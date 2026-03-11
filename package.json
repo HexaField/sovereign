@@ -1,0 +1,36 @@
+{
+  "name": "template-monorepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter @template/client dev\" \"pnpm --filter @template/server dev\"",
+    "build": "pnpm -r --if-present build",
+    "test": "pnpm -r test",
+    "certs": "mkdir -p .certs && openssl req -x509 -newkey rsa:2048 -keyout .certs/localhost.key -out .certs/localhost.cert -days 365 -nodes -subj \"/CN=localhost\"",
+    "lint": "oxlint --fix",
+    "format": "oxfmt --write",
+    "check": "pnpm -r check && oxlint",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@fastify/pre-commit": "^2.2.1",
+    "@types/node": "^25.0.3",
+    "concurrently": "^9.2.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "oxfmt": "^0.23.0",
+    "oxlint": "^1.38.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx}": [
+      "oxlint --fix",
+      "oxfmt --write"
+    ],
+    "*.{json,css,md,html}": [
+      "oxfmt --write"
+    ]
+  }
+}

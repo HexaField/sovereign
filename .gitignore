@@ -1,0 +1,13 @@
+node_modules
+dist
+.transcripts
+.DS_Store
+package-lock.json
+bun.lock
+playwright-report
+test-results
+.opencode
+.env
+.env.local
+
+.certs
