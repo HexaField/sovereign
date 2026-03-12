@@ -24,11 +24,11 @@ DAG planning engine built directly on the issue/review system (Phase 4). Uses Gi
 
 ## Phase 6: Chat & Voice
 
-Chat interface with workspace-bound threads: each project gets its own chat context. The 'main' thread and user-created bespoke threads operate in a global (non-workspace) context. Input area (multi-line, file attachments, voice recording). Voice interface (push-to-talk, TTS playback). Connects to OpenClaw gateway WS as agent backend. The global context is primarily presented as the dashboard view — observe all workspaces and their activity, plus non-workspace activity.
+Entity-bound chat threads: every thread is associated with a branch, issue, or PR. Events from that entity (CI, review comments, status changes) route into the thread automatically — AGENT events trigger autonomous work, NOTIFY events surface for user response. The 'main' thread and user-created threads are global (no entity binding). Message forwarding across threads for user-driven cross-thread orchestration. Input area, voice interface, gateway bridge to OpenClaw. Dashboard as the global context view.
 
 ## Phase 7: Observability
 
-Architecture & system view (live systems overview). Notifications panel. Events feed. Logs viewer. Recording management. Integrated into the dashboard (global context) and per-workspace views as appropriate.
+Architecture & system view. Notifications and events are entity-scoped — grouped by the thread/entity they belong to, click to jump into context. Logs viewer. Recording management.
 
 ## Phase 8: Agent Core (beta release)
 
