@@ -13,4 +13,4 @@ export const add = (a: number, b: number) => a + b
 
 export * from './bus/index.js'
 export * from './ws/types.js'
-export { isWsMessage, isWsSubscribe, isWsError, validateMessage } from './ws/protocol.js'
+export { isWsMessage, isWsSubscribe, isWsError, isBuiltinType, validateMessage } from './ws/protocol.js'

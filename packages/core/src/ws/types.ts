@@ -4,6 +4,7 @@ export interface WsMessage {
   type: string
   timestamp?: string
   ackId?: string
+  [key: string]: unknown
 }
 
 export interface WsSubscribe extends WsMessage {

@@ -1,6 +1,8 @@
 import type { IncomingMessage } from 'http'
 import type { WebSocket } from 'ws'
-import type { TerminalManager } from './terminal.js'
+import type { EventBus } from '@template/core'
+import type { WsHandler } from '../ws/handler.js'
+import type { TerminalManager, AttachHandle } from './terminal.js'
 
 export interface WsMessage {
   type: 'data' | 'resize' | 'close'
@@ -10,6 +12,7 @@ export interface WsMessage {
   sessionId?: string
 }
 
+// Legacy WS handler for direct WebSocket connections
 export function createTerminalWsHandler(manager: TerminalManager) {
   return function handleConnection(ws: WebSocket, req: IncomingMessage) {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
@@ -76,4 +79,81 @@ export function createTerminalWsHandler(manager: TerminalManager) {
       }
     })
   }
+}
+
+// Channel-based WS handler for the unified WS system
+// Track per-device attach handles keyed by deviceId
+const attachments = new Map<string, { sessionId: string; handle: AttachHandle }>()
+
+export function registerTerminalChannel(ws: WsHandler, bus: EventBus, manager: TerminalManager): void {
+  ws.registerChannel('terminal', {
+    serverMessages: ['terminal.data', 'terminal.created', 'terminal.closed'],
+    clientMessages: ['terminal.input', 'terminal.resize'],
+    binary: true,
+
+    onSubscribe(deviceId: string, scope?: Record<string, string>) {
+      const sessionId = scope?.sessionId
+      if (!sessionId) return
+      if (!manager.get(sessionId)) return
+
+      // Cancel any pending grace-period close
+      manager.cancelScheduledClose(sessionId)
+
+      const handle = manager.attach(sessionId)
+      handle.onData((data: string) => {
+        ws.sendBinary('terminal', Buffer.from(data), { sessionId })
+      })
+      attachments.set(deviceId, { sessionId, handle })
+    },
+
+    onMessage(type: string, payload: unknown, deviceId: string) {
+      const attachment = attachments.get(deviceId)
+      if (!attachment) return
+
+      if (type === 'terminal.input') {
+        const msg = payload as { data?: string }
+        if (msg.data) attachment.handle.write(msg.data)
+      } else if (type === 'terminal.resize') {
+        const msg = payload as { cols?: number; rows?: number }
+        if (msg.cols && msg.rows) {
+          manager.resize(attachment.sessionId, msg.cols, msg.rows)
+        }
+      }
+    },
+
+    onUnsubscribe(deviceId: string) {
+      const attachment = attachments.get(deviceId)
+      if (!attachment) return
+      attachment.handle.dispose()
+      attachments.delete(deviceId)
+    },
+
+    onDisconnect(deviceId: string) {
+      const attachment = attachments.get(deviceId)
+      if (!attachment) return
+      attachment.handle.dispose()
+      // Schedule grace-period close
+      manager.scheduleClose(attachment.sessionId)
+      attachments.delete(deviceId)
+    }
+  })
+
+  // Bridge bus events for created/closed
+  bus.on('terminal.created', (event) => {
+    const p = event.payload as Record<string, string>
+    ws.broadcastToChannel('terminal', {
+      type: 'terminal.created',
+      ...p,
+      timestamp: new Date().toISOString()
+    })
+  })
+
+  bus.on('terminal.closed', (event) => {
+    const p = event.payload as Record<string, string>
+    ws.broadcastToChannel('terminal', {
+      type: 'terminal.closed',
+      ...p,
+      timestamp: new Date().toISOString()
+    })
+  })
 }
