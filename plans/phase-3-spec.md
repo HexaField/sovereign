@@ -32,7 +32,7 @@ A unified configuration system. Every other module reads its settings from here.
 - The config store MUST support **defaults** — every config key has a default value. `get()` returns the merged result of defaults + user overrides.
 - The config store MUST emit `config.changed` events on the bus with `{ path, oldValue, newValue }`.
 - The config store MUST maintain a **change history** at `{dataDir}/config-history.jsonl` — each change logged with timestamp, key path, old value, new value, and source (`api` | `file` | `env` | `startup`).
-- The config store MUST support **environment variable overrides** — env vars like `SOVEREIGN_MEMORY__OLLAMA__URL` (double underscore as path separator) override config file values. Env overrides take precedence over file values but are NOT written to disk.
+- The config store MUST support **environment variable overrides** — env vars like `SOVEREIGN_TERMINAL__SHELL` (double underscore as path separator) override config file values. Env overrides take precedence over file values but are NOT written to disk.
 - The config store MUST NOT apply invalid config — validation happens before write, failed validation returns the errors to the caller.
 - The config store MUST load and validate on startup, applying defaults for any missing keys.
 - The config store MUST expose a REST API:
@@ -54,18 +54,6 @@ interface SovereignConfig {
     port: number // default: 3001
     host: string // default: 'localhost'
   }
-  memory: {
-    enabled: boolean // default: true
-    ollama: {
-      url: string // default: 'http://localhost:11434'
-      model: string // default: 'nomic-embed-text'
-    }
-    chunkSize: number // default: 512
-    chunkOverlap: number // default: 64
-    watchDirs: string[] // default: []
-    watchDebounceMs: number // default: 2000
-    excludePatterns: string[] // default: ['node_modules', '.git', 'dist', 'build']
-  }
   terminal: {
     shell: string // default: process.env.SHELL || '/bin/zsh'
     gracePeriodMs: number // default: 30000
@@ -75,12 +63,11 @@ interface SovereignConfig {
     staleDays: number // default: 14
     autoCleanupMerged: boolean // default: false
   }
-  git: {
-    protectedBranches: string[] // default: ['main', 'master', 'dev']
-  }
-  review: {
-    autoAssign: boolean // default: false
-    requireApproval: boolean // default: true
+  projects: {
+    defaults: {
+      // Per-project defaults — individual projects override via projects.{projectId}.*
+      remotes: [] // default: [] (configured per project at creation)
+    }
   }
 }
 ```
