@@ -20,15 +20,15 @@ Diff engine (text, file, semantic for JSON/YAML/TOML, change sets). Provider-bac
 
 ## Phase 5: Planning
 
-DAG planning engine with dependency-aware work graphs. Planning UI (graph, kanban, list, tree views). Ported from voice-ui holons system, rebuilt on the DAG engine.
+DAG planning engine built directly on the issue/review system (Phase 4). Uses GitHub Issues/Projects and Radicle Issues as the backing store — no separate plan store. Sovereign adds minimal metadata (dependency edges, cross-project links) as issue labels/references. Planning UI (graph, kanban, list, tree views) reads from and writes to the provider-backed issue tracker.
 
 ## Phase 6: Chat & Voice
 
-Chat interface (message streaming, thinking blocks, work indicators, thread management, compaction indicators, rate-limit retry). Input area (multi-line, file attachments, voice recording). Voice interface (push-to-talk, TTS playback). Connects to OpenClaw gateway WS as agent backend. Integrated as IDE panels, not a standalone app.
+Chat interface with workspace-bound threads: each project gets its own chat context. The 'main' thread and user-created bespoke threads operate in a global (non-workspace) context. Input area (multi-line, file attachments, voice recording). Voice interface (push-to-talk, TTS playback). Connects to OpenClaw gateway WS as agent backend. The global context is primarily presented as the dashboard view — observe all workspaces and their activity, plus non-workspace activity.
 
 ## Phase 7: Observability
 
-Architecture & system view (skills, tools, cron jobs, active sessions, webhooks, memory files, devices — merged into one live systems overview). Notifications panel. Events feed (webhook events, system events). Dashboard (health timeline, system status). Logs viewer. Recording management.
+Architecture & system view (live systems overview). Notifications panel. Events feed. Logs viewer. Recording management. Integrated into the dashboard (global context) and per-workspace views as appropriate.
 
 ## Phase 8: Agent Core (beta release)
 
