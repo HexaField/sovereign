@@ -8,9 +8,9 @@ Event bus, scheduler, webhook receiver, auth layer, notifications, status bar. I
 
 Org manager, multi-project support per org with shared context. Git worktree lifecycle per project, synchronised across projects for cross-project PRs and CI. IDE shell (split panels, tabs, shortcuts), file explorer, git integration panel, embedded terminal. Mobile-first, progressive disclosure.
 
-## Phase 3: Config, Protocol, Memory, Diff & Review
+## Phase 3: Config, Protocol, Memory, Diff, Issues & Review
 
-Dynamic config management (schema-validated, hot-reload, env overrides). Typed multiplexed WebSocket protocol replacing the raw status connection. Local-first memory & embeddings (SQLite + FTS5 + sqlite-vec + Ollama). Diff engine (text, file, semantic for JSON/YAML/TOML, change sets). Code review system (inline comments, threading, approve/reject/merge, worktree cleanup).
+Dynamic config management (schema-validated, hot-reload, env overrides). Typed multiplexed WebSocket protocol replacing the raw status connection. Local-first memory & embeddings (SQLite + FTS5 + sqlite-vec + Ollama). Diff engine (text, file, semantic for JSON/YAML/TOML, change sets). Issue tracker and code review system — both provider-backed with GitHub and Radicle as sources of truth, unified behind a provider abstraction. Sovereign caches for performance and offline access but does NOT maintain its own authoritative issue/review store.
 
 Still relies on OpenClaw for agent runtime. Session store, context compaction, and prompt assembly deferred to Phase 5.
 
@@ -24,7 +24,7 @@ Own session store (JSONL), context compaction, system prompt assembly. Tool runt
 
 ## Phase 6: Radicle & Sovereignty (initial release)
 
-Radicle bridge (`rad` CLI), patch workflow replacing PRs, peer-to-peer repo sync across devices, decentralized CI with signed attestations. **Full independence from GitHub.**
+Radicle repo management (`rad` CLI), peer-to-peer repo sync across devices, decentralized CI with signed attestations. Note: Radicle issue and patch providers are introduced in Phase 3 — Phase 6 adds the deeper integration. **Full independence from GitHub.**
 
 ## Phase 7: Ecosystem (long-term vision)
 
