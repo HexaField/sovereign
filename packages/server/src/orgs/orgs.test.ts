@@ -1,85 +1,457 @@
-import { describe, it } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import express from 'express'
+import request from 'supertest'
+import { createEventBus } from '@template/core'
+import type { BusEvent } from '@template/core'
+import { createOrgManager, type OrgManager } from './orgs.js'
+import { createOrgStore } from './store.js'
+import { createOrgRoutes } from './routes.js'
+
+function tmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'sovereign-orgs-test-'))
+}
+
+function fakeGitRepo(base: string, name: string = 'repo'): string {
+  const p = path.join(base, name)
+  fs.mkdirSync(path.join(p, '.git'), { recursive: true })
+  return p
+}
+
+let dataDir: string
+let tempBase: string
+let bus: ReturnType<typeof createEventBus>
+let manager: OrgManager
+let events: BusEvent[]
+
+beforeEach(() => {
+  dataDir = tmpDir()
+  tempBase = tmpDir()
+  bus = createEventBus(dataDir)
+  events = []
+  bus.on('org.*', (e) => {
+    events.push(e)
+  })
+  bus.on('project.*', (e) => {
+    events.push(e)
+  })
+  manager = createOrgManager(bus, dataDir)
+})
+
+afterEach(() => {
+  fs.rmSync(dataDir, { recursive: true, force: true })
+  fs.rmSync(tempBase, { recursive: true, force: true })
+})
 
 describe('Org Manager', () => {
   // Org CRUD
-  it.todo('creates an org with id, name, path, timestamps')
-  it.todo('updates an org')
-  it.todo('deletes an org')
-  it.todo('gets an org by id')
-  it.todo('lists all orgs')
-  it.todo('rejects creating org with non-existent path')
+  it('creates an org with id, name, path, timestamps', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    expect(org.id).toBeTruthy()
+    expect(org.name).toBe('Test')
+    expect(org.path).toBe(tempBase)
+    expect(org.createdAt).toBeTruthy()
+    expect(org.updatedAt).toBeTruthy()
+  })
+
+  it('updates an org', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const updated = manager.updateOrg(org.id, { name: 'Updated' })
+    expect(updated.name).toBe('Updated')
+    expect(updated.updatedAt).toBeTruthy()
+  })
+
+  it('deletes an org', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.deleteOrg(org.id)
+    expect(manager.getOrg(org.id)).toBeUndefined()
+  })
+
+  it('gets an org by id', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    expect(manager.getOrg(org.id)).toEqual(org)
+  })
+
+  it('lists all orgs', () => {
+    manager.createOrg({ name: 'A', path: tempBase })
+    const dir2 = tmpDir()
+    manager.createOrg({ name: 'B', path: dir2 })
+    expect(manager.listOrgs()).toHaveLength(2)
+    fs.rmSync(dir2, { recursive: true, force: true })
+  })
+
+  it('rejects creating org with non-existent path', () => {
+    expect(() => manager.createOrg({ name: 'X', path: '/no/such/path' })).toThrow()
+  })
 
   // Project CRUD
-  it.todo('adds a project to an org')
-  it.todo('validates project repoPath exists and is a git repo')
-  it.todo('rejects project with non-git directory')
-  it.todo('rejects project if repoPath already belongs to another org')
-  it.todo('updates a project')
-  it.todo('removes a project from an org')
-  it.todo('gets a project by id')
-  it.todo('lists all projects for an org')
+  it('adds a project to an org', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const project = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    expect(project.id).toBeTruthy()
+    expect(project.orgId).toBe(org.id)
+    expect(project.repoPath).toBe(repo)
+  })
+
+  it('validates project repoPath exists and is a git repo', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const project = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    expect(project).toBeTruthy()
+  })
+
+  it('rejects project with non-git directory', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const dir = path.join(tempBase, 'notgit')
+    fs.mkdirSync(dir)
+    expect(() => manager.addProject(org.id, { name: 'proj', repoPath: dir })).toThrow(/not a git repo/)
+  })
+
+  it('rejects project if repoPath already belongs to another org', () => {
+    const org1 = manager.createOrg({ name: 'A', path: tempBase })
+    const dir2 = tmpDir()
+    const org2 = manager.createOrg({ name: 'B', path: dir2 })
+    const repo = fakeGitRepo(tempBase)
+    manager.addProject(org1.id, { name: 'p1', repoPath: repo })
+    expect(() => manager.addProject(org2.id, { name: 'p2', repoPath: repo })).toThrow(/already belongs/)
+    fs.rmSync(dir2, { recursive: true, force: true })
+  })
+
+  it('updates a project', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const project = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    const updated = manager.updateProject(org.id, project.id, { name: 'renamed' })
+    expect(updated.name).toBe('renamed')
+  })
+
+  it('removes a project from an org', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const project = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    manager.removeProject(org.id, project.id)
+    expect(manager.getProject(org.id, project.id)).toBeUndefined()
+  })
+
+  it('gets a project by id', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const project = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    expect(manager.getProject(org.id, project.id)).toEqual(project)
+  })
+
+  it('lists all projects for an org', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const r1 = fakeGitRepo(tempBase, 'r1')
+    const r2 = fakeGitRepo(tempBase, 'r2')
+    manager.addProject(org.id, { name: 'p1', repoPath: r1 })
+    manager.addProject(org.id, { name: 'p2', repoPath: r2 })
+    expect(manager.listProjects(org.id)).toHaveLength(2)
+  })
 
   // Persistence
-  it.todo('persists orgs to disk on create')
-  it.todo('persists orgs to disk on update')
-  it.todo('persists orgs to disk on delete')
-  it.todo('recovers orgs and projects from disk on startup')
+  it('persists orgs to disk on create', () => {
+    manager.createOrg({ name: 'Test', path: tempBase })
+    const store = createOrgStore(dataDir)
+    expect(store.read().orgs).toHaveLength(1)
+  })
+
+  it('persists orgs to disk on update', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.updateOrg(org.id, { name: 'Updated' })
+    const store = createOrgStore(dataDir)
+    expect(store.read().orgs[0].name).toBe('Updated')
+  })
+
+  it('persists orgs to disk on delete', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.deleteOrg(org.id)
+    const store = createOrgStore(dataDir)
+    expect(store.read().orgs).toHaveLength(0)
+  })
+
+  it('recovers orgs and projects from disk on startup', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    manager.addProject(org.id, { name: 'proj', repoPath: repo })
+
+    const manager2 = createOrgManager(bus, dataDir)
+    expect(manager2.listOrgs()).toHaveLength(1)
+    expect(manager2.listProjects(org.id)).toHaveLength(1)
+  })
 
   // Events
-  it.todo('emits org.created on the bus')
-  it.todo('emits org.updated on the bus')
-  it.todo('emits org.deleted on the bus')
-  it.todo('emits project.created on the bus')
-  it.todo('emits project.updated on the bus')
-  it.todo('emits project.deleted on the bus')
+  it('emits org.created on the bus', () => {
+    manager.createOrg({ name: 'Test', path: tempBase })
+    expect(events.some((e) => e.type === 'org.created')).toBe(true)
+  })
+
+  it('emits org.updated on the bus', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.updateOrg(org.id, { name: 'X' })
+    expect(events.some((e) => e.type === 'org.updated')).toBe(true)
+  })
+
+  it('emits org.deleted on the bus', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.deleteOrg(org.id)
+    expect(events.some((e) => e.type === 'org.deleted')).toBe(true)
+  })
+
+  it('emits project.created on the bus', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    expect(events.some((e) => e.type === 'project.created')).toBe(true)
+  })
+
+  it('emits project.updated on the bus', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const p = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    manager.updateProject(org.id, p.id, { name: 'x' })
+    expect(events.some((e) => e.type === 'project.updated')).toBe(true)
+  })
+
+  it('emits project.deleted on the bus', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const p = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    manager.removeProject(org.id, p.id)
+    expect(events.some((e) => e.type === 'project.deleted')).toBe(true)
+  })
 
   // Monorepo detection
-  it.todo('detects pnpm workspace monorepo')
-  it.todo('detects npm workspaces monorepo')
-  it.todo('detects nx monorepo')
-  it.todo('detects turborepo monorepo')
-  it.todo('returns undefined monorepo for non-monorepo project')
+  it('detects pnpm workspace monorepo', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase, 'mono')
+    fs.writeFileSync(path.join(repo, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n')
+    const pkgDir = path.join(repo, 'packages', 'a')
+    fs.mkdirSync(pkgDir, { recursive: true })
+    fs.writeFileSync(path.join(pkgDir, 'package.json'), '{}')
+    const p = manager.addProject(org.id, { name: 'mono', repoPath: repo })
+    expect(p.monorepo?.tool).toBe('pnpm')
+    expect(p.monorepo?.packages).toContain('packages/a')
+  })
+
+  it('detects npm workspaces monorepo', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase, 'npmm')
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }))
+    const pkgDir = path.join(repo, 'packages', 'b')
+    fs.mkdirSync(pkgDir, { recursive: true })
+    fs.writeFileSync(path.join(pkgDir, 'package.json'), '{}')
+    const p = manager.addProject(org.id, { name: 'npmm', repoPath: repo })
+    expect(p.monorepo?.tool).toBe('npm')
+  })
+
+  it('detects nx monorepo', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase, 'nxr')
+    fs.writeFileSync(path.join(repo, 'nx.json'), '{}')
+    const p = manager.addProject(org.id, { name: 'nxr', repoPath: repo })
+    expect(p.monorepo?.tool).toBe('nx')
+  })
+
+  it('detects turborepo monorepo', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase, 'turbo')
+    fs.writeFileSync(path.join(repo, 'turbo.json'), '{}')
+    const p = manager.addProject(org.id, { name: 'turbo', repoPath: repo })
+    expect(p.monorepo?.tool).toBe('turborepo')
+  })
+
+  it('returns undefined monorepo for non-monorepo project', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase, 'plain')
+    const p = manager.addProject(org.id, { name: 'plain', repoPath: repo })
+    expect(p.monorepo).toBeUndefined()
+  })
 
   // Active context
-  it.todo('sets and gets active org')
-  it.todo('sets and gets active project')
-  it.todo('emits org.active.changed on active org change')
-  it.todo('emits project.active.changed on active project change')
+  it('sets and gets active org', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.setActiveOrg(org.id)
+    expect(manager.getActiveOrg()?.id).toBe(org.id)
+  })
+
+  it('sets and gets active project', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const p = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    manager.setActiveProject(org.id, p.id)
+    expect(manager.getActiveProject()?.id).toBe(p.id)
+  })
+
+  it('emits org.active.changed on active org change', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.setActiveOrg(org.id)
+    expect(events.some((e) => e.type === 'org.active.changed')).toBe(true)
+  })
+
+  it('emits project.active.changed on active project change', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const p = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    manager.setActiveProject(org.id, p.id)
+    expect(events.some((e) => e.type === 'project.active.changed')).toBe(true)
+  })
 
   // Config
-  it.todo('reads per-org config')
-  it.todo('updates per-org config')
-  it.todo('hot-reloads per-org config without restart')
+  it('reads per-org config', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const config = manager.getOrgConfig(org.id)
+    expect(config).toEqual({})
+  })
+
+  it('updates per-org config', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.updateOrgConfig(org.id, { key: 'value' })
+    expect(manager.getOrgConfig(org.id)).toEqual({ key: 'value' })
+  })
+
+  it('hot-reloads per-org config without restart', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    manager.updateOrgConfig(org.id, { a: 1 })
+    // Directly modify the config file to simulate external change
+    const configPath = path.join(dataDir, 'orgs', org.id, 'config.json')
+    fs.writeFileSync(configPath, JSON.stringify({ a: 2, b: 3 }))
+    // Reading should get fresh data (reads from disk each time)
+    expect(manager.getOrgConfig(org.id)).toEqual({ a: 2, b: 3 })
+  })
 
   // Constraints
-  it.todo('does not create or modify files inside user git repos')
+  it('does not create or modify files inside user git repos', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase, 'saferepo')
+    const before = fs.readdirSync(repo)
+    manager.addProject(org.id, { name: 'safe', repoPath: repo })
+    const after = fs.readdirSync(repo)
+    expect(after).toEqual(before)
+  })
 })
 
 describe('Org Manager Routes', () => {
-  it.todo('GET /api/orgs returns org list')
-  it.todo('POST /api/orgs creates an org')
-  it.todo('GET /api/orgs/:orgId returns an org')
-  it.todo('PUT /api/orgs/:orgId updates an org')
-  it.todo('DELETE /api/orgs/:orgId deletes an org')
-  it.todo('GET /api/orgs/:orgId/projects returns project list')
-  it.todo('POST /api/orgs/:orgId/projects adds a project')
-  it.todo('GET /api/orgs/:orgId/projects/:projectId returns a project')
-  it.todo('PUT /api/orgs/:orgId/projects/:projectId updates a project')
-  it.todo('DELETE /api/orgs/:orgId/projects/:projectId removes a project')
-  it.todo('all routes reject unauthenticated requests with 401')
-})
+  let app: express.Express
 
-describe('Monorepo Detection', () => {
-  it.todo('detects pnpm-workspace.yaml')
-  it.todo('detects package.json workspaces field')
-  it.todo('detects nx.json')
-  it.todo('detects turbo.json')
-  it.todo('returns null for non-monorepo')
-  it.todo('lists workspace packages for pnpm workspace')
+  beforeEach(() => {
+    app = express()
+    app.use(express.json())
+    // Auth middleware: check for Bearer token
+    const authMw = (req: any, res: any, next: any) => {
+      const auth = req.headers.authorization
+      if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' })
+      next()
+    }
+    app.use('/api', createOrgRoutes(manager, authMw))
+  })
+
+  const auth = { Authorization: 'Bearer test-token' }
+
+  it('GET /api/orgs returns org list', async () => {
+    manager.createOrg({ name: 'Test', path: tempBase })
+    const res = await request(app).get('/api/orgs').set(auth)
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveLength(1)
+  })
+
+  it('POST /api/orgs creates an org', async () => {
+    const res = await request(app).post('/api/orgs').set(auth).send({ name: 'New', path: tempBase })
+    expect(res.status).toBe(201)
+    expect(res.body.name).toBe('New')
+  })
+
+  it('GET /api/orgs/:orgId returns an org', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const res = await request(app).get(`/api/orgs/${org.id}`).set(auth)
+    expect(res.status).toBe(200)
+    expect(res.body.id).toBe(org.id)
+  })
+
+  it('PUT /api/orgs/:orgId updates an org', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const res = await request(app).put(`/api/orgs/${org.id}`).set(auth).send({ name: 'Updated' })
+    expect(res.status).toBe(200)
+    expect(res.body.name).toBe('Updated')
+  })
+
+  it('DELETE /api/orgs/:orgId deletes an org', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const res = await request(app).delete(`/api/orgs/${org.id}`).set(auth)
+    expect(res.status).toBe(204)
+  })
+
+  it('GET /api/orgs/:orgId/projects returns project list', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    const res = await request(app).get(`/api/orgs/${org.id}/projects`).set(auth)
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveLength(1)
+  })
+
+  it('POST /api/orgs/:orgId/projects adds a project', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const res = await request(app).post(`/api/orgs/${org.id}/projects`).set(auth).send({ name: 'proj', repoPath: repo })
+    expect(res.status).toBe(201)
+  })
+
+  it('GET /api/orgs/:orgId/projects/:projectId returns a project', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const p = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    const res = await request(app).get(`/api/orgs/${org.id}/projects/${p.id}`).set(auth)
+    expect(res.status).toBe(200)
+    expect(res.body.id).toBe(p.id)
+  })
+
+  it('PUT /api/orgs/:orgId/projects/:projectId updates a project', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const p = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    const res = await request(app).put(`/api/orgs/${org.id}/projects/${p.id}`).set(auth).send({ name: 'updated' })
+    expect(res.status).toBe(200)
+    expect(res.body.name).toBe('updated')
+  })
+
+  it('DELETE /api/orgs/:orgId/projects/:projectId removes a project', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase)
+    const p = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    const res = await request(app).delete(`/api/orgs/${org.id}/projects/${p.id}`).set(auth)
+    expect(res.status).toBe(204)
+  })
+
+  it('all routes reject unauthenticated requests with 401', async () => {
+    const res = await request(app).get('/api/orgs')
+    expect(res.status).toBe(401)
+  })
 })
 
 describe('Org Store', () => {
-  it.todo('reads orgs from disk')
-  it.todo('writes orgs to disk atomically')
-  it.todo('creates data directory if it does not exist')
+  it('reads orgs from disk', () => {
+    const store = createOrgStore(dataDir)
+    const data = store.read()
+    expect(data).toEqual({ orgs: [], projects: [] })
+  })
+
+  it('writes orgs to disk atomically', () => {
+    const store = createOrgStore(dataDir)
+    store.write({ orgs: [{ id: '1', name: 'Test', path: '/tmp', createdAt: '', updatedAt: '' }], projects: [] })
+    const data = store.read()
+    expect(data.orgs).toHaveLength(1)
+    // No .tmp file should remain
+    const files = fs.readdirSync(path.join(dataDir, 'orgs'))
+    expect(files.some((f) => f.endsWith('.tmp'))).toBe(false)
+  })
+
+  it('creates data directory if it does not exist', () => {
+    const newDir = path.join(dataDir, 'nested', 'deep')
+    const store = createOrgStore(newDir)
+    store.read() // should not throw
+  })
 })
