@@ -513,7 +513,10 @@ A provider-backed issue tracker. GitHub Issues and Radicle Issues are the source
 ### Requirements
 
 - The issue tracker MUST define a **provider interface** that abstracts issue operations. Two providers MUST be implemented: `GitHubIssueProvider` (via `gh` CLI) and `RadicleIssueProvider` (via `rad issue` CLI).
-- Each project in an org MUST be configured with an issue provider (stored in config: `projects.{projectId}.issueProvider: 'github' | 'radicle'`).
+- Each project in an org MUST support **multiple remotes**, each with its own provider. Remotes are configured in config: `projects.{projectId}.remotes: [{ name: 'origin', provider: 'github', repo: 'owner/repo' }, { name: 'rad', provider: 'radicle', rid: 'rad:z...' }]`. A project MAY have one or both provider types.
+- The issue tracker MUST aggregate issues across all configured remotes for a project. Each issue carries a `remote` field identifying which remote it belongs to.
+- When creating an issue, the caller MUST specify which remote to create it on (or default to the first remote). When listing, all remotes are queried and results merged.
+- Cross-remote issue references SHOULD be supported — an issue on GitHub can reference a Radicle issue by ID and vice versa (display only, no automatic linking).
 - A **unified issue** MUST have: `id` (provider-native ID), `projectId`, `orgId`, `title`, `body` (markdown), `state` (`open` | `closed`), `labels` (string[]), `assignees` (string[]), `author`, `createdAt`, `updatedAt`, `commentCount`, `providerUrl` (link to GitHub/Radicle web view), `providerMeta` (opaque provider-specific data).
 - An **issue comment** MUST have: `id`, `issueId`, `author`, `body` (markdown), `createdAt`, `updatedAt`.
 - The issue tracker MUST support: `list` (with filters: state, label, assignee, search), `get`, `create`, `update` (title, body, state, labels, assignees), `addComment`, `listComments`.
@@ -526,7 +529,7 @@ A provider-backed issue tracker. GitHub Issues and Radicle Issues are the source
 - The issue tracker MUST emit events on the bus: `issue.created`, `issue.updated`, `issue.comment.added`, `issue.synced`.
 - The issue tracker MUST support **cross-project views** — list issues across all projects in an org, with project as a filterable field.
 - The issue tracker MUST expose a REST API:
-  - `GET /api/orgs/:orgId/issues?projectId=...&state=...&label=...&assignee=...&q=...` — list issues (cross-project if no projectId)
+  - `GET /api/orgs/:orgId/issues?projectId=...&remote=...&state=...&label=...&assignee=...&q=...` — list issues (cross-project if no projectId, cross-remote if no remote)
   - `GET /api/orgs/:orgId/projects/:projectId/issues/:id` — get issue
   - `POST /api/orgs/:orgId/projects/:projectId/issues` — create issue
   - `PATCH /api/orgs/:orgId/projects/:projectId/issues/:id` — update issue
@@ -544,6 +547,8 @@ interface Issue {
   id: string
   projectId: string
   orgId: string
+  remote: string // which remote this issue belongs to (e.g. 'origin', 'rad')
+  provider: 'github' | 'radicle'
   title: string
   body: string
   state: 'open' | 'closed'
@@ -568,6 +573,7 @@ interface IssueComment {
 
 interface IssueFilter {
   projectId?: string
+  remote?: string // filter to specific remote
   state?: 'open' | 'closed'
   label?: string
   assignee?: string
@@ -598,7 +604,7 @@ interface IssueTracker {
   create(
     orgId: string,
     projectId: string,
-    data: { title: string; body?: string; labels?: string[]; assignees?: string[] }
+    data: { remote: string; title: string; body?: string; labels?: string[]; assignees?: string[] }
   ): Promise<Issue>
   update(
     orgId: string,
@@ -638,7 +644,8 @@ A provider-backed code review system. GitHub Pull Requests and Radicle Patches a
 ### Requirements
 
 - The review system MUST define a **provider interface** that abstracts review operations. Two providers MUST be implemented: `GitHubReviewProvider` (wraps `gh pr` CLI) and `RadicleReviewProvider` (wraps `rad patch` CLI).
-- Each project MUST use the same provider for reviews as for issues (configured per project).
+- Each project MUST support multiple remotes for reviews, matching the issue tracker's remote configuration. A review (PR/patch) is created on a specific remote.
+- When listing reviews, all remotes are queried and results merged. Each review carries a `remote` field.
 - A **unified review** MUST have: `id` (provider-native ID, e.g. PR number or patch ID), `changeSetId` (local change set from diff engine), `projectId`, `orgId`, `title`, `description`, `status` (`open` | `approved` | `changes_requested` | `merged` | `closed`), `author`, `reviewers[]`, `baseBranch`, `headBranch`, `createdAt`, `updatedAt`, `mergedAt?`, `providerUrl`, `providerMeta`.
 - A **review comment** MUST have: `id`, `reviewId`, `filePath`, `lineNumber`, `endLineNumber?`, `side` (`old` | `new`), `body` (markdown), `author`, `createdAt`, `resolved`, `replyTo?` (thread parent), `providerCommentId` (for sync).
 - The review system MUST support creating a review from a worktree branch:
@@ -666,7 +673,7 @@ A provider-backed code review system. GitHub Pull Requests and Radicle Patches a
 - The `RadicleReviewProvider` MUST use `rad` CLI: `rad patch create`, `rad patch list`, `rad patch show`, `rad patch review`, `rad patch merge`, `rad patch comment`.
 - The review system MUST expose a REST API:
   - `POST /api/orgs/:orgId/projects/:projectId/reviews` — create review from worktree/branch
-  - `GET /api/orgs/:orgId/reviews?projectId=...&status=...` — list reviews (cross-project if no projectId)
+  - `GET /api/orgs/:orgId/reviews?projectId=...&remote=...&status=...` — list reviews (cross-project/cross-remote)
   - `GET /api/orgs/:orgId/projects/:projectId/reviews/:id` — get review with metadata
   - `GET /api/orgs/:orgId/projects/:projectId/reviews/:id/diff` — get local diff (from change set)
   - `POST /api/orgs/:orgId/projects/:projectId/reviews/:id/comments` — add inline comment
@@ -689,6 +696,8 @@ interface Review {
   changeSetId: string
   projectId: string
   orgId: string
+  remote: string // which remote this review lives on
+  provider: 'github' | 'radicle'
   title: string
   description: string
   status: 'open' | 'approved' | 'changes_requested' | 'merged' | 'closed'
@@ -749,6 +758,7 @@ interface ReviewSystem {
     orgId: string,
     projectId: string,
     data: {
+      remote: string
       worktreeId?: string
       title: string
       description?: string
