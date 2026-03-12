@@ -12,19 +12,19 @@ Org manager, multi-project support per org with shared context. Git worktree lif
 
 Own session store (JSONL), typed WebSocket protocol, memory & embeddings (SQLite + vector), context compaction, system prompt assembly, dynamic config management. Bridge to OpenClaw during transition.
 
-## Phase 4: Planning & Review
+## Phase 4: Planning & Review (alpha release)
 
 DAG planning engine with dependency-aware work graphs. Diff engine (code, plan, config). Review system with inline comments and merge workflow. Local VM CI runner (Lima/Firecracker). Cross-project dependencies.
 
-## Phase 5: Agent Core
+## Phase 5: Agent Core (beta release)
 
 Tool runtime & registry, LLM router (multi-provider, streaming, fallback), agent loop (deterministic state machine), multi-agent orchestration, worktree-agent binding. **Full independence from OpenClaw.**
 
-## Phase 6: Radicle & Sovereignty
+## Phase 6: Radicle & Sovereignty (initial release)
 
 Radicle bridge (`rad` CLI), patch workflow replacing PRs, peer-to-peer repo sync across devices, decentralized CI with signed attestations. **Full independence from GitHub.**
 
-## Phase 7: Ecosystem
+## Phase 7: Ecosystem (long-term vision)
 
 Device/node system, plugin architecture, multi-user support, voice & ambient interfaces, hardening & testing.
 
