@@ -10,3 +10,5 @@ export const SHARED_CONSTANT = 'template'
  * @returns The sum of a and b.
  */
 export const add = (a: number, b: number) => a + b
+
+export * from './bus/index.js'
