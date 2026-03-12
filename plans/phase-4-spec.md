@@ -1,18 +1,18 @@
-# Phase 4: Diff, Issues & Review — Specification
+# Phase 4: Diff, Issues, Review & Radicle — Specification
 
-**Status:** Draft **Revision:** 1 **Date:** 2026-03-12
+**Status:** Draft **Revision:** 2 **Date:** 2026-03-12
 
-This document specifies the three modules of Phase 4. All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md). Each section defines requirements using MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
+This document specifies the four modules of Phase 4. All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md). Each section defines requirements using MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
 
-Phase 4 depends on Phases 1–3 (event bus, auth, orgs, projects, worktrees, files, git, config, WebSocket protocol, memory). All new modules communicate via the event bus.
+Phase 4 depends on Phases 1–3 (event bus, auth, orgs, projects, worktrees, files, git, config, WebSocket protocol). All new modules communicate via the event bus.
 
-The diff engine provides pure computation for comparing files and structured formats. Issues and reviews are **provider-backed** — GitHub and Radicle are the sources of truth, with Sovereign providing a unified abstraction layer, local caching, and offline support. Projects support multiple remotes (e.g. GitHub + Radicle), and issues/reviews are aggregated across all configured remotes.
+The diff engine provides pure computation for comparing files and structured formats. Issues and reviews are **provider-backed** — GitHub and Radicle are the sources of truth, with Sovereign providing a unified abstraction layer, local caching, and offline support. Projects support multiple remotes (e.g. GitHub + Radicle), and issues/reviews are aggregated across all configured remotes. Radicle repo management provides first-class `rad` CLI integration for managing decentralized repositories.
 
 ---
 
 ## Wave Strategy
 
-**Wave 1 (parallel):** Diff Engine, Issue Tracker **Wave 2 (after wave 1):** Review System **Wave 3:** Client UI components + integration tests
+**Wave 1 (parallel):** Diff Engine, Issue Tracker, Radicle Repo Management **Wave 2 (after wave 1):** Review System **Wave 3:** Client UI components + integration tests
 
 ---
 
@@ -458,6 +458,93 @@ packages/server/src/review/
 
 ---
 
+## 4. Radicle Repo Management
+
+First-class `rad` CLI integration for managing decentralized git repositories. Enables projects to use Radicle as a remote alongside (or instead of) GitHub.
+
+### Requirements
+
+- The module MUST provide Radicle repo operations by wrapping the `rad` CLI: `rad init`, `rad push`, `rad pull`, `rad clone`, `rad seed`.
+- The module MUST support **identity management** — create/list Radicle DIDs, set default identity for signing.
+- The module MUST provide a **repo dashboard** showing: peers connected, replication status, seed nodes, last sync time.
+- The module MUST support **peer discovery** — list known peers, connect to new peers by Node ID, manage seed node configuration.
+- The module MUST integrate with the project remote configuration from Phase 4's issue/review providers — when a project has a Radicle remote configured, Radicle repo management provides the push/pull/sync operations.
+- The module MUST detect whether `rad` CLI is installed and available, gracefully degrading with clear error messages if not.
+- The module MUST emit bus events: `radicle.repo.init`, `radicle.repo.pushed`, `radicle.repo.pulled`, `radicle.repo.cloned`, `radicle.peer.connected`, `radicle.peer.disconnected`.
+- The module MUST expose a REST API:
+  - `GET /api/radicle/status` — Radicle node status (running, identity, connected peers)
+  - `POST /api/radicle/repos` — init a new Radicle repo
+  - `GET /api/radicle/repos` — list Radicle repos
+  - `POST /api/radicle/repos/:rid/push` — push to Radicle
+  - `POST /api/radicle/repos/:rid/pull` — pull from Radicle
+  - `GET /api/radicle/repos/:rid/peers` — list peers for a repo
+  - `POST /api/radicle/repos/:rid/seed` — seed a repo
+  - `GET /api/radicle/identity` — current Radicle identity
+  - `POST /api/radicle/identity` — create/set Radicle identity
+  - `GET /api/radicle/peers` — list known peers
+  - `POST /api/radicle/peers` — connect to a peer
+- The module SHOULD support **repo seeding configuration** — control which repos are seeded and to which peers.
+- The module SHOULD track sync history (last push/pull per repo + peer).
+- The module MAY support Radicle node lifecycle management (start/stop the `radicle-node` daemon).
+
+### Interface
+
+```typescript
+interface RadicleRepoInfo {
+  rid: string // Radicle repo ID (rad:z...)
+  name: string
+  description?: string
+  defaultBranch: string
+  peers: RadiclePeer[]
+  delegates: string[] // DIDs with write access
+  seeding: boolean
+  lastSynced?: string
+}
+
+interface RadiclePeer {
+  nodeId: string
+  alias?: string
+  address?: string
+  state: 'connected' | 'disconnected'
+  lastSeen?: string
+}
+
+interface RadicleIdentity {
+  did: string
+  alias?: string
+  nodeId: string
+}
+
+interface RadicleManager {
+  getStatus(): Promise<{ running: boolean; identity?: RadicleIdentity; peers: number }>
+  initRepo(path: string, opts?: { name?: string; description?: string }): Promise<RadicleRepoInfo>
+  listRepos(): Promise<RadicleRepoInfo[]>
+  push(rid: string): Promise<void>
+  pull(rid: string): Promise<void>
+  clone(rid: string, path: string): Promise<void>
+  seed(rid: string): Promise<void>
+  unseed(rid: string): Promise<void>
+  listPeers(): Promise<RadiclePeer[]>
+  connectPeer(nodeId: string, address?: string): Promise<void>
+  getIdentity(): Promise<RadicleIdentity | undefined>
+  createIdentity(alias: string): Promise<RadicleIdentity>
+}
+```
+
+### Files
+
+```
+packages/server/src/radicle/
+├── radicle.ts           # Core Radicle manager (wraps rad CLI)
+├── radicle.test.ts      # Unit tests (mocked rad CLI)
+├── types.ts             # RadicleRepoInfo, RadiclePeer, RadicleIdentity types
+├── cli.ts               # rad CLI wrapper (exec + parse output)
+├── cli.test.ts          # CLI wrapper tests
+└── routes.ts            # Express REST API router
+```
+
+---
+
 ## Cross-Cutting Concerns
 
 ### Integration Tests
@@ -471,6 +558,8 @@ Phase 4 MUST include integration tests covering:
 - Create review (PR/patch) from worktree → add comments → approve → merge → worktree cleaned up → change set `merged`
 - Review comment bidirectional sync: local → provider, provider → local cache
 - Cross-module event flow: review.merged → notification.created → ws push to client
+- Radicle init repo → push → list shows repo with peers
+- Radicle CLI unavailable → graceful degradation with clear error
 - All new REST endpoints protected by auth middleware
 
 ### Data Directory Extension
@@ -515,3 +604,4 @@ All Phase 4 server modules MUST follow the established pattern:
 - Diff tests use inline string fixtures (no real git repos needed for text diff; file-diff tests use temp git repos as in Phase 2).
 - Issue provider tests mock `gh` and `rad` CLI calls (no real GitHub/Radicle access in tests).
 - Review provider tests mock `gh` and `rad` CLI calls. Merge tests use injected mock dependencies.
+- Radicle tests mock `rad` CLI calls (no real Radicle node in tests).
