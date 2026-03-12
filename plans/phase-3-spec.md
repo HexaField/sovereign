@@ -1,12 +1,12 @@
-# Phase 3: Config, Protocol, Memory, Diff & Review — Specification
+# Phase 3: Config, Protocol, Memory, Diff, Issues & Review — Specification
 
-**Status:** Draft **Revision:** 1 **Date:** 2026-03-12
+**Status:** Draft **Revision:** 2 **Date:** 2026-03-12
 
-This document specifies the five modules of Phase 3. All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md). Each section defines requirements using MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
+This document specifies the six modules of Phase 3. All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md). Each section defines requirements using MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
 
 Phase 3 depends on Phase 1 (event bus, auth, notifications, scheduler, status) and Phase 2 (orgs, projects, worktrees, files, git, terminal, IDE shell). All new modules communicate via the event bus.
 
-Phase 3 builds the infrastructure layer while OpenClaw remains the agent runtime. Config management establishes the foundation all modules depend on. The typed WebSocket protocol replaces the raw status connection and enables real-time push for all existing server-side modules. Memory & embeddings provides project knowledge search. The diff engine and review system bring code review workflows into the platform.
+Phase 3 builds the infrastructure layer while OpenClaw remains the agent runtime. Config management establishes the foundation all modules depend on. The typed WebSocket protocol replaces the raw status connection and enables real-time push for all existing server-side modules. Memory & embeddings provides project knowledge search. The diff engine provides pure computation for comparing files and structured formats. Issues and reviews are **provider-backed** — GitHub and Radicle are the sources of truth, with Sovereign providing a unified abstraction layer, local caching, and offline support.
 
 Session store, context compaction, and system prompt assembly are deferred to Phase 5 (Agent Core) — they require owning the conversation state, which OpenClaw still manages.
 
@@ -14,7 +14,7 @@ Session store, context compaction, and system prompt assembly are deferred to Ph
 
 ## Wave Strategy
 
-**Wave 1 (parallel):** Config, WebSocket Protocol, Memory & Embeddings **Wave 2 (depends on Git + Files + Worktrees):** Diff Engine **Wave 3 (depends on Diff Engine):** Review System **Wave 4:** Client UI components + integration tests
+**Wave 1 (parallel):** Config, WebSocket Protocol, Memory & Embeddings **Wave 2 (after wave 1):** Diff Engine, Issue Tracker (parallel) **Wave 3 (after Diff Engine + Issues):** Review System **Wave 4:** Client UI components + integration tests
 
 ---
 
@@ -506,47 +506,180 @@ packages/server/src/diff/
 
 ---
 
-## 5. Review System
+## 5. Issue Tracker
 
-A code review workflow built on change sets. Inline comments, review actions, merge triggers. Local-first — no GitHub dependency.
+A provider-backed issue tracker. GitHub Issues and Radicle Issues are the sources of truth. Sovereign provides a unified API and local cache for performance and offline access.
 
 ### Requirements
 
-- A **review** MUST be attached to exactly one change set. Creating a review transitions the change set status to `reviewing`.
-- A **review** MUST have: `id`, `changeSetId`, `status` (`pending` | `approved` | `changes_requested` | `merged`), `reviewers[]` (device IDs or names), `createdAt`, `updatedAt`, `mergedAt?`.
-- The review system MUST support **inline comments** — comments attached to a specific file, line number, and optionally a range of lines within a change set.
-- A **comment** MUST have: `id`, `reviewId`, `filePath`, `lineNumber`, `endLineNumber?` (for range), `side` (`old` | `new`), `content` (markdown), `author`, `createdAt`, `resolved` (boolean), `replyTo?` (parent comment ID for threads).
-- Comments MUST support **threading** — replies to a comment form a thread. Threads can be resolved (collapsed) or unresolved.
-- The review system MUST support **review actions**:
-  - `approve` — mark the review as approved
-  - `request-changes` — mark as changes requested, with required comment
-  - `comment` — add comments without approving or requesting changes
-  - `merge` — merge the change set's branch into its base branch (requires approved status if `review.requireApproval` config is true)
-- **Merge** MUST:
-  1. Execute `git merge` (or fast-forward) of the head branch into the base branch via the Phase 2 git module
-  2. Clean up the worktree if the change set is linked to one (via the worktree module)
-  3. Transition the change set status to `merged`
-  4. Transition the review status to `merged`
-  5. Emit `review.merged` event on the bus
-- The review system MUST persist reviews as JSON files at `{dataDir}/reviews/{reviewId}.json` (alongside change set files in the same directory).
-- Comments MUST be persisted as JSONL at `{dataDir}/reviews/{reviewId}-comments.jsonl` (append-only).
-- The review system MUST emit events on the bus: `review.created`, `review.updated`, `review.comment.added`, `review.comment.resolved`, `review.approved`, `review.changes_requested`, `review.merged`.
+- The issue tracker MUST define a **provider interface** that abstracts issue operations. Two providers MUST be implemented: `GitHubIssueProvider` (via `gh` CLI) and `RadicleIssueProvider` (via `rad issue` CLI).
+- Each project in an org MUST be configured with an issue provider (stored in config: `projects.{projectId}.issueProvider: 'github' | 'radicle'`).
+- A **unified issue** MUST have: `id` (provider-native ID), `projectId`, `orgId`, `title`, `body` (markdown), `state` (`open` | `closed`), `labels` (string[]), `assignees` (string[]), `author`, `createdAt`, `updatedAt`, `commentCount`, `providerUrl` (link to GitHub/Radicle web view), `providerMeta` (opaque provider-specific data).
+- An **issue comment** MUST have: `id`, `issueId`, `author`, `body` (markdown), `createdAt`, `updatedAt`.
+- The issue tracker MUST support: `list` (with filters: state, label, assignee, search), `get`, `create`, `update` (title, body, state, labels, assignees), `addComment`, `listComments`.
+- All write operations MUST proxy to the provider — the provider is authoritative. Sovereign MUST NOT maintain its own issue state beyond a cache.
+- The issue tracker MUST maintain a **local cache** at `{dataDir}/issues/{orgId}/{projectId}/` — JSON files mirroring provider data. Cache MUST be refreshed on explicit sync, on webhook receipt (if configured), or on TTL expiry (configurable, default 5 minutes).
+- The issue tracker MUST support **offline reads** — when the provider is unreachable, serve from cache with a staleness indicator.
+- The issue tracker MUST support **queued writes** — when offline, write operations are queued to `{dataDir}/issues/queue.jsonl` and replayed when connectivity returns.
+- The `GitHubIssueProvider` MUST use the `gh` CLI for all operations: `gh issue list`, `gh issue view`, `gh issue create`, `gh issue edit`, `gh issue comment`.
+- The `RadicleIssueProvider` MUST use the `rad issue` CLI: `rad issue list`, `rad issue open`, `rad issue comment`, `rad issue label`, `rad issue assign`.
+- The issue tracker MUST emit events on the bus: `issue.created`, `issue.updated`, `issue.comment.added`, `issue.synced`.
+- The issue tracker MUST support **cross-project views** — list issues across all projects in an org, with project as a filterable field.
+- The issue tracker MUST expose a REST API:
+  - `GET /api/orgs/:orgId/issues?projectId=...&state=...&label=...&assignee=...&q=...` — list issues (cross-project if no projectId)
+  - `GET /api/orgs/:orgId/projects/:projectId/issues/:id` — get issue
+  - `POST /api/orgs/:orgId/projects/:projectId/issues` — create issue
+  - `PATCH /api/orgs/:orgId/projects/:projectId/issues/:id` — update issue
+  - `GET /api/orgs/:orgId/projects/:projectId/issues/:id/comments` — list comments
+  - `POST /api/orgs/:orgId/projects/:projectId/issues/:id/comments` — add comment
+  - `POST /api/orgs/:orgId/projects/:projectId/issues/sync` — force sync from provider
+- The issue tracker MUST listen for `config.changed` events to pick up provider changes.
+- The issue tracker SHOULD support **webhooks** — when a GitHub webhook fires for issue events, update the cache immediately (via the Phase 1 webhook module).
+- The issue tracker MAY support label and assignee autocomplete (cached from provider).
+
+### Interface
+
+```typescript
+interface Issue {
+  id: string
+  projectId: string
+  orgId: string
+  title: string
+  body: string
+  state: 'open' | 'closed'
+  labels: string[]
+  assignees: string[]
+  author: string
+  createdAt: string
+  updatedAt: string
+  commentCount: number
+  providerUrl?: string
+  providerMeta?: Record<string, unknown>
+}
+
+interface IssueComment {
+  id: string
+  issueId: string
+  author: string
+  body: string
+  createdAt: string
+  updatedAt?: string
+}
+
+interface IssueFilter {
+  projectId?: string
+  state?: 'open' | 'closed'
+  label?: string
+  assignee?: string
+  q?: string
+  limit?: number
+  offset?: number
+}
+
+interface IssueProvider {
+  list(repoPath: string, filter?: IssueFilter): Promise<Issue[]>
+  get(repoPath: string, issueId: string): Promise<Issue | undefined>
+  create(
+    repoPath: string,
+    data: { title: string; body?: string; labels?: string[]; assignees?: string[] }
+  ): Promise<Issue>
+  update(
+    repoPath: string,
+    issueId: string,
+    patch: { title?: string; body?: string; state?: string; labels?: string[]; assignees?: string[] }
+  ): Promise<Issue>
+  listComments(repoPath: string, issueId: string): Promise<IssueComment[]>
+  addComment(repoPath: string, issueId: string, body: string): Promise<IssueComment>
+}
+
+interface IssueTracker {
+  list(orgId: string, filter?: IssueFilter): Promise<Issue[]>
+  get(orgId: string, projectId: string, issueId: string): Promise<Issue | undefined>
+  create(
+    orgId: string,
+    projectId: string,
+    data: { title: string; body?: string; labels?: string[]; assignees?: string[] }
+  ): Promise<Issue>
+  update(
+    orgId: string,
+    projectId: string,
+    issueId: string,
+    patch: { title?: string; body?: string; state?: string; labels?: string[]; assignees?: string[] }
+  ): Promise<Issue>
+  listComments(orgId: string, projectId: string, issueId: string): Promise<IssueComment[]>
+  addComment(orgId: string, projectId: string, issueId: string, body: string): Promise<IssueComment>
+  sync(orgId: string, projectId: string): Promise<{ synced: number; errors: number }>
+  flushQueue(): Promise<{ replayed: number; failed: number }>
+}
+```
+
+### Files
+
+```
+packages/server/src/issues/
+├── issues.ts            # Core issue tracker (orchestrates providers + cache)
+├── issues.test.ts       # Unit tests
+├── types.ts             # Issue, IssueComment, IssueFilter, IssueProvider types
+├── github.ts            # GitHub provider (gh CLI wrapper)
+├── github.test.ts       # GitHub provider tests (mocked CLI)
+├── radicle.ts           # Radicle provider (rad issue CLI wrapper)
+├── radicle.test.ts      # Radicle provider tests (mocked CLI)
+├── cache.ts             # Local JSON cache + queue management
+├── cache.test.ts        # Cache tests
+└── routes.ts            # Express REST API router
+```
+
+---
+
+## 6. Review System
+
+A provider-backed code review system. GitHub Pull Requests and Radicle Patches are the sources of truth. Sovereign provides a unified review abstraction that combines local diff computation (from section 4) with provider-managed review state.
+
+### Requirements
+
+- The review system MUST define a **provider interface** that abstracts review operations. Two providers MUST be implemented: `GitHubReviewProvider` (wraps `gh pr` CLI) and `RadicleReviewProvider` (wraps `rad patch` CLI).
+- Each project MUST use the same provider for reviews as for issues (configured per project).
+- A **unified review** MUST have: `id` (provider-native ID, e.g. PR number or patch ID), `changeSetId` (local change set from diff engine), `projectId`, `orgId`, `title`, `description`, `status` (`open` | `approved` | `changes_requested` | `merged` | `closed`), `author`, `reviewers[]`, `baseBranch`, `headBranch`, `createdAt`, `updatedAt`, `mergedAt?`, `providerUrl`, `providerMeta`.
+- A **review comment** MUST have: `id`, `reviewId`, `filePath`, `lineNumber`, `endLineNumber?`, `side` (`old` | `new`), `body` (markdown), `author`, `createdAt`, `resolved`, `replyTo?` (thread parent), `providerCommentId` (for sync).
+- The review system MUST support creating a review from a worktree branch:
+  1. Create a local change set (diff engine)
+  2. Push the branch to the remote (if not already pushed)
+  3. Create a PR/patch via the provider
+  4. Link the local change set to the provider review
+- The review system MUST support **review actions** — all proxied to the provider:
+  - `approve` — approve via provider (`gh pr review --approve` / `rad patch review --accept`)
+  - `request-changes` — request changes via provider with comment
+  - `comment` — add review comment (not approval/rejection)
+  - `merge` — merge via provider (`gh pr merge` / `rad patch merge`)
+- On **merge**, the review system MUST also:
+  1. Clean up the local worktree (if linked) via the worktree module
+  2. Update the local change set status to `merged`
+  3. Emit `review.merged` event on the bus
+- **Inline comments** MUST be synced bidirectionally:
+  - Local comment → pushed to provider (creates PR comment / patch comment)
+  - Provider comments → pulled into local cache on sync
+  - Comment resolution state synced where supported (GitHub supports resolved; Radicle may not)
+- The review system MUST maintain a **local cache** at `{dataDir}/reviews/{orgId}/{projectId}/` — JSON files mirroring provider state. Same TTL/sync model as the issue tracker.
+- The review system MUST support **offline reads** from cache.
+- The review system MUST emit events: `review.created`, `review.updated`, `review.comment.added`, `review.comment.resolved`, `review.approved`, `review.changes_requested`, `review.merged`.
+- The `GitHubReviewProvider` MUST use `gh` CLI: `gh pr create`, `gh pr list`, `gh pr view`, `gh pr review`, `gh pr merge`, `gh pr comment`.
+- The `RadicleReviewProvider` MUST use `rad` CLI: `rad patch create`, `rad patch list`, `rad patch show`, `rad patch review`, `rad patch merge`, `rad patch comment`.
 - The review system MUST expose a REST API:
-  - `POST /api/reviews` — create review for a change set
-  - `GET /api/reviews?changeSetId=...&status=...` — list reviews
-  - `GET /api/reviews/:id` — get review with metadata
-  - `POST /api/reviews/:id/comments` — add comment
-  - `GET /api/reviews/:id/comments` — list comments (with thread structure)
-  - `PATCH /api/reviews/:id/comments/:commentId` — edit or resolve comment
-  - `POST /api/reviews/:id/approve` — approve
-  - `POST /api/reviews/:id/request-changes` — request changes (body: `{ comment }`)
-  - `POST /api/reviews/:id/merge` — merge
-- The review system MUST check merge eligibility before merging — if `review.requireApproval` config is true, the review MUST be in `approved` status. If there are unresolved comment threads, merge MUST be blocked (configurable: `review.blockOnUnresolved`, default true).
-- The review system MUST NOT directly import from the git or worktree modules — all interaction MUST go through the event bus or through injected dependencies (dependency inversion).
-- The review system SHOULD support **review assignment** — notify assigned reviewers via the notification module.
-- The review system SHOULD update the change set's file list when new commits are pushed to the head branch (listen for git events).
-- The review system MAY support **review templates** — predefined checklists attached to reviews.
-- The review system MAY support cross-project reviews (a single review spanning change sets in multiple projects, using linked worktrees).
+  - `POST /api/orgs/:orgId/projects/:projectId/reviews` — create review from worktree/branch
+  - `GET /api/orgs/:orgId/reviews?projectId=...&status=...` — list reviews (cross-project if no projectId)
+  - `GET /api/orgs/:orgId/projects/:projectId/reviews/:id` — get review with metadata
+  - `GET /api/orgs/:orgId/projects/:projectId/reviews/:id/diff` — get local diff (from change set)
+  - `POST /api/orgs/:orgId/projects/:projectId/reviews/:id/comments` — add inline comment
+  - `GET /api/orgs/:orgId/projects/:projectId/reviews/:id/comments` — list comments (threaded)
+  - `PATCH /api/orgs/:orgId/projects/:projectId/reviews/:id/comments/:commentId` — resolve/edit
+  - `POST /api/orgs/:orgId/projects/:projectId/reviews/:id/approve` — approve
+  - `POST /api/orgs/:orgId/projects/:projectId/reviews/:id/request-changes` — request changes
+  - `POST /api/orgs/:orgId/projects/:projectId/reviews/:id/merge` — merge
+  - `POST /api/orgs/:orgId/projects/:projectId/reviews/sync` — force sync from provider
+- The review system MUST NOT directly import from git, worktree, or diff modules — all interaction via bus or injected dependencies.
+- The review system SHOULD support **review assignment** — notify assignees via the notification module.
+- The review system SHOULD detect when new commits are pushed to the head branch and refresh the change set diff.
+- The review system MAY support cross-project reviews (linked worktrees spanning multiple projects).
 
 ### Interface
 
@@ -554,11 +687,20 @@ A code review workflow built on change sets. Inline comments, review actions, me
 interface Review {
   id: string
   changeSetId: string
-  status: 'pending' | 'approved' | 'changes_requested' | 'merged'
+  projectId: string
+  orgId: string
+  title: string
+  description: string
+  status: 'open' | 'approved' | 'changes_requested' | 'merged' | 'closed'
+  author: string
   reviewers: string[]
+  baseBranch: string
+  headBranch: string
   createdAt: string
   updatedAt: string
   mergedAt?: string
+  providerUrl?: string
+  providerMeta?: Record<string, unknown>
 }
 
 interface ReviewComment {
@@ -568,39 +710,76 @@ interface ReviewComment {
   lineNumber: number
   endLineNumber?: number
   side: 'old' | 'new'
-  content: string
+  body: string
   author: string
   createdAt: string
   resolved: boolean
   replyTo?: string
+  providerCommentId?: string
+}
+
+interface ReviewProvider {
+  create(
+    repoPath: string,
+    data: { title: string; body?: string; baseBranch: string; headBranch: string }
+  ): Promise<Review>
+  list(repoPath: string, filter?: { status?: string }): Promise<Review[]>
+  get(repoPath: string, reviewId: string): Promise<Review | undefined>
+  approve(repoPath: string, reviewId: string, body?: string): Promise<void>
+  requestChanges(repoPath: string, reviewId: string, body: string): Promise<void>
+  merge(repoPath: string, reviewId: string): Promise<void>
+  addComment(
+    repoPath: string,
+    reviewId: string,
+    comment: { filePath: string; lineNumber: number; body: string; side: 'old' | 'new' }
+  ): Promise<ReviewComment>
+  listComments(repoPath: string, reviewId: string): Promise<ReviewComment[]>
+  resolveComment(repoPath: string, reviewId: string, commentId: string): Promise<void>
 }
 
 interface ReviewDeps {
-  gitMerge: (projectPath: string, branch: string) => Promise<void>
   removeWorktree: (worktreeId: string) => Promise<void>
   getChangeSet: (id: string) => ChangeSet | undefined
   updateChangeSet: (id: string, patch: Partial<ChangeSet>) => ChangeSet
-  notify: (event: string, data: object) => void
+  getProvider: (orgId: string, projectId: string) => ReviewProvider
 }
 
 interface ReviewSystem {
-  create(data: { changeSetId: string; reviewers?: string[] }): Review
-  get(reviewId: string): Review | undefined
-  list(filter?: { changeSetId?: string; status?: string }): Review[]
+  create(
+    orgId: string,
+    projectId: string,
+    data: {
+      worktreeId?: string
+      title: string
+      description?: string
+      baseBranch: string
+      headBranch: string
+      reviewers?: string[]
+    }
+  ): Promise<Review>
+  get(orgId: string, projectId: string, reviewId: string): Promise<Review | undefined>
+  list(orgId: string, filter?: { projectId?: string; status?: string }): Promise<Review[]>
 
   addComment(
+    orgId: string,
+    projectId: string,
     reviewId: string,
-    comment: Omit<ReviewComment, 'id' | 'reviewId' | 'createdAt' | 'resolved'>
-  ): ReviewComment
-  listComments(reviewId: string): ReviewComment[]
-  resolveComment(reviewId: string, commentId: string): void
-  unresolveComment(reviewId: string, commentId: string): void
-  editComment(reviewId: string, commentId: string, content: string): ReviewComment
+    comment: {
+      filePath: string
+      lineNumber: number
+      endLineNumber?: number
+      side: 'old' | 'new'
+      body: string
+      replyTo?: string
+    }
+  ): Promise<ReviewComment>
+  listComments(orgId: string, projectId: string, reviewId: string): Promise<ReviewComment[]>
+  resolveComment(orgId: string, projectId: string, reviewId: string, commentId: string): Promise<void>
 
-  approve(reviewId: string): Review
-  requestChanges(reviewId: string, comment: string): Review
-  merge(reviewId: string): Promise<Review>
-  canMerge(reviewId: string): { allowed: boolean; reasons: string[] }
+  approve(orgId: string, projectId: string, reviewId: string, body?: string): Promise<Review>
+  requestChanges(orgId: string, projectId: string, reviewId: string, body: string): Promise<Review>
+  merge(orgId: string, projectId: string, reviewId: string): Promise<Review>
+  sync(orgId: string, projectId: string): Promise<{ synced: number; errors: number }>
 }
 ```
 
@@ -608,12 +787,16 @@ interface ReviewSystem {
 
 ```
 packages/server/src/review/
-├── review.ts            # Core review system
+├── review.ts            # Core review system (orchestrates providers + cache)
 ├── review.test.ts       # Unit tests
-├── types.ts             # Review, ReviewComment types
-├── comments.ts          # Comment storage (JSONL append + read)
-├── comments.test.ts     # Comment tests
-├── merge.ts             # Merge logic (merge + cleanup + status transitions)
+├── types.ts             # Review, ReviewComment, ReviewProvider types
+├── github.ts            # GitHub provider (gh pr CLI wrapper)
+├── github.test.ts       # GitHub provider tests (mocked CLI)
+├── radicle.ts           # Radicle provider (rad patch CLI wrapper)
+├── radicle.test.ts      # Radicle provider tests (mocked CLI)
+├── cache.ts             # Local JSON cache for reviews
+├── cache.test.ts        # Cache tests
+├── merge.ts             # Merge orchestration (provider merge + local cleanup)
 ├── merge.test.ts        # Merge tests
 └── routes.ts            # Express REST API router
 ```
@@ -632,7 +815,10 @@ Phase 3 MUST include integration tests covering:
 - File change → memory watcher re-ingests → search finds updated content
 - Memory search returns results from ingested project files
 - Create worktree → create change set from worktree → diff shows branch changes
-- Create review → add comments → approve → merge → worktree cleaned up → change set status `merged`
+- Issue create → synced to provider → list includes new issue
+- Issue provider offline → reads from cache → writes queued → flushQueue replays
+- Create review (PR/patch) from worktree → add comments → approve → merge → worktree cleaned up → change set `merged`
+- Review comment bidirectional sync: local → provider, provider → local cache
 - Cross-module event flow: review.merged → notification.created → ws push to client
 - All new REST endpoints protected by auth middleware
 
@@ -643,10 +829,12 @@ Phase 3 MUST include integration tests covering:
 ├── ... (Phase 1 + 2 directories)
 ├── memory/
 │   └── memory.db            # SQLite (documents, chunks, embeddings, FTS5)
+├── issues/
+│   ├── {orgId}/{projectId}/ # Cached issue JSON files
+│   └── queue.jsonl          # Offline write queue
 ├── reviews/
-│   ├── {changeSetId}.json   # Change set metadata
-│   ├── {reviewId}.json      # Review metadata
-│   └── {reviewId}-comments.jsonl  # Review comments
+│   ├── {orgId}/{projectId}/ # Cached review JSON files
+│   └── {changeSetId}.json   # Local change set metadata
 ├── config.json              # Unified configuration
 └── config-history.jsonl     # Config change log
 ```
@@ -688,4 +876,5 @@ All Phase 3 server modules MUST follow the established pattern:
 - Memory tests using in-memory SQLite (`:memory:`) for speed.
 - Embedding tests mock the Ollama HTTP call (no real API calls in tests).
 - Diff tests use inline string fixtures (no real git repos needed for text diff; file-diff tests use temp git repos as in Phase 2).
-- Review merge tests use injected mock dependencies (no real git operations).
+- Issue provider tests mock `gh` and `rad` CLI calls (no real GitHub/Radicle access in tests).
+- Review provider tests mock `gh` and `rad` CLI calls. Merge tests use injected mock dependencies.
