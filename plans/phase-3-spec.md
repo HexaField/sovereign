@@ -14,7 +14,7 @@ Memory & embeddings, session store, context compaction, and system prompt assemb
 
 ## Wave Strategy
 
-**Wave 1 (parallel):** Config, WebSocket Protocol **Wave 2:** Client UI components + integration tests
+**Wave 1 (parallel):** Config, WebSocket Protocol (core transport + channel registry) **Wave 2:** Module WS integrations (status, notifications, scheduler, files, git, terminal, worktrees, orgs) **Wave 3:** Client UI (WS store, reconnection, update StatusBar to use WS store) + integration tests
 
 ---
 
@@ -115,37 +115,47 @@ packages/server/src/config/
 
 ## 2. WebSocket Protocol
 
-A typed, multiplexed WebSocket protocol replacing the raw status connection. All real-time communication between client and server flows through this single connection.
+A typed, multiplexed WebSocket transport layer. Like the event bus, this is **infrastructure** — it provides connection management, auth, subscriptions, and multiplexing. Individual modules register their own channels and message types. The WS module does NOT hardcode knowledge of any specific module's messages.
 
 ### Requirements
 
+#### Core Transport
+
 - The server MUST expose a single WebSocket endpoint at `/ws`, replacing the current raw status-only WS from Phase 2.
 - All WebSocket messages MUST be JSON objects with a `type` string discriminator.
-- The protocol MUST support these server → client message types:
-  - `status.update` — system status (connection state, active jobs, unread notifications)
-  - `session.message` — new message in a subscribed session
-  - `notification.new` — new notification
-  - `file.changed` — file change event (path, kind: created/modified/deleted)
-  - `terminal.data` — terminal output (sessionId + base64-encoded data)
-  - `git.status` — git status changed for a project
-  - `worktree.update` — worktree state change
-  - `review.update` — review status change
-  - `error` — server-side error with code and message
-  - `pong` — keepalive response
-- The protocol MUST support these client → server message types:
-  - `subscribe` — subscribe to event channels for a scope (`{ channels: ['terminal', 'files', 'git'], scope?: { orgId, projectId, sessionId } }`)
-  - `unsubscribe` — unsubscribe from channels
-  - `terminal.input` — terminal input data (sessionId + base64 data)
-  - `terminal.resize` — terminal resize (sessionId + cols + rows)
-  - `ping` — keepalive
 - The server MUST support **multiplexing** — a single WS connection carries all event types. Events are scoped by optional `orgId`, `projectId`, or `sessionId` fields.
 - The server MUST track **subscriptions** per connection — only send events the client has subscribed to. Default subscriptions on connect: `['status']`.
-- The server MUST respond to `ping` with `pong`.
 - The server MUST authenticate WebSocket connections using the auth module (token as query parameter `?token=...` or in the first message).
-- The server MUST bridge existing bus events to WebSocket messages — when `file.created` fires on the bus, connected clients subscribed to `files` receive a `file.changed` message.
-- The server MUST gracefully handle disconnections — clean up subscriptions, detach terminal sessions, emit `ws.disconnected` on the bus.
+- The server MUST gracefully handle disconnections — clean up subscriptions, invoke channel `onDisconnect` callbacks, emit `ws.disconnected` on the bus.
 - The server MUST emit `ws.connected` and `ws.disconnected` events on the bus with the device ID.
-- Binary frames MUST be supported for terminal data — binary frames use a 1-byte channel ID prefix followed by payload. Channel 0 = terminal.
+- Binary frames MUST be supported — binary frames use a 1-byte channel ID prefix followed by payload. Channel IDs are assigned during channel registration.
+
+#### Built-in Messages (transport-level only)
+
+- `subscribe` (client → server) — subscribe to channels for a scope (`{ channels: string[], scope?: { orgId?, projectId?, sessionId? } }`)
+- `unsubscribe` (client → server) — unsubscribe from channels
+- `ping` (client → server) / `pong` (server → client) — keepalive
+- `error` (server → client) — transport/auth error with code and message
+- `ack` (server → client) — optional acknowledgement (`{ ackId }`)
+
+#### Channel Registration API
+
+- The WS module MUST expose a `registerChannel()` API that other modules call during init to declare their channels and message types.
+- `registerChannel(name, options)` where options include:
+  - `serverMessages: string[]` — message types this channel can push to clients
+  - `clientMessages: string[]` — message types this channel accepts from clients
+  - `binary?: boolean` — whether this channel supports binary frames (assigns a binary channel ID)
+  - `onSubscribe?: (deviceId, scope) => void` — called when a client subscribes to this channel
+  - `onUnsubscribe?: (deviceId, scope) => void` — called when a client unsubscribes
+  - `onDisconnect?: (deviceId) => void` — called on client disconnect (for resource cleanup)
+  - `onMessage?: (type, payload, deviceId) => void` — handler for client → server messages on this channel
+- Modules MUST register channels before the server starts accepting connections.
+- The WS module MUST reject `subscribe` requests for unregistered channels.
+- The WS module MUST reject incoming client messages with types not registered to any channel.
+- `GET /ws/channels` SHOULD return the list of registered channels and their message types (for debugging/introspection).
+
+#### Client
+
 - The client MUST implement automatic reconnection with exponential backoff (initial 1s, max 30s, jitter).
 - The client MUST provide a **reactive SolidJS store** that components subscribe to for specific event types. Components MUST NOT manage their own WebSocket connections.
 - The client MUST re-subscribe to all active channels on reconnection.
@@ -162,31 +172,6 @@ interface WsMessage {
   ackId?: string
 }
 
-interface WsStatusUpdate extends WsMessage {
-  type: 'status.update'
-  status: { connected: boolean; activeJobs: number; unreadNotifications: number }
-}
-
-interface WsFileChanged extends WsMessage {
-  type: 'file.changed'
-  orgId: string
-  projectId: string
-  path: string
-  kind: 'created' | 'modified' | 'deleted'
-}
-
-interface WsTerminalData extends WsMessage {
-  type: 'terminal.data'
-  sessionId: string
-  data: string // base64
-}
-
-interface WsTerminalInput extends WsMessage {
-  type: 'terminal.input'
-  sessionId: string
-  data: string // base64
-}
-
 interface WsSubscribe extends WsMessage {
   type: 'subscribe'
   channels: string[]
@@ -199,19 +184,33 @@ interface WsError extends WsMessage {
   message: string
 }
 
+// Channel registration (server-side)
+interface WsChannelOptions {
+  serverMessages: string[]
+  clientMessages: string[]
+  binary?: boolean
+  onSubscribe?: (deviceId: string, scope?: Record<string, string>) => void
+  onUnsubscribe?: (deviceId: string, scope?: Record<string, string>) => void
+  onDisconnect?: (deviceId: string) => void
+  onMessage?: (type: string, payload: unknown, deviceId: string) => void
+}
+
 // Server-side
 interface WsHandler {
+  registerChannel(name: string, options: WsChannelOptions): void
   handleConnection(ws: WebSocket, deviceId: string): void
   broadcast(msg: WsMessage): void
-  broadcastToChannel(channel: string, msg: WsMessage, scope?: object): void
+  broadcastToChannel(channel: string, msg: WsMessage, scope?: Record<string, string>): void
   sendTo(deviceId: string, msg: WsMessage): void
+  sendBinary(channel: string, data: Buffer, scope?: Record<string, string>): void
   getConnectedDevices(): string[]
+  getChannels(): string[]
 }
 
 // Client-side
 interface WsStore {
   connected: Accessor<boolean>
-  subscribe(channels: string[], scope?: object): void
+  subscribe(channels: string[], scope?: Record<string, string>): void
   unsubscribe(channels: string[]): void
   on<T extends WsMessage>(type: string, handler: (msg: T) => void): () => void
   send(msg: WsMessage): void
@@ -222,18 +221,17 @@ interface WsStore {
 
 ```
 packages/core/src/ws/
-├── types.ts             # All WsMessage types (shared client + server)
-├── protocol.ts          # Message validation, type guards, channel constants
+├── types.ts             # WsMessage, WsSubscribe, WsError, WsChannelOptions
+├── protocol.ts          # Message validation, type guards
 └── protocol.test.ts     # Protocol validation tests
 
 packages/server/src/ws/
-├── handler.ts           # WebSocket connection handler + auth
+├── handler.ts           # WebSocket connection handler, auth, channel registry
 ├── handler.test.ts      # Handler tests
 ├── subscriptions.ts     # Per-connection subscription tracking
 ├── subscriptions.test.ts
-├── bridge.ts            # Bus event → WS message bridging
-├── bridge.test.ts       # Bridge tests
-└── binary.ts            # Binary frame encoding/decoding
+├── binary.ts            # Binary frame encoding/decoding (channel ID prefix)
+└── binary.test.ts       # Binary frame tests
 
 packages/client/src/ws/
 ├── ws-store.ts          # Reactive SolidJS WebSocket store
@@ -242,6 +240,131 @@ packages/client/src/ws/
 └── reconnect.test.ts    # Reconnection tests
 ```
 
+---
+
+## 3. Module WebSocket Integrations
+
+When the WebSocket protocol lands, the following **existing modules** from Phases 1 and 2 MUST be updated to register their WS channels. Each module defines its own message types, registers its channel, bridges bus events to WS messages, and handles client→server messages where applicable.
+
+This work is part of Phase 3 — the WS module is useless without at least the core modules wired up.
+
+### 3.1 Status (Phase 1)
+
+Already has a raw WS connection — replace with proper channel registration.
+
+**Channel:** `status` **Server → client:**
+
+- `status.update` — `{ connected: boolean, activeJobs: number, unreadNotifications: number }`
+
+**Bus → WS bridge:** `status.update` bus event → `status.update` WS message
+
+**Files to update:** `packages/server/src/status/`, `packages/client/src/components/status-bar/` **Tests:** Verify status channel registration, subscription delivers status updates, auto-subscribed on connect.
+
+### 3.2 Notifications (Phase 1)
+
+**Channel:** `notifications` **Server → client:**
+
+- `notification.new` — `{ id, title, body, level, timestamp }`
+- `notification.read` — `{ id }`
+
+**Bus → WS bridge:** `notification.created` → `notification.new`, `notification.read` → `notification.read`
+
+**Files to update:** `packages/server/src/notifications/` **Tests:** Subscribe to notifications channel, bus event fires, client receives message.
+
+### 3.3 Scheduler (Phase 1)
+
+**Channel:** `scheduler` **Server → client:**
+
+- `scheduler.job.started` — `{ jobId, name }`
+- `scheduler.job.completed` — `{ jobId, name, result }`
+- `scheduler.job.failed` — `{ jobId, name, error }`
+
+**Bus → WS bridge:** `scheduler.job.*` bus events → matching WS messages
+
+**Files to update:** `packages/server/src/scheduler/` **Tests:** Subscribe to scheduler channel, job lifecycle events pushed to client.
+
+### 3.4 Files (Phase 2)
+
+**Channel:** `files` **Server → client:**
+
+- `file.changed` — `{ orgId, projectId, path, kind: 'created' | 'modified' | 'deleted' }`
+
+**Bus → WS bridge:** `file.created`, `file.deleted` → `file.changed`
+
+**Files to update:** `packages/server/src/files/` **Tests:** Subscribe to files channel with project scope, file bus event delivered to subscribed clients only.
+
+### 3.5 Git (Phase 2)
+
+**Channel:** `git` **Server → client:**
+
+- `git.status` — `{ orgId, projectId, branch, ahead, behind, staged, modified, untracked }`
+
+**Bus → WS bridge:** `git.status.changed` → `git.status` (if the git module emits this — may need to add the bus event)
+
+**Files to update:** `packages/server/src/git/` **Tests:** Subscribe to git channel with project scope, status change pushed to client.
+
+### 3.6 Terminal (Phase 2)
+
+**Channel:** `terminal` **Server → client:**
+
+- `terminal.data` — binary frame (terminal output)
+- `terminal.created` — `{ sessionId, shell, cwd }`
+- `terminal.closed` — `{ sessionId, exitCode }`
+
+**Client → server:**
+
+- `terminal.input` — binary frame (terminal input)
+- `terminal.resize` — `{ sessionId, cols, rows }`
+
+**Binary:** Yes (channel ID assigned at registration). Binary frames carry raw PTY data.
+
+**Callbacks:**
+
+- `onSubscribe` — attach client to terminal session
+- `onUnsubscribe` / `onDisconnect` — detach client, optionally grace-period close
+
+**Bus → WS bridge:** `terminal.created`, `terminal.closed` bus events → matching WS messages. Terminal data bypasses the bus (direct binary push for performance).
+
+**Files to update:** `packages/server/src/terminal/` **Tests:** Subscribe to terminal channel with sessionId scope, input/output round-trip, resize, disconnect cleanup.
+
+### 3.7 Worktrees (Phase 2)
+
+**Channel:** `worktrees` **Server → client:**
+
+- `worktree.update` — `{ orgId, projectId, worktreeId, status, branch }`
+- `worktree.stale` — `{ orgId, projectId, worktreeId, staleDays }`
+
+**Bus → WS bridge:** `worktree.created`, `worktree.removed`, `worktree.stale` → matching WS messages
+
+**Files to update:** `packages/server/src/worktrees/` **Tests:** Subscribe to worktrees channel, worktree lifecycle events pushed to client.
+
+### 3.8 Orgs (Phase 2)
+
+**Channel:** `orgs` **Server → client:**
+
+- `org.created` — `{ orgId, name }`
+- `org.updated` — `{ orgId, changes }`
+- `org.deleted` — `{ orgId }`
+
+**Bus → WS bridge:** `org.*` bus events → matching WS messages
+
+**Files to update:** `packages/server/src/orgs/` **Tests:** Subscribe to orgs channel, org lifecycle events pushed to client.
+
+### Summary
+
+| Module | Channel | Server→Client | Client→Server | Binary | Phase |
+| --- | --- | --- | --- | --- | --- |
+| Status | `status` | `status.update` | — | No | 1 |
+| Notifications | `notifications` | `notification.new`, `notification.read` | — | No | 1 |
+| Scheduler | `scheduler` | `scheduler.job.*` | — | No | 1 |
+| Files | `files` | `file.changed` | — | No | 2 |
+| Git | `git` | `git.status` | — | No | 2 |
+| Terminal | `terminal` | `terminal.data`, `terminal.created`, `terminal.closed` | `terminal.input`, `terminal.resize` | Yes | 2 |
+| Worktrees | `worktrees` | `worktree.update`, `worktree.stale` | — | No | 2 |
+| Orgs | `orgs` | `org.created`, `org.updated`, `org.deleted` | — | No | 2 |
+
+Future modules (Phase 4: issues, reviews, radicle; Phase 6: sessions, agents) will register their own channels following the same pattern.
+
 ## Cross-Cutting Concerns
 
 ### Integration Tests
@@ -249,8 +372,12 @@ packages/client/src/ws/
 Phase 3 MUST include integration tests covering:
 
 - Config change via API → module picks up new value (e.g. change `terminal.shell` → terminal module uses new shell on next session)
-- WebSocket subscribe to channel → bus event fires → client receives typed message
+- WebSocket channel registration → subscribe → bus event fires → client receives typed message
 - WebSocket auth — reject connection without valid token
+- WebSocket subscribe to unregistered channel → error
+- WebSocket client message with unregistered type → error
+- Terminal binary round-trip: client sends binary input → terminal processes → binary output received
+- Module disconnect callback: terminal client disconnects → onDisconnect fires → terminal grace period starts
 - All new REST endpoints protected by auth middleware
 
 ### Data Directory Extension
