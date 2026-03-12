@@ -1,20 +1,20 @@
-# Phase 3: Config, Protocol & Memory — Specification
+# Phase 3: Config & Protocol — Specification
 
-**Status:** Draft **Revision:** 3 **Date:** 2026-03-12
+**Status:** Draft **Revision:** 4 **Date:** 2026-03-12
 
-This document specifies the three modules of Phase 3. All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md). Each section defines requirements using MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
+This document specifies the two modules of Phase 3. All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md). Each section defines requirements using MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
 
 Phase 3 depends on Phase 1 (event bus, auth, notifications, scheduler, status) and Phase 2 (orgs, projects, worktrees, files, git, terminal, IDE shell). All new modules communicate via the event bus.
 
-Phase 3 builds the infrastructure layer while OpenClaw remains the agent runtime. Config management establishes the foundation all modules depend on. The typed WebSocket protocol replaces the raw status connection and enables real-time push for all existing server-side modules. Memory & embeddings provides project knowledge search.
+Phase 3 builds the infrastructure layer while OpenClaw remains the agent runtime. Config management establishes the foundation all modules depend on. The typed WebSocket protocol replaces the raw status connection and enables real-time push for all existing server-side modules.
 
-Session store, context compaction, and system prompt assembly are deferred to Phase 6 (Agent Core).
+Memory & embeddings, session store, context compaction, and system prompt assembly are deferred to Phase 6 (Agent Core).
 
 ---
 
 ## Wave Strategy
 
-**Wave 1 (parallel):** Config, WebSocket Protocol, Memory & Embeddings **Wave 2:** Client UI components + integration tests
+**Wave 1 (parallel):** Config, WebSocket Protocol **Wave 2:** Client UI components + integration tests
 
 ---
 
@@ -255,133 +255,15 @@ packages/client/src/ws/
 └── reconnect.test.ts    # Reconnection tests
 ```
 
----
-
-## 3. Memory & Embeddings
-
-A local-first semantic memory system. Index project files, search them by keyword or meaning. Uses SQLite for storage, FTS5 for keyword search, sqlite-vec for vector similarity, and Ollama for local embeddings.
-
-### Requirements
-
-- The memory store MUST use a single SQLite database at `{dataDir}/memory/memory.db`.
-- The database MUST have tables:
-  - `documents` — `id TEXT PK`, `path TEXT UNIQUE`, `orgId TEXT`, `hash TEXT`, `chunk_count INTEGER`, `updated_at TEXT`
-  - `chunks` — `id TEXT PK`, `document_id TEXT FK`, `content TEXT`, `start_line INTEGER`, `end_line INTEGER`, `token_count INTEGER`
-  - `embeddings` — `chunk_id TEXT FK`, `vector BLOB` (sqlite-vec float32 array)
-  - `chunks_fts` — FTS5 virtual table on `chunks.content` for BM25 keyword search
-- The memory store MUST support **document ingestion**: given a file path, read the file, split into chunks, compute embeddings via Ollama, store everything in a single transaction.
-- **Chunking** MUST be content-aware:
-  - Markdown: split on headings (`## `, `### `, etc.), keeping heading as chunk prefix
-  - Code (TypeScript/JavaScript): split on top-level declarations (function, class, export)
-  - Fallback: fixed-size token window
-  - Default chunk size: 512 tokens, 64-token overlap (configurable via config module)
-- The memory store MUST track file content hashes — re-ingestion skips unchanged files (hash comparison).
-- **Keyword search** MUST use FTS5 BM25 ranking.
-- **Semantic search** MUST use sqlite-vec cosine similarity over embedding vectors.
-- **Hybrid search** MUST combine keyword and semantic results using Reciprocal Rank Fusion: `score = Σ 1/(k + rank_i)` where `k = 60` (configurable).
-- Search MUST support filters: `search(query, { orgId?, paths?, minScore?, limit?, mode? })` where mode is `keyword`, `semantic`, or `hybrid` (default).
-- Embeddings MUST be generated via Ollama API (`POST /api/embed` with model from config, default `nomic-embed-text`). The Ollama URL MUST come from the config module.
-- The memory store MUST gracefully handle Ollama being unavailable — ingest the document and chunks without embeddings, log a warning, allow keyword-only search. Embeddings MUST be backfillable: `backfill()` processes all chunks missing embeddings.
-- The memory store MUST listen for `config.changed` events on path `memory.ollama.*` and update its Ollama client accordingly (hot-reload).
-- The memory store MUST emit `memory.document.ingested`, `memory.document.removed`, `memory.search` events on the bus.
-- The memory store MUST expose a REST API:
-  - `POST /api/memory/ingest` — body: `{ path: string }` or `{ directory: string, patterns?: string[], exclude?: string[] }`
-  - `GET /api/memory/search?q=...&mode=...&limit=...&orgId=...`
-  - `GET /api/memory/documents?orgId=...` — list indexed documents
-  - `DELETE /api/memory/documents/:id` — remove a document and its chunks/embeddings
-  - `POST /api/memory/reindex` — re-ingest all tracked documents
-  - `POST /api/memory/backfill` — generate missing embeddings
-- The memory store MUST NOT load entire files into memory for chunking — stream or read in bounded segments for large files.
-- A **file watcher** SHOULD automatically re-ingest changed files within configured watch directories (from config `memory.watchDirs`). The watcher MUST debounce rapid changes (configurable, default 2s). The watcher MUST respect exclude patterns from config.
-- The memory store SHOULD support batch ingestion with progress reporting (emit `memory.ingest.progress` events).
-- The memory store MAY support multiple embedding models (configurable per org).
-
-### Interface
-
-```typescript
-interface MemoryDocument {
-  id: string
-  path: string
-  orgId?: string
-  hash: string
-  chunkCount: number
-  updatedAt: string
-}
-
-interface MemoryChunk {
-  id: string
-  documentId: string
-  content: string
-  startLine: number
-  endLine: number
-  tokenCount: number
-}
-
-interface SearchResult {
-  chunk: MemoryChunk
-  document: MemoryDocument
-  score: number
-  matchType: 'keyword' | 'semantic' | 'hybrid'
-}
-
-interface SearchOptions {
-  orgId?: string
-  paths?: string[]
-  minScore?: number
-  limit?: number
-  mode?: 'keyword' | 'semantic' | 'hybrid'
-}
-
-interface MemoryStore {
-  ingest(filePath: string, orgId?: string): Promise<MemoryDocument>
-  ingestDirectory(
-    dirPath: string,
-    opts?: { orgId?: string; patterns?: string[]; exclude?: string[] }
-  ): Promise<MemoryDocument[]>
-  search(query: string, opts?: SearchOptions): Promise<SearchResult[]>
-  listDocuments(opts?: { orgId?: string }): MemoryDocument[]
-  getDocument(docId: string): MemoryDocument | undefined
-  removeDocument(docId: string): void
-  reindex(): Promise<void>
-  backfill(): Promise<{ processed: number; failed: number }>
-  startWatcher(): void
-  stopWatcher(): void
-}
-```
-
-### Files
-
-```
-packages/server/src/memory/
-├── memory.ts            # Core memory store (orchestrates ingest + search)
-├── memory.test.ts       # Unit tests
-├── types.ts             # MemoryDocument, MemoryChunk, SearchResult types
-├── db.ts                # SQLite database setup (tables, FTS5, sqlite-vec)
-├── db.test.ts           # Database tests
-├── chunker.ts           # Content-aware text chunking
-├── chunker.test.ts      # Chunker tests
-├── embeddings.ts        # Ollama embedding client
-├── embeddings.test.ts   # Embedding tests (mocked Ollama)
-├── search.ts            # Hybrid search (FTS5 + vector + RRF fusion)
-├── search.test.ts       # Search tests
-├── watcher.ts           # File watcher for auto-reingestion
-├── watcher.test.ts      # Watcher tests
-└── routes.ts            # Express REST API router
-```
-
----
-
 ## Cross-Cutting Concerns
 
 ### Integration Tests
 
 Phase 3 MUST include integration tests covering:
 
-- Config change via API → module picks up new value (e.g. change `memory.ollama.url` → memory store uses new URL on next call)
+- Config change via API → module picks up new value (e.g. change `terminal.shell` → terminal module uses new shell on next session)
 - WebSocket subscribe to channel → bus event fires → client receives typed message
 - WebSocket auth — reject connection without valid token
-- File change → memory watcher re-ingests → search finds updated content
-- Memory search returns results from ingested project files
 - All new REST endpoints protected by auth middleware
 
 ### Data Directory Extension
@@ -389,8 +271,6 @@ Phase 3 MUST include integration tests covering:
 ```
 {dataDir}/
 ├── ... (Phase 1 + 2 directories)
-├── memory/
-│   └── memory.db            # SQLite (documents, chunks, embeddings, FTS5)
 ├── config.json              # Unified configuration
 └── config-history.jsonl     # Config change log
 ```
@@ -399,8 +279,6 @@ Phase 3 MUST include integration tests covering:
 
 **Server:**
 
-- `better-sqlite3` + `@types/better-sqlite3` — synchronous SQLite driver
-- `sqlite-vec` — vector similarity extension for SQLite
 - `ajv` — JSON Schema validation for config
 
 **Core:**
@@ -426,5 +304,3 @@ All Phase 3 server modules MUST follow the established pattern:
 - Unit tests per module following established patterns (Vitest, temp directories, injectable bus).
 - Integration tests in `packages/server/src/__integration__/phase3.test.ts`.
 - Client WebSocket store tests using a mock WebSocket.
-- Memory tests using in-memory SQLite (`:memory:`) for speed.
-- Embedding tests mock the Ollama HTTP call (no real API calls in tests).

@@ -8,9 +8,9 @@ Event bus, scheduler, webhook receiver, auth layer, notifications, status bar. I
 
 Org manager, multi-project support per org with shared context. Git worktree lifecycle per project, synchronised across projects for cross-project PRs and CI. IDE shell (split panels, tabs, shortcuts), file explorer, git integration panel, embedded terminal. Mobile-first, progressive disclosure.
 
-## Phase 3: Config, Protocol & Memory
+## Phase 3: Config & Protocol
 
-Dynamic config management (schema-validated, hot-reload, env overrides). Typed multiplexed WebSocket protocol replacing the raw status connection. Local-first memory & embeddings (SQLite + FTS5 + sqlite-vec + Ollama).
+Dynamic config management (schema-validated, hot-reload, env overrides). Typed multiplexed WebSocket protocol replacing the raw status connection.
 
 Still relies on OpenClaw for agent runtime.
 
@@ -24,7 +24,7 @@ DAG planning engine with dependency-aware work graphs. Planning UI (graph, kanba
 
 ## Phase 6: Agent Core (beta release)
 
-Own session store (JSONL), context compaction, system prompt assembly. Tool runtime & registry, LLM router (multi-provider, streaming, fallback), agent loop (deterministic state machine), multi-agent orchestration, worktree-agent binding. **Full independence from OpenClaw.**
+Own session store (JSONL), context compaction, system prompt assembly. Memory & embeddings (SQLite + FTS5 + sqlite-vec + Ollama). Tool runtime & registry, LLM router (multi-provider, streaming, fallback), agent loop (deterministic state machine), multi-agent orchestration, worktree-agent binding. **Full independence from OpenClaw.**
 
 ## Phase 7: Radicle & Sovereignty (initial release)
 
