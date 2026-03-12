@@ -14,21 +14,21 @@ Dynamic config management (schema-validated, hot-reload, env overrides). Typed m
 
 Still relies on OpenClaw for agent runtime.
 
-## Phase 4: Diff, Issues & Review
+## Phase 4: Diff, Issues, Review & Radicle
 
-Diff engine (text, file, semantic for JSON/YAML/TOML, change sets). Provider-backed issue tracker and code review system — GitHub and Radicle as sources of truth, unified behind a provider abstraction with multi-remote support per project. Sovereign caches for performance and offline access but does NOT maintain its own authoritative issue/review store.
+Diff engine (text, file, semantic for JSON/YAML/TOML, change sets). Provider-backed issue tracker and code review system — GitHub and Radicle as sources of truth, unified behind a provider abstraction with multi-remote support per project. Radicle repo management (`rad` CLI integration, repo dashboard, identity management, peer discovery). Sovereign caches for performance and offline access but does NOT maintain its own authoritative issue/review store.
 
-## Phase 5: Planning & CI
+## Phase 5: Planning
 
-DAG planning engine with dependency-aware work graphs. Planning UI (graph, kanban, list, tree views). Local VM CI runner (Lima/QEMU on macOS, Firecracker on Linux). Pipeline YAML, artifact caching, matrix builds.
+DAG planning engine with dependency-aware work graphs. Planning UI (graph, kanban, list, tree views).
 
 ## Phase 6: Agent Core (beta release)
 
 Own session store (JSONL), context compaction, system prompt assembly. Memory & embeddings (SQLite + FTS5 + sqlite-vec + Ollama). Tool runtime & registry, LLM router (multi-provider, streaming, fallback), agent loop (deterministic state machine), multi-agent orchestration, worktree-agent binding. **Full independence from OpenClaw.**
 
-## Phase 7: Radicle & Sovereignty (initial release)
+## Phase 7: Sovereignty & CI (initial release)
 
-Radicle repo management (`rad` CLI), peer-to-peer repo sync across devices, decentralized CI with signed attestations. Note: Radicle issue and patch providers are introduced in Phase 4 — Phase 7 adds the deeper integration. **Full independence from GitHub.**
+Peer-to-peer repo sync across devices via Radicle gossip. Local VM CI runner (Lima/QEMU on macOS, Firecracker on Linux). Pipeline YAML, artifact caching, matrix builds. Decentralized CI with signed attestations and distributed build farm. **Full independence from GitHub.**
 
 ## Phase 8: Ecosystem (long-term vision)
 
@@ -38,4 +38,4 @@ Device/node system, plugin architecture, multi-user support, voice & ambient int
 
 **Critical path:** 1 → 2 → 3 → 6.session → 6.agent-loop → 6.multi-agent
 
-**Parallel tracks:** Phase 5 alongside Phase 4. VM CI independent. Radicle starts after git integration. UI work runs in parallel with everything.
+**Parallel tracks:** Phase 5 alongside Phase 4. Radicle repo mgmt in Phase 4 enables P2P sync in Phase 7. VM CI independent. UI work runs in parallel with everything.
