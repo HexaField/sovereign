@@ -9,13 +9,18 @@
   },
   "dependencies": {
     "@template/core": "workspace:*",
+    "@types/diff": "^8.0.0",
+    "@types/js-yaml": "^4.0.9",
     "ajv": "^8.18.0",
     "chokidar": "^5.0.0",
     "cors": "^2.8.5",
+    "diff": "^8.0.3",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "jose": "^6.2.1",
+    "js-yaml": "^4.1.1",
     "node-pty": "^1.1.0",
+    "smol-toml": "^1.6.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
