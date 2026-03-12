@@ -1,102 +1,126 @@
-# Phase 3: Intelligence & Session — Specification
+# Phase 3: Config, Protocol, Memory, Diff & Review — Specification
 
 **Status:** Draft **Revision:** 1 **Date:** 2026-03-12
 
-This document specifies the six modules of Phase 3. All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md). Each section defines requirements using MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
+This document specifies the five modules of Phase 3. All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md). Each section defines requirements using MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
 
 Phase 3 depends on Phase 1 (event bus, auth, notifications, scheduler, status) and Phase 2 (orgs, projects, worktrees, files, git, terminal, IDE shell). All new modules communicate via the event bus.
 
-Phase 3 is the intelligence layer — owning conversation state, memory, context assembly, and the typed WebSocket protocol that replaces the raw status connection from Phase 2.
+Phase 3 builds the infrastructure layer while OpenClaw remains the agent runtime. Config management establishes the foundation all modules depend on. The typed WebSocket protocol replaces the raw status connection and enables real-time push for all existing server-side modules. Memory & embeddings provides project knowledge search. The diff engine and review system bring code review workflows into the platform.
+
+Session store, context compaction, and system prompt assembly are deferred to Phase 5 (Agent Core) — they require owning the conversation state, which OpenClaw still manages.
 
 ---
 
-## 1. Session Store
+## Wave Strategy
 
-The session store owns all conversation state. Every message — human, assistant, tool calls, system events — is persisted as append-only JSONL. The session store replaces any external session management dependency.
+**Wave 1 (parallel):** Config, WebSocket Protocol, Memory & Embeddings **Wave 2 (depends on Git + Files + Worktrees):** Diff Engine **Wave 3 (depends on Diff Engine):** Review System **Wave 4:** Client UI components + integration tests
+
+---
+
+## 1. Config Management
+
+A unified configuration system. Every other module reads its settings from here. Schema-validated, hot-reloadable, environment-overridable.
 
 ### Requirements
 
-- A **session** MUST have: `id`, `orgId` (optional), `kind` (`main` | `thread` | `agent`), `label` (optional human-readable name), `status` (`active` | `archived` | `compacted`), `createdAt`, `updatedAt`, `messageCount`, `tokenEstimate`.
-- A **message** MUST have: `id`, `sessionId`, `role` (`user` | `assistant` | `system` | `tool`), `content` (string or structured), `timestamp`, `metadata` (optional: model, tokens, tool info, thinking).
-- Messages MUST be persisted as append-only JSONL files at `{dataDir}/sessions/{sessionId}.jsonl` — one JSON object per line, one file per session.
-- The session store MUST maintain a session index at `{dataDir}/sessions/index.json` mapping session IDs to metadata (kind, label, status, message count, last activity).
-- The session store MUST support **thread routing**: a label like `thread:planning` resolves to a specific session file. Thread creation MUST be implicit — sending to a non-existent thread creates it.
-- The session store MUST support session lifecycle: `create`, `append` (add message), `history` (read messages with pagination), `archive` (mark inactive), `delete` (remove JSONL file).
-- The session store MUST emit `session.created`, `session.message`, `session.archived`, `session.deleted` events on the bus.
-- Appending a message MUST be atomic — the JSONL line is flushed before the append call returns.
-- The session store MUST support filtering sessions by kind, status, orgId, and label.
-- The session store MUST support message pagination: `history(sessionId, { limit, before, after })` returning messages in chronological order.
-- The session store MUST track token estimates per session (approximate, based on character count / 4 or a configurable ratio).
-- The session store MUST expose a REST API: `GET/POST /api/sessions`, `GET/DELETE /api/sessions/:id`, `GET/POST /api/sessions/:id/messages`.
-- The session store MUST NOT load entire JSONL files into memory for reads — it MUST support streaming/tailing for large sessions.
-- The session store SHOULD support compaction: replacing old messages with a summary while preserving the JSONL file (summary message + marker + recent messages).
-- The session store MAY support session export (download JSONL) and import.
+- The config store MUST maintain all Sovereign configuration in a single JSON file at `{dataDir}/config.json`.
+- The config MUST be validated against a JSON Schema definition before every write. Invalid config writes MUST be rejected with detailed validation errors.
+- The config store MUST support **hot-reload** — changes applied via the API update the in-memory config object and emit events. No process restarts, no connection drops, no interrupted in-flight work. Modules pick up new values on their next read or via bus subscription.
+- The config store MUST support **namespaced access** using dot-path notation: `get('memory.ollama.url')`, `set('memory.ollama.url', 'http://...')`.
+- The config store MUST support **patch** operations — partial updates deep-merged into existing config.
+- The config store MUST support **defaults** — every config key has a default value. `get()` returns the merged result of defaults + user overrides.
+- The config store MUST emit `config.changed` events on the bus with `{ path, oldValue, newValue }`.
+- The config store MUST maintain a **change history** at `{dataDir}/config-history.jsonl` — each change logged with timestamp, key path, old value, new value, and source (`api` | `file` | `env` | `startup`).
+- The config store MUST support **environment variable overrides** — env vars like `SOVEREIGN_MEMORY__OLLAMA__URL` (double underscore as path separator) override config file values. Env overrides take precedence over file values but are NOT written to disk.
+- The config store MUST NOT apply invalid config — validation happens before write, failed validation returns the errors to the caller.
+- The config store MUST load and validate on startup, applying defaults for any missing keys.
+- The config store MUST expose a REST API:
+  - `GET /api/config` — full resolved config (defaults + file + env)
+  - `GET /api/config/:path` — namespaced read (dot-path in URL, e.g. `/api/config/memory.ollama.url`)
+  - `PATCH /api/config` — partial update (validate, merge, write, emit)
+  - `GET /api/config/schema` — JSON Schema definition
+  - `GET /api/config/history` — change history with pagination
+  - `POST /api/config/export` — download full config
+  - `POST /api/config/import` — upload, validate, apply
+- The config store SHOULD support config presets — named configurations (e.g. `"development"`, `"production"`) that can be applied as a batch.
+- The config store MAY support config diffing — show differences between current and proposed config before applying.
+
+### Default Config Schema
+
+```typescript
+interface SovereignConfig {
+  server: {
+    port: number // default: 3001
+    host: string // default: 'localhost'
+  }
+  memory: {
+    enabled: boolean // default: true
+    ollama: {
+      url: string // default: 'http://localhost:11434'
+      model: string // default: 'nomic-embed-text'
+    }
+    chunkSize: number // default: 512
+    chunkOverlap: number // default: 64
+    watchDirs: string[] // default: []
+    watchDebounceMs: number // default: 2000
+    excludePatterns: string[] // default: ['node_modules', '.git', 'dist', 'build']
+  }
+  terminal: {
+    shell: string // default: process.env.SHELL || '/bin/zsh'
+    gracePeriodMs: number // default: 30000
+    maxSessions: number // default: 10
+  }
+  worktrees: {
+    staleDays: number // default: 14
+    autoCleanupMerged: boolean // default: false
+  }
+  git: {
+    protectedBranches: string[] // default: ['main', 'master', 'dev']
+  }
+  review: {
+    autoAssign: boolean // default: false
+    requireApproval: boolean // default: true
+  }
+}
+```
 
 ### Interface
 
 ```typescript
-interface Session {
-  id: string
-  orgId?: string
-  kind: 'main' | 'thread' | 'agent'
-  label?: string
-  status: 'active' | 'archived' | 'compacted'
-  createdAt: string
-  updatedAt: string
-  messageCount: number
-  tokenEstimate: number
+interface ConfigStore {
+  get<T = unknown>(path?: string): T
+  set(path: string, value: unknown): void
+  patch(partial: Record<string, unknown>): void
+  getSchema(): object
+  getHistory(opts?: { limit?: number; offset?: number }): ConfigChange[]
+  exportConfig(): SovereignConfig
+  importConfig(config: unknown): void // validates, then applies
+  onChange(path: string, handler: (change: ConfigChange) => void): () => void
 }
 
-interface Message {
-  id: string
-  sessionId: string
-  role: 'user' | 'assistant' | 'system' | 'tool'
-  content: string | StructuredContent
+interface ConfigChange {
   timestamp: string
-  metadata?: {
-    model?: string
-    inputTokens?: number
-    outputTokens?: number
-    toolName?: string
-    toolCallId?: string
-    thinkingContent?: string
-    duration?: number
-  }
-}
-
-interface StructuredContent {
-  type: 'text' | 'tool_call' | 'tool_result' | 'image'
-  text?: string
-  toolName?: string
-  toolInput?: Record<string, unknown>
-  toolResult?: unknown
-  imageUrl?: string
-}
-
-interface SessionStore {
-  create(data: { kind: Session['kind']; label?: string; orgId?: string }): Session
-  get(sessionId: string): Session | undefined
-  list(filter?: { kind?: string; status?: string; orgId?: string; label?: string }): Session[]
-  archive(sessionId: string): void
-  delete(sessionId: string): void
-  resolve(label: string): Session // Thread routing — finds or creates
-
-  append(sessionId: string, message: Omit<Message, 'id' | 'sessionId' | 'timestamp'>): Message
-  history(sessionId: string, opts?: { limit?: number; before?: string; after?: string }): Message[]
-  compact(sessionId: string, summary: string): void
+  path: string
+  oldValue: unknown
+  newValue: unknown
+  source: 'api' | 'file' | 'env' | 'startup'
 }
 ```
 
 ### Files
 
 ```
-packages/server/src/sessions/
-├── sessions.ts          # Core session store
-├── sessions.test.ts     # Unit tests
-├── types.ts             # Session, Message types
-├── store.ts             # JSONL file I/O (append, read, tail, compact)
-├── store.test.ts        # Store tests (JSONL operations)
-├── index-file.ts        # Session index management
+packages/server/src/config/
+├── config.ts            # Core config store (get/set/patch, hot-reload)
+├── config.test.ts       # Unit tests
+├── types.ts             # SovereignConfig, ConfigChange types
+├── schema.ts            # JSON Schema definition + validation
+├── schema.test.ts       # Schema validation tests
+├── defaults.ts          # Default values
+├── env.ts               # Environment variable override resolution
+├── env.test.ts          # Env override tests
+├── history.ts           # Change history (JSONL append)
 └── routes.ts            # Express REST API router
 ```
 
@@ -104,114 +128,105 @@ packages/server/src/sessions/
 
 ## 2. WebSocket Protocol
 
-A typed, multiplexed WebSocket protocol that replaces the raw status connection. All real-time communication between client and server flows through this protocol.
+A typed, multiplexed WebSocket protocol replacing the raw status connection. All real-time communication between client and server flows through this single connection.
 
 ### Requirements
 
-- The server MUST expose a single WebSocket endpoint at `/ws` (replacing the current raw status WS).
-- All WebSocket messages MUST be JSON with a `type` field discriminator.
-- The protocol MUST support these message types:
-
-  **Server → Client:**
-  - `status.update` — system status (connection, active jobs, unread notifications)
-  - `stream.delta` — incremental assistant response text
-  - `stream.final` — completed assistant response
-  - `tool.start` — tool execution started (name, input)
-  - `tool.end` — tool execution completed (name, result/error)
-  - `thinking` — model thinking/reasoning content
+- The server MUST expose a single WebSocket endpoint at `/ws`, replacing the current raw status-only WS from Phase 2.
+- All WebSocket messages MUST be JSON objects with a `type` string discriminator.
+- The protocol MUST support these server → client message types:
+  - `status.update` — system status (connection state, active jobs, unread notifications)
   - `session.message` — new message in a subscribed session
   - `notification.new` — new notification
-  - `file.changed` — file watcher event
-  - `terminal.data` — terminal I/O (binary-safe, base64 encoded)
-  - `git.status.changed` — git status update
-  - `error` — server-side error
-
-  **Client → Server:**
-  - `subscribe` — subscribe to events for a session/channel (`{ type: 'subscribe', sessionId, channels: ['stream', 'tools', 'thinking'] }`)
-  - `unsubscribe` — unsubscribe from a session/channel
-  - `terminal.data` — terminal input
-  - `terminal.resize` — terminal resize
+  - `file.changed` — file change event (path, kind: created/modified/deleted)
+  - `terminal.data` — terminal output (sessionId + base64-encoded data)
+  - `git.status` — git status changed for a project
+  - `worktree.update` — worktree state change
+  - `review.update` — review status change
+  - `error` — server-side error with code and message
+  - `pong` — keepalive response
+- The protocol MUST support these client → server message types:
+  - `subscribe` — subscribe to event channels for a scope (`{ channels: ['terminal', 'files', 'git'], scope?: { orgId, projectId, sessionId } }`)
+  - `unsubscribe` — unsubscribe from channels
+  - `terminal.input` — terminal input data (sessionId + base64 data)
+  - `terminal.resize` — terminal resize (sessionId + cols + rows)
   - `ping` — keepalive
-
-- The server MUST support multiplexing — a single WS connection carries all event types, scoped by `sessionId` where applicable.
-- The server MUST send `pong` in response to `ping` for keepalive.
-- The server MUST authenticate WebSocket connections using the auth module from Phase 1 (token in query param or first message).
-- The protocol MUST support binary frames for terminal data and audio streaming — binary frames are prefixed with a 1-byte channel ID, remainder is payload.
-- The server MUST track subscriptions per connection — only send events the client has subscribed to.
-- The server MUST gracefully handle disconnections — clean up subscriptions, terminal attachments, etc.
-- The WebSocket handler MUST emit `ws.connected`, `ws.disconnected` events on the bus.
-- The client MUST implement automatic reconnection with exponential backoff (already partially implemented in StatusBar — extract and generalise).
-- The client MUST provide a reactive WebSocket store that components can subscribe to for specific event types.
-- The protocol SHOULD support message acknowledgement for critical messages (optional `ackId` field).
-- The protocol MAY support compression (per-message deflate).
+- The server MUST support **multiplexing** — a single WS connection carries all event types. Events are scoped by optional `orgId`, `projectId`, or `sessionId` fields.
+- The server MUST track **subscriptions** per connection — only send events the client has subscribed to. Default subscriptions on connect: `['status']`.
+- The server MUST respond to `ping` with `pong`.
+- The server MUST authenticate WebSocket connections using the auth module (token as query parameter `?token=...` or in the first message).
+- The server MUST bridge existing bus events to WebSocket messages — when `file.created` fires on the bus, connected clients subscribed to `files` receive a `file.changed` message.
+- The server MUST gracefully handle disconnections — clean up subscriptions, detach terminal sessions, emit `ws.disconnected` on the bus.
+- The server MUST emit `ws.connected` and `ws.disconnected` events on the bus with the device ID.
+- Binary frames MUST be supported for terminal data — binary frames use a 1-byte channel ID prefix followed by payload. Channel 0 = terminal.
+- The client MUST implement automatic reconnection with exponential backoff (initial 1s, max 30s, jitter).
+- The client MUST provide a **reactive SolidJS store** that components subscribe to for specific event types. Components MUST NOT manage their own WebSocket connections.
+- The client MUST re-subscribe to all active channels on reconnection.
+- The protocol SHOULD support message acknowledgement — optional `ackId` field on critical messages, server responds with `{ type: 'ack', ackId }`.
+- The protocol MAY support per-message compression (permessage-deflate).
 
 ### Interface
 
 ```typescript
-// Shared protocol types (in @template/core)
+// Shared types (in @template/core)
 interface WsMessage {
   type: string
-  sessionId?: string
-  ackId?: string
   timestamp?: string
+  ackId?: string
 }
 
-interface StreamDelta extends WsMessage {
-  type: 'stream.delta'
-  content: string
+interface WsStatusUpdate extends WsMessage {
+  type: 'status.update'
+  status: { connected: boolean; activeJobs: number; unreadNotifications: number }
+}
+
+interface WsFileChanged extends WsMessage {
+  type: 'file.changed'
+  orgId: string
+  projectId: string
+  path: string
+  kind: 'created' | 'modified' | 'deleted'
+}
+
+interface WsTerminalData extends WsMessage {
+  type: 'terminal.data'
   sessionId: string
+  data: string // base64
 }
 
-interface StreamFinal extends WsMessage {
-  type: 'stream.final'
-  content: string
+interface WsTerminalInput extends WsMessage {
+  type: 'terminal.input'
   sessionId: string
-  metadata?: { model: string; inputTokens: number; outputTokens: number; duration: number }
+  data: string // base64
 }
 
-interface ToolStart extends WsMessage {
-  type: 'tool.start'
-  sessionId: string
-  toolName: string
-  toolInput: Record<string, unknown>
-  toolCallId: string
-}
-
-interface ToolEnd extends WsMessage {
-  type: 'tool.end'
-  sessionId: string
-  toolName: string
-  toolCallId: string
-  result?: unknown
-  error?: string
-}
-
-interface ThinkingMessage extends WsMessage {
-  type: 'thinking'
-  sessionId: string
-  content: string
-}
-
-interface Subscribe extends WsMessage {
+interface WsSubscribe extends WsMessage {
   type: 'subscribe'
-  sessionId: string
-  channels: ('stream' | 'tools' | 'thinking' | 'terminal' | 'files' | 'git')[]
+  channels: string[]
+  scope?: { orgId?: string; projectId?: string; sessionId?: string }
 }
 
-// Server-side handler
-interface WsProtocol {
+interface WsError extends WsMessage {
+  type: 'error'
+  code: string
+  message: string
+}
+
+// Server-side
+interface WsHandler {
   handleConnection(ws: WebSocket, deviceId: string): void
-  broadcast(type: string, data: WsMessage): void
-  sendTo(deviceId: string, data: WsMessage): void
-  sendToSession(sessionId: string, data: WsMessage): void
+  broadcast(msg: WsMessage): void
+  broadcastToChannel(channel: string, msg: WsMessage, scope?: object): void
+  sendTo(deviceId: string, msg: WsMessage): void
+  getConnectedDevices(): string[]
 }
 
-// Client-side store
+// Client-side
 interface WsStore {
-  connected: boolean
-  subscribe(sessionId: string, channels: string[]): void
-  unsubscribe(sessionId: string): void
-  onMessage(type: string, handler: (msg: WsMessage) => void): () => void
+  connected: Accessor<boolean>
+  subscribe(channels: string[], scope?: object): void
+  unsubscribe(channels: string[]): void
+  on<T extends WsMessage>(type: string, handler: (msg: T) => void): () => void
   send(msg: WsMessage): void
 }
 ```
@@ -221,62 +236,79 @@ interface WsStore {
 ```
 packages/core/src/ws/
 ├── types.ts             # All WsMessage types (shared client + server)
-├── protocol.ts          # Message validation, type guards
-├── protocol.test.ts     # Protocol validation tests
+├── protocol.ts          # Message validation, type guards, channel constants
+└── protocol.test.ts     # Protocol validation tests
 
 packages/server/src/ws/
-├── handler.ts           # WebSocket connection handler
+├── handler.ts           # WebSocket connection handler + auth
 ├── handler.test.ts      # Handler tests
 ├── subscriptions.ts     # Per-connection subscription tracking
 ├── subscriptions.test.ts
-├── binary.ts            # Binary frame encoding/decoding (channel ID + payload)
-└── types.ts             # Server-side WS types
+├── bridge.ts            # Bus event → WS message bridging
+├── bridge.test.ts       # Bridge tests
+└── binary.ts            # Binary frame encoding/decoding
 
 packages/client/src/ws/
 ├── ws-store.ts          # Reactive SolidJS WebSocket store
 ├── ws-store.test.ts     # Store tests
-├── reconnect.ts         # Reconnection with exponential backoff
-└── types.ts             # Client-side types
+├── reconnect.ts         # Exponential backoff reconnection
+└── reconnect.test.ts    # Reconnection tests
 ```
 
 ---
 
 ## 3. Memory & Embeddings
 
-A local-first semantic memory system using SQLite for storage, FTS5 for keyword search, and sqlite-vec for vector similarity search. Embeddings are generated locally via Ollama.
+A local-first semantic memory system. Index project files, search them by keyword or meaning. Uses SQLite for storage, FTS5 for keyword search, sqlite-vec for vector similarity, and Ollama for local embeddings.
 
 ### Requirements
 
 - The memory store MUST use a single SQLite database at `{dataDir}/memory/memory.db`.
-- The database MUST have tables: `documents` (id, path, content, hash, updated_at), `chunks` (id, document_id, content, start_line, end_line, token_count), `embeddings` (chunk_id, vector BLOB), `fts_chunks` (FTS5 virtual table on chunk content).
-- The memory store MUST support **document ingestion**: given a file path, read the file, split into chunks (by heading for Markdown, by function/class for code, or by fixed token window), compute embeddings via Ollama, and store.
-- Chunking MUST be configurable: default chunk size 512 tokens with 64-token overlap.
-- The memory store MUST track file hashes — re-ingestion only processes changed files (content hash comparison).
-- **Keyword search** MUST use FTS5 BM25 ranking over chunk content.
+- The database MUST have tables:
+  - `documents` — `id TEXT PK`, `path TEXT UNIQUE`, `orgId TEXT`, `hash TEXT`, `chunk_count INTEGER`, `updated_at TEXT`
+  - `chunks` — `id TEXT PK`, `document_id TEXT FK`, `content TEXT`, `start_line INTEGER`, `end_line INTEGER`, `token_count INTEGER`
+  - `embeddings` — `chunk_id TEXT FK`, `vector BLOB` (sqlite-vec float32 array)
+  - `chunks_fts` — FTS5 virtual table on `chunks.content` for BM25 keyword search
+- The memory store MUST support **document ingestion**: given a file path, read the file, split into chunks, compute embeddings via Ollama, store everything in a single transaction.
+- **Chunking** MUST be content-aware:
+  - Markdown: split on headings (`## `, `### `, etc.), keeping heading as chunk prefix
+  - Code (TypeScript/JavaScript): split on top-level declarations (function, class, export)
+  - Fallback: fixed-size token window
+  - Default chunk size: 512 tokens, 64-token overlap (configurable via config module)
+- The memory store MUST track file content hashes — re-ingestion skips unchanged files (hash comparison).
+- **Keyword search** MUST use FTS5 BM25 ranking.
 - **Semantic search** MUST use sqlite-vec cosine similarity over embedding vectors.
-- **Hybrid search** MUST combine keyword and semantic results using Reciprocal Rank Fusion (RRF): `score = Σ 1/(k + rank_i)` where k=60 (configurable).
-- The memory store MUST support search with filters: `search(query, { orgId?, paths?, minScore?, limit? })`.
-- Embedding MUST be generated via Ollama API (`POST /api/embeddings` with model `nomic-embed-text`). The Ollama URL MUST be configurable (default `http://localhost:11434`).
-- The memory store MUST gracefully handle Ollama being unavailable — ingest without embeddings, log warning, allow keyword-only search. Embeddings can be backfilled later.
-- The memory store MUST emit `memory.ingested`, `memory.search` events on the bus.
-- The memory store MUST expose a REST API: `POST /api/memory/ingest` (trigger ingestion for a path/glob), `GET /api/memory/search?q=...`, `GET /api/memory/documents` (list indexed docs).
-- A **file watcher** SHOULD automatically re-ingest changed files within tracked directories.
-- The file watcher MUST be configurable: which directories to watch, debounce interval (default 2s), and file patterns to include/exclude.
-- The memory store SHOULD support manual re-indexing of all documents.
+- **Hybrid search** MUST combine keyword and semantic results using Reciprocal Rank Fusion: `score = Σ 1/(k + rank_i)` where `k = 60` (configurable).
+- Search MUST support filters: `search(query, { orgId?, paths?, minScore?, limit?, mode? })` where mode is `keyword`, `semantic`, or `hybrid` (default).
+- Embeddings MUST be generated via Ollama API (`POST /api/embed` with model from config, default `nomic-embed-text`). The Ollama URL MUST come from the config module.
+- The memory store MUST gracefully handle Ollama being unavailable — ingest the document and chunks without embeddings, log a warning, allow keyword-only search. Embeddings MUST be backfillable: `backfill()` processes all chunks missing embeddings.
+- The memory store MUST listen for `config.changed` events on path `memory.ollama.*` and update its Ollama client accordingly (hot-reload).
+- The memory store MUST emit `memory.document.ingested`, `memory.document.removed`, `memory.search` events on the bus.
+- The memory store MUST expose a REST API:
+  - `POST /api/memory/ingest` — body: `{ path: string }` or `{ directory: string, patterns?: string[], exclude?: string[] }`
+  - `GET /api/memory/search?q=...&mode=...&limit=...&orgId=...`
+  - `GET /api/memory/documents?orgId=...` — list indexed documents
+  - `DELETE /api/memory/documents/:id` — remove a document and its chunks/embeddings
+  - `POST /api/memory/reindex` — re-ingest all tracked documents
+  - `POST /api/memory/backfill` — generate missing embeddings
+- The memory store MUST NOT load entire files into memory for chunking — stream or read in bounded segments for large files.
+- A **file watcher** SHOULD automatically re-ingest changed files within configured watch directories (from config `memory.watchDirs`). The watcher MUST debounce rapid changes (configurable, default 2s). The watcher MUST respect exclude patterns from config.
+- The memory store SHOULD support batch ingestion with progress reporting (emit `memory.ingest.progress` events).
 - The memory store MAY support multiple embedding models (configurable per org).
 
 ### Interface
 
 ```typescript
-interface Document {
+interface MemoryDocument {
   id: string
   path: string
+  orgId?: string
   hash: string
   chunkCount: number
   updatedAt: string
 }
 
-interface Chunk {
+interface MemoryChunk {
   id: string
   documentId: string
   content: string
@@ -286,8 +318,8 @@ interface Chunk {
 }
 
 interface SearchResult {
-  chunk: Chunk
-  document: Document
+  chunk: MemoryChunk
+  document: MemoryDocument
   score: number
   matchType: 'keyword' | 'semantic' | 'hybrid'
 }
@@ -301,13 +333,19 @@ interface SearchOptions {
 }
 
 interface MemoryStore {
-  ingest(filePath: string): Promise<Document>
-  ingestDirectory(dirPath: string, opts?: { patterns?: string[]; exclude?: string[] }): Promise<Document[]>
+  ingest(filePath: string, orgId?: string): Promise<MemoryDocument>
+  ingestDirectory(
+    dirPath: string,
+    opts?: { orgId?: string; patterns?: string[]; exclude?: string[] }
+  ): Promise<MemoryDocument[]>
   search(query: string, opts?: SearchOptions): Promise<SearchResult[]>
-  listDocuments(opts?: { orgId?: string }): Document[]
-  getDocument(docId: string): Document | undefined
+  listDocuments(opts?: { orgId?: string }): MemoryDocument[]
+  getDocument(docId: string): MemoryDocument | undefined
   removeDocument(docId: string): void
   reindex(): Promise<void>
+  backfill(): Promise<{ processed: number; failed: number }>
+  startWatcher(): void
+  stopWatcher(): void
 }
 ```
 
@@ -317,238 +355,266 @@ interface MemoryStore {
 packages/server/src/memory/
 ├── memory.ts            # Core memory store (orchestrates ingest + search)
 ├── memory.test.ts       # Unit tests
-├── types.ts             # Document, Chunk, SearchResult types
+├── types.ts             # MemoryDocument, MemoryChunk, SearchResult types
 ├── db.ts                # SQLite database setup (tables, FTS5, sqlite-vec)
 ├── db.test.ts           # Database tests
-├── chunker.ts           # Text chunking (markdown-aware, code-aware, fixed-window)
+├── chunker.ts           # Content-aware text chunking
 ├── chunker.test.ts      # Chunker tests
 ├── embeddings.ts        # Ollama embedding client
-├── embeddings.test.ts   # Embedding tests (with mock)
+├── embeddings.test.ts   # Embedding tests (mocked Ollama)
 ├── search.ts            # Hybrid search (FTS5 + vector + RRF fusion)
 ├── search.test.ts       # Search tests
 ├── watcher.ts           # File watcher for auto-reingestion
+├── watcher.test.ts      # Watcher tests
 └── routes.ts            # Express REST API router
 ```
 
 ---
 
-## 4. Context Compaction
+## 4. Diff Engine
 
-Manages conversation context size by summarising older messages while preserving recent context and pinned turns. Uses LLMs for generating summaries.
+Core diff computation for files, structured formats, and change sets. Provides the data layer for the review system and for displaying diffs in the IDE.
 
 ### Requirements
 
-- The compaction engine MUST operate on a session's message history, producing a compacted version that fits within a configurable token budget.
-- The token budget MUST be configurable per session (default: 100k tokens, configurable via session metadata or org config).
-- The compaction engine MUST support a **compaction strategy**:
-  - `sliding-window`: keep the most recent N messages, summarise the rest into a single system message at the start.
-  - `importance-weighted`: score each message by role, tool usage, decision content, and user reactions. Summarise low-importance messages first.
-- **Pinned messages** MUST be preserved verbatim in the compacted output — users/agents can pin critical turns that must never be summarised.
-- The compaction engine MUST use an LLM to generate summaries. The LLM call MUST be configurable (model, prompt template).
-- The summary prompt MUST be structured: include key decisions, code changes, open questions, and action items from the compacted messages.
-- The compaction engine MUST produce a **compaction preview** before executing: show which messages will be summarised, the estimated token savings, and the generated summary.
-- Compaction MUST be reversible — the original JSONL file is preserved (renamed to `{sessionId}.jsonl.pre-compact`) before writing the compacted version.
-- The compaction engine MUST emit `session.compaction.started`, `session.compaction.completed` events on the bus.
-- The compaction engine MUST NOT compact sessions with fewer than 50 messages or under 10k estimated tokens.
-- The compaction engine MUST expose a REST API: `POST /api/sessions/:id/compact` (trigger), `GET /api/sessions/:id/compact/preview` (preview).
-- Token counting MUST use a configurable ratio (default: 1 token ≈ 4 characters) or an optional tiktoken-compatible counter.
-- The compaction engine SHOULD support automatic compaction — triggered when a session exceeds its token budget, with a configurable threshold (e.g., compact when at 80% of budget).
-- The compaction engine MAY support incremental compaction — only summarise the oldest unsummarised segment, not the entire history.
+- The diff engine MUST compute unified diffs between two strings or two file versions (by path + ref/commit).
+- The diff engine MUST produce structured output: an array of **hunks**, each containing line-level changes with `added`, `removed`, and `context` line types.
+- A **hunk** MUST have: `oldStart`, `oldLines`, `newStart`, `newLines`, `lines[]` where each line has `type` (`add` | `remove` | `context`), `content`, `oldLineNumber?`, `newLineNumber?`.
+- The diff engine MUST support **file diffs** — diff between two commits for a given file path within a git repo. It MUST use the git module from Phase 2 to retrieve file content at specific refs.
+- The diff engine MUST support **working tree diffs** — diff between HEAD and the current working tree (unstaged changes) and between index and working tree (staged vs unstaged).
+- The diff engine MUST support **semantic diffs** for structured formats:
+  - JSON: key-level changes (added key, removed key, changed value) with path notation
+  - YAML: same as JSON (parse to object, diff objects)
+  - TOML: same as JSON
+  - Package.json: special handling for dependency version changes (show old → new version)
+- Semantic diffs MUST fall back to text diff if the file fails to parse.
+- The diff engine MUST support a **change set** model — a named group of related diffs that represents a logical unit of work (e.g. all changes in a worktree branch, or all changes in a PR).
+- A **change set** MUST have: `id`, `title`, `description`, `orgId`, `projectId`, `worktreeId?`, `baseBranch`, `headBranch`, `files[]` (list of changed file paths with status: added/modified/deleted/renamed), `createdAt`, `updatedAt`, `status` (`open` | `reviewing` | `approved` | `merged` | `closed`).
+- The diff engine MUST support creating a change set from a worktree (compares worktree branch to its base branch) and from two arbitrary refs.
+- The diff engine MUST support **cross-project change sets** — a change set can span multiple projects within an org (e.g. when a worktree has linked worktrees in other projects).
+- The diff engine MUST persist change sets as JSON files at `{dataDir}/reviews/{changeSetId}.json`.
+- The diff engine MUST emit `changeset.created`, `changeset.updated`, `changeset.closed` events on the bus.
+- The diff engine MUST expose a REST API:
+  - `GET /api/diff?path=...&base=...&head=...&projectId=...` — compute diff for a file
+  - `GET /api/diff/working?projectId=...&worktreeId=...` — working tree diff
+  - `GET /api/diff/semantic?path=...&base=...&head=...` — semantic diff (JSON/YAML/TOML)
+  - `POST /api/changesets` — create change set from worktree or refs
+  - `GET /api/changesets?orgId=...&status=...` — list change sets
+  - `GET /api/changesets/:id` — get change set with file list
+  - `GET /api/changesets/:id/files/:path` — get diff for a specific file in the change set
+  - `PATCH /api/changesets/:id` — update status/metadata
+  - `DELETE /api/changesets/:id` — close/delete change set
+- The diff engine MUST NOT shell out to `diff` — use a JavaScript diff library or implement Myers' algorithm. Git diffs are retrieved via `git diff` through the Phase 2 git module.
+- The diff engine SHOULD support rename/move detection (matching file content across different paths).
+- The diff engine SHOULD support binary file detection (report as binary, no line diff).
+- The diff engine MAY support word-level diff within changed lines (highlight the specific characters that changed).
 
 ### Interface
 
 ```typescript
-interface CompactionConfig {
-  tokenBudget: number
-  strategy: 'sliding-window' | 'importance-weighted'
-  preserveRecentMessages: number // always keep this many recent messages
-  autoCompactThreshold: number // 0-1, trigger at this % of budget
-  model?: string // LLM model for summary generation
-  summaryPrompt?: string // custom summary prompt template
+interface DiffHunk {
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: DiffLine[]
 }
 
-interface CompactionPreview {
-  sessionId: string
-  currentTokens: number
-  targetTokens: number
-  messagesToCompact: number
-  messagesToPreserve: number
-  pinnedMessages: number
-  estimatedSavings: number
-  summary?: string // generated summary (if preview includes generation)
-}
-
-interface CompactionEngine {
-  preview(sessionId: string, config?: Partial<CompactionConfig>): Promise<CompactionPreview>
-  execute(sessionId: string, config?: Partial<CompactionConfig>): Promise<void>
-  pin(sessionId: string, messageId: string): void
-  unpin(sessionId: string, messageId: string): void
-  getConfig(sessionId: string): CompactionConfig
-  updateConfig(sessionId: string, patch: Partial<CompactionConfig>): void
-}
-```
-
-### Files
-
-```
-packages/server/src/compaction/
-├── compaction.ts        # Core compaction engine
-├── compaction.test.ts   # Unit tests
-├── types.ts             # CompactionConfig, CompactionPreview types
-├── strategies.ts        # Sliding-window and importance-weighted strategies
-├── strategies.test.ts   # Strategy tests
-├── tokens.ts            # Token counting (char ratio + optional tiktoken)
-├── tokens.test.ts       # Token counting tests
-├── summary.ts           # LLM summary generation
-└── routes.ts            # Express REST API router
-```
-
----
-
-## 5. System Prompt Assembly
-
-Dynamically assembles the system prompt from prioritised sections, respecting a token budget. Ensures the most relevant context is always included.
-
-### Requirements
-
-- The prompt assembler MUST construct a system prompt from **sections** — discrete blocks of content with priority, token cost, and conditions.
-- A **section** MUST have: `id`, `priority` (0-100, higher = more important), `content` (string or function returning string), `tokenCost` (pre-computed or lazy), `condition` (optional predicate: include only if true).
-- The assembler MUST include sections in priority order until the token budget is exhausted.
-- The token budget for the system prompt MUST be configurable (default: 8k tokens).
-- **Built-in sections** (in priority order):
-  1. `identity` (100) — SOUL.md / IDENTITY.md content
-  2. `user` (95) — USER.md
-  3. `principles` (90) — PRINCIPLES.md or project rules
-  4. `active-context` (85) — current org, project, branch, worktree
-  5. `memory-recall` (80) — relevant memory snippets from semantic search (dynamic, based on recent messages)
-  6. `skills` (70) — relevant skill descriptions (filtered by recent message content)
-  7. `tools` (60) — available tool descriptions
-  8. `session-summary` (50) — compacted session summary (if compacted)
-  9. `workspace-files` (40) — key workspace file contents
-- The assembler MUST support **dynamic sections** — sections whose content is generated at assembly time (e.g., memory recall requires the recent conversation context).
-- The assembler MUST support **section registration** — modules can register new sections at runtime.
-- The assembler MUST cache assembled prompts by content hash — if no section content has changed, return the cached version.
-- The assembler MUST emit `prompt.assembled` events on the bus with metadata (sections included, total tokens, cache hit/miss).
-- The assembler MUST expose a REST API: `GET /api/prompt/preview` (show assembled prompt with section breakdown), `GET /api/prompt/sections` (list registered sections).
-- The assembler SHOULD support per-org section overrides (e.g., different identity for different orgs).
-- The assembler MAY support A/B testing of prompt configurations.
-
-### Interface
-
-```typescript
-interface PromptSection {
-  id: string
-  priority: number
-  content: string | (() => string) | (() => Promise<string>)
-  tokenCost?: number // pre-computed; if absent, computed from content
-  condition?: () => boolean // include only if returns true
-  orgId?: string // org-specific override
-}
-
-interface AssembledPrompt {
+interface DiffLine {
+  type: 'add' | 'remove' | 'context'
   content: string
-  sections: { id: string; priority: number; tokens: number; included: boolean }[]
-  totalTokens: number
-  cacheHit: boolean
-  hash: string
+  oldLineNumber?: number
+  newLineNumber?: number
 }
 
-interface PromptAssembler {
-  register(section: PromptSection): void
-  unregister(sectionId: string): void
-  assemble(opts?: { tokenBudget?: number; orgId?: string; context?: string[] }): Promise<AssembledPrompt>
-  preview(opts?: { tokenBudget?: number; orgId?: string }): Promise<AssembledPrompt>
-  listSections(): PromptSection[]
+interface FileDiff {
+  path: string
+  oldPath?: string // if renamed
+  status: 'added' | 'modified' | 'deleted' | 'renamed'
+  binary: boolean
+  hunks: DiffHunk[]
+  additions: number
+  deletions: number
+}
+
+interface SemanticChange {
+  path: string // JSON path, e.g. "dependencies.express"
+  type: 'added' | 'removed' | 'changed'
+  oldValue?: unknown
+  newValue?: unknown
+}
+
+interface SemanticDiff {
+  format: 'json' | 'yaml' | 'toml'
+  changes: SemanticChange[]
+  fallbackTextDiff?: FileDiff // if parsing failed
+}
+
+interface ChangeSet {
+  id: string
+  title: string
+  description: string
+  orgId: string
+  projectId: string
+  worktreeId?: string
+  baseBranch: string
+  headBranch: string
+  files: { path: string; status: string; additions: number; deletions: number }[]
+  status: 'open' | 'reviewing' | 'approved' | 'merged' | 'closed'
+  createdAt: string
+  updatedAt: string
+}
+
+interface DiffEngine {
+  diffText(oldText: string, newText: string): DiffHunk[]
+  diffFile(projectPath: string, filePath: string, base: string, head: string): Promise<FileDiff>
+  diffWorking(projectPath: string, opts?: { staged?: boolean }): Promise<FileDiff[]>
+  diffSemantic(oldText: string, newText: string, format: string): SemanticDiff
+
+  createChangeSet(data: {
+    orgId: string
+    projectId: string
+    worktreeId?: string
+    baseBranch: string
+    headBranch: string
+    title: string
+    description?: string
+  }): Promise<ChangeSet>
+  getChangeSet(id: string): ChangeSet | undefined
+  listChangeSets(filter?: { orgId?: string; status?: string }): ChangeSet[]
+  updateChangeSet(id: string, patch: Partial<ChangeSet>): ChangeSet
+  deleteChangeSet(id: string): void
+  getChangeSetFileDiff(changeSetId: string, filePath: string): Promise<FileDiff>
 }
 ```
 
 ### Files
 
 ```
-packages/server/src/prompt/
-├── prompt.ts            # Core prompt assembler
-├── prompt.test.ts       # Unit tests
-├── types.ts             # PromptSection, AssembledPrompt types
-├── sections.ts          # Built-in section definitions
-├── sections.test.ts     # Section tests
-├── cache.ts             # Content-hash based cache
-├── cache.test.ts        # Cache tests
+packages/server/src/diff/
+├── diff.ts              # Core text diff (Myers' algorithm or library wrapper)
+├── diff.test.ts         # Text diff tests
+├── types.ts             # DiffHunk, FileDiff, ChangeSet, SemanticChange types
+├── file-diff.ts         # File diff via git (uses git module)
+├── file-diff.test.ts    # File diff tests
+├── semantic.ts          # Semantic diff for JSON/YAML/TOML
+├── semantic.test.ts     # Semantic diff tests
+├── changeset.ts         # Change set management (CRUD, persistence)
+├── changeset.test.ts    # Change set tests
 └── routes.ts            # Express REST API router
 ```
 
 ---
 
-## 6. Config Management
+## 5. Review System
 
-A unified configuration system with schema validation, UI editing, hot-reload, and import/export.
+A code review workflow built on change sets. Inline comments, review actions, merge triggers. Local-first — no GitHub dependency.
 
 ### Requirements
 
-- The config store MUST maintain all Sovereign configuration in a single JSON file at `{dataDir}/config.json`.
-- The config MUST be schema-validated using a JSON Schema definition. Invalid config writes MUST be rejected with detailed validation errors.
-- The config store MUST support **hot-reload** — changes to config.json (via API or file edit) are detected and applied without restart.
-- The config store MUST support **namespaced access**: `get('memory.ollama.url')`, `set('memory.ollama.url', 'http://...')` using dot-path notation.
-- The config store MUST support **patch** operations — partial updates merged into existing config (deep merge).
-- The config store MUST support **defaults** — every config key has a default value. `get()` returns the merged result of defaults + user overrides.
-- The config store MUST emit `config.changed` events on the bus with the changed key path and old/new values.
-- The config store MUST maintain a **change history** — each config change is logged to `{dataDir}/config-history.jsonl` with timestamp, key, old value, new value, source (api/file/startup).
-- The config store MUST expose a REST API: `GET /api/config` (full config), `GET /api/config/:path` (namespaced read), `PATCH /api/config` (partial update), `GET /api/config/schema` (JSON schema), `GET /api/config/history` (change history).
-- The config store MUST support **import/export**: `GET /api/config/export` (download), `POST /api/config/import` (upload + validate + apply).
-- The config store MUST NOT apply invalid config — validation MUST happen before write.
-- The config store MUST support **environment variable overrides** — env vars like `SOVEREIGN_MEMORY_OLLAMA_URL` override config file values (converted from SCREAMING_SNAKE_CASE dot paths).
-- The config store SHOULD support config presets (named configurations that can be applied as a batch).
-- The config store MAY support config diffing (show changes between current and proposed config).
+- A **review** MUST be attached to exactly one change set. Creating a review transitions the change set status to `reviewing`.
+- A **review** MUST have: `id`, `changeSetId`, `status` (`pending` | `approved` | `changes_requested` | `merged`), `reviewers[]` (device IDs or names), `createdAt`, `updatedAt`, `mergedAt?`.
+- The review system MUST support **inline comments** — comments attached to a specific file, line number, and optionally a range of lines within a change set.
+- A **comment** MUST have: `id`, `reviewId`, `filePath`, `lineNumber`, `endLineNumber?` (for range), `side` (`old` | `new`), `content` (markdown), `author`, `createdAt`, `resolved` (boolean), `replyTo?` (parent comment ID for threads).
+- Comments MUST support **threading** — replies to a comment form a thread. Threads can be resolved (collapsed) or unresolved.
+- The review system MUST support **review actions**:
+  - `approve` — mark the review as approved
+  - `request-changes` — mark as changes requested, with required comment
+  - `comment` — add comments without approving or requesting changes
+  - `merge` — merge the change set's branch into its base branch (requires approved status if `review.requireApproval` config is true)
+- **Merge** MUST:
+  1. Execute `git merge` (or fast-forward) of the head branch into the base branch via the Phase 2 git module
+  2. Clean up the worktree if the change set is linked to one (via the worktree module)
+  3. Transition the change set status to `merged`
+  4. Transition the review status to `merged`
+  5. Emit `review.merged` event on the bus
+- The review system MUST persist reviews as JSON files at `{dataDir}/reviews/{reviewId}.json` (alongside change set files in the same directory).
+- Comments MUST be persisted as JSONL at `{dataDir}/reviews/{reviewId}-comments.jsonl` (append-only).
+- The review system MUST emit events on the bus: `review.created`, `review.updated`, `review.comment.added`, `review.comment.resolved`, `review.approved`, `review.changes_requested`, `review.merged`.
+- The review system MUST expose a REST API:
+  - `POST /api/reviews` — create review for a change set
+  - `GET /api/reviews?changeSetId=...&status=...` — list reviews
+  - `GET /api/reviews/:id` — get review with metadata
+  - `POST /api/reviews/:id/comments` — add comment
+  - `GET /api/reviews/:id/comments` — list comments (with thread structure)
+  - `PATCH /api/reviews/:id/comments/:commentId` — edit or resolve comment
+  - `POST /api/reviews/:id/approve` — approve
+  - `POST /api/reviews/:id/request-changes` — request changes (body: `{ comment }`)
+  - `POST /api/reviews/:id/merge` — merge
+- The review system MUST check merge eligibility before merging — if `review.requireApproval` config is true, the review MUST be in `approved` status. If there are unresolved comment threads, merge MUST be blocked (configurable: `review.blockOnUnresolved`, default true).
+- The review system MUST NOT directly import from the git or worktree modules — all interaction MUST go through the event bus or through injected dependencies (dependency inversion).
+- The review system SHOULD support **review assignment** — notify assigned reviewers via the notification module.
+- The review system SHOULD update the change set's file list when new commits are pushed to the head branch (listen for git events).
+- The review system MAY support **review templates** — predefined checklists attached to reviews.
+- The review system MAY support cross-project reviews (a single review spanning change sets in multiple projects, using linked worktrees).
 
-### Default Config Schema
+### Interface
 
 ```typescript
-interface SovereignConfig {
-  server: {
-    port: number // default: 3001
-    host: string // default: 'localhost'
-  }
-  memory: {
-    ollama: {
-      url: string // default: 'http://localhost:11434'
-      model: string // default: 'nomic-embed-text'
-    }
-    chunkSize: number // default: 512
-    chunkOverlap: number // default: 64
-    watchDirs: string[] // default: []
-    watchDebounceMs: number // default: 2000
-  }
-  compaction: {
-    tokenBudget: number // default: 100000
-    strategy: string // default: 'sliding-window'
-    preserveRecentMessages: number // default: 20
-    autoCompactThreshold: number // default: 0.8
-  }
-  prompt: {
-    tokenBudget: number // default: 8000
-  }
-  terminal: {
-    shell: string // default: process.env.SHELL || '/bin/bash'
-    gracePeriodMs: number // default: 30000
-  }
-  worktrees: {
-    staleDays: number // default: 14
-    autoCleanupMerged: boolean // default: false
-  }
+interface Review {
+  id: string
+  changeSetId: string
+  status: 'pending' | 'approved' | 'changes_requested' | 'merged'
+  reviewers: string[]
+  createdAt: string
+  updatedAt: string
+  mergedAt?: string
+}
+
+interface ReviewComment {
+  id: string
+  reviewId: string
+  filePath: string
+  lineNumber: number
+  endLineNumber?: number
+  side: 'old' | 'new'
+  content: string
+  author: string
+  createdAt: string
+  resolved: boolean
+  replyTo?: string
+}
+
+interface ReviewDeps {
+  gitMerge: (projectPath: string, branch: string) => Promise<void>
+  removeWorktree: (worktreeId: string) => Promise<void>
+  getChangeSet: (id: string) => ChangeSet | undefined
+  updateChangeSet: (id: string, patch: Partial<ChangeSet>) => ChangeSet
+  notify: (event: string, data: object) => void
+}
+
+interface ReviewSystem {
+  create(data: { changeSetId: string; reviewers?: string[] }): Review
+  get(reviewId: string): Review | undefined
+  list(filter?: { changeSetId?: string; status?: string }): Review[]
+
+  addComment(
+    reviewId: string,
+    comment: Omit<ReviewComment, 'id' | 'reviewId' | 'createdAt' | 'resolved'>
+  ): ReviewComment
+  listComments(reviewId: string): ReviewComment[]
+  resolveComment(reviewId: string, commentId: string): void
+  unresolveComment(reviewId: string, commentId: string): void
+  editComment(reviewId: string, commentId: string, content: string): ReviewComment
+
+  approve(reviewId: string): Review
+  requestChanges(reviewId: string, comment: string): Review
+  merge(reviewId: string): Promise<Review>
+  canMerge(reviewId: string): { allowed: boolean; reasons: string[] }
 }
 ```
 
 ### Files
 
 ```
-packages/server/src/config/
-├── config.ts            # Core config store
-├── config.test.ts       # Unit tests
-├── types.ts             # SovereignConfig type, schema
-├── schema.ts            # JSON Schema definition + validation
-├── schema.test.ts       # Schema validation tests
-├── history.ts           # Change history (JSONL)
-├── env.ts               # Environment variable override resolution
-├── env.test.ts          # Env override tests
+packages/server/src/review/
+├── review.ts            # Core review system
+├── review.test.ts       # Unit tests
+├── types.ts             # Review, ReviewComment types
+├── comments.ts          # Comment storage (JSONL append + read)
+├── comments.test.ts     # Comment tests
+├── merge.ts             # Merge logic (merge + cleanup + status transitions)
+├── merge.test.ts        # Merge tests
 └── routes.ts            # Express REST API router
 ```
 
@@ -560,26 +626,27 @@ packages/server/src/config/
 
 Phase 3 MUST include integration tests covering:
 
-- Session create → append messages → search memory for session content (session + memory integration)
-- WebSocket subscribe to session → append message → receive `session.message` via WS
+- Config change via API → module picks up new value (e.g. change `memory.ollama.url` → memory store uses new URL on next call)
+- WebSocket subscribe to channel → bus event fires → client receives typed message
+- WebSocket auth — reject connection without valid token
 - File change → memory watcher re-ingests → search finds updated content
-- Session exceeds token budget → auto-compaction triggers → compacted session still searchable
-- Prompt assembly includes memory recall results from recent conversation context
-- Config change via API → hot-reload → affected module picks up new value (e.g., change Ollama URL → memory store uses new URL)
-- Auth middleware protects all new API endpoints
-- WebSocket authentication — reject connections without valid token
+- Memory search returns results from ingested project files
+- Create worktree → create change set from worktree → diff shows branch changes
+- Create review → add comments → approve → merge → worktree cleaned up → change set status `merged`
+- Cross-module event flow: review.merged → notification.created → ws push to client
+- All new REST endpoints protected by auth middleware
 
 ### Data Directory Extension
 
 ```
 {dataDir}/
 ├── ... (Phase 1 + 2 directories)
-├── sessions/
-│   ├── index.json           # Session metadata index
-│   ├── {sessionId}.jsonl    # Per-session message log
-│   └── {sessionId}.jsonl.pre-compact  # Pre-compaction backup
 ├── memory/
 │   └── memory.db            # SQLite (documents, chunks, embeddings, FTS5)
+├── reviews/
+│   ├── {changeSetId}.json   # Change set metadata
+│   ├── {reviewId}.json      # Review metadata
+│   └── {reviewId}-comments.jsonl  # Review comments
 ├── config.json              # Unified configuration
 └── config-history.jsonl     # Config change log
 ```
@@ -588,17 +655,20 @@ Phase 3 MUST include integration tests covering:
 
 **Server:**
 
-- `better-sqlite3` — SQLite driver (synchronous, fast)
-- `sqlite-vec` — Vector similarity extension for SQLite
-- `@anthropic-ai/tokenizer` or character-ratio based — token counting
+- `better-sqlite3` + `@types/better-sqlite3` — synchronous SQLite driver
+- `sqlite-vec` — vector similarity extension for SQLite
+- `diff` + `@types/diff` — text diff computation (or implement Myers' directly)
+- `js-yaml` — YAML parsing for semantic diffs
+- `@iarna/toml` — TOML parsing for semantic diffs
+- `ajv` — JSON Schema validation for config
 
 **Core:**
 
-- WebSocket protocol types shared between client and server
+- WebSocket protocol types (shared between client and server)
 
 **Client:**
 
-- No new external deps (SolidJS stores + existing WS)
+- No new external dependencies (SolidJS stores + existing infrastructure)
 
 ### Module Registration
 
@@ -608,12 +678,14 @@ All Phase 3 server modules MUST follow the established pattern:
 - Export `status(): ModuleStatus`
 - Communicate only via event bus and shared types from `@template/core`
 - Express routers mounted by the main server, not self-mounting
+- Read configuration from the config module, not from environment directly (except config module itself, which reads env for bootstrapping)
 
 ### Testing
 
-- Unit tests per module (same as Phase 1 & 2).
+- Unit tests per module following established patterns (Vitest, temp directories, injectable bus).
 - Integration tests in `packages/server/src/__integration__/phase3.test.ts`.
-- Client WebSocket store tests using mock WebSocket.
-- Memory tests using an in-memory SQLite database (`:memory:`) for speed.
-- Compaction and prompt tests using mock LLM responses (no real API calls in tests).
-- Embedding tests mock the Ollama HTTP call.
+- Client WebSocket store tests using a mock WebSocket.
+- Memory tests using in-memory SQLite (`:memory:`) for speed.
+- Embedding tests mock the Ollama HTTP call (no real API calls in tests).
+- Diff tests use inline string fixtures (no real git repos needed for text diff; file-diff tests use temp git repos as in Phase 2).
+- Review merge tests use injected mock dependencies (no real git operations).
