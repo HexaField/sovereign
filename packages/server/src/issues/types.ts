@@ -55,6 +55,13 @@ export interface IssueProvider {
   addComment(repoPath: string, issueId: string, body: string): Promise<IssueComment>
 }
 
+export interface Remote {
+  name: string
+  provider: 'github' | 'radicle'
+  repo?: string
+  rid?: string
+}
+
 export interface IssueTracker {
   list(orgId: string, filter?: IssueFilter): Promise<Issue[]>
   get(orgId: string, projectId: string, issueId: string): Promise<Issue | undefined>
@@ -73,4 +80,14 @@ export interface IssueTracker {
   addComment(orgId: string, projectId: string, issueId: string, body: string): Promise<IssueComment>
   sync(orgId: string, projectId: string): Promise<{ synced: number; errors: number }>
   flushQueue(): Promise<{ replayed: number; failed: number }>
+}
+
+export interface QueuedOperation {
+  id: string
+  type: 'create' | 'update' | 'comment'
+  orgId: string
+  projectId: string
+  remote: string
+  data: Record<string, unknown>
+  timestamp: string
 }

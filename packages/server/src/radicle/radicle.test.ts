@@ -1,75 +1,223 @@
-import { describe, it } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { EventBus, BusEvent } from '@template/core'
+
+vi.mock('./cli.js', () => ({
+  isRadAvailable: vi.fn(),
+  radStatus: vi.fn(),
+  radInit: vi.fn(),
+  radPush: vi.fn(),
+  radPull: vi.fn(),
+  radClone: vi.fn(),
+  radSeed: vi.fn(),
+  radUnseed: vi.fn(),
+  radListRepos: vi.fn(),
+  radListPeers: vi.fn(),
+  radConnectPeer: vi.fn(),
+  radGetIdentity: vi.fn(),
+  radCreateIdentity: vi.fn()
+}))
+
+import * as cli from './cli.js'
+import { createRadicleManager } from './radicle.js'
+
+const mockedCli = vi.mocked(cli)
+
+function makeBus(): EventBus & { events: BusEvent[] } {
+  const events: BusEvent[] = []
+  return {
+    events,
+    emit(e: BusEvent) {
+      events.push(e)
+    },
+    on() {
+      return () => {}
+    },
+    once() {
+      return () => {}
+    },
+    async *replay() {},
+    history() {
+      return []
+    }
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockedCli.isRadAvailable.mockResolvedValue(true)
+})
 
 describe('RadicleManager', () => {
   describe('CLI detection', () => {
-    it.todo('works when rad CLI is available')
-    it.todo('gracefully degrades with clear error when rad is not available')
+    it('works when rad CLI is available', async () => {
+      mockedCli.radStatus.mockResolvedValue({
+        running: true,
+        peers: 2,
+        identity: { did: 'did:key:z1', nodeId: 'z1', alias: 'a' }
+      })
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      const s = await mgr.getStatus()
+      expect(s.running).toBe(true)
+    })
+
+    it('gracefully degrades with clear error when rad is not available', async () => {
+      mockedCli.isRadAvailable.mockResolvedValue(false)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      await expect(mgr.getStatus()).rejects.toThrow('Radicle CLI (rad) is not installed')
+      await expect(mgr.listRepos()).rejects.toThrow('Radicle CLI (rad) is not installed')
+      await expect(mgr.push('rid')).rejects.toThrow('Radicle CLI (rad) is not installed')
+    })
   })
 
   describe('initRepo', () => {
-    it.todo('initializes a new Radicle repo via rad init')
-    it.todo('passes name and description options')
-    it.todo('returns RadicleRepoInfo')
-    it.todo('emits radicle.repo.init event')
+    it('initializes a new Radicle repo and emits event', async () => {
+      const info = { rid: 'rad:z1', name: 'test', defaultBranch: 'main', peers: [], delegates: [], seeding: false }
+      mockedCli.radInit.mockResolvedValue(info)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      const result = await mgr.initRepo('/path', { name: 'test', description: 'desc' })
+      expect(result.rid).toBe('rad:z1')
+      expect(mockedCli.radInit).toHaveBeenCalledWith('/path', { name: 'test', description: 'desc' })
+      expect(bus.events.some((e) => e.type === 'radicle.repo.init')).toBe(true)
+    })
   })
 
   describe('listRepos', () => {
-    it.todo('lists all Radicle repos')
-    it.todo('returns array of RadicleRepoInfo')
+    it('lists all Radicle repos', async () => {
+      const repos = [{ rid: 'rad:z1', name: 'r1', defaultBranch: 'main', peers: [], delegates: [], seeding: false }]
+      mockedCli.radListRepos.mockResolvedValue(repos)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      const result = await mgr.listRepos()
+      expect(result).toEqual(repos)
+    })
   })
 
   describe('push', () => {
-    it.todo('pushes to Radicle via rad push')
-    it.todo('emits radicle.repo.pushed event')
+    it('pushes and emits event', async () => {
+      mockedCli.radPush.mockResolvedValue(undefined)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      await mgr.push('rad:z1')
+      expect(mockedCli.radPush).toHaveBeenCalledWith('rad:z1')
+      expect(bus.events.some((e) => e.type === 'radicle.repo.pushed')).toBe(true)
+    })
   })
 
   describe('pull', () => {
-    it.todo('pulls from Radicle via rad pull')
-    it.todo('emits radicle.repo.pulled event')
+    it('pulls and emits event', async () => {
+      mockedCli.radPull.mockResolvedValue(undefined)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      await mgr.pull('rad:z1')
+      expect(bus.events.some((e) => e.type === 'radicle.repo.pulled')).toBe(true)
+    })
   })
 
   describe('clone', () => {
-    it.todo('clones a Radicle repo via rad clone')
-    it.todo('emits radicle.repo.cloned event')
+    it('clones and emits event', async () => {
+      mockedCli.radClone.mockResolvedValue(undefined)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      await mgr.clone('rad:z1', '/dest')
+      expect(mockedCli.radClone).toHaveBeenCalledWith('rad:z1', '/dest')
+      expect(bus.events.some((e) => e.type === 'radicle.repo.cloned')).toBe(true)
+    })
   })
 
   describe('seed/unseed', () => {
-    it.todo('seeds a repo via rad seed')
-    it.todo('unseeds a repo via rad unseed')
+    it('seeds a repo', async () => {
+      mockedCli.radSeed.mockResolvedValue(undefined)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      await mgr.seed('rad:z1')
+      expect(mockedCli.radSeed).toHaveBeenCalledWith('rad:z1')
+    })
+
+    it('unseeds a repo', async () => {
+      mockedCli.radUnseed.mockResolvedValue(undefined)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      await mgr.unseed('rad:z1')
+      expect(mockedCli.radUnseed).toHaveBeenCalledWith('rad:z1')
+    })
   })
 
   describe('identity management', () => {
-    it.todo('gets current identity')
-    it.todo('returns undefined when no identity exists')
-    it.todo('creates a new identity with alias')
-    it.todo('sets default identity for signing')
+    it('gets current identity', async () => {
+      const id = { did: 'did:key:z1', nodeId: 'z1', alias: 'bob' }
+      mockedCli.radGetIdentity.mockResolvedValue(id)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      expect(await mgr.getIdentity()).toEqual(id)
+    })
+
+    it('returns undefined when no identity exists', async () => {
+      mockedCli.radGetIdentity.mockResolvedValue(undefined)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      expect(await mgr.getIdentity()).toBeUndefined()
+    })
+
+    it('creates a new identity with alias', async () => {
+      const id = { did: 'did:key:z2', nodeId: 'z2', alias: 'alice' }
+      mockedCli.radCreateIdentity.mockResolvedValue(id)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      const result = await mgr.createIdentity('alice')
+      expect(result.alias).toBe('alice')
+    })
   })
 
   describe('peer discovery', () => {
-    it.todo('lists known peers')
-    it.todo('connects to a peer by Node ID')
-    it.todo('connects to a peer with optional address')
-    it.todo('emits radicle.peer.connected event')
-  })
+    it('lists known peers', async () => {
+      const peers = [{ nodeId: 'z1', state: 'connected' as const }]
+      mockedCli.radListPeers.mockResolvedValue(peers)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      expect(await mgr.listPeers()).toEqual(peers)
+    })
 
-  describe('repo dashboard', () => {
-    it.todo('shows peers connected to a repo')
-    it.todo('shows replication status')
-    it.todo('shows seed nodes')
-    it.todo('shows last sync time')
+    it('connects to a peer and emits event', async () => {
+      mockedCli.radConnectPeer.mockResolvedValue(undefined)
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      await mgr.connectPeer('z1', '1.2.3.4:8776')
+      expect(mockedCli.radConnectPeer).toHaveBeenCalledWith('z1', '1.2.3.4:8776')
+      expect(bus.events.some((e) => e.type === 'radicle.peer.connected')).toBe(true)
+    })
   })
 
   describe('getStatus', () => {
-    it.todo('returns running state, identity, and peer count')
-    it.todo('returns running: false when node is not running')
+    it('returns running state, identity, and peer count', async () => {
+      mockedCli.radStatus.mockResolvedValue({
+        running: true,
+        identity: { did: 'did:key:z1', nodeId: 'z1', alias: 'a' },
+        peers: 5
+      })
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      const s = await mgr.getStatus()
+      expect(s.running).toBe(true)
+      expect(s.peers).toBe(5)
+    })
+
+    it('returns running: false when node is not running', async () => {
+      mockedCli.radStatus.mockResolvedValue({ running: false, peers: 0 })
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      const s = await mgr.getStatus()
+      expect(s.running).toBe(false)
+    })
   })
 
-  describe('bus events', () => {
-    it.todo('emits radicle.repo.init on init')
-    it.todo('emits radicle.repo.pushed on push')
-    it.todo('emits radicle.repo.pulled on pull')
-    it.todo('emits radicle.repo.cloned on clone')
-    it.todo('emits radicle.peer.connected on peer connect')
-    it.todo('emits radicle.peer.disconnected on peer disconnect')
+  describe('status()', () => {
+    it('returns module status', () => {
+      const bus = makeBus()
+      const mgr = createRadicleManager(bus, '/tmp')
+      expect(mgr.status()).toEqual({ name: 'radicle', status: 'ok' })
+    })
   })
 })
