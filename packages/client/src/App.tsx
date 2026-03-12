@@ -1,15 +1,9 @@
-import Home from './pages/Home'
-import StatusBar from './components/status-bar/StatusBar'
+import Shell from './shell/Shell.js'
 
 /**
  * The main application component.
- * Renders the Home page with a persistent status bar.
+ * Renders the IDE Shell as the root layout.
  */
 export default function App() {
-  return (
-    <>
-      <Home />
-      <StatusBar />
-    </>
-  )
+  return <Shell />
 }

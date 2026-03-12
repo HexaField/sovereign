@@ -15,6 +15,11 @@ export default defineConfig(({ mode }) => {
         key: fs.readFileSync(path.resolve(process.cwd(), '../../.certs/localhost.key')),
         cert: fs.readFileSync(path.resolve(process.cwd(), '../../.certs/localhost.cert'))
       }
+    },
+    test: {
+      environment: 'node',
+      include: ['src/**/*.test.ts'],
+      setupFiles: []
     }
   }
 })
