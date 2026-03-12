@@ -8,7 +8,10 @@ dotenv.config()
 
 import cors from 'cors'
 import express from 'express'
+import { WebSocketServer } from 'ws'
+import { createEventBus } from '@template/core'
 import healthRouter from './routes/health'
+import { createStatusAggregator } from './status/status.js'
 
 const app = express()
 const port = process.env.PORT || 3001
@@ -24,6 +27,30 @@ const options = {
   cert: fs.readFileSync(path.join(process.cwd(), '../../.certs/localhost.cert'))
 }
 
-https.createServer(options, app).listen(Number(port), host, () => {
+const server = https.createServer(options, app)
+
+// --- WebSocket setup ---
+const wss = new WebSocketServer({ server, path: '/ws' })
+const dataDir = path.join(process.cwd(), '.data')
+fs.mkdirSync(dataDir, { recursive: true })
+const bus = createEventBus(dataDir)
+
+const statusAggregator = createStatusAggregator(bus, {
+  modules: [],
+  pushToClients: (update) => {
+    const msg = JSON.stringify(update)
+    for (const client of wss.clients) {
+      if (client.readyState === 1) client.send(msg)
+    }
+  }
+})
+
+wss.on('connection', (ws) => {
+  // Send initial status immediately
+  const initial = { type: 'status.update', payload: statusAggregator.getStatus() }
+  ws.send(JSON.stringify(initial))
+})
+
+server.listen(Number(port), host, () => {
   console.log(`Server running at https://${host}:${port}`)
 })

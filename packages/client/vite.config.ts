@@ -14,6 +14,13 @@ export default defineConfig(({ mode }) => {
       https: {
         key: fs.readFileSync(path.resolve(process.cwd(), '../../.certs/localhost.key')),
         cert: fs.readFileSync(path.resolve(process.cwd(), '../../.certs/localhost.cert'))
+      },
+      proxy: {
+        '/ws': {
+          target: env.VITE_API_URL || `https://localhost:5801`,
+          ws: true,
+          secure: false
+        }
       }
     },
     test: {
