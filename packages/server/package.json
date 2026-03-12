@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@template/core": "workspace:*",
+    "ajv": "^8.18.0",
     "chokidar": "^5.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
