@@ -453,22 +453,27 @@ Entity-bound thread management. Every thread is tied to a git entity or is a glo
 
 #### 6.1 Thread Model
 
-- Every thread MUST have an identity: `{ threadKey: string, entityBinding?: EntityBinding, label?: string }`.
+- Every thread MUST have an identity: `{ threadKey: string, entities: EntityBinding[], label?: string }`.
+- The `entities` array MAY be empty (global threads), contain one entity (typical), or contain multiple entities (cross-cutting work).
 - An `EntityBinding` MUST contain: `{ orgId: string, projectId: string, entityType: 'branch' | 'issue' | 'pr', entityRef: string }`.
-- Thread keys for entity-bound threads MUST follow the format: `{orgId}/{projectId}/{entityType}:{entityRef}` (e.g. `myorg/myrepo/branch:feat-auth`, `myorg/myrepo/issue:42`, `myorg/myrepo/pr:73`).
+- Thread keys for entity-bound threads MUST follow the format: `{orgId}/{projectId}/{entityType}:{entityRef}` based on the **primary** entity (first in the array). The key is immutable once created — adding more entities does not change the key.
 - Global thread keys MUST be: `main` for the default thread, or user-defined labels for bespoke threads.
+- Entities MUST be addable to an existing thread: `POST /api/threads/:key/entities` with an `EntityBinding` body. This allows a thread to track a branch AND its associated issue AND its PR simultaneously.
+- Entities MUST be removable from a thread: `DELETE /api/threads/:key/entities/:entityType/:entityRef`.
 - When a worktree is created (bus event `worktree.created`), a thread MUST be automatically created (or reused) for that branch.
 - When an issue is created (bus event `issue.created`), a thread MUST be automatically created for that issue.
 - When a review is created (bus event `review.created`), a thread MUST be automatically created for that PR/patch.
+- When entities are naturally related (e.g. a PR references an issue, or a branch is created from an issue), the thread manager SHOULD automatically associate them into the same thread rather than creating separate threads. Detection via: PR body mentioning `fixes #42` / `closes #42`, branch name containing issue number (e.g. `feat/42-auth`), explicit cross-references in issue/PR metadata.
 - Thread metadata MUST be persisted to `{dataDir}/threads/registry.json` (atomic write).
 
 #### 6.2 Event Routing
 
-- Events from an entity MUST be routed to the entity's thread:
-  - `git.status.changed` with a branch → route to `branch:*` thread
-  - `issue.updated`, `issue.comment.added` → route to `issue:*` thread
-  - `review.updated`, `review.comment.added`, `review.approved`, `review.merged` → route to `pr:*` thread
-  - Webhook events with entity extraction → route to the matching thread
+- Events from an entity MUST be routed to **every thread that contains that entity** in its `entities` array. A single event MAY route to multiple threads if the entity is associated with more than one.
+- Entity → thread matching:
+  - `git.status.changed` with a branch → route to all threads containing `branch:*` entity
+  - `issue.updated`, `issue.comment.added` → route to all threads containing `issue:*` entity
+  - `review.updated`, `review.comment.added`, `review.approved`, `review.merged` → route to all threads containing `pr:*` entity
+  - Webhook events with entity extraction → route to all matching threads
 - AGENT-classified events MUST trigger autonomous agent work in the thread: the thread manager sends the event as a system message via the `AgentBackend` to the session mapped to that thread.
 - NOTIFY-classified events MUST surface as a notification in the thread view for the user to respond to (via Phase 1 notification system).
 - Events for entities with no existing thread SHOULD create the thread automatically.
@@ -482,7 +487,7 @@ Entity-bound thread management. Every thread is tied to a git entity or is a glo
 - The drawer MUST support: switching threads (tap), creating new global threads, hiding threads (swipe or menu), unhiding threads.
 - Hidden threads MUST be persisted in `localStorage` key `sovereign:hidden-threads`.
 - The drawer MUST show subagent sessions (if any) under the parent thread.
-- Thread display names MUST be derived from the entity: branch name, issue title + number, PR title + number.
+- Thread display names MUST be derived from the primary entity (first in array): branch name, issue title + number, PR title + number. When multiple entities are bound, a secondary indicator MUST show the additional entity count (e.g. "feat-auth +2").
 - All styling MUST use Tailwind utility classes.
 
 #### 6.4 Thread Status
@@ -494,9 +499,11 @@ Entity-bound thread management. Every thread is tied to a git entity or is a glo
 ### Thread REST API
 
 - `GET /api/threads` — list all threads with status
-- `GET /api/threads/:key` — get thread details + entity binding
+- `GET /api/threads/:key` — get thread details + entities
 - `POST /api/threads` — create a global thread
 - `DELETE /api/threads/:key` — archive/hide a thread
+- `POST /api/threads/:key/entities` — add an entity binding to a thread
+- `DELETE /api/threads/:key/entities/:entityType/:entityRef` — remove an entity from a thread
 - `GET /api/threads/:key/events` — list events routed to this thread
 
 ### Thread WS Channel: `threads`
@@ -653,7 +660,7 @@ Top navigation bar.
 
 - The header MUST show: connection status `<Badge>` (colored dot), current thread name, view switcher (chat/voice/dashboard), thread drawer toggle `<IconButton>`, settings `<IconButton>`.
 - Connection status MUST use theme tokens: green for connected, red/danger for error/disconnected, muted for connecting.
-- The thread name MUST show the entity binding when applicable (e.g. "feat-auth" for a branch thread, "Issue #42: Fix login" for an issue thread).
+- The thread name MUST show the primary entity binding when applicable (e.g. "feat-auth" for a branch thread, "Issue #42: Fix login" for an issue thread). When multiple entities are bound, a clickable "+N" indicator MUST expand to show all bound entities.
 - The header MUST include a subagent indicator: when subagents are active in the current thread, show a count `<Badge>`.
 - View switching MUST update the URL query parameter and render the appropriate view.
 - The settings modal MUST support: theme selection (dark/light/ironman/jarvis), audio settings (TTS enabled, voice selection).
