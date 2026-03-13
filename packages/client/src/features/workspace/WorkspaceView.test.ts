@@ -26,7 +26,6 @@ import {
   setActiveThreadKey,
   sidebarCollapsed,
   setSidebarCollapsed,
-  toggleSidebar,
   SIDEBAR_TABS,
   CHAT_PANEL_DEFAULT_WIDTH,
   CHAT_PANEL_MIN_WIDTH,

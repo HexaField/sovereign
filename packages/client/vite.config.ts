@@ -20,6 +20,11 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_API_URL || `https://localhost:5801`,
           ws: true,
           secure: false
+        },
+        '/api': {
+          target: env.VITE_API_URL || `https://localhost:5801`,
+          secure: false,
+          changeOrigin: true
         }
       }
     },

@@ -1,4 +1,4 @@
-import { type Component, createSignal, onMount, onCleanup, For, Show, createMemo } from 'solid-js'
+import { type Component, createSignal, onMount, For, Show, createMemo } from 'solid-js'
 import {
   viewMode,
   setViewMode,
@@ -131,9 +131,9 @@ const GlobalPlanningView: Component = () => {
   const [orgs, setOrgs] = createSignal<Array<{ id: string; name: string }>>([])
   const [showCreateDialog, setShowCreateDialog] = createSignal(false)
   const [showAssignDialog, setShowAssignDialog] = createSignal(false)
-  const [svgZoom, setSvgZoom] = createSignal(1)
-  const [svgPanX, setSvgPanX] = createSignal(0)
-  const [svgPanY, setSvgPanY] = createSignal(0)
+  const [svgZoom, _setSvgZoom] = createSignal(1)
+  const [svgPanX, _setSvgPanX] = createSignal(0)
+  const [svgPanY, _setSvgPanY] = createSignal(0)
 
   // Fetch planning data
   onMount(async () => {

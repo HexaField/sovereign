@@ -16,7 +16,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 
 import { buildTreeUrl, getFileExtension, type FileNode } from './FileExplorerPanel.js'
-import { activeWorkspace, setActiveWorkspace, setActiveProject, _setActiveWorkspace } from '../store.js'
+import { activeWorkspace, setActiveProject, _setActiveWorkspace } from '../store.js'
 
 beforeEach(() => {
   ;(globalThis as any).localStorage.clear()

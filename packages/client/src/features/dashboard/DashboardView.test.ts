@@ -17,7 +17,7 @@ import {
   getConnectionDotColor,
   formatJobCount
 } from './DashboardView'
-import type { ServiceStatus, ActivityEvent, Notification, ThreadInfo, ConnectionState } from './DashboardView'
+import type { ServiceStatus, ActivityEvent, Notification, ThreadInfo } from './DashboardView'
 
 describe('§7 Dashboard', () => {
   describe('§7.1 DashboardView', () => {

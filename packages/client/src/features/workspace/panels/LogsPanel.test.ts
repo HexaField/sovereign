@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   writable: true
 })
 
-import { filterLogs, LOG_LEVEL_ICONS, type LogEntry, type LogLevel } from './LogsPanel.js'
+import { filterLogs, LOG_LEVEL_ICONS, type LogEntry } from './LogsPanel.js'
 import { _setActiveWorkspace } from '../store.js'
 
 beforeEach(() => {

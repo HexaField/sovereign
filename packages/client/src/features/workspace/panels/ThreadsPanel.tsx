@@ -1,6 +1,6 @@
-import { createSignal, For, Show } from 'solid-js'
+import { Show } from 'solid-js'
 import type { Component } from 'solid-js'
-import { activeWorkspace, setActiveThreadKey } from '../store.js'
+import { activeWorkspace } from '../store.js'
 
 export interface ThreadItem {
   key: string

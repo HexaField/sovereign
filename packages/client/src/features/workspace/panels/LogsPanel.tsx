@@ -28,8 +28,8 @@ export function filterLogs(entries: LogEntry[], level: LogLevel | null, module: 
 }
 
 const LogsPanel: Component = () => {
-  const [levelFilter, setLevelFilter] = createSignal<LogLevel | null>(null)
-  const [moduleFilter, setModuleFilter] = createSignal<string | null>(null)
+  const [_levelFilter, setLevelFilter] = createSignal<LogLevel | null>(null)
+  const [_moduleFilter, _setModuleFilter] = createSignal<string | null>(null)
   const ws = () => activeWorkspace()
 
   return (
