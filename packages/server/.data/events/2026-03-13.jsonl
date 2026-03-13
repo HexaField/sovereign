@@ -25,3 +25,7 @@
 {"type":"ws.connected","timestamp":"2026-03-13T22:08:38.437Z","source":"ws","payload":{"deviceId":"l7drs266mbe"}}
 {"type":"ws.disconnected","timestamp":"2026-03-13T22:08:39.706Z","source":"ws","payload":{"deviceId":"l7drs266mbe"}}
 {"type":"org.created","timestamp":"2026-03-13T23:05:37.948Z","source":"orgs","payload":{"id":"_global","name":"Global","path":"/Users/josh/Desktop/sovereign/packages/server/.data/orgs/_global","provider":"radicle","createdAt":"2026-03-13T23:05:37.947Z","updatedAt":"2026-03-13T23:05:37.948Z"}}
+{"type":"ws.connected","timestamp":"2026-03-13T23:26:35.662Z","source":"ws","payload":{"deviceId":"z8dg0g46ls"}}
+{"type":"ws.connected","timestamp":"2026-03-13T23:26:50.787Z","source":"ws","payload":{"deviceId":"q0yef8dgyx"}}
+{"type":"ws.disconnected","timestamp":"2026-03-13T23:27:05.844Z","source":"ws","payload":{"deviceId":"q0yef8dgyx"}}
+{"type":"ws.connected","timestamp":"2026-03-13T23:27:05.846Z","source":"ws","payload":{"deviceId":"47ylpdq2kav"}}
