@@ -13,7 +13,10 @@ function loadTheme(): Theme {
   if (typeof localStorage === 'undefined') return 'default'
   const stored = localStorage.getItem(STORAGE_KEY)
   if (stored && isValidTheme(stored)) return stored
-  // Default to dark theme — Sovereign is dark-first (like voice-ui)
+  // Respect OS preference if no explicit choice stored
+  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) {
+    return 'light'
+  }
   return 'default'
 }
 
