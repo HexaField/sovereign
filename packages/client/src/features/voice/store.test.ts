@@ -1,0 +1,21 @@
+import { describe, it } from 'vitest'
+
+describe('§3.4 Voice Store', () => {
+  it.todo('MUST expose voiceState: Accessor<VoiceState>')
+  it.todo('MUST expose isRecording derived from voiceState === listening')
+  it.todo('MUST expose recordingTimerText formatted as MM:SS, updating every second')
+  it.todo('MUST reset recordingTimerText to 00:00 when recording stops')
+  it.todo('MUST expose voiceStatusText derived from voiceState')
+  it.todo('startRecording MUST request microphone access via getUserMedia')
+  it.todo('startRecording MUST create MediaRecorder with audio/webm;codecs=opus')
+  it.todo('startRecording MUST fallback to audio/webm if opus not supported')
+  it.todo('startRecording MUST set voiceState to listening')
+  it.todo('stopRecording MUST stop MediaRecorder and collect audio blob')
+  it.todo('stopRecording MUST set voiceState to processing')
+  it.todo('stopRecording MUST send audio to POST /api/voice/transcribe')
+  it.todo('stopRecording MUST send transcribed text as chat message')
+  it.todo('stopRecording MUST set voiceState to idle after sending (or speaking if TTS begins)')
+  it.todo('interruptPlayback MUST stop TTS audio playback immediately')
+  it.todo('interruptPlayback MUST set voiceState to idle')
+  it.todo('MUST be self-contained — MUST NOT import from other feature stores')
+})

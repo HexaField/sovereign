@@ -1,0 +1,23 @@
+import { describe, it } from 'vitest'
+
+describe('§3.3 Thread Store', () => {
+  it.todo('MUST expose threadKey: Accessor<string>')
+  it.todo('MUST expose threads: Accessor<ThreadInfo[]>')
+  it.todo('switchThread MUST set the active thread key')
+  it.todo('switchThread MUST update the URL hash to #thread={key}')
+  it.todo('switchThread MUST NOT reload the page')
+  it.todo('createThread MUST send POST /api/threads REST request')
+  it.todo('createThread MUST add new thread to threads on success')
+  it.todo('addEntity MUST send POST /api/threads/:key/entities')
+  it.todo('removeEntity MUST send DELETE /api/threads/:key/entities/:entityType/:entityRef')
+  it.todo('MUST read thread key from URL hash on init')
+  it.todo('MUST default to main if no hash is present')
+  it.todo('MUST listen for popstate events and update threadKey')
+  it.todo('MUST subscribe to threads WS channel for thread.created messages')
+  it.todo('MUST subscribe to threads WS channel for thread.updated messages')
+  it.todo('MUST subscribe to threads WS channel for thread.status messages')
+  it.todo('MUST add new thread to threads on thread.created')
+  it.todo('MUST update matching thread metadata on thread.updated')
+  it.todo('MUST update matching thread status on thread.status')
+  it.todo('MUST fetch initial thread list on init via GET /api/threads')
+})

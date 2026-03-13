@@ -1,0 +1,20 @@
+import { describe, it } from 'vitest'
+
+describe('§5.3 ThreadDrawer', () => {
+  it.todo('MUST slide in from the left edge with 300ms ease CSS transition')
+  it.todo('MUST show threads grouped into Global and per-workspace sections')
+  it.todo('MUST show display name derived from primary entity')
+  it.todo('MUST show entity type icon: 🌿 branch, 🎫 issue, 🔀 PR')
+  it.todo('MUST show last activity time as relative time')
+  it.todo('MUST show unread indicator Badge that hides when count is 0')
+  it.todo('MUST show secondary indicator with additional entity count when multiple entities bound')
+  it.todo('MUST switch thread on tap/click')
+  it.todo('MUST provide "New thread" button in Global section')
+  it.todo('MUST support hide thread via swipe-left on mobile')
+  it.todo('MUST support hide thread via right-click → "Hide" on desktop')
+  it.todo('MUST persist hidden thread keys in localStorage key sovereign:hidden-threads')
+  it.todo('MUST provide "Show hidden" toggle showing hidden threads with muted styling')
+  it.todo('MUST show subagent sessions nested under parent thread entry')
+  it.todo('MUST have search/filter input that filters by name, entity ref, or label')
+  it.todo('Search MUST be case-insensitive substring match')
+})
