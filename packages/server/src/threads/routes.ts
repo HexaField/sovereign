@@ -16,7 +16,7 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
     res.json({ threads })
   })
 
-  router.get('/api/threads/:key(*)', (req, res) => {
+  router.get('/api/threads/:key', (req, res) => {
     const thread = threadManager.get(req.params.key)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
     const events = threadManager.getEvents(req.params.key, {
@@ -32,31 +32,31 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
     res.status(201).json({ thread })
   })
 
-  router.delete('/api/threads/:key(*)', (req, res) => {
+  router.delete('/api/threads/:key', (req, res) => {
     const deleted = threadManager.delete(req.params.key)
     if (!deleted) return res.status(404).json({ error: 'Thread not found' })
     res.json({ success: true })
   })
 
-  router.post('/api/threads/:key(*)/entities', (req, res) => {
+  router.post('/api/threads/:key/entities', (req, res) => {
     const thread = threadManager.addEntity(req.params.key, req.body)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
     res.json({ thread })
   })
 
-  router.delete('/api/threads/:key(*)/entities/:entityType/:entityRef', (req, res) => {
+  router.delete('/api/threads/:key/entities/:entityType/:entityRef', (req, res) => {
     const thread = threadManager.removeEntity(req.params.key, req.params.entityType as never, req.params.entityRef)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
     res.json({ thread })
   })
 
-  router.post('/api/threads/:key(*)/forward', (req, res) => {
+  router.post('/api/threads/:key/forward', (req, res) => {
     const result = forwardHandler.forward(req.body.sourceThread ?? req.params.key, req.params.key, req.body)
     if (!result.success) return res.status(400).json({ error: result.error })
     res.json({ success: true })
   })
 
-  router.get('/api/threads/:key(*)/events', (req, res) => {
+  router.get('/api/threads/:key/events', (req, res) => {
     const events = threadManager.getEvents(req.params.key, {
       limit: Number(req.query.limit) || 50,
       offset: Number(req.query.offset) || 0,
