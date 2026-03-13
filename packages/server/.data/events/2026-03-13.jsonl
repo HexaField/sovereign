@@ -24,3 +24,4 @@
 {"type":"ws.disconnected","timestamp":"2026-03-13T22:07:42.408Z","source":"ws","payload":{"deviceId":"vflp1z0410h"}}
 {"type":"ws.connected","timestamp":"2026-03-13T22:08:38.437Z","source":"ws","payload":{"deviceId":"l7drs266mbe"}}
 {"type":"ws.disconnected","timestamp":"2026-03-13T22:08:39.706Z","source":"ws","payload":{"deviceId":"l7drs266mbe"}}
+{"type":"org.created","timestamp":"2026-03-13T23:05:37.948Z","source":"orgs","payload":{"id":"_global","name":"Global","path":"/Users/josh/Desktop/sovereign/packages/server/.data/orgs/_global","provider":"radicle","createdAt":"2026-03-13T23:05:37.947Z","updatedAt":"2026-03-13T23:05:37.948Z"}}
