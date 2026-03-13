@@ -24,7 +24,7 @@ export interface SystemModule {
   registerModule(info: ModuleInfo): void
 }
 
-export function createSystemModule(bus: EventBus, dataDir: string): SystemModule {
+export function createSystemModule(_bus: EventBus, dataDir: string): SystemModule {
   const startTime = Date.now()
   const registeredModules: ModuleInfo[] = []
 

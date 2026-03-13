@@ -18,7 +18,7 @@ Still relies on OpenClaw for agent runtime.
 
 Diff engine (text, file, semantic for JSON/YAML/TOML, change sets). Provider-backed issue tracker and code review system — GitHub and Radicle as sources of truth, unified behind a provider abstraction with multi-remote support per project. Radicle repo management (`rad` CLI integration, repo dashboard, identity management, peer discovery). Sovereign caches for performance and offline access but does NOT maintain its own authoritative issue/review store.
 
-## Phase 5: Planning
+## Phase 5: Planning ✅
 
 DAG planning engine built directly on the issue/review system (Phase 4). Uses GitHub Issues/Projects and Radicle Issues as the backing store — no separate plan store. Sovereign adds minimal metadata (dependency edges, cross-project links) as issue labels/references. Planning UI (graph, kanban, list, tree views) reads from and writes to the provider-backed issue tracker.
 
