@@ -1,14 +1,11 @@
 // Threads — WS channel for thread events
 
-import type { EventBus } from '@template/core'
+import type { EventBus, WsChannelOptions } from '@template/core'
 import type { ThreadManager } from './types.js'
 
 export interface WsHandler {
-  registerChannel(
-    name: string,
-    handler: (msg: { type: string; payload: unknown }, send: (msg: unknown) => void) => void
-  ): void
-  broadcast(channel: string, msg: unknown): void
+  registerChannel(name: string, options: WsChannelOptions): void
+  broadcastToChannel(channel: string, msg: { type: string; payload: unknown }): void
 }
 
 export function registerThreadsWs(
@@ -18,41 +15,53 @@ export function registerThreadsWs(
 ): { destroy: () => void } {
   const unsubs: Array<() => void> = []
 
-  wsHandler.registerChannel('threads', (msg, send) => {
-    const { type, payload } = msg as { type: string; payload: Record<string, unknown> }
-
-    switch (type) {
-      case 'thread.list': {
-        const threads = threadManager.list()
-        send({ type: 'thread.list', payload: { threads } })
-        break
-      }
-      case 'thread.create': {
-        const thread = threadManager.create({
-          label: payload?.label as string | undefined,
-          entities: payload?.entities as never
-        })
-        send({ type: 'thread.created', payload: { thread } })
-        break
-      }
-      case 'thread.switch': {
-        const key = payload?.key as string
-        const thread = threadManager.get(key)
-        send({ type: 'thread.switched', payload: { thread: thread ?? null } })
-        break
-      }
-      case 'thread.entity.add': {
-        const key = payload?.key as string
-        const entity = payload?.entity as never
-        const thread = threadManager.addEntity(key, entity)
-        send({ type: 'thread.updated', payload: { thread } })
-        break
-      }
-      case 'thread.entity.remove': {
-        const key = payload?.key as string
-        const thread = threadManager.removeEntity(key, payload?.entityType as never, payload?.entityRef as string)
-        send({ type: 'thread.updated', payload: { thread } })
-        break
+  wsHandler.registerChannel('threads', {
+    serverMessages: [
+      'thread.list',
+      'thread.created',
+      'thread.switched',
+      'thread.updated',
+      'thread.deleted',
+      'thread.entity.added',
+      'thread.entity.removed',
+      'thread.event.routed'
+    ],
+    clientMessages: ['thread.list', 'thread.create', 'thread.switch', 'thread.entity.add', 'thread.entity.remove'],
+    onMessage(type, payload, _deviceId) {
+      const p = payload as Record<string, unknown>
+      switch (type) {
+        case 'thread.list': {
+          const threads = threadManager.list()
+          wsHandler.broadcastToChannel('threads', { type: 'thread.list', payload: { threads } })
+          break
+        }
+        case 'thread.create': {
+          const thread = threadManager.create({
+            label: p?.label as string | undefined,
+            entities: p?.entities as never
+          })
+          wsHandler.broadcastToChannel('threads', { type: 'thread.created', payload: { thread } })
+          break
+        }
+        case 'thread.switch': {
+          const key = p?.key as string
+          const thread = threadManager.get(key)
+          wsHandler.broadcastToChannel('threads', { type: 'thread.switched', payload: { thread: thread ?? null } })
+          break
+        }
+        case 'thread.entity.add': {
+          const key = p?.key as string
+          const entity = p?.entity as never
+          const thread = threadManager.addEntity(key, entity)
+          wsHandler.broadcastToChannel('threads', { type: 'thread.updated', payload: { thread } })
+          break
+        }
+        case 'thread.entity.remove': {
+          const key = p?.key as string
+          const thread = threadManager.removeEntity(key, p?.entityType as never, p?.entityRef as string)
+          wsHandler.broadcastToChannel('threads', { type: 'thread.updated', payload: { thread } })
+          break
+        }
       }
     }
   })
@@ -68,7 +77,7 @@ export function registerThreadsWs(
   for (const eventType of busEvents) {
     unsubs.push(
       bus.on(eventType, (event) => {
-        wsHandler.broadcast('threads', { type: event.type, payload: event.payload })
+        wsHandler.broadcastToChannel('threads', { type: event.type, payload: event.payload })
       })
     )
   }

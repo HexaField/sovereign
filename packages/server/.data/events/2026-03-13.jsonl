@@ -1,0 +1,5 @@
+{"type":"ws.connected","timestamp":"2026-03-13T07:12:19.890Z","source":"ws","payload":{"deviceId":"zlhnahlbxz"}}
+{"type":"ws.connected","timestamp":"2026-03-13T07:12:21.871Z","source":"ws","payload":{"deviceId":"5wu2cclbg9u"}}
+{"type":"ws.disconnected","timestamp":"2026-03-13T07:12:41.621Z","source":"ws","payload":{"deviceId":"5wu2cclbg9u"}}
+{"type":"ws.disconnected","timestamp":"2026-03-13T07:12:45.797Z","source":"ws","payload":{"deviceId":"zlhnahlbxz"}}
+{"type":"ws.connected","timestamp":"2026-03-13T07:12:45.827Z","source":"ws","payload":{"deviceId":"pi2d3z1ns6j"}}

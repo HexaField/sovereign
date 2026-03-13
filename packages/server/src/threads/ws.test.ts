@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { createEventBus } from '@template/core'
+import type { WsChannelOptions } from '@template/core'
 import { createThreadManager } from './threads.js'
 import { registerThreadsWs } from './ws.js'
 import type { ThreadManager } from './types.js'
@@ -13,19 +14,24 @@ function makeTmpDir(): string {
 }
 
 function createMockWsHandler(): WsHandler & {
-  channels: Map<string, (msg: { type: string; payload: unknown }, send: (msg: unknown) => void) => void>
+  channelOptions: Map<string, WsChannelOptions>
   broadcasts: Array<{ channel: string; msg: unknown }>
+  sendMessage(channel: string, type: string, payload: unknown): void
 } {
-  const channels = new Map<string, (msg: { type: string; payload: unknown }, send: (msg: unknown) => void) => void>()
+  const channelOptions = new Map<string, WsChannelOptions>()
   const broadcasts: Array<{ channel: string; msg: unknown }> = []
   return {
-    channels,
+    channelOptions,
     broadcasts,
-    registerChannel(name, handler) {
-      channels.set(name, handler)
+    registerChannel(name: string, options: WsChannelOptions) {
+      channelOptions.set(name, options)
     },
-    broadcast(channel, msg) {
+    broadcastToChannel(channel: string, msg: unknown) {
       broadcasts.push({ channel, msg })
+    },
+    sendMessage(channel: string, type: string, payload: unknown) {
+      const opts = channelOptions.get(channel)
+      if (opts?.onMessage) opts.onMessage(type, payload, 'test-device')
     }
   }
 }
@@ -45,40 +51,29 @@ describe('Threads WS Channel', () => {
   })
 
   it('MUST register threads WS channel', () => {
-    expect(ws.channels.has('threads')).toBe(true)
+    expect(ws.channelOptions.has('threads')).toBe(true)
   })
 
   it('MUST send thread.created when a new thread is created', () => {
-    const handler = ws.channels.get('threads')!
-    const responses: unknown[] = []
-    handler({ type: 'thread.create', payload: { label: 'new-thread' } }, (msg) => responses.push(msg))
-    expect(responses).toHaveLength(1)
-    expect((responses[0] as Record<string, unknown>).type).toBe('thread.created')
+    ws.sendMessage('threads', 'thread.create', { label: 'new-thread' })
+    const found = ws.broadcasts.find((b) => (b.msg as Record<string, unknown>).type === 'thread.created')
+    expect(found).toBeDefined()
   })
 
   it('MUST send thread.updated when thread metadata changes', () => {
     tm.create({ label: 'test-thread' })
     ws.broadcasts.length = 0
 
-    const handler = ws.channels.get('threads')!
-    const responses: unknown[] = []
-    handler(
-      {
-        type: 'thread.entity.add',
-        payload: {
-          key: 'test-thread',
-          entity: { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '1' }
-        }
-      },
-      (msg) => responses.push(msg)
-    )
+    ws.sendMessage('threads', 'thread.entity.add', {
+      key: 'test-thread',
+      entity: { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '1' }
+    })
 
-    expect(responses).toHaveLength(1)
-    expect((responses[0] as Record<string, unknown>).type).toBe('thread.updated')
+    const found = ws.broadcasts.find((b) => (b.msg as Record<string, unknown>).type === 'thread.updated')
+    expect(found).toBeDefined()
   })
 
   it('MUST send thread.event.routed when an entity event is routed to a thread', () => {
-    // thread.event.routed is broadcast from the bus listener
     bus.emit({
       type: 'thread.event.routed',
       timestamp: new Date().toISOString(),
@@ -90,16 +85,12 @@ describe('Threads WS Channel', () => {
   })
 
   it('MUST send thread.status when thread status changes', () => {
-    // Thread created emits thread.created on bus which gets broadcast
     tm.create({ label: 'status-test' })
     const found = ws.broadcasts.find((b) => (b.msg as Record<string, unknown>).type === 'thread.created')
     expect(found).toBeDefined()
   })
 
   it('MUST scope by { orgId, projectId } — client subscribed with scope only receives matching events', () => {
-    // Scoping is a property of the WS handler implementation.
-    // Our broadcast sends all events; the WS layer filters by scope.
-    // Here we verify events contain the necessary data for scoping.
     const entity = { orgId: 'org1', projectId: 'proj1', entityType: 'issue' as const, entityRef: '5' }
     tm.create({ entities: [entity] })
     const found = ws.broadcasts.find((b) => {
@@ -112,7 +103,6 @@ describe('Threads WS Channel', () => {
   })
 
   it('MUST support unscoped subscription for all thread events', () => {
-    // All broadcasts go to the 'threads' channel regardless of scope
     tm.create({ label: 'unscoped-test' })
     expect(ws.broadcasts.length).toBeGreaterThan(0)
     expect(ws.broadcasts.every((b) => b.channel === 'threads')).toBe(true)
