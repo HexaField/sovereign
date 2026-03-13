@@ -174,7 +174,7 @@ The scoping mechanism from Phase 3 WS applies: clients subscribe to `chat` scope
 
 ## Wave Strategy
 
-**Wave 1 (parallel):** Theme System, Agent Backend Abstraction + OpenClaw Implementation, Chat Module (server), App Store (client) **Wave 2 (after wave 1):** Chat Interface, Input Area **Wave 3 (after wave 2):** Thread System, Message Forwarding **Wave 4 (after wave 3):** Voice Interface, Dashboard **Wave 5:** Integration tests
+**Wave 1 (parallel):** Theme System, Agent Backend Abstraction + OpenClaw Implementation, Chat Module (server), Client Stores **Wave 2 (after wave 1):** Chat Interface, Input Area **Wave 3 (after wave 2):** Thread System, Message Forwarding **Wave 4 (after wave 3):** Voice Interface, Dashboard **Wave 5:** Integration tests
 
 ---
 
@@ -325,38 +325,71 @@ packages/server/src/chat/
 
 ---
 
-## 3. App Store
+## 3. Client Stores
 
-Central reactive state for the chat application.
+Modular reactive state. Each domain owns its own store — no monolithic app store. Stores are self-contained: they define their own signals, subscribe to their own WS channels, and expose only what consumers need.
 
 ### Requirements
 
-- The store MUST expose all reactive signals needed by chat components:
-  - `connectionStatus`, `statusText` — backend connection state (from server via WS)
-  - `threadKey` — current thread identifier (replaces voice-ui `sessionKey`)
-  - `viewMode` — current view (`chat`, `voice`, `dashboard`, `recording`)
-  - `turns` — parsed conversation turns (user message + work items + assistant response)
-  - `streamingHtml` — live streaming HTML content
-  - `agentStatus` — current agent activity state (`idle`, `working`, `thinking`)
-  - `liveWork` — array of work items for the in-progress turn
-  - `liveThinkingText` — raw thinking text being streamed
-  - `compacting` — context compaction indicator
-  - `voiceState` — voice interface state (`idle`, `listening`, `speaking`, `processing`)
-  - `drawerOpen` — thread drawer visibility
-  - `isRecording` — voice recording active state
-  - `settingsOpen` — settings modal visibility
-- The store MUST define the `ParsedTurn` and `WorkItem` types (imported from `@template/core`).
-- The `viewMode` MUST sync with URL query parameters (`?view=chat`, `?view=voice`, etc.) and support browser back/forward navigation.
+#### 3.1 Connection Store
+
+- MUST expose: `connectionStatus: Accessor<ConnectionStatus>`, `statusText: Accessor<string>`.
+- MUST subscribe to the `chat` WS channel for `backend.status` messages.
+- MUST derive `statusText` from `connectionStatus` (e.g. `'connecting'` → `'connecting…'`).
+- Types: `ConnectionStatus = 'connecting' | 'authenticating' | 'connected' | 'disconnected' | 'error'`.
+
+#### 3.2 Chat Store
+
+- MUST expose: `turns: ParsedTurn[]`, `streamingHtml: Accessor<string>`, `agentStatus: Accessor<AgentStatus>`, `liveWork: Accessor<WorkItem[]>`, `liveThinkingText: Accessor<string>`, `compacting: Accessor<boolean>`.
+- MUST expose retry state: `isRetryCountdownActive: Accessor<boolean>`, `retryCountdownSeconds: Accessor<number>`, `startRetryCountdown(seconds)`, `clearRetryCountdown()`.
+- MUST expose actions: `sendMessage(text, attachments?)`, `abortChat()`.
+- MUST subscribe to the `chat` WS channel for `chat.stream`, `chat.turn`, `chat.status`, `chat.work`, `chat.compacting`, `chat.error`, `chat.session.info` messages.
+- All state MUST be scoped to the current thread — when the thread changes (from thread store), the chat store resets and loads history for the new thread.
+- Types `ParsedTurn`, `WorkItem`, `AgentStatus` imported from `@template/core`.
+
+#### 3.3 Thread Store
+
+- MUST expose: `threadKey: Accessor<string>`, `threads: Accessor<ThreadInfo[]>`.
+- MUST expose actions: `switchThread(key)`, `createThread(label?)`.
+- The `threadKey` MUST sync with URL hash and support browser back/forward navigation.
 - The initial thread key MUST be read from URL hash or default to `'main'`.
-- The store MUST support retry countdown state: `isRetryCountdownActive`, `startRetryCountdown(seconds)`, `clearRetryCountdown()`.
-- All store state MUST be updated from the Phase 3 WS `chat` channel messages — the store subscribes to WS events from the server, NOT from any external gateway.
+- MUST subscribe to the `threads` WS channel for `thread.created`, `thread.updated`, `thread.status` messages.
+- MUST fetch thread list on init via REST (`GET /api/threads`).
+
+#### 3.4 Voice Store
+
+- MUST expose: `voiceState: Accessor<VoiceState>`, `isRecording: Accessor<boolean>`, `recordingTimerText: Accessor<string>`, `voiceStatusText: Accessor<string>`.
+- MUST expose actions: `startRecording()`, `stopRecording()`, `interruptPlayback()`.
+- Self-contained: manages `MediaRecorder`, audio chunks, timer intervals internally.
+- Types: `VoiceState = 'idle' | 'listening' | 'speaking' | 'processing'`.
+
+#### 3.5 UI Store
+
+- MUST expose: `viewMode: Accessor<ViewMode>`, `setViewMode(mode)`, `drawerOpen: Accessor<boolean>`, `setDrawerOpen(open)`, `settingsOpen: Accessor<boolean>`, `setSettingsOpen(open)`.
+- The `viewMode` MUST sync with URL query parameters (`?view=chat`, `?view=voice`, etc.) and support browser back/forward navigation.
+- Types: `ViewMode = 'chat' | 'voice' | 'dashboard' | 'recording'`.
+
+#### 3.6 Store Principles
+
+- Each store MUST be a standalone module — no circular imports between stores.
+- Cross-store coordination MUST flow through the WS channel (server as source of truth) or through explicit composition in components, NOT through stores importing each other.
+- The one exception: the chat store MUST read the current `threadKey` from the thread store to scope its WS subscription. This is a read-only dependency, passed as a parameter at init: `initChatStore(threadKey: Accessor<string>)`.
+- Each store MUST be independently testable with a mocked WS connection.
 
 ### Files
 
 ```
 packages/client/src/stores/
-├── app.ts               # All reactive signals + types
-├── app.test.ts
+├── connection.ts        # Backend connection status
+├── connection.test.ts
+├── chat.ts              # Turns, streaming, work, agent status, retry
+├── chat.test.ts
+├── thread.ts            # Thread list, current thread, switching
+├── thread.test.ts
+├── voice.ts             # Recording state, playback state
+├── voice.test.ts
+├── ui.ts                # View mode, drawer, settings modal
+├── ui.test.ts
 ```
 
 ---
