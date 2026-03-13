@@ -61,9 +61,9 @@ describe('WorkspaceHeader', () => {
       expect(true).toBe(true)
     })
 
-    it('§8 — Cmd+B toggles sidebar', () => {
+    it('§8 — Cmd+B toggles sidebar', async () => {
       // Sidebar toggle is in workspace store
-      const { toggleSidebar, sidebarCollapsed } = require('./store.js')
+      const { toggleSidebar, sidebarCollapsed } = await import('./store.js')
       expect(sidebarCollapsed()).toBe(false)
       toggleSidebar()
       expect(sidebarCollapsed()).toBe(true)
