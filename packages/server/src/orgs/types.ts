@@ -4,6 +4,7 @@ export interface Org {
   id: string
   name: string
   path: string
+  provider?: 'radicle' | 'github'
   createdAt: string
   updatedAt: string
 }

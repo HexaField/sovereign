@@ -31,7 +31,8 @@ export function createOrgRoutes(manager: OrgManager, authMiddleware: (req: any, 
       const org = manager.updateOrg(req.params.orgId, req.body)
       res.json(org)
     } catch (e: any) {
-      res.status(400).json({ error: e.message })
+      const status = e.status || 400
+      res.status(status).json({ error: e.message })
     }
   })
 
@@ -40,7 +41,8 @@ export function createOrgRoutes(manager: OrgManager, authMiddleware: (req: any, 
       manager.deleteOrg(req.params.orgId)
       res.status(204).send()
     } catch (e: any) {
-      res.status(400).json({ error: e.message })
+      const status = e.status || 400
+      res.status(status).json({ error: e.message })
     }
   })
 
