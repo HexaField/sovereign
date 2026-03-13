@@ -1,7 +1,6 @@
 # Sovereign — Views & User Stories
 
-> Date: 2026-03-13  
-> Status: Draft
+> Date: 2026-03-13 Revision: 2 Status: Draft
 
 ## Core Concept: Everything is a Workspace
 
@@ -46,51 +45,62 @@ The home screen. Shows a condensed overview of everything that matters right now
 
 The IDE view. Full development environment scoped to a single org.
 
-**Layout:** Classic IDE — sidebar (left), main content (center, tabbed), bottom panel (terminal/logs), header with breadcrumbs and workspace selector.
+**Desktop Layout:** Three columns — sidebar (left, 260px), main content (center, tabbed), chat panel (right, 360px resizable). Header with workspace breadcrumb and selector. No status bar. No bottom panel — terminal, logs, and recordings are sidebar tabs.
 
-**Sidebar Sections** (collapsible, reorderable):
+**Sidebar Tabs** (icon + label, one visible at a time):
 
-- **File Explorer** — tree view of the active project's filesystem. Click to open file in a tab. Shows git status indicators (modified, added, deleted, untracked) per file. Multi-project: tabs or dropdown to switch between projects within the org.
+- **Files** — tree view of the active project's filesystem. Click to open file in a main content tab. Shows git status indicators (modified, added, deleted, untracked) per file. Project selector dropdown in tab header.
 - **Git** — branch list, status summary, staging area, commit history. Multi-project: grouped by project. Shows worktree status (which agent is working where). Quick actions: create branch, switch branch, stage, commit.
-- **Threads** — all threads for this workspace. Categorised: entity-bound (branch/issue/PR threads), user-created, agent-spawned. Shows status indicators (busy, unread, stuck, error). Click to open thread in main content.
-- **Planning** — mini planning view for this workspace. Shows ready/blocked/in-progress counts. Expand for DAG overview. Click item to jump to its thread or issue.
+- **Threads** — all threads for this workspace. Categorised: entity-bound (branch/issue/PR threads), user-created, agent-spawned. Shows status indicators (busy, unread, stuck, error). Click to switch the right-panel chat to that thread.
+- **Planning** — mini planning view for this workspace. Shows ready/blocked/in-progress counts. Click item to jump to its issue or open "View Full DAG" in main content.
 - **Notifications** — workspace-scoped notifications. Review requests, CI results, mentions, agent completions.
+- **Terminal** — embedded PTY terminals. Multiple instances as sub-tabs. Scoped to workspace/project/worktree.
+- **Recordings** — workspace-scoped recording & transcription tool. Record audio, auto-transcribe, searchable transcript archive. Recordings bound to workspace context (optionally to a specific thread/entity). Export as audio or text.
+- **Logs** — agent logs, build output, event stream for this workspace. Filterable by level and module.
 
 **Main Content** (tabbed):
 
-- **File Viewer/Editor** — syntax-highlighted file view. Read-only initially (agent does the editing). Later: editing with conflict resolution when agent is also modifying.
-- **Chat Thread** — a thread tab. Shows messages, streaming agent response, work items, thinking blocks. Input area at bottom. Thread is bound to its entity — events route in automatically.
+- **File Viewer** — syntax-highlighted file view. Read-only initially (agent does the editing). Git diff markers in gutter for uncommitted changes.
 - **Diff View** — side-by-side or unified diff for files, PRs, worktree changes.
-- **Issue/PR Detail** — full view of an issue or PR with comments, status, linked threads.
+- **Issue/PR Detail** — full view of an issue or PR with comments, status, linked threads. "Open Thread" button switches right-panel chat.
 - **Planning DAG** — interactive dependency graph for this workspace.
 
-**Bottom Panel** (toggle with Cmd+\`):
+**Right Panel — Chat:**
 
-- **Terminal** — embedded PTY terminals. Multiple instances, split panes. Scoped to workspace/project/worktree.
-- **Logs** — agent logs, build output, event stream for this workspace.
-- **Problems** — lint errors, type errors, test failures from CI.
-- **Recordings** — workspace-scoped recording & transcription tool. Record audio, auto-transcribe, searchable transcript archive. Recordings bound to workspace context (optionally to a specific thread/entity). Export as audio or text.
+- Always-visible chat interface for the active thread (selected via Threads sidebar tab).
+- Full chat: messages, streaming agent response, work items, thinking blocks, input area, forwarding.
+- Resizable width (drag divider). Default 360px, min 280px, max 600px.
+- **Expand button** — expands chat to fill the entire workspace view area, looking identical to the current voice-ui chat interface (same layout, components, styling). A back button returns to multi-panel workspace view. Toggle with `Cmd+Shift+E`.
 
 **Header:**
 
 - Workspace breadcrumb: Org > Project (clickable to switch)
 - Workspace selector dropdown (switch orgs)
 - Search (files, issues, threads — scoped to workspace)
-- Command palette (Cmd+P)
+- Connection badge
+
+**Mobile Layout:**
+
+- All panels (Files, File Viewer, Chat, Git, Threads, Planning, Notifications, Terminal, Recordings, Logs) collapse into a swipeable tab strip.
+- Header shows active tab name. Swipe left/right to switch tabs. Tap header for dropdown of all tabs.
+- Only one tab visible at a time, filling the viewport below the header.
+- Tapping a file in Files auto-switches to File Viewer. Tapping a thread auto-switches to Chat.
 
 **User Stories:**
 
 - US-W1: As a user, I select a workspace and see my projects listed in the sidebar with git status at a glance.
 - US-W2: As a user, I open a file from the explorer and view it in a tab with syntax highlighting and git diff markers.
-- US-W3: As a user, I open a terminal scoped to a project's worktree and run commands.
+- US-W3: As a user, I open a terminal in the sidebar scoped to a project's worktree and run commands.
 - US-W4: As a user, I see all active threads for this workspace — I can tell which ones have agents working, which have unread messages, which are stuck.
-- US-W5: As a user, I open an entity-bound thread (e.g., for issue #42) and see both the chat history and the live events (CI results, review comments) flowing in.
-- US-W6: As a user, I see the planning overview in the sidebar showing ready/blocked items, and can expand to see the full DAG.
-- US-W7: As a user, I can view diffs for any file, PR, or worktree in a tab.
-- US-W8: As a user, I can have multiple tabs open: a file, a thread, a diff, and a planning view — all within the same workspace.
-- US-W9: As a user, I assign work to an agent from a thread ("fix issue #42") and see it create a worktree, make changes, and push — all visible in the workspace's git panel and thread.
+- US-W5: As a user, I open an entity-bound thread in the right panel and see both the chat history and the live events flowing in.
+- US-W6: As a user, I see the planning overview in the sidebar showing ready/blocked items, and can expand to see the full DAG in main content.
+- US-W7: As a user, I can view diffs for any file, PR, or worktree in a main content tab.
+- US-W8: As a user, I can have multiple tabs open in main content (a file, a diff, a planning view) while chatting in the right panel.
+- US-W9: As a user, I assign work to an agent from a thread ("fix issue #42") and see it create a worktree, make changes, and push — all visible in the sidebar git panel and chat.
 - US-W10: As a user, I can switch between projects within the same workspace without losing my tab state.
-- US-W11: As a user, I can record audio within a workspace, have it auto-transcribed, and search/export the transcripts later. Recordings are associated with the workspace and optionally with a specific thread.
+- US-W11: As a user, I can record audio within a workspace, have it auto-transcribed, and search/export the transcripts later.
+- US-W12: As a user, I can expand the chat to full-screen for a focused conversation, then collapse back to the multi-panel IDE when I need to see files/git/planning alongside.
+- US-W13: On mobile, I swipe between Files, Chat, Terminal and other panels — one at a time, full screen.
 
 ---
 
@@ -111,6 +121,8 @@ A zoomed-out, spatial view of all workspaces as interconnected organisms.
 - **Expand** — click a workspace membrane to zoom in and see its internal structure: projects as sub-nodes, agents as moving dots, event streams as flowing lines.
 - **Global Context** — the Global workspace is always visible, shown as the background or a distinct central node.
 - **Event Stream** — a live sidebar or overlay showing the event bus in real time, filterable by workspace/type.
+
+**Mobile:** Touch pan and pinch zoom. Tap a workspace membrane for a bottom sheet with details (no sidebar).
 
 **User Stories:**
 
@@ -137,6 +149,8 @@ Cross-workspace planning view. The DAG spans all orgs.
 - **Blocked Items** — prominent display of items blocked on cross-workspace dependencies.
 - **Actions** — create issue, decompose task, assign to agent, link dependencies — all cross-workspace.
 
+**Mobile:** Default to List view. Kanban scrolls horizontally. DAG available but limited interactivity.
+
 **User Stories:**
 
 - US-P1: As a user, I see all planned work across all workspaces in a unified view.
@@ -152,7 +166,7 @@ Cross-workspace planning view. The DAG spans all orgs.
 
 Administration and observability.
 
-**Layout:** Tabbed view — Architecture, Logs, Health, Config.
+**Layout:** Tabbed view — Architecture, Logs, Health, Config, Devices, Jobs.
 
 **Content:**
 
@@ -162,6 +176,8 @@ Administration and observability.
 - **Config** — live config editor. Shows current config values, edit with validation, see change history. Hot-reload — changes apply immediately.
 - **Devices** — connected devices, pending pairing requests, device identity management.
 - **Jobs** — scheduled job list, run history, next run times. Manual trigger, enable/disable.
+
+**Mobile:** Tabs scroll horizontally. Config editor stacks fields vertically.
 
 **User Stories:**
 
@@ -176,7 +192,7 @@ Administration and observability.
 
 ## The Global Workspace
 
-The "Global" context is a first-class workspace with a reserved org ID (e.g., `_global`). It has all the same capabilities as any other workspace:
+The "Global" context is a first-class workspace with a reserved org ID (`_global`). It has all the same capabilities as any other workspace:
 
 - Its own projects (Radicle repos only — **never GitHub**)
 - Its own planning items
@@ -198,48 +214,49 @@ The Global workspace is where:
 
 ## Navigation
 
-Top-level navigation between the 5 views:
+Top-level navigation between the 5 views via a **dropdown menu in the top-right area of the header** (consistent with the voice-ui header dropdown pattern):
 
-1. **Dashboard** — home icon / `D`
-2. **Workspace** — folder icon / `W` (opens last-used workspace, or workspace picker)
-3. **Canvas** — hexagon icon / `C`
-4. **Planning** — graph icon / `P`
-5. **System** — gear icon / `S`
+1. **Dashboard** — 🏠 / `Cmd+1`
+2. **Workspace** — 📁 / `Cmd+2`
+3. **Canvas** — ⬡ / `Cmd+3`
+4. **Planning** — 📊 / `Cmd+4`
+5. **System** — ⚙️ / `Cmd+5`
 
-Navigation bar: left side on desktop (vertical icon rail), bottom on mobile (horizontal tab bar). Always visible, minimal — just icons with labels on hover.
-
-Keyboard: `Cmd+1` through `Cmd+5` to switch views. `Cmd+Shift+W` for workspace picker.
+The header is shared across all views. It contains: workspace selector (left), connection badge, view menu dropdown (right). The dropdown shows icon, label, and keyboard shortcut for each view with the active view highlighted.
 
 ---
 
 ## Relationship to Existing Code
 
-### Keep (integrate into Shell)
+### Keep (integrate into views)
 
-- `shell/` — Shell.tsx, shell-store, panels, commands, tabs, sidebar, dividers, status bar
+- `shell/` — Shell.tsx, shell-store, panels, commands, tabs, sidebar, dividers (status bar removed)
 - All Phase 1–5 server modules (event bus, scheduler, auth, notifications, orgs, files, git, terminal, worktrees, config, WS protocol, diff, issues, review, radicle, planning)
 - Phase 6 server modules (agent-backend, threads, chat, voice)
 - Phase 6 client stores (chat, threads, voice, connection, theme, nav)
-- StatusBar component
 
-### Restructure (adapt to Shell panels/tabs)
+### Restructure (adapt to new layout)
 
-- `features/chat/` — ChatView, InputArea, MessageBubble, etc. become tab content, not standalone views
-- `features/threads/` — ThreadDrawer becomes a sidebar panel, not an overlay
-- `features/voice/` — VoiceView becomes a dashboard widget + command palette action
-- `features/dashboard/` — DashboardView becomes the Dashboard top-level view
-- `features/nav/` — Header replaced by Shell header; SettingsModal moves to System view or command palette
+- `features/chat/` — ChatView, InputArea, MessageBubble, etc. become the right-panel chat in workspace view (and expand to full-screen mode matching current voice-ui)
+- `features/threads/` — ThreadDrawer becomes a sidebar tab panel, not an overlay
+- `features/voice/` — VoiceView becomes a dashboard widget + voice controls in expanded chat
+- `features/dashboard/` — DashboardView rewritten with workspace cards, voice widget, notification feed
+- `features/nav/` — Header updated with view menu dropdown; SettingsModal moves to System view config tab
+- `components/file-explorer/` — wrapped as sidebar Files tab
+- `components/git-panel/` — wrapped as sidebar Git tab
+- `components/terminal/` — wrapped as sidebar Terminal tab
+- `components/status-bar/` — removed (no status bar)
 
 ### Build New
 
-- **Navigation rail** — top-level view switcher
+- **View menu dropdown** — top-level view switcher in header
 - **Workspace selector** — org picker in header
-- **File explorer panel** — sidebar panel using Phase 2 files module
-- **Git panel** — sidebar panel using Phase 2 git module
-- **Planning panel** — sidebar panel using Phase 5 planning module
-- **Terminal tab** — tab content using Phase 2 terminal module
-- **File viewer tab** — tab content with syntax highlighting
-- **Diff viewer tab** — tab content using Phase 4 diff module
-- **Holonic canvas** — new view (Phase 7)
+- **Sidebar tab bar** — tab strip for switching sidebar panels
+- **Chat right panel** — always-visible chat with expand/collapse to full-screen
+- **File viewer tab** — main content tab with syntax highlighting
+- **Diff viewer tab** — main content tab using Phase 4 diff module
+- **Recordings panel** — sidebar tab for workspace-scoped audio recording/transcription
+- **Logs panel** — sidebar tab for live event/log stream
+- **Holonic canvas** — new view
 - **Global planning view** — new view extending Phase 5
-- **System view** — new view (Phase 7)
+- **System view** — new view with architecture, logs, health, config, devices, jobs tabs
