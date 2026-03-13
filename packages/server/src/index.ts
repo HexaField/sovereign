@@ -126,11 +126,11 @@ if (!orgManager.getOrg('_global')) {
   orgManager.createOrg({ id: '_global', name: 'Global', path: globalOrgPath, provider: 'radicle' })
 }
 
-app.use(createOrgRoutes(orgManager, authMiddleware))
+app.use('/api', createOrgRoutes(orgManager, authMiddleware))
 registerOrgsChannel(wsHandler, bus)
 
 const fileService = createFileService(bus)
-app.use(createFileRouter(fileService))
+app.use('/api/files', createFileRouter(fileService))
 registerFilesChannel(wsHandler, bus)
 
 // Project resolver: maps orgId+projectId to filesystem path
@@ -144,14 +144,14 @@ const resolveProject = (orgId: string, projectId: string, _worktreeId?: string) 
 
 const gitCli = createGitCli()
 const gitService = createGitService(bus, gitCli, resolveProject)
-app.use(createGitRoutes(gitService, authMiddleware))
+app.use('/api/git', createGitRoutes(gitService, authMiddleware))
 registerGitChannel(wsHandler, bus)
 
 const terminalManager = createTerminalManager(bus, {
   validateCwd: () => true,
   gracePeriodMs: 10_000
 })
-app.use(createTerminalRoutes(terminalManager))
+app.use('/api/terminal', createTerminalRoutes(terminalManager))
 registerTerminalChannel(wsHandler, bus, terminalManager)
 
 const worktreeManager = createWorktreeManager(bus, dataDir, {
@@ -169,7 +169,7 @@ registerWorktreesChannel(wsHandler, bus)
 // ============================================================
 
 const configStore = createConfigStore(bus, dataDir)
-app.use(createConfigRouter(configStore))
+app.use('/api/config', createConfigRouter(configStore))
 
 // ============================================================
 // Phase 4 — Diff, Issues, Review, Radicle
@@ -194,7 +194,7 @@ const reviewSystem = createReviewSystem(bus, dataDir, {
 app.use(createReviewRouter(reviewSystem))
 
 const radicleManager = createRadicleManager(bus, dataDir)
-app.use(createRadicleRouter(radicleManager))
+app.use('/api/radicle', createRadicleRouter(radicleManager))
 
 // ============================================================
 // Phase 5 — Planning
