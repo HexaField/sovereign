@@ -11,11 +11,7 @@ import ViewMenu from './features/nav/ViewMenu.js'
 
 // Lazy-loaded views
 const DashboardView = lazy(() => import('./features/dashboard/DashboardView.js'))
-const WorkspacePlaceholder = () => (
-  <div class="flex h-full items-center justify-center" style={{ color: 'var(--c-text-muted)' }}>
-    Workspace View — Coming Soon
-  </div>
-)
+const WorkspaceView = lazy(() => import('./features/workspace/WorkspaceView.js'))
 const CanvasPlaceholder = () => (
   <div class="flex h-full items-center justify-center" style={{ color: 'var(--c-text-muted)' }}>
     Canvas View — Coming Soon
@@ -60,7 +56,7 @@ export default function App() {
             <DashboardView />
           </Match>
           <Match when={activeView() === 'workspace'}>
-            <WorkspacePlaceholder />
+            <WorkspaceView />
           </Match>
           <Match when={activeView() === 'canvas'}>
             <CanvasPlaceholder />
