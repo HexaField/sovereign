@@ -20,6 +20,11 @@ import {
   setActiveProject,
   _setActiveWorkspace,
   _resetWorkspaceStore,
+  activeMobileTab,
+  setActiveMobileTab,
+  swipeMobileTab,
+  MOBILE_TAB_ORDER,
+  _setActiveMobileTab,
   type WorkspaceContext
 } from './store.js'
 
@@ -31,6 +36,7 @@ beforeEach(() => {
     activeProjectId: null,
     activeProjectName: null
   })
+  _setActiveMobileTab('files')
 })
 
 describe('Workspace Store', () => {
@@ -111,6 +117,50 @@ describe('Workspace Store', () => {
       expect(activeWorkspace()!.activeProjectId).toBe('proj-1')
       setActiveWorkspace('org-b', 'B')
       expect(activeWorkspace()!.activeProjectId).toBeNull()
+    })
+  })
+
+  describe('§7.3 — Mobile Tab Store', () => {
+    it('has 10 mobile tabs in correct order', () => {
+      const keys = MOBILE_TAB_ORDER.map((t) => t.key)
+      expect(keys).toEqual([
+        'files',
+        'file-viewer',
+        'chat',
+        'git',
+        'threads',
+        'planning',
+        'notifications',
+        'terminal',
+        'recordings',
+        'logs'
+      ])
+    })
+
+    it('setActiveMobileTab persists to localStorage', () => {
+      setActiveMobileTab('chat')
+      expect(activeMobileTab()).toBe('chat')
+      expect(localStorageMock.getItem('sovereign:mobile-tab')).toBe('chat')
+    })
+
+    it('swipeMobileTab left advances to next tab', () => {
+      _setActiveMobileTab('files')
+      const result = swipeMobileTab('left')
+      expect(result).toBe('file-viewer')
+      expect(activeMobileTab()).toBe('file-viewer')
+    })
+
+    it('swipeMobileTab right goes to previous tab', () => {
+      _setActiveMobileTab('chat')
+      const result = swipeMobileTab('right')
+      expect(result).toBe('file-viewer')
+    })
+
+    it('swipeMobileTab clamps at boundaries', () => {
+      _setActiveMobileTab('files')
+      expect(swipeMobileTab('right')).toBe('files')
+      _setActiveMobileTab('logs')
+      expect(swipeMobileTab('left')).toBe('logs')
     })
   })
 })
