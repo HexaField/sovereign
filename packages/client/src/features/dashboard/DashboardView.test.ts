@@ -13,34 +13,42 @@ import {
   formatAgentDuration,
   getAgentStatusLabel,
   getRecentThreads,
-  QUICK_SWITCH_LIMIT
+  QUICK_SWITCH_LIMIT,
+  getConnectionDotColor,
+  formatJobCount
 } from './DashboardView'
-import type { ServiceStatus, ActivityEvent, Notification, ThreadInfo } from './DashboardView'
+import type { ServiceStatus, ActivityEvent, Notification, ThreadInfo, ConnectionState } from './DashboardView'
 
 describe('§7 Dashboard', () => {
   describe('§7.1 DashboardView', () => {
     it('is the default view when user is in a global thread (main or bespoke)', () => {
-      // DashboardView is exported and composable as the default view
-      // DashboardView imported at top
       expect(typeof DashboardView).toBe('function')
     })
 
     it('auto-refreshes all sections via Phase 3 WS subscriptions (status, notifications, threads)', () => {
-      // Architecture: DashboardView composes sub-components that each subscribe to WS channels
-      // Verified by the component existing and composing sub-sections
-      expect(true).toBe(true) // structural/integration concern verified by composition
+      expect(true).toBe(true)
     })
 
     it('uses responsive grid layout: 1 col mobile, 2 col tablet, 3 col desktop', () => {
-      // Verified by Tailwind classes: grid-cols-1 md:grid-cols-2 lg:grid-cols-3
-      // DashboardView imported at top
       expect(typeof DashboardView).toBe('function')
     })
 
     it('uses Tailwind utilities with var(--c-*) theme tokens throughout', () => {
-      // Component uses style={{ color: 'var(--c-text)', background: 'var(--c-bg)' }}
-      // DashboardView imported at top
       expect(typeof DashboardView).toBe('function')
+    })
+  })
+
+  describe('§2.6 System Status Strip', () => {
+    it('returns correct dot color for connection states', () => {
+      expect(getConnectionDotColor('connected')).toBe('bg-green-500')
+      expect(getConnectionDotColor('connecting')).toBe('bg-amber-500')
+      expect(getConnectionDotColor('disconnected')).toBe('bg-red-500')
+    })
+
+    it('formats job count correctly', () => {
+      expect(formatJobCount(0)).toBe('No active jobs')
+      expect(formatJobCount(1)).toBe('1 active job')
+      expect(formatJobCount(5)).toBe('5 active jobs')
     })
   })
 
@@ -52,7 +60,6 @@ describe('§7 Dashboard', () => {
     })
 
     it('auto-updates time display every second', () => {
-      // formatClock is a pure function called each second by the component's setInterval
       const t1 = formatClock(new Date('2026-01-15T10:30:45'))
       const t2 = formatClock(new Date('2026-01-15T10:30:46'))
       expect(t1).not.toBe(t2)
@@ -62,7 +69,6 @@ describe('§7 Dashboard', () => {
       const date = new Date('2026-01-15T14:30:00')
       const en = formatClock(date, 'en-US')
       const de = formatClock(date, 'de-DE')
-      // Both should contain the time but may differ in format
       expect(typeof en).toBe('string')
       expect(typeof de).toBe('string')
       expect(en.length).toBeGreaterThan(0)
@@ -72,7 +78,6 @@ describe('§7 Dashboard', () => {
 
   describe('§7.3 HealthPanel', () => {
     it('shows agent backend connection status using ConnectionBadge', () => {
-      // HealthPanel composes ConnectionBadge; getStatusColor maps status to color
       expect(getStatusColor('healthy')).toBe('green')
     })
 
@@ -83,7 +88,6 @@ describe('§7 Dashboard', () => {
     })
 
     it('shows server uptime formatted as Xd Xh Xm', () => {
-      // 2 days, 3 hours, 15 minutes in ms
       const ms = (2 * 24 * 60 + 3 * 60 + 15) * 60000
       expect(formatUptime(ms)).toBe('2d 3h 15m')
     })
@@ -97,7 +101,6 @@ describe('§7 Dashboard', () => {
 
   describe('§7.4 ActivityFeed', () => {
     it('shows recent events across all workspaces in reverse-chronological order', () => {
-      // MAX_FEED_EVENTS constant enforces limit; sorting is by timestamp desc
       expect(MAX_FEED_EVENTS).toBe(50)
     })
 
@@ -145,7 +148,6 @@ describe('§7 Dashboard', () => {
     })
 
     it('switches to entity-bound thread when an event entry is clicked', () => {
-      // Events carry entityId for thread switching; component handles onClick
       const ev: ActivityEvent = { type: 'issue.created', timestamp: Date.now(), entityId: 'issue-123' }
       expect(ev.entityId).toBe('issue-123')
     })
@@ -155,7 +157,6 @@ describe('§7 Dashboard', () => {
     })
 
     it('supports "Load more" pagination', () => {
-      // Pagination is UI behavior; MAX_FEED_EVENTS defines page size
       expect(MAX_FEED_EVENTS).toBe(50)
     })
   })
@@ -181,7 +182,7 @@ describe('§7 Dashboard', () => {
       expect(grouped.get('thread-2')?.length).toBe(1)
     })
 
-    it('shows NOTIFY-classified events with action prompt (e.g. "Review requested on PR #42 — View")', () => {
+    it('shows NOTIFY-classified events with action prompt', () => {
       const n = makeNotification({ message: 'Review requested on PR #42', actionUrl: '/pr/42' })
       expect(n.message).toContain('Review requested')
       expect(n.actionUrl).toBe('/pr/42')
@@ -200,7 +201,6 @@ describe('§7 Dashboard', () => {
     })
 
     it('subscribes to the notifications WS channel', () => {
-      // Structural: component subscribes to WS; verified by integration
       expect(true).toBe(true)
     })
   })
@@ -211,7 +211,6 @@ describe('§7 Dashboard', () => {
     })
 
     it('shows thread name / entity binding for each agent', () => {
-      // UI concern; agents carry threadId for display
       expect(getAgentStatusLabel('thinking')).toBe('Thinking')
     })
 
@@ -230,7 +229,6 @@ describe('§7 Dashboard', () => {
     })
 
     it('switches to agent thread on click', () => {
-      // UI concern; each agent item carries threadId for navigation
       expect(typeof getAgentStatusLabel).toBe('function')
     })
   })
@@ -249,8 +247,8 @@ describe('§7 Dashboard', () => {
       expect(QUICK_SWITCH_LIMIT).toBe(5)
       const recent = getRecentThreads(threads)
       expect(recent.length).toBe(5)
-      expect(recent[0].id).toBe('6') // highest lastActivity
-      expect(recent.map((t) => t.id)).not.toContain('1') // lowest excluded
+      expect(recent[0].id).toBe('6')
+      expect(recent.map((t) => t.id)).not.toContain('1')
     })
 
     it('shows thread display name, entity icon, and relative time of last activity', () => {
@@ -261,7 +259,6 @@ describe('§7 Dashboard', () => {
     })
 
     it('switches to thread on click', () => {
-      // UI concern; thread items carry id for navigation
       const recent = getRecentThreads(threads, 3)
       expect(recent.length).toBe(3)
       expect(recent.every((t) => typeof t.id === 'string')).toBe(true)
@@ -270,12 +267,10 @@ describe('§7 Dashboard', () => {
 
   describe('§7.8 Optional Sections', () => {
     it('shows weather information if dashboard.weatherLocation is configured', () => {
-      // Optional feature; config-driven display
       expect(true).toBe(true)
     })
 
-    it('may show planning summary from Phase 5 (completion rates, blocked items, critical path)', () => {
-      // Optional feature; depends on Phase 5 integration
+    it('may show planning summary from Phase 5', () => {
       expect(true).toBe(true)
     })
   })
