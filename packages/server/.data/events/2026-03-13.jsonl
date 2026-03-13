@@ -14,3 +14,5 @@
 {"type":"ws.disconnected","timestamp":"2026-03-13T07:19:48.152Z","source":"ws","payload":{"deviceId":"29u94u8qan"}}
 {"type":"ws.connected","timestamp":"2026-03-13T07:19:48.212Z","source":"ws","payload":{"deviceId":"ncblxv1zwe"}}
 {"type":"ws.disconnected","timestamp":"2026-03-13T07:20:09.059Z","source":"ws","payload":{"deviceId":"ncblxv1zwe"}}
+{"type":"ws.connected","timestamp":"2026-03-13T12:57:21.860Z","source":"ws","payload":{"deviceId":"wizso22r6z8"}}
+{"type":"ws.disconnected","timestamp":"2026-03-13T12:57:55.849Z","source":"ws","payload":{"deviceId":"wizso22r6z8"}}
