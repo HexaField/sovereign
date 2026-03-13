@@ -1,15 +1,10 @@
 import { type Component, createSignal, onMount, onCleanup, For, Show, createEffect } from 'solid-js'
 import {
   zoom,
-  setZoom,
   panX,
   panY,
-  setPanX,
-  setPanY,
-  selectedNode,
   setSelectedNode,
   drillDownTarget,
-  setDrillDownTarget,
   eventSidebarOpen,
   toggleEventSidebar,
   eventFilterWorkspace,
@@ -19,9 +14,7 @@ import {
   applyZoomDelta,
   applyPanDelta,
   zoomToNode,
-  zoomOut,
-  MIN_ZOOM,
-  MAX_ZOOM
+  zoomOut
 } from './store'
 
 // Types
@@ -241,7 +234,6 @@ const CanvasView: Component = () => {
 
   // Touch handlers
   let lastTouchDist = 0
-  let lastTouchCenter = { x: 0, y: 0 }
 
   function handleTouchStart(e: TouchEvent) {
     if (e.touches.length === 1) {
@@ -251,10 +243,6 @@ const CanvasView: Component = () => {
       const dx = e.touches[1].clientX - e.touches[0].clientX
       const dy = e.touches[1].clientY - e.touches[0].clientY
       lastTouchDist = Math.sqrt(dx * dx + dy * dy)
-      lastTouchCenter = {
-        x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-        y: (e.touches[0].clientY + e.touches[1].clientY) / 2
-      }
     }
   }
 
@@ -395,7 +383,7 @@ const CanvasView: Component = () => {
                       style={{ filter: getHealthGlowFilter(node.health) }}
                     >
                       {isPulsing() && (
-                        <animate attributeName="stroke-opacity" values="1;0.3;1" dur="0.8s" repeatCount="1" />
+                        <animate attributeName="stroke-opacity" values="1;0.3;1" dur="0.8s" repeatCount={1} />
                       )}
                     </rect>
 
@@ -412,8 +400,8 @@ const CanvasView: Component = () => {
                         opacity={0.5}
                         data-testid={`pulse-${node.id}`}
                       >
-                        <animate attributeName="stroke-width" values="2;8;2" dur="1s" repeatCount="1" />
-                        <animate attributeName="opacity" values="0.5;0;0.5" dur="1s" repeatCount="1" />
+                        <animate attributeName="stroke-width" values="2;8;2" dur="1s" repeatCount={1} />
+                        <animate attributeName="opacity" values="0.5;0;0.5" dur="1s" repeatCount={1} />
                       </rect>
                     </Show>
 
@@ -430,8 +418,7 @@ const CanvasView: Component = () => {
                       y={isGlobal ? 45 : 35}
                       text-anchor="middle"
                       fill="var(--c-text-heading, #cdd6f4)"
-                      font-size={isGlobal ? 16 : 14}
-                      font-weight="600"
+                      style={{ 'font-size': `${isGlobal ? 16 : 14}px`, 'font-weight': '600' }}
                     >
                       {node.name}
                     </text>
@@ -524,7 +511,7 @@ const CanvasView: Component = () => {
                     opacity={0.6}
                     data-testid={`event-flow-${evt.id}`}
                   >
-                    <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1s" repeatCount="3" />
+                    <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1s" repeatCount={3} />
                   </line>
                 </Show>
               )

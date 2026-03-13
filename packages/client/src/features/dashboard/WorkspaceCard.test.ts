@@ -7,7 +7,7 @@ import {
   activityDotClass,
   handleCardClick
 } from './WorkspaceCard'
-import type { OrgSummary, ActivityColor } from './WorkspaceCard'
+import type { OrgSummary } from './WorkspaceCard'
 
 const makeOrg = (overrides: Partial<OrgSummary> = {}): OrgSummary => ({
   orgId: 'test-org',

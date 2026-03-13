@@ -1,7 +1,7 @@
 // §6 System View — Administration and observability, rendered as tabbed layout
 // Exports pure functions for testability; SolidJS components use Tailwind with var(--c-*) tokens
 
-import { createSignal, type Component, type JSX } from 'solid-js'
+import { createSignal, type Component } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
 import ArchitectureTab from './ArchitectureTab'
 import LogsTab from './LogsTab'

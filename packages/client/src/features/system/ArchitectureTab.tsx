@@ -37,7 +37,7 @@ export async function fetchArchitecture(): Promise<ArchitectureData> {
 const ArchitectureTab: Component = () => {
   const [data, setData] = createSignal<ArchitectureData | null>(null)
   const [error, setError] = createSignal<string | null>(null)
-  const [pulsingModule, setPulsingModule] = createSignal<string | null>(null)
+  const [pulsingModule, _setPulsingModule] = createSignal<string | null>(null)
 
   let pollTimer: ReturnType<typeof setInterval> | undefined
 
@@ -60,12 +60,6 @@ const ArchitectureTab: Component = () => {
   onCleanup(() => {
     if (pollTimer) clearInterval(pollTimer)
   })
-
-  // Simulate pulse effect on module events
-  const pulse = (moduleName: string) => {
-    setPulsingModule(moduleName)
-    setTimeout(() => setPulsingModule(null), 600)
-  }
 
   return (
     <div>

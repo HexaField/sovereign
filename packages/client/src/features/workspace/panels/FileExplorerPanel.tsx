@@ -1,4 +1,4 @@
-import { createSignal, createEffect, Show, For } from 'solid-js'
+import { Show } from 'solid-js'
 import type { Component } from 'solid-js'
 import { activeWorkspace } from '../store.js'
 

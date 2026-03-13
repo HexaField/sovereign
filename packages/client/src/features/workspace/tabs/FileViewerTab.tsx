@@ -1,4 +1,4 @@
-import { Component, createSignal, createResource, Show, For, createMemo } from 'solid-js'
+import { Component, createResource, Show, For, createMemo } from 'solid-js'
 
 export interface FileViewerTabProps {
   path: string
