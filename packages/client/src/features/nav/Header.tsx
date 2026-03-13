@@ -1,6 +1,16 @@
 import { createMemo, createSignal, Show, For, onCleanup } from 'solid-js'
 import { connectionStatus } from '../connection/store.js'
-import { viewMode, setViewMode, drawerOpen, setDrawerOpen, setSettingsOpen, type ViewMode } from '../nav/store.js'
+import {
+  viewMode,
+  setViewMode,
+  activeView,
+  setActiveView,
+  drawerOpen,
+  setDrawerOpen,
+  setSettingsOpen,
+  type ViewMode,
+  type NavView
+} from '../nav/store.js'
 import { threadKey } from '../threads/store.js'
 import { formatRelativeTime } from '../threads/helpers.js'
 import { isAudioPlaying, interruptPlayback } from '../voice/store.js'
@@ -257,9 +267,22 @@ export function Header() {
   const parentKey = createMemo(() => getParentSessionKey(threadKey()))
   const toggleDrawer = () => setDrawerOpen(!drawerOpen())
   const selectMode = (mode: ViewMode) => {
+    setActiveView('workspace')
     setViewMode(mode)
     setMenuOpen(false)
   }
+  const selectView = (view: NavView) => {
+    setActiveView(view)
+    setMenuOpen(false)
+  }
+
+  const topLevelViews: Array<{ view: NavView; label: string; icon: string; shortcut: string }> = [
+    { view: 'dashboard', label: 'Dashboard', icon: '🏠', shortcut: '⌘1' },
+    { view: 'workspace', label: 'Workspace', icon: '📁', shortcut: '⌘2' },
+    { view: 'canvas', label: 'Canvas', icon: '⬡', shortcut: '⌘3' },
+    { view: 'planning', label: 'Planning', icon: '📊', shortcut: '⌘4' },
+    { view: 'system', label: 'System', icon: '⚙️', shortcut: '⌘5' }
+  ]
 
   const menuItems: Array<{ mode: ViewMode; label: string; icon: string }> = [
     { mode: 'chat', label: 'Chat', icon: '💬' },
@@ -267,8 +290,6 @@ export function Header() {
     { mode: 'events', label: 'Events', icon: '🔔' },
     { mode: 'recording', label: 'Recording', icon: '⏺' },
     { mode: 'logs', label: 'Logs', icon: '📜' },
-    { mode: 'dashboard', label: 'Dashboard', icon: '📊' },
-    { mode: 'architecture', label: 'Architecture', icon: '🏗️' },
     { mode: 'files', label: 'Files', icon: '📂' },
     { mode: 'plans', label: 'Plans', icon: '🗺️' }
   ]
@@ -774,42 +795,62 @@ export function Header() {
         <Show when={menuOpen()}>
           <div class="fixed inset-0 z-[199]" onClick={() => setMenuOpen(false)} />
           <div
-            class="absolute top-full right-0 z-[200] mt-1 w-48 overflow-hidden rounded-lg shadow-lg"
+            class="absolute top-full right-0 z-[200] mt-1 w-52 overflow-hidden rounded-lg shadow-lg"
             style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
           >
-            {menuItems.map((item) => (
+            {/* Top-level views */}
+            {topLevelViews.map((item) => (
               <button
-                class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition-colors"
+                class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
                 style={{
-                  color: viewMode() === item.mode ? 'var(--c-accent)' : 'var(--c-text)',
-                  background: viewMode() === item.mode ? 'var(--c-hover-bg)' : undefined
+                  color: activeView() === item.view ? 'var(--c-accent)' : 'var(--c-text)',
+                  background: activeView() === item.view ? 'var(--c-hover-bg)' : undefined
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
                 onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = viewMode() === item.mode ? 'var(--c-hover-bg)' : '')
+                  (e.currentTarget.style.background = activeView() === item.view ? 'var(--c-hover-bg)' : '')
                 }
-                onClick={() => selectMode(item.mode)}
+                onClick={() => selectView(item.view)}
               >
                 <span class="text-base">{item.icon}</span>
                 <span class="flex-1">{item.label}</span>
-                <Show when={item.mode === 'architecture' && warningCount() > 0}>
-                  <span
-                    class="warning-badge-pulse flex h-[20px] min-w-[20px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
-                    style={{ background: '#ef4444' }}
-                  >
-                    {warningCount()}
-                  </span>
-                </Show>
-                <Show when={viewMode() === item.mode}>
-                  <span class="text-xs" style={{ color: 'var(--c-accent)' }}>
-                    ●
-                  </span>
-                </Show>
+                <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                  {item.shortcut}
+                </span>
               </button>
             ))}
+            {/* Workspace sub-views */}
+            <div style={{ 'border-top': '1px solid var(--c-border)' }}>
+              <div
+                class="px-4 py-1.5 text-[10px] font-semibold tracking-wider uppercase"
+                style={{ color: 'var(--c-text-muted)' }}
+              >
+                Workspace
+              </div>
+              {menuItems.map((item) => (
+                <button
+                  class="flex w-full items-center gap-3 px-4 py-2 text-left text-[13px] transition-colors"
+                  style={{
+                    color:
+                      activeView() === 'workspace' && viewMode() === item.mode ? 'var(--c-accent)' : 'var(--c-text)',
+                    background:
+                      activeView() === 'workspace' && viewMode() === item.mode ? 'var(--c-hover-bg)' : undefined
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background =
+                      activeView() === 'workspace' && viewMode() === item.mode ? 'var(--c-hover-bg)' : '')
+                  }
+                  onClick={() => selectMode(item.mode)}
+                >
+                  <span class="text-sm">{item.icon}</span>
+                  <span class="flex-1">{item.label}</span>
+                </button>
+              ))}
+            </div>
             <div style={{ 'border-top': '1px solid var(--c-border)' }}>
               <button
-                class="flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition-colors"
+                class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
                 style={{ color: 'var(--c-text)' }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = '')}

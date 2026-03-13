@@ -12,21 +12,9 @@ import ViewMenu from './features/nav/ViewMenu.js'
 // Lazy-loaded views
 const DashboardView = lazy(() => import('./features/dashboard/DashboardView.js'))
 const WorkspaceView = lazy(() => import('./features/workspace/WorkspaceView.js'))
-const CanvasPlaceholder = () => (
-  <div class="flex h-full items-center justify-center" style={{ color: 'var(--c-text-muted)' }}>
-    Canvas View — Coming Soon
-  </div>
-)
-const PlanningPlaceholder = () => (
-  <div class="flex h-full items-center justify-center" style={{ color: 'var(--c-text-muted)' }}>
-    Planning View — Coming Soon
-  </div>
-)
-const SystemPlaceholder = () => (
-  <div class="flex h-full items-center justify-center" style={{ color: 'var(--c-text-muted)' }}>
-    System View — Coming Soon
-  </div>
-)
+const CanvasView = lazy(() => import('./features/canvas/CanvasView.js'))
+const GlobalPlanningView = lazy(() => import('./features/planning/GlobalPlanningView.js'))
+const SystemView = lazy(() => import('./features/system/SystemView.js'))
 
 export default function App() {
   const cleanups: Array<() => void> = []
@@ -59,13 +47,13 @@ export default function App() {
             <WorkspaceView />
           </Match>
           <Match when={activeView() === 'canvas'}>
-            <CanvasPlaceholder />
+            <CanvasView />
           </Match>
           <Match when={activeView() === 'planning'}>
-            <PlanningPlaceholder />
+            <GlobalPlanningView />
           </Match>
           <Match when={activeView() === 'system'}>
-            <SystemPlaceholder />
+            <SystemView />
           </Match>
         </Switch>
       </main>
