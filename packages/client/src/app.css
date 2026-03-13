@@ -1,0 +1,262 @@
+@import 'tailwindcss';
+
+/* ── Stark Industries font ─────────────────────────────────────────────── */
+@font-face {
+  font-family: 'Orbitron';
+  src: url('/fonts/orbitron.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Theme tokens ──────────────────────────────────────────────────────── */
+/* Dark mode (default) */
+:root {
+  --c-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --c-bg: #0a0a0f;
+  --c-bg-raised: #12121a;
+  --c-bg-overlay: #111122;
+  --c-border: #1e1e2e;
+  --c-border-subtle: #1a1a2e;
+  --c-border-strong: #2a2a3e;
+  --c-text: #e0e0e8;
+  --c-text-muted: #6a6a7a;
+  --c-text-heading: #ccc;
+  --c-accent: #4a9eff;
+  --c-danger: #ff4a6a;
+  --c-amber: #b08a3e;
+  --c-code-text: #e8a0bf;
+  --c-code-bg: rgba(255, 255, 255, 0.06);
+  --c-pre-bg: rgba(0, 0, 0, 0.35);
+  --c-hover-bg: rgba(255, 255, 255, 0.04);
+  --c-hover-bg-strong: rgba(255, 255, 255, 0.06);
+  --c-active-bg: rgba(255, 255, 255, 0.08);
+  --c-scrollbar-thumb: rgba(255, 255, 255, 0.1);
+  --c-scrollbar-hover: rgba(255, 255, 255, 0.2);
+  --c-backdrop: rgba(0, 0, 0, 0.5);
+  --c-overlay-bg: rgba(17, 17, 34, 0.9);
+  --c-menu-bg: #1a1a2e;
+  --c-user-bubble: #4a9eff;
+  --c-user-bubble-text: #ffffff;
+  --c-badge-count: #4a9eff;
+  --c-step-bg: rgba(255, 255, 255, 0.03);
+  --c-step-badge-bg: rgba(255, 255, 255, 0.06);
+  --c-work-body-bg: rgba(0, 0, 0, 0.2);
+  --c-work-border: rgba(255, 255, 255, 0.04);
+  --c-blockquote: #6a6a7a;
+}
+
+/* Light mode */
+.light {
+  --c-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --c-bg: #f5f5f7;
+  --c-bg-raised: #ffffff;
+  --c-bg-overlay: #f0f0f4;
+  --c-border: #d8d8e0;
+  --c-border-subtle: #e0e0e8;
+  --c-border-strong: #c8c8d4;
+  --c-text: #1a1a2e;
+  --c-text-muted: #6a6a7a;
+  --c-text-heading: #333;
+  --c-accent: #2b7de9;
+  --c-danger: #e5395a;
+  --c-amber: #8a6a1e;
+  --c-code-text: #b84e8a;
+  --c-code-bg: rgba(0, 0, 0, 0.05);
+  --c-pre-bg: rgba(0, 0, 0, 0.04);
+  --c-hover-bg: rgba(0, 0, 0, 0.03);
+  --c-hover-bg-strong: rgba(0, 0, 0, 0.06);
+  --c-active-bg: rgba(0, 0, 0, 0.08);
+  --c-scrollbar-thumb: rgba(0, 0, 0, 0.12);
+  --c-scrollbar-hover: rgba(0, 0, 0, 0.2);
+  --c-backdrop: rgba(0, 0, 0, 0.25);
+  --c-overlay-bg: rgba(240, 240, 244, 0.95);
+  --c-menu-bg: #ffffff;
+  --c-user-bubble: #2b7de9;
+  --c-user-bubble-text: #ffffff;
+  --c-badge-count: #2b7de9;
+  --c-step-bg: rgba(0, 0, 0, 0.02);
+  --c-step-badge-bg: rgba(0, 0, 0, 0.06);
+  --c-work-body-bg: rgba(0, 0, 0, 0.03);
+  --c-work-border: rgba(0, 0, 0, 0.06);
+  --c-blockquote: #6a6a7a;
+}
+
+/* Iron Man — blue HUD */
+.ironman {
+  --c-font: 'Orbitron', -apple-system, BlinkMacSystemFont, sans-serif;
+  --c-bg: rgba(2, 8, 18, 0.92);
+  --c-bg-raised: rgba(8, 20, 40, 0.85);
+  --c-bg-overlay: rgba(6, 15, 32, 0.88);
+  --c-border: rgba(40, 140, 255, 0.2);
+  --c-border-subtle: rgba(40, 140, 255, 0.12);
+  --c-border-strong: rgba(40, 140, 255, 0.35);
+  --c-text: #c8e4ff;
+  --c-text-muted: rgba(140, 190, 255, 0.6);
+  --c-text-heading: #e0f0ff;
+  --c-accent: #28a0ff;
+  --c-danger: #ff3a5c;
+  --c-amber: #40b0ff;
+  --c-code-text: #80d0ff;
+  --c-code-bg: rgba(40, 160, 255, 0.08);
+  --c-pre-bg: rgba(0, 10, 30, 0.5);
+  --c-hover-bg: rgba(40, 140, 255, 0.06);
+  --c-hover-bg-strong: rgba(40, 140, 255, 0.1);
+  --c-active-bg: rgba(40, 140, 255, 0.15);
+  --c-scrollbar-thumb: rgba(40, 140, 255, 0.2);
+  --c-scrollbar-hover: rgba(40, 140, 255, 0.35);
+  --c-backdrop: rgba(0, 4, 12, 0.7);
+  --c-overlay-bg: rgba(4, 12, 28, 0.92);
+  --c-menu-bg: rgba(6, 18, 38, 0.95);
+  --c-user-bubble: rgba(40, 160, 255, 0.2);
+  --c-user-bubble-text: #c8e4ff;
+  --c-badge-count: #28a0ff;
+  --c-step-bg: rgba(40, 140, 255, 0.04);
+  --c-step-badge-bg: rgba(40, 140, 255, 0.1);
+  --c-work-body-bg: rgba(0, 8, 20, 0.4);
+  --c-work-border: rgba(40, 140, 255, 0.08);
+  --c-blockquote: rgba(140, 190, 255, 0.5);
+}
+
+/* JARVIS — orange HUD */
+.jarvis {
+  --c-font: 'Orbitron', -apple-system, BlinkMacSystemFont, sans-serif;
+  --c-bg: rgba(10, 6, 2, 0.92);
+  --c-bg-raised: rgba(24, 14, 4, 0.85);
+  --c-bg-overlay: rgba(18, 10, 3, 0.88);
+  --c-border: rgba(255, 160, 40, 0.2);
+  --c-border-subtle: rgba(255, 160, 40, 0.12);
+  --c-border-strong: rgba(255, 160, 40, 0.35);
+  --c-text: #ffe4c8;
+  --c-text-muted: rgba(255, 190, 120, 0.6);
+  --c-text-heading: #fff0e0;
+  --c-accent: #ff8c00;
+  --c-danger: #ff3a3a;
+  --c-amber: #ffa020;
+  --c-code-text: #ffc060;
+  --c-code-bg: rgba(255, 140, 0, 0.08);
+  --c-pre-bg: rgba(16, 8, 0, 0.5);
+  --c-hover-bg: rgba(255, 140, 40, 0.06);
+  --c-hover-bg-strong: rgba(255, 140, 40, 0.1);
+  --c-active-bg: rgba(255, 140, 40, 0.15);
+  --c-scrollbar-thumb: rgba(255, 140, 40, 0.2);
+  --c-scrollbar-hover: rgba(255, 140, 40, 0.35);
+  --c-backdrop: rgba(8, 4, 0, 0.7);
+  --c-overlay-bg: rgba(16, 8, 2, 0.92);
+  --c-menu-bg: rgba(22, 12, 3, 0.95);
+  --c-user-bubble: rgba(255, 140, 0, 0.2);
+  --c-user-bubble-text: #ffe4c8;
+  --c-badge-count: #ff8c00;
+  --c-step-bg: rgba(255, 140, 40, 0.04);
+  --c-step-badge-bg: rgba(255, 140, 40, 0.1);
+  --c-work-body-bg: rgba(12, 6, 0, 0.4);
+  --c-work-border: rgba(255, 140, 40, 0.08);
+  --c-blockquote: rgba(255, 190, 120, 0.5);
+}
+
+/* ── Keyframe animations ───────────────────────────────────────────────── */
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 74, 106, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(255, 74, 106, 0);
+  }
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 74, 106, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 20px rgba(255, 74, 106, 0);
+  }
+}
+
+@keyframes speak-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(74, 158, 255, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 16px rgba(74, 158, 255, 0);
+  }
+}
+
+@keyframes pulse-dots {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes march {
+  to {
+    background-position:
+      0 -16px,
+      16px 0,
+      100% 16px,
+      -16px 100%;
+  }
+}
+
+@keyframes warning-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Scrollbar styling ─────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-scrollbar-thumb);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--c-scrollbar-hover);
+}
+
+/* ── Streaming dots pseudo-element ─────────────────────────────────────── */
+
+.streaming-dots > div > :last-child::after,
+.streaming-dots > div > :only-child::after {
+  content: ' ●●●';
+  color: var(--c-accent);
+  animation: pulse-dots 1.5s ease-in-out infinite;
+  font-size: 0.5em;
+  letter-spacing: 2px;
+  vertical-align: middle;
+}
+
+/* ── Safe area helpers ─────────────────────────────────────────────────── */
+
+@supports (padding-top: env(safe-area-inset-top)) {
+  .safe-top {
+    padding-top: max(12px, env(safe-area-inset-top));
+  }
+  .safe-bottom {
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+}
