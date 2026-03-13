@@ -1,13 +1,14 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import path from 'node:path'
 import type { EventBus } from '@template/core'
 import type { Org, Project } from './types.js'
 import { createOrgStore, type OrgStore, type OrgStoreData } from './store.js'
 import { detectMonorepo } from './monorepo.js'
 
 export interface OrgManager {
-  createOrg(data: { name: string; path: string }): Org
-  updateOrg(orgId: string, patch: Partial<Pick<Org, 'name' | 'path'>>): Org
+  createOrg(data: { id?: string; name: string; path: string; provider?: 'radicle' | 'github' }): Org
+  updateOrg(orgId: string, patch: Partial<Pick<Org, 'name' | 'path' | 'provider'>>): Org
   deleteOrg(orgId: string): void
   getOrg(orgId: string): Org | undefined
   listOrgs(): Org[]
@@ -29,6 +30,8 @@ export interface OrgManager {
 
   getOrgConfig(orgId: string): Record<string, unknown>
   updateOrgConfig(orgId: string, patch: Record<string, unknown>): void
+
+  ensureGlobalWorkspace(): Org
 }
 
 export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
@@ -46,20 +49,33 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
 
   const save = () => store.write(state)
 
-  const createOrg = (data: { name: string; path: string }): Org => {
+  const createOrg = (data: { id?: string; name: string; path: string; provider?: 'radicle' | 'github' }): Org => {
     if (!fs.existsSync(data.path)) throw new Error(`Path does not exist: ${data.path}`)
-    const org: Org = { id: id(), name: data.name, path: data.path, createdAt: now(), updatedAt: now() }
+    const org: Org = {
+      id: data.id || id(),
+      name: data.name,
+      path: data.path,
+      provider: data.provider,
+      createdAt: now(),
+      updatedAt: now()
+    }
     state.orgs.push(org)
     save()
     emit('org.created', org)
     return org
   }
 
-  const updateOrg = (orgId: string, patch: Partial<Pick<Org, 'name' | 'path'>>): Org => {
+  const updateOrg = (orgId: string, patch: Partial<Pick<Org, 'name' | 'path' | 'provider'>>): Org => {
     const org = state.orgs.find((o) => o.id === orgId)
     if (!org) throw new Error(`Org not found: ${orgId}`)
+    if (orgId === '_global' && patch.provider === 'github') {
+      const err = new Error('Cannot change _global provider to github') as any
+      err.status = 403
+      throw err
+    }
     if (patch.name !== undefined) org.name = patch.name
     if (patch.path !== undefined) org.path = patch.path
+    if (patch.provider !== undefined) org.provider = patch.provider
     org.updatedAt = now()
     save()
     emit('org.updated', org)
@@ -67,6 +83,11 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
   }
 
   const deleteOrg = (orgId: string): void => {
+    if (orgId === '_global') {
+      const err = new Error('Cannot delete _global workspace') as any
+      err.status = 403
+      throw err
+    }
     const idx = state.orgs.findIndex((o) => o.id === orgId)
     if (idx === -1) throw new Error(`Org not found: ${orgId}`)
     const org = state.orgs[idx]
@@ -163,6 +184,25 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
     emit('org.config.updated', { orgId, config: merged })
   }
 
+  const ensureGlobalWorkspace = (): Org => {
+    const existing = getOrg('_global')
+    if (existing) return existing
+    const globalDir = path.join(dataDir, 'orgs', '_global')
+    if (!fs.existsSync(globalDir)) fs.mkdirSync(globalDir, { recursive: true })
+    const org: Org = {
+      id: '_global',
+      name: 'Global',
+      path: globalDir,
+      provider: 'radicle',
+      createdAt: now(),
+      updatedAt: now()
+    }
+    state.orgs.push(org)
+    save()
+    emit('org.created', org)
+    return org
+  }
+
   return {
     createOrg,
     updateOrg,
@@ -179,6 +219,7 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
     getActiveOrg,
     getActiveProject,
     getOrgConfig,
-    updateOrgConfig
+    updateOrgConfig,
+    ensureGlobalWorkspace
   }
 }
