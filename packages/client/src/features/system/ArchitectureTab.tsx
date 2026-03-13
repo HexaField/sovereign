@@ -6,7 +6,8 @@ import { createSignal, onMount, onCleanup, For, type Component } from 'solid-js'
 export interface ModuleNode {
   name: string
   status: 'healthy' | 'degraded' | 'error'
-  subscribesTo: string[]
+  subscribes: string[]
+  publishes: string[]
 }
 
 export interface ArchitectureData {
@@ -88,11 +89,20 @@ const ArchitectureTab: Component = () => {
                   <span class="ml-auto text-xs opacity-60">{getStatusLabel(mod.status)}</span>
                 </div>
 
-                {mod.subscribesTo.length > 0 && (
+                {mod.subscribes.length > 0 && (
                   <div class="mt-2 text-xs opacity-70">
-                    <span class="font-medium">Subscribes to:</span>
+                    <span class="font-medium">Subscribes:</span>
                     <ul class="mt-1 ml-3 list-disc">
-                      <For each={mod.subscribesTo}>{(event) => <li>{event}</li>}</For>
+                      <For each={mod.subscribes}>{(event) => <li>{event}</li>}</For>
+                    </ul>
+                  </div>
+                )}
+
+                {mod.publishes.length > 0 && (
+                  <div class="mt-2 text-xs opacity-70">
+                    <span class="font-medium">Publishes:</span>
+                    <ul class="mt-1 ml-3 list-disc">
+                      <For each={mod.publishes}>{(event) => <li>{event}</li>}</For>
                     </ul>
                   </div>
                 )}

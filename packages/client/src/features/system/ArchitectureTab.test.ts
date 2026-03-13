@@ -20,7 +20,7 @@ describe('ArchitectureTab', () => {
 
     it('§6.2 — edges show event bus subscriptions', async () => {
       const mod = await import('./ArchitectureTab.js')
-      // ModuleNode has subscribesTo array which represents edges
+      // ModuleNode has subscribes/publishes arrays which represent edges
       // Verified by TypeScript compilation and component rendering
       expect(typeof mod.default).toBe('function')
     })
