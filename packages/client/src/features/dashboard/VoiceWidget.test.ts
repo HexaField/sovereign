@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { mapVoiceState, getMicButtonColor, getMicButtonLabel } from './VoiceWidget'
-import type { VoiceWidgetState } from './VoiceWidget'
 
 describe('VoiceWidget', () => {
   describe('§2.4 — Voice Widget', () => {

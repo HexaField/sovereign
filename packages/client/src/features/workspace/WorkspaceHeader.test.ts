@@ -14,7 +14,6 @@ const localStorageMock = {
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
 
 import { activeWorkspace, setActiveWorkspace, _setActiveWorkspace } from './store.js'
-import type { WorkspaceOption } from './WorkspaceHeader.js'
 
 beforeEach(() => {
   localStorageMock.clear()

@@ -19,7 +19,6 @@ import {
   setViewMode,
   _setViewMode,
   filters,
-  setFilters,
   setFilter,
   clearFilters,
   removeFilterValue,

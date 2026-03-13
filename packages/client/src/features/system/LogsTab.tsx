@@ -1,7 +1,7 @@
 // §6.3 Logs Tab — Scrollable, filterable log viewer
 // Data from `logs` WS channel. Level badges, module filter, text search, auto-scroll, clear.
 
-import { createSignal, createMemo, For, onCleanup, type Component } from 'solid-js'
+import { createSignal, createMemo, For, type Component } from 'solid-js'
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
 
@@ -55,7 +55,7 @@ const LogsTab: Component = () => {
   const [enabledLevels, setEnabledLevels] = createSignal<Set<LogLevel>>(new Set(ALL_LEVELS))
   const [moduleFilter, setModuleFilter] = createSignal('')
   const [search, setSearch] = createSignal('')
-  const [autoScroll, setAutoScroll] = createSignal(true)
+  const [_autoScroll, setAutoScroll] = createSignal(true)
 
   let scrollRef: HTMLDivElement | undefined
 

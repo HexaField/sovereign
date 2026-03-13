@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 
 // Mock localStorage
 const store: Record<string, string> = {}
@@ -24,8 +24,7 @@ import {
   setActiveMobileTab,
   swipeMobileTab,
   MOBILE_TAB_ORDER,
-  _setActiveMobileTab,
-  type WorkspaceContext
+  _setActiveMobileTab
 } from './store.js'
 
 beforeEach(() => {

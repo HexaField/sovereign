@@ -10,8 +10,6 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
 // Components
 import { Header } from './features/nav/Header.js'
 import { SettingsModal } from './features/nav/SettingsModal.js'
-import ViewMenu from './features/nav/ViewMenu.js'
-
 // Lazy-loaded views
 const DashboardView = lazy(() => import('./features/dashboard/DashboardView.js'))
 const WorkspaceView = lazy(() => import('./features/workspace/WorkspaceView.js'))

@@ -16,12 +16,8 @@ import {
   setActiveMobileTab,
   swipeMobileTab,
   MOBILE_TAB_ORDER,
-  isMobileWidth,
-  type SidebarTab,
-  type MobileTab
+  isMobileWidth
 } from './store.js'
-import { activeWorkspace } from './store.js'
-import WorkspaceHeader from './WorkspaceHeader.js'
 
 // Lazy-loaded sidebar panels
 const FileExplorerPanel = lazy(() => import('./panels/FileExplorerPanel.js'))

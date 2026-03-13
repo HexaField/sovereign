@@ -14,7 +14,6 @@ import {
   setViewMode,
   filters,
   setFilter,
-  clearFilters,
   removeFilterValue,
   searchQuery,
   setSearchQuery,
