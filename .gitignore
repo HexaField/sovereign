@@ -11,3 +11,6 @@ test-results
 .env.local
 
 .certs
+
+# Server data directory
+.data
