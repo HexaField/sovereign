@@ -69,6 +69,7 @@ The IDE view. Full development environment scoped to a single org.
 - **Terminal** — embedded PTY terminals. Multiple instances, split panes. Scoped to workspace/project/worktree.
 - **Logs** — agent logs, build output, event stream for this workspace.
 - **Problems** — lint errors, type errors, test failures from CI.
+- **Recordings** — workspace-scoped recording & transcription tool. Record audio, auto-transcribe, searchable transcript archive. Recordings bound to workspace context (optionally to a specific thread/entity). Export as audio or text.
 
 **Header:**
 
@@ -89,6 +90,7 @@ The IDE view. Full development environment scoped to a single org.
 - US-W8: As a user, I can have multiple tabs open: a file, a thread, a diff, and a planning view — all within the same workspace.
 - US-W9: As a user, I assign work to an agent from a thread ("fix issue #42") and see it create a worktree, make changes, and push — all visible in the workspace's git panel and thread.
 - US-W10: As a user, I can switch between projects within the same workspace without losing my tab state.
+- US-W11: As a user, I can record audio within a workspace, have it auto-transcribed, and search/export the transcripts later. Recordings are associated with the workspace and optionally with a specific thread.
 
 ---
 
