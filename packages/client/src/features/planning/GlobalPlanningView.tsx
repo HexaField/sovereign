@@ -137,6 +137,10 @@ const GlobalPlanningView: Component = () => {
 
   // Fetch planning data
   onMount(async () => {
+    // §7.5 — Default to list view on mobile
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setViewMode('list')
+    }
     try {
       const orgsRes = await fetch('/api/orgs')
       if (!orgsRes.ok) return

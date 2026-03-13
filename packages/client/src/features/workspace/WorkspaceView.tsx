@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onCleanup, Show, Switch, Match, lazy } from 'solid-js'
+import { createSignal, createEffect, onCleanup, Show, Switch, Match, lazy, For } from 'solid-js'
 import type { Component } from 'solid-js'
 import {
   activeSidebarTab,
@@ -12,7 +12,13 @@ import {
   SIDEBAR_TABS,
   CHAT_PANEL_MIN_WIDTH,
   CHAT_PANEL_MAX_WIDTH,
-  type SidebarTab
+  activeMobileTab,
+  setActiveMobileTab,
+  swipeMobileTab,
+  MOBILE_TAB_ORDER,
+  isMobileWidth,
+  type SidebarTab,
+  type MobileTab
 } from './store.js'
 import { activeWorkspace } from './store.js'
 import WorkspaceHeader from './WorkspaceHeader.js'
@@ -175,8 +181,122 @@ const ExpandedChatView: Component = () => {
   )
 }
 
+// §7.3 — Mobile Workspace with swipeable tab strip
+const MobileWorkspace: Component = () => {
+  const [dropdownOpen, setDropdownOpen] = createSignal(false)
+  let touchStartX = 0
+
+  const handleTouchStart = (e: TouchEvent) => {
+    touchStartX = e.touches[0].clientX
+  }
+
+  const handleTouchEnd = (e: TouchEvent) => {
+    const dx = e.changedTouches[0].clientX - touchStartX
+    if (Math.abs(dx) > 50) {
+      swipeMobileTab(dx < 0 ? 'left' : 'right')
+    }
+  }
+
+  const currentLabel = () => MOBILE_TAB_ORDER.find((t) => t.key === activeMobileTab())?.label ?? 'Files'
+
+  return (
+    <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
+      {/* Tab header */}
+      <div class="relative flex items-center border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
+        <button
+          class="text-sm font-medium"
+          style={{ color: 'var(--c-text-heading)' }}
+          onClick={() => setDropdownOpen(!dropdownOpen())}
+        >
+          {currentLabel()} ▾
+        </button>
+        <Show when={dropdownOpen()}>
+          <div
+            class="absolute top-full left-0 z-50 w-48 border shadow-lg"
+            style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
+          >
+            <For each={MOBILE_TAB_ORDER}>
+              {(tab) => (
+                <button
+                  class="block w-full px-3 py-2 text-left text-sm transition-colors"
+                  style={{
+                    background: activeMobileTab() === tab.key ? 'var(--c-accent)' : 'transparent',
+                    color: 'var(--c-text)'
+                  }}
+                  onClick={() => {
+                    setActiveMobileTab(tab.key)
+                    setDropdownOpen(false)
+                  }}
+                >
+                  {tab.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
+      {/* Swipeable content */}
+      <div
+        class="flex-1 overflow-auto"
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        style={{
+          transition: 'transform 0.2s ease-out'
+        }}
+      >
+        <Switch>
+          <Match when={activeMobileTab() === 'files'}>
+            <FileExplorerPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'file-viewer'}>
+            <div class="p-4 text-sm" style={{ color: 'var(--c-text-muted)' }}>
+              File Viewer
+            </div>
+          </Match>
+          <Match when={activeMobileTab() === 'chat'}>
+            <div class="p-4 text-sm" style={{ color: 'var(--c-text-muted)' }}>
+              Chat: {activeThreadKey()}
+            </div>
+          </Match>
+          <Match when={activeMobileTab() === 'git'}>
+            <GitPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'threads'}>
+            <ThreadsPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'planning'}>
+            <PlanningPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'notifications'}>
+            <NotificationsPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'terminal'}>
+            <TerminalPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'recordings'}>
+            <RecordingsPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'logs'}>
+            <LogsPanel />
+          </Match>
+        </Switch>
+      </div>
+    </div>
+  )
+}
+
 // Main Workspace View
 const WorkspaceView: Component = () => {
+  const [isMobile, setIsMobile] = createSignal(isMobileWidth())
+
+  // §7.1 — Detect mobile on mount and resize
+  createEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', onResize)
+    onCleanup(() => window.removeEventListener('resize', onResize))
+  })
+
   // §3.2 — Cmd+Shift+E toggle
   const handleKeydown = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
@@ -198,36 +318,43 @@ const WorkspaceView: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
-      <Show when={!chatExpanded()} fallback={<ExpandedChatView />}>
-        <div class="flex flex-1 overflow-hidden">
-          {/* §3.1 — Sidebar */}
-          <Show when={!sidebarCollapsed()}>
-            <div
-              class="flex flex-col border-r"
-              style={{
-                width: '260px',
-                'min-width': '260px',
-                'border-color': 'var(--c-border)',
-                background: 'var(--c-bg-raised)'
-              }}
-            >
-              <SidebarTabBar />
-              <SidebarContent />
+      <Show
+        when={isMobile()}
+        fallback={
+          <Show when={!chatExpanded()} fallback={<ExpandedChatView />}>
+            <div class="flex flex-1 overflow-hidden">
+              {/* §3.1 — Sidebar */}
+              <Show when={!sidebarCollapsed()}>
+                <div
+                  class="flex flex-col border-r"
+                  style={{
+                    width: '260px',
+                    'min-width': '260px',
+                    'border-color': 'var(--c-border)',
+                    background: 'var(--c-bg-raised)'
+                  }}
+                >
+                  <SidebarTabBar />
+                  <SidebarContent />
+                </div>
+              </Show>
+
+              {/* §3.1 — Main Content */}
+              <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
+                <div class="flex-1 overflow-auto p-4">
+                  <p class="text-sm" style={{ color: 'var(--c-text-muted)' }}>
+                    Main content area
+                  </p>
+                </div>
+              </div>
+
+              {/* §3.5 — Right Panel Chat */}
+              <ChatPanel />
             </div>
           </Show>
-
-          {/* §3.1 — Main Content */}
-          <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
-            <div class="flex-1 overflow-auto p-4">
-              <p class="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-                Main content area
-              </p>
-            </div>
-          </div>
-
-          {/* §3.5 — Right Panel Chat */}
-          <ChatPanel />
-        </div>
+        }
+      >
+        <MobileWorkspace />
       </Show>
     </div>
   )
