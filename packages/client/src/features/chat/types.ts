@@ -1,4 +1,4 @@
-import type { ParsedTurn, WorkItem, AgentStatus } from '@template/core'
+import type { ParsedTurn } from '@template/core'
 
 export interface ChatMessage {
   turn: ParsedTurn

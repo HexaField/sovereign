@@ -2,18 +2,51 @@ import { createSignal } from 'solid-js'
 
 export type ViewMode = 'chat' | 'voice' | 'dashboard' | 'recording'
 
-export const [viewMode, _setViewMode] = createSignal<ViewMode>('chat')
+function readViewModeFromUrl(): ViewMode {
+  if (typeof location === 'undefined') return 'chat'
+  const params = new URLSearchParams(location.search)
+  const v = params.get('view')
+  if (v === 'chat' || v === 'voice' || v === 'dashboard' || v === 'recording') return v
+  return 'chat'
+}
+
+export const [viewMode, _setViewMode] = createSignal<ViewMode>(readViewModeFromUrl())
 export const [drawerOpen, _setDrawerOpen] = createSignal(false)
 export const [settingsOpen, _setSettingsOpen] = createSignal(false)
 
-export function setViewMode(_mode: ViewMode): void {
-  throw new Error('not implemented')
+export function setViewMode(mode: ViewMode): void {
+  _setViewMode(mode)
+  if (typeof history !== 'undefined' && typeof location !== 'undefined') {
+    const url = new URL(location.href)
+    url.searchParams.set('view', mode)
+    history.replaceState(null, '', url.toString())
+  }
 }
 
-export function setDrawerOpen(_open: boolean): void {
-  throw new Error('not implemented')
+export function setDrawerOpen(open: boolean): void {
+  _setDrawerOpen(open)
 }
 
-export function setSettingsOpen(_open: boolean): void {
-  throw new Error('not implemented')
+export function setSettingsOpen(open: boolean): void {
+  _setSettingsOpen(open)
+}
+
+let popstateHandler: (() => void) | null = null
+
+export function initNavStore(): () => void {
+  _setViewMode(readViewModeFromUrl())
+  popstateHandler = () => _setViewMode(readViewModeFromUrl())
+  if (typeof globalThis.addEventListener === 'function') {
+    globalThis.addEventListener('popstate', popstateHandler)
+  }
+  return () => {
+    if (popstateHandler && typeof globalThis.removeEventListener === 'function') {
+      globalThis.removeEventListener('popstate', popstateHandler)
+    }
+  }
+}
+
+/** @internal — for testing */
+export function _triggerPopstate(): void {
+  if (popstateHandler) popstateHandler()
 }

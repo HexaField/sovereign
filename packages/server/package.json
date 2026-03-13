@@ -8,6 +8,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@noble/ed25519": "^3.0.0",
+    "@noble/hashes": "^2.0.1",
     "@template/core": "workspace:*",
     "@types/diff": "^8.0.0",
     "@types/js-yaml": "^4.0.9",
@@ -21,11 +23,13 @@
     "js-yaml": "^4.1.1",
     "node-pty": "^1.1.0",
     "smol-toml": "^1.6.0",
+    "ws": "^8.19.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
     "@types/supertest": "^7.2.0",
     "@types/ws": "^8.18.1",
     "supertest": "^7.2.2"
