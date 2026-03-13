@@ -9,18 +9,12 @@ function isValidTheme(value: unknown): value is Theme {
   return typeof value === 'string' && VALID_THEMES.includes(value as Theme)
 }
 
-function detectSystemTheme(): Theme {
-  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) {
-    return 'light'
-  }
-  return 'default'
-}
-
 function loadTheme(): Theme {
   if (typeof localStorage === 'undefined') return 'default'
   const stored = localStorage.getItem(STORAGE_KEY)
   if (stored && isValidTheme(stored)) return stored
-  return detectSystemTheme()
+  // Default to dark theme — Sovereign is dark-first (like voice-ui)
+  return 'default'
 }
 
 function applyThemeClass(theme: Theme): void {
