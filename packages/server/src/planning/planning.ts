@@ -1,43 +1,315 @@
 // Planning Module — Planning Service
 
+import * as crypto from 'node:crypto'
 import type { EventBus } from '@template/core'
-import type { PlanningDeps, PlanningService, GraphQueryResult, CriticalPath, EntityRef, CycleError } from './types.js'
+import type {
+  PlanningDeps,
+  PlanningService,
+  EntityRef,
+  CycleError,
+  GraphFilter,
+  IssueSnapshot,
+  DependencyEdge
+} from './types.js'
 import type { Issue } from '../issues/types.js'
+import { createGraph } from './graph.js'
+import { parseDependencies } from './parser.js'
+import { createDependencyIndex } from './index.js'
 
-export function createPlanningService(_bus: EventBus, _dataDir: string, _deps: PlanningDeps): PlanningService {
+function hashBody(body: string): string {
+  return crypto.createHash('sha256').update(body).digest('hex').slice(0, 16)
+}
+
+function issueToSnapshot(issue: Issue): IssueSnapshot {
   return {
-    async getGraph(_orgId, _filter?): Promise<GraphQueryResult> {
-      return { nodes: [], edges: [] }
+    ref: {
+      orgId: issue.orgId,
+      projectId: issue.projectId,
+      remote: issue.remote,
+      issueId: issue.id
     },
-    async getCriticalPath(_orgId, _target?): Promise<CriticalPath> {
-      return { path: [], length: 0 }
+    state: issue.state,
+    labels: issue.labels,
+    milestone: undefined,
+    assignees: issue.assignees,
+    body: issue.body,
+    bodyHash: hashBody(issue.body)
+  }
+}
+
+function formatRefString(ref: EntityRef): string {
+  // Use org/project#id for cross-repo refs, #id for bare refs
+  return `${ref.orgId}/${ref.projectId}#${ref.issueId}`
+}
+
+function formatDepsInBody(body: string | undefined, dependsOn?: EntityRef[], blocks?: EntityRef[]): string {
+  const lines: string[] = body ? [body] : []
+  if (dependsOn?.length) {
+    lines.push('')
+    for (const dep of dependsOn) {
+      lines.push(`depends on ${formatRefString(dep)}`)
+    }
+  }
+  if (blocks?.length) {
+    lines.push('')
+    for (const b of blocks) {
+      lines.push(`blocks ${formatRefString(b)}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+export function createPlanningService(bus: EventBus, dataDir: string, deps: PlanningDeps): PlanningService {
+  const index = createDependencyIndex(dataDir)
+
+  // Load index on creation (async, but we don't await — first query will work with whatever is loaded)
+  const ready = index.load()
+
+  async function buildGraph(orgId: string, filter?: GraphFilter) {
+    await ready
+    const issues = await deps.issueTracker.list(
+      orgId,
+      filter
+        ? {
+            projectId: filter.projectId,
+            label: filter.label,
+            assignee: filter.assignee
+          }
+        : undefined
+    )
+
+    const snapshots: IssueSnapshot[] = issues.map(issueToSnapshot)
+    const allEdges: DependencyEdge[] = []
+
+    for (const snap of snapshots) {
+      const edges = parseDependencies(snap.body, {
+        orgId: snap.ref.orgId,
+        projectId: snap.ref.projectId,
+        remote: snap.ref.remote
+      })
+      // Fix up the "from" ref to include the actual issue ID
+      const fixedEdges = edges.map((e) => ({
+        ...e,
+        from: e.from.issueId === '0' ? { ...e.from, issueId: snap.ref.issueId } : e.from,
+        to: e.to.issueId === '0' ? { ...e.to, issueId: snap.ref.issueId } : e.to
+      }))
+      allEdges.push(...fixedEdges)
+    }
+
+    const result = createGraph(snapshots, allEdges)
+    return result
+  }
+
+  async function updateFromIssue(issue: Issue) {
+    await ready
+    const snapshot = issueToSnapshot(issue)
+    const edges = parseDependencies(snapshot.body, {
+      orgId: snapshot.ref.orgId,
+      projectId: snapshot.ref.projectId,
+      remote: snapshot.ref.remote
+    }).map((e) => ({
+      ...e,
+      from: e.from.issueId === '0' ? { ...e.from, issueId: snapshot.ref.issueId } : e.from,
+      to: e.to.issueId === '0' ? { ...e.to, issueId: snapshot.ref.issueId } : e.to
+    }))
+    index.updateIssue(snapshot, edges)
+    await index.save()
+
+    bus.emit({
+      type: 'planning.graph.updated',
+      timestamp: new Date().toISOString(),
+      source: 'planning',
+      payload: { orgId: issue.orgId }
+    })
+  }
+
+  // Listen for bus events
+  bus.on('issue.created', async (event) => {
+    const issue = event.payload as Issue
+    if (issue) await updateFromIssue(issue)
+  })
+
+  bus.on('issue.updated', async (event) => {
+    const issue = event.payload as Issue
+    if (issue) await updateFromIssue(issue)
+  })
+
+  bus.on('issue.synced', async (event) => {
+    const payload = event.payload as { orgId: string }
+    if (payload?.orgId) {
+      bus.emit({
+        type: 'planning.graph.updated',
+        timestamp: new Date().toISOString(),
+        source: 'planning',
+        payload: { orgId: payload.orgId }
+      })
+    }
+  })
+
+  const service: PlanningService = {
+    async getGraph(orgId, filter?) {
+      const { graph } = await buildGraph(orgId, filter)
+      if (filter) {
+        return graph.subgraph(filter)
+      }
+      return graph.subgraph({}) // return all
     },
-    async getBlocked(_orgId, _filter?): Promise<EntityRef[]> {
-      return []
+
+    async getCriticalPath(orgId, target?) {
+      const { graph } = await buildGraph(orgId)
+      return graph.criticalPath(target)
     },
-    async getReady(_orgId, _filter?): Promise<EntityRef[]> {
-      return []
+
+    async getBlocked(orgId, filter?) {
+      const { graph } = await buildGraph(orgId, filter)
+      return graph.blocked()
     },
-    async getParallelSets(_orgId, _filter?): Promise<EntityRef[][]> {
-      return []
+
+    async getReady(orgId, filter?) {
+      const { graph } = await buildGraph(orgId, filter)
+      return graph.ready()
     },
-    async getImpact(_orgId, _ref): Promise<EntityRef[]> {
-      return []
+
+    async getParallelSets(orgId, filter?) {
+      const { graph } = await buildGraph(orgId, filter)
+      return graph.parallelSets()
     },
-    async getCompletion(_orgId, _filter?) {
-      return { total: 0, closed: 0, percentage: 0 }
+
+    async getImpact(orgId, ref) {
+      const { graph } = await buildGraph(orgId)
+      return graph.impact(ref)
     },
-    async createIssue(_orgId, _data): Promise<{ issue: Issue; ref: EntityRef }> {
-      throw new Error('Not implemented')
+
+    async getCompletion(orgId, filter?) {
+      const { graph } = await buildGraph(orgId, filter)
+      return graph.completionRate(filter)
     },
-    async decompose(_orgId, _data): Promise<{ issues: Issue[]; graph: GraphQueryResult }> {
-      throw new Error('Not implemented')
+
+    async createIssue(orgId, data) {
+      const body = formatDepsInBody(data.body, data.dependsOn, data.blocks)
+      const issue = await deps.issueTracker.create(orgId, data.projectId, {
+        remote: data.remote,
+        title: data.title,
+        body,
+        labels: data.labels,
+        assignees: data.assignees
+      })
+
+      const ref: EntityRef = {
+        orgId,
+        projectId: data.projectId,
+        remote: data.remote,
+        issueId: issue.id
+      }
+
+      bus.emit({
+        type: 'planning.graph.updated',
+        timestamp: new Date().toISOString(),
+        source: 'planning',
+        payload: { orgId }
+      })
+
+      return { issue, ref }
     },
-    async sync(_orgId, _projectId?): Promise<{ parsed: number; edges: number; cycles: CycleError[] }> {
-      return { parsed: 0, edges: 0, cycles: [] }
+
+    async decompose(orgId, data) {
+      const issues: Issue[] = []
+
+      for (const item of data.issues) {
+        const body = formatDepsInBody(item.body, item.dependsOn, item.blocks)
+        const issue = await deps.issueTracker.create(orgId, data.projectId, {
+          remote: data.remote,
+          title: item.title,
+          body,
+          labels: item.labels,
+          assignees: item.assignees
+        })
+        issues.push(issue)
+      }
+
+      // Build graph from the created issues
+      const snapshots = issues.map(issueToSnapshot)
+      const allEdges: DependencyEdge[] = []
+      for (const snap of snapshots) {
+        const edges = parseDependencies(snap.body, {
+          orgId: snap.ref.orgId,
+          projectId: snap.ref.projectId,
+          remote: snap.ref.remote
+        }).map((e) => ({
+          ...e,
+          from: e.from.issueId === '0' ? { ...e.from, issueId: snap.ref.issueId } : e.from,
+          to: e.to.issueId === '0' ? { ...e.to, issueId: snap.ref.issueId } : e.to
+        }))
+        allEdges.push(...edges)
+      }
+
+      const { graph } = createGraph(snapshots, allEdges)
+      const graphResult = graph.subgraph({})
+
+      bus.emit({
+        type: 'planning.graph.updated',
+        timestamp: new Date().toISOString(),
+        source: 'planning',
+        payload: { orgId }
+      })
+
+      return { issues, graph: graphResult }
     },
+
+    async sync(orgId, projectId?) {
+      await ready
+      const issues = await deps.issueTracker.list(orgId, projectId ? { projectId } : undefined)
+      const snapshots = issues.map(issueToSnapshot)
+
+      let parsed = 0
+      let edgeCount = 0
+      const allCycles: CycleError[] = []
+
+      for (const snap of snapshots) {
+        const edges = parseDependencies(snap.body, {
+          orgId: snap.ref.orgId,
+          projectId: snap.ref.projectId,
+          remote: snap.ref.remote
+        }).map((e) => ({
+          ...e,
+          from: e.from.issueId === '0' ? { ...e.from, issueId: snap.ref.issueId } : e.from,
+          to: e.to.issueId === '0' ? { ...e.to, issueId: snap.ref.issueId } : e.to
+        }))
+        index.updateIssue(snap, edges)
+        parsed++
+        edgeCount += edges.length
+      }
+
+      await index.save()
+
+      // Check for cycles
+      const allEdges = index.getEdges(orgId)
+      const { errors } = createGraph(snapshots, allEdges)
+      allCycles.push(...errors)
+
+      if (allCycles.length > 0) {
+        bus.emit({
+          type: 'planning.cycle.detected',
+          timestamp: new Date().toISOString(),
+          source: 'planning',
+          payload: { orgId, cycles: allCycles }
+        })
+      }
+
+      bus.emit({
+        type: 'planning.sync.completed',
+        timestamp: new Date().toISOString(),
+        source: 'planning',
+        payload: { orgId, parsed, edges: edgeCount, cycles: allCycles.length }
+      })
+
+      return { parsed, edges: edgeCount, cycles: allCycles }
+    },
+
     status() {
       return { module: 'planning', status: 'ok' }
     }
   }
+
+  return service
 }
