@@ -28,22 +28,26 @@ Entity-bound chat threads: every thread is associated with a branch, issue, or P
 
 ## Phase 7: Observability
 
-Architecture & system view. Notifications and events are entity-scoped — grouped by the thread/entity they belong to, click to jump into context. Logs viewer. Recording management.
+Architecture & system view. Notifications and events are entity-scoped — grouped by the thread/entity they belong to, click to jump into context. Holonic event viewer — visualise event flow across entities and threads in real time. Logs viewer.
 
-## Phase 8: Agent Core (beta release)
+## Phase 8: Recording & Transcription
+
+Recording management, playback, audio transcription pipeline. Session recording (audio + text), searchable transcript archive, export.
+
+## Phase 9: Agent Core (beta release)
 
 Own session store (JSONL), context compaction, system prompt assembly. Memory & embeddings (SQLite + FTS5 + sqlite-vec + Ollama). Tool runtime & registry, LLM router (multi-provider, streaming, fallback), agent loop (deterministic state machine), multi-agent orchestration, worktree-agent binding. **Full independence from OpenClaw.**
 
-## Phase 9: Sovereignty & CI (initial release)
+## Phase 10: Sovereignty & CI (initial release)
 
 Peer-to-peer repo sync across devices via Radicle gossip. Local VM CI runner (Lima/QEMU on macOS, Firecracker on Linux). Pipeline YAML, artifact caching, matrix builds. Decentralized CI with signed attestations and distributed build farm. **Full independence from GitHub.**
 
-## Phase 10: Ecosystem (long-term vision)
+## Phase 11: Ecosystem (long-term vision)
 
 Device/node system, plugin architecture, multi-user support, ambient interfaces, hardening & testing.
 
 ---
 
-**Critical path:** 1 → 2 → 3 → 6 → 8.session → 8.agent-loop → 8.multi-agent
+**Critical path:** 1 → 2 → 3 → 6 → 9.session → 9.agent-loop → 9.multi-agent
 
-**Parallel tracks:** Phase 5 alongside Phase 4–7. Phase 7 alongside Phase 6. Radicle repo mgmt (Phase 4) enables P2P sync (Phase 9). VM CI independent. UI work runs in parallel with backend.
+**Parallel tracks:** Phase 5 alongside Phase 4–7. Phase 7 alongside Phase 6. Phase 8 alongside Phase 9. Radicle repo mgmt (Phase 4) enables P2P sync (Phase 10). VM CI independent. UI work runs in parallel with backend.
