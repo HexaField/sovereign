@@ -212,4 +212,93 @@ describe('§6.4 Voice Module (Server)', () => {
 
     vi.unstubAllGlobals()
   })
+
+  // --- Phase 6 review fix todos ---
+
+  it('MUST apply a request timeout to transcription fetch calls (not hang indefinitely)', async () => {
+    const shortVoice = createVoiceModule(bus, {
+      transcribeUrl: 'http://localhost:9876/transcribe',
+      ttsUrl: 'http://localhost:9876/tts',
+      timeoutMs: 50
+    })
+    const mockFetch = vi.fn().mockImplementation((_url: string, opts?: { signal?: AbortSignal }) => {
+      return new Promise((_resolve, reject) => {
+        if (opts?.signal) {
+          opts.signal.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError'))
+          )
+        }
+      })
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    await expect(shortVoice.transcribe(Buffer.from('data'), 'audio/wav')).rejects.toThrow('timed out')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('MUST apply a request timeout to TTS fetch calls (not hang indefinitely)', async () => {
+    const shortVoice = createVoiceModule(bus, {
+      transcribeUrl: 'http://localhost:9876/transcribe',
+      ttsUrl: 'http://localhost:9876/tts',
+      timeoutMs: 50
+    })
+    const mockFetch = vi.fn().mockImplementation((_url: string, opts?: { signal?: AbortSignal }) => {
+      return new Promise((_resolve, reject) => {
+        if (opts?.signal) {
+          opts.signal.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError'))
+          )
+        }
+      })
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    await expect(shortVoice.synthesize('hello')).rejects.toThrow('timed out')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('MUST support abort signal to cancel in-flight transcription requests', async () => {
+    const controller = new AbortController()
+    const mockFetch = vi.fn().mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+      return new Promise((_resolve, reject) => {
+        opts.signal.addEventListener('abort', () => reject(new Error('Aborted')))
+      })
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const promise = voice.transcribe(Buffer.from('data'), 'audio/wav', { signal: controller.signal })
+    controller.abort()
+    await expect(promise).rejects.toThrow('aborted')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('MUST support abort signal to cancel in-flight TTS requests', async () => {
+    const controller = new AbortController()
+    const mockFetch = vi.fn().mockImplementation((_url: string, opts: { signal: AbortSignal }) => {
+      return new Promise((_resolve, reject) => {
+        opts.signal.addEventListener('abort', () => reject(new Error('Aborted')))
+      })
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const promise = voice.synthesize('hello', undefined, { signal: controller.signal })
+    controller.abort()
+    await expect(promise).rejects.toThrow('aborted')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('MUST propagate fetch errors with meaningful error messages (not raw fetch failures)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')))
+
+    await expect(voice.transcribe(Buffer.from('data'), 'audio/wav')).rejects.toThrow(
+      'Transcription failed: fetch failed'
+    )
+    await expect(voice.synthesize('hello')).rejects.toThrow('TTS failed: fetch failed')
+
+    vi.unstubAllGlobals()
+  })
 })

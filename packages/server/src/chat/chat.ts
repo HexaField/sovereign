@@ -4,11 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents } from '@template/core'
 import type { WsHandler } from '../ws/handler.js'
-
-export interface ThreadManager {
-  getSessionKey(threadKey: string): string | undefined
-  createThread(label?: string): string
-}
+import type { ThreadManager } from '../threads/types.js'
 
 export interface ChatModule {
   status(): ModuleStatus
@@ -167,10 +163,10 @@ export function createChatModule(
   }
 
   async function handleSessionCreate(label?: string): Promise<{ threadKey: string; sessionKey: string }> {
-    const threadKey = threadManager.createThread(label)
+    const thread = threadManager.create({ label })
     const sessionKey = await backend.createSession(label)
-    setMapping(threadKey, sessionKey)
-    return { threadKey, sessionKey }
+    setMapping(thread.key, sessionKey)
+    return { threadKey: thread.key, sessionKey }
   }
 
   return {

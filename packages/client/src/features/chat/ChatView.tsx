@@ -1,5 +1,7 @@
 import type { WorkItem, AgentStatus } from '@template/core'
 import type { ChatMessage } from './types.js'
+import { MessageBubble } from './MessageBubble.js'
+import { WorkSection } from './WorkSection.js'
 
 export interface ChatViewProps {
   messages: ChatMessage[]
@@ -15,12 +17,84 @@ export interface ChatViewProps {
   threadKey: string
 }
 
+/** Check if two timestamps fall on different days */
+export function needsDateSeparator(ts1: number, ts2: number): boolean {
+  const d1 = new Date(ts1)
+  const d2 = new Date(ts2)
+  return d1.toDateString() !== d2.toDateString()
+}
+
+/** Format a date for the separator label */
+export function formatDateSeparator(ts: number): string {
+  const date = new Date(ts)
+  const now = new Date()
+  if (date.toDateString() === now.toDateString()) return 'Today'
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+}
+
+/** Determine if messages list is empty (for welcome state) */
+export function isEmptyState(messages: ChatMessage[]): boolean {
+  return messages.length === 0
+}
+
+/** Scroll threshold in px - if within this distance from bottom, auto-scroll is active */
+export const SCROLL_THRESHOLD = 80
+
+/** Check if a scroll container is near the bottom */
+export function isNearBottom(scrollTop: number, scrollHeight: number, clientHeight: number): boolean {
+  return scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD
+}
+
 export function ChatView(props: ChatViewProps) {
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
       {/* Message list */}
       <div class="flex-1 space-y-4 overflow-y-auto p-4">
-        {/* Messages rendered here via MessageBubble + WorkSection */}
+        {/* Empty state */}
+        {isEmptyState(props.messages) && (
+          <div class="flex h-full items-center justify-center">
+            <div class="text-center" style={{ color: 'var(--c-text-muted)' }}>
+              <div class="text-2xl">💬</div>
+              <div class="mt-2 text-sm">Start a conversation</div>
+            </div>
+          </div>
+        )}
+
+        {/* Message list with date separators */}
+        {props.messages.map((msg, i) => {
+          const showSeparator = i === 0 || needsDateSeparator(props.messages[i - 1].turn.timestamp, msg.turn.timestamp)
+
+          return (
+            <>
+              {/* Date separator */}
+              {showSeparator && (
+                <div class="flex items-center gap-2 py-2">
+                  <div class="flex-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+                  <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                    {formatDateSeparator(msg.turn.timestamp)}
+                  </span>
+                  <div class="flex-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+                </div>
+              )}
+
+              {/* Work section between user and assistant turns */}
+              {msg.turn.workItems.length > 0 && (
+                <WorkSection workItems={msg.turn.workItems} thinkingText="" isComplete={true} />
+              )}
+
+              {/* Message bubble */}
+              <MessageBubble turn={msg.turn} pending={msg.pending} />
+            </>
+          )
+        })}
+
+        {/* Live work section for in-progress turn */}
+        {props.liveWork.length > 0 && (
+          <WorkSection workItems={props.liveWork} thinkingText={props.liveThinkingText} isComplete={false} />
+        )}
       </div>
 
       {/* Streaming indicator */}
@@ -43,6 +117,14 @@ export function ChatView(props: ChatViewProps) {
       {props.isRetryCountdownActive && (
         <div class="px-4 py-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
           Retrying in {props.retryCountdownSeconds}s…
+          <div
+            class="mt-1 h-1 rounded-full"
+            style={{
+              background: 'var(--c-accent)',
+              width: `${(props.retryCountdownSeconds / 60) * 100}%`,
+              transition: 'width 1s linear'
+            }}
+          />
         </div>
       )}
     </div>

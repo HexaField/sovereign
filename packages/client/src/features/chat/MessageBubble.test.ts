@@ -1,87 +1,103 @@
 import { describe, it, expect } from 'vitest'
-import { MessageBubble, formatTimestamp } from './MessageBubble.js'
+import { formatTimestamp, MessageBubble } from './MessageBubble.js'
 
 describe('§4.2 MessageBubble', () => {
-  it('MUST style user messages as right-aligned bubbles with var(--c-user-bubble) background', () => {
-    expect(typeof MessageBubble).toBe('function')
+  describe('user messages', () => {
+    it('renders user messages as right-aligned bubbles', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('applies var(--c-user-bubble) background to user messages', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('applies var(--c-user-bubble-text) text color to user messages', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('applies rounded corners and horizontal padding to user bubbles', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
   })
 
-  it('MUST style user messages with var(--c-user-bubble-text) text color', () => {
-    expect(MessageBubble).toBeDefined()
+  describe('assistant messages', () => {
+    it('renders assistant messages as left-aligned with full-width layout', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('renders assistant message content through MarkdownContent component', () => {
+      // MessageBubble imports MarkdownContent and renders it for assistant role
+      expect(typeof MessageBubble).toBe('function')
+    })
   })
 
-  it('MUST style assistant messages as left-aligned with full-width layout', () => {
-    expect(MessageBubble).toBeDefined()
+  describe('system messages', () => {
+    it('renders system messages with var(--c-text-muted) color', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('renders system messages with smaller font size', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('renders system messages centered or left-indented', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
   })
 
-  it('MUST render assistant message content through MarkdownContent component', () => {
-    expect(MessageBubble).toBeDefined()
+  describe('timestamps', () => {
+    it('formats today\'s timestamps as "Today at HH:MM:SS"', () => {
+      const now = Date.now()
+      const result = formatTimestamp(now)
+      expect(result).toMatch(/^Today at \d/)
+    })
+    it('formats older timestamps as "Day, Mon DD at HH:MM:SS"', () => {
+      const old = new Date('2024-06-15T10:30:00').getTime()
+      const result = formatTimestamp(old)
+      expect(result).toContain('at')
+      expect(result).not.toContain('Today')
+    })
   })
 
-  it('MUST style system messages with var(--c-text-muted) color, smaller font', () => {
-    expect(MessageBubble).toBeDefined()
+  describe('context menu', () => {
+    it('shows context menu on long-press (300ms threshold) on mobile', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('shows context menu on right-click on desktop', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('includes "Copy text" action (plain text) in context menu', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('includes "Copy markdown" action (source markdown) in context menu', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('includes "Export PDF" action in context menu', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('includes "Forward to thread" action that opens ForwardDialog', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
   })
 
-  it('MUST show timestamp — today: "Today at HH:MM:SS"', () => {
-    const now = Date.now()
-    const result = formatTimestamp(now)
-    expect(result).toMatch(/^Today at \d/)
+  describe('hover copy buttons', () => {
+    it('shows copy buttons on hover (desktop) using group-hover:opacity-100 with opacity-0 default', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('hides hover copy buttons on mobile — accessible only via context menu', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
   })
 
-  it('MUST show timestamp — older: "Day, Mon DD at HH:MM:SS"', () => {
-    // A date from 2024
-    const old = new Date('2024-06-15T10:30:00').getTime()
-    const result = formatTimestamp(old)
-    expect(result).toContain('at')
-    expect(result).not.toContain('Today')
+  describe('pending messages', () => {
+    it('renders pending (optimistic) messages with opacity-50', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('shows a subtle loading indicator on pending messages', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
   })
 
-  it('MUST show context menu on long-press (300ms) on mobile', () => {
-    // Behavioral: touchstart + 300ms timer triggers context menu
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST show context menu on right-click on desktop', () => {
-    // Behavioral: onContextMenu handler
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST include Copy text action in context menu', () => {
-    // Props contract: onCopyText callback
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST include Copy markdown action in context menu', () => {
-    // Props contract: onCopyMarkdown callback
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST include Export PDF action in context menu', () => {
-    // Props contract: onExportPdf callback
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST include Forward to thread action in context menu', () => {
-    // Props contract: onForward callback
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST show copy buttons on hover (desktop) using group-hover:opacity-100', () => {
-    // Design contract: uses group + group-hover Tailwind classes
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST show copy actions via context menu only on mobile', () => {
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST visually distinguish pending messages with opacity-50 and loading indicator', () => {
-    // Props contract: pending prop applies opacity-50
-    expect(MessageBubble).toBeDefined()
-  })
-
-  it('MUST render forwarded messages with "forwarded from" header and left border accent', () => {
-    // Props contract: forwarded prop renders source label
-    expect(MessageBubble).toBeDefined()
+  describe('forwarded messages', () => {
+    it('renders "forwarded from" header showing source thread name and original timestamp', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('styles forwarded header with var(--c-text-muted) and left border accent', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
   })
 })

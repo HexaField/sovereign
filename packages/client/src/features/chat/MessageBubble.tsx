@@ -1,4 +1,5 @@
 import type { ParsedTurn, ForwardedMessage } from '@template/core'
+import { MarkdownContent } from './MarkdownContent.js'
 
 export interface MessageBubbleProps {
   turn: ParsedTurn
@@ -11,7 +12,8 @@ export interface MessageBubbleProps {
   onRetry?: (turn: ParsedTurn) => void
 }
 
-function formatTimestamp(ts: number): string {
+/** Format a timestamp for display */
+export function formatTimestamp(ts: number): string {
   const date = new Date(ts)
   const now = new Date()
   const isToday = date.toDateString() === now.toDateString()
@@ -24,6 +26,7 @@ export function MessageBubble(props: MessageBubbleProps) {
   const { turn } = props
   const isUser = turn.role === 'user'
   const isSystem = turn.role === 'system'
+  const isAssistant = turn.role === 'assistant'
 
   return (
     <div
@@ -37,32 +40,71 @@ export function MessageBubble(props: MessageBubbleProps) {
           'font-size': isSystem ? '0.85rem' : undefined
         }}
       >
+        {/* Forwarded header */}
         {props.forwarded && (
           <div
             class="mb-1 border-l-2 pl-2 text-xs"
             style={{ 'border-color': 'var(--c-accent)', color: 'var(--c-text-muted)' }}
           >
             Forwarded from {props.forwarded.sourceThreadLabel}
+            {' · '}
+            {formatTimestamp(props.forwarded.originalTimestamp)}
           </div>
         )}
-        <div>{turn.content}</div>
+
+        {/* Content: markdown for assistant, plain text for user/system */}
+        {isAssistant ? <MarkdownContent html={turn.content} /> : <div>{turn.content}</div>}
+
+        {/* Pending indicator */}
+        {props.pending && (
+          <span class="ml-2 inline-block animate-pulse text-xs" style={{ color: 'var(--c-text-muted)' }}>
+            ⏳
+          </span>
+        )}
+
+        {/* Timestamp */}
         <div class="mt-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
           {formatTimestamp(turn.timestamp)}
         </div>
       </div>
 
-      {/* Copy buttons on hover (desktop) */}
+      {/* Action buttons on hover (desktop) */}
       <div class="absolute top-0 right-0 hidden gap-1 opacity-0 transition-opacity group-hover:flex group-hover:opacity-100">
         <button
           onClick={() => props.onCopyText?.(turn.content)}
           class="rounded p-1"
           style={{ background: 'var(--c-step-bg)' }}
+          title="Copy text"
         >
           📋
         </button>
+        <button
+          onClick={() => props.onCopyMarkdown?.(turn.content)}
+          class="rounded p-1"
+          style={{ background: 'var(--c-step-bg)' }}
+          title="Copy markdown"
+        >
+          📝
+        </button>
+        <button
+          onClick={() => props.onForward?.(turn)}
+          class="rounded p-1"
+          style={{ background: 'var(--c-step-bg)' }}
+          title="Forward"
+        >
+          ↗️
+        </button>
+        {isAssistant && (
+          <button
+            onClick={() => props.onRetry?.(turn)}
+            class="rounded p-1"
+            style={{ background: 'var(--c-step-bg)' }}
+            title="Retry"
+          >
+            🔄
+          </button>
+        )}
       </div>
     </div>
   )
 }
-
-export { formatTimestamp }
