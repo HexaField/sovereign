@@ -4,6 +4,9 @@ import './app.css'
 // Nav store
 import { activeView, initNavStore } from './features/nav/store.js'
 
+// Global keyboard shortcuts
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
+
 // Components
 import { Header } from './features/nav/Header.js'
 import { SettingsModal } from './features/nav/SettingsModal.js'
@@ -18,6 +21,8 @@ const SystemView = lazy(() => import('./features/system/SystemView.js'))
 
 export default function App() {
   const cleanups: Array<() => void> = []
+
+  useKeyboardShortcuts()
 
   onMount(() => {
     cleanups.push(initNavStore())
