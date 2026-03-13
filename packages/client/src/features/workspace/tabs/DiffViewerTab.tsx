@@ -21,12 +21,10 @@ export interface DiffViewerTabProps {
 }
 
 async function fetchDiff(params: { path: string; projectId: string; base?: string; head?: string }): Promise<DiffData> {
-  const url = new URL('/api/diff', window.location.origin)
-  url.searchParams.set('path', params.path)
-  url.searchParams.set('projectId', params.projectId)
-  if (params.base) url.searchParams.set('base', params.base)
-  if (params.head) url.searchParams.set('head', params.head)
-  const res = await fetch(url.toString())
+  const qs = new URLSearchParams({ path: params.path, projectId: params.projectId })
+  if (params.base) qs.set('base', params.base)
+  if (params.head) qs.set('head', params.head)
+  const res = await fetch(`/api/diff?${qs.toString()}`)
   if (!res.ok) throw new Error(`Failed to fetch diff: ${res.statusText}`)
   return res.json()
 }
