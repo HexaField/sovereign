@@ -22,7 +22,7 @@ Diff engine (text, file, semantic for JSON/YAML/TOML, change sets). Provider-bac
 
 DAG planning engine built directly on the issue/review system (Phase 4). Uses GitHub Issues/Projects and Radicle Issues as the backing store — no separate plan store. Sovereign adds minimal metadata (dependency edges, cross-project links) as issue labels/references. Planning UI (graph, kanban, list, tree views) reads from and writes to the provider-backed issue tracker.
 
-## Phase 6: Chat & Voice
+## Phase 6: Chat & Voice ✅
 
 Entity-bound chat threads: every thread is associated with a branch, issue, or PR. Events from that entity (CI, review comments, status changes) route into the thread automatically — AGENT events trigger autonomous work, NOTIFY events surface for user response. The 'main' thread and user-created threads are global (no entity binding). Message forwarding across threads for user-driven cross-thread orchestration. Input area, voice interface, gateway bridge to OpenClaw. Dashboard as the global context view.
 
