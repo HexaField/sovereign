@@ -1,0 +1,23 @@
+import { describe, it } from 'vitest'
+
+describe('§5.1 Thread Model', () => {
+  it.todo('MUST give every thread an identity: { threadKey, entities, label }')
+  it.todo('entities array MAY be empty for global threads')
+  it.todo('entities array MAY contain one entity (typical)')
+  it.todo('entities array MAY contain multiple entities (cross-cutting work)')
+  it.todo('EntityBinding MUST contain: { orgId, projectId, entityType, entityRef }')
+  it.todo('Thread keys for entity-bound threads MUST follow format: {orgId}/{projectId}/{entityType}:{entityRef}')
+  it.todo('Thread key is immutable — adding more entities MUST NOT change it')
+  it.todo('Global thread keys MUST be: main or user-defined labels')
+  it.todo('MUST support adding entities to an existing thread via POST /api/threads/:key/entities')
+  it.todo('MUST support removing entities from a thread via DELETE /api/threads/:key/entities/:entityType/:entityRef')
+  it.todo('Removing the last entity from a non-global thread MUST NOT delete the thread')
+  it.todo('MUST automatically create a thread when worktree.created bus event is emitted')
+  it.todo('MUST reuse existing thread if one already exists for that branch')
+  it.todo('MUST automatically create a thread when issue.created bus event is emitted')
+  it.todo('MUST automatically create a thread when review.created bus event is emitted')
+  it.todo('SHOULD automatically associate related entities into the same thread (PR fixes #42)')
+  it.todo('SHOULD detect branch name containing issue number and link them')
+  it.todo('SHOULD detect explicit cross-references in issue/PR metadata')
+  it.todo('MUST persist thread metadata to {dataDir}/threads/registry.json using atomic file writes')
+})

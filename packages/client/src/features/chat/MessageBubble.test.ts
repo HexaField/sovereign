@@ -1,0 +1,21 @@
+import { describe, it } from 'vitest'
+
+describe('§4.2 MessageBubble', () => {
+  it.todo('MUST style user messages as right-aligned bubbles with var(--c-user-bubble) background')
+  it.todo('MUST style user messages with var(--c-user-bubble-text) text color')
+  it.todo('MUST style assistant messages as left-aligned with full-width layout')
+  it.todo('MUST render assistant message content through MarkdownContent component')
+  it.todo('MUST style system messages with var(--c-text-muted) color, smaller font')
+  it.todo('MUST show timestamp — today: "Today at HH:MM:SS"')
+  it.todo('MUST show timestamp — older: "Day, Mon DD at HH:MM:SS"')
+  it.todo('MUST show context menu on long-press (300ms) on mobile')
+  it.todo('MUST show context menu on right-click on desktop')
+  it.todo('MUST include Copy text action in context menu')
+  it.todo('MUST include Copy markdown action in context menu')
+  it.todo('MUST include Export PDF action in context menu')
+  it.todo('MUST include Forward to thread action in context menu')
+  it.todo('MUST show copy buttons on hover (desktop) using group-hover:opacity-100')
+  it.todo('MUST show copy actions via context menu only on mobile')
+  it.todo('MUST visually distinguish pending messages with opacity-50 and loading indicator')
+  it.todo('MUST render forwarded messages with "forwarded from" header and left border accent')
+})

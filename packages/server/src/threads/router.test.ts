@@ -1,0 +1,20 @@
+import { describe, it } from 'vitest'
+
+describe('§5.2 Event Routing (Server)', () => {
+  it.todo('MUST route events from an entity to every thread that contains that entity')
+  it.todo('MUST route git.status.changed with branch reference to matching branch threads')
+  it.todo('MUST route issue.updated to matching issue threads')
+  it.todo('MUST route issue.comment.added to matching issue threads')
+  it.todo('MUST route review.updated to matching PR threads')
+  it.todo('MUST route review.comment.added to matching PR threads')
+  it.todo('MUST route review.approved to matching PR threads')
+  it.todo('MUST route review.changes_requested to matching PR threads')
+  it.todo('MUST route review.merged to matching PR threads')
+  it.todo('MUST route webhook events with entity extraction to matching threads')
+  it.todo('MUST classify events as AGENT or NOTIFY')
+  it.todo('MUST trigger autonomous agent work in thread for AGENT-classified events')
+  it.todo('MUST surface NOTIFY-classified events as notifications with threadKey metadata')
+  it.todo('SHOULD cause automatic thread creation for entities with no existing thread')
+  it.todo('MUST emit thread.event.routed bus events with { threadKey, event, entityBinding }')
+  it.todo('A single event MAY route to multiple threads if the entity appears in more than one')
+})
