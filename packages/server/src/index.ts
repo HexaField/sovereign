@@ -42,7 +42,7 @@ const server = https.createServer(options, app)
 
 // --- WebSocket setup ---
 const wss = new WebSocketServer({ server, path: '/ws' })
-const dataDir = path.join(process.cwd(), '.data')
+const dataDir = process.env.SOVEREIGN_DATA_DIR || path.join(process.cwd(), '.data')
 fs.mkdirSync(dataDir, { recursive: true })
 const bus = createEventBus(dataDir)
 
