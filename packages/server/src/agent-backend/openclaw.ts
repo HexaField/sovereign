@@ -101,9 +101,9 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
     return identity
   }
 
-  function setStatus(status: BackendConnectionStatus) {
+  function setStatus(status: BackendConnectionStatus, reason?: string, errorType?: string) {
     state.connectionStatus = status
-    emitter.emit('backend.status', { status })
+    emitter.emit('backend.status', { status, reason, errorType })
   }
 
   function handleMessage(raw: string) {
@@ -201,7 +201,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
         break
       }
       case 'pairing.required': {
-        setStatus('error')
+        setStatus('error', 'Device pairing required', 'auth_rejected')
         break
       }
     }
@@ -256,10 +256,10 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
           if (state.destroyed) return
           if (!settled) {
             settled = true
-            setStatus('disconnected')
+            setStatus('disconnected', 'Connection closed before open', 'server_down')
             reject(new Error('Connection closed before open'))
           } else {
-            setStatus('disconnected')
+            setStatus('disconnected', 'Connection lost')
           }
           scheduleReconnect()
         })
@@ -267,7 +267,8 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
         ws.on('error', (err: Error) => {
           if (!settled) {
             settled = true
-            setStatus('disconnected')
+            const errorType = err.message?.includes('certificate') ? 'cert_error' : 'server_down'
+            setStatus('disconnected', err.message, errorType)
             reject(err)
           }
         })
@@ -287,8 +288,12 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
       if (state.destroyed) return
       try {
         await connectWs()
-      } catch {
-        // connectWs failure will trigger close -> scheduleReconnect again
+      } catch (err) {
+        emitter.emit('backend.status', {
+          status: 'disconnected',
+          reason: `Reconnect attempt ${state.reconnectAttempt} failed: ${(err as Error).message}`,
+          errorType: 'reconnect_failed'
+        })
       }
     }, delay)
   }
@@ -374,10 +379,20 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
           return reject(new Error('Not connected'))
         }
         const requestId = Math.random().toString(36).slice(2)
+        let settled = false
+        const timer = setTimeout(() => {
+          if (settled) return
+          settled = true
+          state.ws?.off('message', handler)
+          reject(new Error('Session creation timeout'))
+        }, 10000)
         const handler = (data: any) => {
           try {
             const msg = JSON.parse(data.toString())
             if (msg.type === 'session.created' && msg.requestId === requestId) {
+              if (settled) return
+              settled = true
+              clearTimeout(timer)
               state.ws?.off('message', handler)
               resolve(msg.sessionKey)
             }
@@ -387,10 +402,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
         }
         state.ws.on('message', handler)
         state.ws.send(JSON.stringify({ type: 'session.create', label, requestId }))
-        setTimeout(() => {
-          state.ws?.off('message', handler)
-          reject(new Error('Session creation timeout'))
-        }, 10000)
       })
     },
 

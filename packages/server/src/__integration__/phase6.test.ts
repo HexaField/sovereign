@@ -8,9 +8,9 @@ import { createEventBus } from '@template/core'
 import type { EventBus, AgentBackend, AgentBackendEvents, BackendConnectionStatus } from '@template/core'
 import { createOpenClawBackend } from '../agent-backend/openclaw.js'
 import { createThreadManager } from '../threads/threads.js'
+import type { EntityBinding, ThreadEvent } from '../threads/types.js'
 import { createVoiceModule } from '../voice/voice.js'
 import { createChatModule } from '../chat/chat.js'
-import type { ThreadManager, EntityBinding, ThreadEvent } from '../threads/types.js'
 import type { OpenClawConfig } from '../agent-backend/types.js'
 
 // --- Helpers ---
@@ -272,7 +272,9 @@ describe('Phase 6 — Integration Tests', () => {
 
     // Set up routing: listen for issue.updated and route to the thread
     const routedEvents: any[] = []
-    bus.on('thread.event.routed', (e) => routedEvents.push(e))
+    bus.on('thread.event.routed', (e) => {
+      routedEvents.push(e)
+    })
 
     // Route issue.updated events to their thread
     bus.on('issue.updated', (event) => {
@@ -420,18 +422,9 @@ describe('Phase 6 — Integration Tests', () => {
     const backend = createOpenClawBackend({ gatewayUrl: gw.url, dataDir: tmpDir })
     const tm = createThreadManager(bus, tmpDir)
 
-    // Minimal thread manager adapter for chat module
-    const threadAdapter = {
-      getSessionKey: (tk: string) => undefined,
-      createThread: (label?: string) => {
-        const t = tm.create({ label })
-        return t.key
-      }
-    }
-
     try {
       await backend.connect()
-      const chat = createChatModule(bus, backend, threadAdapter, { dataDir: tmpDir })
+      const chat = createChatModule(bus, backend, tm, { dataDir: tmpDir })
 
       // Create target thread
       const targetThread = tm.create({ label: 'target-thread' })
@@ -656,16 +649,11 @@ describe('Phase 6 — Integration Tests', () => {
 
     const backend = createOpenClawBackend({ gatewayUrl: gw.url, dataDir: tmpDir })
     const tm = createThreadManager(bus, tmpDir)
-    const threadAdapter = {
-      getSessionKey: (tk: string) => undefined,
-      createThread: (label?: string) => tm.create({ label }).key
-    }
-
     try {
       await backend.connect()
 
       // Create chat module and a session mapping
-      const chat1 = createChatModule(bus, backend, threadAdapter, { dataDir: tmpDir })
+      const chat1 = createChatModule(bus, backend, tm, { dataDir: tmpDir })
       const { threadKey, sessionKey } = await chat1.handleSessionCreate('test-label')
 
       expect(threadKey).toBeDefined()
@@ -673,7 +661,7 @@ describe('Phase 6 — Integration Tests', () => {
       expect(chat1.getSessionKeyForThread(threadKey)).toBe('persistent-sess-1')
 
       // "Restart" — create a new chat module that loads from disk
-      const chat2 = createChatModule(bus, backend, threadAdapter, { dataDir: tmpDir })
+      const chat2 = createChatModule(bus, backend, tm, { dataDir: tmpDir })
       chat2.loadMapping()
 
       expect(chat2.getSessionKeyForThread(threadKey)).toBe('persistent-sess-1')

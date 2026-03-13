@@ -3,7 +3,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { createChatModule } from './chat.js'
-import type { ChatModule, ThreadManager } from './chat.js'
+import type { ChatModule } from './chat.js'
+import type { ThreadManager } from '../threads/types.js'
 import type { EventBus, AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedTurn } from '@template/core'
 import type { WsHandler } from '../ws/handler.js'
 import type { WsMessage } from '@template/core'
@@ -59,10 +60,33 @@ function createMockBackend(): AgentBackend & { _handlers: Map<string, Array<(...
 
 function createMockThreadManager(): ThreadManager {
   let counter = 0
+  const threads = new Map<string, any>()
   return {
-    getSessionKey: vi.fn((_threadKey: string) => undefined),
-    createThread: vi.fn((_label?: string) => `thread-${++counter}`)
-  }
+    create: vi.fn((opts?: { label?: string; entities?: any[] }) => {
+      const key = `thread-${++counter}`
+      const thread = {
+        key,
+        entities: opts?.entities ?? [],
+        label: opts?.label,
+        lastActivity: Date.now(),
+        unreadCount: 0,
+        agentStatus: 'idle' as const,
+        createdAt: Date.now(),
+        archived: false
+      }
+      threads.set(key, thread)
+      return thread
+    }),
+    get: vi.fn((key: string) => threads.get(key)),
+    list: vi.fn(() => [...threads.values()]),
+    delete: vi.fn(() => true),
+    addEntity: vi.fn(() => undefined),
+    removeEntity: vi.fn(() => undefined),
+    getEntities: vi.fn(() => []),
+    getThreadsForEntity: vi.fn(() => []),
+    addEvent: vi.fn(),
+    getEvents: vi.fn(() => [])
+  } as unknown as ThreadManager
 }
 
 function createMockWsHandler(): WsHandler {
@@ -303,5 +327,31 @@ describe('§2.4 Chat Module (Server)', () => {
     // Create a new module instance (simulating restart)
     const newModule = createChatModule(bus, backend, threadManager, { dataDir, wsHandler })
     expect(newModule.getSessionKeyForThread(threadKey)).toBe(sessionKey)
+  })
+
+  // --- Phase 6 review fix todos ---
+
+  it('MUST use real ThreadManager interface (get/create) not local getSessionKey/createThread mismatch', async () => {
+    // Verify the chat module calls threadManager.create() which returns a ThreadInfo
+    const result = await chatModule.handleSessionCreate('test')
+    expect(threadManager.create).toHaveBeenCalledWith({ label: 'test' })
+    expect(result.threadKey).toMatch(/^thread-/)
+  })
+
+  it('MUST import ThreadManager from threads module instead of defining a local interface', async () => {
+    // This is a structural test - the fact that we pass a ThreadManager with create/get and it works
+    // proves the chat module uses the real interface
+    const result = await chatModule.handleSessionCreate()
+    expect(result.threadKey).toBeTruthy()
+    expect(result.sessionKey).toBeTruthy()
+  })
+
+  it('MUST handle case where threadKey has no session mapping (auto-create session)', async () => {
+    // Send to a threadKey that has no mapping - should auto-create a session
+    await chatModule.handleSend('unknown-thread', 'hello')
+    expect(backend.createSession).toHaveBeenCalled()
+    expect(backend.sendMessage).toHaveBeenCalled()
+    // After auto-create, the mapping should exist
+    expect(chatModule.getSessionKeyForThread('unknown-thread')).toBeTruthy()
   })
 })

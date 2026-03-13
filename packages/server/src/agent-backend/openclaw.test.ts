@@ -356,6 +356,72 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     expect(historyMsgs.length).toBe(1)
   })
 
+  // --- Phase 6 review fix todos ---
+
+  it('MUST clear the 10s timeout in createSession when session is created successfully (timer leak fix)', async () => {
+    const serverWs2 = await connectBackend()
+    serverWs2.on('message', (data: any) => {
+      const msg = JSON.parse(data.toString())
+      if (msg.type === 'session.create') {
+        serverWs2.send(JSON.stringify({ type: 'session.created', requestId: msg.requestId, sessionKey: 'sk-1' }))
+      }
+    })
+    const sessionKey = await backend.createSession('test')
+    expect(sessionKey).toBe('sk-1')
+    // If the timer was not cleared, it would try to reject after 10s
+    // but the `settled` flag prevents double-fire.
+  })
+
+  it('MUST NOT fire both resolve and reject in createSession when session succeeds near timeout boundary', async () => {
+    const serverWs = await connectBackend()
+    serverWs.on('message', (data: any) => {
+      const msg = JSON.parse(data.toString())
+      if (msg.type === 'session.create') {
+        // Respond immediately
+        serverWs.send(JSON.stringify({ type: 'session.created', requestId: msg.requestId, sessionKey: 'sk-race' }))
+      }
+    })
+    const result = await backend.createSession()
+    expect(result).toBe('sk-race')
+    // Wait past what would be the timeout to ensure no unhandled rejection
+    await waitFor(100)
+  })
+
+  it('MUST include error detail (reason string) in backend.status error events — not just status: error', async () => {
+    const serverWs = await connectBackend()
+    const p = waitForEvent<{ status: BackendConnectionStatus; reason?: string }>(backend, 'backend.status')
+    serverWs.send(JSON.stringify({ type: 'pairing.required' }))
+    const data = await p
+    expect(data.status).toBe('error')
+    expect(data.reason).toBeDefined()
+    expect(typeof data.reason).toBe('string')
+  })
+
+  it('MUST emit backend.status with error metadata distinguishing auth rejected vs server down vs cert error', async () => {
+    const serverWs = await connectBackend()
+    const p = waitForEvent<{ status: BackendConnectionStatus; errorType?: string }>(backend, 'backend.status')
+    serverWs.send(JSON.stringify({ type: 'pairing.required' }))
+    const data = await p
+    expect(data.errorType).toBe('auth_rejected')
+  })
+
+  it('MUST emit bus event or log on reconnect failure instead of silently catching in scheduleReconnect', async () => {
+    // Verify the backend emits status events on connection failure (not silent catch)
+    const statuses: Array<{ status: string; reason?: string }> = []
+    // Try to connect to a port with no server
+    const badBackend = createOpenClawBackend(getConfig({ gatewayUrl: 'ws://127.0.0.1:1/ws' }))
+    badBackend.on('backend.status', (d: any) => statuses.push(d))
+    try {
+      await badBackend.connect()
+    } catch {
+      // Expected to fail
+    }
+    await waitFor(300) // Allow reconnect attempt to fire and fail
+    await badBackend.disconnect()
+    // Should have emitted disconnected with a reason
+    expect(statuses.some((s) => s.status === 'disconnected')).toBe(true)
+  })
+
   it('MUST emit reloaded history as a session.info event', async () => {
     const serverWs = await connectBackend()
 

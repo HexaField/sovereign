@@ -54,7 +54,7 @@ export interface AgentBackendEvents {
   /** Session info (on connect or session switch) */
   'session.info': { sessionKey: string; label?: string; history: ParsedTurn[] }
   /** Backend connection state changed */
-  'backend.status': { status: BackendConnectionStatus }
+  'backend.status': { status: BackendConnectionStatus; reason?: string; errorType?: string }
 }
 
 /**
