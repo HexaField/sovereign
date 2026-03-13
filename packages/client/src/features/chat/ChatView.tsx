@@ -81,9 +81,7 @@ export function ChatView(props: ChatViewProps) {
               )}
 
               {/* Work section between user and assistant turns */}
-              {msg.turn.workItems.length > 0 && (
-                <WorkSection workItems={msg.turn.workItems} thinkingText="" isComplete={true} />
-              )}
+              {msg.turn.workItems.length > 0 && <WorkSection work={msg.turn.workItems} />}
 
               {/* Message bubble */}
               <MessageBubble turn={msg.turn} pending={msg.pending} />
@@ -92,9 +90,7 @@ export function ChatView(props: ChatViewProps) {
         })}
 
         {/* Live work section for in-progress turn */}
-        {props.liveWork.length > 0 && (
-          <WorkSection workItems={props.liveWork} thinkingText={props.liveThinkingText} isComplete={false} />
-        )}
+        {props.liveWork.length > 0 && <WorkSection work={props.liveWork} />}
       </div>
 
       {/* Streaming indicator */}
