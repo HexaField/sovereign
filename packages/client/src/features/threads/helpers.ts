@@ -57,20 +57,26 @@ export function formatRelativeTime(timestamp: number): string {
 
   if (seconds < 60) return 'Just now'
   if (minutes < 60) return `${minutes}m ago`
-  if (hours < 24) return `${hours}h ago`
 
+  // Check calendar days before falling back to hours
   const date = new Date(timestamp)
   const today = new Date(now)
   const yesterday = new Date(now)
   yesterday.setDate(today.getDate() - 1)
 
-  if (
+  const isToday =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+
+  if (isToday) return `${hours}h ago`
+
+  const isYesterday =
     date.getFullYear() === yesterday.getFullYear() &&
     date.getMonth() === yesterday.getMonth() &&
     date.getDate() === yesterday.getDate()
-  ) {
-    return 'Yesterday'
-  }
+
+  if (isYesterday) return 'Yesterday'
 
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
