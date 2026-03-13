@@ -7,6 +7,46 @@ export interface WorkspaceContext {
   activeProjectName: string | null
 }
 
+// §3.3 — Sidebar tab types
+export type SidebarTab = 'files' | 'git' | 'threads' | 'planning' | 'notifications' | 'terminal' | 'recordings' | 'logs'
+
+export const SIDEBAR_TABS: { key: SidebarTab; label: string; icon: string }[] = [
+  { key: 'files', label: 'Files', icon: '📄' },
+  { key: 'git', label: 'Git', icon: '🔀' },
+  { key: 'threads', label: 'Threads', icon: '💬' },
+  { key: 'planning', label: 'Planning', icon: '📊' },
+  { key: 'notifications', label: 'Notifications', icon: '🔔' },
+  { key: 'terminal', label: 'Terminal', icon: '⬛' },
+  { key: 'recordings', label: 'Recordings', icon: '🎙️' },
+  { key: 'logs', label: 'Logs', icon: '📋' }
+]
+
+// §3.3 — Active sidebar tab
+export const [activeSidebarTab, setActiveSidebarTab] = createSignal<SidebarTab>('files')
+
+// §3.2 — Expand chat mode
+export const [chatExpanded, setChatExpanded] = createSignal(false)
+
+export function toggleChatExpanded(): void {
+  setChatExpanded(!chatExpanded())
+}
+
+// §3.5 — Chat panel width
+export const CHAT_PANEL_DEFAULT_WIDTH = 360
+export const CHAT_PANEL_MIN_WIDTH = 280
+export const CHAT_PANEL_MAX_WIDTH = 600
+export const [chatPanelWidth, setChatPanelWidth] = createSignal(CHAT_PANEL_DEFAULT_WIDTH)
+
+// §3.5 — Active thread key for right panel
+export const [activeThreadKey, setActiveThreadKey] = createSignal('main')
+
+// §3.1 — Sidebar collapsed state
+export const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
+
+export function toggleSidebar(): void {
+  setSidebarCollapsed(!sidebarCollapsed())
+}
+
 const STORAGE_KEY = 'sovereign:active-workspace'
 
 function loadFromStorage(): WorkspaceContext | null {
