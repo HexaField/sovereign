@@ -239,6 +239,85 @@ const systemModule = createSystemModule(bus, dataDir)
 app.use(createSystemRoutes(systemModule))
 registerLogsChannel(wsHandler, bus)
 
+// --- Register all modules with system ---
+systemModule.registerModule({
+  name: 'scheduler',
+  status: 'healthy',
+  subscribes: ['scheduler.job.*'],
+  publishes: ['scheduler.job.due', 'scheduler.job.started', 'scheduler.job.completed']
+})
+systemModule.registerModule({
+  name: 'orgs',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['org.created', 'org.updated', 'org.deleted']
+})
+systemModule.registerModule({
+  name: 'files',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['file.created', 'file.deleted']
+})
+systemModule.registerModule({ name: 'git', status: 'healthy', subscribes: [], publishes: ['git.status.changed'] })
+systemModule.registerModule({
+  name: 'terminal',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['terminal.created', 'terminal.closed']
+})
+systemModule.registerModule({
+  name: 'worktrees',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['worktree.created', 'worktree.removed']
+})
+systemModule.registerModule({
+  name: 'config',
+  status: 'healthy',
+  subscribes: ['config.changed'],
+  publishes: ['config.changed']
+})
+systemModule.registerModule({
+  name: 'diff',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['changeset.created', 'changeset.updated']
+})
+systemModule.registerModule({
+  name: 'issues',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['issue.created', 'issue.updated']
+})
+systemModule.registerModule({
+  name: 'review',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['review.created', 'review.updated', 'review.merged']
+})
+systemModule.registerModule({
+  name: 'radicle',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['radicle.repo.init', 'radicle.peer.connected']
+})
+systemModule.registerModule({
+  name: 'planning',
+  status: 'healthy',
+  subscribes: ['issue.*'],
+  publishes: ['planning.graph.updated']
+})
+systemModule.registerModule({ name: 'chat', status: 'healthy', subscribes: [], publishes: [] })
+systemModule.registerModule({ name: 'threads', status: 'healthy', subscribes: [], publishes: [] })
+systemModule.registerModule({ name: 'voice', status: 'healthy', subscribes: [], publishes: [] })
+systemModule.registerModule({ name: 'recordings', status: 'healthy', subscribes: [], publishes: [] })
+systemModule.registerModule({
+  name: 'notifications',
+  status: 'healthy',
+  subscribes: ['notification.*'],
+  publishes: ['notification.new']
+})
+
 // ============================================================
 // Status Aggregator
 // ============================================================

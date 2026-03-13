@@ -4,6 +4,11 @@ import './app.css'
 // Nav store
 import { activeView, initNavStore } from './features/nav/store.js'
 
+// WS + connection stores
+import { wsStore } from './ws/index.js'
+import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
+import { initThreadStore } from './features/threads/store.js'
+
 // Global keyboard shortcuts
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
 
@@ -24,6 +29,21 @@ export default function App() {
 
   onMount(() => {
     cleanups.push(initNavStore())
+
+    const cleanupConnection = initConnectionStore(wsStore)
+    cleanups.push(cleanupConnection)
+
+    const cleanupThreads = initThreadStore(wsStore)
+    cleanups.push(cleanupThreads)
+
+    const checkInterval = setInterval(() => {
+      setConnectionStatus(wsStore.connected() ? 'connected' : 'disconnected')
+    }, 1000)
+
+    cleanups.push(() => {
+      clearInterval(checkInterval)
+      wsStore.close()
+    })
   })
 
   onCleanup(() => {

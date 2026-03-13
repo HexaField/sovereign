@@ -1,5 +1,6 @@
 // System module — architecture and health reporting
 
+import os from 'node:os'
 import type { EventBus } from '@template/core'
 
 export interface ModuleInfo {
@@ -10,10 +11,13 @@ export interface ModuleInfo {
 }
 
 export interface HealthInfo {
-  uptime: number
-  connections: { ws: number; agentBackend: boolean }
-  jobs: { active: number; lastErrors: string[] }
-  disk: { dataDir: string; usedBytes: number }
+  connection: { wsStatus: string; agentBackend: string; uptime: number }
+  resources: {
+    diskUsage: { used: number; total: number }
+    memoryUsage: { used: number; total: number }
+  }
+  jobs: { active: number; lastStatus: string; nextRun: string | null }
+  errors: { countLastHour: number; recent: Array<{ message: string; timestamp: string }> }
 }
 
 export interface SystemModule {
@@ -24,7 +28,7 @@ export interface SystemModule {
   registerModule(info: ModuleInfo): void
 }
 
-export function createSystemModule(_bus: EventBus, dataDir: string): SystemModule {
+export function createSystemModule(_bus: EventBus, _dataDir: string): SystemModule {
   const startTime = Date.now()
   const registeredModules: ModuleInfo[] = []
 
@@ -38,12 +42,24 @@ export function createSystemModule(_bus: EventBus, dataDir: string): SystemModul
     modules: [...registeredModules]
   })
 
-  const getHealth = (): HealthInfo => ({
-    uptime: Date.now() - startTime,
-    connections: { ws: 0, agentBackend: false },
-    jobs: { active: 0, lastErrors: [] },
-    disk: { dataDir, usedBytes: 0 }
-  })
+  const getHealth = (): HealthInfo => {
+    const uptimeMs = Date.now() - startTime
+    const mem = process.memoryUsage()
+    const totalMem = os.totalmem()
+    return {
+      connection: {
+        wsStatus: '0 clients',
+        agentBackend: 'disconnected',
+        uptime: Math.floor(uptimeMs / 1000)
+      },
+      resources: {
+        diskUsage: { used: 0, total: 0 },
+        memoryUsage: { used: mem.rss, total: totalMem }
+      },
+      jobs: { active: 0, lastStatus: 'idle', nextRun: null },
+      errors: { countLastHour: 0, recent: [] }
+    }
+  }
 
   const status = () => ({ healthy: true })
 
