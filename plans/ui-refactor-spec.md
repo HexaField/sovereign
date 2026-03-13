@@ -1,6 +1,6 @@
 # UI Refactor: Shell Integration — Specification
 
-**Status:** Draft **Revision:** 1 **Date:** 2026-03-13
+**Status:** Draft **Revision:** 2 **Date:** 2026-03-13
 
 This document specifies the refactoring of Sovereign's client from a chat-first mobile app into a multi-workspace IDE with agent orchestration. All requirements use MUST/MUST NOT/SHOULD/SHOULD NOT/MAY per [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119). All modules MUST conform to [PRINCIPLES.md](../PRINCIPLES.md).
 
@@ -57,40 +57,27 @@ export interface WorkspaceContext {
 
 ## §1 Top-Level Navigation
 
-### §1.1 Navigation Rail
+### §1.1 View Menu
 
-The client MUST render a navigation rail component (`features/nav/NavRail.tsx`) that provides top-level view switching.
+The client MUST render a dropdown view selector in the top-right area of the header (consistent with the current voice-ui header dropdown pattern).
 
-**Desktop layout (≥768px):**
+- The selector MUST be a button showing the current view label + icon, which opens a dropdown menu on click.
+- The dropdown MUST list all 5 views:
 
-- The rail MUST render as a vertical icon column on the left edge of the viewport.
-- The rail MUST have a fixed width of 48px.
-- The rail MUST use `var(--c-bg-raised)` as background with a right border of `var(--c-border)`.
-- Each nav item MUST render as a 48×40px clickable region containing a single icon (emoji or SVG).
-- The active item MUST show `var(--c-accent)` text color and a 2px left border of `var(--c-accent)`.
-- Inactive items MUST show `var(--c-text-muted)` and highlight to `var(--c-text)` on hover.
-- Hover MUST show a tooltip with the view label (using the `ui/Tooltip` component).
+| Key         | Icon | Label     | Shortcut |
+| ----------- | ---- | --------- | -------- |
+| `dashboard` | 🏠   | Dashboard | `Cmd+1`  |
+| `workspace` | 📁   | Workspace | `Cmd+2`  |
+| `canvas`    | ⬡    | Canvas    | `Cmd+3`  |
+| `planning`  | 📊   | Planning  | `Cmd+4`  |
+| `system`    | ⚙️   | System    | `Cmd+5`  |
 
-**Mobile layout (<768px):**
-
-- The rail MUST render as a horizontal tab bar fixed to the bottom of the viewport.
-- Each item MUST render as an equal-width flex item with icon above label.
-- The active item MUST use `var(--c-accent)` color.
-- The bar MUST respect `safe-area-inset-bottom` for devices with home indicators.
-- The bar MUST have a z-index above all other content (z-50).
-
-**Navigation items (in order):**
-
-| Key         | Icon | Label     | Shortcut | View                  |
-| ----------- | ---- | --------- | -------- | --------------------- |
-| `dashboard` | 🏠   | Dashboard | `Cmd+1`  | DashboardView         |
-| `workspace` | 📁   | Workspace | `Cmd+2`  | WorkspaceView (Shell) |
-| `canvas`    | ⬡    | Canvas    | `Cmd+3`  | CanvasView            |
-| `planning`  | 📊   | Planning  | `Cmd+4`  | PlanningView          |
-| `system`    | ⚙️   | System    | `Cmd+5`  | SystemView            |
-
+- Each item MUST show icon, label, and keyboard shortcut hint (muted text, right-aligned).
+- The active view MUST show a check mark or `var(--c-accent)` highlight.
+- The dropdown MUST use `var(--c-menu-bg)` background with `var(--c-border)` border.
+- Clicking an item MUST switch views and close the dropdown.
+- Clicking outside MUST close the dropdown.
 - The navigation MUST support keyboard shortcuts `Cmd+1` through `Cmd+5` to switch views.
-- The navigation MUST support `Cmd+Shift+W` to open the workspace picker.
 - The current view MUST persist to `localStorage` under key `sovereign:active-view`.
 - The navigation MUST restore the last active view on init.
 - If no view was previously selected, the client MUST default to `dashboard`.
@@ -111,18 +98,18 @@ The existing `viewMode` signal MUST be replaced by `activeView`. The existing `V
 
 ```
 ┌──────────────────────────────────────────┐
-│ NavRail │         Active View            │
-│  (48px) │                                │
-│         │   (dashboard | workspace |     │
-│  [🏠]   │    canvas | planning | system) │
-│  [📁]   │                                │
-│  [⬡]    │                                │
-│  [📊]   │                                │
-│  [⚙️]   │                                │
+│  Header  [workspace ▾] [...] [View ▾]   │
+├──────────────────────────────────────────┤
+│                                          │
+│           Active View                    │
+│   (dashboard | workspace |               │
+│    canvas | planning | system)           │
+│                                          │
 └──────────────────────────────────────────┘
 ```
 
-- `App.tsx` MUST render `<NavRail />` and a `<Switch>` over `activeView()`.
+- `App.tsx` MUST render a shared header bar and a `<Switch>` over `activeView()`.
+- The header MUST contain: workspace selector (left), connection badge, view menu dropdown (right).
 - `App.tsx` MUST NOT contain feature-specific state (no chat signals, no thread signals in App.tsx).
 - Each view MUST be a lazy-loaded component (`lazy(() => import(...))`) to avoid loading all views upfront.
 - The theme class MUST be applied to `document.documentElement` (already done by theme store).
@@ -186,55 +173,58 @@ The Dashboard is the home screen — a grid of cards showing workspace summaries
 
 ---
 
-## §3 Workspace View (Shell Integration)
+## §3 Workspace View
 
-The Workspace view is the full IDE — it renders the existing `shell/Shell.tsx` with workspace-scoped panels and tabs.
+The Workspace view is the full IDE. It uses a three-column layout on desktop: left sidebar, center content, right chat panel.
 
-### §3.1 Shell Layout
-
-The existing `Shell.tsx` MUST be adapted to serve as the Workspace view:
+### §3.1 Desktop Layout
 
 ```
-┌─────────────────────────────────────────────────┐
-│ Workspace Header (breadcrumb, search, actions)  │
-├──────┬──────────────────────────┬───────────────┤
-│      │                          │               │
-│ Side │     Main Content         │  (optional)   │
-│ bar  │     (tabbed)             │  Right Panel  │
-│      │                          │               │
-│ 260px│                          │               │
-├──────┴──────────────────────────┴───────────────┤
-│ Bottom Panel (terminal, logs, recordings)       │
-├─────────────────────────────────────────────────┤
-│ Status Bar                                      │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  [Tab] [Tab] [Tab] [Tab]  ← sidebar tab bar          │
+├────────┬──────────────────────┬──────────────────────┤
+│        │                      │                      │
+│  Side  │   Main Content       │   Chat Panel         │
+│  bar   │   (file viewer)      │   (thread chat)      │
+│        │                      │                      │
+│ 260px  │     flex-1           │     360px            │
+│        │                      │                      │
+├────────┴──────────────────────┴──────────────────────┤
+│  (no status bar)                                      │
+└──────────────────────────────────────────────────────┘
 ```
 
-- The Shell MUST receive the active workspace context from the workspace store.
-- All sidebar panels, tab content, and bottom panels MUST scope their data to the active workspace (`orgId`) and active project (`projectId`) where applicable.
-- Switching workspace MUST clear project-specific tabs (file tabs, diff tabs) but preserve workspace-level tabs (threads, planning).
-- Switching project within a workspace MUST NOT clear workspace-level tabs.
+- The Workspace MUST render three columns: sidebar (left), main content (center), chat panel (right).
+- The sidebar MUST have a tab bar at the top. Tabs switch the sidebar content. Tabs include:
+  - **Files** — file explorer tree
+  - **Git** — git status, branches, changes
+  - **Threads** — thread list for the workspace
+  - **Planning** — compact planning summary
+  - **Notifications** — workspace notifications
+  - **Terminal** — embedded terminal(s)
+  - **Recordings** — audio recordings
+  - **Logs** — event/log stream
+- Only one sidebar tab is visible at a time.
+- The main content area MUST show the file viewer (or diff viewer, issue detail, planning DAG — based on what the user opens from the sidebar).
+- The main content area MUST support multiple open tabs (tab bar at top).
+- The right panel MUST show the chat interface for the active thread.
+- There MUST be NO status bar.
+- All panels MUST scope their data to the active workspace (`orgId`) and active project (`projectId`).
 
-### §3.2 Workspace Header
+### §3.2 Expand Chat Mode
 
-`shell/Header.tsx` MUST be extended (replacing the current minimal shell header):
+- The chat panel MUST have a button (top-right of chat panel, e.g., expand icon ⤢) to expand chat to fill the entire workspace view area.
+- When expanded, the chat MUST look and behave identically to the current voice-ui chat interface — same layout, same components, same styling.
+- The expanded chat MUST show a button to return to the multi-panel workspace view (e.g., collapse icon ⤡ or "Back to Workspace").
+- The expanded/collapsed state MUST be stored in the workspace store.
+- The expanded chat MUST include the full header, input area, message list, voice controls, and thread drawer — exactly as the current voice-ui renders them.
+- Keyboard shortcut: `Cmd+Shift+E` to toggle expand/collapse.
 
-- MUST show workspace breadcrumb: `Org Name / Project Name` (both clickable).
-- Clicking the org name MUST open the workspace picker dropdown.
-- Clicking the project name MUST open the project picker dropdown (projects within the active org).
-- MUST show a search input (Cmd+P to focus) — searches files, issues, threads within the active workspace.
-- MUST show connection status badge (reuse `ConnectionBadge` from `features/connection/`).
-- MUST show notification bell with unread count (workspace-scoped).
-- MUST show a settings gear icon that opens the command palette or settings.
-- Background MUST be `var(--c-bg-raised)`, bottom border `var(--c-border)`, height 40px.
+### §3.3 Sidebar Tabs
 
-### §3.3 Sidebar Panels
+The sidebar MUST use a vertical tab bar at the top of the sidebar area. Each tab is an icon + label.
 
-The sidebar MUST use the existing `shell/Sidebar.tsx` panel system. Panels are registered via `registerPanel()` and rendered by position.
-
-The following sidebar panels MUST be registered for the Workspace view:
-
-#### §3.3.1 File Explorer Panel
+#### §3.3.1 Files Tab — File Explorer
 
 `features/workspace/panels/FileExplorerPanel.tsx`
 
@@ -248,60 +238,88 @@ The following sidebar panels MUST be registered for the Workspace view:
 - The panel header MUST show the active project name with a dropdown to switch projects within the org.
 - MUST show "No project selected" placeholder if no project is active.
 
-#### §3.3.2 Git Panel
+#### §3.3.2 Git Tab
 
 `features/workspace/panels/GitPanel.tsx`
 
 - MUST show git status for the active project, fetched from `GET /api/git/status?project=:projectId`.
 - MUST subscribe to `git` WS channel (scoped to project) for live status updates.
 - MUST show: current branch name, ahead/behind counts, list of changed files (staged/unstaged/untracked).
-- Each changed file MUST be clickable → opens diff in a tab.
-- MUST show active worktrees for this project (fetched from `GET /api/worktrees?project=:projectId`), each showing: branch name, agent binding (if any), status.
+- Each changed file MUST be clickable → opens diff in a main content tab.
+- MUST show active worktrees for this project.
 - SHOULD show branch selector dropdown for quick branch switching.
 - SHOULD show quick-action buttons: Stage All, Commit, Push.
-- For multi-project workspaces: MUST show a project selector or group changes by project.
 
-#### §3.3.3 Threads Panel
+#### §3.3.3 Threads Tab
 
 `features/workspace/panels/ThreadsPanel.tsx`
 
 - MUST list all threads for the active workspace.
 - MUST fetch from `GET /api/threads?orgId=:orgId` (see §9.1).
-- MUST subscribe to `threads` WS channel for live thread updates (created, status change, new messages).
+- MUST subscribe to `threads` WS channel for live thread updates.
 - Threads MUST be grouped into sections:
   - **Entity-Bound**: threads linked to a branch, issue, or PR. Show entity type icon + reference.
   - **User Threads**: manually created threads. Show label.
   - **Agent Threads**: auto-created by agent orchestration. Show label + agent status.
-- Each thread row MUST show: icon, label/entity ref, status indicator (idle/busy/stuck/error), unread message count badge.
-- Clicking a thread MUST open it as a tab in main content (ChatThreadTab).
-- The panel MUST show a "New Thread" button at the bottom.
-- The panel MUST support search/filter by thread name or entity ref.
-- Hidden threads (stored in `localStorage`) MUST be in a collapsible "Hidden" section at the bottom.
+- Each thread row MUST show: icon, label/entity ref, status indicator, unread message count badge.
+- Clicking a thread MUST switch the right-panel chat to that thread.
+- The panel MUST show a "New Thread" button.
+- Hidden threads MUST be in a collapsible "Hidden" section.
 
-#### §3.3.4 Planning Panel
+#### §3.3.4 Planning Tab
 
 `features/workspace/panels/PlanningPanel.tsx`
 
 - MUST show a compact planning summary for the active workspace.
 - MUST fetch from `GET /api/orgs/:orgId/planning/completion`.
-- MUST show: total items, ready count, blocked count, in-progress count as a horizontal bar or pill badges.
-- Clicking "View Full DAG" MUST open a PlanningTab in main content.
-- Each ready/blocked item SHOULD be listed with a one-line summary; clicking navigates to its thread or issue tab.
+- MUST show: total items, ready count, blocked count, in-progress count.
+- Clicking "View Full DAG" MUST open a PlanningTab in main content area.
 - MUST subscribe to `planning` WS channel for live updates.
 
-#### §3.3.5 Notifications Panel
+#### §3.3.5 Notifications Tab
 
 `features/workspace/panels/NotificationsPanel.tsx`
 
 - MUST show workspace-scoped notifications.
 - MUST subscribe to `notifications` WS channel.
 - Each notification: icon, summary, relative timestamp, read/unread indicator.
-- Clicking MUST navigate to the relevant entity (open the right tab).
+- Clicking MUST navigate to the relevant entity (open the right tab in main content).
 - MUST show "Mark all read" action.
+
+#### §3.3.6 Terminal Tab
+
+`features/workspace/panels/TerminalPanel.tsx`
+
+- MUST render embedded terminal(s) using the existing `components/terminal/` components.
+- MUST support multiple terminal instances as sub-tabs within the panel.
+- Each terminal MUST be scoped to a project directory within the active workspace.
+- MUST use the `terminal` WS channel for PTY data.
+- "New Terminal" button MUST create a terminal and subscribe to its data stream.
+- MUST support terminal resize on panel resize.
+
+#### §3.3.7 Recordings Tab
+
+`features/workspace/panels/RecordingsPanel.tsx`
+
+- MUST show a list of audio recordings for the active workspace.
+- Each recording: timestamp, duration, transcript preview, thread binding.
+- MUST support playback inline.
+- MUST support starting a new recording.
+- Recordings MUST be persisted to `{dataDir}/recordings/{orgId}/`.
+
+#### §3.3.8 Logs Tab
+
+`features/workspace/panels/LogsPanel.tsx`
+
+- MUST show a live event/log stream for the active workspace.
+- MUST subscribe to relevant bus events via the WS protocol.
+- Each log entry: timestamp, level (icon/color), module name, message.
+- MUST support filtering by level and module.
+- MUST auto-scroll to bottom unless user has scrolled up.
 
 ### §3.4 Main Content Tabs
 
-The main content area uses the existing `shell/MainContent.tsx` + `shell/TabBar.tsx` tab system. Tabs are opened via `openTab()` from `shell-store.ts`.
+The main content area uses a tab bar at the top. Tabs are opened from sidebar interactions.
 
 #### §3.4.1 File Viewer Tab
 
@@ -309,115 +327,57 @@ The main content area uses the existing `shell/MainContent.tsx` + `shell/TabBar.
 
 - MUST display file content with syntax highlighting.
 - MUST fetch file content from `GET /api/files?path=:path&project=:projectId`.
-- MUST use a monospace font (`font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace`).
+- MUST use a monospace font.
 - MUST show line numbers.
-- MUST show git diff markers in the gutter (green for added lines, red for removed, blue for modified) when the file has uncommitted changes.
-- SHOULD support basic syntax highlighting via a lightweight highlighter (e.g., `highlight.js` or `shiki`). MAY defer full syntax highlighting to a later phase and show plain text initially.
-- The tab title MUST show the filename. The tab icon MUST use the file-type icon from `file-icons.ts`.
+- MUST show git diff markers in the gutter when the file has uncommitted changes.
+- SHOULD support basic syntax highlighting (MAY defer to a later phase and show plain text initially).
+- The tab title MUST show the filename with file-type icon.
 - The tab MUST be closable.
-- Read-only initially — MUST show a "Read Only" indicator in the tab or header.
+- Read-only initially — MUST show a "Read Only" indicator.
 
-#### §3.4.2 Chat Thread Tab
-
-`features/workspace/tabs/ChatThreadTab.tsx`
-
-- MUST render the full chat interface for a specific thread.
-- MUST reuse the existing `ChatView`, `InputArea`, `MessageBubble`, `MarkdownContent`, `WorkSection` components from `features/chat/`.
-- MUST subscribe to `chat` WS channel scoped to the thread key.
-- MUST show the thread label/entity binding in the tab title.
-- The tab MUST be closable.
-- MUST support message forwarding (open `ForwardDialog`).
-- When opening a thread tab for an entity-bound thread, events from that entity MUST appear inline in the thread (already handled by Phase 6 thread routing).
-
-#### §3.4.3 Diff Viewer Tab
+#### §3.4.2 Diff Viewer Tab
 
 `features/workspace/tabs/DiffViewerTab.tsx`
 
 - MUST display file diffs in unified or side-by-side format.
-- MUST fetch diff data from `GET /api/diff?path=:path&project=:projectId` or `GET /api/diff/working?project=:projectId`.
-- MUST show added lines (green background), removed lines (red background), context lines.
-- MUST show file path as tab title with a diff icon.
+- MUST fetch diff data from `GET /api/diff?path=:path&project=:projectId`.
+- MUST show added lines (green), removed lines (red), context lines.
 - The tab MUST be closable.
 - SHOULD support toggling between unified and side-by-side view.
 
-#### §3.4.4 Issue/PR Detail Tab
+#### §3.4.3 Issue/PR Detail Tab
 
 `features/workspace/tabs/EntityDetailTab.tsx`
 
 - MUST display full details of an issue or PR/patch.
-- Issues: fetch from `GET /api/orgs/:orgId/projects/:projectId/issues/:id`.
-- PRs: fetch from `GET /api/orgs/:orgId/projects/:projectId/reviews/:id`.
 - MUST show: title, status, author, body (markdown rendered), comments list, labels, linked threads.
-- MUST show a "Open Thread" button that opens/creates the entity-bound thread as a ChatThreadTab.
+- MUST show an "Open Thread" button that switches the right-panel chat to the entity-bound thread.
 - The tab MUST be closable.
 
-#### §3.4.5 Planning DAG Tab
+#### §3.4.4 Planning DAG Tab
 
 `features/workspace/tabs/PlanningTab.tsx`
 
 - MUST display the full planning DAG for the active workspace.
 - MUST fetch from `GET /api/orgs/:orgId/planning/graph`.
-- MUST render nodes as cards (issue title, status, project) connected by directed edges (dependency arrows).
-- Critical path MUST be highlighted (fetch from `GET /api/orgs/:orgId/planning/critical-path`).
-- Blocked nodes MUST show a red/amber indicator.
-- Ready nodes MUST show a green indicator.
-- Clicking a node MUST open its issue/thread as a tab.
-- MUST subscribe to `planning` WS channel for live graph updates.
+- MUST render nodes as cards connected by directed edges.
+- Critical path MUST be highlighted.
+- Blocked nodes MUST show a red/amber indicator. Ready nodes MUST show green.
+- Clicking a node MUST open its issue/thread.
+- MUST subscribe to `planning` WS channel for live updates.
 - SHOULD support pan and zoom.
-- MAY support drag-to-reorder or drag-to-link dependencies.
 
-### §3.5 Bottom Panel Sections
+### §3.5 Right Panel — Chat
 
-The bottom panel uses the existing `shell/BottomPanel.tsx`. Sections are registered as bottom-position panels.
+The right panel renders the full chat interface for the currently selected thread.
 
-#### §3.5.1 Terminal Section
-
-`features/workspace/bottom/TerminalSection.tsx`
-
-- MUST render embedded terminal(s) using the existing `components/terminal/` components.
-- MUST support multiple terminal instances as sub-tabs within the bottom panel.
-- Each terminal MUST be scoped to a project directory (or worktree) within the active workspace.
-- MUST use the `terminal` WS channel for PTY data (binary frames, Phase 3).
-- "New Terminal" button MUST create a terminal via `POST` and subscribe to its data stream.
-- MUST support terminal resize (send `terminal.resize` WS message on panel resize).
-
-#### §3.5.2 Logs Section
-
-`features/workspace/bottom/LogsSection.tsx`
-
-- MUST show a live event/log stream for the active workspace.
-- MUST subscribe to relevant bus events via the WS protocol.
-- Each log entry: timestamp, level (icon/color), module name, message.
-- MUST support filtering by level (debug/info/warn/error) and module.
-- MUST support text search within visible log entries.
-- MUST auto-scroll to bottom when new entries arrive (unless user has scrolled up).
-
-#### §3.5.3 Recordings Section
-
-`features/workspace/bottom/RecordingsSection.tsx`
-
-- MUST show a list of audio recordings for the active workspace.
-- Each recording: timestamp, duration, transcript preview (if transcribed), thread binding (if any).
-- MUST support playback inline.
-- MUST support starting a new recording (same audio pipeline as `features/voice/`).
-- MUST support exporting recordings as audio files or transcript text.
-- Recordings MUST be persisted to `{dataDir}/recordings/{orgId}/`.
-- The server MUST expose: `GET /api/orgs/:orgId/recordings`, `POST /api/orgs/:orgId/recordings`, `DELETE /api/orgs/:orgId/recordings/:id`, `GET /api/orgs/:orgId/recordings/:id/audio`, `GET /api/orgs/:orgId/recordings/:id/transcript`.
-
-#### §3.5.4 Problems Section
-
-`features/workspace/bottom/ProblemsSection.tsx`
-
-- SHOULD show lint errors, type errors, and test failures for the active project.
-- Data source: MUST subscribe to relevant events (CI results, lint output) when available.
-- MAY be a stub initially that shows "No problems detected" — full implementation deferred to when CI integration (Phase 10) provides the data.
-
-### §3.6 Status Bar
-
-The existing `components/status-bar/StatusBar.tsx` MUST be preserved and rendered at the bottom of the Workspace view.
-
-- MUST show: active workspace name, active project name, git branch, connection status, agent status.
-- MUST update reactively from the workspace store and WS channels.
+- MUST reuse the existing `ChatView`, `InputArea`, `MessageBubble`, `MarkdownContent`, `WorkSection` components from `features/chat/`.
+- MUST subscribe to `chat` WS channel scoped to the active thread key.
+- The panel header MUST show the thread label/entity binding and the expand button (§3.2).
+- MUST support message forwarding (open `ForwardDialog`).
+- Selecting a thread in the Threads sidebar tab (§3.3.3) MUST update the right panel.
+- The right panel MUST have a resizable width (drag divider between main content and chat).
+- Default width: 360px. Min: 280px. Max: 600px.
 
 ---
 
@@ -599,18 +559,23 @@ The System view MUST render a horizontal tab bar at the top with tabs:
 - Cards MUST stack vertically (single column).
 - Voice widget MUST be full-width.
 
-### §7.3 Workspace (Mobile)
+### §7.3 Workspace (Mobile) — Swipeable Tab Strip
 
-- Sidebar MUST be hidden by default, toggled via hamburger icon in header.
-- When open, sidebar MUST render as a full-screen overlay (z-40) with backdrop.
-- Bottom panel MUST be hidden by default, toggled via a toolbar icon.
-- Tab bar MUST scroll horizontally if more than 3 tabs.
-- Only the active tab content renders (same as desktop).
+On mobile, the Workspace view MUST collapse all panels into a single swipeable tab strip:
+
+- The header MUST show the active tab name. Swiping left/right on the header MUST switch between tabs.
+- Tapping the header tab name MUST open a dropdown listing all available tabs (Files, File Viewer, Chat, Git, Threads, Planning, Notifications, Terminal, Recordings, Logs).
+- Only ONE tab MUST be visible at a time — it fills the full viewport below the header.
+- The tab order MUST be: Files → File Viewer → Chat → Git → Threads → Planning → Notifications → Terminal → Recordings → Logs.
+- Swipe gestures MUST animate the transition (slide left/right).
+- The active tab MUST persist to `localStorage`.
+- When a file is tapped in the Files tab, the view MUST auto-switch to the File Viewer tab showing that file.
+- When a thread is tapped in the Threads tab, the view MUST auto-switch to the Chat tab showing that thread.
 
 ### §7.4 Canvas (Mobile)
 
 - Touch pan and pinch zoom MUST work.
-- Event sidebar MUST be hidden — tapping a workspace membrane shows a bottom sheet with details.
+- Tapping a workspace membrane MUST show a bottom sheet with details (no event sidebar).
 
 ### §7.5 Planning (Mobile)
 
@@ -710,19 +675,20 @@ The orgs module MUST reject `update` or `delete` for `id === '_global'` with a 4
 
 | Current | New Location | Change |
 | --- | --- | --- |
-| `App.tsx` | `App.tsx` | Rewrite: NavRail + view Switch |
-| `features/nav/Header.tsx` | Archived | Replaced by shell Header + NavRail |
+| `App.tsx` | `App.tsx` | Rewrite: header + view menu dropdown + view Switch |
+| `features/nav/Header.tsx` | `features/nav/Header.tsx` | Add view menu dropdown (right side) |
 | `features/nav/store.ts` | `features/nav/store.ts` | Replace `viewMode` with `activeView: NavView` |
 | `features/nav/SettingsModal.tsx` | `features/system/ConfigTab.tsx` | Move to System view config tab |
 | `features/threads/ThreadDrawer.tsx` | `features/workspace/panels/ThreadsPanel.tsx` | Overlay → sidebar panel |
 | `features/dashboard/DashboardView.tsx` | `features/dashboard/DashboardView.tsx` | Rewrite with workspace cards |
 | `features/voice/VoiceView.tsx` | `features/dashboard/VoiceWidget.tsx` | Extract voice widget for dashboard |
-| `features/voice/RecordingView.tsx` | `features/workspace/bottom/RecordingsSection.tsx` | View → bottom panel section |
+| `features/voice/RecordingView.tsx` | `features/workspace/panels/RecordingsPanel.tsx` | View → sidebar tab panel |
 | `shell/Shell.tsx` | `features/workspace/WorkspaceView.tsx` | Rename + integrate workspace context |
 | `shell/Header.tsx` | `features/workspace/WorkspaceHeader.tsx` | Extend with breadcrumbs + search |
-| `components/file-explorer/*` | `features/workspace/panels/FileExplorerPanel.tsx` | Wrap existing components as sidebar panel |
-| `components/git-panel/*` | `features/workspace/panels/GitPanel.tsx` | Wrap existing components as sidebar panel |
-| `components/terminal/*` | `features/workspace/bottom/TerminalSection.tsx` | Wrap existing components as bottom panel |
+| `components/file-explorer/*` | `features/workspace/panels/FileExplorerPanel.tsx` | Wrap existing as sidebar tab |
+| `components/git-panel/*` | `features/workspace/panels/GitPanel.tsx` | Wrap existing as sidebar tab |
+| `components/terminal/*` | `features/workspace/panels/TerminalPanel.tsx` | Wrap existing as sidebar tab |
+| `components/status-bar/StatusBar.tsx` | Removed | No status bar in workspace view |
 
 ### §10.2 Files to Keep Unchanged
 
@@ -741,8 +707,8 @@ The orgs module MUST reject `update` or `delete` for `id === '_global'` with a 4
 
 | File                                                   | Purpose                                  |
 | ------------------------------------------------------ | ---------------------------------------- |
-| `features/nav/NavRail.tsx`                             | Top-level navigation rail                |
-| `features/nav/NavRail.test.ts`                         | NavRail tests                            |
+| `features/nav/ViewMenu.tsx`                            | View menu dropdown component             |
+| `features/nav/ViewMenu.test.ts`                        | ViewMenu tests                           |
 | `features/workspace/store.ts`                          | Active workspace context                 |
 | `features/workspace/store.test.ts`                     | Workspace store tests                    |
 | `features/workspace/WorkspaceView.tsx`                 | Shell wrapper with workspace context     |
@@ -769,14 +735,12 @@ The orgs module MUST reject `update` or `delete` for `id === '_global'` with a 4
 | `features/workspace/tabs/EntityDetailTab.test.ts`      | Entity detail tests                      |
 | `features/workspace/tabs/PlanningTab.tsx`              | Full planning DAG tab content            |
 | `features/workspace/tabs/PlanningTab.test.ts`          | Planning tab tests                       |
-| `features/workspace/bottom/TerminalSection.tsx`        | Terminal bottom panel                    |
-| `features/workspace/bottom/TerminalSection.test.ts`    | Terminal section tests                   |
-| `features/workspace/bottom/LogsSection.tsx`            | Log viewer bottom panel                  |
-| `features/workspace/bottom/LogsSection.test.ts`        | Logs section tests                       |
-| `features/workspace/bottom/RecordingsSection.tsx`      | Recording tool bottom panel              |
-| `features/workspace/bottom/RecordingsSection.test.ts`  | Recordings tests                         |
-| `features/workspace/bottom/ProblemsSection.tsx`        | Problems/errors bottom panel             |
-| `features/workspace/bottom/ProblemsSection.test.ts`    | Problems tests                           |
+| `features/workspace/panels/TerminalPanel.tsx`          | Terminal sidebar tab                     |
+| `features/workspace/panels/TerminalPanel.test.ts`      | Terminal panel tests                     |
+| `features/workspace/panels/LogsPanel.tsx`              | Log viewer sidebar tab                   |
+| `features/workspace/panels/LogsPanel.test.ts`          | Logs panel tests                         |
+| `features/workspace/panels/RecordingsPanel.tsx`        | Recordings sidebar tab                   |
+| `features/workspace/panels/RecordingsPanel.test.ts`    | Recordings tests                         |
 | `features/canvas/CanvasView.tsx`                       | Holonic canvas view                      |
 | `features/canvas/CanvasView.test.ts`                   | Canvas tests                             |
 | `features/canvas/store.ts`                             | Canvas state (zoom, pan, selected node)  |
@@ -818,33 +782,31 @@ Server additions: | File | Purpose | |------|---------| | `packages/server/src/s
 
 - §0.1 Global Workspace bootstrap (server)
 - §0.2 Active Workspace store (client)
-- §1.1–1.3 NavRail + navigation store + App.tsx restructure
+- §1.1–1.3 View menu + navigation store + App.tsx restructure
 - §9.1 Thread filtering by orgId
 - §9.2 System endpoints
 - §9.5 Global workspace server guard
 
-### Wave 2: Workspace View — Panels (parallel, after Wave 1)
+### Wave 2: Workspace View — Sidebar + Chat (parallel, after Wave 1)
 
-- §3.1 Shell layout adaptation
-- §3.2 Workspace Header
-- §3.3.1 File Explorer Panel
-- §3.3.2 Git Panel
-- §3.3.3 Threads Panel
-- §3.3.4 Planning Panel
-- §3.3.5 Notifications Panel
-- §3.6 Status Bar integration
+- §3.1 Three-column layout
+- §3.2 Expand chat mode
+- §3.3.1 Files tab (file explorer)
+- §3.3.2 Git tab
+- §3.3.3 Threads tab
+- §3.3.4 Planning tab
+- §3.3.5 Notifications tab
+- §3.3.6 Terminal tab
+- §3.3.7 Recordings tab
+- §3.3.8 Logs tab
+- §3.5 Right panel chat
 
-### Wave 3: Workspace View — Tabs & Bottom Panels (parallel, after Wave 2)
+### Wave 3: Workspace View — Main Content Tabs (parallel, after Wave 2)
 
 - §3.4.1 File Viewer Tab
-- §3.4.2 Chat Thread Tab
-- §3.4.3 Diff Viewer Tab
-- §3.4.4 Issue/PR Detail Tab
-- §3.4.5 Planning DAG Tab
-- §3.5.1 Terminal Section
-- §3.5.2 Logs Section (requires §9.3)
-- §3.5.3 Recordings Section (requires §9.4)
-- §3.5.4 Problems Section (stub)
+- §3.4.2 Diff Viewer Tab
+- §3.4.3 Issue/PR Detail Tab
+- §3.4.4 Planning DAG Tab
 - §9.3 Logs WS channel
 - §9.4 Recording endpoints
 
