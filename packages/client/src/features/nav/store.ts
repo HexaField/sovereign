@@ -1,12 +1,32 @@
 import { createSignal } from 'solid-js'
 
-export type ViewMode = 'chat' | 'voice' | 'dashboard' | 'recording'
+export type ViewMode =
+  | 'chat'
+  | 'voice'
+  | 'dashboard'
+  | 'recording'
+  | 'events'
+  | 'logs'
+  | 'architecture'
+  | 'files'
+  | 'plans'
 
 function readViewModeFromUrl(): ViewMode {
   if (typeof location === 'undefined') return 'chat'
   const params = new URLSearchParams(location.search)
   const v = params.get('view')
-  if (v === 'chat' || v === 'voice' || v === 'dashboard' || v === 'recording') return v
+  const valid: ViewMode[] = [
+    'chat',
+    'voice',
+    'dashboard',
+    'recording',
+    'events',
+    'logs',
+    'architecture',
+    'files',
+    'plans'
+  ]
+  if (valid.includes(v as ViewMode)) return v as ViewMode
   return 'chat'
 }
 

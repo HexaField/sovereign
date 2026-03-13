@@ -24,5 +24,18 @@ marked.setOptions({ renderer })
  * Sanitization is handled by the consuming component (MarkdownContent.sanitizeHtml).
  */
 export function renderMarkdown(text: string): string {
-  return marked.parse(text, { async: false }) as string
+  try {
+    return marked.parse(text, { async: false }) as string
+  } catch {
+    return escapeHtml(text)
+  }
+}
+
+export function escapeHtml(text: string): string {
+  if (typeof document === 'undefined') {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  }
+  const div = document.createElement('div')
+  div.textContent = text
+  return div.innerHTML
 }

@@ -11,6 +11,7 @@ export const [liveThinkingText, setLiveThinkingText] = createSignal('')
 export const [compacting, setCompacting] = createSignal(false)
 export const [isRetryCountdownActive, setRetryActive] = createSignal(false)
 export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
+export const [inputValue, setInputValue] = createSignal('')
 
 let retryTimer: ReturnType<typeof setInterval> | null = null
 let ws: WsStore | null = null
