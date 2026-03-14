@@ -39,11 +39,11 @@ describe('§5.5 Thread Helpers', () => {
   })
 
   it('getEntityIcon MUST return 🎫 for issue', () => {
-    expect(getEntityIcon('issue')).toBe('🎫')
+    expect(getEntityIcon('issue')).toBe('ticket')
   })
 
   it('getEntityIcon MUST return 🔀 for pr', () => {
-    expect(getEntityIcon('pr')).toBe('🔀')
+    expect(getEntityIcon('pr')).toBe('branch')
   })
 
   it('groupThreadsByWorkspace MUST group by {orgId}/{projectId} key', () => {

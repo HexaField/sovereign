@@ -148,26 +148,18 @@ describe('Phase 6 — Integration Tests', () => {
     const gw = createMockGateway()
     await gw.start()
 
-    // When gateway receives a chat.send, respond with stream + turn
+    // When gateway receives a chat.send req, respond with stream events + turn
     gw.wss.on('connection', (ws) => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString())
-        if (msg.type === 'chat.send') {
-          ws.send(JSON.stringify({ type: 'chat.stream', sessionKey: msg.sessionKey, text: 'Hello' }))
-          ws.send(JSON.stringify({ type: 'chat.stream', sessionKey: msg.sessionKey, text: ' world' }))
-          ws.send(
-            JSON.stringify({
-              type: 'chat.turn',
-              sessionKey: msg.sessionKey,
-              turn: {
-                role: 'assistant',
-                content: 'Hello world',
-                timestamp: Date.now(),
-                workItems: [],
-                thinkingBlocks: []
-              }
-            })
-          )
+        if (msg.type === 'req' && msg.method === 'chat.send') {
+          // Respond to the RPC request
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: {} }))
+          // Then send stream events
+          const sk = msg.params?.sessionKey ?? 'main'
+          ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'delta', message: [{ type: 'text', text: 'Hello' }], sessionKey: sk } }))
+          ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'delta', message: [{ type: 'text', text: ' world' }], sessionKey: sk } }))
+          ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'final', message: [{ type: 'text', text: 'Hello world' }], sessionKey: sk } }))
         }
       })
     })

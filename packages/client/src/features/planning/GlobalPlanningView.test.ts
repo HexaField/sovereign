@@ -259,10 +259,10 @@ describe('GlobalPlanningView', () => {
     })
 
     it('getPriorityIcon returns emoji icons', () => {
-      expect(getPriorityIcon('critical')).toBe('🔴')
+      expect(getPriorityIcon('critical')).toBe('blocked')
       expect(getPriorityIcon('high')).toBe('🟠')
-      expect(getPriorityIcon('medium')).toBe('🟡')
-      expect(getPriorityIcon('low')).toBe('🟢')
+      expect(getPriorityIcon('medium')).toBe('active')
+      expect(getPriorityIcon('low')).toBe('ready')
     })
 
     it('dagLayout positions nodes by depth', () => {

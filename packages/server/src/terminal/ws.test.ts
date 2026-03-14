@@ -165,7 +165,7 @@ describe('Terminal WS Channel', () => {
       expect(msg!.sessionId).toBe('sess-1')
     })
 
-    it('terminal data bypasses bus — direct binary push', () => {
+    it('terminal data bypasses bus — direct JSON push via sendTo', () => {
       const bus = createEventBus(tmpDir())
       const ws = createWsHandler(bus)
       const mgr = createMockManager()
@@ -175,16 +175,16 @@ describe('Terminal WS Channel', () => {
       ws.handleConnection(client, 'device-1')
       subscribe(client, ['terminal'], { sessionId: 'sess-1' })
 
-      // The onSubscribe callback attaches and sets up onData → sendBinary
-      // Trigger the data callback
+      // The onSubscribe callback attaches and sets up onData → sendTo (JSON)
       const handle = mgr.lastHandle
       expect(handle._dataCb).toBeDefined()
       handle._dataCb!('hello world')
 
-      // Should have received a binary frame (Buffer)
-      const calls = (client.send as ReturnType<typeof vi.fn>).mock.calls
-      const binaryCall = calls.find((c: unknown[]) => Buffer.isBuffer(c[0]))
-      expect(binaryCall).toBeDefined()
+      // Should have received a JSON message with terminal.data type
+      const msgs = getSentMessages(client)
+      const dataMsg = msgs.find((m) => m.type === 'terminal.data')
+      expect(dataMsg).toBeDefined()
+      expect(dataMsg!.data).toBe('hello world')
     })
   })
 
@@ -299,7 +299,7 @@ describe('Terminal WS Channel', () => {
   })
 
   describe('binary frames', () => {
-    it('sends terminal output as binary frame with channel ID prefix', () => {
+    it('sends terminal output as JSON message via sendTo', () => {
       const bus = createEventBus(tmpDir())
       const ws = createWsHandler(bus)
       const mgr = createMockManager()
@@ -312,12 +312,11 @@ describe('Terminal WS Channel', () => {
       const handle = mgr.lastHandle
       handle._dataCb!('output data')
 
-      const calls = (client.send as ReturnType<typeof vi.fn>).mock.calls
-      const binaryCall = calls.find((c: unknown[]) => Buffer.isBuffer(c[0]))
-      expect(binaryCall).toBeDefined()
-      // First byte(s) should be channel ID prefix
-      const buf = binaryCall![0] as Buffer
-      expect(buf.length).toBeGreaterThan('output data'.length)
+      const msgs = getSentMessages(client)
+      const dataMsg = msgs.find((m) => m.type === 'terminal.data')
+      expect(dataMsg).toBeDefined()
+      expect(dataMsg!.sessionId).toBe('sess-1')
+      expect(dataMsg!.data).toBe('output data')
     })
 
     it('receives terminal input as binary frame', () => {
@@ -336,7 +335,7 @@ describe('Terminal WS Channel', () => {
       expect(handle.write).toHaveBeenCalledWith('echo hello')
     })
 
-    it('binary round-trip preserves data', () => {
+    it('JSON round-trip preserves data', () => {
       const bus = createEventBus(tmpDir())
       const ws = createWsHandler(bus)
       const mgr = createMockManager()
@@ -350,14 +349,10 @@ describe('Terminal WS Channel', () => {
       const testData = 'Hello, terminal! 🎉'
       handle._dataCb!(testData)
 
-      const calls = (client.send as ReturnType<typeof vi.fn>).mock.calls
-      const binaryCall = calls.find((c: unknown[]) => Buffer.isBuffer(c[0]))
-      expect(binaryCall).toBeDefined()
-      const buf = binaryCall![0] as Buffer
-      // The payload after the channel ID prefix should contain our data
-      // Channel ID is encoded as a varint (1 byte for small IDs)
-      const payload = buf.slice(1).toString()
-      expect(payload).toBe(testData)
+      const msgs = getSentMessages(client)
+      const dataMsg = msgs.find((m) => m.type === 'terminal.data')
+      expect(dataMsg).toBeDefined()
+      expect(dataMsg!.data).toBe(testData)
     })
   })
 })
