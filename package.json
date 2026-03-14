@@ -1,10 +1,14 @@
 {
   "name": "template-monorepo",
   "private": true,
+  "bin": {
+    "sovereign": "./bin/sovereign"
+  },
   "type": "module",
   "scripts": {
     "dev": "concurrently \"pnpm --filter @template/client dev\" \"pnpm --filter @template/server dev\"",
     "build": "pnpm -r --if-present build",
+    "start": "pnpm --filter @template/server start",
     "test": "pnpm -r test",
     "certs": "mkdir -p .certs && openssl req -x509 -newkey rsa:2048 -keyout .certs/localhost.key -out .certs/localhost.cert -days 365 -nodes -subj \"/CN=localhost\"",
     "lint": "oxlint --fix",
