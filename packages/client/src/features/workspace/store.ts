@@ -19,16 +19,16 @@ export type SidebarTab =
   | 'meetings'
   | 'logs'
 
-export const SIDEBAR_TABS: { key: SidebarTab; label: string; icon: string }[] = [
-  { key: 'files', label: 'Files', icon: '📄' },
-  { key: 'git', label: 'Git', icon: '🔀' },
-  { key: 'threads', label: 'Threads', icon: '💬' },
-  { key: 'planning', label: 'Planning', icon: '📊' },
-  { key: 'notifications', label: 'Notifications', icon: '🔔' },
-  { key: 'terminal', label: 'Terminal', icon: '⬛' },
-  { key: 'recordings', label: 'Recordings', icon: '🎙️' },
-  { key: 'meetings', label: 'Meetings', icon: '📝' },
-  { key: 'logs', label: 'Logs', icon: '📋' }
+export const SIDEBAR_TABS: { key: SidebarTab; label: string; iconKey: string }[] = [
+  { key: 'files', label: 'Files', iconKey: 'files' },
+  { key: 'git', label: 'Git', iconKey: 'git' },
+  { key: 'threads', label: 'Threads', iconKey: 'threads' },
+  { key: 'planning', label: 'Planning', iconKey: 'planning' },
+  { key: 'notifications', label: 'Notifications', iconKey: 'notifications' },
+  { key: 'terminal', label: 'Terminal', iconKey: 'terminal' },
+  { key: 'recordings', label: 'Recordings', iconKey: 'recordings' },
+  { key: 'meetings', label: 'Meetings', iconKey: 'meetings' },
+  { key: 'logs', label: 'Logs', iconKey: 'logs' }
 ]
 
 // §3.3 — Active sidebar tab

@@ -21,8 +21,8 @@ import { turns, sendMessage } from '../chat/store.js'
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
 
 export function getViewModeIcon(mode: string): string {
-  const icons: Record<string, string> = { chat: '💬', voice: '🎤', dashboard: '📊', recording: '🎙' }
-  return icons[mode] || '📋'
+  const icons: Record<string, string> = { chat: 'chat', voice: 'voice', dashboard: 'dashboard', recording: 'recording' }
+  return icons[mode] || 'list'
 }
 
 export function getViewModeLabel(mode: string): string {
@@ -278,19 +278,19 @@ export function Header() {
   }
 
   const topLevelViews: Array<{ view: NavView; label: string; icon: string; shortcut: string }> = [
-    { view: 'dashboard', label: 'Dashboard', icon: '🏠', shortcut: '⌘1' },
-    { view: 'workspace', label: 'Workspace', icon: '📁', shortcut: '⌘2' },
+    { view: 'dashboard', label: 'Dashboard', icon: 'dashboard', shortcut: '⌘1' },
+    { view: 'workspace', label: 'Workspace', icon: 'workspace', shortcut: '⌘2' },
     { view: 'canvas', label: 'Canvas', icon: '⬡', shortcut: '⌘3' },
-    { view: 'planning', label: 'Planning', icon: '📊', shortcut: '⌘4' },
-    { view: 'system', label: 'System', icon: '⚙️', shortcut: '⌘5' }
+    { view: 'planning', label: 'Planning', icon: 'planning', shortcut: '⌘4' },
+    { view: 'system', label: 'System', icon: 'system', shortcut: '⌘5' }
   ]
 
   const menuItems: Array<{ mode: ViewMode; label: string; icon: string }> = [
-    { mode: 'chat', label: 'Chat', icon: '💬' },
-    { mode: 'voice', label: 'Voice', icon: '🎙' },
-    { mode: 'events', label: 'Events', icon: '🔔' },
+    { mode: 'chat', label: 'Chat', icon: 'chat' },
+    { mode: 'voice', label: 'Voice', icon: 'voice' },
+    { mode: 'events', label: 'Events', icon: 'events' },
     { mode: 'recording', label: 'Recording', icon: '⏺' },
-    { mode: 'logs', label: 'Logs', icon: '📜' },
+    { mode: 'logs', label: 'Logs', icon: 'logs' },
     { mode: 'files', label: 'Files', icon: '📂' },
     { mode: 'plans', label: 'Plans', icon: '🗺️' }
   ]
@@ -334,7 +334,7 @@ export function Header() {
                 class="flex h-[18px] min-w-[18px] shrink-0 animate-pulse items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
                 style={{ background: '#f59e0b' }}
               >
-                ⏳
+                …
               </span>
             </Show>
             <Show when={unreadThreadCount() > 0}>
@@ -387,7 +387,7 @@ export function Header() {
                   handleRetry()
                 }}
               >
-                {retrying() ? 'Retrying…' : hasActiveNudge() ? '🔄 Nudge queued' : '🔄 Retry'}
+                {retrying() ? 'Retrying…' : hasActiveNudge() ? 'Nudge queued' : 'Retry'}
               </button>
               <button
                 class="rounded px-1.5 py-0.5 text-[10px]"
@@ -404,7 +404,7 @@ export function Header() {
                   handleClearLock()
                 }}
               >
-                🗑️ Clear Lock
+                Clear Lock
               </button>
               <button
                 class="rounded px-1.5 py-0.5 text-[10px]"
@@ -421,7 +421,7 @@ export function Header() {
                   handleStop()
                 }}
               >
-                ⏹️ Stop
+                Stop
               </button>
               <div class="relative">
                 <button
@@ -439,7 +439,7 @@ export function Header() {
                     setShowModelDropdown(!showModelDropdown())
                   }}
                 >
-                  🔀 Switch Model
+                  Switch Model
                 </button>
                 <Show when={showModelDropdown()}>
                   <div
@@ -563,7 +563,7 @@ export function Header() {
             onClick={() => setShowRecoveryMenu(!showRecoveryMenu())}
             title="Thread recovery"
           >
-            🔧
+            settings
           </button>
 
           <Show when={showRecoveryMenu()}>
@@ -589,7 +589,7 @@ export function Header() {
                   handleRetry()
                 }}
               >
-                🔄 Retry
+                Retry
               </button>
               <button
                 class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-[12px] transition-colors"
@@ -602,7 +602,7 @@ export function Header() {
                   handleClearLock()
                 }}
               >
-                🗑️ Clear Lock
+                Clear Lock
               </button>
               <button
                 class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-[12px] transition-colors"
@@ -615,7 +615,7 @@ export function Header() {
                   handleStop()
                 }}
               >
-                ⏹️ Stop
+                Stop
               </button>
               <div style={{ 'border-top': '1px solid var(--c-border)' }}>
                 <button
@@ -649,7 +649,7 @@ export function Header() {
                         handleSwitchModelRetry(model)
                       }}
                     >
-                      🔀 {model}
+                      · {model}
                     </button>
                   )}
                 </For>
@@ -678,7 +678,7 @@ export function Header() {
             }}
             title="Sub-agents"
           >
-            🤖
+            agent
           </button>
 
           <Show when={subagentOpen()}>
@@ -720,7 +720,7 @@ export function Header() {
                         setSubagentOpen(false)
                       }}
                     >
-                      <span class="mt-0.5 shrink-0 text-xs">🔀</span>
+                      <span class="mt-0.5 shrink-0 text-xs">fork</span>
                       <div class="min-w-0 flex-1">
                         <div class="overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap">
                           {sa.label}
@@ -860,7 +860,7 @@ export function Header() {
                   setSettingsOpen(true)
                 }}
               >
-                <span class="text-base">⚙️</span>
+                Settings
                 <span class="flex-1">Settings</span>
               </button>
             </div>

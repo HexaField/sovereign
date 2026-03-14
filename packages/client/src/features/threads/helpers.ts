@@ -22,9 +22,9 @@ export function getEntityIcon(entityType: 'branch' | 'issue' | 'pr'): string {
     case 'branch':
       return '🌿'
     case 'issue':
-      return '🎫'
+      return 'ticket'
     case 'pr':
-      return '🔀'
+      return 'branch'
     default:
       return ''
   }

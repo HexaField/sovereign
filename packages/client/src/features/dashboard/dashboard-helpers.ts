@@ -63,21 +63,21 @@ export interface ActivityEvent {
 export function getEventIcon(eventType: EventType): string {
   switch (eventType) {
     case 'git.status.changed':
-      return '📝'
+      return 'git-change'
     case 'chat.status':
-      return '🤖'
+      return 'bot'
     case 'review.created':
     case 'review.updated':
-      return '👀'
+      return 'eye'
     case 'issue.updated':
     case 'issue.created':
-      return '🎫'
+      return 'ticket'
     case 'worktree.created':
-      return '🌳'
+      return 'tree'
     case 'worktree.removed':
-      return '🪓'
+      return 'axe'
     default:
-      return '📌'
+      return 'pin'
   }
 }
 

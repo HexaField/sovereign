@@ -13,10 +13,10 @@ interface ChangesListProps {
 }
 
 const statusIcon: Record<string, string> = {
-  added: '🟢',
-  modified: '🟡',
-  deleted: '🔴',
-  renamed: '🔵'
+  added: '+',
+  modified: '~',
+  deleted: '-',
+  renamed: '>'
 }
 
 const ChangesList: Component<ChangesListProps> = (props) => {

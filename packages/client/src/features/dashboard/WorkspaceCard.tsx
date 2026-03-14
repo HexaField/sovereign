@@ -79,7 +79,7 @@ export default function WorkspaceCard(props: { org: OrgSummary }) {
       <div class="mb-2 flex items-center gap-2">
         <span class={`inline-block h-2.5 w-2.5 rounded-full ${activityDotClass(color())}`} />
         <h3 class="text-base font-semibold" style={{ color: 'var(--c-text-heading)' }}>
-          {isGlobal() ? '🔒 Global' : props.org.orgName}
+          {isGlobal() ? 'Global' : props.org.orgName}
         </h3>
         {props.org.notificationCount > 0 && (
           <span class="ml-auto rounded-full bg-red-500 px-1.5 py-0.5 text-xs font-medium text-white">

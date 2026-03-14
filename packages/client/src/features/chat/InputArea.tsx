@@ -1,5 +1,6 @@
 import { createSignal, createEffect, Show, For } from 'solid-js'
 import type { AgentStatus } from '@sovereign/core'
+import { AttachIcon, CloseIcon, LoaderIcon } from '../../ui/icons.js'
 import {
   inputValue,
   setInputValue,
@@ -301,7 +302,7 @@ export function InputArea(props: InputAreaProps) {
     // Build message with file context
     let msg = text
     if (files.length) {
-      const fileLines = files.map((f) => `📎 ${f.name} → ${f.path}`).join('\n')
+      const fileLines = files.map((f) => `[file] ${f.name} → ${f.path}`).join('\n')
       msg = files.length && text ? `${text}\n\n[Attached files]\n${fileLines}` : `[Attached files]\n${fileLines}`
     }
 
@@ -500,7 +501,9 @@ export function InputArea(props: InputAreaProps) {
                 class="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px]"
                 style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
               >
-                <span>📎</span>
+                <span>
+                  <AttachIcon class="inline h-3 w-3" />
+                </span>
                 <span class="max-w-[150px] truncate" style={{ color: 'var(--c-text)' }}>
                   {file.name}
                 </span>
@@ -516,14 +519,17 @@ export function InputArea(props: InputAreaProps) {
                   style={{ color: 'var(--c-text-muted)' }}
                   onClick={() => removeAttachment(idx())}
                 >
-                  ✕
+                  <CloseIcon class="inline h-3 w-3" />
                 </button>
               </div>
             )}
           </For>
           <Show when={uploading()}>
             <div class="flex items-center gap-1 px-2.5 py-1 text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
-              <span class="animate-pulse">⏳</span> Uploading…
+              <span class="animate-pulse">
+                <LoaderIcon class="inline h-3 w-3 animate-spin" />
+              </span>{' '}
+              Uploading…
             </div>
           </Show>
         </div>
@@ -642,7 +648,7 @@ export function InputArea(props: InputAreaProps) {
                             onClick={() => deleteEntry(entry)}
                             title="Delete"
                           >
-                            ✕
+                            <CloseIcon class="inline h-3 w-3" />
                           </button>
                         </div>
                       </Show>

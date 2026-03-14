@@ -14,7 +14,7 @@ function turnToMarkdown(turn: ParsedTurn): string {
   } else if (turn.role === 'assistant') {
     parts.push(`**${agentName()}**${ts ? ` — ${ts}` : ''}\n\n${turn.content}`)
   } else if (turn.role === 'system') {
-    parts.push(`⏰ Scheduled Result${ts ? ` — ${ts}` : ''}\n\n${turn.content}`)
+    parts.push(`[Scheduled Result]${ts ? ` — ${ts}` : ''}\n\n${turn.content}`)
   }
 
   return parts.join('\n\n')
@@ -40,7 +40,7 @@ export function turnsToMarkdown(turns: ParsedTurn[], threadName?: string): strin
 
 export function messageToMarkdown(role: string, content: string, timestamp?: number): string {
   const ts = timestamp ? formatTs(timestamp) : ''
-  const label = role === 'user' ? '**You**' : role === 'system' ? '⏰ Scheduled Result' : `**${agentName()}**`
+  const label = role === 'user' ? '**You**' : role === 'system' ? '[Scheduled Result]' : `**${agentName()}**`
   return `${label}${ts ? ` — ${ts}` : ''}\n\n${content}`
 }
 

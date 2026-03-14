@@ -22,26 +22,26 @@ async function fetchFile(params: { path: string; projectId: string }): Promise<F
 function getFileIcon(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
   const icons: Record<string, string> = {
-    ts: '🟦',
-    tsx: '⚛️',
-    js: '🟨',
-    jsx: '⚛️',
-    json: '📋',
-    md: '📝',
-    css: '🎨',
-    html: '🌐',
-    py: '🐍',
-    rs: '🦀',
-    go: '🔵',
-    sh: '📜',
-    yaml: '⚙️',
-    yml: '⚙️',
-    toml: '⚙️',
-    svg: '🖼️',
-    png: '🖼️',
-    jpg: '🖼️'
+    ts: 'TS',
+    tsx: 'TX',
+    js: 'JS',
+    jsx: 'JX',
+    json: '{}',
+    md: 'MD',
+    css: 'CS',
+    html: '<>',
+    py: 'PY',
+    rs: 'RS',
+    go: 'GO',
+    sh: 'SH',
+    yaml: 'YM',
+    yml: 'YM',
+    toml: 'TM',
+    svg: 'SV',
+    png: 'IM',
+    jpg: 'IM'
   }
-  return icons[ext] ?? '📄'
+  return icons[ext] ?? '--'
 }
 
 function getFilename(filepath: string): string {

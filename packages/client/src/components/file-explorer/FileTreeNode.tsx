@@ -40,33 +40,33 @@ const FileTreeNode: Component<FileTreeNodeProps> = (props) => {
   const contextActions = (): ContextMenuAction[] => [
     {
       label: 'New File',
-      icon: '📄',
+      icon: 'file',
       action: () => {
         /* TODO: emit event */
       }
     },
     {
       label: 'New Folder',
-      icon: '📁',
+      icon: 'folder',
       action: () => {
         /* TODO: emit event */
       }
     },
     {
       label: 'Rename',
-      icon: '✏️',
+      icon: 'edit',
       action: () => {
         /* TODO: emit event */
       }
     },
     {
       label: 'Delete',
-      icon: '🗑️',
+      icon: 'delete',
       action: () => {
         /* TODO: emit event */
       }
     },
-    { label: 'Copy Path', icon: '📋', action: () => navigator.clipboard.writeText(props.node.path) }
+    { label: 'Copy Path', icon: 'copy', action: () => navigator.clipboard.writeText(props.node.path) }
   ]
 
   return (

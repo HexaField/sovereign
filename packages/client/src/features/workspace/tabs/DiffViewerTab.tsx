@@ -1,4 +1,5 @@
 import { Component, createSignal, createResource, Show, For, createMemo } from 'solid-js'
+import { GitIcon } from '../../../ui/icons.js'
 
 export interface DiffLine {
   type: 'added' | 'removed' | 'context'
@@ -52,7 +53,7 @@ const DiffViewerTab: Component<DiffViewerTabProps> = (props) => {
         style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text-secondary)' }}
       >
         <div class="flex items-center gap-2">
-          <span>📊</span>
+          <GitIcon class="h-4 w-4" />
           <span style={{ color: 'var(--c-text-primary)' }}>{filename()}</span>
           <button
             class="rounded px-2 py-0.5 text-xs"

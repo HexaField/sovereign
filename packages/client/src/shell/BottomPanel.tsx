@@ -2,6 +2,7 @@ import { type Component, Show, For } from 'solid-js'
 import { shellState, setBottomHeight, toggleBottomPanel } from './shell-store.js'
 import { getPanels } from './panels.js'
 import Divider from './Divider.js'
+import { CloseIcon } from '../ui/icons.js'
 
 const BottomPanel: Component = () => {
   const bottomPanels = () => getPanels('bottom')
@@ -25,7 +26,7 @@ const BottomPanel: Component = () => {
             </For>
           </div>
           <button class="text-zinc-500 hover:text-zinc-300" onClick={toggleBottomPanel} title="Close panel">
-            ✕
+            <CloseIcon class="h-4 w-4" />
           </button>
         </div>
 

@@ -1,6 +1,19 @@
 import { createSignal, createEffect, onCleanup, Show, Switch, Match, lazy, For } from 'solid-js'
 import type { Component } from 'solid-js'
 import {
+  FilesIcon,
+  GitIcon,
+  ThreadsIcon,
+  PlanningIcon,
+  NotificationsIcon,
+  TerminalIcon,
+  RecordingIcon,
+  MeetingsIcon,
+  LogsIcon,
+  ExpandIcon,
+  CollapseIcon
+} from '../../ui/icons.js'
+import {
   activeSidebarTab,
   setActiveSidebarTab,
   chatExpanded,
@@ -32,24 +45,40 @@ const MeetingsPanel = lazy(() =>
 )
 const LogsPanel = lazy(() => import('./panels/LogsPanel.js'))
 
+// Icon component lookup
+const SIDEBAR_ICON_MAP: Record<string, Component<{ class?: string }>> = {
+  files: FilesIcon,
+  git: GitIcon,
+  threads: ThreadsIcon,
+  planning: PlanningIcon,
+  notifications: NotificationsIcon,
+  terminal: TerminalIcon,
+  recordings: RecordingIcon,
+  meetings: MeetingsIcon,
+  logs: LogsIcon
+}
+
 // §3.3 — Sidebar Tab Bar
 const SidebarTabBar: Component = () => {
   return (
-    <div class="flex flex-wrap gap-1 border-b px-2 py-1" style={{ 'border-color': 'var(--c-border)' }}>
-      {SIDEBAR_TABS.map((tab) => (
-        <button
-          class="flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors"
-          style={{
-            background: activeSidebarTab() === tab.key ? 'var(--c-accent)' : 'transparent',
-            color: activeSidebarTab() === tab.key ? 'var(--c-text)' : 'var(--c-text-muted)'
-          }}
-          onClick={() => setActiveSidebarTab(tab.key)}
-          title={tab.label}
-        >
-          <span>{tab.icon}</span>
-          <span>{tab.label}</span>
-        </button>
-      ))}
+    <div class="flex flex-wrap gap-1 border-b px-2 py-1.5" style={{ 'border-color': 'var(--c-border)' }}>
+      {SIDEBAR_TABS.map((tab) => {
+        const Icon = SIDEBAR_ICON_MAP[tab.iconKey]
+        return (
+          <button
+            class="flex items-center gap-1 rounded px-2 py-1.5 text-xs transition-colors"
+            style={{
+              background: activeSidebarTab() === tab.key ? 'var(--c-accent)' : 'transparent',
+              color: activeSidebarTab() === tab.key ? 'var(--c-text)' : 'var(--c-text-muted)'
+            }}
+            onClick={() => setActiveSidebarTab(tab.key)}
+            title={tab.label}
+          >
+            {Icon && <Icon class="h-3.5 w-3.5" />}
+            <span>{tab.label}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -145,7 +174,7 @@ const ChatPanel: Component = () => {
             onClick={toggleChatExpanded}
             title="Expand chat (Cmd+Shift+E)"
           >
-            ⤢
+            <ExpandIcon class="h-4 w-4" />
           </button>
         </div>
         {/* Chat content — reuses ChatView when wired */}
@@ -167,7 +196,7 @@ const ExpandedChatView: Component = () => {
           onClick={toggleChatExpanded}
           title="Back to Workspace"
         >
-          ⤡
+          <CollapseIcon class="h-4 w-4" />
         </button>
         <span class="text-sm font-medium" style={{ color: 'var(--c-text-heading)' }}>
           Thread: {activeThreadKey()}
@@ -347,9 +376,11 @@ const WorkspaceView: Component = () => {
               {/* §3.1 — Main Content */}
               <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
                 <div class="flex-1 overflow-auto p-4">
-                  <p class="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-                    Main content area
-                  </p>
+                  <div class="flex h-full items-center justify-center">
+                    <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
+                      Select a file to get started
+                    </p>
+                  </div>
                 </div>
               </div>
 

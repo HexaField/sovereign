@@ -26,7 +26,7 @@ const RecordingsPanel: Component = () => {
           Recordings
         </span>
         <button class="rounded px-2 py-0.5 text-xs" style={{ background: 'var(--c-accent)', color: 'var(--c-text)' }}>
-          🎙️ Record
+          Record
         </button>
       </div>
       <div class="flex-1 overflow-auto p-2">
