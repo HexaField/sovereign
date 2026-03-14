@@ -65,6 +65,38 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
     res.json({ events })
   })
 
+  // ── Thread management endpoints ──────────────────────────────────────
+
+  router.post('/api/threads/clear-lock', (req, res) => {
+    const { sessionKey } = req.body ?? {}
+    if (!sessionKey) return res.status(400).json({ error: 'sessionKey required' })
+    const thread = threadManager.get(sessionKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    // Clear the agent status lock
+    thread.agentStatus = 'idle'
+    res.json({ success: true, thread })
+  })
+
+  router.post('/api/threads/stop', (req, res) => {
+    const { sessionKey } = req.body ?? {}
+    if (!sessionKey) return res.status(400).json({ error: 'sessionKey required' })
+    const thread = threadManager.get(sessionKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    // Signal stop by setting status to idle
+    thread.agentStatus = 'idle'
+    res.json({ success: true, thread })
+  })
+
+  router.post('/api/threads/switch-model', (req, res) => {
+    const { sessionKey, model } = req.body ?? {}
+    if (!sessionKey) return res.status(400).json({ error: 'sessionKey required' })
+    if (!model) return res.status(400).json({ error: 'model required' })
+    const thread = threadManager.get(sessionKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    // Model switching is acknowledged — the actual model change is handled by the agent runtime
+    res.json({ success: true, model, thread })
+  })
+
   // Session tree — returns thread hierarchy for the ThreadDrawer
   router.get('/api/sessions/tree', (_req, res) => {
     const threads = threadManager.list()

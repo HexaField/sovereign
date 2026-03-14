@@ -27,7 +27,136 @@ const fetchTree = async (projectPath: string | null): Promise<FileNode[]> => {
   return res.json()
 }
 
-const FileIcon: Component<{ node: FileNode }> = (props) => {
+// ── File operations ─────────────────────────────────────────────────
+
+export async function createFileOrFolder(
+  projectPath: string,
+  parentDir: string,
+  name: string,
+  type: 'file' | 'directory'
+): Promise<boolean> {
+  const res = await fetch('/api/files/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project: projectPath, path: `${parentDir}/${name}`, type })
+  })
+  return res.ok
+}
+
+export async function renameFileOrFolder(projectPath: string, oldPath: string, newName: string): Promise<boolean> {
+  const res = await fetch('/api/files/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project: projectPath, oldPath, newName })
+  })
+  return res.ok
+}
+
+export async function deleteFileOrFolder(projectPath: string, path: string): Promise<boolean> {
+  const res = await fetch('/api/files/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project: projectPath, path })
+  })
+  return res.ok
+}
+
+// ── Context Menu ────────────────────────────────────────────────────
+
+interface ContextMenuProps {
+  x: number
+  y: number
+  node: FileNode | null
+  projectPath: string
+  onClose: () => void
+  onRefresh: () => void
+}
+
+const ContextMenu: Component<ContextMenuProps> = (props) => {
+  const handleCreate = async (type: 'file' | 'directory') => {
+    const label = type === 'file' ? 'file' : 'folder'
+    const name = prompt(`New ${label} name:`)
+    if (!name) return props.onClose()
+    const parentDir = props.node?.type === 'directory' ? props.node.path : ''
+    await createFileOrFolder(props.projectPath, parentDir, name, type)
+    props.onRefresh()
+    props.onClose()
+  }
+
+  const handleRename = async () => {
+    if (!props.node) return props.onClose()
+    const newName = prompt('Rename to:', props.node.name)
+    if (!newName || newName === props.node.name) return props.onClose()
+    await renameFileOrFolder(props.projectPath, props.node.path, newName)
+    props.onRefresh()
+    props.onClose()
+  }
+
+  const handleDelete = async () => {
+    if (!props.node) return props.onClose()
+    if (!confirm(`Delete "${props.node.name}"?`)) return props.onClose()
+    await deleteFileOrFolder(props.projectPath, props.node.path)
+    props.onRefresh()
+    props.onClose()
+  }
+
+  return (
+    <div
+      class="fixed z-[999] min-w-[140px] overflow-hidden rounded-lg py-1 shadow-xl"
+      style={{
+        left: `${props.x}px`,
+        top: `${props.y}px`,
+        background: 'var(--c-menu-bg)',
+        border: '1px solid var(--c-border-strong)'
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+        style={{ color: 'var(--c-text)' }}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--c-hover-bg-strong)')}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}
+        onClick={() => handleCreate('file')}
+      >
+        New File
+      </button>
+      <button
+        class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+        style={{ color: 'var(--c-text)' }}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--c-hover-bg-strong)')}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}
+        onClick={() => handleCreate('directory')}
+      >
+        New Folder
+      </button>
+      <Show when={props.node}>
+        <div style={{ height: '1px', background: 'var(--c-border-strong)', margin: '2px 0' }} />
+        <button
+          class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+          style={{ color: 'var(--c-text)' }}
+          onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--c-hover-bg-strong)')}
+          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}
+          onClick={handleRename}
+        >
+          Rename
+        </button>
+        <button
+          class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+          style={{ color: 'var(--c-danger)' }}
+          onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--c-hover-bg-strong)')}
+          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}
+          onClick={handleDelete}
+        >
+          Delete
+        </button>
+      </Show>
+    </div>
+  )
+}
+
+// ── Icons ───────────────────────────────────────────────────────────
+
+const FileIconSvg: Component<{ node: FileNode }> = (props) => {
   return (
     <span class="mr-1 inline-flex" style={{ color: 'var(--c-text-muted)' }}>
       {props.node.type === 'directory' ? (
@@ -62,7 +191,13 @@ const FileIcon: Component<{ node: FileNode }> = (props) => {
   )
 }
 
-const TreeNode: Component<{ node: FileNode; depth: number }> = (props) => {
+// ── Tree Node ───────────────────────────────────────────────────────
+
+const TreeNode: Component<{
+  node: FileNode
+  depth: number
+  onContextMenu: (e: MouseEvent, node: FileNode) => void
+}> = (props) => {
   const [expanded, setExpanded] = createSignal(false)
   const [children, setChildren] = createSignal<FileNode[]>([])
   const [loading, setLoading] = createSignal(false)
@@ -74,16 +209,13 @@ const TreeNode: Component<{ node: FileNode; depth: number }> = (props) => {
     if (!expanded()) {
       setLoading(true)
       try {
-        // Fetch children for this subdirectory
         const projectPath = ws()?.activeProjectId
         if (!projectPath) return
-        // We need the repo path, not just project id. Use the node's path for subdir.
         const res = await fetch(
           `/api/files/tree?project=${encodeURIComponent(projectPath)}&path=${encodeURIComponent(props.node.path)}`
         )
         if (res.ok) {
           const nodes: FileNode[] = await res.json()
-          // Prefix child paths with parent path
           setChildren(nodes.map((n) => ({ ...n, path: `${props.node.path}/${n.path}` })))
         }
       } finally {
@@ -103,13 +235,17 @@ const TreeNode: Component<{ node: FileNode; depth: number }> = (props) => {
           background: 'transparent'
         }}
         onClick={toggle}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          props.onContextMenu(e, props.node)
+        }}
       >
         <Show when={props.node.type === 'directory'}>
           <span class="mr-0.5 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
             {expanded() ? '▾' : '▸'}
           </span>
         </Show>
-        <FileIcon node={props.node} />
+        <FileIconSvg node={props.node} />
         <span class="truncate">{props.node.name}</span>
       </button>
       <Show when={expanded()}>
@@ -121,20 +257,22 @@ const TreeNode: Component<{ node: FileNode; depth: number }> = (props) => {
             Loading...
           </div>
         </Show>
-        <For each={children()}>{(child) => <TreeNode node={child} depth={props.depth + 1} />}</For>
+        <For each={children()}>
+          {(child) => <TreeNode node={child} depth={props.depth + 1} onContextMenu={props.onContextMenu} />}
+        </For>
       </Show>
     </div>
   )
 }
 
+// ── Main Panel ──────────────────────────────────────────────────────
+
 const FileExplorerPanel: Component = () => {
   const ws = () => activeWorkspace()
-  // We pass repoPath of the active project, but the files API uses the project path
-  // The tree API takes `project` param which is the filesystem path
-  // We need to get the actual repoPath from the project data
   const [projectPath, setProjectPath] = createSignal<string | null>(null)
+  const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; node: FileNode | null } | null>(null)
+  const [refreshKey, setRefreshKey] = createSignal(0)
 
-  // Fetch project details to get repoPath when projectId changes
   const fetchProjectPath = async () => {
     const orgId = ws()?.orgId
     const projectId = ws()?.activeProjectId
@@ -153,19 +291,38 @@ const FileExplorerPanel: Component = () => {
   }
 
   const projectKey = () => `${ws()?.orgId}:${ws()?.activeProjectId}`
-  const [tree] = createResource(projectKey, fetchProjectPath)
+  const [_tree] = createResource(projectKey, fetchProjectPath)
 
-  const [rootTree] = createResource(projectPath, fetchTree)
+  const treeKey = () => `${projectPath()}:${refreshKey()}`
+  const [rootTree, { refetch }] = createResource(treeKey, () => fetchTree(projectPath()))
+
+  const handleContextMenu = (e: MouseEvent, node: FileNode | null) => {
+    e.preventDefault()
+    setCtxMenu({ x: e.clientX, y: e.clientY, node })
+  }
+
+  const handleRefresh = () => {
+    setRefreshKey((k) => k + 1)
+    refetch()
+  }
+
+  // Close context menu on click anywhere
+  const handleDocClick = () => setCtxMenu(null)
+  document.addEventListener('click', handleDocClick)
 
   return (
     <div class="flex h-full flex-col">
-      {/* Workspace picker */}
       <div class="border-b px-2 py-2" style={{ 'border-color': 'var(--c-border)' }}>
         <WorkspacePicker />
       </div>
 
-      {/* File tree */}
-      <div class="flex-1 overflow-auto p-1">
+      <div
+        class="flex-1 overflow-auto p-1"
+        onContextMenu={(e) => {
+          if (e.target === e.currentTarget || (e.target as HTMLElement).closest('[data-file-tree]')) return
+          handleContextMenu(e, null)
+        }}
+      >
         <Show
           when={ws()?.activeProjectId}
           fallback={
@@ -182,7 +339,9 @@ const FileExplorerPanel: Component = () => {
               </p>
             }
           >
-            <For each={rootTree() ?? []}>{(node) => <TreeNode node={node} depth={0} />}</For>
+            <For each={rootTree() ?? []}>
+              {(node) => <TreeNode node={node} depth={0} onContextMenu={handleContextMenu} />}
+            </For>
             <Show when={(rootTree() ?? []).length === 0}>
               <p class="px-2 text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 Empty directory
@@ -191,6 +350,19 @@ const FileExplorerPanel: Component = () => {
           </Show>
         </Show>
       </div>
+
+      <Show when={ctxMenu()}>
+        {(menu) => (
+          <ContextMenu
+            x={menu().x}
+            y={menu().y}
+            node={menu().node}
+            projectPath={projectPath() ?? ''}
+            onClose={() => setCtxMenu(null)}
+            onRefresh={handleRefresh}
+          />
+        )}
+      </Show>
     </div>
   )
 }

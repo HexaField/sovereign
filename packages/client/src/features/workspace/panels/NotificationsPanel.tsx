@@ -3,12 +3,15 @@ import type { Component } from 'solid-js'
 import { activeWorkspace } from '../store.js'
 import { wsStore } from '../../../ws/index.js'
 
+export type NotificationPriority = 'info' | 'warning' | 'error' | 'critical'
+
 export interface NotificationItem {
   id: string
   icon: string
   summary: string
   timestamp: number
   read: boolean
+  priority: NotificationPriority
   entityRef?: string
   entityId?: string
   entityType?: string
@@ -25,17 +28,43 @@ export function formatRelativeTime(ts: number): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
+const PRIORITY_ICON: Record<NotificationPriority, string> = {
+  info: 'ℹ️',
+  warning: '⚠️',
+  error: '❌',
+  critical: '🔴'
+}
+
+const PRIORITY_ORDER: Record<NotificationPriority, number> = {
+  critical: 0,
+  error: 1,
+  warning: 2,
+  info: 3
+}
+
+function mapSeverityToIcon(severity: string): string {
+  if (severity === 'critical') return '🔴'
+  if (severity === 'error') return '❌'
+  if (severity === 'warning') return '⚠️'
+  return 'ℹ️'
+}
+
+function mapSeverityToPriority(severity: string): NotificationPriority {
+  if (severity === 'critical' || severity === 'error' || severity === 'warning' || severity === 'info')
+    return severity as NotificationPriority
+  return 'info'
+}
+
 const NotificationsPanel: Component = () => {
   const ws = () => activeWorkspace()
   const [items, setItems] = createSignal<NotificationItem[]>([])
+  const [priorityFilter, setPriorityFilter] = createSignal<NotificationPriority | 'all'>('all')
   const unreadBadge = () => items().filter((n) => !n.read && !n.dismissed).length
 
   onMount(() => {
     fetch('/api/notifications/unread-count')
       .then((r) => r.json())
-      .then(() => {
-        // Initial count loaded
-      })
+      .then(() => {})
       .catch(() => {})
 
     fetch('/api/notifications?limit=50')
@@ -45,10 +74,11 @@ const NotificationsPanel: Component = () => {
           setItems(
             data.notifications.map((n: Record<string, unknown>) => ({
               id: n.id as string,
-              icon: n.severity === 'error' ? 'error' : 'info',
+              icon: mapSeverityToIcon(n.severity as string),
               summary: n.title as string,
               timestamp: new Date(n.timestamp as string).getTime(),
               read: n.read as boolean,
+              priority: mapSeverityToPriority(n.severity as string),
               entityId: n.entityId as string | undefined,
               entityType: n.entityType as string | undefined,
               dismissed: n.dismissed as boolean
@@ -60,12 +90,14 @@ const NotificationsPanel: Component = () => {
 
     wsStore.subscribe(['notifications'])
     const offNew = wsStore.on('notification.new', (msg: Record<string, unknown>) => {
+      const severity = (msg.severity as string) || 'info'
       const item: NotificationItem = {
         id: (msg.id as string) || Math.random().toString(36).slice(2),
-        icon: msg.severity === 'error' ? 'error' : 'info',
+        icon: mapSeverityToIcon(severity),
         summary: (msg.title as string) || '',
         timestamp: Date.now(),
         read: false,
+        priority: mapSeverityToPriority(severity),
         entityId: msg.entityId as string | undefined,
         entityType: msg.entityType as string | undefined
       }
@@ -110,7 +142,27 @@ const NotificationsPanel: Component = () => {
     }).catch(() => {})
   }
 
-  const visible = () => items().filter((n) => !n.dismissed)
+  const visible = () => {
+    let result = items().filter((n) => !n.dismissed)
+    const filter = priorityFilter()
+    if (filter !== 'all') {
+      result = result.filter((n) => n.priority === filter)
+    }
+    // Sort by priority (critical first), then by timestamp (newest first)
+    return result.sort((a, b) => {
+      const pd = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]
+      if (pd !== 0) return pd
+      return b.timestamp - a.timestamp
+    })
+  }
+
+  const filterButtons: Array<{ label: string; value: NotificationPriority | 'all' }> = [
+    { label: 'All', value: 'all' },
+    { label: '🔴', value: 'critical' },
+    { label: '❌', value: 'error' },
+    { label: '⚠️', value: 'warning' },
+    { label: 'ℹ️', value: 'info' }
+  ]
 
   return (
     <div class="flex h-full flex-col">
@@ -127,6 +179,26 @@ const NotificationsPanel: Component = () => {
           Mark all read
         </button>
       </div>
+
+      {/* Priority filter bar */}
+      <div class="flex gap-1 border-b px-3 py-1.5" style={{ 'border-color': 'var(--c-border)' }}>
+        <For each={filterButtons}>
+          {(btn) => (
+            <button
+              class="rounded px-1.5 py-0.5 text-[10px]"
+              style={{
+                background: priorityFilter() === btn.value ? 'var(--c-accent)' : 'var(--c-hover-bg)',
+                color: priorityFilter() === btn.value ? 'var(--c-text-on-accent)' : 'var(--c-text-muted)'
+              }}
+              onClick={() => setPriorityFilter(btn.value)}
+              data-testid={`filter-${btn.value}`}
+            >
+              {btn.label}
+            </button>
+          )}
+        </For>
+      </div>
+
       <div class="flex-1 overflow-auto p-2">
         <Show
           when={ws()}
@@ -149,6 +221,8 @@ const NotificationsPanel: Component = () => {
                 <div
                   class={`flex items-start gap-2 border-b p-2 ${n.read ? 'opacity-50' : ''}`}
                   style={{ 'border-color': 'var(--c-border)' }}
+                  data-testid={`notification-${n.id}`}
+                  data-priority={n.priority}
                 >
                   <span class="text-xs">{n.icon}</span>
                   <div class="min-w-0 flex-1">

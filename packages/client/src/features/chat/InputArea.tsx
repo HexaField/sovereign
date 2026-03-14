@@ -437,18 +437,25 @@ export function InputArea(props: InputAreaProps) {
 
   const processChatRec = async () => {
     if (audioChunks.length === 0) return
-    void new Blob(audioChunks, { type: 'audio/webm' })
+    const blob = new Blob(audioChunks, { type: 'audio/webm' })
     audioChunks = []
 
+    setVoiceState('processing')
     try {
-      // Stub transcription — would call server
-      const text = ''
+      const form = new FormData()
+      form.append('audio', blob)
+      const res = await fetch('/api/voice/transcribe', { method: 'POST', body: form })
+      if (!res.ok) throw new Error('Transcription failed')
+      const data = await res.json()
+      const text = data.text?.trim() ?? ''
       if (text) {
         pushMsgHistory(threadKey(), text)
         sendMessage(text)
       }
     } catch (e) {
       console.error('Transcription error:', e)
+    } finally {
+      setVoiceState('idle')
     }
   }
 
