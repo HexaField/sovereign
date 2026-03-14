@@ -2,6 +2,7 @@ import { createMemo, createSignal, Show, For, onCleanup } from 'solid-js'
 import { ContextBudgetModal } from '../system/ContextBudgetModal.js'
 import { agentName, agentIcon } from '../../lib/identity.js'
 import { connectionStatus } from '../connection/store.js'
+import { DashboardIcon, WorkspaceIcon, CanvasIcon, PlanningIcon, SystemIcon, SettingsIcon } from '../../ui/icons.js'
 import {
   viewMode,
   setViewMode,
@@ -279,22 +280,12 @@ export function Header() {
     setMenuOpen(false)
   }
 
-  const topLevelViews: Array<{ view: NavView; label: string; icon: string; shortcut: string }> = [
-    { view: 'dashboard', label: 'Dashboard', icon: 'dashboard', shortcut: '⌘1' },
-    { view: 'workspace', label: 'Workspace', icon: 'workspace', shortcut: '⌘2' },
-    { view: 'canvas', label: 'Canvas', icon: '⬡', shortcut: '⌘3' },
-    { view: 'planning', label: 'Planning', icon: 'planning', shortcut: '⌘4' },
-    { view: 'system', label: 'System', icon: 'system', shortcut: '⌘5' }
-  ]
-
-  const menuItems: Array<{ mode: ViewMode; label: string; icon: string }> = [
-    { mode: 'chat', label: 'Chat', icon: 'chat' },
-    { mode: 'voice', label: 'Voice', icon: 'voice' },
-    { mode: 'events', label: 'Events', icon: 'events' },
-    { mode: 'recording', label: 'Recording', icon: '⏺' },
-    { mode: 'logs', label: 'Logs', icon: 'logs' },
-    { mode: 'files', label: 'Files', icon: '📂' },
-    { mode: 'plans', label: 'Plans', icon: '🗺️' }
+  const topLevelViews: Array<{ view: NavView; label: string; icon: () => any; shortcut: string }> = [
+    { view: 'dashboard', label: 'Dashboard', icon: () => <DashboardIcon size={16} />, shortcut: '⌘1' },
+    { view: 'workspace', label: 'Workspace', icon: () => <WorkspaceIcon size={16} />, shortcut: '⌘2' },
+    { view: 'canvas', label: 'Canvas', icon: () => <CanvasIcon size={16} />, shortcut: '⌘3' },
+    { view: 'planning', label: 'Planning', icon: () => <PlanningIcon size={16} />, shortcut: '⌘4' },
+    { view: 'system', label: 'System', icon: () => <SystemIcon size={16} />, shortcut: '⌘5' }
   ]
 
   return (
@@ -845,42 +836,13 @@ export function Header() {
                 }
                 onClick={() => selectView(item.view)}
               >
-                <span class="text-base">{item.icon}</span>
+                <span class="flex w-5 items-center justify-center">{item.icon()}</span>
                 <span class="flex-1">{item.label}</span>
                 <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
                   {item.shortcut}
                 </span>
               </button>
             ))}
-            {/* Workspace sub-views */}
-            <div style={{ 'border-top': '1px solid var(--c-border)' }}>
-              <div
-                class="px-4 py-1.5 text-[10px] font-semibold tracking-wider uppercase"
-                style={{ color: 'var(--c-text-muted)' }}
-              >
-                Workspace
-              </div>
-              {menuItems.map((item) => (
-                <button
-                  class="flex w-full items-center gap-3 px-4 py-2 text-left text-[13px] transition-colors"
-                  style={{
-                    color:
-                      activeView() === 'workspace' && viewMode() === item.mode ? 'var(--c-accent)' : 'var(--c-text)',
-                    background:
-                      activeView() === 'workspace' && viewMode() === item.mode ? 'var(--c-hover-bg)' : undefined
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.background =
-                      activeView() === 'workspace' && viewMode() === item.mode ? 'var(--c-hover-bg)' : '')
-                  }
-                  onClick={() => selectMode(item.mode)}
-                >
-                  <span class="text-sm">{item.icon}</span>
-                  <span class="flex-1">{item.label}</span>
-                </button>
-              ))}
-            </div>
             <div style={{ 'border-top': '1px solid var(--c-border)' }}>
               <button
                 class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
@@ -892,7 +854,9 @@ export function Header() {
                   setSettingsOpen(true)
                 }}
               >
-                Settings
+                <span class="flex w-5 items-center justify-center">
+                  <SettingsIcon size={16} />
+                </span>
                 <span class="flex-1">Settings</span>
               </button>
             </div>
