@@ -32,11 +32,11 @@ Architecture & system view. Notifications and events are entity-scoped — group
 
 ## Phase 8: Recording, Transcription & Voice Intelligence
 
-Voice as a first-class workspace modality. Meeting model with diarization (speaker identification), transcription, and summarization pipeline. Meeting summaries, action items, and decisions feed into workspace-level context and memory. Thread-level voice I/O (STT for input, TTS for responses, voice mode toggle). External meeting import (Zoom, Otter.ai, Google Meet transcripts/audio). Meetings panel in workspace sidebar, meeting detail view, speaker timeline, searchable meeting history. Workspace context integration — meeting knowledge is part of the workspace's living memory.
+Voice as a first-class workspace modality. Meeting model with diarization (speaker identification), transcription, and summarization pipeline. Meeting summaries, action items, and decisions feed into workspace-level context and memory. Thread-level voice I/O (STT for input, TTS for responses, voice mode toggle). Conversational voice output — rule-based post-processing strips Markdown/code/paths from agent responses before TTS (LLM-powered rewriting deferred to Phase 9). Immediate voice acknowledgment — static phrases ("On it", "Working on that") play while agent processes, suppressed for fast responses (context-aware acknowledgments deferred to Phase 9). External meeting import (Zoom, Otter.ai, Google Meet transcripts/audio). Meetings panel in workspace sidebar, meeting detail view, speaker timeline, searchable meeting history. Workspace context integration — meeting knowledge is part of the workspace's living memory.
 
 ## Phase 9: Agent Core (beta release)
 
-Own session store (JSONL), context compaction, system prompt assembly. Memory & embeddings (SQLite + FTS5 + sqlite-vec + Ollama). Tool runtime & registry, LLM router (multi-provider, streaming, fallback), agent loop (deterministic state machine), multi-agent orchestration, worktree-agent binding. **Full independence from OpenClaw.**
+Own session store (JSONL), context compaction, system prompt assembly. Memory & embeddings (SQLite + FTS5 + sqlite-vec + Ollama). Tool runtime & registry, LLM router (multi-provider, streaming, fallback), agent loop (deterministic state machine), multi-agent orchestration, worktree-agent binding. Voice intelligence enhancements: LLM-powered TTS post-processing (rewrite agent responses as natural spoken language via local Ollama), context-aware voice acknowledgments (agent loop emits intent metadata, voice system generates situational acks like "Let me look at that code"). **Full independence from OpenClaw.**
 
 ## Phase 10: Sovereignty & CI (initial release)
 

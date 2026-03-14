@@ -332,6 +332,59 @@ interface RecordingMeta {
 - Audio playback MUST be interruptible (stop button replaces play while active).
 - Auto-TTS mode: when enabled (`config.voice.autoTTS`), agent responses MUST auto-play. Default: `false`.
 
+#### §8.5.2.1 — TTS Post-Processing (Conversational Voice)
+
+Agent text responses often contain content unsuitable for spoken output — file paths, URLs, Markdown formatting, code blocks, tables, raw JSON. Reading these aloud produces a poor experience.
+
+- When voice mode is ON and auto-TTS is active, agent responses MUST be post-processed before TTS synthesis.
+- Phase 8 MUST define a `VoicePostProcessor` interface:
+
+```typescript
+interface VoicePostProcessor {
+  /** Transform agent text into natural spoken language */
+  process(
+    agentResponse: string,
+    context?: {
+      threadKey?: string
+      lastUserMessage?: string
+    }
+  ): Promise<string>
+}
+```
+
+- Phase 8 MUST implement a **rule-based fallback** post-processor:
+  - Strip Markdown formatting (bold, italic, headers, links).
+  - Replace URLs with "a link" or "a link to [domain]".
+  - Replace file paths with "a file called [basename]".
+  - Omit code blocks entirely, replace with "some code" or "a code snippet".
+  - Omit tables, replace with a brief description ("a table with N rows").
+  - Collapse excessive whitespace and list markers.
+- This fallback MUST work without any LLM dependency.
+
+- Phase 9 (Agent Core, §9.6 LLM Router) MUST implement an **LLM-powered post-processor** that replaces the rule-based fallback:
+  - Send the agent response to a local LLM (Ollama) with a system prompt instructing it to rewrite the content as natural spoken language.
+  - The prompt MUST instruct the LLM to: preserve meaning, use conversational tone, describe rather than read technical artifacts, be concise.
+  - The LLM post-processor MUST fall back to the rule-based processor if Ollama is unavailable.
+  - Config: `voice.postProcessor: 'rules' | 'llm'` (default: `'llm'` when Phase 9 is available, `'rules'` otherwise).
+
+### §8.5.2.2 — Immediate Voice Acknowledgment
+
+When a user speaks to a thread via voice input, there is a delay between sending the message and receiving the agent's response. In text mode this is fine (typing indicators). In voice mode, silence feels broken.
+
+- When voice mode is ON and a user message is sent via STT, the system MUST provide immediate audible feedback.
+- Phase 8 MUST implement a **pre-recorded/static acknowledgment** system:
+  - A small set of short acknowledgment phrases: "On it", "Working on that", "Let me check", "One moment", "Got it", etc.
+  - Selected randomly or round-robin to avoid repetition.
+  - Synthesized via TTS at build time or on first use (cached).
+  - Played immediately after the user's STT message is sent, before the agent begins responding.
+- The acknowledgment MUST NOT play if the agent response arrives within a configurable threshold (`config.voice.ackDelayMs`, default: 1500ms). This avoids unnecessary acknowledgment for fast responses.
+
+- Phase 9 (Agent Core, §9.7 Agent Loop) MUST enhance this with **context-aware acknowledgments**:
+  - The agent loop MUST emit a `agent.turn.started` bus event when processing begins, with optional `intent` metadata (e.g., "looking at code", "checking the build", "reading the file").
+  - The voice system subscribes to this event and, if voice mode is ON, generates a contextual acknowledgment via local LLM: "Let me look at that code", "Checking the build now", etc.
+  - Falls back to static acknowledgments if LLM is unavailable or too slow.
+  - Config: `voice.contextualAck: boolean` (default: `true` when Phase 9 available).
+
 ### §8.5.3 — Voice Mode Toggle
 
 - Thread chat MUST have a voice mode toggle (microphone icon in input area).
@@ -507,6 +560,9 @@ interface RecordingsConfig {
   voice: {
     autoTTS: boolean // Default: false
     ttsVoice?: string // Preferred TTS voice
+    postProcessor: 'rules' | 'llm' // Default: 'rules' (Phase 9 enables 'llm')
+    ackDelayMs: number // Default: 1500 — suppress ack if agent responds within this
+    contextualAck: boolean // Default: false (Phase 9 enables true)
   }
   storage: {
     retentionDays?: number // Null = keep forever
@@ -614,7 +670,11 @@ packages/server/src/
 │   ├── voice.ts              # (unchanged)
 │   ├── routes.ts             # (unchanged)
 │   ├── provider.ts           # VoiceTranscriptionProvider adapter
-│   └── provider.test.ts
+│   ├── provider.test.ts
+│   ├── post-processor.ts     # VoicePostProcessor interface + rule-based impl
+│   ├── post-processor.test.ts
+│   ├── acknowledgment.ts     # Static acknowledgment system (phrase selection + caching)
+│   └── acknowledgment.test.ts
 ```
 
 ### Client
