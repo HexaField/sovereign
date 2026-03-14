@@ -6,11 +6,22 @@ import type { LogsChannel } from './ws.js'
 import { readPersistedLogs } from './ws.js'
 import type { HealthHistory } from './health-history.js'
 
+export interface DeviceInfoProvider {
+  getDeviceInfo(): {
+    deviceId: string
+    publicKey: string
+    connectionStatus: string
+    gatewayUrl: string
+    reconnectAttempt: number
+  }
+}
+
 export interface SystemRoutesOptions {
   system: SystemModule
   logsChannel: LogsChannel
   dataDir: string
   healthHistory?: HealthHistory
+  deviceInfoProvider?: DeviceInfoProvider
 }
 
 async function fetchContextBudgetFromGateway(): Promise<Record<string, unknown> | null> {
@@ -61,6 +72,7 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   const logsChannel = 'logsChannel' in opts ? (opts as SystemRoutesOptions).logsChannel : null
   const dataDir = 'dataDir' in opts ? (opts as SystemRoutesOptions).dataDir : null
   const healthHistory = 'healthHistory' in opts ? (opts as SystemRoutesOptions).healthHistory : null
+  const deviceInfoProvider = 'deviceInfoProvider' in opts ? (opts as SystemRoutesOptions).deviceInfoProvider : null
 
   router.get('/api/system/identity', (_req, res) => {
     res.json({
@@ -118,6 +130,80 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
     }
     const windowMs = req.query.window ? Number(req.query.window) : 3600_000
     res.json({ snapshots: healthHistory.getSnapshots(windowMs) })
+  })
+
+  // Device identity endpoint
+  router.get('/api/system/devices', (_req, res) => {
+    if (!deviceInfoProvider) {
+      res.json({ devices: [], error: 'Device info not available' })
+      return
+    }
+    const info = deviceInfoProvider.getDeviceInfo()
+    res.json({
+      devices: [
+        {
+          deviceId: info.deviceId,
+          publicKey: info.publicKey,
+          name: 'This Device',
+          connectionStatus: info.connectionStatus,
+          gatewayUrl: info.gatewayUrl,
+          reconnectAttempt: info.reconnectAttempt,
+          isCurrent: true
+        }
+      ]
+    })
+  })
+
+  // Watchdog endpoint
+  router.get('/api/system/watchdog', async (_req, res) => {
+    const checks: Array<{ name: string; status: 'ok' | 'warning' | 'error'; message: string }> = []
+
+    // Check gateway reachability
+    const health = system.getHealth()
+    const backendStatus = health.connection.agentBackend
+    checks.push({
+      name: 'gateway_reachable',
+      status: backendStatus === 'connected' ? 'ok' : backendStatus === 'connecting' ? 'warning' : 'error',
+      message: `Agent backend: ${backendStatus}`
+    })
+
+    // Check modules initialized
+    const arch = system.getArchitecture()
+    const errorModules = arch.modules.filter((m) => m.status === 'error')
+    checks.push({
+      name: 'modules_initialized',
+      status: errorModules.length > 0 ? 'error' : 'ok',
+      message:
+        errorModules.length > 0
+          ? `${errorModules.length} module(s) in error: ${errorModules.map((m) => m.name).join(', ')}`
+          : `All ${arch.modules.length} modules healthy`
+    })
+
+    // Check disk space
+    const memPct =
+      health.resources.memoryUsage.total > 0
+        ? (health.resources.memoryUsage.used / health.resources.memoryUsage.total) * 100
+        : 0
+    checks.push({
+      name: 'memory_adequate',
+      status: memPct > 95 ? 'error' : memPct > 85 ? 'warning' : 'ok',
+      message: `Memory usage: ${memPct.toFixed(1)}%`
+    })
+
+    // Check uptime (proxy for stuck threads — if uptime < 5s, still starting)
+    checks.push({
+      name: 'system_uptime',
+      status: health.connection.uptime < 5 ? 'warning' : 'ok',
+      message: `Uptime: ${health.connection.uptime}s`
+    })
+
+    const overallStatus = checks.some((c) => c.status === 'error')
+      ? 'error'
+      : checks.some((c) => c.status === 'warning')
+        ? 'warning'
+        : 'ok'
+
+    res.json({ status: overallStatus, checks, timestamp: new Date().toISOString() })
   })
 
   return router

@@ -51,9 +51,19 @@ export function moduleHealthStatus(modules: ArchitectureData['modules']): 'healt
   return 'healthy'
 }
 
+export interface PlanSummary {
+  total: number
+  completed: number
+  blocked: number
+  ready: number
+  active: number
+  completionPct: number
+}
+
 const OverviewTab: Component = () => {
   const [data, setData] = createSignal<ArchitectureData | null>(null)
   const [error, setError] = createSignal<string | null>(null)
+  const [planSummary, setPlanSummary] = createSignal<PlanSummary | null>(null)
 
   const load = async () => {
     try {
@@ -68,6 +78,12 @@ const OverviewTab: Component = () => {
 
   onMount(() => {
     load()
+    fetch('/api/planning/summary')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) setPlanSummary(d)
+      })
+      .catch(() => {})
     wsStore.subscribe(['system'])
 
     const offArch = wsStore.on('system.architecture', (msg: Record<string, unknown>) => {
@@ -372,7 +388,51 @@ const OverviewTab: Component = () => {
                 </div>
               </SectionCard>
 
-              {/* Plans Sync placeholder */}
+              {/* Plans Sync Status */}
+              <SectionCard
+                title="Planning"
+                icon="📋"
+                badge={planSummary()?.total || undefined}
+                status={planSummary()?.blocked ? 'warning' : 'healthy'}
+              >
+                <Show
+                  when={planSummary()}
+                  fallback={
+                    <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
+                      No planning data
+                    </div>
+                  }
+                >
+                  {(ps) => (
+                    <div class="mt-2 space-y-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                      <div class="flex justify-between">
+                        <span>Total</span>
+                        <span class="font-mono">{ps().total}</span>
+                      </div>
+                      <div class="flex justify-between">
+                        <span>Completed</span>
+                        <span class="font-mono text-green-400">{ps().completed}</span>
+                      </div>
+                      <div class="flex justify-between">
+                        <span>Active</span>
+                        <span class="font-mono text-blue-400">{ps().active}</span>
+                      </div>
+                      <div class="flex justify-between">
+                        <span>Blocked</span>
+                        <span class="font-mono text-red-400">{ps().blocked}</span>
+                      </div>
+                      <div class="flex justify-between">
+                        <span>Ready</span>
+                        <span class="font-mono text-amber-400">{ps().ready}</span>
+                      </div>
+                      <div class="mt-2 h-1.5 w-full rounded-full" style={{ background: 'var(--c-border)' }}>
+                        <div class="h-full rounded-full bg-green-500" style={{ width: `${ps().completionPct}%` }} />
+                      </div>
+                      <div class="text-right text-[10px] opacity-60">{ps().completionPct.toFixed(0)}% complete</div>
+                    </div>
+                  )}
+                </Show>
+              </SectionCard>
             </div>
           )
         }}

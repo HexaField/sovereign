@@ -7,6 +7,29 @@ import type { PlanningService, GraphFilter, EntityRef } from './types.js'
 export function createPlanningRouter(service: PlanningService): Router {
   const router = Router({ mergeParams: true })
 
+  // Planning summary (cross-org)
+  router.get('/api/planning/summary', async (_req: Request, res: Response) => {
+    try {
+      // Get summary across all orgs — use '_global' as default
+      const orgId = '_global'
+      const [completion, blocked, ready] = await Promise.all([
+        service.getCompletion(orgId, {}).catch(() => ({ total: 0, closed: 0, percentage: 0 })),
+        service.getBlocked(orgId, {}).catch(() => []),
+        service.getReady(orgId, {}).catch(() => [])
+      ])
+      res.json({
+        total: completion.total,
+        completed: completion.closed,
+        blocked: blocked.length,
+        ready: ready.length,
+        active: completion.total - completion.closed - blocked.length,
+        completionPct: completion.percentage
+      })
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
   router.get('/api/orgs/:orgId/planning/graph', async (req: Request, res: Response) => {
     try {
       const { orgId } = req.params
