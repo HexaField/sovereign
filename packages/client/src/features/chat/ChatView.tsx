@@ -2,6 +2,7 @@ import type { WorkItem, AgentStatus } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
+import { ChatIcon } from '../../ui/icons.js'
 
 export interface ChatViewProps {
   messages: ChatMessage[]
@@ -57,7 +58,7 @@ export function ChatView(props: ChatViewProps) {
         {isEmptyState(props.messages) && (
           <div class="flex h-full items-center justify-center">
             <div class="text-center" style={{ color: 'var(--c-text-muted)' }}>
-              <div class="text-2xl">💬</div>
+              <ChatIcon class="h-8 w-8" />
               <div class="mt-2 text-sm">Start a conversation</div>
             </div>
           </div>

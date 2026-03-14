@@ -1,6 +1,7 @@
 import { type Component, For, Show } from 'solid-js'
 import { shellState, toggleSidebar } from './shell-store.js'
 import { getPanels } from './panels.js'
+import { ChevronLeftIcon } from '../ui/icons.js'
 
 const Sidebar: Component = () => {
   const sidebarPanels = () => getPanels('sidebar')
@@ -15,7 +16,7 @@ const Sidebar: Component = () => {
         <div class="flex items-center justify-between border-b border-zinc-700 px-3 py-2">
           <span class="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Explorer</span>
           <button class="text-zinc-500 hover:text-zinc-300" onClick={toggleSidebar} title="Collapse sidebar">
-            ◀
+            <ChevronLeftIcon class="h-4 w-4" />
           </button>
         </div>
 

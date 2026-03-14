@@ -9,11 +9,11 @@ interface ViewItem {
 }
 
 const VIEW_ITEMS: ViewItem[] = [
-  { key: 'dashboard', icon: '🏠', label: 'Dashboard', shortcut: '⌘1' },
-  { key: 'workspace', icon: '📁', label: 'Workspace', shortcut: '⌘2' },
-  { key: 'canvas', icon: '⬡', label: 'Canvas', shortcut: '⌘3' },
-  { key: 'planning', icon: '📊', label: 'Planning', shortcut: '⌘4' },
-  { key: 'system', icon: '⚙️', label: 'System', shortcut: '⌘5' }
+  { key: 'dashboard', icon: 'dashboard', label: 'Dashboard', shortcut: '⌘1' },
+  { key: 'workspace', icon: 'workspace', label: 'Workspace', shortcut: '⌘2' },
+  { key: 'canvas', icon: 'canvas', label: 'Canvas', shortcut: '⌘3' },
+  { key: 'planning', icon: 'planning', label: 'Planning', shortcut: '⌘4' },
+  { key: 'system', icon: 'system', label: 'System', shortcut: '⌘5' }
 ]
 
 export default function ViewMenu() {

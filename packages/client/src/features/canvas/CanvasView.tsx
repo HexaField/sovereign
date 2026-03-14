@@ -97,12 +97,12 @@ export function formatEventTime(ts: number): string {
 
 // Event type icon
 export function getEventIcon(type: string): string {
-  if (type.includes('issue')) return '📋'
-  if (type.includes('review') || type.includes('pr')) return '🔀'
-  if (type.includes('sync')) return '🔄'
-  if (type.includes('agent')) return '🤖'
-  if (type.includes('build') || type.includes('ci')) return '🔨'
-  return '⚡'
+  if (type.includes('issue')) return 'list'
+  if (type.includes('review') || type.includes('pr')) return 'git'
+  if (type.includes('sync')) return 'refresh'
+  if (type.includes('agent')) return 'bot'
+  if (type.includes('build') || type.includes('ci')) return 'wrench'
+  return 'signal'
 }
 
 const CanvasView: Component = () => {
@@ -365,7 +365,7 @@ const CanvasView: Component = () => {
         onClick={() => setEventFlowEnabled(!eventFlowEnabled())}
         data-testid="performance-toggle"
       >
-        {eventFlowEnabled() ? '✨ Animations On' : '⚡ Animations Off'}
+        {eventFlowEnabled() ? 'Animations On' : 'Animations Off'}
       </button>
 
       {/* SVG Canvas */}
@@ -436,7 +436,7 @@ const CanvasView: Component = () => {
                     {/* Global badge */}
                     <Show when={isGlobal}>
                       <text x={w - 30} y={22} font-size="14" fill="var(--c-text-muted, #a6adc8)">
-                        🔒
+                        lock
                       </text>
                     </Show>
 
@@ -453,14 +453,14 @@ const CanvasView: Component = () => {
 
                     {/* Badges */}
                     <text x={12} y={h - 30} font-size="11" fill="var(--c-text-muted, #a6adc8)">
-                      📁 {node.projectCount}
+                      dir {node.projectCount}
                     </text>
                     <text x={w / 2 - 20} y={h - 30} font-size="11" fill="var(--c-text-muted, #a6adc8)">
-                      🤖 {node.activeAgents}
+                      agent {node.activeAgents}
                     </text>
                     <Show when={node.unreadCount > 0}>
                       <text x={w - 50} y={h - 30} font-size="11" fill="var(--c-accent, #89b4fa)">
-                        🔔 {node.unreadCount}
+                        bell {node.unreadCount}
                       </text>
                     </Show>
 
@@ -509,7 +509,7 @@ const CanvasView: Component = () => {
                       🌿 {project.branch}
                     </text>
                     <text x={90} y={70} text-anchor="middle" fill="var(--c-text-muted, #a6adc8)" font-size="10">
-                      🤖 {project.activeAgents} agents
+                      agent {project.activeAgents} agents
                     </text>
                   </g>
                 )

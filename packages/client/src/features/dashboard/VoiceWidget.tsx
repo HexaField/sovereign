@@ -66,7 +66,7 @@ export default function VoiceWidget() {
         onClick={handleVoiceToggle}
         disabled={widgetState() === 'processing'}
       >
-        🎤
+        mic
       </button>
       <p class="text-xs opacity-70" style={{ color: 'var(--c-text)' }}>
         {voiceStatusText()}

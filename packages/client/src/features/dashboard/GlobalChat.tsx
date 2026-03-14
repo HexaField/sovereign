@@ -55,7 +55,7 @@ export default function GlobalChat() {
         onClick={navigateToGlobalChat}
       >
         <span class="text-sm font-semibold" style={{ color: 'var(--c-text-heading)' }}>
-          🔒 Global Chat
+          Global Chat
         </span>
         <span class="text-xs opacity-60" style={{ color: 'var(--c-text)' }}>
           {agentStatus() !== 'idle' ? `Agent: ${agentStatus()}` : ''}

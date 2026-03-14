@@ -91,7 +91,7 @@ export default function NotificationFeed() {
             id: n.id as string,
             orgId: (n.source as string) || '',
             orgName: (n.source as string) || '',
-            icon: n.severity === 'error' ? '🔴' : n.severity === 'warning' ? '🟡' : '🔔',
+            icon: n.severity === 'error' ? 'error' : n.severity === 'warning' ? 'warning' : 'info',
             summary: n.title as string,
             timestamp: new Date(n.timestamp as string).getTime(),
             read: n.read as boolean,
@@ -112,7 +112,7 @@ export default function NotificationFeed() {
         id: (msg.id as string) || Math.random().toString(36).slice(2),
         orgId: (msg.source as string) || '',
         orgName: (msg.source as string) || '',
-        icon: msg.severity === 'error' ? '🔴' : msg.severity === 'warning' ? '🟡' : '🔔',
+        icon: msg.severity === 'error' ? 'error' : msg.severity === 'warning' ? 'warning' : 'info',
         summary: (msg.title as string) || '',
         timestamp: Date.now(),
         read: false,
@@ -250,7 +250,9 @@ export default function NotificationFeed() {
                 class={`flex w-full items-start gap-2 border-b p-3 ${n.read ? 'opacity-50' : ''} ${highlightIds().has(n.id) ? 'bg-blue-500/10' : ''}`}
                 style={{ 'border-color': 'var(--c-border)' }}
               >
-                <span class="text-sm">{n.icon}</span>
+                <span
+                  class={`mt-1 inline-block h-2 w-2 rounded-full ${n.icon === 'error' ? 'bg-red-400' : n.icon === 'warning' ? 'bg-yellow-400' : 'bg-cyan-400'}`}
+                />
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-xs font-medium" style={{ color: 'var(--c-text)' }}>
                     {n.summary}
@@ -313,7 +315,9 @@ export default function NotificationFeed() {
                         class={`flex items-start gap-2 border-t p-2 pl-6 ${n.read ? 'opacity-50' : ''}`}
                         style={{ 'border-color': 'var(--c-border)' }}
                       >
-                        <span class="text-xs">{n.icon}</span>
+                        <span
+                          class={`inline-block h-2 w-2 rounded-full ${n.icon === 'error' ? 'bg-red-400' : n.icon === 'warning' ? 'bg-yellow-400' : 'bg-cyan-400'}`}
+                        />
                         <span class="flex-1 text-xs">{n.summary}</span>
                         <div class="flex gap-1">
                           <Show when={!n.read}>

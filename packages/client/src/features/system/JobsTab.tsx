@@ -161,7 +161,7 @@ const JobsTab: Component = () => {
                   onClick={() => handleToggle(job)}
                   title={job.enabled ? 'Disable' : 'Enable'}
                 >
-                  {job.enabled ? '⏸ Disable' : '▶ Enable'}
+                  {job.enabled ? 'Disable' : 'Enable'}
                 </button>
                 <button
                   class="rounded border px-2 py-1 text-xs hover:opacity-80"
@@ -169,7 +169,7 @@ const JobsTab: Component = () => {
                   onClick={() => handleViewHistory(job.id)}
                   title="View history"
                 >
-                  📋 History
+                  History
                 </button>
               </div>
             </div>

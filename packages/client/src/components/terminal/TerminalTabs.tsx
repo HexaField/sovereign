@@ -48,7 +48,7 @@ const TerminalTabs: Component = () => {
               }`}
               onClick={() => setActiveTab(tab.id)}
             >
-              <span>⬛</span>
+              <span>T</span>
               <span>{tab.title}</span>
               <button
                 class="ml-1 text-zinc-500 hover:text-zinc-300"

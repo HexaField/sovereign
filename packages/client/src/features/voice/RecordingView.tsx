@@ -1,4 +1,5 @@
 import { createSignal, For, Show } from 'solid-js'
+import { PlayIcon, PauseIcon, StopIcon, SaveIcon, CloseIcon } from '../../ui/icons.js'
 
 export interface Recording {
   id: string
@@ -59,7 +60,7 @@ export function RecordingView(props: RecordingViewProps) {
               style={{ color: 'var(--c-accent)' }}
               onClick={() => setPlayingId(playingId() === rec.id ? null : rec.id)}
             >
-              {playingId() === rec.id ? '⏸' : '▶'}
+              {playingId() === rec.id ? <PauseIcon class="h-4 w-4" /> : <PlayIcon class="h-4 w-4" />}
             </button>
             <Show when={playingId() === rec.id}>
               <button
@@ -67,7 +68,7 @@ export function RecordingView(props: RecordingViewProps) {
                 style={{ color: 'var(--c-text-muted)' }}
                 onClick={() => setPlayingId(null)}
               >
-                ⏹
+                <StopIcon class="h-4 w-4" />
               </button>
             </Show>
             <button
@@ -75,7 +76,7 @@ export function RecordingView(props: RecordingViewProps) {
               style={{ color: 'var(--c-text-muted)' }}
               onClick={() => props.onExport(rec)}
             >
-              💾
+              <SaveIcon class="h-4 w-4" />
             </button>
             <Show
               when={confirmDeleteId() === rec.id}
@@ -85,7 +86,7 @@ export function RecordingView(props: RecordingViewProps) {
                   style={{ color: 'var(--c-danger, #ef4444)' }}
                   onClick={() => setConfirmDeleteId(rec.id)}
                 >
-                  🗑
+                  <CloseIcon class="h-4 w-4" />
                 </button>
               }
             >

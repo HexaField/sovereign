@@ -18,7 +18,7 @@ export function setTtsEnabled(enabled: boolean): void {
 const THEME_OPTIONS: Array<{ value: Theme; label: string; icon: string }> = [
   { value: 'default', label: 'Dark', icon: '🌙' },
   { value: 'light', label: 'Light', icon: '☀️' },
-  { value: 'ironman', label: 'Iron Man', icon: '🔵' },
+  { value: 'ironman', label: 'Iron Man', icon: 'circle' },
   { value: 'jarvis', label: 'JARVIS', icon: '🟠' }
 ]
 

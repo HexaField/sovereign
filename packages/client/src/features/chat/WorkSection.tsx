@@ -4,59 +4,59 @@ import { renderMarkdown } from '../../lib/markdown.js'
 
 // ── Tool icons & labels ──────────────────────────────────────────────
 const TOOL_ICONS: Record<string, string> = {
-  read: '📖',
-  write: '✏️',
-  edit: '✂️',
-  exec: '▶',
-  process: '⚙',
-  browser: '🌐',
-  web_search: '🔍',
-  web_fetch: '🌐',
-  cron: '⏰',
-  gateway: '🔌',
-  memory_search: '🧠',
-  memory_get: '🧠',
-  nodes: '📱',
-  tts: '🔊',
-  sessions_spawn: '🧪',
-  sessions_send: '💬',
-  sessions_list: '📋',
-  sessions_history: '📜',
-  session_status: '📊',
-  subagents: '🧵',
-  agents_list: '📋'
+  read: 'read',
+  write: 'write',
+  edit: 'edit',
+  exec: 'exec',
+  process: 'process',
+  browser: 'browser',
+  web_search: 'search',
+  web_fetch: 'fetch',
+  cron: 'cron',
+  gateway: 'gateway',
+  memory_search: 'memory',
+  memory_get: 'memory',
+  nodes: 'nodes',
+  tts: 'tts',
+  sessions_spawn: 'spawn',
+  sessions_send: 'send',
+  sessions_list: 'list',
+  sessions_history: 'history',
+  session_status: 'status',
+  subagents: 'agents',
+  agents_list: 'agents'
 }
 
 function toolIcon(name: string): string {
-  return TOOL_ICONS[name] || '⚙'
+  return TOOL_ICONS[name] || 'tool'
 }
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export function getToolIcon(name: string): string {
   const icons: Record<string, string> = {
-    read: '📖',
-    write: '✏️',
-    edit: '✂️',
-    exec: '▶',
-    process: '⚙',
-    browser: '🌐',
-    web_search: '🔍',
-    web_fetch: '📡',
-    memory_search: '🔍',
-    memory_get: '📋',
-    cron: '⏰',
-    gateway: '🔌',
-    tts: '🔊',
-    sessions_spawn: '🧪',
-    sessions_send: '💬',
-    sessions_list: '📋',
-    sessions_history: '📜',
-    session_status: '📊',
-    subagents: '🧵',
-    agents_list: '📋',
-    nodes: '📱'
+    read: 'read',
+    write: 'write',
+    edit: 'edit',
+    exec: 'exec',
+    process: 'process',
+    browser: 'browser',
+    web_search: 'search',
+    web_fetch: 'fetch',
+    memory_search: 'search',
+    memory_get: 'list',
+    cron: 'cron',
+    gateway: 'gateway',
+    tts: 'tts',
+    sessions_spawn: 'spawn',
+    sessions_send: 'send',
+    sessions_list: 'list',
+    sessions_history: 'history',
+    session_status: 'status',
+    subagents: 'agents',
+    agents_list: 'agents',
+    nodes: 'nodes'
   }
-  return icons[name] || '🔧'
+  return icons[name] || 'tool'
 }
 
 export function summarizeWork(items: WorkItem[]): string {
@@ -156,14 +156,14 @@ export function WorkSection(props: { work: WorkItem[] }) {
       if (w.type === 'system_event') {
         const sk = w.icon || 'generic'
         const icons: Record<string, string> = {
-          nudge: '📌',
-          supervisor: '👷',
-          memorySave: '📝',
-          heartbeat: '💓',
-          compaction: '🧹',
-          subagentContext: '🔀',
-          runtimeContext: '⚙️',
-          generic: '📋'
+          nudge: 'pin',
+          supervisor: 'worker',
+          memorySave: 'write',
+          heartbeat: 'heart',
+          compaction: 'broom',
+          subagentContext: 'split',
+          runtimeContext: 'gear',
+          generic: 'list'
         }
         const labels: Record<string, string> = {
           nudge: 'System Nudge',
@@ -175,11 +175,11 @@ export function WorkSection(props: { work: WorkItem[] }) {
           runtimeContext: 'Runtime Context',
           generic: 'System'
         }
-        return { icon: icons[sk] || '📋', text: labels[sk] || 'System' }
+        return { icon: icons[sk] || 'list', text: labels[sk] || 'System' }
       }
-      if (w.type === 'thinking') return { icon: '💭', text: (w.output || w.input || '').slice(0, 60) }
+      if (w.type === 'thinking') return { icon: 'thought', text: (w.output || w.input || '').slice(0, 60) }
     }
-    return { icon: '⚙', text: '' }
+    return { icon: 'gear', text: '' }
   }
 
   const stepLabel = () => {
@@ -223,14 +223,14 @@ export function WorkSection(props: { work: WorkItem[] }) {
               if (w.type === 'system_event') {
                 const sk = w.icon || 'generic'
                 const iconMap: Record<string, string> = {
-                  nudge: '📌',
-                  supervisor: '👷',
-                  memorySave: '📝',
-                  heartbeat: '💓',
-                  compaction: '🧹',
-                  subagentContext: '🔀',
-                  runtimeContext: '⚙️',
-                  generic: '📋'
+                  nudge: 'pin',
+                  supervisor: 'worker',
+                  memorySave: 'write',
+                  heartbeat: 'heart',
+                  compaction: 'broom',
+                  subagentContext: 'split',
+                  runtimeContext: 'gear',
+                  generic: 'list'
                 }
                 const labelMap: Record<string, string> = {
                   nudge: 'System Nudge',
@@ -242,7 +242,7 @@ export function WorkSection(props: { work: WorkItem[] }) {
                   runtimeContext: 'Runtime Context',
                   generic: 'System'
                 }
-                const icon = iconMap[sk] || '📋'
+                const icon = iconMap[sk] || 'list'
                 const baseLabel = labelMap[sk] || 'System'
                 const detail = sk === 'supervisor' ? `: ${(w.output || '').slice(0, 80)}` : ''
                 return (
@@ -288,7 +288,7 @@ function ThoughtRow(props: { text: string }) {
       }}
       onClick={() => needsTruncation() && setExpanded((v) => !v)}
     >
-      <span>💭 {displayText()}</span>
+      <span>thought {displayText()}</span>
       <Show when={needsTruncation()}>
         <span class="ml-1" style={{ opacity: 0.5, 'font-style': 'normal', 'font-size': '10px' }}>
           {expanded() ? '▲' : '▼'}
@@ -852,7 +852,7 @@ function CronDetail(props: { input: Record<string, unknown>; result?: string }) 
       </div>
       <Show when={schedule()}>
         <div class="mb-1 font-mono text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-          ⏰ {schedule()}
+          [scheduled] {schedule()}
         </div>
       </Show>
       <Show when={payload()}>

@@ -1,8 +1,26 @@
-import { Show, createSignal, createMemo, createEffect, onCleanup } from 'solid-js'
+import { Show, createSignal, createMemo, createEffect, onCleanup, type JSX } from 'solid-js'
 import type { ParsedTurn, ForwardedMessage } from '@sovereign/core'
 import { renderMarkdown, escapeHtml } from '../../lib/markdown.js'
 import { messageToMarkdown, downloadText, exportMessagePdf, turnsToMarkdown, exportThreadPdf } from './export.js'
 import { turns } from './store.js'
+import {
+  WriteIcon,
+  HeartIcon,
+  BotIcon,
+  SystemIcon,
+  SplitIcon,
+  AlertIcon,
+  SignalIcon,
+  RefreshIcon,
+  ClockIcon,
+  FileIcon,
+  ChatIcon,
+  ListIcon,
+  ExternalLinkIcon,
+  CloseIcon,
+  ChevronDownIcon,
+  PinIcon
+} from '../../ui/icons.js'
 
 // ── Icons ────────────────────────────────────────────────────────────
 
@@ -80,7 +98,7 @@ function MarkdownContentInternal(props: { text: string }) {
 
 // ── Context menu item ────────────────────────────────────────────────
 
-function ContextMenuItem(props: { icon: string; label: string; onClick: () => void; danger?: boolean }) {
+function ContextMenuItem(props: { icon: JSX.Element | string; label: string; onClick: () => void; danger?: boolean }) {
   return (
     <button
       class="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors"
@@ -221,25 +239,27 @@ export function MessageBubble(props: MessageBubbleProps) {
     const isSubagentContext = content().startsWith('[Subagent Context]') || content().startsWith('[Subagent Task]')
     const isRuntimeContext = /^OpenClaw runtime context \(internal\):/i.test(content())
     const isTaskCompletion = isRuntimeContext && /\[Internal task completion event\]/i.test(content())
-    const icon = isMemorySave
-      ? '📝'
-      : isHeartbeat
-        ? '💓'
-        : isTaskCompletion
-          ? '🤖'
-          : isRuntimeContext
-            ? '⚙️'
-            : isSubagentContext
-              ? '🔀'
-              : isSubagent
-                ? '🤖'
-                : isExecFailed
-                  ? '⚠️'
-                  : isEvent
-                    ? '📡'
-                    : isReconciliation
-                      ? '🔄'
-                      : '⏰'
+    const icon = isMemorySave ? (
+      <WriteIcon class="inline h-4 w-4" />
+    ) : isHeartbeat ? (
+      <HeartIcon class="inline h-4 w-4" />
+    ) : isTaskCompletion ? (
+      <BotIcon class="inline h-4 w-4" />
+    ) : isRuntimeContext ? (
+      <SystemIcon class="inline h-4 w-4" />
+    ) : isSubagentContext ? (
+      <SplitIcon class="inline h-4 w-4" />
+    ) : isSubagent ? (
+      <BotIcon class="inline h-4 w-4" />
+    ) : isExecFailed ? (
+      <AlertIcon class="inline h-4 w-4" />
+    ) : isEvent ? (
+      <SignalIcon class="inline h-4 w-4" />
+    ) : isReconciliation ? (
+      <RefreshIcon class="inline h-4 w-4" />
+    ) : (
+      <ClockIcon class="inline h-4 w-4" />
+    )
     const label = isMemorySave
       ? 'Memory Checkpoint'
       : isHeartbeat
@@ -285,7 +305,9 @@ export function MessageBubble(props: MessageBubbleProps) {
                 {new Date(timestamp()!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             </Show>
-            <span style={{ 'margin-left': 'auto', 'font-size': '10px', opacity: 0.6 }}>{expanded() ? '▲' : '▼'}</span>
+            <span style={{ 'margin-left': 'auto', 'font-size': '10px', opacity: 0.6 }}>
+              <ChevronDownIcon class={`inline h-3 w-3 transition-transform ${expanded() ? 'rotate-180' : ''}`} />
+            </span>
           </div>
           <div
             style={{
@@ -399,7 +421,7 @@ export function MessageBubble(props: MessageBubbleProps) {
           </Show>
           <Show when={pending()}>
             <ContextMenuItem
-              icon="🗑️"
+              icon={<CloseIcon class="h-3.5 w-3.5" />}
               label="Remove from queue"
               onClick={() => {
                 // removePendingTurn not wired yet
@@ -456,7 +478,7 @@ export function MessageBubble(props: MessageBubbleProps) {
           <div style={{ height: '1px', background: 'var(--c-border-strong)' }} />
 
           <ContextMenuItem
-            icon="📝"
+            icon={<WriteIcon class="h-3.5 w-3.5" />}
             label="Export message as Markdown"
             onClick={() => {
               const md = messageToMarkdown(role(), content(), timestamp())
@@ -465,7 +487,7 @@ export function MessageBubble(props: MessageBubbleProps) {
             }}
           />
           <ContextMenuItem
-            icon="📄"
+            icon={<FileIcon class="h-3.5 w-3.5" />}
             label="Export message as PDF"
             onClick={() => {
               exportMessagePdf(role(), content(), timestamp())
@@ -476,7 +498,7 @@ export function MessageBubble(props: MessageBubbleProps) {
           <div style={{ height: '1px', background: 'var(--c-border-strong)' }} />
 
           <ContextMenuItem
-            icon="💬"
+            icon={<ChatIcon class="h-3.5 w-3.5" />}
             label="Export thread as Markdown"
             onClick={() => {
               const md = turnsToMarkdown(turns())
@@ -485,7 +507,7 @@ export function MessageBubble(props: MessageBubbleProps) {
             }}
           />
           <ContextMenuItem
-            icon="📑"
+            icon={<ListIcon class="h-3.5 w-3.5" />}
             label="Export thread as PDF"
             onClick={() => {
               exportThreadPdf(turns())
@@ -496,7 +518,7 @@ export function MessageBubble(props: MessageBubbleProps) {
           <Show when={props.onForward}>
             <div style={{ height: '1px', background: 'var(--c-border-strong)' }} />
             <ContextMenuItem
-              icon="↗️"
+              icon={<ExternalLinkIcon class="h-3.5 w-3.5" />}
               label="Forward to thread"
               onClick={() => {
                 props.onForward?.(props.turn)
