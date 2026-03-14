@@ -11,7 +11,8 @@ import {
   MeetingsIcon,
   LogsIcon,
   ExpandIcon,
-  CollapseIcon
+  CollapseIcon,
+  CloseIcon
 } from '../../ui/icons.js'
 import {
   activeSidebarTab,
@@ -21,6 +22,7 @@ import {
   chatPanelWidth,
   setChatPanelWidth,
   activeThreadKey,
+  setActiveThreadKey,
   sidebarCollapsed,
   SIDEBAR_TABS,
   CHAT_PANEL_MIN_WIDTH,
@@ -29,8 +31,32 @@ import {
   setActiveMobileTab,
   swipeMobileTab,
   MOBILE_TAB_ORDER,
-  isMobileWidth
+  isMobileWidth,
+  openFileTabs,
+  activeFileTabId,
+  setActiveFileTabId,
+  closeFileTab
 } from './store.js'
+
+// Chat imports
+import { ChatView } from '../chat/ChatView.js'
+import { InputArea } from '../chat/InputArea.js'
+import {
+  turns,
+  streamingHtml,
+  agentStatus,
+  liveWork,
+  liveThinkingText,
+  compacting,
+  isRetryCountdownActive,
+  retryCountdownSeconds,
+  sendMessage,
+  abortChat,
+  initChatStore
+} from '../chat/store.js'
+import { threadKey, switchThread, threads, createThread } from '../threads/store.js'
+import { wsStore } from '../../ws/index.js'
+import type { ChatMessage } from '../chat/types.js'
 
 // Lazy-loaded sidebar panels
 const FileExplorerPanel = lazy(() => import('./panels/FileExplorerPanel.js'))
@@ -44,6 +70,7 @@ const MeetingsPanel = lazy(() =>
   import('../../features/meetings/MeetingsPanel.js').then((m) => ({ default: m.MeetingsPanel }))
 )
 const LogsPanel = lazy(() => import('./panels/LogsPanel.js'))
+const FileViewerTab = lazy(() => import('./tabs/FileViewerTab.js'))
 
 // Icon component lookup
 const SIDEBAR_ICON_MAP: Record<string, Component<{ class?: string }>> = {
@@ -120,9 +147,78 @@ const SidebarContent: Component = () => {
   )
 }
 
-// §3.5 — Right Panel Chat
+// §3.6 — Main Content Area with file tabs
+const MainContentArea: Component = () => {
+  const tabs = openFileTabs
+  const activeId = activeFileTabId
+
+  return (
+    <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
+      {/* Tab bar */}
+      <Show when={tabs().length > 0}>
+        <div
+          class="scrollbar-none flex shrink-0 overflow-x-auto border-b"
+          style={{ 'border-color': 'var(--c-border)', background: 'var(--c-bg-raised)' }}
+        >
+          <For each={tabs()}>
+            {(tab) => (
+              <div
+                class="group flex shrink-0 cursor-pointer items-center gap-1.5 border-r px-3 py-1.5 text-xs"
+                style={{
+                  'border-color': 'var(--c-border)',
+                  background: activeId() === tab.id ? 'var(--c-bg)' : 'transparent',
+                  color: activeId() === tab.id ? 'var(--c-text)' : 'var(--c-text-muted)',
+                  'border-bottom': activeId() === tab.id ? '2px solid var(--c-accent)' : '2px solid transparent'
+                }}
+                onClick={() => setActiveFileTabId(tab.id)}
+              >
+                <span class="max-w-[120px] truncate">{tab.label}</span>
+                <button
+                  class="ml-1 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+                  style={{ color: 'var(--c-text-muted)' }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeFileTab(tab.id)
+                  }}
+                >
+                  <CloseIcon class="h-3 w-3" />
+                </button>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
+      {/* Content */}
+      <div class="flex-1 overflow-auto">
+        <Show
+          when={activeId() && tabs().find((t) => t.id === activeId())}
+          fallback={
+            <div class="flex h-full items-center justify-center">
+              <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
+                Select a file to get started
+              </p>
+            </div>
+          }
+        >
+          {(tab) => (
+            <FileViewerTab path={tab().path} projectId={tab().projectId} onClose={() => closeFileTab(tab().id)} />
+          )}
+        </Show>
+      </div>
+    </div>
+  )
+}
+
+// §3.5 — Right Panel Chat (now functional)
 const ChatPanel: Component = () => {
   const [dragging, setDragging] = createSignal(false)
+
+  // Init chat store for the active thread
+  onMount(() => {
+    const cleanup = initChatStore(threadKey, wsStore)
+    onCleanup(() => cleanup?.())
+  })
 
   const onMouseDown = (e: MouseEvent) => {
     e.preventDefault()
@@ -148,6 +244,13 @@ const ChatPanel: Component = () => {
     })
   })
 
+  // Build messages from turns
+  const messages = (): ChatMessage[] =>
+    turns().map((t) => ({
+      turn: t,
+      pending: t.pending
+    }))
+
   return (
     <>
       {/* Resize divider */}
@@ -164,30 +267,81 @@ const ChatPanel: Component = () => {
           'max-width': `${CHAT_PANEL_MAX_WIDTH}px`
         }}
       >
-        {/* Chat panel header */}
+        {/* Chat panel header with thread info */}
         <div class="flex items-center justify-between border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
-          <span class="text-sm font-medium" style={{ color: 'var(--c-text-heading)' }}>
-            Thread: {activeThreadKey()}
-          </span>
-          <button
-            class="rounded p-1 text-sm transition-colors hover:bg-white/10"
-            onClick={toggleChatExpanded}
-            title="Expand chat (Cmd+Shift+E)"
-          >
-            <ExpandIcon class="h-4 w-4" />
-          </button>
+          <div class="flex min-w-0 flex-1 items-center gap-2">
+            <span class="truncate text-sm font-medium" style={{ color: 'var(--c-text-heading)' }}>
+              {threadKey()}
+            </span>
+            <Show when={agentStatus() === 'working' || agentStatus() === 'thinking'}>
+              <span
+                class="flex h-[18px] min-w-[18px] shrink-0 animate-pulse items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+                style={{ background: '#f59e0b' }}
+              >
+                {agentStatus() === 'thinking' ? 'thinking' : '...'}
+              </span>
+            </Show>
+          </div>
+          <div class="flex items-center gap-1">
+            {/* Thread selector dropdown */}
+            <select
+              class="rounded border px-1.5 py-0.5 text-[11px]"
+              style={{
+                background: 'var(--c-bg)',
+                'border-color': 'var(--c-border)',
+                color: 'var(--c-text)'
+              }}
+              value={threadKey()}
+              onChange={(e) => switchThread(e.currentTarget.value)}
+            >
+              <option value="main">main</option>
+              <For each={threads()}>{(t) => <option value={t.key}>{t.label ?? t.key}</option>}</For>
+            </select>
+            <button
+              class="rounded p-1 text-sm transition-colors hover:bg-white/10"
+              onClick={toggleChatExpanded}
+              title="Expand chat (Cmd+Shift+E)"
+            >
+              <ExpandIcon class="h-4 w-4" />
+            </button>
+          </div>
         </div>
-        {/* Chat content — reuses ChatView when wired */}
-        <div class="flex-1 overflow-auto p-3" style={{ color: 'var(--c-text-muted)' }}>
-          <p class="text-sm">Chat for thread: {activeThreadKey()}</p>
-        </div>
+
+        {/* Chat messages */}
+        <ChatView
+          messages={messages()}
+          streamingHtml={streamingHtml()}
+          agentStatus={agentStatus()}
+          liveWork={liveWork()}
+          liveThinkingText={liveThinkingText()}
+          compacting={compacting()}
+          isRetryCountdownActive={isRetryCountdownActive()}
+          retryCountdownSeconds={retryCountdownSeconds()}
+          onSend={sendMessage}
+          onAbort={abortChat}
+          threadKey={threadKey()}
+        />
+
+        {/* Input area */}
+        <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
       </div>
     </>
   )
 }
 
-// §3.2 — Expanded Chat View
+// §3.2 — Expanded Chat View (full-screen chat)
 const ExpandedChatView: Component = () => {
+  onMount(() => {
+    const cleanup = initChatStore(threadKey, wsStore)
+    onCleanup(() => cleanup?.())
+  })
+
+  const messages = (): ChatMessage[] =>
+    turns().map((t) => ({
+      turn: t,
+      pending: t.pending
+    }))
+
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
       <div class="flex items-center border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
@@ -199,15 +353,25 @@ const ExpandedChatView: Component = () => {
           <CollapseIcon class="h-4 w-4" />
         </button>
         <span class="text-sm font-medium" style={{ color: 'var(--c-text-heading)' }}>
-          Thread: {activeThreadKey()}
+          Thread: {threadKey()}
         </span>
       </div>
-      <div class="flex-1 overflow-auto p-4" style={{ color: 'var(--c-text)' }}>
-        {/* Full chat interface — reuses ChatView, InputArea, MessageBubble etc. */}
-        <p class="text-sm" style={{ color: 'var(--c-text-muted)' }}>
-          Expanded chat view for thread: {activeThreadKey()}
-        </p>
-      </div>
+
+      <ChatView
+        messages={messages()}
+        streamingHtml={streamingHtml()}
+        agentStatus={agentStatus()}
+        liveWork={liveWork()}
+        liveThinkingText={liveThinkingText()}
+        compacting={compacting()}
+        isRetryCountdownActive={isRetryCountdownActive()}
+        retryCountdownSeconds={retryCountdownSeconds()}
+        onSend={sendMessage}
+        onAbort={abortChat}
+        threadKey={threadKey()}
+      />
+
+      <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
     </div>
   )
 }
@@ -228,7 +392,6 @@ const MobileWorkspace: Component = () => {
   const handleTouchMove = (e: TouchEvent) => {
     const dx = Math.abs(e.touches[0].clientX - touchStartX)
     const dy = Math.abs(e.touches[0].clientY - touchStartY)
-    // If horizontal movement dominates, prevent browser back/forward gesture
     if (dx > 10 && dx > dy * 1.5) {
       isHorizontalSwipe = true
       e.preventDefault()
@@ -246,7 +409,6 @@ const MobileWorkspace: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
-      {/* Tab header */}
       <div class="relative flex items-center border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
         <button
           class="text-sm font-medium"
@@ -280,7 +442,6 @@ const MobileWorkspace: Component = () => {
           </div>
         </Show>
       </div>
-      {/* Swipeable content */}
       <div
         ref={(el: HTMLDivElement) => {
           onMount(() => {
@@ -295,9 +456,6 @@ const MobileWorkspace: Component = () => {
           })
         }}
         class="flex-1 overflow-auto"
-        style={{
-          transition: 'transform 0.2s ease-out'
-        }}
       >
         <Switch>
           <Match when={activeMobileTab() === 'files'}>
@@ -347,7 +505,6 @@ const MobileWorkspace: Component = () => {
 const WorkspaceView: Component = () => {
   const [isMobile, setIsMobile] = createSignal(isMobileWidth())
 
-  // §7.1 — Detect mobile on mount and resize
   createEffect(() => {
     if (typeof window === 'undefined') return
     const onResize = () => setIsMobile(window.innerWidth < 768)
@@ -355,7 +512,6 @@ const WorkspaceView: Component = () => {
     onCleanup(() => window.removeEventListener('resize', onResize))
   })
 
-  // §3.2 — Cmd+Shift+E toggle
   const handleKeydown = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
       e.preventDefault()
@@ -397,16 +553,8 @@ const WorkspaceView: Component = () => {
                 </div>
               </Show>
 
-              {/* §3.1 — Main Content */}
-              <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
-                <div class="flex-1 overflow-auto p-4">
-                  <div class="flex h-full items-center justify-center">
-                    <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
-                      Select a file to get started
-                    </p>
-                  </div>
-                </div>
-              </div>
+              {/* §3.1 — Main Content with file tabs */}
+              <MainContentArea />
 
               {/* §3.5 — Right Panel Chat */}
               <ChatPanel />
