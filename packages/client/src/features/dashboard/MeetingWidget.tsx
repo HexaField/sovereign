@@ -8,11 +8,13 @@ export interface MeetingWidgetProps {
   openActionItems: ActionItem[]
 }
 
-export function formatHours(h: number): string {
+export function formatHours(h: number | null | undefined): string {
+  if (h == null || isNaN(h)) return '0m'
   return h < 1 ? `${Math.round(h * 60)}m` : `${h.toFixed(1)}h`
 }
 
-export function attentionItems(items: ActionItem[]): ActionItem[] {
+export function attentionItems(items: ActionItem[] | null | undefined): ActionItem[] {
+  if (!items) return []
   const now = Date.now()
   return items.filter((ai) => !ai.done && (!ai.dueDate || new Date(ai.dueDate).getTime() < now))
 }
@@ -28,12 +30,12 @@ export function MeetingWidget(props: MeetingWidgetProps) {
       <div class="mb-3 flex gap-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
         <span>{formatHours(props.totalHours)} this week</span>
         {props.pendingCount > 0 && <span>{props.pendingCount} pending</span>}
-        {props.openActionItems.length > 0 && <span>{props.openActionItems.length} action items</span>}
+        {(props.openActionItems?.length ?? 0) > 0 && <span>{props.openActionItems.length} action items</span>}
       </div>
 
       {/* Recent meetings */}
       <div class="flex flex-col gap-1.5">
-        {props.recentMeetings.slice(0, 5).map((m) => (
+        {(props.recentMeetings ?? []).slice(0, 5).map((m) => (
           <div class="flex items-center justify-between text-xs">
             <span class="truncate font-medium" style={{ color: 'var(--c-text)' }}>
               {m.title}
