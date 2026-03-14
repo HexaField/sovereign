@@ -33,6 +33,37 @@ function waitForConnection(wss: WebSocketServer, timeoutMs = 3000): Promise<WsWe
   })
 }
 
+/**
+ * Install the default challenge-response handshake handler on a WSS.
+ * Every new client gets a connect.challenge event, and the connect RPC is auto-accepted.
+ */
+function installHandshake(wss: WebSocketServer, opts?: { rejectConnect?: boolean; deviceToken?: string }) {
+  wss.on('connection', (ws) => {
+    // Send challenge
+    ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'test-nonce-123' } }))
+
+    ws.on('message', (data: any) => {
+      let msg: any
+      try {
+        msg = JSON.parse(data.toString())
+      } catch {
+        return
+      }
+      if (msg.type === 'req' && msg.method === 'connect') {
+        if (opts?.rejectConnect) {
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, error: { message: 'pairing required' } }))
+        } else {
+          const result: any = { ok: true }
+          if (opts?.deviceToken) {
+            result.auth = { deviceToken: opts.deviceToken }
+          }
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result }))
+        }
+      }
+    })
+  })
+}
+
 describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   let wss: WebSocketServer
   let port: number
@@ -63,6 +94,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
         resolve()
       })
     })
+    installHandshake(wss)
   })
 
   afterEach(async () => {
@@ -102,27 +134,46 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     expect(identity.publicKey.length).toBe(64) // 32 bytes hex
   })
 
-  it('MUST sign authentication payloads with the device private key', async () => {
-    let receivedUrl = ''
-    wss.on('connection', (_ws, req) => {
-      receivedUrl = req.url ?? ''
+  it('MUST sign authentication payloads with the device private key using base64url encoding', async () => {
+    // Override handshake to capture connect params
+    wss.removeAllListeners('connection')
+    let connectParams: any = null
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'test-nonce' } }))
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req' && msg.method === 'connect') {
+          connectParams = msg.params
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+        }
+      })
     })
     backend = createOpenClawBackend(getConfig())
     await backend.connect()
-    await waitFor(50)
-    expect(receivedUrl).toContain('signature=')
-    expect(receivedUrl).toContain('timestamp=')
+    expect(connectParams).toBeDefined()
+    expect(connectParams.device.signature).toBeDefined()
+    // base64url: no +, /, or = characters
+    expect(connectParams.device.signature).not.toMatch(/[+/=]/)
   })
 
-  it('MUST send the device token in the initial WS handshake', async () => {
-    let receivedUrl = ''
-    wss.on('connection', (_ws, req) => {
-      receivedUrl = req.url ?? ''
+  it('MUST send device public key as base64url in the connect handshake', async () => {
+    wss.removeAllListeners('connection')
+    let connectParams: any = null
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'test-nonce' } }))
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req' && msg.method === 'connect') {
+          connectParams = msg.params
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+        }
+      })
     })
     backend = createOpenClawBackend(getConfig())
     await backend.connect()
-    await waitFor(50)
-    expect(receivedUrl).toContain('publicKey=')
+    expect(connectParams.device.publicKey).toBeDefined()
+    // base64url encoded 32 bytes = 43 chars (no padding)
+    expect(connectParams.device.publicKey).not.toMatch(/[+/=]/)
   })
 
   it('MUST implement automatic reconnection with exponential backoff', async () => {
@@ -303,6 +354,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
 
     // Create a second server
     const wss2 = new WebSocketServer({ port: 0 })
+    installHandshake(wss2)
     const port2 = await new Promise<number>((resolve) => {
       wss2.on('listening', () => resolve((wss2.address() as any).port))
     })
@@ -448,5 +500,138 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     const info = await received
     expect(info.history.length).toBe(1)
     expect(info.history[0].content).toBe('hi')
+  })
+
+  // --- §6.2 Challenge-response handshake tests ---
+
+  it('§6.2 — MUST wait for connect.challenge event before sending connect RPC', async () => {
+    // Override handshake to track message order
+    wss.removeAllListeners('connection')
+    const events: string[] = []
+    wss.on('connection', (ws) => {
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        events.push(msg.method ?? msg.type)
+      })
+      // Delay challenge slightly
+      setTimeout(() => {
+        ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'delayed-nonce' } }))
+        // Then respond to the connect
+        ws.on('message', (data: any) => {
+          const msg = JSON.parse(data.toString())
+          if (msg.type === 'req' && msg.method === 'connect') {
+            ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+          }
+        })
+      }, 50)
+    })
+    backend = createOpenClawBackend(getConfig())
+    await backend.connect()
+    // The connect RPC should only appear after we sent the challenge
+    expect(events).toContain('connect')
+  })
+
+  it('§6.2 — MUST include nonce from challenge in signed payload', async () => {
+    wss.removeAllListeners('connection')
+    let connectParams: any = null
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'specific-nonce-42' } }))
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req' && msg.method === 'connect') {
+          connectParams = msg.params
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+        }
+      })
+    })
+    backend = createOpenClawBackend(getConfig())
+    await backend.connect()
+    expect(connectParams.device.nonce).toBe('specific-nonce-42')
+  })
+
+  it('§6.2 — MUST send connect params with correct protocol version and client info', async () => {
+    wss.removeAllListeners('connection')
+    let connectParams: any = null
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'n' } }))
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req' && msg.method === 'connect') {
+          connectParams = msg.params
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+        }
+      })
+    })
+    backend = createOpenClawBackend(getConfig())
+    await backend.connect()
+    expect(connectParams.minProtocol).toBe(3)
+    expect(connectParams.maxProtocol).toBe(3)
+    expect(connectParams.client.id).toBe('openclaw-control-ui')
+    expect(connectParams.client.version).toBe('2.0')
+    expect(connectParams.client.mode).toBe('webchat')
+    expect(connectParams.role).toBe('operator')
+  })
+
+  it('§6.2 — MUST derive device ID as sha256 hex of public key bytes', async () => {
+    wss.removeAllListeners('connection')
+    let connectParams: any = null
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'n' } }))
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req' && msg.method === 'connect') {
+          connectParams = msg.params
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+        }
+      })
+    })
+    backend = createOpenClawBackend(getConfig())
+    await backend.connect()
+    // Device ID should be 64-char hex (sha256)
+    expect(connectParams.device.id).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('§6.2 — MUST use gatewayToken as fallback auth token when no stored device token exists', async () => {
+    wss.removeAllListeners('connection')
+    let connectParams: any = null
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'n' } }))
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req' && msg.method === 'connect') {
+          connectParams = msg.params
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+        }
+      })
+    })
+    backend = createOpenClawBackend(getConfig({ gatewayToken: 'my-secret-token' }))
+    await backend.connect()
+    expect(connectParams.auth.token).toBe('my-secret-token')
+  })
+
+  it('§6.2 — MUST persist device token returned from connect handshake', async () => {
+    wss.removeAllListeners('connection')
+    installHandshake(wss, { deviceToken: 'new-device-token-xyz' })
+    backend = createOpenClawBackend(getConfig())
+    await backend.connect()
+    await waitFor(50)
+    const tokenPath = join(dataDir, 'agent-backend', 'device-token.json')
+    expect(existsSync(tokenPath)).toBe(true)
+    const tokenData = JSON.parse(readFileSync(tokenPath, 'utf-8'))
+    expect(tokenData.token).toBe('new-device-token-xyz')
+  })
+
+  it('§6.2 — MUST set status to error with auth_rejected when connect RPC is rejected with pairing message', async () => {
+    wss.removeAllListeners('connection')
+    installHandshake(wss, { rejectConnect: true })
+    const statuses: Array<{ status: string; errorType?: string }> = []
+    backend = createOpenClawBackend(getConfig())
+    backend.on('backend.status', (d: any) => statuses.push(d))
+    try {
+      await backend.connect()
+    } catch {
+      // Expected — connect rejected
+    }
+    expect(statuses.some((s) => s.errorType === 'auth_rejected')).toBe(true)
   })
 })

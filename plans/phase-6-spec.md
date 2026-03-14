@@ -376,6 +376,16 @@ Server-side abstraction over the agent runtime. The client never touches this di
 #### 2.2 OpenClaw Implementation
 
 - The OpenClaw backend MUST establish a WebSocket connection to the OpenClaw gateway URL specified in config.
+- The backend MUST implement a challenge-response WebSocket handshake:
+  - On WS open, the backend MUST wait for a `connect.challenge` event from the gateway containing a `nonce`.
+  - The backend MUST sign a v2 payload with the device private key: `v2|{deviceId}|openclaw-control-ui|webchat|operator|{scopes}|{signedAt}|{token}|{nonce}`.
+  - Signatures MUST be base64url-encoded (not hex).
+  - The backend MUST send a `connect` RPC with params: `{ minProtocol: 3, maxProtocol: 3, client: { id, version, platform, mode }, role: 'operator', scopes, device: { id, publicKey, signature, signedAt, nonce }, auth: { token }, userAgent, caps }`.
+  - `deriveDeviceId(publicKeyHex)` = sha256 of public key bytes as hex.
+  - `publicKeyBase64Url(publicKeyHex)` = public key bytes as base64url.
+  - If the connect RPC returns a `deviceToken` in the result, the backend MUST persist it to `{dataDir}/agent-backend/device-token.json`.
+  - If the connect RPC is rejected with a pairing-related error, the backend MUST emit `backend.status` with `'error'` and `errorType: 'auth_rejected'`.
+- The backend MUST support a `gatewayToken` config option used as a fallback auth token when no stored device token exists.
 - The backend MUST implement Ed25519 device identity authentication:
   - The backend MUST generate an Ed25519 keypair on first use and store it to `{dataDir}/agent-backend/device-identity.json`.
   - The backend MUST sign authentication payloads with the device private key.
@@ -929,6 +939,7 @@ The home screen for global threads. Shows activity across all workspaces. All co
   - Connected services: list of active server modules with their status (from the `status` WS channel).
   - Uptime: server uptime duration formatted as `Xd Xh Xm`.
 - Each service MUST show a status dot: green for healthy, amber for degraded, red for error.
+- The system module's `getHealth()` MUST accept an optional `getAgentBackendStatus` callback in its options. When provided, the health endpoint's `connection.agentBackend` field MUST reflect the return value of this callback. When not provided, it MUST default to `'disconnected'`. This allows the server wiring to inject the live agent backend connection status into health reports.
 
 #### 7.4 ActivityFeed
 
