@@ -61,7 +61,7 @@ const EntityDetailTab: Component<EntityDetailTabProps> = (props) => {
         style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text-secondary)' }}
       >
         <div class="flex items-center gap-2">
-          <span>{props.entityType === 'issue' ? '🔴' : '🟣'}</span>
+          <span></span>
           <span style={{ color: 'var(--c-text-primary)' }}>{data()?.title ?? `${typeLabel()} #${props.entityId}`}</span>
         </div>
         <Show when={props.onClose}>

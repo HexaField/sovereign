@@ -13,7 +13,7 @@ export interface LogEntry {
 }
 
 export const LOG_LEVEL_ICONS: Record<LogLevel, string> = {
-  debug: '🔍',
+  debug: 'debug',
   info: 'ℹ️',
   warn: '⚠️',
   error: '❌'

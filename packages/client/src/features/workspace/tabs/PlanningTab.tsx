@@ -1,4 +1,5 @@
 import { Component, createSignal, createResource, createEffect, Show, For, onCleanup, createMemo } from 'solid-js'
+import { PlanningIcon } from '../../../ui/icons.js'
 
 export interface PlanningNode {
   id: string
@@ -28,9 +29,9 @@ async function fetchPlanningGraph(orgId: string): Promise<PlanningGraph> {
 }
 
 const statusIndicator: Record<PlanningNode['status'], { color: string; label: string }> = {
-  blocked: { color: 'var(--c-error, #ef4444)', label: '🔴' },
-  ready: { color: 'var(--c-success, #22c55e)', label: '🟢' },
-  'in-progress': { color: 'var(--c-warning, #f59e0b)', label: '🟡' },
+  blocked: { color: 'var(--c-error, #ef4444)', label: 'blocked' },
+  ready: { color: 'var(--c-success, #22c55e)', label: 'ready' },
+  'in-progress': { color: 'var(--c-warning, #f59e0b)', label: 'active' },
   done: { color: 'var(--c-text-muted)', label: '✅' }
 }
 
@@ -154,7 +155,7 @@ const PlanningTab: Component<PlanningTabProps> = (props) => {
         style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text-secondary)' }}
       >
         <div class="flex items-center gap-2">
-          <span>📊</span>
+          <PlanningIcon class="h-4 w-4" />
           <span style={{ color: 'var(--c-text-primary)' }}>Planning DAG</span>
         </div>
         <Show when={props.onClose}>

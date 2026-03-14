@@ -1,4 +1,5 @@
 import { type Component, createSignal, createResource, For, Show } from 'solid-js'
+import { NotificationsIcon } from '../ui/icons.js'
 
 interface OrgSummary {
   id: string
@@ -78,7 +79,7 @@ const Header: Component = () => {
 
       {/* Notification bell */}
       <div class="relative cursor-pointer text-zinc-400 hover:text-zinc-200">
-        <span class="text-lg">🔔</span>
+        <NotificationsIcon class="h-5 w-5" />
         <Show when={(notifications() ?? 0) > 0}>
           <span class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
             {notifications()}

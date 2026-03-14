@@ -145,12 +145,12 @@ function formatCountdown(ms: number): string {
 }
 
 const KIND_ICONS: Record<string, string> = {
-  main: '💬',
-  thread: '🧵',
-  cron: '⏰',
+  main: 'chat',
+  thread: 'thread',
+  cron: 'cron',
   'cron-run': '▶',
-  subagent: '🤖',
-  'event-agent': '⚡'
+  subagent: 'bot',
+  'event-agent': 'event'
 }
 
 const KIND_COLORS: Record<string, string> = {
@@ -279,7 +279,7 @@ function SessionRow(props: {
               const ms = () => (next().nextRunAtMs || 0) - props.now
               return (
                 <div class="mt-0.5 flex items-center gap-1 text-[10px]" style={{ color: '#f59e0b' }}>
-                  <span>⏰</span>
+                  <span>cron</span>
                   <span>{next().name}</span>
                   <span style={{ color: 'var(--c-text-muted)' }}>
                     {ms() > 0 ? `in ${formatCountdown(ms())}` : 'due'}

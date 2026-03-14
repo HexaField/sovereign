@@ -45,7 +45,7 @@ const NotificationsPanel: Component = () => {
           setItems(
             data.notifications.map((n: Record<string, unknown>) => ({
               id: n.id as string,
-              icon: n.severity === 'error' ? '🔴' : '🔔',
+              icon: n.severity === 'error' ? 'error' : 'info',
               summary: n.title as string,
               timestamp: new Date(n.timestamp as string).getTime(),
               read: n.read as boolean,
@@ -62,7 +62,7 @@ const NotificationsPanel: Component = () => {
     const offNew = wsStore.on('notification.new', (msg: Record<string, unknown>) => {
       const item: NotificationItem = {
         id: (msg.id as string) || Math.random().toString(36).slice(2),
-        icon: msg.severity === 'error' ? '🔴' : '🔔',
+        icon: msg.severity === 'error' ? 'error' : 'info',
         summary: (msg.title as string) || '',
         timestamp: Date.now(),
         read: false,

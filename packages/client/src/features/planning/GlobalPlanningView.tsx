@@ -68,13 +68,13 @@ export function getStatusLabel(status: PlanningNode['status']): string {
 export function getPriorityIcon(priority: PlanningNode['priority']): string {
   switch (priority) {
     case 'critical':
-      return '🔴'
+      return 'blocked'
     case 'high':
       return '🟠'
     case 'medium':
-      return '🟡'
+      return 'active'
     case 'low':
-      return '🟢'
+      return 'ready'
   }
 }
 
@@ -100,9 +100,9 @@ export function getWorkspaceColor(workspace: string, allWorkspaces: string[]): s
 // View mode labels/icons
 export const VIEW_MODES: Array<{ key: PlanningViewMode; label: string; icon: string }> = [
   { key: 'dag', label: 'DAG', icon: '🔗' },
-  { key: 'kanban', label: 'Kanban', icon: '📋' },
-  { key: 'list', label: 'List', icon: '📃' },
-  { key: 'tree', label: 'Tree', icon: '🌳' }
+  { key: 'kanban', label: 'Kanban', icon: 'kanban' },
+  { key: 'list', label: 'List', icon: 'list' },
+  { key: 'tree', label: 'Tree', icon: 'tree' }
 ]
 
 // Filter keys
@@ -338,7 +338,7 @@ const GlobalPlanningView: Component = () => {
           onClick={() => setShowAssignDialog(true)}
           data-testid="assign-agent-button"
         >
-          🤖 Assign to Agent
+          Assign to Agent
         </button>
         <button
           class="rounded px-2 py-1 text-xs font-medium"
