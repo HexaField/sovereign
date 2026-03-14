@@ -170,7 +170,7 @@ export function createChatModule(
 
   async function handleSessionCreate(label?: string): Promise<{ threadKey: string; sessionKey: string }> {
     const thread = threadManager.create({ label })
-    const sessionKey = await backend.createSession(label)
+    const sessionKey = deriveSessionKey(thread.key)
     setMapping(thread.key, sessionKey)
     return { threadKey: thread.key, sessionKey }
   }
