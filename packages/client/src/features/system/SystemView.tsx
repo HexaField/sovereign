@@ -3,6 +3,7 @@
 
 import { createSignal, type Component } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
+import OverviewTab from './OverviewTab'
 import ArchitectureTab from './ArchitectureTab'
 import LogsTab from './LogsTab'
 import HealthTab from './HealthTab'
@@ -11,7 +12,7 @@ import DevicesTab from './DevicesTab'
 import JobsTab from './JobsTab'
 import EventStreamTab from './EventStreamTab'
 
-export type SystemTabId = 'architecture' | 'logs' | 'health' | 'config' | 'devices' | 'jobs' | 'events'
+export type SystemTabId = 'overview' | 'architecture' | 'logs' | 'health' | 'config' | 'devices' | 'jobs' | 'events'
 
 export interface SystemTab {
   id: SystemTabId
@@ -20,6 +21,7 @@ export interface SystemTab {
 }
 
 export const SYSTEM_TABS: SystemTab[] = [
+  { id: 'overview', label: 'Overview', component: OverviewTab },
   { id: 'architecture', label: 'Architecture', component: ArchitectureTab },
   { id: 'logs', label: 'Logs', component: LogsTab },
   { id: 'health', label: 'Health', component: HealthTab },
@@ -30,7 +32,7 @@ export const SYSTEM_TABS: SystemTab[] = [
 ]
 
 const SystemView: Component = () => {
-  const [activeTab, setActiveTab] = createSignal<SystemTabId>('architecture')
+  const [activeTab, setActiveTab] = createSignal<SystemTabId>('overview')
 
   const activeComponent = () => SYSTEM_TABS.find((t) => t.id === activeTab())?.component
 

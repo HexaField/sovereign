@@ -8,7 +8,9 @@ import {
   streamingHtml,
   turns,
   sendMessage,
-  abortChat
+  abortChat,
+  compacting,
+  retryCountdownSeconds
 } from './store.js'
 import { threadKey } from '../threads/store.js'
 import { isRecording, setVoiceState, voiceTimerText, setVoiceTimerText } from '../voice/store.js'
@@ -481,6 +483,28 @@ export function InputArea(props: InputAreaProps) {
         >
           <span class="text-sm font-medium" style={{ color: 'var(--c-accent)' }}>
             Drop files here
+          </span>
+        </div>
+      </Show>
+
+      {/* Retry countdown */}
+      <Show when={retryCountdownSeconds() > 0}>
+        <div class="flex w-full items-center gap-2 px-0.5">
+          <div class="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: '#f59e0b' }} />
+          <span class="text-xs" style={{ color: '#f59e0b' }}>
+            Rate limited — retrying in {retryCountdownSeconds()}s
+          </span>
+        </div>
+      </Show>
+
+      {/* Compaction indicator */}
+      <Show when={compacting()}>
+        <div class="flex w-full items-center gap-2 px-0.5">
+          <svg class="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+          <span class="text-xs" style={{ color: '#8b5cf6' }}>
+            Compacting context…
           </span>
         </div>
       </Show>
