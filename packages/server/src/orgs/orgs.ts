@@ -31,6 +31,7 @@ export interface OrgManager {
   getOrgConfig(orgId: string): Record<string, unknown>
   updateOrgConfig(orgId: string, patch: Record<string, unknown>): void
 
+  autoDetectProjects(orgId: string): Project[]
   ensureGlobalWorkspace(): Org
 }
 
@@ -203,6 +204,46 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
     return org
   }
 
+  const SKIP_DIRS = new Set(['.git', 'node_modules', '.sovereign-data'])
+
+  const autoDetectProjects = (orgId: string): Project[] => {
+    const org = getOrg(orgId)
+    if (!org) throw new Error(`Org not found: ${orgId}`)
+
+    const existingPaths = new Set(state.projects.filter((p) => p.orgId === orgId).map((p) => p.repoPath))
+    const added: Project[] = []
+
+    const tryRegister = (dirPath: string) => {
+      const resolved = path.resolve(dirPath)
+      if (existingPaths.has(resolved)) return
+      if (!fs.existsSync(path.join(resolved, '.git'))) return
+      try {
+        const project = addProject(orgId, { name: path.basename(resolved), repoPath: resolved })
+        added.push(project)
+        existingPaths.add(resolved)
+      } catch {
+        // Already registered or invalid — skip
+      }
+    }
+
+    // Check if org path itself is a git repo
+    tryRegister(org.path)
+
+    // Scan immediate subdirectories
+    try {
+      const entries = fs.readdirSync(org.path, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
+        tryRegister(path.join(org.path, entry.name))
+      }
+    } catch {
+      // Can't read directory — skip
+    }
+
+    return added
+  }
+
   return {
     createOrg,
     updateOrg,
@@ -220,6 +261,7 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
     getActiveProject,
     getOrgConfig,
     updateOrgConfig,
+    autoDetectProjects,
     ensureGlobalWorkspace
   }
 }
