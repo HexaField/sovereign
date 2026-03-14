@@ -336,7 +336,9 @@ const systemModule = createSystemModule(bus, dataDir, {
 })
 const logsChannel = registerLogsChannel(wsHandler, bus, dataDir)
 const healthHistory = createHealthHistory()
-app.use(createSystemRoutes({ system: systemModule, logsChannel, dataDir, healthHistory }))
+app.use(
+  createSystemRoutes({ system: systemModule, logsChannel, dataDir, healthHistory, deviceInfoProvider: backend as any })
+)
 
 // --- Event Stream ---
 const eventStream = createEventStream(bus)
