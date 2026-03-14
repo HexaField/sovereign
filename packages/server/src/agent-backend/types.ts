@@ -5,6 +5,8 @@ import type { AgentStatus, BackendConnectionStatus } from '@template/core'
 export interface OpenClawConfig {
   /** Gateway WebSocket URL (e.g. wss://localhost:3456/ws) */
   gatewayUrl: string
+  /** Gateway auth token */
+  gatewayToken?: string
   /** Path to device identity key file */
   deviceKeyPath?: string
   /** Data directory for storing device identity */
