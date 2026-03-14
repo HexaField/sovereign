@@ -1,19 +1,21 @@
-import { createSignal, For, Show, onMount, onCleanup } from 'solid-js'
+import { createSignal, Show, onMount, onCleanup } from 'solid-js'
+import type { JSX } from 'solid-js'
 import { activeView, setActiveView, type NavView } from './store.js'
+import { DashboardIcon, WorkspaceIcon, CanvasIcon, PlanningIcon, SystemIcon } from '../../ui/icons.js'
 
 interface ViewItem {
   key: NavView
-  icon: string
+  icon: () => JSX.Element
   label: string
   shortcut: string
 }
 
 const VIEW_ITEMS: ViewItem[] = [
-  { key: 'dashboard', icon: 'dashboard', label: 'Dashboard', shortcut: '⌘1' },
-  { key: 'workspace', icon: 'workspace', label: 'Workspace', shortcut: '⌘2' },
-  { key: 'canvas', icon: 'canvas', label: 'Canvas', shortcut: '⌘3' },
-  { key: 'planning', icon: 'planning', label: 'Planning', shortcut: '⌘4' },
-  { key: 'system', icon: 'system', label: 'System', shortcut: '⌘5' }
+  { key: 'dashboard', icon: () => <DashboardIcon size={16} />, label: 'Dashboard', shortcut: '⌘1' },
+  { key: 'workspace', icon: () => <WorkspaceIcon size={16} />, label: 'Workspace', shortcut: '⌘2' },
+  { key: 'canvas', icon: () => <CanvasIcon size={16} />, label: 'Canvas', shortcut: '⌘3' },
+  { key: 'planning', icon: () => <PlanningIcon size={16} />, label: 'Planning', shortcut: '⌘4' },
+  { key: 'system', icon: () => <SystemIcon size={16} />, label: 'System', shortcut: '⌘5' }
 ]
 
 export default function ViewMenu() {
@@ -60,7 +62,7 @@ export default function ViewMenu() {
         onClick={() => setOpen(!open())}
         data-testid="view-menu-trigger"
       >
-        <span>{currentItem().icon}</span>
+        <span class="flex items-center">{currentItem().icon()}</span>
         <span>{currentItem().label}</span>
         <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
           ▾
@@ -77,33 +79,28 @@ export default function ViewMenu() {
           }}
           data-testid="view-menu-dropdown"
         >
-          <For each={VIEW_ITEMS}>
-            {(item) => (
-              <button
-                class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
-                style={{
-                  color: activeView() === item.key ? 'var(--c-accent)' : 'var(--c-text)',
-                  background: activeView() === item.key ? 'var(--c-hover-bg)' : 'transparent',
-                  border: 'none',
-                  cursor: 'pointer'
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = activeView() === item.key ? 'var(--c-hover-bg)' : '')
-                }
-                onClick={() => select(item.key)}
-              >
-                <span class="w-5 text-center">{item.icon}</span>
-                <span class="flex-1">{item.label}</span>
-                <Show when={activeView() === item.key}>
-                  <span style={{ color: 'var(--c-accent)' }}>✓</span>
-                </Show>
-                <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                  {item.shortcut}
-                </span>
-              </button>
-            )}
-          </For>
+          {VIEW_ITEMS.map((item) => (
+            <button
+              class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
+              style={{
+                color: activeView() === item.key ? 'var(--c-accent)' : 'var(--c-text)',
+                background: activeView() === item.key ? 'var(--c-hover-bg)' : 'transparent',
+                border: 'none',
+                cursor: 'pointer'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.background = activeView() === item.key ? 'var(--c-hover-bg)' : '')
+              }
+              onClick={() => select(item.key)}
+            >
+              <span class="flex w-5 items-center justify-center">{item.icon()}</span>
+              <span class="flex-1">{item.label}</span>
+              <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                {item.shortcut}
+              </span>
+            </button>
+          ))}
         </div>
       </Show>
     </div>
