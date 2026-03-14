@@ -11,6 +11,7 @@ import { generateKeyPairSync, sign, createPrivateKey, createHash } from 'node:cr
 const DEFAULT_INITIAL_DELAY = 1000
 const DEFAULT_MAX_DELAY = 30000
 const HISTORY_RELOAD_DEBOUNCE = 300
+const REQUEST_TIMEOUT = 30000
 
 function createEventEmitter() {
   const listeners = new Map<string, Set<(data: any) => void>>()
@@ -37,7 +38,6 @@ function loadOrCreateIdentity(keyPath: string): DeviceIdentity {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
   const pubDer = publicKey.export({ type: 'spki', format: 'der' })
   const privDer = privateKey.export({ type: 'pkcs8', format: 'der' })
-  // Ed25519 public key raw bytes are last 32 bytes of SPKI DER
   const pubRaw = pubDer.subarray(pubDer.length - 32)
   const identity: DeviceIdentity = {
     publicKey: pubRaw.toString('hex'),
@@ -77,9 +77,7 @@ function calcReconnectDelay(attempt: number, config: OpenClawConfig): number {
   return delay
 }
 
-export function createOpenClawBackend(
-  config: OpenClawConfig
-): AgentBackend & {
+export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   getDeviceInfo(): {
     deviceId: string
     publicKey: string
@@ -104,6 +102,10 @@ export function createOpenClawBackend(
 
   let currentConfig = { ...config }
 
+  // Pending RPC requests awaiting response
+  const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+  let msgId = 0
+
   function getKeyPath(): string {
     if (currentConfig.deviceKeyPath) return currentConfig.deviceKeyPath
     const dataDir = currentConfig.dataDir ?? '.'
@@ -124,6 +126,24 @@ export function createOpenClawBackend(
     emitter.emit('backend.status', { status, reason, errorType })
   }
 
+  /** Send a JSON-RPC style request to the gateway and return a promise for the response. */
+  function request(method: string, params: Record<string, unknown>): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        return reject(new Error('Not connected'))
+      }
+      const id = 'r' + String(++msgId)
+      pending.set(id, { resolve, reject })
+      state.ws.send(JSON.stringify({ type: 'req', id, method, params }))
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id)
+          reject(new Error(`Request ${method} timed out`))
+        }
+      }, REQUEST_TIMEOUT)
+    })
+  }
+
   function handleMessage(raw: string) {
     let msg: any
     try {
@@ -132,107 +152,158 @@ export function createOpenClawBackend(
       return
     }
 
-    const sessionKey = msg.sessionKey ?? state.activeSessionKey ?? 'main'
+    // Handle RPC responses — match to pending requests
+    if (msg.type === 'res') {
+      const p = pending.get(msg.id)
+      if (p) {
+        pending.delete(msg.id)
+        if (msg.ok === false || msg.error) {
+          p.reject(new Error(msg.error?.message ?? msg.error ?? 'request failed'))
+        } else {
+          p.resolve(msg.payload ?? msg.result ?? null)
+        }
+      }
+      return
+    }
 
-    switch (msg.type) {
-      case 'stream':
-      case 'chat.stream': {
-        const text = stripThinkingBlocks(msg.text ?? msg.data ?? '')
-        if (text) {
-          emitter.emit('chat.stream', { sessionKey, text })
-        }
+    // Handle events from the gateway
+    if (msg.type === 'event') {
+      handleEvent(msg.event, msg.payload)
+      return
+    }
+  }
+
+  function handleEvent(event: string, payload: any) {
+    if (!payload) return
+
+    const sessionKey = payload.sessionKey ?? state.activeSessionKey ?? 'main'
+
+    switch (event) {
+      case 'chat': {
+        handleChatEvent(sessionKey, payload)
         break
       }
-      case 'turn':
-      case 'chat.turn': {
-        const turn: ParsedTurn = {
-          role: msg.turn?.role ?? msg.role ?? 'assistant',
-          content: stripThinkingBlocks(msg.turn?.content ?? msg.content ?? ''),
-          timestamp: msg.turn?.timestamp ?? msg.timestamp ?? Date.now(),
-          workItems: msg.turn?.workItems ?? msg.workItems ?? [],
-          thinkingBlocks: msg.turn?.thinkingBlocks ?? msg.thinkingBlocks ?? []
-        }
-        emitter.emit('chat.turn', { sessionKey, turn })
+      case 'agent': {
+        handleAgentEvent(sessionKey, payload)
         break
       }
-      case 'status':
-      case 'chat.status': {
-        const agentStatus = msg.status ?? msg.agentStatus
-        if (agentStatus) {
-          const prevStatus = state.agentStatus
-          state.agentStatus = agentStatus
-          emitter.emit('chat.status', { sessionKey, status: agentStatus })
-          if (prevStatus === 'working' && agentStatus === 'idle') {
-            scheduleHistoryReload(sessionKey)
-          }
-        }
-        break
-      }
-      case 'work':
-      case 'chat.work': {
-        const work: WorkItem = msg.work ?? {
-          type: msg.workType ?? 'tool_call',
-          name: msg.name,
-          input: msg.input,
-          output: msg.output,
-          toolCallId: msg.toolCallId,
-          timestamp: msg.timestamp ?? Date.now()
-        }
-        emitter.emit('chat.work', { sessionKey, work })
-        break
-      }
-      case 'thinking':
-      case 'chat.thinking': {
-        const work: WorkItem = {
-          type: 'thinking',
-          output: msg.text ?? msg.content ?? '',
-          timestamp: msg.timestamp ?? Date.now()
-        }
-        emitter.emit('chat.work', { sessionKey, work })
-        break
-      }
-      case 'compacting':
-      case 'chat.compacting': {
-        emitter.emit('chat.compacting', { sessionKey, active: msg.active ?? true })
-        break
-      }
-      case 'error':
-      case 'chat.error': {
-        const retryAfterMs = msg.retryAfterMs ?? msg.retryAfter
-        emitter.emit('chat.error', { sessionKey, error: msg.error ?? msg.message ?? 'Unknown error', retryAfterMs })
-        if (retryAfterMs) {
-          state.retryTimer = setTimeout(() => {
-            state.retryTimer = null
-            if (state.ws?.readyState === WebSocket.OPEN) {
-              state.ws.send(JSON.stringify({ type: 'retry' }))
-            }
-          }, retryAfterMs)
-        }
-        break
-      }
-      case 'session.info': {
-        emitter.emit('session.info', {
-          sessionKey: msg.sessionKey ?? sessionKey,
-          label: msg.label,
-          history: msg.history ?? []
-        })
-        break
-      }
-      case 'pairing.required': {
-        setStatus('error', 'Device pairing required', 'auth_rejected')
+      case 'health': {
+        // Health check event — no action needed
         break
       }
     }
+  }
+
+  function handleChatEvent(sessionKey: string, ev: any) {
+    if (ev.state === 'delta') {
+      // Streaming text chunk
+      const text = extractText(ev.message)
+      const cleaned = text ? stripThinkingBlocks(text) : ''
+      if (cleaned) {
+        emitter.emit('chat.stream', { sessionKey, text: cleaned })
+      }
+    } else if (ev.state === 'final') {
+      // Completed turn
+      const text = extractText(ev.message)
+      const cleaned = text ? stripThinkingBlocks(text) : ''
+      if (cleaned) {
+        const turn: ParsedTurn = {
+          role: 'assistant',
+          content: cleaned,
+          timestamp: Date.now(),
+          workItems: [],
+          thinkingBlocks: []
+        }
+        emitter.emit('chat.turn', { sessionKey, turn })
+      }
+      emitter.emit('chat.status', { sessionKey, status: 'idle' })
+      scheduleHistoryReload(sessionKey)
+    }
+  }
+
+  function handleAgentEvent(sessionKey: string, ev: any) {
+    const data = ev.data ?? {}
+    const stream = ev.stream as string | undefined
+    const phase = data.phase as string | undefined
+
+    switch (stream) {
+      case 'lifecycle': {
+        if (phase === 'start') {
+          state.agentStatus = 'working'
+          emitter.emit('chat.status', { sessionKey, status: 'working' })
+        } else if (phase === 'end' || phase === 'error') {
+          if (phase === 'error') {
+            const reason = data.error || data.reason || data.stopReason || ''
+            emitter.emit('chat.error', { sessionKey, error: reason || 'Agent error', retryAfterMs: undefined })
+          }
+          state.agentStatus = 'idle'
+          emitter.emit('chat.status', { sessionKey, status: 'idle' })
+          scheduleHistoryReload(sessionKey)
+        }
+        break
+      }
+      case 'tool': {
+        const work: WorkItem = {
+          type: phase === 'result' ? 'tool_result' : 'tool_call',
+          name: data.name,
+          input: data.input,
+          output: data.output,
+          toolCallId: data.toolCallId,
+          timestamp: data.timestamp ?? Date.now()
+        }
+        emitter.emit('chat.work', { sessionKey, work })
+        break
+      }
+      case 'thinking': {
+        const work: WorkItem = {
+          type: 'thinking',
+          output: data.text ?? data.content ?? data.delta ?? '',
+          timestamp: data.timestamp ?? Date.now()
+        }
+        emitter.emit('chat.work', { sessionKey, work })
+        break
+      }
+      case 'compaction': {
+        emitter.emit('chat.compacting', { sessionKey, active: phase === 'start' })
+        break
+      }
+      case 'assistant': {
+        // Assistant stream — indicates agent is producing text, status can be cleared
+        break
+      }
+    }
+  }
+
+  /** Extract text content from a gateway ChatMessage (ContentBlock[] or string). */
+  function extractText(message: unknown): string | null {
+    if (!message) return null
+    if (typeof message === 'string') return message
+    if (Array.isArray(message)) {
+      return message
+        .filter((b: any) => b.type === 'text')
+        .map((b: any) => b.text ?? '')
+        .join('')
+    }
+    if (typeof message === 'object' && 'content' in (message as any)) {
+      return extractText((message as any).content)
+    }
+    return null
   }
 
   function scheduleHistoryReload(sessionKey: string) {
     if (state.historyReloadTimer) {
       clearTimeout(state.historyReloadTimer)
     }
-    state.historyReloadTimer = setTimeout(() => {
+    state.historyReloadTimer = setTimeout(async () => {
       state.historyReloadTimer = null
-      if (state.ws?.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({ type: 'history', sessionKey }))
+      try {
+        const res = (await request('chat.history', { sessionKey, limit: 1000 })) as {
+          messages?: any[]
+        }
+        const history = res?.messages ?? []
+        emitter.emit('session.info', { sessionKey, label: undefined, history })
+      } catch {
+        // History fetch failed — non-critical
       }
     }, HISTORY_RELOAD_DEBOUNCE)
   }
@@ -251,10 +322,8 @@ export function createOpenClawBackend(
 
         let settled = false
         let connectNonce = ''
-        let pendingReq: { id: string; resolve: (v: unknown) => void; reject: (e: Error) => void } | null = null
 
         ws.on('open', () => {
-          // Don't resolve yet — wait for connect handshake
           state.reconnectAttempt = 0
         })
 
@@ -292,13 +361,12 @@ export function createOpenClawBackend(
               const signature = signPayload(id, payload)
 
               const reqId = 'c' + Date.now()
-              pendingReq = {
-                id: reqId,
+              // Register this as a pending request so the normal res handler picks it up
+              pending.set(reqId, {
                 resolve: (result) => {
                   if (settled) return
                   settled = true
 
-                  // Store device token if returned
                   const auth = (result as any)?.auth
                   if (auth?.deviceToken) {
                     saveDeviceToken(deviceId, auth.deviceToken)
@@ -314,7 +382,7 @@ export function createOpenClawBackend(
                   setStatus('error', err.message, isPairing ? 'auth_rejected' : 'server_down')
                   reject(err)
                 }
-              }
+              })
 
               ws.send(
                 JSON.stringify({
@@ -354,25 +422,18 @@ export function createOpenClawBackend(
             return
           }
 
-          // Handle RPC responses (for connect handshake)
-          if (msg.type === 'res' && pendingReq && msg.id === pendingReq.id) {
-            if (msg.error) {
-              pendingReq.reject(new Error(msg.error.message ?? msg.error ?? 'connect failed'))
-            } else {
-              pendingReq.resolve(msg.result)
-            }
-            pendingReq = null
-            return
-          }
+          // All other messages go through unified handler (res + event)
+          handleMessage(raw)
 
-          // Normal message handling (after connected)
-          if (settled) {
-            handleMessage(raw)
-          }
+          // Check if connect settled via the res handler
+          // (The pending map resolve/reject for the connect reqId handles this)
         })
 
         ws.on('close', () => {
           if (state.destroyed) return
+          // Reject all pending requests
+          pending.forEach((p) => p.reject(new Error('Connection closed')))
+          pending.clear()
           if (!settled) {
             settled = true
             setStatus('disconnected', 'Connection closed before handshake', 'server_down')
@@ -455,6 +516,9 @@ export function createOpenClawBackend(
       clearTimeout(state.historyReloadTimer)
       state.historyReloadTimer = null
     }
+    // Reject all pending requests
+    pending.forEach((p) => p.reject(new Error('Backend disconnected')))
+    pending.clear()
     if (state.ws) {
       state.ws.removeAllListeners()
       if (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING) {
@@ -494,85 +558,38 @@ export function createOpenClawBackend(
     },
 
     async sendMessage(sessionKey: string, text: string, attachments?: Buffer[]) {
-      if (state.ws?.readyState !== WebSocket.OPEN) {
-        throw new Error('Not connected')
+      const params: Record<string, unknown> = {
+        sessionKey,
+        message: text,
+        deliver: false,
+        idempotencyKey: 'r' + Date.now()
       }
-      const msg: any = { type: 'chat.send', sessionKey, text }
       if (attachments?.length) {
-        msg.attachments = attachments.map((b) => b.toString('base64'))
+        params.attachments = attachments.map((b) => b.toString('base64'))
       }
-      state.ws.send(JSON.stringify(msg))
+      await request('chat.send', params)
     },
 
     async abort(sessionKey: string) {
-      if (state.ws?.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({ type: 'chat.abort', sessionKey }))
-      }
+      await request('chat.abort', { sessionKey }).catch(() => {})
     },
 
     async switchSession(sessionKey: string) {
       state.activeSessionKey = sessionKey
-      if (state.ws?.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({ type: 'session.switch', sessionKey }))
-      }
+      await request('session.switch', { sessionKey }).catch(() => {})
     },
 
     async createSession(label?: string): Promise<string> {
-      return new Promise((resolve, reject) => {
-        if (state.ws?.readyState !== WebSocket.OPEN) {
-          return reject(new Error('Not connected'))
-        }
-        const requestId = Math.random().toString(36).slice(2)
-        let settled = false
-        const timer = setTimeout(() => {
-          if (settled) return
-          settled = true
-          state.ws?.off('message', handler)
-          reject(new Error('Session creation timeout'))
-        }, 10000)
-        const handler = (data: any) => {
-          try {
-            const msg = JSON.parse(data.toString())
-            if (msg.type === 'session.created' && msg.requestId === requestId) {
-              if (settled) return
-              settled = true
-              clearTimeout(timer)
-              state.ws?.off('message', handler)
-              resolve(msg.sessionKey)
-            }
-          } catch {
-            /* ignore parse errors */
-          }
-        }
-        state.ws.on('message', handler)
-        state.ws.send(JSON.stringify({ type: 'session.create', label, requestId }))
-      })
+      const result = (await request('session.create', { label })) as { sessionKey?: string }
+      if (!result?.sessionKey) throw new Error('No sessionKey in response')
+      return result.sessionKey
     },
 
     async getHistory(sessionKey: string): Promise<ParsedTurn[]> {
-      return new Promise((resolve, reject) => {
-        if (state.ws?.readyState !== WebSocket.OPEN) {
-          return reject(new Error('Not connected'))
-        }
-        const requestId = Math.random().toString(36).slice(2)
-        const handler = (data: any) => {
-          try {
-            const msg = JSON.parse(data.toString())
-            if (msg.type === 'session.info' && (msg.requestId === requestId || msg.sessionKey === sessionKey)) {
-              state.ws?.off('message', handler)
-              resolve(msg.history ?? [])
-            }
-          } catch {
-            /* ignore parse errors */
-          }
-        }
-        state.ws.on('message', handler)
-        state.ws.send(JSON.stringify({ type: 'history', sessionKey, requestId }))
-        setTimeout(() => {
-          state.ws?.off('message', handler)
-          reject(new Error('History fetch timeout'))
-        }, 10000)
-      })
+      const result = (await request('chat.history', { sessionKey, limit: 1000 })) as {
+        messages?: any[]
+      }
+      return result?.messages ?? []
     },
 
     on: emitter.on,
