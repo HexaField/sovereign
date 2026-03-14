@@ -112,11 +112,21 @@ export function registerTerminalChannel(ws: WsHandler, bus: EventBus, manager: T
 
       if (type === 'terminal.input') {
         const msg = payload as { data?: string }
-        if (msg.data) attachment.handle.write(msg.data)
+        if (msg.data) {
+          try {
+            attachment.handle.write(msg.data)
+          } catch {
+            /* PTY closed */
+          }
+        }
       } else if (type === 'terminal.resize') {
         const msg = payload as { cols?: number; rows?: number }
         if (msg.cols && msg.rows) {
-          manager.resize(attachment.sessionId, msg.cols, msg.rows)
+          try {
+            manager.resize(attachment.sessionId, msg.cols, msg.rows)
+          } catch {
+            /* PTY closed */
+          }
         }
       }
     },

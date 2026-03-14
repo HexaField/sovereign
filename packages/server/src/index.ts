@@ -3,6 +3,11 @@ import fs from 'node:fs'
 import https from 'node:https'
 import http from 'node:http'
 import path from 'node:path'
+
+// Prevent unhandled rejections from crashing the server
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] Unhandled rejection:', reason)
+})
 import { fileURLToPath } from 'node:url'
 
 dotenv.config({ path: '.env.local' })
