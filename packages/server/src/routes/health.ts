@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import type { Request, Response } from 'express'
-import { healthResponseSchema } from '../schemas/health'
+import { healthResponseSchema } from '../schemas/health.js'
 
 const router = Router()
 
