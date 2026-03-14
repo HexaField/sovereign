@@ -101,7 +101,7 @@ export function registerTerminalChannel(ws: WsHandler, bus: EventBus, manager: T
 
       const handle = manager.attach(sessionId)
       handle.onData((data: string) => {
-        ws.sendBinary('terminal', Buffer.from(data), { sessionId })
+        ws.sendTo(deviceId, { type: 'terminal.data', sessionId, data } as any)
       })
       attachments.set(deviceId, { sessionId, handle })
     },
