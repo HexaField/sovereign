@@ -1,4 +1,5 @@
 import { createMemo, createSignal, Show, For, onCleanup } from 'solid-js'
+import { agentName, agentIcon } from '../../lib/identity.js'
 import { connectionStatus } from '../connection/store.js'
 import {
   viewMode,
@@ -251,7 +252,7 @@ export function Header() {
   const headerTitle = createMemo(() => {
     const sk = threadKey()
     if (isSubagentSession(sk)) return sk.split(':subagent:').pop() || 'Subagent'
-    return sk === 'main' ? 'Hex' : sk
+    return sk === 'main' ? agentName() : sk
   })
 
   const isThread = createMemo(() => {
@@ -299,7 +300,7 @@ export function Header() {
       class="safe-top z-[100] flex shrink-0 items-center gap-2 px-4 py-3"
       style={{ 'border-bottom': '1px solid var(--c-border)', background: 'var(--c-bg-raised)' }}
     >
-      <span class="shrink-0 text-xl">⬡</span>
+      <span class="shrink-0 text-xl">{agentIcon()}</span>
 
       {/* Back-to-main button (when viewing subagent) */}
       <Show when={viewMode() === 'chat' && isInSubagent()}>
@@ -545,7 +546,7 @@ export function Header() {
                           ? 'Plans'
                           : viewMode() === 'events'
                             ? 'Events'
-                            : 'Hex'}
+                            : agentName()}
           </span>
         </div>
       </Show>

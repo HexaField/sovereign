@@ -4,6 +4,9 @@ import './app.css'
 // Nav store
 import { activeView, initNavStore } from './features/nav/store.js'
 
+// Identity
+import { loadIdentity } from './lib/identity.js'
+
 // WS + connection stores
 import { wsStore } from './ws/index.js'
 import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
@@ -28,6 +31,7 @@ export default function App() {
   useKeyboardShortcuts()
 
   onMount(() => {
+    loadIdentity()
     cleanups.push(initNavStore())
 
     const cleanupConnection = initConnectionStore(wsStore)

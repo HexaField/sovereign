@@ -19,6 +19,13 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   const logsChannel = 'logsChannel' in opts ? (opts as SystemRoutesOptions).logsChannel : null
   const dataDir = 'dataDir' in opts ? (opts as SystemRoutesOptions).dataDir : null
 
+  router.get('/api/system/identity', (_req, res) => {
+    res.json({
+      agentName: process.env.SOVEREIGN_AGENT_NAME || 'Sovereign',
+      agentIcon: process.env.SOVEREIGN_AGENT_ICON || '⬡'
+    })
+  })
+
   router.get('/api/system/architecture', (_req, res) => {
     res.json(system.getArchitecture())
   })
