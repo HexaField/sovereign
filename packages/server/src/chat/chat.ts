@@ -81,6 +81,9 @@ export function createChatModule(
     backend.on(eventName, (data: Record<string, unknown>) => {
       const sessionKey = data.sessionKey as string | undefined
       const threadKey = sessionKey ? sessionToThread.get(sessionKey) : undefined
+      console.log(
+        `[chat] backend event: ${eventName}, sessionKey: ${sessionKey}, threadKey: ${threadKey}, hasWsHandler: ${!!wsHandler}`
+      )
 
       // Map WS message type
       const wsType = eventName === 'session.info' ? 'chat.session.info' : eventName
@@ -155,7 +158,12 @@ export function createChatModule(
       }
       return
     }
-    const history = await backend.getHistory(sessionKey)
+    let history: any[] = []
+    try {
+      history = await backend.getHistory(sessionKey)
+    } catch {
+      // timeout or connection error — return empty history
+    }
     if (wsHandler) {
       wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history })
     }
