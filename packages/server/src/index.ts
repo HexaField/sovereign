@@ -72,6 +72,10 @@ import { registerRecordingRoutes } from './recordings/routes.js'
 import { createSystemModule } from './system/system.js'
 import { createSystemRoutes } from './system/routes.js'
 import { registerLogsChannel } from './system/ws.js'
+import { createLogger } from './system/logger.js'
+import { createEventStream } from './system/event-stream.js'
+import { createNotifications } from './notifications/notifications.js'
+import { createNotificationRoutes } from './notifications/routes.js'
 
 // ============================================================
 // App setup
@@ -235,9 +239,66 @@ app.use(createVoiceRoutes(voiceModule))
 const recordingsService = createRecordingsService(dataDir)
 app.use(registerRecordingRoutes(recordingsService))
 
-const systemModule = createSystemModule(bus, dataDir)
-app.use(createSystemRoutes(systemModule))
-registerLogsChannel(wsHandler, bus)
+const systemModule = createSystemModule(bus, dataDir, { wsHandler })
+const logsChannel = registerLogsChannel(wsHandler, bus, dataDir)
+app.use(createSystemRoutes({ system: systemModule, logsChannel, dataDir }))
+
+// --- Event Stream ---
+const eventStream = createEventStream(bus)
+
+// Event stream routes
+import { Router as EventRouter } from 'express'
+const eventStreamRouter = EventRouter()
+eventStreamRouter.get('/api/system/events', (req, res) => {
+  const { type, source, since, until, entityId, limit, offset } = req.query as Record<string, string | undefined>
+  const filter: Record<string, unknown> = {}
+  if (type) filter.type = type
+  if (source) filter.source = source
+  if (since) filter.since = Number(since)
+  if (until) filter.until = Number(until)
+  if (entityId) filter.entityId = entityId
+  if (limit) filter.limit = Number(limit)
+  if (offset) filter.offset = Number(offset)
+  const entries = eventStream.query(filter as any)
+  res.json({ events: entries, total: entries.length })
+})
+eventStreamRouter.get('/api/system/events/stats', (_req, res) => {
+  res.json(eventStream.stats())
+})
+app.use(eventStreamRouter)
+
+// Event stream WS channel
+wsHandler.registerChannel('events', {
+  serverMessages: ['event.new', 'event.history'],
+  clientMessages: [],
+  onSubscribe: (deviceId) => {
+    const recent = eventStream.query({ limit: 100 })
+    wsHandler.sendTo(deviceId, {
+      type: 'event.history',
+      events: recent,
+      timestamp: new Date().toISOString()
+    })
+  }
+})
+eventStream.subscribe((entry) => {
+  wsHandler.broadcastToChannel('events', {
+    type: 'event.new',
+    ...entry,
+    timestamp: new Date().toISOString()
+  })
+})
+
+// --- Notifications module ---
+const notificationsModule = createNotifications(bus, dataDir)
+app.use(createNotificationRoutes(notificationsModule))
+
+// --- Bus wildcard logging (debug level) ---
+const sysLogger = createLogger(logsChannel, 'bus')
+bus.on('*', (event) => {
+  // Don't log log.entry events to avoid infinite recursion
+  if (event.type === 'log.entry') return
+  sysLogger.debug(`${event.type}`, { metadata: { source: event.source } })
+})
 
 // --- Register all modules with system ---
 systemModule.registerModule({
@@ -386,6 +447,9 @@ function shutdown() {
   terminalManager.dispose()
   backend.disconnect().catch(() => {})
   statusAggregator.destroy()
+  systemModule.dispose()
+  eventStream.dispose()
+  notificationsModule.dispose()
   wss.close()
   server.close()
 }

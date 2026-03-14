@@ -2,6 +2,7 @@
 
 import os from 'node:os'
 import type { EventBus } from '@template/core'
+import type { WsHandler } from '../ws/handler.js'
 
 export interface ModuleInfo {
   name: string
@@ -26,16 +27,59 @@ export interface SystemModule {
   getArchitecture(): { modules: ModuleInfo[] }
   getHealth(): HealthInfo
   registerModule(info: ModuleInfo): void
+  dispose(): void
 }
 
-export function createSystemModule(_bus: EventBus, _dataDir: string): SystemModule {
+export interface SystemModuleOptions {
+  healthIntervalMs?: number
+  wsHandler?: WsHandler
+}
+
+export function createSystemModule(bus: EventBus, _dataDir: string, options?: SystemModuleOptions): SystemModule {
   const startTime = Date.now()
   const registeredModules: ModuleInfo[] = []
+  const healthIntervalMs = options?.healthIntervalMs ?? 10_000
+  const wsHandler = options?.wsHandler
+
+  // Register WS system channel if wsHandler provided
+  if (wsHandler) {
+    wsHandler.registerChannel('system', {
+      serverMessages: ['system.architecture', 'system.health'],
+      clientMessages: [],
+      onSubscribe: (deviceId) => {
+        wsHandler.sendTo(deviceId, {
+          type: 'system.architecture',
+          modules: [...registeredModules],
+          timestamp: new Date().toISOString()
+        })
+        wsHandler.sendTo(deviceId, {
+          type: 'system.health',
+          ...getHealth(),
+          timestamp: new Date().toISOString()
+        })
+      }
+    })
+  }
 
   const registerModule = (info: ModuleInfo): void => {
     const existing = registeredModules.findIndex((m) => m.name === info.name)
     if (existing >= 0) registeredModules[existing] = info
     else registeredModules.push(info)
+
+    bus.emit({
+      type: 'system.architecture.updated',
+      timestamp: new Date().toISOString(),
+      source: 'system',
+      payload: { modules: [...registeredModules] }
+    })
+
+    if (wsHandler) {
+      wsHandler.broadcastToChannel('system', {
+        type: 'system.architecture',
+        modules: [...registeredModules],
+        timestamp: new Date().toISOString()
+      })
+    }
   }
 
   const getArchitecture = (): { modules: ModuleInfo[] } => ({
@@ -63,13 +107,35 @@ export function createSystemModule(_bus: EventBus, _dataDir: string): SystemModu
 
   const status = () => ({ healthy: true })
 
+  // Periodic health emission
+  const healthInterval = setInterval(() => {
+    const health = getHealth()
+    bus.emit({
+      type: 'system.health.updated',
+      timestamp: new Date().toISOString(),
+      source: 'system',
+      payload: health
+    })
+    if (wsHandler) {
+      wsHandler.broadcastToChannel('system', {
+        type: 'system.health',
+        ...health,
+        timestamp: new Date().toISOString()
+      })
+    }
+  }, healthIntervalMs)
+
   // Register self
   registerModule({
     name: 'system',
     status: 'healthy',
     subscribes: [],
-    publishes: ['system.health']
+    publishes: ['system.health.updated', 'system.architecture.updated']
   })
 
-  return { name: 'system', status, getArchitecture, getHealth, registerModule }
+  const dispose = (): void => {
+    clearInterval(healthInterval)
+  }
+
+  return { name: 'system', status, getArchitecture, getHealth, registerModule, dispose }
 }
