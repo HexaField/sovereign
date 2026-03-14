@@ -21,10 +21,28 @@ export interface HealthInfo {
   errors: { countLastHour: number; recent: Array<{ message: string; timestamp: string }> }
 }
 
+export interface ArchitectureData {
+  modules: ModuleInfo[]
+  config: { models: string[]; defaultModel: string | null }
+  sessions: { total: number; byKind: Record<string, number> }
+  cron: { jobs: Array<{ name: string; schedule: string; status: string }> }
+  skills: { entries: Array<{ name: string; enabled: boolean }>; total: number; enabled: number }
+  system: {
+    os: string
+    arch: string
+    platform: string
+    cpus: number
+    totalMemory: number
+    freeMemory: number
+    uptime: number
+    nodeVersion: string
+  }
+}
+
 export interface SystemModule {
   name: string
   status(): { healthy: boolean }
-  getArchitecture(): { modules: ModuleInfo[] }
+  getArchitecture(): ArchitectureData
   getHealth(): HealthInfo
   registerModule(info: ModuleInfo): void
   dispose(): void
@@ -83,8 +101,25 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
     }
   }
 
-  const getArchitecture = (): { modules: ModuleInfo[] } => ({
-    modules: [...registeredModules]
+  const getArchitecture = (): ArchitectureData => ({
+    modules: [...registeredModules],
+    config: {
+      models: (process.env.SOVEREIGN_MODELS ?? '').split(',').filter(Boolean),
+      defaultModel: process.env.SOVEREIGN_DEFAULT_MODEL ?? null
+    },
+    sessions: { total: 0, byKind: {} },
+    cron: { jobs: [] },
+    skills: { entries: [], total: 0, enabled: 0 },
+    system: {
+      os: `${os.type()} ${os.release()}`,
+      arch: os.arch(),
+      platform: os.platform(),
+      cpus: os.cpus().length,
+      totalMemory: os.totalmem(),
+      freeMemory: os.freemem(),
+      uptime: os.uptime(),
+      nodeVersion: process.version
+    }
   })
 
   const getHealth = (): HealthInfo => {
