@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, watchFile, unwatchFile } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, watchFile, unwatchFile, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { NotificationRule } from './types.js'
 import type { BusEvent } from '@template/core'
@@ -22,7 +22,6 @@ const getByPath = (obj: unknown, path: string): unknown => {
 
 export const interpolate = (template: string, event: BusEvent): string => {
   return template.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (_, path: string) => {
-    // Try event-level first, e.g. {{payload.repo}} means event.payload.repo
     const val = getByPath(event, path)
     return val !== undefined ? String(val) : ''
   })
@@ -35,6 +34,62 @@ const matchPattern = (eventType: string, pattern: string): boolean => {
     return eventType === prefix || eventType.startsWith(prefix + '.')
   }
   return eventType === pattern
+}
+
+const DEFAULT_RULES: NotificationRule[] = [
+  {
+    eventPattern: 'issue.created',
+    severity: 'info',
+    titleTemplate: 'New Issue',
+    bodyTemplate: 'Issue created: {{payload.title}}',
+    entityType: 'issue',
+    entityIdField: 'payload.id'
+  },
+  {
+    eventPattern: 'issue.updated',
+    severity: 'info',
+    titleTemplate: 'Issue Updated',
+    bodyTemplate: 'Issue updated: {{payload.title}}',
+    entityType: 'issue',
+    entityIdField: 'payload.id'
+  },
+  {
+    eventPattern: 'review.created',
+    severity: 'info',
+    titleTemplate: 'New Review',
+    bodyTemplate: 'Review created for {{payload.title}}',
+    entityType: 'pr',
+    entityIdField: 'payload.id'
+  },
+  {
+    eventPattern: 'review.merged',
+    severity: 'info',
+    titleTemplate: 'Review Merged',
+    bodyTemplate: 'Review merged: {{payload.title}}',
+    entityType: 'pr',
+    entityIdField: 'payload.id'
+  },
+  {
+    eventPattern: 'scheduler.job.failed',
+    severity: 'error',
+    titleTemplate: 'Job Failed',
+    bodyTemplate: 'Scheduled job failed: {{payload.jobName}}'
+  },
+  {
+    eventPattern: 'config.changed',
+    severity: 'info',
+    titleTemplate: 'Config Changed',
+    bodyTemplate: 'Configuration updated: {{payload.key}}'
+  }
+]
+
+export const seedDefaultRules = (dataDir: string): void => {
+  const dir = join(dataDir, 'notifications')
+  mkdirSync(dir, { recursive: true })
+  const rulesPath = join(dir, 'rules.json')
+  if (!existsSync(rulesPath)) {
+    writeFileSync(rulesPath, JSON.stringify(DEFAULT_RULES, null, 2))
+  }
 }
 
 export const createRuleEngine = (dataDir: string): RuleEngine => {
@@ -55,7 +110,6 @@ export const createRuleEngine = (dataDir: string): RuleEngine => {
 
   reload()
 
-  // Hot-reload via file watching
   let watching = false
   if (existsSync(rulesPath)) {
     watchFile(rulesPath, { interval: 500 }, () => {

@@ -9,6 +9,8 @@ export interface Notification {
   dismissed: boolean
   group?: string
   action?: { type: string; payload: Record<string, unknown> }
+  entityId?: string
+  entityType?: 'issue' | 'pr' | 'branch' | 'thread' | 'system'
 }
 
 export interface NotificationRule {
@@ -17,4 +19,6 @@ export interface NotificationRule {
   titleTemplate: string
   bodyTemplate: string
   group?: string
+  entityType?: Notification['entityType']
+  entityIdField?: string
 }
