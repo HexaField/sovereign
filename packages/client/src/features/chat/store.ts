@@ -15,6 +15,34 @@ export const [inputValue, setInputValue] = createSignal('')
 
 let retryTimer: ReturnType<typeof setInterval> | null = null
 let ws: WsStore | null = null
+let suppressLifecycleUntil = 0
+
+// Pending turn persistence helpers
+function pendingStorageKey(threadKey: string): string {
+  return `sovereign:pending-turns:${threadKey}`
+}
+
+function persistPendingTurns(threadKey: string, allTurns: ParsedTurn[]): void {
+  const pending = allTurns.filter((t) => t.pending)
+  try {
+    if (pending.length > 0) {
+      localStorage.setItem(pendingStorageKey(threadKey), JSON.stringify(pending))
+    } else {
+      localStorage.removeItem(pendingStorageKey(threadKey))
+    }
+  } catch {
+    // localStorage may be unavailable
+  }
+}
+
+function loadPendingTurns(threadKey: string): ParsedTurn[] {
+  try {
+    const raw = localStorage.getItem(pendingStorageKey(threadKey))
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
 
 export function startRetryCountdown(seconds: number): void {
   clearRetryCountdown()
@@ -63,6 +91,11 @@ export function sendMessage(text: string, _attachments?: File[]): void {
 export function abortChat(): void {
   ws?.send({ type: 'chat.abort' })
   setAgentStatus('idle')
+  setStreamingHtml('')
+  setLiveWork([])
+  setLiveThinkingText('')
+  // Suppress lifecycle status updates for 30s to prevent flicker
+  suppressLifecycleUntil = Date.now() + 30_000
 }
 
 export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): (() => void) | void {
@@ -83,12 +116,15 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       // Replace optimistic pending turn if present
       setTurns((prev) => {
         const idx = prev.findIndex((t) => t.pending && t.role === 'user')
+        let next: ParsedTurn[]
         if (turn.role === 'user' && idx >= 0) {
-          const copy = [...prev]
-          copy[idx] = turn
-          return copy
+          next = [...prev]
+          next[idx] = turn
+        } else {
+          next = [...prev, turn]
         }
-        return [...prev, turn]
+        persistPendingTurns(_threadKey(), next)
+        return next
       })
       setStreamingHtml('')
       setLiveWork([])
@@ -98,6 +134,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.status', (msg: any) => {
+      // Suppress lifecycle updates after abort to prevent flicker
+      if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
       setAgentStatus(msg.status)
     })
   )
@@ -124,7 +162,18 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
-      setTurns(msg.history ?? [])
+      const history: ParsedTurn[] = msg.history ?? []
+      // Merge persisted pending turns, deduplicating by content
+      const persisted = loadPendingTurns(_threadKey())
+      const merged = [...history]
+      for (const pending of persisted) {
+        const alreadyConfirmed = history.some((t) => t.role === 'user' && t.content === pending.content)
+        if (!alreadyConfirmed) {
+          merged.push(pending)
+        }
+      }
+      setTurns(merged)
+      persistPendingTurns(_threadKey(), merged)
     })
   )
 

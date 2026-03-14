@@ -69,7 +69,7 @@ export default function App() {
     >
       <Header />
 
-      <main class="flex-1 overflow-hidden pt-12">
+      <main class="flex-1 overflow-hidden">
         <Switch>
           <Match when={activeView() === 'dashboard'}>
             <DashboardView />

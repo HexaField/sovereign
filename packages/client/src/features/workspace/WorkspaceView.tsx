@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onCleanup, Show, Switch, Match, lazy, For } from 'solid-js'
+import { createSignal, createEffect, onCleanup, Show, Switch, Match, lazy, For, onMount } from 'solid-js'
 import type { Component } from 'solid-js'
 import {
   FilesIcon,
@@ -216,14 +216,28 @@ const ExpandedChatView: Component = () => {
 const MobileWorkspace: Component = () => {
   const [dropdownOpen, setDropdownOpen] = createSignal(false)
   let touchStartX = 0
+  let touchStartY = 0
+  let isHorizontalSwipe = false
 
   const handleTouchStart = (e: TouchEvent) => {
     touchStartX = e.touches[0].clientX
+    touchStartY = e.touches[0].clientY
+    isHorizontalSwipe = false
+  }
+
+  const handleTouchMove = (e: TouchEvent) => {
+    const dx = Math.abs(e.touches[0].clientX - touchStartX)
+    const dy = Math.abs(e.touches[0].clientY - touchStartY)
+    // If horizontal movement dominates, prevent browser back/forward gesture
+    if (dx > 10 && dx > dy * 1.5) {
+      isHorizontalSwipe = true
+      e.preventDefault()
+    }
   }
 
   const handleTouchEnd = (e: TouchEvent) => {
     const dx = e.changedTouches[0].clientX - touchStartX
-    if (Math.abs(dx) > 50) {
+    if (isHorizontalSwipe && Math.abs(dx) > 50) {
       swipeMobileTab(dx < 0 ? 'left' : 'right')
     }
   }
@@ -268,9 +282,19 @@ const MobileWorkspace: Component = () => {
       </div>
       {/* Swipeable content */}
       <div
+        ref={(el: HTMLDivElement) => {
+          onMount(() => {
+            el.addEventListener('touchstart', handleTouchStart, { passive: true })
+            el.addEventListener('touchmove', handleTouchMove, { passive: false })
+            el.addEventListener('touchend', handleTouchEnd, { passive: true })
+            onCleanup(() => {
+              el.removeEventListener('touchstart', handleTouchStart)
+              el.removeEventListener('touchmove', handleTouchMove)
+              el.removeEventListener('touchend', handleTouchEnd)
+            })
+          })
+        }}
         class="flex-1 overflow-auto"
-        onTouchStart={handleTouchStart}
-        onTouchEnd={handleTouchEnd}
         style={{
           transition: 'transform 0.2s ease-out'
         }}
