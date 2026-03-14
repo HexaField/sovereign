@@ -371,18 +371,22 @@ interface VoicePostProcessor {
 
 When a user speaks to a thread via voice input, there is a delay between sending the message and receiving the agent's response. In text mode this is fine (typing indicators). In voice mode, silence feels broken.
 
-- When voice mode is ON and a user message is sent via STT, the system MUST provide immediate audible feedback.
-- Phase 8 MUST implement a **pre-recorded/static acknowledgment** system:
-  - A small set of short acknowledgment phrases: "On it", "Working on that", "Let me check", "One moment", "Got it", etc.
-  - Selected randomly or round-robin to avoid repetition.
-  - Synthesized via TTS at build time or on first use (cached).
-  - Played immediately after the user's STT message is sent, before the agent begins responding.
-- The acknowledgment MUST NOT play if the agent response arrives within a configurable threshold (`config.voice.ackDelayMs`, default: 1500ms). This avoids unnecessary acknowledgment for fast responses.
+- When voice mode is ON and a user message is sent via STT, the system MUST generate and speak a single acknowledgment sentence **in parallel** with the agent beginning work.
+- Phase 8 MUST implement a **rule-based acknowledgment generator**:
+  - Takes the user's transcribed message as input.
+  - Generates a single contextual sentence that acknowledges the request (e.g., user says "Can you check the build logs?" → "Checking the build logs now").
+  - Uses the same `VoicePostProcessor` pipeline — input is the user's message, output is a brief spoken acknowledgment.
+  - The generator MUST be a lightweight text transformation (template + keyword extraction), NOT an LLM call. It runs synchronously so TTS can begin immediately.
+  - Pattern: extract the verb/intent from the user's message, reframe as "I'll [verb] [object]" or "[Verb]ing [object] now".
+  - Fallback for unparseable input: "Let me work on that".
+- The acknowledgment MUST be synthesized via TTS and played immediately — it MUST NOT wait for the agent to respond.
+- The acknowledgment MUST NOT play if the agent response arrives within `config.voice.ackDelayMs` (default: 1500ms). Implementation: start TTS synthesis immediately but delay audio playback by `ackDelayMs`. If the agent response arrives before playback starts, cancel it.
+- The acknowledgment audio MUST be interrupted if the agent's full TTS response begins playing.
 
-- Phase 9 (Agent Core, §9.7 Agent Loop) MUST enhance this with **context-aware acknowledgments**:
+- Phase 9 (Agent Core, §9.7 Agent Loop) MUST enhance this with **agent-aware acknowledgments**:
   - The agent loop MUST emit a `agent.turn.started` bus event when processing begins, with optional `intent` metadata (e.g., "looking at code", "checking the build", "reading the file").
-  - The voice system subscribes to this event and, if voice mode is ON, generates a contextual acknowledgment via local LLM: "Let me look at that code", "Checking the build now", etc.
-  - Falls back to static acknowledgments if LLM is unavailable or too slow.
+  - The voice system subscribes to this event and, if voice mode is ON, generates a contextual acknowledgment via local LLM — richer and more accurate than the rule-based version since it has agent intent context.
+  - Falls back to rule-based acknowledgment if LLM is unavailable or too slow.
   - Config: `voice.contextualAck: boolean` (default: `true` when Phase 9 available).
 
 ### §8.5.3 — Voice Mode Toggle
@@ -673,7 +677,7 @@ packages/server/src/
 │   ├── provider.test.ts
 │   ├── post-processor.ts     # VoicePostProcessor interface + rule-based impl
 │   ├── post-processor.test.ts
-│   ├── acknowledgment.ts     # Static acknowledgment system (phrase selection + caching)
+│   ├── acknowledgment.ts     # Rule-based ack generator (keyword extraction + reframing)
 │   └── acknowledgment.test.ts
 ```
 
