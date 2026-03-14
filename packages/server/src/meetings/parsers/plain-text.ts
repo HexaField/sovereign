@@ -1,4 +1,12 @@
 // Plain text transcript parser — §8.6.3
-export function parsePlainText(_content: string): unknown {
-  throw new Error('Not implemented')
+
+import type { ParsedTranscript } from './index.js'
+
+export function parsePlainText(content: string): ParsedTranscript {
+  const text = content.trim()
+  return {
+    text,
+    segments: [{ start: 0, end: 0, text, speaker: undefined }],
+    speakers: {}
+  }
 }
