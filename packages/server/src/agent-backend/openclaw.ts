@@ -6,7 +6,7 @@ import { stripThinkingBlocks } from './thinking.js'
 import WebSocket from 'ws'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { generateKeyPairSync, sign, createPrivateKey } from 'node:crypto'
+import { generateKeyPairSync, sign, createPrivateKey, createHash } from 'node:crypto'
 
 const DEFAULT_INITIAL_DELAY = 1000
 const DEFAULT_MAX_DELAY = 30000
@@ -55,7 +55,15 @@ function signPayload(identity: DeviceIdentity, payload: string): string {
     type: 'pkcs8'
   })
   const sig = sign(null, Buffer.from(payload), privKey)
-  return sig.toString('hex')
+  return sig.toString('base64url')
+}
+
+function deriveDeviceId(publicKeyHex: string): string {
+  return createHash('sha256').update(Buffer.from(publicKeyHex, 'hex')).digest('hex')
+}
+
+function publicKeyBase64Url(publicKeyHex: string): string {
+  return Buffer.from(publicKeyHex, 'hex').toString('base64url')
 }
 
 function calcReconnectDelay(attempt: number, config: OpenClawConfig): number {
@@ -226,38 +234,139 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
       setStatus('connecting')
 
       try {
-        const id = getIdentity()
-        const timestamp = Date.now().toString()
-        const signature = signPayload(id, timestamp)
-
-        const wsUrl =
-          currentConfig.gatewayUrl +
-          (currentConfig.gatewayUrl.includes('?') ? '&' : '?') +
-          `publicKey=${id.publicKey}&timestamp=${encodeURIComponent(timestamp)}&signature=${signature}`
-
-        const ws = new WebSocket(wsUrl)
+        const ws = new WebSocket(currentConfig.gatewayUrl, {
+          headers: { origin: 'https://localhost:5801' }
+        })
         state.ws = ws
 
         let settled = false
+        let connectNonce = ''
+        let pendingReq: { id: string; resolve: (v: unknown) => void; reject: (e: Error) => void } | null = null
 
         ws.on('open', () => {
-          if (settled) return
-          settled = true
+          // Don't resolve yet — wait for connect handshake
           state.reconnectAttempt = 0
-          setStatus('connected')
-          resolve()
         })
 
-        ws.on('message', (data: any) => {
-          handleMessage(data.toString())
+        ws.on('message', async (data: any) => {
+          const raw = data.toString()
+          let msg: any
+          try {
+            msg = JSON.parse(raw)
+          } catch {
+            return
+          }
+
+          // Handle connect.challenge event — sign and send connect request
+          if (msg.type === 'event' && msg.event === 'connect.challenge') {
+            const nonce = msg.payload?.nonce
+            if (nonce) connectNonce = nonce
+
+            try {
+              const id = getIdentity()
+              const deviceId = deriveDeviceId(id.publicKey)
+              const pubKeyB64 = publicKeyBase64Url(id.publicKey)
+              const storedToken = getDeviceToken(deviceId) || currentConfig.gatewayToken || ''
+              const signedAt = Date.now()
+              const payload = [
+                'v2',
+                deviceId,
+                'openclaw-control-ui',
+                'webchat',
+                'operator',
+                'operator.read,operator.write,operator.admin',
+                String(signedAt),
+                storedToken,
+                connectNonce
+              ].join('|')
+              const signature = signPayload(id, payload)
+
+              const reqId = 'c' + Date.now()
+              pendingReq = {
+                id: reqId,
+                resolve: (result) => {
+                  if (settled) return
+                  settled = true
+
+                  // Store device token if returned
+                  const auth = (result as any)?.auth
+                  if (auth?.deviceToken) {
+                    saveDeviceToken(deviceId, auth.deviceToken)
+                  }
+
+                  setStatus('connected')
+                  resolve()
+                },
+                reject: (err) => {
+                  if (settled) return
+                  settled = true
+                  const isPairing = err.message?.includes('pairing')
+                  setStatus('error', err.message, isPairing ? 'auth_rejected' : 'server_down')
+                  reject(err)
+                }
+              }
+
+              ws.send(
+                JSON.stringify({
+                  type: 'req',
+                  id: reqId,
+                  method: 'connect',
+                  params: {
+                    minProtocol: 3,
+                    maxProtocol: 3,
+                    client: {
+                      id: 'openclaw-control-ui',
+                      version: '2.0',
+                      platform: process.platform,
+                      mode: 'webchat'
+                    },
+                    role: 'operator',
+                    scopes: ['operator.read', 'operator.write', 'operator.admin'],
+                    device: {
+                      id: deviceId,
+                      publicKey: pubKeyB64,
+                      signature,
+                      signedAt,
+                      nonce: connectNonce
+                    },
+                    auth: { token: storedToken },
+                    userAgent: `Sovereign/0.1.0 (Node ${process.version})`,
+                    caps: []
+                  }
+                })
+              )
+            } catch (err) {
+              if (!settled) {
+                settled = true
+                reject(err as Error)
+              }
+            }
+            return
+          }
+
+          // Handle RPC responses (for connect handshake)
+          if (msg.type === 'res' && pendingReq && msg.id === pendingReq.id) {
+            if (msg.error) {
+              pendingReq.reject(new Error(msg.error.message ?? msg.error ?? 'connect failed'))
+            } else {
+              pendingReq.resolve(msg.result)
+            }
+            pendingReq = null
+            return
+          }
+
+          // Normal message handling (after connected)
+          if (settled) {
+            handleMessage(raw)
+          }
         })
 
         ws.on('close', () => {
           if (state.destroyed) return
           if (!settled) {
             settled = true
-            setStatus('disconnected', 'Connection closed before open', 'server_down')
-            reject(new Error('Connection closed before open'))
+            setStatus('disconnected', 'Connection closed before handshake', 'server_down')
+            reject(new Error('Connection closed before handshake'))
           } else {
             setStatus('disconnected', 'Connection lost')
           }
@@ -277,6 +386,31 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
         reject(err as Error)
       }
     })
+  }
+
+  // Device token persistence
+  function getDeviceTokenPath(): string {
+    return join(currentConfig.dataDir ?? '.data', 'agent-backend', 'device-token.json')
+  }
+
+  function saveDeviceToken(deviceId: string, token: string): void {
+    try {
+      const dir = dirname(getDeviceTokenPath())
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      writeFileSync(getDeviceTokenPath(), JSON.stringify({ deviceId, token }))
+    } catch {
+      /* best effort */
+    }
+  }
+
+  function getDeviceToken(deviceId: string): string | null {
+    try {
+      const data = JSON.parse(readFileSync(getDeviceTokenPath(), 'utf-8'))
+      if (data.deviceId === deviceId) return data.token
+    } catch {
+      /* not found */
+    }
+    return null
   }
 
   function scheduleReconnect() {

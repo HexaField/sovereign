@@ -14,10 +14,25 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DATA_DIR="${SOVEREIGN_DATA_DIR:-$REPO_DIR/packages/server/.data}"
+SERVER_ENTRY="$REPO_DIR/packages/server/dist/index.js"
+
+# Read data dir from .env.local or .env (same precedence as dotenv)
+_read_env_var() {
+  local var="$1"
+  local val=""
+  if [ -f "$REPO_DIR/.env.local" ]; then
+    val=$(grep "^${var}=" "$REPO_DIR/.env.local" 2>/dev/null | head -1 | cut -d= -f2-)
+  fi
+  if [ -z "$val" ] && [ -f "$REPO_DIR/.env" ]; then
+    val=$(grep "^${var}=" "$REPO_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)
+  fi
+  echo "$val"
+}
+
+DATA_DIR="${SOVEREIGN_DATA_DIR:-$(_read_env_var SOVEREIGN_DATA_DIR)}"
+DATA_DIR="${DATA_DIR:-$REPO_DIR/packages/server/.data}"
 PID_FILE="$DATA_DIR/sovereign.pid"
 LOG_FILE="$DATA_DIR/sovereign.log"
-SERVER_ENTRY="$REPO_DIR/packages/server/dist/index.js"
 
 mkdir -p "$DATA_DIR"
 
@@ -37,7 +52,7 @@ _start_server() {
   fi
 
   echo "Starting Sovereign..."
-  SOVEREIGN_DATA_DIR="$DATA_DIR" nohup node "$SERVER_ENTRY" >> "$LOG_FILE" 2>&1 &
+  cd "$REPO_DIR" && nohup node "$SERVER_ENTRY" >> "$LOG_FILE" 2>&1 &
   local pid=$!
   echo "$pid" > "$PID_FILE"
   
@@ -145,7 +160,7 @@ case "${1:-help}" in
   
   run)
     echo "Running in foreground (Ctrl+C to stop)..."
-    SOVEREIGN_DATA_DIR="$DATA_DIR" exec node "$SERVER_ENTRY"
+    cd "$REPO_DIR" && exec node "$SERVER_ENTRY"
     ;;
   
   help|--help|-h)

@@ -33,6 +33,7 @@ export interface SystemModule {
 export interface SystemModuleOptions {
   healthIntervalMs?: number
   wsHandler?: WsHandler
+  getAgentBackendStatus?: () => string
 }
 
 export function createSystemModule(bus: EventBus, _dataDir: string, options?: SystemModuleOptions): SystemModule {
@@ -93,7 +94,7 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
     return {
       connection: {
         wsStatus: '0 clients',
-        agentBackend: 'disconnected',
+        agentBackend: options?.getAgentBackendStatus?.() ?? 'disconnected',
         uptime: Math.floor(uptimeMs / 1000)
       },
       resources: {

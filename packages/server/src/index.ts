@@ -128,10 +128,11 @@ registerNotificationsChannel(wsHandler, bus)
 const orgManager = createOrgManager(bus, dataDir)
 
 // Bootstrap global workspace
+// SOVEREIGN_GLOBAL_PATH overrides the default data-dir-based path
+const globalPath = process.env.SOVEREIGN_GLOBAL_PATH || path.join(dataDir, 'orgs', '_global')
 if (!orgManager.getOrg('_global')) {
-  const globalOrgPath = path.join(dataDir, 'orgs', '_global')
-  fs.mkdirSync(globalOrgPath, { recursive: true })
-  orgManager.createOrg({ id: '_global', name: 'Global', path: globalOrgPath, provider: 'radicle' })
+  fs.mkdirSync(globalPath, { recursive: true })
+  orgManager.createOrg({ id: '_global', name: 'Global', path: globalPath, provider: 'radicle' })
 }
 
 app.use('/api', createOrgRoutes(orgManager, authMiddleware))
@@ -221,11 +222,25 @@ registerPlanningWs(wsHandler, bus)
 
 const backend = createOpenClawBackend({
   gatewayUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'ws://localhost:3456/ws',
+  gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN ?? '',
   dataDir,
   onConfigChange: (_cb) => {}
 })
 
 const threadManager = createThreadManager(bus, dataDir)
+
+// Seed default threads for global workspace
+const defaultThreads = [
+  { label: 'main', displayLabel: 'Main' },
+  { label: 'upgrades', displayLabel: 'Upgrades' },
+  { label: 'v2-app', displayLabel: 'Sovereign Development' }
+]
+for (const { label } of defaultThreads) {
+  if (!threadManager.get(label)) {
+    threadManager.create({ label })
+  }
+}
+
 const chatModule = createChatModule(bus, backend, threadManager, { dataDir, wsHandler })
 registerChatWs(wsHandler, chatModule)
 app.use(createChatRoutes(chatModule, backend))
@@ -243,7 +258,10 @@ app.use(createVoiceRoutes(voiceModule))
 const recordingsService = createRecordingsService(dataDir)
 app.use(registerRecordingRoutes(recordingsService))
 
-const systemModule = createSystemModule(bus, dataDir, { wsHandler })
+const systemModule = createSystemModule(bus, dataDir, {
+  wsHandler,
+  getAgentBackendStatus: () => backend.status()
+})
 const logsChannel = registerLogsChannel(wsHandler, bus, dataDir)
 app.use(createSystemRoutes({ system: systemModule, logsChannel, dataDir }))
 
