@@ -22,7 +22,16 @@ const fetchGitStatus = async (key: string): Promise<GitStatusData | null> => {
     `/api/git/status?orgId=${encodeURIComponent(orgId)}&projectId=${encodeURIComponent(projectId)}`
   )
   if (!res.ok) return null
-  return res.json()
+  const data = await res.json()
+  // Server returns { modified: [...] } but we expect { unstaged: [...] }
+  return {
+    branch: data.branch ?? 'unknown',
+    ahead: data.ahead ?? 0,
+    behind: data.behind ?? 0,
+    staged: (data.staged ?? []).map((f: any) => (typeof f === 'string' ? f : f.path)),
+    unstaged: (data.modified ?? data.unstaged ?? []).map((f: any) => (typeof f === 'string' ? f : f.path)),
+    untracked: (data.untracked ?? []).map((f: any) => (typeof f === 'string' ? f : f.path))
+  }
 }
 
 const GitPanel: Component = () => {
