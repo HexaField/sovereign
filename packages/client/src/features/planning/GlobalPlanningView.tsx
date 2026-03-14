@@ -1,4 +1,4 @@
-import { type Component, createSignal, onMount, For, Show, createMemo } from 'solid-js'
+import { type Component, createSignal, onMount, For, Show, createMemo, type JSX } from 'solid-js'
 import {
   viewMode,
   setViewMode,
@@ -10,6 +10,7 @@ import {
   setSearchQuery,
   type PlanningViewMode
 } from './store'
+import { LinkIcon, KanbanIcon, ListIcon, TreeIcon } from '../../ui/icons.js'
 
 // Types
 export interface PlanningNode {
@@ -98,11 +99,11 @@ export function getWorkspaceColor(workspace: string, allWorkspaces: string[]): s
 }
 
 // View mode labels/icons
-export const VIEW_MODES: Array<{ key: PlanningViewMode; label: string; icon: string }> = [
-  { key: 'dag', label: 'DAG', icon: '🔗' },
-  { key: 'kanban', label: 'Kanban', icon: 'kanban' },
-  { key: 'list', label: 'List', icon: 'list' },
-  { key: 'tree', label: 'Tree', icon: 'tree' }
+export const VIEW_MODES: Array<{ key: PlanningViewMode; label: string; icon: () => JSX.Element }> = [
+  { key: 'dag', label: 'DAG', icon: () => <LinkIcon class="h-3.5 w-3.5" /> },
+  { key: 'kanban', label: 'Kanban', icon: () => <KanbanIcon class="h-3.5 w-3.5" /> },
+  { key: 'list', label: 'List', icon: () => <ListIcon class="h-3.5 w-3.5" /> },
+  { key: 'tree', label: 'Tree', icon: () => <TreeIcon class="h-3.5 w-3.5" /> }
 ]
 
 // Filter keys
@@ -273,7 +274,9 @@ const GlobalPlanningView: Component = () => {
                 onClick={() => setViewMode(mode.key)}
                 data-testid={`view-mode-${mode.key}`}
               >
-                {mode.icon} {mode.label}
+                <span class="flex items-center gap-1">
+                  {mode.icon()} {mode.label}
+                </span>
               </button>
             )}
           </For>

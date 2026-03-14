@@ -1,13 +1,14 @@
-import { Show, For, createSignal, onMount, onCleanup } from 'solid-js'
+import { Show, For, createSignal, onMount, onCleanup, type JSX } from 'solid-js'
 import type { Component } from 'solid-js'
 import { activeWorkspace } from '../store.js'
 import { wsStore } from '../../../ws/index.js'
+import { AlertCircleIcon, AlertIcon, WarningIcon, InfoIcon } from '../../../ui/icons.js'
 
 export type NotificationPriority = 'info' | 'warning' | 'error' | 'critical'
 
 export interface NotificationItem {
   id: string
-  icon: string
+  icon: JSX.Element
   summary: string
   timestamp: number
   read: boolean
@@ -42,11 +43,11 @@ const PRIORITY_ORDER: Record<NotificationPriority, number> = {
   info: 3
 }
 
-function mapSeverityToIcon(severity: string): string {
-  if (severity === 'critical') return '🔴'
-  if (severity === 'error') return '❌'
-  if (severity === 'warning') return '⚠️'
-  return 'ℹ️'
+function mapSeverityToIcon(severity: string): JSX.Element {
+  if (severity === 'critical') return <AlertCircleIcon class="h-3.5 w-3.5 text-red-400" />
+  if (severity === 'error') return <AlertIcon class="h-3.5 w-3.5 text-red-400" />
+  if (severity === 'warning') return <WarningIcon class="h-3.5 w-3.5 text-yellow-400" />
+  return <InfoIcon class="h-3.5 w-3.5 text-cyan-400" />
 }
 
 function mapSeverityToPriority(severity: string): NotificationPriority {

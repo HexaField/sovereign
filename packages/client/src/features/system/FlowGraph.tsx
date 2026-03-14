@@ -1,12 +1,13 @@
 // §P.2 FlowGraph — SVG-based system data flow visualization
 // Simplified port from voice-ui SystemFlowGraph.tsx — no ELK dependency, static layout
 
-import { type Component, createSignal, For, Show } from 'solid-js'
+import { type Component, createSignal, For, Show, type JSX } from 'solid-js'
+import { UserIcon, RouteIcon, PlugIcon, BotIcon, WrenchIcon, SignalIcon, ChatIcon } from '../../ui/icons.js'
 
 interface FlowNode {
   id: string
   label: string
-  icon: string
+  icon: () => JSX.Element
   group: string
   description: string
   x: number
@@ -33,13 +34,69 @@ const NODE_H = 52
 
 // Static layout of the request/response flow
 const NODES: FlowNode[] = [
-  { id: 'user', label: 'User', icon: '👤', group: 'external', description: 'Client input', x: 40, y: 100 },
-  { id: 'gateway', label: 'Gateway', icon: '🔀', group: 'input', description: 'Route & auth', x: 240, y: 40 },
-  { id: 'ws', label: 'WebSocket', icon: '🔌', group: 'input', description: 'Real-time sync', x: 240, y: 160 },
-  { id: 'agent', label: 'Agent', icon: '🤖', group: 'processing', description: 'LLM reasoning', x: 460, y: 100 },
-  { id: 'tools', label: 'Tools', icon: '🔧', group: 'processing', description: 'Execute actions', x: 660, y: 40 },
-  { id: 'events', label: 'Events', icon: '📡', group: 'storage', description: 'Event bus', x: 660, y: 160 },
-  { id: 'response', label: 'Response', icon: '💬', group: 'output', description: 'Stream back', x: 860, y: 100 }
+  {
+    id: 'user',
+    label: 'User',
+    icon: () => <UserIcon class="h-3.5 w-3.5" />,
+    group: 'external',
+    description: 'Client input',
+    x: 40,
+    y: 100
+  },
+  {
+    id: 'gateway',
+    label: 'Gateway',
+    icon: () => <RouteIcon class="h-3.5 w-3.5" />,
+    group: 'input',
+    description: 'Route & auth',
+    x: 240,
+    y: 40
+  },
+  {
+    id: 'ws',
+    label: 'WebSocket',
+    icon: () => <PlugIcon class="h-3.5 w-3.5" />,
+    group: 'input',
+    description: 'Real-time sync',
+    x: 240,
+    y: 160
+  },
+  {
+    id: 'agent',
+    label: 'Agent',
+    icon: () => <BotIcon class="h-3.5 w-3.5" />,
+    group: 'processing',
+    description: 'LLM reasoning',
+    x: 460,
+    y: 100
+  },
+  {
+    id: 'tools',
+    label: 'Tools',
+    icon: () => <WrenchIcon class="h-3.5 w-3.5" />,
+    group: 'processing',
+    description: 'Execute actions',
+    x: 660,
+    y: 40
+  },
+  {
+    id: 'events',
+    label: 'Events',
+    icon: () => <SignalIcon class="h-3.5 w-3.5" />,
+    group: 'storage',
+    description: 'Event bus',
+    x: 660,
+    y: 160
+  },
+  {
+    id: 'response',
+    label: 'Response',
+    icon: () => <ChatIcon class="h-3.5 w-3.5" />,
+    group: 'output',
+    description: 'Stream back',
+    x: 860,
+    y: 100
+  }
 ]
 
 const EDGES: FlowEdge[] = [
@@ -186,9 +243,12 @@ const FlowGraph: Component = () => {
                     stroke={hovered() === node.id ? colors.text : colors.border}
                     stroke-width={hovered() === node.id ? 2 : 1}
                   />
-                  <text x={NODE_W / 2} y={20} text-anchor="middle" font-size="12" fill={colors.text} font-weight="600">
-                    {node.icon} {node.label}
-                  </text>
+                  <foreignObject x="0" y="4" width={NODE_W} height="20">
+                    <div class="flex items-center justify-center gap-1" style={{ color: colors.text }}>
+                      {node.icon()}
+                      <span style={{ 'font-size': '12px', 'font-weight': '600' }}>{node.label}</span>
+                    </div>
+                  </foreignObject>
                   <text x={NODE_W / 2} y={38} text-anchor="middle" font-size="9" fill="var(--c-text)" opacity="0.5">
                     {node.description}
                   </text>

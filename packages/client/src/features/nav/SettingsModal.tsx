@@ -1,7 +1,8 @@
-import { For } from 'solid-js'
+import { For, type JSX } from 'solid-js'
 import { agentName } from '../../lib/identity.js'
 import { currentTheme, setTheme } from '../theme/store.js'
 import { settingsOpen, setSettingsOpen } from '../nav/store.js'
+import { MoonIcon, SunIcon, CircleDotIcon } from '../../ui/icons.js'
 import type { Theme } from '../theme/themes.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
@@ -15,11 +16,11 @@ export function setTtsEnabled(enabled: boolean): void {
   localStorage.setItem(TTS_ENABLED_KEY, String(enabled))
 }
 
-const THEME_OPTIONS: Array<{ value: Theme; label: string; icon: string }> = [
-  { value: 'default', label: 'Dark', icon: '🌙' },
-  { value: 'light', label: 'Light', icon: '☀️' },
-  { value: 'ironman', label: 'Iron Man', icon: 'circle' },
-  { value: 'jarvis', label: 'JARVIS', icon: '🟠' }
+const THEME_OPTIONS: Array<{ value: Theme; label: string; icon: () => JSX.Element }> = [
+  { value: 'default', label: 'Dark', icon: () => <MoonIcon class="h-5 w-5" /> },
+  { value: 'light', label: 'Light', icon: () => <SunIcon class="h-5 w-5" /> },
+  { value: 'ironman', label: 'Iron Man', icon: () => <CircleDotIcon class="h-5 w-5" /> },
+  { value: 'jarvis', label: 'JARVIS', icon: () => <CircleDotIcon class="h-5 w-5" /> }
 ]
 
 export function SettingsModal() {
@@ -71,7 +72,7 @@ export function SettingsModal() {
                     }}
                     onClick={() => setTheme(opt.value)}
                   >
-                    <span class="text-lg">{opt.icon}</span>
+                    <span class="flex items-center text-lg">{opt.icon()}</span>
                     <span class="text-[11px] font-medium">{opt.label}</span>
                   </button>
                 )}

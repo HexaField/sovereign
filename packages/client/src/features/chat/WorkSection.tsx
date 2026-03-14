@@ -1,8 +1,71 @@
-import { createSignal, For, Show, createMemo } from 'solid-js'
+import { createSignal, For, Show, createMemo, type JSX } from 'solid-js'
 import type { WorkItem } from '@sovereign/core'
 import { renderMarkdown } from '../../lib/markdown.js'
+import {
+  ReadIcon,
+  WriteIcon,
+  EditIcon,
+  ExecIcon,
+  ProcessIcon,
+  BrowserIcon,
+  SearchIcon,
+  ClockIcon,
+  SettingsIcon,
+  BrainIcon,
+  PlugIcon,
+  SendIcon,
+  ListIcon,
+  ScrollIcon,
+  SplitIcon,
+  BotIcon,
+  CheckIcon,
+  ThoughtIcon,
+  PinIcon,
+  HeartIcon,
+  BroomIcon,
+  WrenchIcon,
+  EyeIcon,
+  PlayIcon,
+  SpeakerIcon,
+  ImageIcon
+} from '../../ui/icons.js'
 
 // ── Tool icons & labels ──────────────────────────────────────────────
+const cls = 'h-3 w-3'
+
+const ICON_MAP: Record<string, () => JSX.Element> = {
+  read: () => <ReadIcon class={cls} />,
+  write: () => <WriteIcon class={cls} />,
+  edit: () => <EditIcon class={cls} />,
+  exec: () => <ExecIcon class={cls} />,
+  process: () => <ProcessIcon class={cls} />,
+  browser: () => <BrowserIcon class={cls} />,
+  search: () => <SearchIcon class={cls} />,
+  fetch: () => <BrowserIcon class={cls} />,
+  cron: () => <ClockIcon class={cls} />,
+  gateway: () => <SettingsIcon class={cls} />,
+  memory: () => <BrainIcon class={cls} />,
+  nodes: () => <PlugIcon class={cls} />,
+  tts: () => <SpeakerIcon class={cls} />,
+  spawn: () => <SplitIcon class={cls} />,
+  send: () => <SendIcon class={cls} />,
+  list: () => <ListIcon class={cls} />,
+  history: () => <ScrollIcon class={cls} />,
+  status: () => <EyeIcon class={cls} />,
+  agents: () => <BotIcon class={cls} />,
+  tool: () => <WrenchIcon class={cls} />,
+  thought: () => <ThoughtIcon class={cls} />,
+  gear: () => <SettingsIcon class={cls} />,
+  pin: () => <PinIcon class={cls} />,
+  worker: () => <BotIcon class={cls} />,
+  heart: () => <HeartIcon class={cls} />,
+  broom: () => <BroomIcon class={cls} />,
+  split: () => <SplitIcon class={cls} />,
+  check: () => <CheckIcon class={cls} />,
+  image: () => <ImageIcon class={cls} />,
+  play: () => <PlayIcon class={cls} />
+}
+
 const TOOL_ICONS: Record<string, string> = {
   read: 'read',
   write: 'write',
@@ -27,8 +90,17 @@ const TOOL_ICONS: Record<string, string> = {
   agents_list: 'agents'
 }
 
+function resolveIcon(key: string): JSX.Element {
+  const fn = ICON_MAP[key]
+  return fn ? fn() : <WrenchIcon class={cls} />
+}
+
 function toolIcon(name: string): string {
   return TOOL_ICONS[name] || 'tool'
+}
+
+function toolIconElement(name: string): JSX.Element {
+  return resolveIcon(toolIcon(name))
 }
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
@@ -148,11 +220,11 @@ export function WorkSection(props: { work: WorkItem[] }) {
 
   const paired = createMemo(() => pairTools(props.work))
 
-  const preview = () => {
+  const preview = (): { icon: JSX.Element; text: string } => {
     for (let i = props.work.length - 1; i >= 0; i--) {
       const w = props.work[i]
-      if (w.type === 'tool_call') return { icon: toolIcon(w.name || ''), text: w.name || 'tool' }
-      if (w.type === 'tool_result') return { icon: '✓', text: w.name || 'tool' }
+      if (w.type === 'tool_call') return { icon: toolIconElement(w.name || ''), text: w.name || 'tool' }
+      if (w.type === 'tool_result') return { icon: resolveIcon('check'), text: w.name || 'tool' }
       if (w.type === 'system_event') {
         const sk = w.icon || 'generic'
         const icons: Record<string, string> = {
@@ -175,11 +247,11 @@ export function WorkSection(props: { work: WorkItem[] }) {
           runtimeContext: 'Runtime Context',
           generic: 'System'
         }
-        return { icon: icons[sk] || 'list', text: labels[sk] || 'System' }
+        return { icon: resolveIcon(icons[sk] || 'list'), text: labels[sk] || 'System' }
       }
-      if (w.type === 'thinking') return { icon: 'thought', text: (w.output || w.input || '').slice(0, 60) }
+      if (w.type === 'thinking') return { icon: resolveIcon('thought'), text: (w.output || w.input || '').slice(0, 60) }
     }
-    return { icon: 'gear', text: '' }
+    return { icon: resolveIcon('gear'), text: '' }
   }
 
   const stepLabel = () => {
