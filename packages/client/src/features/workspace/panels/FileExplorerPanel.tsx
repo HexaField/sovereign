@@ -207,9 +207,9 @@ const TreeNode: Component<{
   const toggle = async () => {
     if (props.node.type !== 'directory') {
       // Open file in viewer
-      const projectPath = ws()?.activeProjectId
-      if (projectPath) {
-        openFileTab(props.node.path, projectPath)
+      const projId = ws()?.activeProjectId
+      if (projId) {
+        openFileTab(props.node.path, projId)
       }
       return
     }

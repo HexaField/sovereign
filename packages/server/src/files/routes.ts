@@ -5,11 +5,25 @@ import type { FileService } from './files.js'
 import { PathTraversalError, validatePath } from './files.js'
 import { buildTree } from './tree.js'
 
-export function createFileRouter(fileService: FileService, authMiddleware?: RequestHandler): Router {
+type ProjectResolver = (project: string) => string
+
+export function createFileRouter(
+  fileService: FileService,
+  authMiddleware?: RequestHandler,
+  resolveProject?: ProjectResolver
+): Router {
   const router = Router()
 
   if (authMiddleware) {
     router.use(authMiddleware)
+  }
+
+  // Resolve project param: if it looks like a UUID, try to resolve to path; otherwise use as-is
+  const resolveProjectPath = (project: string): string => {
+    if (resolveProject && /^[0-9a-f]{8}-/.test(project)) {
+      return resolveProject(project)
+    }
+    return project
   }
 
   // GET /api/files/tree?path=...&project=...
@@ -21,7 +35,8 @@ export function createFileRouter(fileService: FileService, authMiddleware?: Requ
       return
     }
     try {
-      const targetPath = dirPath ? `${project}/${dirPath}` : project
+      const resolved = resolveProjectPath(project)
+      const targetPath = dirPath ? `${resolved}/${dirPath}` : resolved
       const nodes = await buildTree(targetPath)
       res.json(nodes)
     } catch (err: any) {
@@ -42,7 +57,8 @@ export function createFileRouter(fileService: FileService, authMiddleware?: Requ
       return
     }
     try {
-      const content = await fileService.readFile(project, filePath)
+      const resolved = resolveProjectPath(project)
+      const content = await fileService.readFile(resolved, filePath)
       res.json(content)
     } catch (err: any) {
       if (err instanceof PathTraversalError) {
