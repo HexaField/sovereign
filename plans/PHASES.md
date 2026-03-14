@@ -26,7 +26,7 @@ DAG planning engine built directly on the issue/review system (Phase 4). Uses Gi
 
 Entity-bound chat threads: every thread is associated with a branch, issue, or PR. Events from that entity (CI, review comments, status changes) route into the thread automatically — AGENT events trigger autonomous work, NOTIFY events surface for user response. The 'main' thread and user-created threads are global (no entity binding). Message forwarding across threads for user-driven cross-thread orchestration. Input area, voice interface, gateway bridge to OpenClaw. Dashboard as the global context view.
 
-## Phase 7: Observability
+## Phase 7: Observability ✅
 
 Architecture & system view. Notifications and events are entity-scoped — grouped by the thread/entity they belong to, click to jump into context. Holonic event viewer — visualise event flow across entities and threads in real time. Logs viewer.
 
