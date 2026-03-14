@@ -1,4 +1,5 @@
 import { type Component, createSignal, onMount, onCleanup, For, Show, createEffect } from 'solid-js'
+import { wsStore } from '../../ws/index.js'
 import {
   zoom,
   panX,
@@ -11,6 +12,8 @@ import {
   setEventFilterWorkspace,
   eventFilterType,
   setEventFilterType,
+  eventFlowEnabled,
+  setEventFlowEnabled,
   applyZoomDelta,
   applyPanDelta,
   zoomToNode,
@@ -109,8 +112,10 @@ const CanvasView: Component = () => {
   const [isDragging, setIsDragging] = createSignal(false)
   const [dragStart, setDragStart] = createSignal<{ x: number; y: number } | null>(null)
   const [projects, setProjects] = createSignal<ProjectNode[]>([])
+  const [eventFlows, setEventFlows] = createSignal<Array<{ id: string; from: string; to: string; createdAt: number }>>(
+    []
+  )
   let svgRef: SVGSVGElement | undefined
-  let wsRef: WebSocket | null = null
 
   // Fetch orgs
   onMount(async () => {
@@ -133,49 +138,58 @@ const CanvasView: Component = () => {
     }
   })
 
-  // Subscribe to WS event stream
+  // Subscribe to WS event stream via wsStore
   onMount(() => {
-    try {
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const ws = new WebSocket(`${proto}//${location.host}/ws`)
-      wsRef = ws
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data)
-          if (msg.type === 'event' || msg.channel === 'events') {
-            const evt: CanvasEvent = {
-              id: msg.id || crypto.randomUUID(),
-              type: msg.eventType || msg.type || 'unknown',
-              workspace: msg.orgId || msg.workspace || '',
-              targetWorkspace: msg.targetOrgId || msg.targetWorkspace,
-              summary: msg.summary || msg.message || '',
-              timestamp: msg.timestamp || Date.now()
-            }
-            setEvents((prev) => [evt, ...prev].slice(0, 100))
+    wsStore.subscribe(['events'])
 
-            // Pulse the workspace
-            if (evt.workspace) {
-              setPulsingNodes((prev) => new Set([...prev, evt.workspace]))
-              setTimeout(() => {
-                setPulsingNodes((prev) => {
-                  const next = new Set(prev)
-                  next.delete(evt.workspace)
-                  return next
-                })
-              }, 1000)
-            }
-          }
-        } catch {
-          /* bad json */
-        }
+    const offNew = wsStore.on('event.new', (msg: Record<string, unknown>) => {
+      const event = msg.event as Record<string, unknown> | undefined
+      const evt: CanvasEvent = {
+        id: (msg.id as string) || crypto.randomUUID(),
+        type: (event?.type as string) || (msg.type as string) || 'unknown',
+        workspace: (event?.source as string) || (msg.source as string) || '',
+        targetWorkspace: undefined,
+        summary: (event?.type as string) || '',
+        timestamp: Date.now()
       }
-    } catch {
-      /* ws error */
-    }
-  })
+      setEvents((prev) => [evt, ...prev].slice(0, 100))
 
-  onCleanup(() => {
-    wsRef?.close()
+      // Pulse the workspace node
+      if (evt.workspace) {
+        setPulsingNodes((prev) => new Set([...prev, evt.workspace]))
+        setTimeout(() => {
+          setPulsingNodes((prev) => {
+            const next = new Set(prev)
+            next.delete(evt.workspace)
+            return next
+          })
+        }, 2000) // 2-second decay
+      }
+
+      // Event flow animation (if enabled and has target)
+      if (eventFlowEnabled() && evt.targetWorkspace && evt.workspace !== evt.targetWorkspace) {
+        const flowId = `flow-${Date.now()}-${Math.random()}`
+        setEventFlows((prev) => [
+          ...prev,
+          { id: flowId, from: evt.workspace, to: evt.targetWorkspace!, createdAt: Date.now() }
+        ])
+        setTimeout(() => {
+          setEventFlows((prev) => prev.filter((f) => f.id !== flowId))
+        }, 2000)
+      }
+    })
+
+    // Decay timer — clean up old event flows
+    const decayTimer = setInterval(() => {
+      const now = Date.now()
+      setEventFlows((prev) => prev.filter((f) => now - f.createdAt < 2000))
+    }, 500)
+
+    onCleanup(() => {
+      offNew()
+      wsStore.unsubscribe(['events'])
+      clearInterval(decayTimer)
+    })
   })
 
   // Fetch projects for drill-down
@@ -340,6 +354,20 @@ const CanvasView: Component = () => {
         {eventSidebarOpen() ? '▶' : '◀'} Events
       </button>
 
+      {/* Performance toggle */}
+      <button
+        class="absolute top-14 right-4 z-20 rounded-lg px-3 py-1.5 text-sm"
+        style={{
+          background: 'var(--c-bg-raised, #1e1e2e)',
+          color: 'var(--c-text, #cdd6f4)',
+          border: '1px solid var(--c-border, #45475a)'
+        }}
+        onClick={() => setEventFlowEnabled(!eventFlowEnabled())}
+        data-testid="performance-toggle"
+      >
+        {eventFlowEnabled() ? '✨ Animations On' : '⚡ Animations Off'}
+      </button>
+
       {/* SVG Canvas */}
       <svg
         ref={svgRef}
@@ -489,34 +517,42 @@ const CanvasView: Component = () => {
             </For>
           </Show>
 
-          {/* Cross-workspace event flow animations */}
-          <For
-            each={events()
-              .filter((e) => e.targetWorkspace && !drillDownTarget())
-              .slice(0, 5)}
-          >
-            {(evt) => {
-              const sourceLayout = () => nodes().find((n) => n.node.id === evt.workspace)
-              const targetLayout = () => nodes().find((n) => n.node.id === evt.targetWorkspace)
-              return (
-                <Show when={sourceLayout() && targetLayout()}>
-                  <line
-                    x1={sourceLayout()!.x + sourceLayout()!.w / 2}
-                    y1={sourceLayout()!.y + sourceLayout()!.h / 2}
-                    x2={targetLayout()!.x + targetLayout()!.w / 2}
-                    y2={targetLayout()!.y + targetLayout()!.h / 2}
-                    stroke="var(--c-accent, #89b4fa)"
-                    stroke-width={1.5}
-                    stroke-dasharray="6,4"
-                    opacity={0.6}
-                    data-testid={`event-flow-${evt.id}`}
-                  >
-                    <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1s" repeatCount={3} />
-                  </line>
-                </Show>
-              )
-            }}
-          </For>
+          {/* Cross-workspace event flow animations (2s decay) */}
+          <Show when={eventFlowEnabled()}>
+            <For each={eventFlows()}>
+              {(flow) => {
+                const sourceLayout = () => nodes().find((n) => n.node.id === flow.from)
+                const targetLayout = () => nodes().find((n) => n.node.id === flow.to)
+                return (
+                  <Show when={sourceLayout() && targetLayout()}>
+                    <line
+                      x1={sourceLayout()!.x + sourceLayout()!.w / 2}
+                      y1={sourceLayout()!.y + sourceLayout()!.h / 2}
+                      x2={targetLayout()!.x + targetLayout()!.w / 2}
+                      y2={targetLayout()!.y + targetLayout()!.h / 2}
+                      stroke="var(--c-accent, #89b4fa)"
+                      stroke-width={2}
+                      stroke-dasharray="6,4"
+                      opacity={0.7}
+                      data-testid={`event-flow-${flow.id}`}
+                    >
+                      <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1s" repeatCount="indefinite" />
+                      <animate attributeName="opacity" from="0.7" to="0" dur="2s" fill="freeze" />
+                    </line>
+                    {/* Pulse particle along path */}
+                    <circle r="4" fill="var(--c-accent, #89b4fa)" opacity="0.8">
+                      <animateMotion
+                        dur="1s"
+                        repeatCount={1}
+                        path={`M${sourceLayout()!.x + sourceLayout()!.w / 2},${sourceLayout()!.y + sourceLayout()!.h / 2} L${targetLayout()!.x + targetLayout()!.w / 2},${targetLayout()!.y + targetLayout()!.h / 2}`}
+                      />
+                      <animate attributeName="opacity" from="0.8" to="0" dur="2s" fill="freeze" />
+                    </circle>
+                  </Show>
+                )
+              }}
+            </For>
+          </Show>
         </g>
       </svg>
 

@@ -16,6 +16,9 @@ export const [eventSidebarOpen, setEventSidebarOpen] = createSignal(false)
 export const [eventFilterWorkspace, setEventFilterWorkspace] = createSignal<string | null>(null)
 export const [eventFilterType, setEventFilterType] = createSignal<string | null>(null)
 
+// §7 — Performance toggle for event flow animations
+export const [eventFlowEnabled, setEventFlowEnabled] = createSignal(true)
+
 export function toggleEventSidebar(): void {
   setEventSidebarOpen(!eventSidebarOpen())
 }
