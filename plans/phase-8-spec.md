@@ -332,6 +332,18 @@ interface RecordingMeta {
 - Audio playback MUST be interruptible (stop button replaces play while active).
 - Auto-TTS mode: when enabled (`config.voice.autoTTS`), agent responses MUST auto-play. Default: `false`.
 
+#### §8.5.2.0 — Device-Scoped Audio
+
+Users may be connected from multiple devices simultaneously (laptop, phone, etc.). Text messages, thread state, meeting updates, and all other data MUST sync in real time across all connected devices. TTS audio output MUST NOT.
+
+- TTS audio (both agent response TTS and voice acknowledgments) MUST only play on the device that originated the STT request.
+- The device that records and sends a voice message MUST be tagged as the **voice-originating device** for that interaction.
+- The server MUST track which device (by connection/session ID) initiated a voice-mode message.
+- When the agent response is ready for TTS, the `chat` WS channel MUST include a `ttsTargetDevice` field identifying the originating device. Only that device synthesizes and plays audio.
+- Other connected devices MUST receive the text response and all metadata in real time — they simply skip TTS playback.
+- Manual TTS (user clicks play button on a message) is always local to the device that clicked — no device-scoping needed since it's user-initiated.
+- Voice mode state itself is per-device — one device can be in voice mode while another is in text mode on the same thread.
+
 #### §8.5.2.1 — TTS Post-Processing (Conversational Voice)
 
 Agent text responses often contain content unsuitable for spoken output — file paths, URLs, Markdown formatting, code blocks, tables, raw JSON. Reading these aloud produces a poor experience.
