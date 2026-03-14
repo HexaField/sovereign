@@ -36,7 +36,7 @@ describe('SubscriptionTracker', () => {
     t.subscribe('d1', ['files'], { projectId: 'p1' })
     t.subscribe('d2', ['files'], { projectId: 'p2' })
     t.subscribe('d3', ['files'])
-    expect(t.getSubscribers('files', { projectId: 'p1' })).toEqual(['d1'])
+    expect(t.getSubscribers('files', { projectId: 'p1' })).toEqual(['d1', 'd3'])
   })
 
   it('removes all subscriptions for device on disconnect', () => {

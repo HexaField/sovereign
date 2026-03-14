@@ -1,5 +1,5 @@
 import type { Component } from 'solid-js'
-import { Show, For, createSignal, createResource } from 'solid-js'
+import { Show, For, createSignal, createEffect, onCleanup } from 'solid-js'
 import { activeWorkspace } from '../store.js'
 
 export interface GitStatusData {
@@ -15,15 +15,12 @@ export function buildGitStatusUrl(projectId: string): string {
   return `/api/git/status?project=${encodeURIComponent(projectId)}`
 }
 
-const fetchGitStatus = async (key: string): Promise<GitStatusData | null> => {
-  const [orgId, projectId] = key.split(':')
-  if (!orgId || !projectId || projectId === 'null') return null
+const fetchGitStatus = async (orgId: string, projectId: string): Promise<GitStatusData | null> => {
   const res = await fetch(
     `/api/git/status?orgId=${encodeURIComponent(orgId)}&projectId=${encodeURIComponent(projectId)}`
   )
   if (!res.ok) return null
   const data = await res.json()
-  // Server returns { modified: [...] } but we expect { unstaged: [...] }
   return {
     branch: data.branch ?? 'unknown',
     ahead: data.ahead ?? 0,
@@ -36,9 +33,29 @@ const fetchGitStatus = async (key: string): Promise<GitStatusData | null> => {
 
 const GitPanel: Component = () => {
   const ws = () => activeWorkspace()
-  const projectKey = () => `${ws()?.orgId ?? ''}:${ws()?.activeProjectId ?? 'null'}`
+  const [status, setStatus] = createSignal<GitStatusData | null>(null)
+  const [loading, setLoading] = createSignal(false)
+  const [error, setError] = createSignal(false)
 
-  const [status] = createResource(projectKey, fetchGitStatus)
+  createEffect(() => {
+    const orgId = ws()?.orgId
+    const projectId = ws()?.activeProjectId
+    if (!orgId || !projectId) {
+      setStatus(null)
+      return
+    }
+    setLoading(true)
+    setError(false)
+    fetchGitStatus(orgId, projectId)
+      .then((data) => {
+        setStatus(data)
+        setLoading(false)
+      })
+      .catch(() => {
+        setError(true)
+        setLoading(false)
+      })
+  })
 
   return (
     <div class="flex h-full flex-col">
@@ -57,7 +74,7 @@ const GitPanel: Component = () => {
           }
         >
           <Show
-            when={!status.loading}
+            when={!loading()}
             fallback={
               <p class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 Loading...
