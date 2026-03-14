@@ -1,5 +1,5 @@
 import { Show, For, createSignal, createResource, type Component } from 'solid-js'
-import { activeWorkspace } from '../store.js'
+import { activeWorkspace, openFileTab } from '../store.js'
 import WorkspacePicker from '../WorkspacePicker.js'
 
 export interface FileNode {
@@ -205,7 +205,14 @@ const TreeNode: Component<{
   const ws = () => activeWorkspace()
 
   const toggle = async () => {
-    if (props.node.type !== 'directory') return
+    if (props.node.type !== 'directory') {
+      // Open file in viewer
+      const projectPath = ws()?.activeProjectId
+      if (projectPath) {
+        openFileTab(props.node.path, projectPath)
+      }
+      return
+    }
     if (!expanded()) {
       setLoading(true)
       try {

@@ -86,10 +86,10 @@ describe('§8.1 Header', () => {
 
 describe('getViewModeIcon', () => {
   it('returns correct icons', () => {
-    expect(getViewModeIcon('chat')).toBe('💬')
-    expect(getViewModeIcon('voice')).toBe('🎤')
-    expect(getViewModeIcon('dashboard')).toBe('📊')
-    expect(getViewModeIcon('recording')).toBe('🎙')
+    expect(getViewModeIcon('chat')).toBe('chat')
+    expect(getViewModeIcon('voice')).toBe('voice')
+    expect(getViewModeIcon('dashboard')).toBe('dashboard')
+    expect(getViewModeIcon('recording')).toBe('recording')
   })
 })
 

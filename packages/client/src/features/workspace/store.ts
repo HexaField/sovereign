@@ -120,6 +120,37 @@ export const [chatPanelWidth, setChatPanelWidth] = createSignal(CHAT_PANEL_DEFAU
 // §3.5 — Active thread key for right panel
 export const [activeThreadKey, setActiveThreadKey] = createSignal('main')
 
+// §3.6 — Open file tabs in main content
+export interface OpenFileTab {
+  id: string
+  path: string
+  projectId: string
+  label: string
+}
+
+export const [openFileTabs, setOpenFileTabs] = createSignal<OpenFileTab[]>([])
+export const [activeFileTabId, setActiveFileTabId] = createSignal<string | null>(null)
+
+export function openFileTab(path: string, projectId: string): void {
+  const id = `file:${projectId}:${path}`
+  const label = path.split('/').pop() ?? path
+  setOpenFileTabs((prev) => {
+    if (prev.some((t) => t.id === id)) return prev
+    return [...prev, { id, path, projectId, label }]
+  })
+  setActiveFileTabId(id)
+}
+
+export function closeFileTab(id: string): void {
+  setOpenFileTabs((prev) => {
+    const next = prev.filter((t) => t.id !== id)
+    if (activeFileTabId() === id) {
+      setActiveFileTabId(next.length > 0 ? next[next.length - 1].id : null)
+    }
+    return next
+  })
+}
+
 // §3.1 — Sidebar collapsed state
 export const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
 
