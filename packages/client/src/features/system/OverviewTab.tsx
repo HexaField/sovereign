@@ -3,6 +3,25 @@
 
 import { createSignal, onMount, onCleanup, For, Show, type Component } from 'solid-js'
 import { SectionCard } from '../../ui/SectionCard.js'
+import {
+  HeartIcon,
+  BotIcon,
+  SignalIcon,
+  LinkIcon,
+  ClockIcon,
+  TargetIcon,
+  BrainIcon,
+  HookIcon,
+  ChartIcon,
+  BellIcon,
+  GlobeIcon,
+  LightningIcon,
+  ShieldIcon,
+  ScrollIcon,
+  ComputerIcon,
+  PuzzleIcon,
+  ClipboardIcon
+} from '../../ui/icons.js'
 import { wsStore } from '../../ws/index.js'
 
 export interface ArchitectureData {
@@ -134,7 +153,7 @@ const OverviewTab: Component = () => {
               {/* 1. Thread Health */}
               <SectionCard
                 title="Thread Health"
-                icon="💓"
+                icon={<HeartIcon class="h-5 w-5" />}
                 status={moduleHealthStatus(modules())}
                 badge={sessions().total || undefined}
               >
@@ -155,7 +174,11 @@ const OverviewTab: Component = () => {
               </SectionCard>
 
               {/* 2. Models */}
-              <SectionCard title="Models" icon="🤖" badge={config().models.length || undefined}>
+              <SectionCard
+                title="Models"
+                icon={<BotIcon class="h-5 w-5" />}
+                badge={config().models.length || undefined}
+              >
                 <div class="mt-2 space-y-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
                   <Show when={config().defaultModel}>
                     <div class="flex justify-between">
@@ -171,14 +194,14 @@ const OverviewTab: Component = () => {
               </SectionCard>
 
               {/* 3. Channels */}
-              <SectionCard title="Channels" icon="📡">
+              <SectionCard title="Channels" icon={<SignalIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Channel data from gateway not yet wired
                 </div>
               </SectionCard>
 
               {/* 4. Sessions */}
-              <SectionCard title="Sessions" icon="🔗" badge={sessions().total || undefined}>
+              <SectionCard title="Sessions" icon={<LinkIcon class="h-5 w-5" />} badge={sessions().total || undefined}>
                 <div class="mt-2 space-y-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
                   <div class="flex justify-between">
                     <span>Total</span>
@@ -198,7 +221,7 @@ const OverviewTab: Component = () => {
               {/* 5. Cron Jobs */}
               <SectionCard
                 title="Cron Jobs"
-                icon="⏰"
+                icon={<ClockIcon class="h-5 w-5" />}
                 badge={cronJobs().length || undefined}
                 status={errorCron() > 0 ? 'error' : pausedCron() > 0 ? 'warning' : 'healthy'}
               >
@@ -236,7 +259,7 @@ const OverviewTab: Component = () => {
               {/* 6. Skills */}
               <SectionCard
                 title="Skills"
-                icon="🎯"
+                icon={<TargetIcon class="h-5 w-5" />}
                 badge={`${skills().enabled}/${skills().total}`}
                 status={skills().enabled > 0 ? 'healthy' : 'warning'}
               >
@@ -270,63 +293,63 @@ const OverviewTab: Component = () => {
               </SectionCard>
 
               {/* 7. LLM Context */}
-              <SectionCard title="LLM Context" icon="🧠">
+              <SectionCard title="LLM Context" icon={<BrainIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Use the context budget button in the header for detailed breakdown
                 </div>
               </SectionCard>
 
               {/* 8. Hooks */}
-              <SectionCard title="Hooks" icon="🪝">
+              <SectionCard title="Hooks" icon={<HookIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Hook data from gateway not yet wired
                 </div>
               </SectionCard>
 
               {/* 9. Context Management */}
-              <SectionCard title="Context Management" icon="📊">
+              <SectionCard title="Context Management" icon={<ChartIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Compaction stats from gateway not yet wired
                 </div>
               </SectionCard>
 
               {/* 10. Notifications */}
-              <SectionCard title="Notifications" icon="🔔">
+              <SectionCard title="Notifications" icon={<BellIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Notification data from gateway not yet wired
                 </div>
               </SectionCard>
 
               {/* 11. Webhooks */}
-              <SectionCard title="Webhooks" icon="🌐">
+              <SectionCard title="Webhooks" icon={<GlobeIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Webhook data from gateway not yet wired
                 </div>
               </SectionCard>
 
               {/* 12. Events Pipeline */}
-              <SectionCard title="Events Pipeline" icon="⚡">
+              <SectionCard title="Events Pipeline" icon={<LightningIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Event pipeline metrics from gateway not yet wired
                 </div>
               </SectionCard>
 
               {/* 13. Security & Devices */}
-              <SectionCard title="Security & Devices" icon="🔐">
+              <SectionCard title="Security & Devices" icon={<ShieldIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Device and credential data from gateway not yet wired
                 </div>
               </SectionCard>
 
               {/* 14. Scripts */}
-              <SectionCard title="Scripts" icon="📜">
+              <SectionCard title="Scripts" icon={<ScrollIcon class="h-5 w-5" />}>
                 <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
                   Script data from gateway not yet wired
                 </div>
               </SectionCard>
 
               {/* 15. System */}
-              <SectionCard title="System" icon="🖥️" status="healthy">
+              <SectionCard title="System" icon={<ComputerIcon class="h-5 w-5" />} status="healthy">
                 <div class="mt-2 space-y-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
                   <div class="flex justify-between">
                     <span>OS</span>
@@ -359,7 +382,12 @@ const OverviewTab: Component = () => {
               </SectionCard>
 
               {/* 16. Modules (Architecture) */}
-              <SectionCard title="Modules" icon="🧩" badge={modules().length} status={moduleHealthStatus(modules())}>
+              <SectionCard
+                title="Modules"
+                icon={<PuzzleIcon class="h-5 w-5" />}
+                badge={modules().length}
+                status={moduleHealthStatus(modules())}
+              >
                 <div class="mt-2 space-y-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
                   <div class="flex justify-between">
                     <span>Healthy</span>
@@ -391,7 +419,7 @@ const OverviewTab: Component = () => {
               {/* Plans Sync Status */}
               <SectionCard
                 title="Planning"
-                icon="📋"
+                icon={<ClipboardIcon class="h-5 w-5" />}
                 badge={planSummary()?.total || undefined}
                 status={planSummary()?.blocked ? 'warning' : 'healthy'}
               >

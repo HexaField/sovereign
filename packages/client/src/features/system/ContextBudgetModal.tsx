@@ -1,7 +1,8 @@
 // §P.2 Context Budget Modal — shows full LLM context budget breakdown
 // Ported from voice-ui's ContextBudgetModal.tsx, adapted for Sovereign/SolidJS
 
-import { type Component, createSignal, onMount, For, Show, createMemo } from 'solid-js'
+import { type Component, createSignal, onMount, For, Show, createMemo, type JSX } from 'solid-js'
+import { SettingsIcon, FilesIcon, TargetIcon, WrenchIcon, ClipboardIcon, BrainIcon } from '../../ui/icons.js'
 
 interface WorkspaceFile {
   name: string
@@ -89,7 +90,7 @@ const BarSegment: Component<{ label: string; chars: number; total: number; color
 
 const Section: Component<{
   title: string
-  icon: string
+  icon: JSX.Element
   chars: number
   total: number
   color: string
@@ -105,7 +106,7 @@ const Section: Component<{
         onClick={() => setOpen(!open())}
       >
         <span class="text-[10px]">{open() ? '▼' : '▶'}</span>
-        <span>{props.icon}</span>
+        <span class="flex h-4 w-4 shrink-0 items-center">{props.icon}</span>
         <span class="text-xs font-medium">{props.title}</span>
         <span class="ml-auto text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
           {formatSize(props.chars)}
@@ -219,7 +220,9 @@ export const ContextBudgetModal: Component<{ onClose: () => void }> = (props) =>
       >
         {/* Header */}
         <div class="flex items-center gap-3 border-b px-5 py-3" style={{ 'border-color': 'var(--c-border)' }}>
-          <span class="text-lg">🧠</span>
+          <span class="text-lg">
+            <BrainIcon size={20} />
+          </span>
           <span class="text-sm font-semibold">LLM Context Budget</span>
           <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
             Fixed base context injected every turn
@@ -320,7 +323,7 @@ export const ContextBudgetModal: Component<{ onClose: () => void }> = (props) =>
                   <div class="space-y-2">
                     <Section
                       title="Core System Prompt"
-                      icon="⚙️"
+                      icon={<SettingsIcon class="h-4 w-4" />}
                       chars={r().systemPrompt.nonProjectContextChars}
                       total={total()}
                       color="#3b82f6"
@@ -343,7 +346,7 @@ export const ContextBudgetModal: Component<{ onClose: () => void }> = (props) =>
 
                     <Section
                       title="Workspace Files (Project Context)"
-                      icon="📁"
+                      icon={<FilesIcon class="h-4 w-4" />}
                       chars={r().injectedWorkspaceFiles.reduce((sum, f) => sum + (f.missing ? 0 : f.injectedChars), 0)}
                       total={total()}
                       color="#8b5cf6"
@@ -375,7 +378,7 @@ export const ContextBudgetModal: Component<{ onClose: () => void }> = (props) =>
 
                     <Section
                       title="Skills Listing"
-                      icon="🎯"
+                      icon={<TargetIcon class="h-4 w-4" />}
                       chars={r().skills.promptChars}
                       total={total()}
                       color="#22c55e"
@@ -396,7 +399,7 @@ export const ContextBudgetModal: Component<{ onClose: () => void }> = (props) =>
 
                     <Section
                       title="Tool Descriptions"
-                      icon="🔧"
+                      icon={<WrenchIcon class="h-4 w-4" />}
                       chars={r().tools.listChars}
                       total={total()}
                       color="#f59e0b"
@@ -417,7 +420,7 @@ export const ContextBudgetModal: Component<{ onClose: () => void }> = (props) =>
 
                     <Section
                       title="Tool Schemas (JSON)"
-                      icon="📋"
+                      icon={<ClipboardIcon class="h-4 w-4" />}
                       chars={r().tools.schemaChars}
                       total={total()}
                       color="#ef4444"

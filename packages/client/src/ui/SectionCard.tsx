@@ -2,7 +2,7 @@ import { createSignal, type JSX, Show } from 'solid-js'
 
 export interface SectionCardProps {
   title: string
-  icon: string
+  icon: JSX.Element
   badge?: string | number
   defaultOpen?: boolean
   status?: 'healthy' | 'warning' | 'error' | 'unknown'
@@ -38,7 +38,7 @@ export function SectionCard(props: SectionCardProps): JSX.Element {
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open()}
       >
-        <span class="text-lg" aria-hidden="true">
+        <span class="flex h-5 w-5 shrink-0 items-center" aria-hidden="true">
           {props.icon}
         </span>
         <span class="flex-1 font-medium">{props.title}</span>

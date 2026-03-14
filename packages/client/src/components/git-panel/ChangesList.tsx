@@ -100,7 +100,7 @@ const ChangesList: Component<ChangesListProps> = (props) => {
                 class="flex cursor-pointer items-center justify-between px-2 py-0.5 text-zinc-300 hover:bg-zinc-800"
                 onClick={() => props.onFileClick(path)}
               >
-                <span>❓ {path}</span>
+                <span>? {path}</span>
                 <button
                   class="text-zinc-500 hover:text-zinc-300"
                   onClick={(e) => {
