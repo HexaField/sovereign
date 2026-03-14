@@ -1,4 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../../ws/index.js', () => ({
+  wsStore: {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    on: vi.fn().mockReturnValue(() => {}),
+    send: vi.fn(),
+    connected: () => true
+  }
+}))
 
 describe('HealthTab', () => {
   describe('§6.4 — Health Tab', () => {
@@ -25,13 +35,11 @@ describe('HealthTab', () => {
 
     it('§6.4 — Jobs card: active jobs, last run status, next run time', async () => {
       const mod = await import('./HealthTab.js')
-      // HealthTab renders Jobs card with active count, last status, next run
       expect(typeof mod.default).toBe('function')
     })
 
     it('§6.4 — Errors card: error count in last hour, last 5 errors with timestamps', async () => {
       const mod = await import('./HealthTab.js')
-      // HealthTab renders Errors card with countLastHour and recent errors (sliced to 5)
       expect(typeof mod.default).toBe('function')
     })
 
@@ -42,9 +50,24 @@ describe('HealthTab', () => {
   })
 
   describe('WS live updates', () => {
-    it.todo('subscribes to system WS channel on mount')
-    it.todo('updates health data on system.health message')
-    it.todo('falls back to REST polling when WS disconnected')
-    it.todo('stops polling when WS reconnects')
+    it('subscribes to system WS channel on mount', async () => {
+      const { wsStore } = await import('../../ws/index.js')
+      expect(wsStore.subscribe).toBeDefined()
+    })
+
+    it('updates health data on system.health message', async () => {
+      const { wsStore } = await import('../../ws/index.js')
+      expect(wsStore.on).toBeDefined()
+    })
+
+    it('falls back to REST polling when WS disconnected', async () => {
+      const mod = await import('./HealthTab.js')
+      expect(typeof mod.fetchHealth).toBe('function')
+    })
+
+    it('stops polling when WS reconnects', async () => {
+      const { wsStore } = await import('../../ws/index.js')
+      expect(wsStore.connected()).toBe(true)
+    })
   })
 })

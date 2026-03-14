@@ -1,13 +1,14 @@
 // §6.4 Health Tab — System health metrics in card grid layout
-// Connection, Resources, Jobs, Cache, Errors cards. Data from GET /api/system/health.
+// Connection, Resources, Jobs, Cache, Errors cards. Data from WS system channel with REST fallback.
 
 import { createSignal, onMount, onCleanup, Show, For, type Component } from 'solid-js'
+import { wsStore } from '../../ws/index.js'
 
 export interface HealthData {
   connection: {
     wsStatus: string
     agentBackend: string
-    uptime: number // seconds
+    uptime: number
   }
   resources: {
     diskUsage: { used: number; total: number }
@@ -53,7 +54,7 @@ export async function fetchHealth(): Promise<HealthData> {
   return res.json()
 }
 
-function HealthCard(props: { title: string; children: any }) {
+function HealthCard(props: { title: string; children: import('solid-js').JSX.Element }) {
   return (
     <div class="rounded-lg border p-4" style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}>
       <h3 class="mb-3 text-sm font-semibold opacity-80">{props.title}</h3>
@@ -73,18 +74,39 @@ const HealthTab: Component = () => {
       const health = await fetchHealth()
       setData(health)
       setError(null)
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to load')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to load')
     }
   }
 
   onMount(() => {
+    // Initial REST fetch
     load()
-    pollTimer = setInterval(load, 10000)
-  })
 
-  onCleanup(() => {
-    if (pollTimer) clearInterval(pollTimer)
+    // Subscribe to WS system channel for reactive health updates
+    wsStore.subscribe(['system'])
+
+    const offHealth = wsStore.on('system.health', (msg: Record<string, unknown>) => {
+      // Extract health data from WS message (remove type/timestamp metadata)
+      const { type: _t, timestamp: _ts, ...healthData } = msg
+      if (healthData.connection) {
+        setData(healthData as unknown as HealthData)
+        setError(null)
+      }
+    })
+
+    // Fallback polling when WS disconnected
+    pollTimer = setInterval(() => {
+      if (!wsStore.connected()) {
+        load()
+      }
+    }, 10000)
+
+    onCleanup(() => {
+      offHealth()
+      wsStore.unsubscribe(['system'])
+      if (pollTimer) clearInterval(pollTimer)
+    })
   })
 
   return (
@@ -98,7 +120,6 @@ const HealthTab: Component = () => {
       <Show when={data()}>
         {(health) => (
           <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {/* Connection card */}
             <HealthCard title="Connection">
               <div class="space-y-1 text-sm">
                 <div class="flex justify-between">
@@ -116,7 +137,6 @@ const HealthTab: Component = () => {
               </div>
             </HealthCard>
 
-            {/* Resources card */}
             <HealthCard title="Resources">
               <div class="space-y-1 text-sm">
                 <div class="flex justify-between">
@@ -138,7 +158,6 @@ const HealthTab: Component = () => {
               </div>
             </HealthCard>
 
-            {/* Jobs card */}
             <HealthCard title="Jobs">
               <div class="space-y-1 text-sm">
                 <div class="flex justify-between">
@@ -160,7 +179,6 @@ const HealthTab: Component = () => {
               </div>
             </HealthCard>
 
-            {/* Cache card */}
             <Show when={health().cache}>
               {(cache) => (
                 <HealthCard title="Cache">
@@ -174,7 +192,6 @@ const HealthTab: Component = () => {
               )}
             </Show>
 
-            {/* Errors card */}
             <HealthCard title="Errors">
               <div class="space-y-2 text-sm">
                 <div class="flex justify-between">

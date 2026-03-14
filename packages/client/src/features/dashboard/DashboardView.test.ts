@@ -1,4 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../../ws/index.js', () => ({
+  wsStore: {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    on: vi.fn().mockReturnValue(() => {}),
+    send: vi.fn(),
+    connected: () => true
+  }
+}))
+
 import {
   DashboardView,
   formatClock,
