@@ -276,7 +276,7 @@ const ChatPanel: Component = () => {
         onMouseDown={onMouseDown}
       />
       <div
-        class="flex flex-col overflow-hidden"
+        class="flex h-full flex-col overflow-hidden"
         style={{
           width: `${chatPanelWidth()}px`,
           'min-width': `${CHAT_PANEL_MIN_WIDTH}px`,
