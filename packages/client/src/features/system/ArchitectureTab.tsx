@@ -1,7 +1,8 @@
 // §6.2 Architecture Tab — Graph of server modules and event subscriptions
-// Nodes: module name + status badge. Edges: event subscriptions. Live updates.
+// Nodes: module name + status badge. Edges: event subscriptions. Live updates via WS.
 
 import { createSignal, onMount, onCleanup, For, type Component } from 'solid-js'
+import { wsStore } from '../../ws/index.js'
 
 export interface ModuleNode {
   name: string
@@ -39,27 +40,49 @@ const ArchitectureTab: Component = () => {
   const [data, setData] = createSignal<ArchitectureData | null>(null)
   const [error, setError] = createSignal<string | null>(null)
   const [pulsingModule, _setPulsingModule] = createSignal<string | null>(null)
-
-  let pollTimer: ReturnType<typeof setInterval> | undefined
+  const [_wsConnected, setWsConnected] = createSignal(false)
 
   const load = async () => {
     try {
       const arch = await fetchArchitecture()
       setData(arch)
       setError(null)
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to load')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to load')
     }
   }
 
-  onMount(() => {
-    load()
-    // Poll for live updates every 5s
-    pollTimer = setInterval(load, 5000)
-  })
+  let pollTimer: ReturnType<typeof setInterval> | undefined
 
-  onCleanup(() => {
-    if (pollTimer) clearInterval(pollTimer)
+  onMount(() => {
+    // Initial REST fetch
+    load()
+
+    // Subscribe to WS system channel
+    wsStore.subscribe(['system'])
+    setWsConnected(wsStore.connected())
+
+    const offArch = wsStore.on('system.architecture', (msg: Record<string, unknown>) => {
+      setWsConnected(true)
+      if (msg.modules) {
+        setData({ modules: msg.modules as ModuleNode[] })
+        setError(null)
+      }
+    })
+
+    // Fallback polling when WS disconnected
+    pollTimer = setInterval(() => {
+      if (!wsStore.connected()) {
+        setWsConnected(false)
+        load()
+      }
+    }, 5000)
+
+    onCleanup(() => {
+      offArch()
+      wsStore.unsubscribe(['system'])
+      if (pollTimer) clearInterval(pollTimer)
+    })
   })
 
   return (
@@ -75,9 +98,7 @@ const ArchitectureTab: Component = () => {
           <For each={data()!.modules}>
             {(mod) => (
               <div
-                class={`rounded-lg border p-4 transition-all ${
-                  pulsingModule() === mod.name ? "ring-2 ring-blue-400/50" : ''
-                }`}
+                class={`rounded-lg border p-4 transition-all ${pulsingModule() === mod.name ? "ring-2 ring-blue-400/50" : ''}`}
                 style={{
                   background: 'var(--c-bg-raised)',
                   'border-color': 'var(--c-border)'

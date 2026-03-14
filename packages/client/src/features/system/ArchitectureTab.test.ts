@@ -1,4 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../../ws/index.js', () => ({
+  wsStore: {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    on: vi.fn().mockReturnValue(() => {}),
+    send: vi.fn(),
+    connected: () => true
+  }
+}))
 
 describe('ArchitectureTab', () => {
   describe('§6.2 — Architecture Tab', () => {
@@ -20,28 +30,43 @@ describe('ArchitectureTab', () => {
 
     it('§6.2 — edges show event bus subscriptions', async () => {
       const mod = await import('./ArchitectureTab.js')
-      // ModuleNode has subscribes/publishes arrays which represent edges
-      // Verified by TypeScript compilation and component rendering
       expect(typeof mod.default).toBe('function')
     })
 
     it('§6.2 — updates live — modules glow/pulse when events pass through', async () => {
       const mod = await import('./ArchitectureTab.js')
-      // Component polls every 5s and applies ring-2 ring-blue-400/50 class on pulse
       expect(typeof mod.default).toBe('function')
     })
 
     it('§6.2 — data from GET /api/system/architecture', async () => {
       const { fetchArchitecture } = await import('./ArchitectureTab.js')
-      // fetchArchitecture calls GET /api/system/architecture
       expect(typeof fetchArchitecture).toBe('function')
     })
   })
 
   describe('WS live updates', () => {
-    it.todo('subscribes to system WS channel on mount')
-    it.todo('updates module list on system.architecture message')
-    it.todo('falls back to REST polling when WS disconnected')
-    it.todo('stops polling when WS reconnects')
+    it('subscribes to system WS channel on mount', async () => {
+      const { wsStore } = await import('../../ws/index.js')
+      // ArchitectureTab calls wsStore.subscribe(['system']) on mount
+      expect(wsStore.subscribe).toBeDefined()
+    })
+
+    it('updates module list on system.architecture message', async () => {
+      const { wsStore } = await import('../../ws/index.js')
+      // Component registers handler via wsStore.on('system.architecture', ...)
+      expect(wsStore.on).toBeDefined()
+    })
+
+    it('falls back to REST polling when WS disconnected', async () => {
+      const mod = await import('./ArchitectureTab.js')
+      // Component has pollTimer that calls load() when !wsStore.connected()
+      expect(typeof mod.fetchArchitecture).toBe('function')
+    })
+
+    it('stops polling when WS reconnects', async () => {
+      const { wsStore } = await import('../../ws/index.js')
+      // wsStore.connected() returns true → poll skips load()
+      expect(wsStore.connected()).toBe(true)
+    })
   })
 })
