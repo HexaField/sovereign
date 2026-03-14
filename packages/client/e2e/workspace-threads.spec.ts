@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test'
-
 test.describe('Workspace — Threads Panel', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, isMobile }) => {
+    test.skip(isMobile, 'Desktop-only: requires sidebar and keyboard navigation')
+
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await page.keyboard.press('Meta+2')
