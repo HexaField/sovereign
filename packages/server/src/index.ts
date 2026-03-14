@@ -1,6 +1,7 @@
 import dotenv from 'dotenv'
 import fs from 'node:fs'
 import https from 'node:https'
+import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -109,12 +110,18 @@ app.use(express.json())
 
 app.use('/health', healthRouter)
 
-const options = {
-  key: fs.readFileSync(path.join(repoRoot, '.certs/localhost.key')),
-  cert: fs.readFileSync(path.join(repoRoot, '.certs/localhost.cert'))
-}
+const useTls = process.env.SOVEREIGN_TLS !== 'false'
+let server: http.Server | https.Server
 
-const server = https.createServer(options, app)
+if (useTls) {
+  const options = {
+    key: fs.readFileSync(path.join(repoRoot, '.certs/localhost.key')),
+    cert: fs.readFileSync(path.join(repoRoot, '.certs/localhost.cert'))
+  }
+  server = https.createServer(options, app)
+} else {
+  server = http.createServer(app)
+}
 
 // --- WebSocket setup ---
 const wss = new WebSocketServer({ server, path: '/ws' })
@@ -606,5 +613,6 @@ if (fs.existsSync(clientDist)) {
 }
 
 server.listen(Number(port), host, () => {
-  console.log(`Server running at https://${host}:${port}`)
+  const proto = useTls ? 'https' : 'http'
+  console.log(`Server running at ${proto}://${host}:${port}`)
 })
