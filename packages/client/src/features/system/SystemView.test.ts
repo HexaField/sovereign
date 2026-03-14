@@ -1,4 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../../ws/index.js', () => ({
+  wsStore: {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    on: vi.fn().mockReturnValue(() => {}),
+    send: vi.fn(),
+    connected: () => true
+  }
+}))
 
 describe('SystemView', () => {
   describe('§6.1 — System Tabs', () => {
@@ -25,9 +35,8 @@ describe('SystemView', () => {
 
     it('§6.1 — only one tab content visible at a time', async () => {
       const mod = await import('./SystemView.js')
-      // Each tab has a unique component — the SystemView uses Dynamic to render only the active one
       const components = mod.SYSTEM_TABS.map((t: any) => t.component)
-      expect(new Set(components).size).toBe(6) // all unique
+      expect(new Set(components).size).toBe(6)
       expect(typeof mod.default).toBe('function')
     })
   })
@@ -35,14 +44,11 @@ describe('SystemView', () => {
   describe('§7.6 — Mobile System', () => {
     it('§7.6 — tabs scroll horizontally if they dont fit on mobile', async () => {
       const mod = await import('./SystemView.js')
-      // Implementation uses overflow-x-auto on the tab bar container
-      // Verified by code inspection — tab bar has class "flex overflow-x-auto"
       expect(mod.SYSTEM_TABS.length).toBe(6)
     })
 
     it('§7.6 — config editor stacks fields vertically on mobile', async () => {
       const mod = await import('./ConfigTab.js')
-      // Config form uses space-y-3 for vertical stacking on all screen sizes
       expect(typeof mod.default).toBe('function')
     })
   })
