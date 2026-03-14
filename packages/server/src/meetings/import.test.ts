@@ -213,7 +213,7 @@ describe('§8.6.4 Thread Routing for Imports', () => {
   it('§8.6.4 MUST inject meeting summary into thread as system message', async () => {
     const meetings = createMeetingsService(bus, dataDir)
     const handler = createImportHandler({ bus, meetings })
-    const result = await handler.import('org1', {
+    await handler.import('org1', {
       title: 'Thread Meeting',
       threadKey: 'thread-123',
       transcriptFilename: 'test.txt',

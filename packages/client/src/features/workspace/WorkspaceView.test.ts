@@ -60,9 +60,19 @@ describe('WorkspaceView', () => {
       expect(activeSidebarTab()).toBe('git')
     })
 
-    it('§3.1 — sidebar tabs include: Files, Git, Threads, Planning, Notifications, Terminal, Recordings, Logs', () => {
+    it('§3.1 — sidebar tabs include: Files, Git, Threads, Planning, Notifications, Terminal, Recordings, Meetings, Logs', () => {
       const keys = SIDEBAR_TABS.map((t) => t.key)
-      expect(keys).toEqual(['files', 'git', 'threads', 'planning', 'notifications', 'terminal', 'recordings', 'logs'])
+      expect(keys).toEqual([
+        'files',
+        'git',
+        'threads',
+        'planning',
+        'notifications',
+        'terminal',
+        'recordings',
+        'meetings',
+        'logs'
+      ])
     })
 
     it('§3.1 — only one sidebar tab visible at a time', () => {
@@ -205,7 +215,7 @@ describe('WorkspaceView', () => {
     })
 
     it('§7.3 — tapping header tab name opens dropdown listing all tabs', () => {
-      expect(SIDEBAR_TABS.length).toBe(8)
+      expect(SIDEBAR_TABS.length).toBe(9)
     })
 
     it('§7.3 — only one tab visible at a time, fills full viewport', () => {
@@ -213,9 +223,19 @@ describe('WorkspaceView', () => {
       expect(activeSidebarTab()).toBe('terminal')
     })
 
-    it('§7.3 — tab order: Files → File Viewer → Chat → Git → Threads → Planning → Notifications → Terminal → Recordings → Logs', () => {
+    it('§7.3 — tab order: Files → File Viewer → Chat → Git → Threads → Planning → Notifications → Terminal → Recordings → Meetings → Logs', () => {
       const labels = SIDEBAR_TABS.map((t) => t.label)
-      expect(labels).toEqual(['Files', 'Git', 'Threads', 'Planning', 'Notifications', 'Terminal', 'Recordings', 'Logs'])
+      expect(labels).toEqual([
+        'Files',
+        'Git',
+        'Threads',
+        'Planning',
+        'Notifications',
+        'Terminal',
+        'Recordings',
+        'Meetings',
+        'Logs'
+      ])
     })
 
     it('§7.3 — swipe gestures animate slide transition', () => {

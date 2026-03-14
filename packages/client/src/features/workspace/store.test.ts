@@ -120,7 +120,7 @@ describe('Workspace Store', () => {
   })
 
   describe('§7.3 — Mobile Tab Store', () => {
-    it('has 10 mobile tabs in correct order', () => {
+    it('has 11 mobile tabs in correct order', () => {
       const keys = MOBILE_TAB_ORDER.map((t) => t.key)
       expect(keys).toEqual([
         'files',
@@ -132,6 +132,7 @@ describe('Workspace Store', () => {
         'notifications',
         'terminal',
         'recordings',
+        'meetings',
         'logs'
       ])
     })

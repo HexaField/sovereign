@@ -8,7 +8,16 @@ export interface WorkspaceContext {
 }
 
 // §3.3 — Sidebar tab types
-export type SidebarTab = 'files' | 'git' | 'threads' | 'planning' | 'notifications' | 'terminal' | 'recordings' | 'logs'
+export type SidebarTab =
+  | 'files'
+  | 'git'
+  | 'threads'
+  | 'planning'
+  | 'notifications'
+  | 'terminal'
+  | 'recordings'
+  | 'meetings'
+  | 'logs'
 
 export const SIDEBAR_TABS: { key: SidebarTab; label: string; icon: string }[] = [
   { key: 'files', label: 'Files', icon: '📄' },
@@ -18,6 +27,7 @@ export const SIDEBAR_TABS: { key: SidebarTab; label: string; icon: string }[] = 
   { key: 'notifications', label: 'Notifications', icon: '🔔' },
   { key: 'terminal', label: 'Terminal', icon: '⬛' },
   { key: 'recordings', label: 'Recordings', icon: '🎙️' },
+  { key: 'meetings', label: 'Meetings', icon: '📝' },
   { key: 'logs', label: 'Logs', icon: '📋' }
 ]
 
@@ -35,6 +45,7 @@ export type MobileTab =
   | 'notifications'
   | 'terminal'
   | 'recordings'
+  | 'meetings'
   | 'logs'
 
 export const MOBILE_TAB_ORDER: { key: MobileTab; label: string }[] = [
@@ -47,6 +58,7 @@ export const MOBILE_TAB_ORDER: { key: MobileTab; label: string }[] = [
   { key: 'notifications', label: 'Notifications' },
   { key: 'terminal', label: 'Terminal' },
   { key: 'recordings', label: 'Recordings' },
+  { key: 'meetings', label: 'Meetings' },
   { key: 'logs', label: 'Logs' }
 ]
 

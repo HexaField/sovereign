@@ -55,6 +55,7 @@ import WorkspaceCard from './WorkspaceCard'
 import type { OrgSummary } from './WorkspaceCard'
 import GlobalChat from './GlobalChat'
 import VoiceWidget from './VoiceWidget'
+import { MeetingWidget } from './MeetingWidget'
 import NotificationFeed from './NotificationFeed'
 import { createSignal, onMount } from 'solid-js'
 
@@ -117,6 +118,11 @@ export function DashboardView() {
         {/* §2.4 Voice Widget */}
         <div>
           <VoiceWidget />
+        </div>
+
+        {/* §8 Meeting Widget */}
+        <div>
+          <MeetingWidget />
         </div>
 
         {/* §2.5 Notification Feed — spans full width on large screens */}
