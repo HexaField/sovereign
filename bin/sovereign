@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+#
+# Sovereign daemon — production server with auto-restart on rebuild.
+#
+# Usage:
+#   sovereign start     Start the production daemon
+#   sovereign stop      Stop the daemon
+#   sovereign restart   Restart the daemon
+#   sovereign status    Show daemon status
+#   sovereign build     Build client + server, restart if running
+#   sovereign logs      Tail the daemon log
+#   sovereign run       Run in foreground (no daemon)
+#
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DATA_DIR="${SOVEREIGN_DATA_DIR:-$REPO_DIR/packages/server/.data}"
+PID_FILE="$DATA_DIR/sovereign.pid"
+LOG_FILE="$DATA_DIR/sovereign.log"
+SERVER_ENTRY="$REPO_DIR/packages/server/dist/index.js"
+
+mkdir -p "$DATA_DIR"
+
+_is_running() {
+  [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+_start_server() {
+  if _is_running; then
+    echo "Already running (pid $(cat "$PID_FILE"))"
+    return 1
+  fi
+
+  if [ ! -f "$SERVER_ENTRY" ]; then
+    echo "Server not built. Run: sovereign build"
+    return 1
+  fi
+
+  echo "Starting Sovereign..."
+  SOVEREIGN_DATA_DIR="$DATA_DIR" nohup node "$SERVER_ENTRY" >> "$LOG_FILE" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$PID_FILE"
+  
+  # Wait briefly to check it didn't crash immediately
+  sleep 1
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Sovereign running (pid $pid)"
+    echo "Logs: $LOG_FILE"
+  else
+    echo "Failed to start. Check logs: $LOG_FILE"
+    rm -f "$PID_FILE"
+    tail -20 "$LOG_FILE"
+    return 1
+  fi
+}
+
+_stop_server() {
+  if ! _is_running; then
+    echo "Not running"
+    rm -f "$PID_FILE"
+    return 0
+  fi
+
+  local pid
+  pid=$(cat "$PID_FILE")
+  echo "Stopping Sovereign (pid $pid)..."
+  kill "$pid" 2>/dev/null || true
+  
+  # Wait for graceful shutdown (up to 5s)
+  local i=0
+  while kill -0 "$pid" 2>/dev/null && [ $i -lt 50 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Force killing..."
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  
+  rm -f "$PID_FILE"
+  echo "Stopped"
+}
+
+_build() {
+  echo "Building core..."
+  (cd "$REPO_DIR" && pnpm --filter @template/core build)
+  
+  echo "Building client..."
+  (cd "$REPO_DIR" && pnpm --filter @template/client build)
+  
+  echo "Building server..."
+  (cd "$REPO_DIR" && pnpm --filter @template/server build)
+  
+  echo "Build complete"
+}
+
+case "${1:-help}" in
+  start)
+    _start_server
+    ;;
+  
+  stop)
+    _stop_server
+    ;;
+  
+  restart)
+    _stop_server
+    _start_server
+    ;;
+  
+  status)
+    if _is_running; then
+      local_pid=$(cat "$PID_FILE")
+      echo "Running (pid $local_pid)"
+      echo "Data: $DATA_DIR"
+      echo "Logs: $LOG_FILE"
+      # Show uptime
+      if command -v ps &>/dev/null; then
+        ps -o etime= -p "$local_pid" 2>/dev/null | xargs echo "Uptime:"
+      fi
+    else
+      echo "Not running"
+    fi
+    ;;
+  
+  build)
+    _build
+    if _is_running; then
+      echo "Restarting daemon..."
+      _stop_server
+      _start_server
+    else
+      echo "Daemon not running. Start with: sovereign start"
+    fi
+    ;;
+  
+  logs)
+    if [ -f "$LOG_FILE" ]; then
+      tail -f "$LOG_FILE"
+    else
+      echo "No log file yet"
+    fi
+    ;;
+  
+  run)
+    echo "Running in foreground (Ctrl+C to stop)..."
+    SOVEREIGN_DATA_DIR="$DATA_DIR" exec node "$SERVER_ENTRY"
+    ;;
+  
+  help|--help|-h)
+    echo "Usage: sovereign <command>"
+    echo ""
+    echo "Commands:"
+    echo "  start     Start the production daemon"
+    echo "  stop      Stop the daemon"
+    echo "  restart   Restart the daemon"
+    echo "  status    Show daemon status"
+    echo "  build     Build all packages, restart if running"
+    echo "  logs      Tail the daemon log"
+    echo "  run       Run in foreground (no daemon)"
+    echo ""
+    echo "Environment:"
+    echo "  SOVEREIGN_DATA_DIR  Data directory (default: $REPO_DIR/packages/server/.data)"
+    ;;
+  
+  *)
+    echo "Unknown command: $1"
+    echo "Run 'sovereign help' for usage"
+    exit 1
+    ;;
+esac

@@ -2,6 +2,7 @@ import dotenv from 'dotenv'
 import fs from 'node:fs'
 import https from 'node:https'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 dotenv.config({ path: '.env.local' })
 dotenv.config()
@@ -10,7 +11,7 @@ import cors from 'cors'
 import express from 'express'
 import { WebSocketServer } from 'ws'
 import { createEventBus } from '@template/core'
-import healthRouter from './routes/health'
+import healthRouter from './routes/health.js'
 import { createStatusAggregator } from './status/status.js'
 import { createWsHandler } from './ws/handler.js'
 
@@ -86,13 +87,16 @@ const port = process.env.PORT || 3001
 const host = process.env.HOST || 'localhost'
 
 app.use(cors())
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const repoRoot = path.resolve(__dirname, '../../..')
+
 app.use(express.json())
 
 app.use('/health', healthRouter)
 
 const options = {
-  key: fs.readFileSync(path.join(process.cwd(), '../../.certs/localhost.key')),
-  cert: fs.readFileSync(path.join(process.cwd(), '../../.certs/localhost.cert'))
+  key: fs.readFileSync(path.join(repoRoot, '.certs/localhost.key')),
+  cert: fs.readFileSync(path.join(repoRoot, '.certs/localhost.cert'))
 }
 
 const server = https.createServer(options, app)
@@ -489,6 +493,31 @@ function shutdown() {
 
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
+
+// ============================================================
+// Static file serving (production mode)
+// ============================================================
+// In production, serve the built client from ../client/dist/
+// In dev, Vite dev server handles this with proxy to our API
+const clientDist = path.resolve(__dirname, '../../client/dist')
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist))
+  // SPA fallback — serve index.html for all non-API, non-WS routes
+  app.use((_req, res, next) => {
+    if (_req.path.startsWith('/api') || _req.path.startsWith('/ws')) {
+      next()
+      return
+    }
+    const indexPath = path.join(clientDist, 'index.html')
+    if (fs.existsSync(indexPath)) {
+      res.setHeader('Content-Type', 'text/html')
+      res.send(fs.readFileSync(indexPath, 'utf-8'))
+    } else {
+      next()
+    }
+  })
+  console.log(`Serving client from ${clientDist}`)
+}
 
 server.listen(Number(port), host, () => {
   console.log(`Server running at https://${host}:${port}`)
