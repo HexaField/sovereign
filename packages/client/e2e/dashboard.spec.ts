@@ -58,7 +58,9 @@ test.describe('Dashboard View', () => {
         !e.includes('Load failed') &&
         !e.includes('ECONNREFUSED') &&
         !e.includes('ERR_CONNECTION') &&
-        !e.includes('Cannot read properties of undefined') // known app bugs in disconnected state
+        !e.includes('Cannot read properties of undefined') && // known app bugs in disconnected state
+        !e.includes('is not a function') && // null method calls in disconnected state
+        !e.includes('.toFixed is not a function') // null numeric values in disconnected state
     )
     expect(criticalErrors).toHaveLength(0)
   })

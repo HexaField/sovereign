@@ -37,14 +37,16 @@ export function formatUptime(seconds: number): string {
   return `${m}m`
 }
 
-export function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || isNaN(bytes)) return '0 B'
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
-export function formatPercent(ratio: number): string {
+export function formatPercent(ratio: number | null | undefined): string {
+  if (ratio == null || isNaN(ratio)) return '0.0%'
   return `${(ratio * 100).toFixed(1)}%`
 }
 
