@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { Org, Project } from './types.js'
 import { createOrgStore, type OrgStore, type OrgStoreData } from './store.js'
 import { detectMonorepo } from './monorepo.js'

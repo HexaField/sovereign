@@ -2,7 +2,7 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents } from '@template/core'
+import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
 import type { ThreadManager } from '../threads/types.js'
 

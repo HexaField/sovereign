@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { SignJWT, jwtVerify, errors as joseErrors } from 'jose'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { Device, Session } from './types.js'
 import { createDeviceStore, type DeviceStore } from './devices.js'
 import { generateChallenge, verifySignature } from './crypto.js'

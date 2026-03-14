@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createEventStream, type EventStream } from './event-stream.js'
-import type { EventBus, BusEvent, BusHandler } from '@template/core'
+import type { EventBus, BusEvent, BusHandler } from '@sovereign/core'
 
 function createTestBus(): EventBus & { _fire(event: BusEvent): void } {
   const handlers: Array<{ pattern: string; handler: BusHandler }> = []

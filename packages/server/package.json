@@ -1,6 +1,8 @@
 {
-  "name": "@template/server",
+  "name": "@sovereign/server",
   "version": "1.0.0",
+  "license": "MIT",
+  "author": "Josh Field",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -12,7 +14,7 @@
   "dependencies": {
     "@noble/ed25519": "^3.0.0",
     "@noble/hashes": "^2.0.1",
-    "@template/core": "workspace:*",
+    "@sovereign/core": "workspace:*",
     "@types/diff": "^8.0.0",
     "@types/js-yaml": "^4.0.9",
     "ajv": "^8.18.0",

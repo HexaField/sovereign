@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 
 // These tests verify that server index.ts correctly wires Phase 6 modules.
 // Since index.ts has side effects (starts server), we test the wiring pattern

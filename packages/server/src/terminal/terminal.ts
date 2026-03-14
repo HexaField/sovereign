@@ -1,4 +1,4 @@
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { TerminalSession } from './types.js'
 import * as pty from 'node-pty'
 import { randomUUID } from 'crypto'

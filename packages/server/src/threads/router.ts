@@ -1,6 +1,6 @@
 // Threads — Event Router
 
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { ThreadManager, EntityBinding, ThreadEvent } from './types.js'
 
 export interface EventClassification {

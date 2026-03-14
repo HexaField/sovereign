@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import type { WsHandler, WsLike } from '../ws/handler.js'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import { registerLogsChannel, readPersistedLogs } from './ws.js'
 
 function createMockWsHandler(): WsHandler & {

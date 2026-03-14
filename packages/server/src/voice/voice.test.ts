@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createVoiceModule } from './voice.js'
 import type { VoiceModule } from './voice.js'
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 
 function createMockBus(): EventBus & { emitted: BusEvent[] } {
   const emitted: BusEvent[] = []

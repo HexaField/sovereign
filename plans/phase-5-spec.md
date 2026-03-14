@@ -329,7 +329,7 @@ The Phase 5 module MUST follow the established pattern:
 
 - Export `createPlanningService(bus: EventBus, dataDir: string, deps: PlanningDeps)` factory
 - Export `status(): ModuleStatus`
-- Communicate only via event bus and shared types from `@template/core`
+- Communicate only via event bus and shared types from `@sovereign/core`
 - Express router mounted by the main server, not self-mounting
 - Read configuration from the config module (Phase 3)
 - MUST NOT import from issues module internals — only via injected `IssueTracker` interface

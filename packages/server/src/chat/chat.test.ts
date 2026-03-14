@@ -5,9 +5,9 @@ import * as os from 'node:os'
 import { createChatModule } from './chat.js'
 import type { ChatModule } from './chat.js'
 import type { ThreadManager } from '../threads/types.js'
-import type { EventBus, AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedTurn } from '@template/core'
+import type { EventBus, AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedTurn } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
-import type { WsMessage } from '@template/core'
+import type { WsMessage } from '@sovereign/core'
 
 // --- Helpers ---
 

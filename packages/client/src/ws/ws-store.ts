@@ -1,6 +1,6 @@
 // Reactive WebSocket store
 
-import type { WsMessage } from '@template/core'
+import type { WsMessage } from '@sovereign/core'
 import { createReconnector } from './reconnect.js'
 
 export interface WsStore {

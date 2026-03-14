@@ -38,5 +38,5 @@ export interface ConfigStore {
   exportConfig(): SovereignConfig
   importConfig(config: unknown): void
   onChange(path: string, handler: (change: ConfigChange) => void): () => void
-  status(): import('@template/core').ModuleStatus
+  status(): import('@sovereign/core').ModuleStatus
 }

@@ -1,6 +1,6 @@
 // Event Stream Service — ring buffer, query, stats, subscribe
 
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 
 export interface EventStreamEntry {
   id: number

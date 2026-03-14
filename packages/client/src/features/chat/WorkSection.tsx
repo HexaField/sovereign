@@ -1,5 +1,5 @@
 import { createSignal, For, Show, createMemo } from 'solid-js'
-import type { WorkItem } from '@template/core'
+import type { WorkItem } from '@sovereign/core'
 import { renderMarkdown } from '../../lib/markdown.js'
 
 // ── Tool icons & labels ──────────────────────────────────────────────

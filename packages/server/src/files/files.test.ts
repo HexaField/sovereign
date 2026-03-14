@@ -3,8 +3,8 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { createFileService, PathTraversalError, detectLanguage } from './files.js'
-import { createEventBus } from '@template/core'
-import type { BusEvent } from '@template/core'
+import { createEventBus } from '@sovereign/core'
+import type { BusEvent } from '@sovereign/core'
 
 let tmpDir: string
 let bus: ReturnType<typeof createEventBus>

@@ -4,7 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import { execSync } from 'node:child_process'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { ChangeSet, DiffEngine } from './types.js'
 import type { FileDiff } from './types.js'
 // diffFile is available for getChangeSetFileDiff when projectPath context is provided

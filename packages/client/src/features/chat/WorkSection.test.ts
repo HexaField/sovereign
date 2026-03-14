@@ -7,7 +7,7 @@ import {
   getWorkItemStatus,
   WorkSection
 } from './WorkSection.js'
-import type { WorkItem } from '@template/core'
+import type { WorkItem } from '@sovereign/core'
 
 describe('§4.4 WorkSection', () => {
   describe('tool calls', () => {

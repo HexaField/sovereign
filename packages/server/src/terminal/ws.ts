@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'http'
 import type { WebSocket } from 'ws'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
 import type { TerminalManager, AttachHandle } from './terminal.js'
 

@@ -1,7 +1,7 @@
 // Planning Module — Planning Service
 
 import * as crypto from 'node:crypto'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type {
   PlanningDeps,
   PlanningService,

@@ -9,7 +9,7 @@ import request from 'supertest'
 import { createGitCli, type GitCli } from './git.js'
 import { createGitService, type GitService, type ResolveProject } from './service.js'
 import { createGitRoutes } from './routes.js'
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 
 const execFileAsync = promisify(execFile)
 

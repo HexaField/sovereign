@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { createNotifications, type Notifications } from './notifications.js'
 import { seedDefaultRules } from './rules.js'
-import type { EventBus, BusEvent, BusHandler } from '@template/core'
+import type { EventBus, BusEvent, BusHandler } from '@sovereign/core'
 
 function createTestBus(): EventBus & { _fire(event: BusEvent): void } {
   const handlers: Array<{ pattern: string; handler: BusHandler }> = []

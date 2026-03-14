@@ -1,6 +1,6 @@
 // Agent Backend — OpenClaw Gateway Implementation
 
-import type { AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedTurn, WorkItem } from '@template/core'
+import type { AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedTurn, WorkItem } from '@sovereign/core'
 import type { OpenClawConfig, DeviceIdentity, InternalState } from './types.js'
 import { stripThinkingBlocks } from './thinking.js'
 import WebSocket from 'ws'

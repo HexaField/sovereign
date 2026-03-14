@@ -1,4 +1,4 @@
-import type { WorkItem, AgentStatus } from '@template/core'
+import type { WorkItem, AgentStatus } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
