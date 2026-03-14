@@ -9,8 +9,9 @@ import HealthTab from './HealthTab'
 import ConfigTab from './ConfigTab'
 import DevicesTab from './DevicesTab'
 import JobsTab from './JobsTab'
+import EventStreamTab from './EventStreamTab'
 
-export type SystemTabId = 'architecture' | 'logs' | 'health' | 'config' | 'devices' | 'jobs'
+export type SystemTabId = 'architecture' | 'logs' | 'health' | 'config' | 'devices' | 'jobs' | 'events'
 
 export interface SystemTab {
   id: SystemTabId
@@ -24,7 +25,8 @@ export const SYSTEM_TABS: SystemTab[] = [
   { id: 'health', label: 'Health', component: HealthTab },
   { id: 'config', label: 'Config', component: ConfigTab },
   { id: 'devices', label: 'Devices', component: DevicesTab },
-  { id: 'jobs', label: 'Jobs', component: JobsTab }
+  { id: 'jobs', label: 'Jobs', component: JobsTab },
+  { id: 'events', label: 'Events', component: EventStreamTab }
 ]
 
 const SystemView: Component = () => {
