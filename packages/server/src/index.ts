@@ -157,6 +157,13 @@ if (!orgManager.getOrg('_global')) {
   orgManager.createOrg({ id: '_global', name: 'Global', path: globalPath, provider: 'radicle' })
 }
 
+// Auto-detect git projects in the global workspace
+try {
+  orgManager.autoDetectProjects('_global')
+} catch {
+  // Non-fatal — global workspace may not have scannable directories
+}
+
 app.use('/api', createOrgRoutes(orgManager, authMiddleware))
 registerOrgsChannel(wsHandler, bus)
 
