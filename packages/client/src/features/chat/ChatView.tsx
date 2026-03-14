@@ -82,7 +82,7 @@ export function ChatView(props: ChatViewProps) {
               )}
 
               {/* Work section between user and assistant turns */}
-              {msg.turn.workItems.length > 0 && <WorkSection work={msg.turn.workItems} />}
+              {(msg.turn.workItems?.length ?? 0) > 0 && <WorkSection work={msg.turn.workItems} />}
 
               {/* Message bubble */}
               <MessageBubble turn={msg.turn} pending={msg.pending} />
@@ -97,10 +97,15 @@ export function ChatView(props: ChatViewProps) {
       {/* Streaming response */}
       {props.streamingHtml && (
         <div class="px-4 py-2">
-          <div class="rounded-xl px-3 py-2" style={{ background: 'var(--c-bg-raised)' }}>
-            <div class="prose prose-sm text-sm whitespace-pre-wrap" style={{ color: 'var(--c-text)' }}>
-              {props.streamingHtml}
-            </div>
+          <div
+            class="msg-assistant rounded-xl px-3 py-2"
+            style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
+          >
+            <div
+              class="prose prose-sm text-sm leading-relaxed break-words"
+              style={{ color: 'var(--c-text)' }}
+              innerHTML={props.streamingHtml}
+            />
             <span class="inline-block animate-pulse text-sm" style={{ color: 'var(--c-text-muted)' }}>
               ▍
             </span>

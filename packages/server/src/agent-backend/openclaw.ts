@@ -3,6 +3,7 @@
 import type { AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedTurn, WorkItem } from '@sovereign/core'
 import type { OpenClawConfig, DeviceIdentity, InternalState } from './types.js'
 import { stripThinkingBlocks } from './thinking.js'
+import { parseTurns } from './parse-turns.js'
 import WebSocket from 'ws'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -194,15 +195,25 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     }
   }
 
+  // Track accumulated streaming text per session to compute true deltas
+  let lastStreamLength = 0
+
   function handleChatEvent(sessionKey: string, ev: any) {
     if (ev.state === 'delta') {
-      // Streaming text chunk
+      // Gateway delta contains full accumulated text — compute the true delta
       const text = extractText(ev.message)
-      const cleaned = text ? stripThinkingBlocks(text) : ''
-      if (cleaned) {
-        emitter.emit('chat.stream', { sessionKey, text: cleaned })
+      const cleaned = text
+        ? stripThinkingBlocks(text)
+            .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+            .trim()
+        : ''
+      if (cleaned && cleaned.length > lastStreamLength) {
+        const delta = cleaned.substring(lastStreamLength)
+        lastStreamLength = cleaned.length
+        emitter.emit('chat.stream', { sessionKey, text: delta })
       }
     } else if (ev.state === 'final') {
+      lastStreamLength = 0
       // Completed turn
       const text = extractText(ev.message)
       const cleaned = text ? stripThinkingBlocks(text) : ''
@@ -300,7 +311,8 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         const res = (await request('chat.history', { sessionKey, limit: 1000 })) as {
           messages?: any[]
         }
-        const history = res?.messages ?? []
+        const rawMessages = res?.messages ?? []
+        const history = parseTurns(rawMessages)
         emitter.emit('session.info', { sessionKey, label: undefined, history })
       } catch {
         // History fetch failed — non-critical
@@ -589,7 +601,8 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       const result = (await request('chat.history', { sessionKey, limit: 1000 })) as {
         messages?: any[]
       }
-      return result?.messages ?? []
+      const raw = result?.messages ?? []
+      return parseTurns(raw)
     },
 
     on: emitter.on,

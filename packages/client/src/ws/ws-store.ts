@@ -92,9 +92,13 @@ export function createWsStore(options: WsStoreOptions): WsStore {
     ws.onmessage = (ev: { data: string }) => {
       try {
         const msg = JSON.parse(ev.data) as WsMessage
+        console.log('[ws] received:', msg.type, msg)
         const set = handlers.get(msg.type)
         if (set) {
+          console.log('[ws] dispatching', msg.type, 'to', set.size, 'handlers')
           for (const h of set) h(msg)
+        } else {
+          console.log('[ws] no handlers for', msg.type)
         }
       } catch {
         // ignore parse errors on client

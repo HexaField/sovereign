@@ -2,6 +2,7 @@ import { createSignal, createEffect } from 'solid-js'
 import type { Accessor } from 'solid-js'
 import type { ParsedTurn, WorkItem, AgentStatus } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
+import { renderMarkdown } from '../../lib/markdown.js'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
 export const [streamingHtml, setStreamingHtml] = createSignal('')
@@ -17,6 +18,7 @@ let retryTimer: ReturnType<typeof setInterval> | null = null
 let ws: WsStore | null = null
 let suppressLifecycleUntil = 0
 let currentThreadKey: Accessor<string> | null = null
+let streamingRawText = ''
 
 // Pending turn persistence helpers
 function pendingStorageKey(threadKey: string): string {
@@ -68,6 +70,7 @@ export function clearRetryCountdown(): void {
 function resetState(): void {
   setTurns([])
   setStreamingHtml('')
+  streamingRawText = ''
   setAgentStatus('idle')
   setLiveWork([])
   setLiveThinkingText('')
@@ -94,6 +97,7 @@ export function abortChat(): void {
   ws?.send({ type: 'chat.abort', threadKey: currentThreadKey?.() ?? 'main' } as any)
   setAgentStatus('idle')
   setStreamingHtml('')
+  streamingRawText = ''
   setLiveWork([])
   setLiveThinkingText('')
   // Suppress lifecycle status updates for 30s to prevent flicker
@@ -128,15 +132,21 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     }
   })
 
+  // Reset streaming text for new init
+  streamingRawText = ''
+
   unsubs.push(
     ws.on('chat.stream', (msg: any) => {
+      console.log('[chat-store] chat.stream, threadKey:', msg.threadKey, 'text:', msg.text?.substring(0, 50))
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      setStreamingHtml((prev) => prev + msg.text)
+      streamingRawText += msg.text
+      setStreamingHtml(renderMarkdown(streamingRawText))
     })
   )
 
   unsubs.push(
     ws.on('chat.turn', (msg: any) => {
+      console.log('[chat-store] chat.turn, threadKey:', msg.threadKey, 'role:', msg.turn?.role)
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
       // Replace optimistic pending turn if present
@@ -153,6 +163,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
         return next
       })
       setStreamingHtml('')
+      streamingRawText = ''
       setLiveWork([])
       setLiveThinkingText('')
     })
@@ -190,8 +201,17 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
+      console.log(
+        '[chat-store] session.info received, threadKey:',
+        msg.threadKey,
+        'current:',
+        _threadKey(),
+        'historyLen:',
+        msg.history?.length
+      )
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
+      console.log('[chat-store] setting turns, count:', history.length, 'sample:', history[0])
       // Merge persisted pending turns, deduplicating by content
       const persisted = loadPendingTurns(_threadKey())
       const merged = [...history]
