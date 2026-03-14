@@ -306,6 +306,163 @@
   vertical-align: middle;
 }
 
+/* ── Message markdown styles ───────────────────────────────────────────── */
+
+.msg-assistant code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.88em;
+  background: var(--c-code-bg);
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: var(--c-code-text);
+}
+
+.inline-code-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: baseline;
+}
+.inline-code-copy {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-code-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 1px 3px;
+  margin-left: 2px;
+  color: var(--c-text-muted);
+  line-height: 1;
+  vertical-align: middle;
+}
+.inline-code-copy svg {
+  width: 11px;
+  height: 11px;
+}
+.inline-code-wrap:hover .inline-code-copy {
+  display: inline-flex;
+}
+
+.msg-assistant pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--c-pre-bg);
+  border-radius: 8px;
+  overflow-x: auto;
+  border: 1px solid var(--c-border);
+}
+.msg-assistant pre code {
+  background: none;
+  padding: 0;
+  color: var(--c-text);
+  font-size: 0.85em;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 4px;
+  border: none;
+  background: var(--c-bg-raised);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  color: var(--c-text-muted);
+  line-height: 0;
+}
+pre:hover .code-copy-btn {
+  opacity: 0.7;
+}
+.code-copy-btn:hover {
+  opacity: 1 !important;
+}
+
+.msg-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 4px;
+  border: none;
+  background: var(--c-bg-raised);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  color: var(--c-text-muted);
+  line-height: 0;
+}
+.group:hover .msg-copy-btn {
+  opacity: 0.5;
+}
+.msg-copy-btn:hover {
+  opacity: 1 !important;
+}
+
+.msg-assistant blockquote {
+  margin: 6px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--c-accent);
+  color: var(--c-blockquote);
+  font-style: italic;
+}
+
+.msg-assistant a {
+  color: var(--c-accent);
+  text-decoration: none;
+}
+.msg-assistant a:hover {
+  text-decoration: underline;
+}
+
+.msg-assistant table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+  font-size: 0.9em;
+}
+.msg-assistant th,
+.msg-assistant td {
+  border: 1px solid var(--c-border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.msg-assistant th {
+  background: var(--c-hover-bg);
+  font-weight: 600;
+}
+
+.msg-assistant hr {
+  border: none;
+  border-top: 1px solid var(--c-border);
+  margin: 10px 0;
+}
+
+.msg-assistant strong {
+  font-weight: 600;
+}
+.msg-assistant em {
+  font-style: italic;
+}
+
+.msg-assistant ul,
+.msg-assistant ol {
+  margin: 4px 0;
+  padding-left: 1.5em;
+}
+.msg-assistant li {
+  margin: 2px 0;
+}
+
+.msg-assistant p {
+  margin: 4px 0;
+}
+
 /* ── Safe area helpers ─────────────────────────────────────────────────── */
 
 @supports (padding-top: env(safe-area-inset-top)) {
