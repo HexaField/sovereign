@@ -3,6 +3,7 @@
 
 import { createSignal, onMount, onCleanup, Show, For, type Component } from 'solid-js'
 import { wsStore } from '../../ws/index.js'
+import HealthTimeline from './HealthTimeline.js'
 
 export interface HealthData {
   connection: {
@@ -121,101 +122,110 @@ const HealthTab: Component = () => {
 
       <Show when={data()}>
         {(health) => (
-          <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            <HealthCard title="Connection">
-              <div class="space-y-1 text-sm">
-                <div class="flex justify-between">
-                  <span class="opacity-60">WebSocket</span>
-                  <span>{health().connection.wsStatus}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="opacity-60">Agent Backend</span>
-                  <span>{health().connection.agentBackend}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="opacity-60">Uptime</span>
-                  <span>{formatUptime(health().connection.uptime)}</span>
-                </div>
-              </div>
-            </HealthCard>
-
-            <HealthCard title="Resources">
-              <div class="space-y-1 text-sm">
-                <div class="flex justify-between">
-                  <span class="opacity-60">Disk</span>
-                  <span>
-                    {formatBytes(health().resources.diskUsage.used)} / {formatBytes(health().resources.diskUsage.total)}
-                  </span>
-                </div>
-                <Show when={health().resources.memoryUsage}>
-                  {(mem) => (
-                    <div class="flex justify-between">
-                      <span class="opacity-60">Memory</span>
-                      <span>
-                        {formatBytes(mem().used)} / {formatBytes(mem().total)}
-                      </span>
-                    </div>
-                  )}
-                </Show>
-              </div>
-            </HealthCard>
-
-            <HealthCard title="Jobs">
-              <div class="space-y-1 text-sm">
-                <div class="flex justify-between">
-                  <span class="opacity-60">Active</span>
-                  <span>{health().jobs.active}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="opacity-60">Last Status</span>
-                  <span>{health().jobs.lastStatus}</span>
-                </div>
-                <Show when={health().jobs.nextRun}>
-                  {(next) => (
-                    <div class="flex justify-between">
-                      <span class="opacity-60">Next Run</span>
-                      <span>{next()}</span>
-                    </div>
-                  )}
-                </Show>
-              </div>
-            </HealthCard>
-
-            <Show when={health().cache}>
-              {(cache) => (
-                <HealthCard title="Cache">
-                  <div class="space-y-1 text-sm">
-                    <div class="flex justify-between">
-                      <span class="opacity-60">Hit Rate</span>
-                      <span>{formatPercent(cache().hitRate)}</span>
-                    </div>
+          <>
+            <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <HealthCard title="Connection">
+                <div class="space-y-1 text-sm">
+                  <div class="flex justify-between">
+                    <span class="opacity-60">WebSocket</span>
+                    <span>{health().connection.wsStatus}</span>
                   </div>
-                </HealthCard>
-              )}
-            </Show>
-
-            <HealthCard title="Errors">
-              <div class="space-y-2 text-sm">
-                <div class="flex justify-between">
-                  <span class="opacity-60">Last hour</span>
-                  <span class={health().errors.countLastHour > 0 ? "font-medium text-red-400" : ''}>
-                    {health().errors.countLastHour}
-                  </span>
-                </div>
-                <Show when={health().errors.recent.length > 0}>
-                  <div class="mt-2 space-y-1">
-                    <For each={health().errors.recent.slice(0, 5)}>
-                      {(err) => (
-                        <div class="rounded bg-red-500/10 px-2 py-1 text-xs text-red-400">
-                          <span class="opacity-60">{new Date(err.timestamp).toLocaleTimeString()}</span> {err.message}
-                        </div>
-                      )}
-                    </For>
+                  <div class="flex justify-between">
+                    <span class="opacity-60">Agent Backend</span>
+                    <span>{health().connection.agentBackend}</span>
                   </div>
-                </Show>
-              </div>
-            </HealthCard>
-          </div>
+                  <div class="flex justify-between">
+                    <span class="opacity-60">Uptime</span>
+                    <span>{formatUptime(health().connection.uptime)}</span>
+                  </div>
+                </div>
+              </HealthCard>
+
+              <HealthCard title="Resources">
+                <div class="space-y-1 text-sm">
+                  <div class="flex justify-between">
+                    <span class="opacity-60">Disk</span>
+                    <span>
+                      {formatBytes(health().resources.diskUsage.used)} /{' '}
+                      {formatBytes(health().resources.diskUsage.total)}
+                    </span>
+                  </div>
+                  <Show when={health().resources.memoryUsage}>
+                    {(mem) => (
+                      <div class="flex justify-between">
+                        <span class="opacity-60">Memory</span>
+                        <span>
+                          {formatBytes(mem().used)} / {formatBytes(mem().total)}
+                        </span>
+                      </div>
+                    )}
+                  </Show>
+                </div>
+              </HealthCard>
+
+              <HealthCard title="Jobs">
+                <div class="space-y-1 text-sm">
+                  <div class="flex justify-between">
+                    <span class="opacity-60">Active</span>
+                    <span>{health().jobs.active}</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="opacity-60">Last Status</span>
+                    <span>{health().jobs.lastStatus}</span>
+                  </div>
+                  <Show when={health().jobs.nextRun}>
+                    {(next) => (
+                      <div class="flex justify-between">
+                        <span class="opacity-60">Next Run</span>
+                        <span>{next()}</span>
+                      </div>
+                    )}
+                  </Show>
+                </div>
+              </HealthCard>
+
+              <Show when={health().cache}>
+                {(cache) => (
+                  <HealthCard title="Cache">
+                    <div class="space-y-1 text-sm">
+                      <div class="flex justify-between">
+                        <span class="opacity-60">Hit Rate</span>
+                        <span>{formatPercent(cache().hitRate)}</span>
+                      </div>
+                    </div>
+                  </HealthCard>
+                )}
+              </Show>
+
+              <HealthCard title="Errors">
+                <div class="space-y-2 text-sm">
+                  <div class="flex justify-between">
+                    <span class="opacity-60">Last hour</span>
+                    <span class={health().errors.countLastHour > 0 ? "font-medium text-red-400" : ''}>
+                      {health().errors.countLastHour}
+                    </span>
+                  </div>
+                  <Show when={health().errors.recent.length > 0}>
+                    <div class="mt-2 space-y-1">
+                      <For each={health().errors.recent.slice(0, 5)}>
+                        {(err) => (
+                          <div class="rounded bg-red-500/10 px-2 py-1 text-xs text-red-400">
+                            <span class="opacity-60">{new Date(err.timestamp).toLocaleTimeString()}</span> {err.message}
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                </div>
+              </HealthCard>
+            </div>
+
+            {/* Health Timeline with resource charts */}
+            <div class="mt-6">
+              <h3 class="mb-3 text-sm font-semibold opacity-80">Timeline</h3>
+              <HealthTimeline />
+            </div>
+          </>
         )}
       </Show>
     </div>

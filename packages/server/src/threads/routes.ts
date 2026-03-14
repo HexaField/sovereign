@@ -65,6 +65,59 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
     res.json({ events })
   })
 
+  // Session tree — returns thread hierarchy for the ThreadDrawer
+  router.get('/api/sessions/tree', (_req, res) => {
+    const threads = threadManager.list()
+    const now = Date.now()
+
+    // Build tree nodes from flat thread list
+    interface SessionNode {
+      key: string
+      fullKey: string
+      kind: 'main' | 'thread' | 'cron' | 'cron-run' | 'subagent' | 'event-agent'
+      label: string
+      parentKey: string | null
+      updatedAt: number
+      totalTokens: number
+      children: SessionNode[]
+    }
+
+    const mainNode: SessionNode = {
+      key: 'main',
+      fullKey: 'main',
+      kind: 'main',
+      label: 'Main',
+      parentKey: null,
+      updatedAt: now,
+      totalTokens: 0,
+      children: []
+    }
+
+    for (const t of threads) {
+      const kind = t.key.startsWith('cron:')
+        ? ('cron' as const)
+        : t.key.startsWith('subagent:')
+          ? ('subagent' as const)
+          : ('thread' as const)
+      const node: SessionNode = {
+        key: t.key,
+        fullKey: t.key,
+        kind,
+        label: t.label || t.key,
+        parentKey: 'main',
+        updatedAt: t.lastActivity || t.createdAt || now,
+        totalTokens: 0,
+        children: []
+      }
+      mainNode.children.push(node)
+    }
+
+    // Sort children by updatedAt descending
+    mainNode.children.sort((a, b) => b.updatedAt - a.updatedAt)
+
+    res.json({ tree: [mainNode] })
+  })
+
   return router
 }
 

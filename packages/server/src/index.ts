@@ -73,6 +73,7 @@ import { createRecordingsService } from './recordings/recordings.js'
 import { registerRecordingRoutes } from './recordings/routes.js'
 import { createSystemModule } from './system/system.js'
 import { createSystemRoutes } from './system/routes.js'
+import { createHealthHistory } from './system/health-history.js'
 import { registerLogsChannel } from './system/ws.js'
 import { createLogger } from './system/logger.js'
 import { createEventStream } from './system/event-stream.js'
@@ -334,7 +335,8 @@ const systemModule = createSystemModule(bus, dataDir, {
   getAgentBackendStatus: () => backend.status()
 })
 const logsChannel = registerLogsChannel(wsHandler, bus, dataDir)
-app.use(createSystemRoutes({ system: systemModule, logsChannel, dataDir }))
+const healthHistory = createHealthHistory()
+app.use(createSystemRoutes({ system: systemModule, logsChannel, dataDir, healthHistory }))
 
 // --- Event Stream ---
 const eventStream = createEventStream(bus)
@@ -357,6 +359,18 @@ eventStreamRouter.get('/api/system/events', (req, res) => {
 })
 eventStreamRouter.get('/api/system/events/stats', (_req, res) => {
   res.json(eventStream.stats())
+})
+eventStreamRouter.post('/api/events/:id/retry', (req, res) => {
+  const id = Number(req.params.id)
+  const entries = eventStream.query({ limit: 5000 })
+  const entry = entries.find((e) => e.id === id)
+  if (!entry) {
+    res.status(404).json({ error: 'Event not found' })
+    return
+  }
+  // Re-emit the event on the bus
+  bus.emit(entry.event)
+  res.json({ success: true, retriedId: id })
 })
 app.use(eventStreamRouter)
 
