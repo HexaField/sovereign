@@ -5,6 +5,7 @@ import type { Request, Response, RequestHandler } from 'express'
 import multer from 'multer'
 import fs from 'node:fs'
 import type { RecordingsService } from './recordings.js'
+import { createTranscriptSearch } from './search.js'
 
 export function registerRecordingRoutes(recordings: RecordingsService): Router {
   const router = Router()
@@ -35,6 +36,19 @@ export function registerRecordingRoutes(recordings: RecordingsService): Router {
         audio: file.buffer
       })
       res.status(201).json(meta)
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  }) as RequestHandler)
+
+  // GET /api/orgs/:orgId/recordings/search — search transcripts
+  router.get('/api/orgs/:orgId/recordings/search', (async (req: Request, res: Response) => {
+    try {
+      const query = (req.query.q as string) || ''
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
+      const search = createTranscriptSearch(recordings)
+      const results = await search.search(req.params.orgId, query, { limit })
+      res.json(results)
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message })
     }
