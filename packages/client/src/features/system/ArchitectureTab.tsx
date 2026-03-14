@@ -3,6 +3,7 @@
 
 import { createSignal, onMount, onCleanup, For, type Component } from 'solid-js'
 import { wsStore } from '../../ws/index.js'
+import FlowGraph from './FlowGraph.js'
 
 export interface ModuleNode {
   name: string
@@ -86,7 +87,13 @@ const ArchitectureTab: Component = () => {
   })
 
   return (
-    <div>
+    <div class="space-y-6">
+      {/* Data Flow Graph */}
+      <div>
+        <h3 class="mb-3 text-sm font-semibold opacity-80">Data Flow</h3>
+        <FlowGraph />
+      </div>
+
       {error() && (
         <div class="mb-4 rounded border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">{error()}</div>
       )}

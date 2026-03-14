@@ -4,11 +4,13 @@ import { Router } from 'express'
 import type { SystemModule } from './system.js'
 import type { LogsChannel } from './ws.js'
 import { readPersistedLogs } from './ws.js'
+import type { HealthHistory } from './health-history.js'
 
 export interface SystemRoutesOptions {
   system: SystemModule
   logsChannel: LogsChannel
   dataDir: string
+  healthHistory?: HealthHistory
 }
 
 async function fetchContextBudgetFromGateway(): Promise<Record<string, unknown> | null> {
@@ -58,6 +60,7 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   const system = 'system' in opts ? (opts as SystemRoutesOptions).system : (opts as SystemModule)
   const logsChannel = 'logsChannel' in opts ? (opts as SystemRoutesOptions).logsChannel : null
   const dataDir = 'dataDir' in opts ? (opts as SystemRoutesOptions).dataDir : null
+  const healthHistory = 'healthHistory' in opts ? (opts as SystemRoutesOptions).healthHistory : null
 
   router.get('/api/system/identity', (_req, res) => {
     res.json({
@@ -106,6 +109,15 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   router.get('/api/system/context-budget', async (_req, res) => {
     const data = await fetchContextBudgetFromGateway()
     res.json(data ?? mockContextBudget())
+  })
+
+  router.get('/api/system/health/history', (req, res) => {
+    if (!healthHistory) {
+      res.json({ snapshots: [] })
+      return
+    }
+    const windowMs = req.query.window ? Number(req.query.window) : 3600_000
+    res.json({ snapshots: healthHistory.getSnapshots(windowMs) })
   })
 
   return router
