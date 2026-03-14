@@ -77,7 +77,17 @@ function calcReconnectDelay(attempt: number, config: OpenClawConfig): number {
   return delay
 }
 
-export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
+export function createOpenClawBackend(
+  config: OpenClawConfig
+): AgentBackend & {
+  getDeviceInfo(): {
+    deviceId: string
+    publicKey: string
+    connectionStatus: string
+    gatewayUrl: string
+    reconnectAttempt: number
+  }
+} {
   const emitter = createEventEmitter()
 
   const state: InternalState = {
@@ -467,7 +477,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
     })
   }
 
-  const backend: AgentBackend = {
+  const backend = {
     async connect() {
       state.destroyed = false
       await connectWs()
@@ -566,7 +576,19 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
     },
 
     on: emitter.on,
-    off: emitter.off
+    off: emitter.off,
+
+    getDeviceInfo() {
+      const id = getIdentity()
+      const deviceId = deriveDeviceId(id.publicKey)
+      return {
+        deviceId,
+        publicKey: id.publicKey,
+        connectionStatus: state.connectionStatus,
+        gatewayUrl: config.gatewayUrl,
+        reconnectAttempt: state.reconnectAttempt
+      }
+    }
   }
 
   return backend
