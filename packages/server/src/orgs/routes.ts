@@ -46,6 +46,16 @@ export function createOrgRoutes(manager: OrgManager, authMiddleware: (req: any, 
     }
   })
 
+  // Auto-detect projects
+  router.post('/orgs/:orgId/detect-projects', (req, res) => {
+    try {
+      const projects = manager.autoDetectProjects(req.params.orgId)
+      res.json({ detected: projects })
+    } catch (e: any) {
+      res.status(400).json({ error: e.message })
+    }
+  })
+
   // Projects
   router.get('/orgs/:orgId/projects', (req, res) => {
     res.json(manager.listProjects(req.params.orgId))

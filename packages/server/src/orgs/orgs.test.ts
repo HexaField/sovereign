@@ -271,6 +271,53 @@ describe('Org Manager', () => {
     expect(p.monorepo).toBeUndefined()
   })
 
+  // Auto-detect projects
+  it('autoDetectProjects finds git repos in org path', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    fakeGitRepo(tempBase, 'project-a')
+    fakeGitRepo(tempBase, 'project-b')
+    const added = manager.autoDetectProjects(org.id)
+    expect(added).toHaveLength(2)
+    expect(added.map((p) => p.name).sort()).toEqual(['project-a', 'project-b'])
+  })
+
+  it('autoDetectProjects detects org path itself as git repo', () => {
+    const repoDir = fakeGitRepo(tempBase, 'myrepo')
+    const org = manager.createOrg({ name: 'Test', path: repoDir })
+    const added = manager.autoDetectProjects(org.id)
+    expect(added).toHaveLength(1)
+    expect(added[0].name).toBe('myrepo')
+  })
+
+  it('autoDetectProjects skips already registered projects', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    const repo = fakeGitRepo(tempBase, 'existing')
+    manager.addProject(org.id, { name: 'existing', repoPath: repo })
+    const added = manager.autoDetectProjects(org.id)
+    expect(added).toHaveLength(0)
+  })
+
+  it('autoDetectProjects skips hidden dirs and node_modules', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    // hidden dir with .git
+    fs.mkdirSync(path.join(tempBase, '.hidden', '.git'), { recursive: true })
+    // node_modules with .git
+    fs.mkdirSync(path.join(tempBase, 'node_modules', '.git'), { recursive: true })
+    // valid project
+    fakeGitRepo(tempBase, 'valid')
+    const added = manager.autoDetectProjects(org.id)
+    expect(added).toHaveLength(1)
+    expect(added[0].name).toBe('valid')
+  })
+
+  it('autoDetectProjects skips non-git subdirectories', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    fs.mkdirSync(path.join(tempBase, 'not-a-repo'))
+    fakeGitRepo(tempBase, 'real-repo')
+    const added = manager.autoDetectProjects(org.id)
+    expect(added).toHaveLength(1)
+  })
+
   // Active context
   it('sets and gets active org', () => {
     const org = manager.createOrg({ name: 'Test', path: tempBase })
@@ -424,6 +471,15 @@ describe('Org Manager Routes', () => {
     const p = manager.addProject(org.id, { name: 'proj', repoPath: repo })
     const res = await request(app).delete(`/api/orgs/${org.id}/projects/${p.id}`).set(auth)
     expect(res.status).toBe(204)
+  })
+
+  it('POST /api/orgs/:orgId/detect-projects auto-detects git repos', async () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase })
+    fakeGitRepo(tempBase, 'auto-proj')
+    const res = await request(app).post(`/api/orgs/${org.id}/detect-projects`).set(auth)
+    expect(res.status).toBe(200)
+    expect(res.body.detected).toHaveLength(1)
+    expect(res.body.detected[0].name).toBe('auto-proj')
   })
 
   it('all routes reject unauthenticated requests with 401', async () => {
