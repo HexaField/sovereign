@@ -29,7 +29,8 @@ function mockBus(): EventBus & { events: BusEvent[]; trigger(type: string, paylo
     replay: vi.fn(),
     history: vi.fn().mockReturnValue([]),
     trigger(type: string, payload: unknown) {
-      this.emit({ type, timestamp: new Date().toISOString(), source: 'test', payload })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(this as any).emit({ type, timestamp: new Date().toISOString(), source: 'test', payload })
     }
   } as unknown as EventBus & { events: BusEvent[]; trigger(type: string, payload: unknown): void }
 }
@@ -184,7 +185,7 @@ describe('§8.3.1 Meeting Summarization', () => {
   it('§8.3.1 MUST be non-blocking (queued like transcription)', async () => {
     const meetings = createMeetingsService(bus, dataDir)
     let resolveFirst: () => void
-    const firstCall = new Promise<void>((r) => {
+    void new Promise<void>((r) => {
       resolveFirst = r
     })
     const onSummarize = vi

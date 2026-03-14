@@ -78,6 +78,21 @@ import { createEventStream } from './system/event-stream.js'
 import { createNotifications } from './notifications/notifications.js'
 import { createNotificationRoutes } from './notifications/routes.js'
 
+// --- Phase 8: Meetings, Recording enhancements, Voice enhancements ---
+import { createMeetingsService } from './meetings/meetings.js'
+import { createSpeakerService } from './meetings/speakers.js'
+import { createSummarizationPipeline } from './meetings/summarize.js'
+import { createImportHandler } from './meetings/import.js'
+import { registerMeetingRoutes } from './meetings/routes.js'
+import { registerMeetingsChannel } from './meetings/ws.js'
+import { createRetentionJob } from './meetings/retention.js'
+import { createTranscriptionQueue } from './recordings/transcription.js'
+import { registerRecordingsChannel } from './recordings/ws.js'
+import { createTranscriptSearch } from './recordings/search.js'
+import { createRuleBasedPostProcessor } from './voice/post-processor.js'
+import { createAcknowledgmentGenerator } from './voice/acknowledgment.js'
+import { createVoiceTranscriptionProvider } from './voice/provider.js'
+
 // ============================================================
 // App setup
 // ============================================================
@@ -258,6 +273,48 @@ app.use(createVoiceRoutes(voiceModule))
 const recordingsService = createRecordingsService(dataDir)
 app.use(registerRecordingRoutes(recordingsService))
 
+// --- Phase 8: Meetings, Transcription, Search, Voice enhancements ---
+const meetingsService = createMeetingsService(bus, dataDir)
+const speakerService = createSpeakerService(dataDir)
+void createRuleBasedPostProcessor()
+void createAcknowledgmentGenerator()
+const voiceTranscriptionProvider = createVoiceTranscriptionProvider(voiceModule)
+const transcriptionQueue = createTranscriptionQueue(voiceTranscriptionProvider)
+void createTranscriptSearch(recordingsService)
+
+const summarizationPipeline = createSummarizationPipeline({
+  bus,
+  meetings: meetingsService,
+  dataDir,
+  onSummarize: async (_meeting, _transcriptText) => ({
+    text: 'Auto-generated summary placeholder',
+    actionItems: [],
+    decisions: [],
+    keyTopics: []
+  })
+})
+
+const importHandler = createImportHandler({
+  bus,
+  meetings: meetingsService
+})
+
+void createRetentionJob(bus)
+
+app.use(
+  registerMeetingRoutes({
+    meetings: meetingsService,
+    speakers: speakerService,
+    importHandler,
+    summarization: summarizationPipeline,
+    recordings: recordingsService,
+    transcriptionQueue
+  })
+)
+
+registerMeetingsChannel(wsHandler, bus)
+registerRecordingsChannel(wsHandler, bus)
+
 const systemModule = createSystemModule(bus, dataDir, {
   wsHandler,
   getAgentBackendStatus: () => backend.status()
@@ -426,7 +483,18 @@ systemModule.registerModule({
 systemModule.registerModule({ name: 'chat', status: 'healthy', subscribes: [], publishes: [] })
 systemModule.registerModule({ name: 'threads', status: 'healthy', subscribes: [], publishes: [] })
 systemModule.registerModule({ name: 'voice', status: 'healthy', subscribes: [], publishes: [] })
-systemModule.registerModule({ name: 'recordings', status: 'healthy', subscribes: [], publishes: [] })
+systemModule.registerModule({
+  name: 'recordings',
+  status: 'healthy',
+  subscribes: [],
+  publishes: ['recording.created', 'recording.transcribed']
+})
+systemModule.registerModule({
+  name: 'meetings',
+  status: 'healthy',
+  subscribes: ['recording.transcribed'],
+  publishes: ['meeting.created', 'meeting.updated', 'meeting.summarized', 'meeting.deleted']
+})
 systemModule.registerModule({
   name: 'notifications',
   status: 'healthy',
