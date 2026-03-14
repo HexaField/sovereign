@@ -95,8 +95,7 @@ export function createChatModule(
             type: wsType,
             ...data,
             threadKey
-          },
-          { threadKey }
+          }
         )
       }
 

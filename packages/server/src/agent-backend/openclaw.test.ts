@@ -231,15 +231,14 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   it('MUST translate OpenClaw streaming messages to chat.stream events', async () => {
     const serverWs = await connectBackend()
     const p = waitForEvent<{ text: string }>(backend, 'chat.stream')
-    serverWs.send(JSON.stringify({ type: 'stream', text: 'hello', sessionKey: 'main' }))
+    serverWs.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'delta', message: [{ type: 'text', text: 'hello' }], sessionKey: 'main' } }))
     expect((await p).text).toBe('hello')
   })
 
   it('MUST translate OpenClaw turn completion to chat.turn events with a fully parsed ParsedTurn', async () => {
     const serverWs = await connectBackend()
-    const turn = { role: 'assistant', content: 'hi', timestamp: 1000, workItems: [], thinkingBlocks: [] }
     const p = waitForEvent<{ turn: any }>(backend, 'chat.turn')
-    serverWs.send(JSON.stringify({ type: 'turn', turn, sessionKey: 'main' }))
+    serverWs.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'final', message: [{ type: 'text', text: 'hi' }], sessionKey: 'main' } }))
     const t = (await p).turn
     expect(t.role).toBe('assistant')
     expect(t.content).toBe('hi')
@@ -247,9 +246,8 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
 
   it('MUST translate OpenClaw tool call/result messages to chat.work events', async () => {
     const serverWs = await connectBackend()
-    const work = { type: 'tool_call' as const, name: 'read', input: '{}', timestamp: 1000 }
     const p = waitForEvent<{ work: any }>(backend, 'chat.work')
-    serverWs.send(JSON.stringify({ type: 'work', work, sessionKey: 'main' }))
+    serverWs.send(JSON.stringify({ type: 'event', event: 'agent', payload: { stream: 'tool', data: { name: 'read', input: '{}', phase: 'call', timestamp: 1000 }, sessionKey: 'main' } }))
     const w = (await p).work
     expect(w.type).toBe('tool_call')
     expect(w.name).toBe('read')
@@ -258,7 +256,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   it('MUST translate OpenClaw thinking block messages to chat.work events with type thinking', async () => {
     const serverWs = await connectBackend()
     const p = waitForEvent<{ work: any }>(backend, 'chat.work')
-    serverWs.send(JSON.stringify({ type: 'thinking', text: 'reasoning...', sessionKey: 'main' }))
+    serverWs.send(JSON.stringify({ type: 'event', event: 'agent', payload: { stream: 'thinking', data: { text: 'reasoning...' }, sessionKey: 'main' } }))
     const w = (await p).work
     expect(w.type).toBe('thinking')
     expect(w.output).toBe('reasoning...')
@@ -267,22 +265,22 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   it('MUST translate OpenClaw status transitions to chat.status events', async () => {
     const serverWs = await connectBackend()
     const p = waitForEvent<{ status: string }>(backend, 'chat.status')
-    serverWs.send(JSON.stringify({ type: 'status', status: 'working', sessionKey: 'main' }))
+    serverWs.send(JSON.stringify({ type: 'event', event: 'agent', payload: { stream: 'lifecycle', data: { phase: 'start' }, sessionKey: 'main' } }))
     expect((await p).status).toBe('working')
   })
 
   it('MUST translate OpenClaw compaction messages to chat.compacting events', async () => {
     const serverWs = await connectBackend()
     const p = waitForEvent<{ active: boolean }>(backend, 'chat.compacting')
-    serverWs.send(JSON.stringify({ type: 'compacting', active: true, sessionKey: 'main' }))
+    serverWs.send(JSON.stringify({ type: 'event', event: 'agent', payload: { stream: 'compaction', data: { phase: 'start' }, sessionKey: 'main' } }))
     expect((await p).active).toBe(true)
   })
 
   it('MUST translate OpenClaw error messages to chat.error events', async () => {
     const serverWs = await connectBackend()
     const p = waitForEvent<{ error: string }>(backend, 'chat.error')
-    serverWs.send(JSON.stringify({ type: 'error', error: 'fail', sessionKey: 'main' }))
-    expect((await p).error).toBe('fail')
+    serverWs.send(JSON.stringify({ type: 'event', event: 'agent', payload: { stream: 'lifecycle', data: { phase: 'error', error: 'fail' }, sessionKey: 'main' } }))
+    expect((await p).error).toContain('fail')
   })
 
   it('MUST strip thinking blocks from streamed text', async () => {
