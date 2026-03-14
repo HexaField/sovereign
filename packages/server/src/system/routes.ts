@@ -11,6 +11,46 @@ export interface SystemRoutesOptions {
   dataDir: string
 }
 
+async function fetchContextBudgetFromGateway(): Promise<Record<string, unknown> | null> {
+  const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789/ws'
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN
+  // Try HTTP endpoint first (gateway exposes REST on same port)
+  const httpUrl = gatewayUrl.replace(/^ws/, 'http').replace(/\/ws$/, '/api/context')
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(httpUrl, { headers, signal: controller.signal })
+    clearTimeout(timeout)
+    if (res.ok) return (await res.json()) as Record<string, unknown>
+  } catch {
+    // Gateway unavailable — return null for mock fallback
+  }
+  return null
+}
+
+function mockContextBudget(): Record<string, unknown> {
+  return {
+    report: {
+      source: 'mock',
+      generatedAt: Date.now(),
+      provider: 'unknown',
+      model: 'unknown',
+      workspaceDir: process.cwd(),
+      bootstrapMaxChars: 50000,
+      systemPrompt: { chars: 15000, projectContextChars: 8000, nonProjectContextChars: 7000 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 3000, entries: [] },
+      tools: { listChars: 4000, schemaChars: 12000, entries: [] }
+    },
+    fileContents: {},
+    session: { contextTokens: null },
+    disabledTools: [],
+    disabledSkills: []
+  }
+}
+
 export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Router {
   const router = Router()
 
@@ -61,6 +101,11 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
     } else {
       res.json({ entries: [], total: 0 })
     }
+  })
+
+  router.get('/api/system/context-budget', async (_req, res) => {
+    const data = await fetchContextBudgetFromGateway()
+    res.json(data ?? mockContextBudget())
   })
 
   return router

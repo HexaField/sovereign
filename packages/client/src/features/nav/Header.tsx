@@ -1,4 +1,5 @@
 import { createMemo, createSignal, Show, For, onCleanup } from 'solid-js'
+import { ContextBudgetModal } from '../system/ContextBudgetModal.js'
 import { agentName, agentIcon } from '../../lib/identity.js'
 import { connectionStatus } from '../connection/store.js'
 import {
@@ -66,6 +67,7 @@ export function Header() {
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [subagentOpen, setSubagentOpen] = createSignal(false)
   const [warningCount, setWarningCount] = createSignal(0)
+  const [showContextBudget, setShowContextBudget] = createSignal(false)
   const [subagentList, setSubagentList] = createSignal<
     Array<{ sessionKey: string; label: string; updatedAt?: number; totalTokens: number }>
   >([])
@@ -737,6 +739,36 @@ export function Header() {
             </div>
           </Show>
         </div>
+      </Show>
+
+      {/* Context budget button */}
+      <button
+        class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
+        style={{
+          'border-color': showContextBudget() ? 'var(--c-accent)' : 'var(--c-border)',
+          color: showContextBudget() ? 'var(--c-accent)' : 'var(--c-text-muted)'
+        }}
+        onClick={() => setShowContextBudget(!showContextBudget())}
+        title="Context Budget"
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 6v6l4 2" />
+        </svg>
+      </button>
+
+      {/* Context budget modal */}
+      <Show when={showContextBudget()}>
+        <ContextBudgetModal onClose={() => setShowContextBudget(false)} />
       </Show>
 
       {/* Status badge */}

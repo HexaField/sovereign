@@ -12,10 +12,11 @@ vi.mock('../../ws/index.js', () => ({
 
 describe('SystemView', () => {
   describe('§6.1 — System Tabs', () => {
-    it('§6.1 — renders horizontal tab bar with: Architecture, Logs, Health, Config, Devices, Jobs, Events', async () => {
+    it('§6.1 — renders horizontal tab bar with: Overview, Architecture, Logs, Health, Config, Devices, Jobs, Events', async () => {
       const mod = await import('./SystemView.js')
       expect(mod.SYSTEM_TABS).toBeDefined()
       expect(mod.SYSTEM_TABS.map((t: any) => t.label)).toEqual([
+        'Overview',
         'Architecture',
         'Logs',
         'Health',
@@ -25,6 +26,7 @@ describe('SystemView', () => {
         'Events'
       ])
       expect(mod.SYSTEM_TABS.map((t: any) => t.id)).toEqual([
+        'overview',
         'architecture',
         'logs',
         'health',
@@ -38,7 +40,7 @@ describe('SystemView', () => {
     it('§6.1 — only one tab content visible at a time', async () => {
       const mod = await import('./SystemView.js')
       const components = mod.SYSTEM_TABS.map((t: any) => t.component)
-      expect(new Set(components).size).toBe(7)
+      expect(new Set(components).size).toBe(8)
       expect(typeof mod.default).toBe('function')
     })
   })
@@ -46,7 +48,7 @@ describe('SystemView', () => {
   describe('§7.6 — Mobile System', () => {
     it('§7.6 — tabs scroll horizontally if they dont fit on mobile', async () => {
       const mod = await import('./SystemView.js')
-      expect(mod.SYSTEM_TABS.length).toBe(7)
+      expect(mod.SYSTEM_TABS.length).toBe(8)
     })
 
     it('§7.6 — config editor stacks fields vertically on mobile', async () => {
