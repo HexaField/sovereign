@@ -44,7 +44,7 @@ Peer-to-peer repo sync across devices via Radicle gossip. Local VM CI runner (Li
 
 ## Phase 11: Ecosystem (long-term vision)
 
-Device/node system, plugin architecture, multi-user support, ambient interfaces, hardening & testing.
+Device/node system, plugin architecture, multi-user support, ambient interfaces, hardening & testing. **`.sovereign` project per org** — a versioned, shared wiki/config repository within each org that holds common context, documentation, tools, AI tool definitions, and prompt templates. Acts as the org's knowledge base that all projects can reference. Managed as a first-class Sovereign project (git-backed, diffable, synced via Radicle or GitHub like any other project).
 
 ---
 
