@@ -235,7 +235,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend {
 
       try {
         const ws = new WebSocket(currentConfig.gatewayUrl, {
-          headers: { origin: 'https://localhost:5801' }
+          headers: { origin: 'http://localhost:5801' }
         })
         state.ws = ws
 
