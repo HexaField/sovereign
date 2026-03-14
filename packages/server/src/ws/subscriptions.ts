@@ -50,10 +50,12 @@ export function createSubscriptionTracker(): SubscriptionTracker {
       for (const entry of entries) {
         if (entry.channel !== channel) continue
         if (scope) {
-          // If filtering by scope, only match entries that have a matching scope
-          if (!entry.scope) continue
-          const matches = Object.keys(scope).every((k) => entry.scope![k] === scope[k])
-          if (!matches) continue
+          // If filtering by scope, match entries that either have no scope (wildcard) or matching scope
+          if (entry.scope) {
+            const matches = Object.keys(scope).every((k) => entry.scope![k] === scope[k])
+            if (!matches) continue
+          }
+          // entry.scope is undefined = wildcard, always matches
         }
         result.push(deviceId)
         break

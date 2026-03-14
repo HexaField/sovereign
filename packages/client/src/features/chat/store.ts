@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js'
+import { createSignal, createEffect } from 'solid-js'
 import type { Accessor } from 'solid-js'
 import type { ParsedTurn, WorkItem, AgentStatus } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
@@ -16,6 +16,7 @@ export const [inputValue, setInputValue] = createSignal('')
 let retryTimer: ReturnType<typeof setInterval> | null = null
 let ws: WsStore | null = null
 let suppressLifecycleUntil = 0
+let currentThreadKey: Accessor<string> | null = null
 
 // Pending turn persistence helpers
 function pendingStorageKey(threadKey: string): string {
@@ -72,6 +73,7 @@ function resetState(): void {
   setLiveThinkingText('')
   setCompacting(false)
   clearRetryCountdown()
+  suppressLifecycleUntil = 0
 }
 
 export function sendMessage(text: string, _attachments?: File[]): void {
@@ -85,11 +87,11 @@ export function sendMessage(text: string, _attachments?: File[]): void {
     pending: true
   }
   setTurns((prev) => [...prev, pending])
-  ws?.send({ type: 'chat.send', text })
+  ws?.send({ type: 'chat.send', text, threadKey: currentThreadKey?.() ?? 'main' } as any)
 }
 
 export function abortChat(): void {
-  ws?.send({ type: 'chat.abort' })
+  ws?.send({ type: 'chat.abort', threadKey: currentThreadKey?.() ?? 'main' } as any)
   setAgentStatus('idle')
   setStreamingHtml('')
   setLiveWork([])
@@ -100,18 +102,42 @@ export function abortChat(): void {
 
 export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): (() => void) | void {
   ws = wsStore ?? null
+  currentThreadKey = _threadKey
   if (!ws) return
+
+  // Subscribe to chat channel (no scope filter — we filter by threadKey client-side)
+  ws.subscribe(['chat'])
+
+  // Request history for the current thread
+  ws.send({ type: 'chat.history', threadKey: _threadKey() } as any)
+
+  // Track previous thread key to detect switches
+  let prevThreadKey = _threadKey()
 
   const unsubs: Array<() => void> = []
 
+  // Watch for thread switches — reset state and request new history
+  // Note: createEffect must be called within a reactive owner (onMount provides one)
+  const trackEffect = createEffect(() => {
+    const key = _threadKey()
+    if (key !== prevThreadKey) {
+      prevThreadKey = key
+      resetState()
+      ws?.send({ type: 'chat.history', threadKey: key } as any)
+      ws?.send({ type: 'chat.session.switch', threadKey: key } as any)
+    }
+  })
+
   unsubs.push(
     ws.on('chat.stream', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
       setStreamingHtml((prev) => prev + msg.text)
     })
   )
 
   unsubs.push(
     ws.on('chat.turn', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
       // Replace optimistic pending turn if present
       setTurns((prev) => {
@@ -134,6 +160,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.status', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
       // Suppress lifecycle updates after abort to prevent flicker
       if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
       setAgentStatus(msg.status)
@@ -142,6 +169,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.work', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
       setLiveWork((prev) => [...prev, msg.work])
     })
   )
@@ -162,6 +190,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
       // Merge persisted pending turns, deduplicating by content
       const persisted = loadPendingTurns(_threadKey())
@@ -180,6 +209,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // Return cleanup
   return () => {
     unsubs.forEach((u) => u())
+    ws?.unsubscribe(['chat'])
   }
 }
 
