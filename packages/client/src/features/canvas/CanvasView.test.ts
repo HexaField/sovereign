@@ -204,4 +204,14 @@ describe('CanvasView', () => {
       expect(drillDownTarget()).toBe('org-1')
     })
   })
+
+  describe('event flow visualization', () => {
+    it.todo('subscribes to events WS channel')
+    it.todo('maps event source to workspace node')
+    it.todo('event flow animation triggered on new event')
+    it.todo('animation decays after 2 seconds')
+    it.todo('event sidebar shows filtered events for selected workspace')
+    it.todo('event sidebar shows all events when no workspace selected')
+    it.todo('performance toggle disables event flow')
+  })
 })

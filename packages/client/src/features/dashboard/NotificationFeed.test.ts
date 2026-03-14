@@ -60,4 +60,26 @@ describe('NotificationFeed', () => {
       expect(sorted.map((n) => n.id)).toEqual(['n2', 'n3', 'n1'])
     })
   })
+
+  describe('API integration', () => {
+    it.todo('fetches notifications from /api/notifications')
+  })
+
+  describe('entity grouping', () => {
+    it.todo('toggle between All and By Entity views')
+    it.todo('grouped view shows entity groups with counts')
+    it.todo('expanding entity group shows notifications')
+  })
+
+  describe('real-time updates', () => {
+    it.todo('WS subscription for real-time notifications')
+    it.todo('new notifications appear at top with highlight')
+  })
+
+  describe('actions', () => {
+    it.todo('mark read per notification')
+    it.todo('mark read per entity group')
+    it.todo('dismiss per notification')
+    it.todo('dismiss per entity group')
+  })
 })

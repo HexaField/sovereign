@@ -37,4 +37,11 @@ describe('ArchitectureTab', () => {
       expect(typeof fetchArchitecture).toBe('function')
     })
   })
+
+  describe('WS live updates', () => {
+    it.todo('subscribes to system WS channel on mount')
+    it.todo('updates module list on system.architecture message')
+    it.todo('falls back to REST polling when WS disconnected')
+    it.todo('stops polling when WS reconnects')
+  })
 })

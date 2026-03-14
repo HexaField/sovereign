@@ -40,4 +40,11 @@ describe('HealthTab', () => {
       expect(typeof fetchHealth).toBe('function')
     })
   })
+
+  describe('WS live updates', () => {
+    it.todo('subscribes to system WS channel on mount')
+    it.todo('updates health data on system.health message')
+    it.todo('falls back to REST polling when WS disconnected')
+    it.todo('stops polling when WS reconnects')
+  })
 })
