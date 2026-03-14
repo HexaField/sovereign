@@ -28,8 +28,38 @@ const fetchTree = async (projectPath: string | null): Promise<FileNode[]> => {
 }
 
 const FileIcon: Component<{ node: FileNode }> = (props) => {
-  const icon = () => (props.node.type === 'directory' ? '📁' : '📄')
-  return <span class="mr-1">{icon()}</span>
+  return (
+    <span class="mr-1 inline-flex" style={{ color: 'var(--c-text-muted)' }}>
+      {props.node.type === 'directory' ? (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+        </svg>
+      ) : (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+      )}
+    </span>
+  )
 }
 
 const TreeNode: Component<{ node: FileNode; depth: number }> = (props) => {

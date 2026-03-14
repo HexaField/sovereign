@@ -7,6 +7,9 @@ import { activeView, initNavStore } from './features/nav/store.js'
 // Identity
 import { loadIdentity } from './lib/identity.js'
 
+// Workspace auto-init
+import { autoSelectProject } from './features/workspace/store.js'
+
 // WS + connection stores
 import { wsStore } from './ws/index.js'
 import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
@@ -32,6 +35,7 @@ export default function App() {
 
   onMount(() => {
     loadIdentity()
+    autoSelectProject()
     cleanups.push(initNavStore())
 
     const cleanupConnection = initConnectionStore(wsStore)
