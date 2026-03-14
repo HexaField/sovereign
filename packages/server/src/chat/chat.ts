@@ -119,10 +119,16 @@ export function createChatModule(
     }
   })
 
+  function deriveSessionKey(threadKey: string): string {
+    // Map thread keys to OpenClaw gateway session keys
+    if (threadKey === 'main') return 'agent:main:main'
+    return `agent:main:thread:${threadKey}`
+  }
+
   async function handleSend(threadKey: string, text: string, attachments?: Buffer[]): Promise<void> {
     let sessionKey = threadToSession.get(threadKey)
     if (!sessionKey) {
-      sessionKey = await backend.createSession()
+      sessionKey = deriveSessionKey(threadKey)
       setMapping(threadKey, sessionKey)
     }
     await backend.sendMessage(sessionKey, text, attachments)
