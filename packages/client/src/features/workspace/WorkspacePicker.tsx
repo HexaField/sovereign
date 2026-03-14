@@ -1,4 +1,4 @@
-import { createSignal, createResource, For, Show, type Component } from 'solid-js'
+import { createSignal, createResource, For, Show, onCleanup, type Component } from 'solid-js'
 import { activeWorkspace, setActiveWorkspace, setActiveProject } from './store.js'
 
 interface OrgData {
@@ -33,6 +33,33 @@ const WorkspacePicker: Component = () => {
   const [addName, setAddName] = createSignal('')
   const [addPath, setAddPath] = createSignal('')
   const [addError, setAddError] = createSignal('')
+  let containerRef: HTMLDivElement | undefined
+  let buttonRef: HTMLButtonElement | undefined
+
+  // Compute dropdown position relative to viewport
+  const dropdownStyle = () => {
+    if (!buttonRef) return {}
+    const rect = buttonRef.getBoundingClientRect()
+    return {
+      position: 'fixed' as const,
+      top: `${rect.bottom + 4}px`,
+      left: `${rect.left}px`,
+      width: `${rect.width}px`,
+      'max-height': '320px',
+      'z-index': '9999'
+    }
+  }
+
+  // Close on click outside
+  const handleClickOutside = (e: MouseEvent) => {
+    if (containerRef && !containerRef.contains(e.target as Node)) {
+      setOpen(false)
+    }
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('mousedown', handleClickOutside)
+    onCleanup(() => document.removeEventListener('mousedown', handleClickOutside))
+  }
 
   const ws = () => activeWorkspace()
   const currentOrgId = () => ws()?.orgId ?? '_global'
@@ -89,13 +116,15 @@ const WorkspacePicker: Component = () => {
   }
 
   return (
-    <div class="relative">
+    <div class="relative" ref={containerRef}>
       <button
+        ref={buttonRef}
         class="flex w-full items-center justify-between rounded px-3 py-1.5 text-xs font-medium transition-colors hover:opacity-80"
         style={{ background: 'var(--c-bg)', color: 'var(--c-text-heading)', border: '1px solid var(--c-border)' }}
         onClick={() => {
-          setOpen(!open())
-          if (!open()) {
+          const wasOpen = open()
+          setOpen(!wasOpen)
+          if (!wasOpen) {
             refetchOrgs()
             refetchProjects()
           }
@@ -107,8 +136,8 @@ const WorkspacePicker: Component = () => {
 
       <Show when={open()}>
         <div
-          class="absolute top-full right-0 left-0 z-50 mt-1 max-h-80 overflow-auto rounded border shadow-lg"
-          style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
+          class="overflow-auto rounded border shadow-lg"
+          style={{ ...dropdownStyle(), background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
         >
           <For each={orgs() ?? []}>
             {(org) => (
@@ -163,7 +192,7 @@ const WorkspacePicker: Component = () => {
                 onClick={handleScan}
                 disabled={scanning()}
               >
-                {scanning() ? 'Scanning...' : '🔍 Scan'}
+                {scanning() ? 'Scanning...' : 'Scan'}
               </button>
               <button
                 class="rounded px-2 py-1 text-xs transition-colors hover:opacity-80"

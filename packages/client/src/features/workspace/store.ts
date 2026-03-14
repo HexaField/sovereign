@@ -195,3 +195,23 @@ export function _resetWorkspaceStore(): void {
     }
   }
 }
+
+/**
+ * Auto-select the first project if none is selected.
+ * Call this once on app init (e.g. in App.tsx onMount).
+ */
+export async function autoSelectProject(): Promise<void> {
+  const ws = activeWorkspace()
+  if (!ws || ws.activeProjectId) return // already selected
+
+  try {
+    const res = await fetch(`/api/orgs/${encodeURIComponent(ws.orgId)}/projects`)
+    if (!res.ok) return
+    const projects: Array<{ id: string; name: string }> = await res.json()
+    if (projects.length > 0) {
+      setActiveProject(projects[0].id, projects[0].name)
+    }
+  } catch {
+    /* ignore */
+  }
+}
