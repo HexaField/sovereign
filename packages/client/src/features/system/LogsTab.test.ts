@@ -62,4 +62,31 @@ describe('LogsTab', () => {
       expect(typeof mod.default).toBe('function')
     })
   })
+
+  describe('WS integration', () => {
+    it.todo('WS logs channel subscription on mount')
+    it.todo('handles log.history message (bulk load)')
+    it.todo('handles log.entry message (append)')
+  })
+
+  describe('auto-scroll', () => {
+    it.todo('auto-scroll enabled by default')
+    it.todo('auto-scroll pauses when user scrolls up')
+    it.todo('auto-scroll resumes when user scrolls to bottom')
+  })
+
+  describe('live streaming', () => {
+    it.todo('live indicator shown when receiving entries')
+    it.todo('pause button stops display updates')
+    it.todo('pause badge shows queued entry count')
+  })
+
+  describe('buffer management', () => {
+    it.todo('client buffer limited to 5000 entries')
+    it.todo('oldest entries evicted when buffer full')
+  })
+
+  describe('entity display', () => {
+    it.todo('entityId shown as clickable link when present')
+  })
 })
