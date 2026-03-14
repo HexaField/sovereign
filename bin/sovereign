@@ -99,13 +99,13 @@ _stop_server() {
 
 _build() {
   echo "Building core..."
-  (cd "$REPO_DIR" && pnpm --filter @template/core build)
+  (cd "$REPO_DIR" && pnpm --filter @sovereign/core build)
   
   echo "Building client..."
-  (cd "$REPO_DIR" && pnpm --filter @template/client build)
+  (cd "$REPO_DIR" && pnpm --filter @sovereign/client build)
   
   echo "Building server..."
-  (cd "$REPO_DIR" && pnpm --filter @template/server build)
+  (cd "$REPO_DIR" && pnpm --filter @sovereign/server build)
   
   echo "Build complete"
 }
