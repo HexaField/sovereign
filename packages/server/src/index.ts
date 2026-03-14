@@ -169,7 +169,15 @@ app.use('/api', createOrgRoutes(orgManager, authMiddleware))
 registerOrgsChannel(wsHandler, bus)
 
 const fileService = createFileService(bus)
-app.use('/api/files', createFileRouter(fileService))
+const fileProjectResolver = (projectId: string): string => {
+  for (const org of orgManager.listOrgs()) {
+    const projects = orgManager.listProjects(org.id)
+    const p = projects.find((pr) => pr.id === projectId)
+    if (p) return p.repoPath
+  }
+  return projectId // fallback: treat as path
+}
+app.use('/api/files', createFileRouter(fileService, undefined, fileProjectResolver))
 registerFilesChannel(wsHandler, bus)
 
 // Project resolver: maps orgId+projectId to filesystem path
