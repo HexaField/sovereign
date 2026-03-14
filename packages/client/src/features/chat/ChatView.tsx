@@ -69,7 +69,7 @@ export function ChatView(props: ChatViewProps) {
   })
 
   return (
-    <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
+    <div class="flex min-h-0 flex-1 flex-col" style={{ background: 'var(--c-bg)' }}>
       {/* Message list */}
       <div ref={scrollRef} class="flex-1 space-y-4 overflow-y-auto p-4">
         {/* Empty state */}
