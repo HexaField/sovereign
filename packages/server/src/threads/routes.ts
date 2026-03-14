@@ -16,6 +16,14 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
     res.json({ threads })
   })
 
+  router.get('/api/threads/:key/messages', (req, res) => {
+    const events = threadManager.getEvents(req.params.key, {
+      limit: Number(req.query.limit) || 50,
+      offset: Number(req.query.offset) || 0
+    })
+    res.json({ messages: events })
+  })
+
   router.get('/api/threads/:key', (req, res) => {
     const thread = threadManager.get(req.params.key)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })

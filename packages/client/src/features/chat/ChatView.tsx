@@ -94,12 +94,17 @@ export function ChatView(props: ChatViewProps) {
         {props.liveWork.length > 0 && <WorkSection work={props.liveWork} />}
       </div>
 
-      {/* Streaming indicator */}
+      {/* Streaming response */}
       {props.streamingHtml && (
         <div class="px-4 py-2">
-          <span class="animate-pulse text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            ●●●
-          </span>
+          <div class="rounded-xl px-3 py-2" style={{ background: 'var(--c-bg-raised)' }}>
+            <div class="prose prose-sm text-sm whitespace-pre-wrap" style={{ color: 'var(--c-text)' }}>
+              {props.streamingHtml}
+            </div>
+            <span class="inline-block animate-pulse text-sm" style={{ color: 'var(--c-text-muted)' }}>
+              ▍
+            </span>
+          </div>
         </div>
       )}
 

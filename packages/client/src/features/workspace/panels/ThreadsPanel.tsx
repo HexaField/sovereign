@@ -1,6 +1,7 @@
-import { Show } from 'solid-js'
+import { Show, For, createSignal } from 'solid-js'
 import type { Component } from 'solid-js'
-import { activeWorkspace } from '../store.js'
+import { threads, threadKey, switchThread, createThread } from '../../threads/store.js'
+import type { ThreadInfo } from '../../threads/store.js'
 
 export interface ThreadItem {
   key: string
@@ -39,8 +40,24 @@ export function groupThreads(threads: ThreadItem[]): {
   return { entityBound, user, agent, hidden }
 }
 
+function statusDot(status: string | undefined) {
+  if (status === 'working' || status === 'thinking')
+    return <span class="h-2 w-2 shrink-0 animate-pulse rounded-full" style={{ background: '#f59e0b' }} />
+  if (status === 'error') return <span class="h-2 w-2 shrink-0 rounded-full" style={{ background: '#ef4444' }} />
+  return <span class="h-2 w-2 shrink-0 rounded-full" style={{ background: '#22c55e' }} />
+}
+
 const ThreadsPanel: Component = () => {
-  const ws = () => activeWorkspace()
+  const [newLabel, setNewLabel] = createSignal('')
+  const [showNew, setShowNew] = createSignal(false)
+
+  const handleCreate = () => {
+    const label = newLabel().trim()
+    if (!label) return
+    createThread(label)
+    setNewLabel('')
+    setShowNew(false)
+  }
 
   return (
     <div class="flex h-full flex-col">
@@ -48,21 +65,77 @@ const ThreadsPanel: Component = () => {
         <span class="text-xs font-medium" style={{ color: 'var(--c-text-heading)' }}>
           Threads
         </span>
-        <button class="rounded px-2 py-0.5 text-xs" style={{ background: 'var(--c-accent)', color: 'var(--c-text)' }}>
+        <button
+          class="rounded px-2 py-0.5 text-xs"
+          style={{ background: 'var(--c-accent)', color: '#fff' }}
+          onClick={() => setShowNew(!showNew())}
+        >
           + New
         </button>
       </div>
-      <div class="flex-1 overflow-auto p-2">
-        <Show
-          when={ws()}
-          fallback={
-            <p class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-              No workspace selected
-            </p>
-          }
+
+      {/* New thread form */}
+      <Show when={showNew()}>
+        <div class="flex gap-1 border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
+          <input
+            class="flex-1 rounded border px-2 py-1 text-xs outline-none"
+            style={{ background: 'var(--c-bg)', 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
+            placeholder="Thread name..."
+            value={newLabel()}
+            onInput={(e) => setNewLabel(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+          />
+          <button
+            class="rounded px-2 py-1 text-xs"
+            style={{ background: 'var(--c-accent)', color: '#fff' }}
+            onClick={handleCreate}
+          >
+            Create
+          </button>
+        </div>
+      </Show>
+
+      <div class="flex-1 overflow-auto p-1">
+        {/* Always show main thread */}
+        <button
+          class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs transition-colors"
+          style={{
+            background: threadKey() === 'main' ? 'var(--c-accent)' : 'transparent',
+            color: threadKey() === 'main' ? '#fff' : 'var(--c-text)'
+          }}
+          onClick={() => switchThread('main')}
         >
-          <p class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-            Loading threads for {ws()!.orgId}...
+          {statusDot('idle')}
+          <span class="flex-1 truncate font-medium">Main</span>
+        </button>
+
+        <For each={threads()}>
+          {(t: ThreadInfo) => (
+            <button
+              class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs transition-colors"
+              style={{
+                background: threadKey() === t.key ? 'var(--c-accent)' : 'transparent',
+                color: threadKey() === t.key ? '#fff' : 'var(--c-text)'
+              }}
+              onClick={() => switchThread(t.key)}
+            >
+              {statusDot(t.agentStatus)}
+              <span class="flex-1 truncate">{t.label ?? t.key}</span>
+              <Show when={t.unreadCount > 0}>
+                <span
+                  class="flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+                  style={{ background: 'var(--c-accent)' }}
+                >
+                  {t.unreadCount}
+                </span>
+              </Show>
+            </button>
+          )}
+        </For>
+
+        <Show when={threads().length === 0}>
+          <p class="px-3 py-4 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+            No additional threads
           </p>
         </Show>
       </div>

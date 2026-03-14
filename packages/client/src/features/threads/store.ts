@@ -72,6 +72,9 @@ export function initThreadStore(wsStore?: WsStore): () => void {
   const unsubs: Array<() => void> = []
 
   if (ws) {
+    // Subscribe to threads WS channel for real-time updates
+    ws.subscribe(['threads'])
+
     unsubs.push(
       ws.on('thread.created', (msg: any) => {
         setThreads((prev) => [...prev, msg as ThreadInfo])
@@ -105,7 +108,7 @@ export function initThreadStore(wsStore?: WsStore): () => void {
   // Fetch initial threads
   fetch('/api/threads')
     .then((r) => r.json())
-    .then((data: any) => setThreads(data as ThreadInfo[]))
+    .then((data: any) => setThreads(data.threads ?? data ?? []))
     .catch(() => {})
 
   return () => {
