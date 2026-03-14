@@ -44,6 +44,20 @@
   --c-work-body-bg: rgba(0, 0, 0, 0.2);
   --c-work-border: rgba(255, 255, 255, 0.04);
   --c-blockquote: #6a6a7a;
+  --c-accent-dim: rgba(74, 158, 255, 0.15);
+  --c-bg-active: rgba(255, 255, 255, 0.08);
+  --c-bg-primary: #0a0a0f;
+  --c-bg-secondary: #12121a;
+  --c-bg-tertiary: #1a1a2e;
+  --c-error: #ff4a6a;
+  --c-info: #4a9eff;
+  --c-rec-bg: rgba(255, 74, 106, 0.15);
+  --c-success: #4ade80;
+  --c-surface: #16161e;
+  --c-text-on-accent: #ffffff;
+  --c-text-primary: #e0e0e8;
+  --c-text-secondary: #a0a0b0;
+  --c-warning: #f59e0b;
 }
 
 /* Light mode */
@@ -80,6 +94,20 @@
   --c-work-body-bg: rgba(0, 0, 0, 0.03);
   --c-work-border: rgba(0, 0, 0, 0.06);
   --c-blockquote: #6a6a7a;
+  --c-accent-dim: rgba(43, 125, 233, 0.15);
+  --c-bg-active: rgba(0, 0, 0, 0.08);
+  --c-bg-primary: #f5f5f7;
+  --c-bg-secondary: #ffffff;
+  --c-bg-tertiary: #e8e8f0;
+  --c-error: #e5395a;
+  --c-info: #2b7de9;
+  --c-rec-bg: rgba(229, 57, 90, 0.12);
+  --c-success: #22c55e;
+  --c-surface: #f0f0f4;
+  --c-text-on-accent: #ffffff;
+  --c-text-primary: #1a1a2e;
+  --c-text-secondary: #5a5a6e;
+  --c-warning: #d97706;
 }
 
 /* Iron Man — blue HUD */
@@ -116,6 +144,20 @@
   --c-work-body-bg: rgba(0, 8, 20, 0.4);
   --c-work-border: rgba(40, 140, 255, 0.08);
   --c-blockquote: rgba(140, 190, 255, 0.5);
+  --c-accent-dim: rgba(40, 160, 255, 0.15);
+  --c-bg-active: rgba(40, 140, 255, 0.15);
+  --c-bg-primary: rgba(2, 8, 18, 0.92);
+  --c-bg-secondary: rgba(8, 20, 40, 0.85);
+  --c-bg-tertiary: rgba(12, 30, 60, 0.8);
+  --c-error: #ff3a5c;
+  --c-info: #28a0ff;
+  --c-rec-bg: rgba(255, 58, 92, 0.15);
+  --c-success: #4ade80;
+  --c-surface: rgba(10, 24, 48, 0.9);
+  --c-text-on-accent: #ffffff;
+  --c-text-primary: #c8e4ff;
+  --c-text-secondary: rgba(160, 210, 255, 0.7);
+  --c-warning: #fbbf24;
 }
 
 /* JARVIS — orange HUD */
@@ -152,6 +194,20 @@
   --c-work-body-bg: rgba(12, 6, 0, 0.4);
   --c-work-border: rgba(255, 140, 40, 0.08);
   --c-blockquote: rgba(255, 190, 120, 0.5);
+  --c-accent-dim: rgba(255, 140, 0, 0.15);
+  --c-bg-active: rgba(255, 140, 40, 0.15);
+  --c-bg-primary: rgba(10, 6, 2, 0.92);
+  --c-bg-secondary: rgba(24, 14, 4, 0.85);
+  --c-bg-tertiary: rgba(36, 20, 6, 0.8);
+  --c-error: #ff3a3a;
+  --c-info: #ff8c00;
+  --c-rec-bg: rgba(255, 58, 58, 0.15);
+  --c-success: #4ade80;
+  --c-surface: rgba(20, 12, 3, 0.9);
+  --c-text-on-accent: #ffffff;
+  --c-text-primary: #ffe4c8;
+  --c-text-secondary: rgba(255, 210, 160, 0.7);
+  --c-warning: #fbbf24;
 }
 
 /* ── Keyframe animations ───────────────────────────────────────────────── */
