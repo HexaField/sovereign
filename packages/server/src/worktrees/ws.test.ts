@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createEventBus } from '@template/core'
+import { createEventBus } from '@sovereign/core'
 import { createWsHandler, type WsLike } from '../ws/handler.js'
 import { registerWorktreesChannel } from './ws.js'
 

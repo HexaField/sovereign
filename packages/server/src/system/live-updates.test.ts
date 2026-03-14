@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createSystemModule, type SystemModule } from './system.js'
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 import type { WsHandler, WsLike } from '../ws/handler.js'
 
 function createTestBus(): EventBus & { _emitted: BusEvent[] } {

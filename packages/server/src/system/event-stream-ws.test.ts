@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createEventStream, type EventStream } from './event-stream.js'
-import type { EventBus, BusEvent, BusHandler } from '@template/core'
+import type { EventBus, BusEvent, BusHandler } from '@sovereign/core'
 import type { WsHandler, WsLike } from '../ws/handler.js'
 
 function createTestBus(): EventBus & { _fire(event: BusEvent): void } {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { registerChatWs } from './ws.js'
 import type { ChatModule } from './chat.js'
 import type { WsHandler } from '../ws/handler.js'
-import type { WsChannelOptions } from '@template/core'
+import type { WsChannelOptions } from '@sovereign/core'
 
 function createMockWsHandler(): WsHandler & { _channels: Map<string, WsChannelOptions> } {
   const channels = new Map<string, WsChannelOptions>()

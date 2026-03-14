@@ -1,6 +1,6 @@
 // Scheduler — WebSocket channel registration
 
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
 
 export function registerSchedulerChannel(ws: WsHandler, bus: EventBus): void {

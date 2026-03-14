@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMergeHandler } from './merge.js'
 import type { Review, ReviewDeps, ReviewProvider } from './types.js'
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 
 function createMockBus(): EventBus & { events: BusEvent[] } {
   const events: BusEvent[] = []

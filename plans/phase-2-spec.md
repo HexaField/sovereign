@@ -572,7 +572,7 @@ All Phase 2 server modules MUST follow the Phase 1 pattern:
 
 - Export `init(bus: EventBus, dataDir: string, ...deps): Module` factory
 - Export `status(): ModuleStatus`
-- Communicate only via event bus and shared types from `@template/core`
+- Communicate only via event bus and shared types from `@sovereign/core`
 - Express routers mounted by the main server, not self-mounting
 
 ### Testing

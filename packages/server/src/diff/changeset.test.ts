@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import type { EventBus, BusEvent, BusHandler, Unsubscribe } from '@template/core'
+import type { EventBus, BusEvent, BusHandler, Unsubscribe } from '@sovereign/core'
 import { createChangeSetManager } from './changeset.js'
 
 let tmpDir: string

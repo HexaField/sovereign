@@ -4,7 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { createTerminalManager, type TerminalManager } from './terminal.js'
 import { createTerminalWsHandler } from './ws.js'
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 import { EventEmitter } from 'events'
 
 // Minimal bus for testing

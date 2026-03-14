@@ -2,7 +2,7 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { EventBus, ModuleStatus } from '@template/core'
+import type { EventBus, ModuleStatus } from '@sovereign/core'
 import type { ConfigStore, SovereignConfig, ConfigChange } from './types.js'
 import { defaults } from './defaults.js'
 import { schema, validate } from './schema.js'

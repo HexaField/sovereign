@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'events'
 import { createWsHandler } from './handler.js'
 import type { WsLike } from './handler.js'
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 
 function mockBus(): EventBus & { events: BusEvent[] } {
   const events: BusEvent[] = []

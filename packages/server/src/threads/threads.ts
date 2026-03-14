@@ -2,7 +2,7 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { ThreadInfo, EntityBinding, ThreadEvent, ThreadFilter, ThreadManager, EntityType } from './types.js'
 
 function entityKey(entity: EntityBinding): string {

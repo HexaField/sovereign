@@ -1,6 +1,6 @@
 // Threads — Types
 
-import type { AgentStatus } from '@template/core'
+import type { AgentStatus } from '@sovereign/core'
 
 export type EntityType = 'branch' | 'issue' | 'pr'
 

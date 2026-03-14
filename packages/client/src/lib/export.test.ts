@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { exportAsMarkdown, exportAsPdf, exportAsText } from './export.js'
-import type { ParsedTurn } from '@template/core'
+import type { ParsedTurn } from '@sovereign/core'
 
 const turns: ParsedTurn[] = [
   { role: 'user', content: 'Hello', timestamp: 1700000000000, workItems: [], thinkingBlocks: [] },

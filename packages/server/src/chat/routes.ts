@@ -2,7 +2,7 @@
 
 import { Router } from 'express'
 import type { ChatModule } from './chat.js'
-import type { AgentBackend } from '@template/core'
+import type { AgentBackend } from '@sovereign/core'
 
 export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend): Router {
   const router = Router()

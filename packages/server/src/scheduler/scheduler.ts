@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 import type { Job, RunRecord } from './types.js'
 import { createStore, type SchedulerStore } from './store.js'
 import { isDue, nextRunTime } from './cron.js'

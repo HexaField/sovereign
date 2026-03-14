@@ -1,5 +1,5 @@
 import { Show, createSignal, createMemo, createEffect, onCleanup } from 'solid-js'
-import type { ParsedTurn, ForwardedMessage } from '@template/core'
+import type { ParsedTurn, ForwardedMessage } from '@sovereign/core'
 import { renderMarkdown, escapeHtml } from '../../lib/markdown.js'
 import { messageToMarkdown, downloadText, exportMessagePdf, turnsToMarkdown, exportThreadPdf } from './export.js'
 import { turns } from './store.js'

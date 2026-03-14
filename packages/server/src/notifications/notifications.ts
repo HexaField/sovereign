@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { EventBus, BusEvent } from '@template/core'
+import type { EventBus, BusEvent } from '@sovereign/core'
 import type { Notification } from './types.js'
 import { createNotificationStore, type NotificationStore } from './store.js'
 import { createRuleEngine, interpolate, seedDefaultRules, type RuleEngine } from './rules.js'

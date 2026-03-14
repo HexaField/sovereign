@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { WorktreeLink } from './types.js'
 import type { WorktreeStore } from './store.js'
 

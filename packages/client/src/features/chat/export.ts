@@ -1,4 +1,4 @@
-import type { ParsedTurn } from '@template/core'
+import type { ParsedTurn } from '@sovereign/core'
 
 const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
 

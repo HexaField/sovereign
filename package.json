@@ -1,14 +1,21 @@
 {
-  "name": "template-monorepo",
+  "name": "sovereign",
   "private": true,
+  "description": "Self-hosted multi-org development platform with AI agents, voice, and planning",
+  "license": "MIT",
+  "author": "Josh Field",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HexaField/sovereign.git"
+  },
   "bin": {
     "sovereign": "./bin/sovereign"
   },
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"pnpm --filter @template/client dev\" \"pnpm --filter @template/server dev\"",
+    "dev": "concurrently \"pnpm --filter @sovereign/client dev\" \"pnpm --filter @sovereign/server dev\"",
     "build": "pnpm -r --if-present build",
-    "start": "pnpm --filter @template/server start",
+    "start": "pnpm --filter @sovereign/server start",
     "test": "pnpm -r test",
     "certs": "mkdir -p .certs && openssl req -x509 -newkey rsa:2048 -keyout .certs/localhost.key -out .certs/localhost.cert -days 365 -nodes -subj \"/CN=localhost\"",
     "lint": "oxlint --fix",

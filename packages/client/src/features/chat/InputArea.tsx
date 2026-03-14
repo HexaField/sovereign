@@ -1,5 +1,5 @@
 import { createSignal, createEffect, Show, For } from 'solid-js'
-import type { AgentStatus } from '@template/core'
+import type { AgentStatus } from '@sovereign/core'
 import {
   inputValue,
   setInputValue,

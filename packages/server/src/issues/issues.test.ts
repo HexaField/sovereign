@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createIssueTracker } from './issues.js'
 import type { Issue, IssueComment, IssueProvider, Remote } from './types.js'
 import type { IssueCache } from './cache.js'
-import type { EventBus, BusEvent, BusHandler, Unsubscribe } from '@template/core'
+import type { EventBus, BusEvent, BusHandler, Unsubscribe } from '@sovereign/core'
 
 const sampleIssue: Issue = {
   id: '1',

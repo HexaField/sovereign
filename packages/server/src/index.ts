@@ -10,7 +10,7 @@ dotenv.config()
 import cors from 'cors'
 import express from 'express'
 import { WebSocketServer } from 'ws'
-import { createEventBus } from '@template/core'
+import { createEventBus } from '@sovereign/core'
 import healthRouter from './routes/health.js'
 import { createStatusAggregator } from './status/status.js'
 import { createWsHandler } from './ws/handler.js'

@@ -1,6 +1,6 @@
 // Core review system
 
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { Review, ReviewComment, ReviewSystem, ReviewDeps, ReviewProvider } from './types.js'
 import { createReviewCache, type ReviewCache } from './cache.js'
 import { createMergeHandler, type MergeHandler } from './merge.js'

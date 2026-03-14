@@ -1,6 +1,6 @@
 // Voice Module — Transcription + TTS proxy
 
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { VoiceConfig } from '../agent-backend/types.js'
 
 export interface VoiceModuleConfig extends VoiceConfig {

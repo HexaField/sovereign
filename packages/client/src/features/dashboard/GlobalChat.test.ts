@@ -7,7 +7,7 @@ import {
   formatRole,
   navigateToGlobalChat
 } from './GlobalChat'
-import type { ParsedTurn } from '@template/core'
+import type { ParsedTurn } from '@sovereign/core'
 
 const makeTurn = (role: 'user' | 'assistant', content: string): ParsedTurn => ({
   role,
