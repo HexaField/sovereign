@@ -1,4 +1,5 @@
 import { For } from 'solid-js'
+import { agentName } from '../../lib/identity.js'
 import { currentTheme, setTheme } from '../theme/store.js'
 import { settingsOpen, setSettingsOpen } from '../nav/store.js'
 import type { Theme } from '../theme/themes.js'
@@ -81,7 +82,7 @@ export function SettingsModal() {
 
         <div class="px-5 py-3" style={{ 'border-top': '1px solid var(--c-border)' }}>
           <div class="text-center text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
-            Hex — Agent Interface
+            {agentName()} — Agent Interface
           </div>
         </div>
       </div>

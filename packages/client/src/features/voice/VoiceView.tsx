@@ -1,4 +1,5 @@
 import { Show } from 'solid-js'
+import { agentIcon } from '../../lib/identity.js'
 import {
   voiceState,
   setVoiceState,
@@ -182,7 +183,7 @@ export function VoiceView() {
           'opacity-100': voiceState() === 'listening' || voiceState() === 'speaking'
         }}
       >
-        ⬡
+        {agentIcon()}
       </div>
 
       <div
