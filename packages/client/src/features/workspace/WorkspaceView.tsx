@@ -548,38 +548,33 @@ const WorkspaceView: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
-      <Show
-        when={isMobile()}
-        fallback={
-          <Show when={!chatExpanded()} fallback={<ExpandedChatView />}>
-            <div class="flex flex-1 overflow-hidden">
-              {/* §3.1 — Sidebar */}
-              <Show when={!sidebarCollapsed()}>
-                <div
-                  class="flex flex-col border-r"
-                  style={{
-                    width: '260px',
-                    'min-width': '260px',
-                    'border-color': 'var(--c-border)',
-                    background: 'var(--c-bg-raised)'
-                  }}
-                >
-                  <SidebarTabBar />
-                  <SidebarContent />
-                </div>
-              </Show>
-
-              {/* §3.1 — Main Content with file tabs */}
-              <MainContentArea />
-
-              {/* §3.5 — Right Panel Chat */}
-              <ChatPanel />
+      {chatExpanded() ? (
+        <ExpandedChatView />
+      ) : (
+        <div class="flex flex-1 overflow-hidden">
+          {/* §3.1 — Sidebar */}
+          <Show when={!sidebarCollapsed()}>
+            <div
+              class="flex flex-col border-r"
+              style={{
+                width: '260px',
+                'min-width': '260px',
+                'border-color': 'var(--c-border)',
+                background: 'var(--c-bg-raised)'
+              }}
+            >
+              <SidebarTabBar />
+              <SidebarContent />
             </div>
           </Show>
-        }
-      >
-        <MobileWorkspace />
-      </Show>
+
+          {/* §3.1 — Main Content with file tabs */}
+          <MainContentArea />
+
+          {/* §3.5 — Right Panel Chat */}
+          <ChatPanel />
+        </div>
+      )}
     </div>
   )
 }

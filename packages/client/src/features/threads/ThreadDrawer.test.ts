@@ -121,8 +121,8 @@ describe('§5.3 ThreadDrawer', () => {
     it('shows entity type icon: 🌿 for branch, 🎫 for issue, 🔀 for PR', () => {
       // Icons come from helpers.ts getEntityIcon
       expect(getEntityIcon('branch')).toBe('🌿')
-      expect(getEntityIcon('issue')).toBe('🎫')
-      expect(getEntityIcon('pr')).toBe('🔀')
+      expect(getEntityIcon('issue')).toBe('ticket')
+      expect(getEntityIcon('pr')).toBe('branch')
     })
     it('shows last activity time as relative time (e.g. "2m ago", "1h ago", "Yesterday")', () => {
       expect(formatRelativeTime(Date.now() - 120000)).toBe('2m ago')

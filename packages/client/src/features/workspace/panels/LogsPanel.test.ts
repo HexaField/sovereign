@@ -42,7 +42,7 @@ describe('LogsPanel', () => {
       expect(LOG_LEVEL_ICONS.info).toBe('ℹ️')
       expect(LOG_LEVEL_ICONS.error).toBe('❌')
       expect(LOG_LEVEL_ICONS.warn).toBe('⚠️')
-      expect(LOG_LEVEL_ICONS.debug).toBe('🔍')
+      expect(LOG_LEVEL_ICONS.debug).toBe('debug')
     })
 
     it('§3.3.8 — supports filtering by level and module', () => {

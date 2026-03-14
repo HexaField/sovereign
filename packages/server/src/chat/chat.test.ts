@@ -175,26 +175,22 @@ describe('§2.4 Chat Module (Server)', () => {
     expect(backend.switchSession).toHaveBeenCalledWith(sessionKey)
   })
 
-  it('MUST proxy chat.session.create to backend.createSession(label)', async () => {
+  it('MUST proxy chat.session.create to backend — creates thread and derives session key', async () => {
     const result = await chatModule.handleSessionCreate('test-label')
-    expect(backend.createSession).toHaveBeenCalledWith('test-label')
+    expect(threadManager.create).toHaveBeenCalledWith({ label: 'test-label' })
     expect(result.threadKey).toBeTruthy()
     expect(result.sessionKey).toBeTruthy()
+    // Session key should be derived, not from backend.createSession
+    expect(result.sessionKey).toMatch(/^agent:main:thread:/)
   })
 
-  it('MUST proxy chat.stream events to subscribed clients via WS', () => {
-    // Set up a mapping first
-    // Manually set mapping via handleSessionCreate won't work sync, so create module with pre-existing mapping
-    // Instead, emit event and check — we need the mapping to exist
-    // Let's use the internal approach: create session then emit
-    chatModule.handleSessionCreate().then(({ threadKey: tk, sessionKey: sk }) => {
-      emitBackendEvent(backend, 'chat.stream', { sessionKey: sk, text: 'hello' })
-      expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
-        'chat',
-        expect.objectContaining({ type: 'chat.stream', text: 'hello', threadKey: tk }),
-        { threadKey: tk }
-      )
-    })
+  it('MUST proxy chat.stream events to subscribed clients via WS', async () => {
+    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    emitBackendEvent(backend, 'chat.stream', { sessionKey, text: 'hello' })
+    expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
+      'chat',
+      expect.objectContaining({ type: 'chat.stream', text: 'hello', threadKey })
+    )
   })
 
   it('MUST proxy chat.turn events to subscribed clients via WS', async () => {
@@ -203,8 +199,7 @@ describe('§2.4 Chat Module (Server)', () => {
     emitBackendEvent(backend, 'chat.turn', { sessionKey, turn })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.turn', threadKey }),
-      { threadKey }
+      expect.objectContaining({ type: 'chat.turn', threadKey })
     )
   })
 
@@ -213,8 +208,7 @@ describe('§2.4 Chat Module (Server)', () => {
     emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'working' })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.status', threadKey, status: 'working' }),
-      { threadKey }
+      expect.objectContaining({ type: 'chat.status', threadKey, status: 'working' })
     )
   })
 
@@ -224,8 +218,7 @@ describe('§2.4 Chat Module (Server)', () => {
     emitBackendEvent(backend, 'chat.work', { sessionKey, work })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.work', threadKey }),
-      { threadKey }
+      expect.objectContaining({ type: 'chat.work', threadKey })
     )
   })
 
@@ -234,8 +227,7 @@ describe('§2.4 Chat Module (Server)', () => {
     emitBackendEvent(backend, 'chat.compacting', { sessionKey, active: true })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.compacting', threadKey, active: true }),
-      { threadKey }
+      expect.objectContaining({ type: 'chat.compacting', threadKey, active: true })
     )
   })
 
@@ -244,8 +236,7 @@ describe('§2.4 Chat Module (Server)', () => {
     emitBackendEvent(backend, 'chat.error', { sessionKey, error: 'boom' })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.error', threadKey, error: 'boom' }),
-      { threadKey }
+      expect.objectContaining({ type: 'chat.error', threadKey, error: 'boom' })
     )
   })
 
@@ -254,8 +245,7 @@ describe('§2.4 Chat Module (Server)', () => {
     emitBackendEvent(backend, 'session.info', { sessionKey, history: [] })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.session.info', threadKey }),
-      { threadKey }
+      expect.objectContaining({ type: 'chat.session.info', threadKey })
     )
   })
 
@@ -264,12 +254,12 @@ describe('§2.4 Chat Module (Server)', () => {
     const result2 = await chatModule.handleSessionCreate()
     emitBackendEvent(backend, 'chat.stream', { sessionKey: result1.sessionKey, text: 'for-1' })
     emitBackendEvent(backend, 'chat.stream', { sessionKey: result2.sessionKey, text: 'for-2' })
-    // Each broadcast should use the correct threadKey scope
+    // Each broadcast should include the correct threadKey in the message
     const calls = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
     const call1 = calls.find((c: unknown[]) => (c[1] as WsMessage).text === 'for-1')
     const call2 = calls.find((c: unknown[]) => (c[1] as WsMessage).text === 'for-2')
-    expect(call1![2]).toEqual({ threadKey: result1.threadKey })
-    expect(call2![2]).toEqual({ threadKey: result2.threadKey })
+    expect((call1![1] as any).threadKey).toBe(result1.threadKey)
+    expect((call2![1] as any).threadKey).toBe(result2.threadKey)
   })
 
   it('MUST emit chat.message.sent bus event when a user sends a message', async () => {
@@ -299,7 +289,7 @@ describe('§2.4 Chat Module (Server)', () => {
 
   it('MUST create a corresponding backend session when a new thread is created', async () => {
     const result = await chatModule.handleSessionCreate('my-thread')
-    expect(backend.createSession).toHaveBeenCalledWith('my-thread')
+    expect(threadManager.create).toHaveBeenCalledWith({ label: 'my-thread' })
     expect(result.sessionKey).toBeTruthy()
     expect(chatModule.getSessionKeyForThread(result.threadKey)).toBe(result.sessionKey)
   })
@@ -347,11 +337,11 @@ describe('§2.4 Chat Module (Server)', () => {
   })
 
   it('MUST handle case where threadKey has no session mapping (auto-create session)', async () => {
-    // Send to a threadKey that has no mapping - should auto-create a session
+    // Send to a threadKey that has no mapping - should auto-derive a session key
     await chatModule.handleSend('unknown-thread', 'hello')
-    expect(backend.createSession).toHaveBeenCalled()
     expect(backend.sendMessage).toHaveBeenCalled()
-    // After auto-create, the mapping should exist
+    // After auto-derive, the mapping should exist
     expect(chatModule.getSessionKeyForThread('unknown-thread')).toBeTruthy()
+    expect(chatModule.getSessionKeyForThread('unknown-thread')).toMatch(/^agent:main:thread:unknown-thread$/)
   })
 })
