@@ -30,9 +30,9 @@ Entity-bound chat threads: every thread is associated with a branch, issue, or P
 
 Architecture & system view. Notifications and events are entity-scoped — grouped by the thread/entity they belong to, click to jump into context. Holonic event viewer — visualise event flow across entities and threads in real time. Logs viewer.
 
-## Phase 8: Recording & Transcription
+## Phase 8: Recording, Transcription & Voice Intelligence
 
-Recording management, playback, audio transcription pipeline. Session recording (audio + text), searchable transcript archive, export.
+Voice as a first-class workspace modality. Meeting model with diarization (speaker identification), transcription, and summarization pipeline. Meeting summaries, action items, and decisions feed into workspace-level context and memory. Thread-level voice I/O (STT for input, TTS for responses, voice mode toggle). External meeting import (Zoom, Otter.ai, Google Meet transcripts/audio). Meetings panel in workspace sidebar, meeting detail view, speaker timeline, searchable meeting history. Workspace context integration — meeting knowledge is part of the workspace's living memory.
 
 ## Phase 9: Agent Core (beta release)
 
