@@ -95,9 +95,9 @@ The agent backend `connectWs()` rejects on error, but `scheduleReconnect()` catc
 
 ## D. Code Quality Nitpicks
 
-### D1. Package names still `@template/*`
+### D1. Package names still `@sovereign/*`
 
-Should have been renamed to `@sovereign/*` (or whatever the final name is) before Phase 2. Every file imports from `@template/core`. This will be a painful mass-rename later.
+Should have been renamed to `@sovereign/*` (or whatever the final name is) before Phase 2. Every file imports from `@sovereign/core`. This will be a painful mass-rename later.
 
 ### D2. `thinking.ts` uses `ed.etc.sha512Sync` — but it's unused
 
@@ -125,7 +125,7 @@ The component receives props but renders a simplified skeleton — no collapsibl
 
 I don't see `app.css` being imported by `App.tsx` or any entry point. The theme tokens, fonts, and keyframes defined there may not actually load.
 
-### D7. `threads/types.ts` duplicates `ForwardedMessage` from `@template/core`
+### D7. `threads/types.ts` duplicates `ForwardedMessage` from `@sovereign/core`
 
 `packages/core/src/agent-backend.ts` exports `ForwardedMessage`. `threads/types.ts` likely also defines it. One source of truth.
 
@@ -200,7 +200,7 @@ Worth auditing `phase6.test.ts` to ensure integration tests are using real modul
 
 **Wave C — Housekeeping:**
 
-1. Rename `@template/*` → `@sovereign/*`
+1. Rename `@sovereign/*` → `@sovereign/*`
 2. Remove `SHARED_CONSTANT` and `add()` from core/index.ts
 3. Remove `@noble/ed25519` from dependencies
 4. Remove dead legacy voice routes export

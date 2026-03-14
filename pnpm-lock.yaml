@@ -41,7 +41,7 @@ importers:
 
   packages/client:
     dependencies:
-      '@template/core':
+      '@sovereign/core':
         specifier: workspace:*
         version: link:../core
       '@xterm/addon-fit':
@@ -132,7 +132,7 @@ importers:
       '@noble/hashes':
         specifier: ^2.0.1
         version: 2.0.1
-      '@template/core':
+      '@sovereign/core':
         specifier: workspace:*
         version: link:../core
       '@types/diff':

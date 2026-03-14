@@ -360,13 +360,13 @@ Server-side abstraction over the agent runtime. The client never touches this di
 
 ### Requirements
 
-#### 2.1 Interface (`@template/core`)
+#### 2.1 Interface (`@sovereign/core`)
 
-- The `AgentBackend` interface MUST be defined in `@template/core` (shared types package).
+- The `AgentBackend` interface MUST be defined in `@sovereign/core` (shared types package).
 - The interface MUST support the following methods: `connect()`, `disconnect()`, `status()`, `sendMessage()`, `abort()`, `switchSession()`, `createSession()`, `getHistory()`.
 - The interface MUST support typed event subscription: `on(event, handler)`, `off(event, handler)`.
 - Events MUST include: `chat.stream`, `chat.turn`, `chat.status`, `chat.work`, `chat.compacting`, `chat.error`, `session.info`, `backend.status` — as defined in the `AgentBackendEvents` interface above.
-- All shared types MUST be defined in `@template/core`:
+- All shared types MUST be defined in `@sovereign/core`:
   - `ParsedTurn` — a complete conversation turn with role, content, timestamp, work items, thinking blocks.
   - `WorkItem` — a single unit of agent work: `{ type: 'tool_call' | 'tool_result' | 'thinking' | 'system_event', toolCallId?: string, name?: string, input?: string, output?: string, icon?: string, timestamp: number }`.
   - `AgentStatus` — `'idle' | 'working' | 'thinking'`.
@@ -534,7 +534,7 @@ Each feature module contains its own store. Stores are self-contained: they defi
   2. Send `chat.session.switch` via WS with the new thread key.
   3. Await the `chat.session.info` response to populate `turns` with the new thread's history.
 - Init: `initChatStore(threadKey: Accessor<string>)` — the store MUST accept the thread key as a reactive accessor and set up an effect that reacts to thread changes.
-- Types `ParsedTurn`, `WorkItem`, `AgentStatus` MUST be imported from `@template/core`.
+- Types `ParsedTurn`, `WorkItem`, `AgentStatus` MUST be imported from `@sovereign/core`.
 
 #### 3.3 Thread Store (`features/threads/store.ts`)
 

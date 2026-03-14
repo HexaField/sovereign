@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, watchFile, unwatchFile, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { NotificationRule } from './types.js'
-import type { BusEvent } from '@template/core'
+import type { BusEvent } from '@sovereign/core'
 
 export interface RuleEngine {
   match(event: BusEvent): NotificationRule | null

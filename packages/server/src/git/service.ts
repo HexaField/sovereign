@@ -1,4 +1,4 @@
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { GitCli } from './git.js'
 import type { GitStatus, CommitInfo } from './types.js'
 

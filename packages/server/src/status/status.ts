@@ -1,4 +1,4 @@
-import type { EventBus, ModuleStatus } from '@template/core'
+import type { EventBus, ModuleStatus } from '@sovereign/core'
 import type { StatusUpdate } from './types.js'
 
 export interface StatusConfig {

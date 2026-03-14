@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { FileContent } from './types.js'
 
 const LANGUAGE_MAP: Record<string, string> = {

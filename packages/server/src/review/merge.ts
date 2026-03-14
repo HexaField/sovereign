@@ -1,6 +1,6 @@
 // Merge orchestration
 
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { Review, ReviewDeps } from './types.js'
 
 export interface MergeHandler {

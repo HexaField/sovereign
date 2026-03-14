@@ -1,4 +1,4 @@
-import type { ParsedTurn } from '@template/core'
+import type { ParsedTurn } from '@sovereign/core'
 
 export interface ChatMessage {
   turn: ParsedTurn

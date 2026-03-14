@@ -1,6 +1,6 @@
 // Threads — Message Forwarding Logic
 
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { ThreadManager, ForwardedMessage } from './types.js'
 
 export interface ForwardHandler {

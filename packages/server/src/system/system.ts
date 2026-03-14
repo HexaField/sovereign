@@ -1,7 +1,7 @@
 // System module — architecture and health reporting
 
 import os from 'node:os'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
 
 export interface ModuleInfo {

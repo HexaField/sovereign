@@ -1,8 +1,8 @@
 // WebSocket Handler — connection management, channel registry
 
-import type { EventBus } from '@template/core'
-import type { WsMessage, WsChannelOptions } from '@template/core'
-import { isWsMessage } from '@template/core'
+import type { EventBus } from '@sovereign/core'
+import type { WsMessage, WsChannelOptions } from '@sovereign/core'
+import { isWsMessage } from '@sovereign/core'
 import { createSubscriptionTracker } from './subscriptions.js'
 import { encodeBinaryFrame, createBinaryChannelRegistry } from './binary.js'
 

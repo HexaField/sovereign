@@ -18,7 +18,7 @@ import {
   setAgentStatus,
   _resetState
 } from './store.js'
-import type { ParsedTurn, WorkItem } from '@template/core'
+import type { ParsedTurn, WorkItem } from '@sovereign/core'
 
 function createMockWs() {
   const handlers = new Map<string, Set<(msg: any) => void>>()

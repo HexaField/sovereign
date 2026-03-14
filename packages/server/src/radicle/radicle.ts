@@ -1,6 +1,6 @@
 // Core Radicle manager — wraps CLI functions with bus event emission
 
-import type { EventBus, ModuleStatus } from '@template/core'
+import type { EventBus, ModuleStatus } from '@sovereign/core'
 import type { RadicleManager, RadicleRepoInfo, RadiclePeer, RadicleIdentity } from './types.js'
 import * as cli from './cli.js'
 

@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { createEventBus } from '@template/core'
+import { createEventBus } from '@sovereign/core'
 import { createPlanningService } from '../planning/planning.js'
 import type { Issue, IssueFilter, IssueComment, IssueTracker } from '../issues/types.js'
 import type { EntityRef, PlanningService } from '../planning/types.js'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 
 // --- Helpers ---
 

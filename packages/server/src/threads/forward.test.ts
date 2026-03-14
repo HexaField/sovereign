@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { createEventBus } from '@template/core'
+import { createEventBus } from '@sovereign/core'
 import { createThreadManager } from './threads.js'
 import { createForwardHandler } from './forward.js'
 import type { ThreadManager, ForwardedMessage } from './types.js'
-import type { BusEvent } from '@template/core'
+import type { BusEvent } from '@sovereign/core'
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sovereign-forward-'))

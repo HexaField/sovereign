@@ -1,7 +1,7 @@
 // §2.3 GlobalChat — Compact chat panel for _global main thread on dashboard
 // Pure functions exported for testability; SolidJS component uses Tailwind + var(--c-*) tokens
 
-import type { ParsedTurn } from '@template/core'
+import type { ParsedTurn } from '@sovereign/core'
 
 export const GLOBAL_CHAT_MESSAGE_LIMIT = 5
 export const GLOBAL_CHAT_TRUNCATE_LENGTH = 120

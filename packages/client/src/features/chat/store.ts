@@ -1,6 +1,6 @@
 import { createSignal } from 'solid-js'
 import type { Accessor } from 'solid-js'
-import type { ParsedTurn, WorkItem, AgentStatus } from '@template/core'
+import type { ParsedTurn, WorkItem, AgentStatus } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])

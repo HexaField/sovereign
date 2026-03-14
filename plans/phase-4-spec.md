@@ -593,7 +593,7 @@ All Phase 4 server modules MUST follow the established pattern:
 
 - Export `create*(bus: EventBus, dataDir: string, ...deps)` factory
 - Export `status(): ModuleStatus`
-- Communicate only via event bus and shared types from `@template/core`
+- Communicate only via event bus and shared types from `@sovereign/core`
 - Express routers mounted by the main server, not self-mounting
 - Read configuration from the config module (Phase 3)
 

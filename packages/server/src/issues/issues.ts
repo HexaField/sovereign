@@ -1,6 +1,6 @@
 // Core issue tracker — orchestrates providers + cache
 
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { Issue, IssueComment, IssueFilter, IssueProvider, IssueTracker, Remote } from './types.js'
 import { createIssueCache, type IssueCache } from './cache.js'
 import { createGitHubIssueProvider } from './github.js'

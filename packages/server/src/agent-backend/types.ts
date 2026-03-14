@@ -1,6 +1,6 @@
 // Agent Backend — Server-side Types
 
-import type { AgentStatus, BackendConnectionStatus } from '@template/core'
+import type { AgentStatus, BackendConnectionStatus } from '@sovereign/core'
 
 export interface OpenClawConfig {
   /** Gateway WebSocket URL (e.g. wss://localhost:3456/ws) */

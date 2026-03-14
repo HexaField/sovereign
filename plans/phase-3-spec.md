@@ -165,7 +165,7 @@ A typed, multiplexed WebSocket transport layer. Like the event bus, this is **in
 ### Interface
 
 ```typescript
-// Shared types (in @template/core)
+// Shared types (in @sovereign/core)
 interface WsMessage {
   type: string
   timestamp?: string
@@ -409,7 +409,7 @@ All Phase 3 server modules MUST follow the established pattern:
 
 - Export `create*(bus: EventBus, dataDir: string, ...deps)` factory
 - Export `status(): ModuleStatus`
-- Communicate only via event bus and shared types from `@template/core`
+- Communicate only via event bus and shared types from `@sovereign/core`
 - Express routers mounted by the main server, not self-mounting
 - Read configuration from the config module, not from environment directly (except config module itself, which reads env for bootstrapping)
 

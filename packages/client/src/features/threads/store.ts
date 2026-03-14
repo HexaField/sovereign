@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import type { AgentStatus } from '@template/core'
+import type { AgentStatus } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
 
 export interface ThreadInfo {

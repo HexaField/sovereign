@@ -2,7 +2,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import type { EventBus } from '@template/core'
+import type { EventBus } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
 
 export interface LogEntry {

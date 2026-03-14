@@ -1,6 +1,6 @@
 // Threads — WS channel for thread events
 
-import type { EventBus, WsChannelOptions } from '@template/core'
+import type { EventBus, WsChannelOptions } from '@sovereign/core'
 import type { ThreadManager } from './types.js'
 
 export interface WsHandler {

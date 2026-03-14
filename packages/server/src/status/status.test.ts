@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createEventBus } from '@template/core'
-import type { EventBus, ModuleStatus } from '@template/core'
+import { createEventBus } from '@sovereign/core'
+import type { EventBus, ModuleStatus } from '@sovereign/core'
 import type { StatusUpdate } from './types.js'
 import { createStatusAggregator, type StatusAggregator } from './status.js'
 import { mkdtempSync } from 'fs'
