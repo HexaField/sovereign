@@ -27,6 +27,9 @@ const PlanningPanel = lazy(() => import('./panels/PlanningPanel.js'))
 const NotificationsPanel = lazy(() => import('./panels/NotificationsPanel.js'))
 const TerminalPanel = lazy(() => import('./panels/TerminalPanel.js'))
 const RecordingsPanel = lazy(() => import('./panels/RecordingsPanel.js'))
+const MeetingsPanel = lazy(() =>
+  import('../../features/meetings/MeetingsPanel.js').then((m) => ({ default: m.MeetingsPanel }))
+)
 const LogsPanel = lazy(() => import('./panels/LogsPanel.js'))
 
 // §3.3 — Sidebar Tab Bar
@@ -76,6 +79,9 @@ const SidebarContent: Component = () => {
         </Match>
         <Match when={activeSidebarTab() === 'recordings'}>
           <RecordingsPanel />
+        </Match>
+        <Match when={activeSidebarTab() === 'meetings'}>
+          <MeetingsPanel />
         </Match>
         <Match when={activeSidebarTab() === 'logs'}>
           <LogsPanel />
@@ -271,6 +277,9 @@ const MobileWorkspace: Component = () => {
           </Match>
           <Match when={activeMobileTab() === 'recordings'}>
             <RecordingsPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'meetings'}>
+            <MeetingsPanel />
           </Match>
           <Match when={activeMobileTab() === 'logs'}>
             <LogsPanel />
