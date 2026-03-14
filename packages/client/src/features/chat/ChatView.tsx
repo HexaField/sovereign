@@ -1,3 +1,4 @@
+import { createEffect } from 'solid-js'
 import type { WorkItem, AgentStatus } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
@@ -50,10 +51,27 @@ export function isNearBottom(scrollTop: number, scrollHeight: number, clientHeig
 }
 
 export function ChatView(props: ChatViewProps) {
+  let scrollRef!: HTMLDivElement
+
+  const scrollToBottom = () => {
+    if (scrollRef) {
+      scrollRef.scrollTop = scrollRef.scrollHeight
+    }
+  }
+
+  // Auto-scroll when messages change or streaming updates
+  createEffect(() => {
+    // Track reactive dependencies
+    props.messages.length
+    props.streamingHtml
+    // Schedule scroll after DOM update
+    requestAnimationFrame(scrollToBottom)
+  })
+
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
       {/* Message list */}
-      <div class="flex-1 space-y-4 overflow-y-auto p-4">
+      <div ref={scrollRef} class="flex-1 space-y-4 overflow-y-auto p-4">
         {/* Empty state */}
         {isEmptyState(props.messages) && (
           <div class="flex h-full items-center justify-center">

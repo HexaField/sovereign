@@ -198,5 +198,32 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
     turns.push(lastUserTurn)
   }
 
-  return turns
+  // Filter out noisy internal/system turns
+  const filtered = turns.filter((t) => {
+    const text = (t.content ?? '').trim()
+    if (!text) return true
+
+    // Exact matches
+    if (text === 'NO_REPLY' || text === 'ANNOUNCE_SKIP' || text === 'REPLY_SKIP' || text === 'HEARTBEAT_OK')
+      return false
+
+    // Starts with
+    if (text.startsWith('Agent-to-agent announce step')) return false
+    if (text.startsWith('No new comments on')) return false
+
+    // Contains
+    if (text.includes('[Internal task completion event]')) return false
+
+    // Scheduled Result HH:MM\nCompaction
+    if (/^Scheduled Result \d{2}:\d{2}/.test(text)) return false
+
+    return true
+  })
+
+  // Deduplicate consecutive identical messages
+  return filtered.filter((t, i) => {
+    if (i === 0) return true
+    const prev = filtered[i - 1]
+    return t.content !== prev.content || t.role !== prev.role
+  })
 }
