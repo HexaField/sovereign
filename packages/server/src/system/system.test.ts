@@ -79,6 +79,21 @@ describe('System Module', () => {
       expect(health.errors).toHaveProperty('recent')
     })
 
+    it('§9.2 — health agentBackend defaults to disconnected when getAgentBackendStatus not provided', () => {
+      const health = system.getHealth()
+      expect(health.connection.agentBackend).toBe('disconnected')
+    })
+
+    it('§9.2 — health agentBackend uses getAgentBackendStatus when provided', () => {
+      system.dispose()
+      const customSystem = createSystemModule(bus, dataDir, {
+        getAgentBackendStatus: () => 'connected'
+      })
+      const health = customSystem.getHealth()
+      expect(health.connection.agentBackend).toBe('connected')
+      customSystem.dispose()
+    })
+
     it('§9.2 — aggregates module status() functions for health data', () => {
       system.registerModule({ name: 'orgs', status: 'healthy', subscribes: [], publishes: ['org.created'] })
       system.registerModule({ name: 'threads', status: 'degraded', subscribes: ['org.*'], publishes: [] })
