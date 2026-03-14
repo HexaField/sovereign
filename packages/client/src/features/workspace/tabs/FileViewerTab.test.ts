@@ -14,7 +14,7 @@ describe('FileViewerTab', () => {
       const { getFileIcon } = await import('./FileViewerTab.tsx')
       // Component renders file content in a <pre> with <table> layout
       // Syntax highlighting is deferred — renders plain text initially
-      expect(getFileIcon('main.ts')).toBe('🟦')
+      expect(getFileIcon('main.ts')).toBe('TS')
     })
 
     it('§3.4.1 — fetches file content from GET /api/files?path=:path&project=:projectId', async () => {
@@ -50,9 +50,9 @@ describe('FileViewerTab', () => {
     it('§3.4.1 — tab title shows filename with file-type icon', async () => {
       const { getFileIcon, getFilename } = await import('./FileViewerTab.tsx')
       expect(getFilename('/foo/bar/baz.tsx')).toBe('baz.tsx')
-      expect(getFileIcon('baz.tsx')).toBe('⚛️')
-      expect(getFileIcon('main.rs')).toBe('🦀')
-      expect(getFileIcon('unknown.xyz')).toBe('📄')
+      expect(getFileIcon('baz.tsx')).toBe('TX')
+      expect(getFileIcon('main.rs')).toBe('RS')
+      expect(getFileIcon('unknown.xyz')).toBe('--')
     })
 
     it('§3.4.1 — tab is closable', async () => {

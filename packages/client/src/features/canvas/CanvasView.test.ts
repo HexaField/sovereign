@@ -123,14 +123,14 @@ describe('CanvasView', () => {
     it('§4.3 — subscribes to global event stream via WS', () => {
       // Component opens WebSocket on mount — tested via integration
       // We verify event icon utility
-      expect(getEventIcon('issue.created')).toBe('📋')
+      expect(getEventIcon('issue.created')).toBe('list')
       expect(getEventIcon('pr.merged')).toBe('🔀')
     })
 
     it('§4.3 — cross-workspace events animate line/particle between membranes', () => {
       // SVG <line> elements with stroke-dashoffset animation are rendered for cross-ws events
       // Animation uses stroke-dasharray="6,4" and animate element
-      expect(getEventIcon('sync.complete')).toBe('🔄')
+      expect(getEventIcon('sync.complete')).toBe('refresh')
     })
 
     it('§4.3 — single-workspace events cause membrane to pulse/glow', () => {
@@ -189,7 +189,7 @@ describe('CanvasView', () => {
 
     it('§4.5 — each event shows timestamp, workspace badge, event type icon, summary', () => {
       expect(formatEventTime(1700000000000)).toMatch(/\d/)
-      expect(getEventIcon('agent.started')).toBe('🤖')
+      expect(getEventIcon('agent.started')).toBe('bot')
       expect(getEventIcon('ci.run')).toBe('🔨')
     })
 
