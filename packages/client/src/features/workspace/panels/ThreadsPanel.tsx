@@ -96,19 +96,6 @@ const ThreadsPanel: Component = () => {
       </Show>
 
       <div class="flex-1 overflow-auto p-1">
-        {/* Always show main thread */}
-        <button
-          class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs transition-colors"
-          style={{
-            background: threadKey() === 'main' ? 'var(--c-accent)' : 'transparent',
-            color: threadKey() === 'main' ? '#fff' : 'var(--c-text)'
-          }}
-          onClick={() => switchThread('main')}
-        >
-          {statusDot('idle')}
-          <span class="flex-1 truncate font-medium">Main</span>
-        </button>
-
         <For each={threads()}>
           {(t: ThreadInfo) => (
             <button
