@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onCleanup, Show, Switch, Match, lazy, For, onMount } from 'solid-js'
+import { createSignal, createEffect, onCleanup, Show, Switch, Match, lazy, For, onMount, Suspense } from 'solid-js'
 import type { Component } from 'solid-js'
 import {
   FilesIcon,
@@ -114,35 +114,43 @@ const SidebarTabBar: Component = () => {
 const SidebarContent: Component = () => {
   return (
     <div class="flex-1 overflow-auto">
-      <Switch>
-        <Match when={activeSidebarTab() === 'files'}>
-          <FileExplorerPanel />
-        </Match>
-        <Match when={activeSidebarTab() === 'git'}>
-          <GitPanel />
-        </Match>
-        <Match when={activeSidebarTab() === 'threads'}>
-          <ThreadsPanel />
-        </Match>
-        <Match when={activeSidebarTab() === 'planning'}>
-          <PlanningPanel />
-        </Match>
-        <Match when={activeSidebarTab() === 'notifications'}>
-          <NotificationsPanel />
-        </Match>
-        <Match when={activeSidebarTab() === 'terminal'}>
-          <TerminalPanel />
-        </Match>
-        <Match when={activeSidebarTab() === 'recordings'}>
-          <RecordingsPanel />
-        </Match>
-        <Match when={activeSidebarTab() === 'meetings'}>
-          <MeetingsPanel />
-        </Match>
-        <Match when={activeSidebarTab() === 'logs'}>
-          <LogsPanel />
-        </Match>
-      </Switch>
+      <Suspense
+        fallback={
+          <p class="p-2 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+            Loading...
+          </p>
+        }
+      >
+        <Switch>
+          <Match when={activeSidebarTab() === 'files'}>
+            <FileExplorerPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'git'}>
+            <GitPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'threads'}>
+            <ThreadsPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'planning'}>
+            <PlanningPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'notifications'}>
+            <NotificationsPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'terminal'}>
+            <TerminalPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'recordings'}>
+            <RecordingsPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'meetings'}>
+            <MeetingsPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'logs'}>
+            <LogsPanel />
+          </Match>
+        </Switch>
+      </Suspense>
     </div>
   )
 }
@@ -202,7 +210,15 @@ const MainContentArea: Component = () => {
           }
         >
           {(tab) => (
-            <FileViewerTab path={tab().path} projectId={tab().projectId} onClose={() => closeFileTab(tab().id)} />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading file...
+                </p>
+              }
+            >
+              <FileViewerTab path={tab().path} projectId={tab().projectId} onClose={() => closeFileTab(tab().id)} />
+            </Suspense>
           )}
         </Show>
       </div>

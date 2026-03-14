@@ -42,19 +42,37 @@ const GitPanel: Component = () => {
     const projectId = ws()?.activeProjectId
     if (!orgId || !projectId) {
       setStatus(null)
+      setLoading(false)
       return
     }
     setLoading(true)
     setError(false)
-    fetchGitStatus(orgId, projectId)
-      .then((data) => {
-        setStatus(data)
+    // Use void to fire-and-forget the async work
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/git/status?orgId=${encodeURIComponent(orgId)}&projectId=${encodeURIComponent(projectId)}`
+        )
+        if (!res.ok) {
+          setError(true)
+          setLoading(false)
+          return
+        }
+        const data = await res.json()
+        setStatus({
+          branch: data.branch ?? 'unknown',
+          ahead: data.ahead ?? 0,
+          behind: data.behind ?? 0,
+          staged: (data.staged ?? []).map((f: any) => (typeof f === 'string' ? f : f.path)),
+          unstaged: (data.modified ?? data.unstaged ?? []).map((f: any) => (typeof f === 'string' ? f : f.path)),
+          untracked: (data.untracked ?? []).map((f: any) => (typeof f === 'string' ? f : f.path))
+        })
         setLoading(false)
-      })
-      .catch(() => {
+      } catch {
         setError(true)
         setLoading(false)
-      })
+      }
+    })()
   })
 
   return (
