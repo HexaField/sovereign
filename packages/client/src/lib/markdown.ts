@@ -16,7 +16,7 @@ renderer.image = ({ href, text }) => {
   return `<img src="${href ?? ''}" alt="${text ?? ''}" style="max-width: 100%; border-radius: 0.375rem;" />`
 }
 
-marked.setOptions({ renderer })
+marked.setOptions({ renderer, breaks: true, gfm: true })
 
 /**
  * Convert markdown text to HTML.
