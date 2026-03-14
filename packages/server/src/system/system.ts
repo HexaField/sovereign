@@ -128,7 +128,7 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
     const totalMem = os.totalmem()
     return {
       connection: {
-        wsStatus: '0 clients',
+        wsStatus: `${wsHandler?.getConnectedDevices().length ?? 0} clients`,
         agentBackend: options?.getAgentBackendStatus?.() ?? 'disconnected',
         uptime: Math.floor(uptimeMs / 1000)
       },
