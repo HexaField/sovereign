@@ -137,7 +137,6 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.stream', (msg: any) => {
-      console.log('[chat-store] chat.stream, threadKey:', msg.threadKey, 'text:', msg.text?.substring(0, 50))
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       streamingRawText += msg.text
       setStreamingHtml(renderMarkdown(streamingRawText))
@@ -146,7 +145,6 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.turn', (msg: any) => {
-      console.log('[chat-store] chat.turn, threadKey:', msg.threadKey, 'role:', msg.turn?.role)
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
       // Replace optimistic pending turn if present
@@ -201,17 +199,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
-      console.log(
-        '[chat-store] session.info received, threadKey:',
-        msg.threadKey,
-        'current:',
-        _threadKey(),
-        'historyLen:',
-        msg.history?.length
-      )
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
-      console.log('[chat-store] setting turns, count:', history.length, 'sample:', history[0])
       // Merge persisted pending turns, deduplicating by content
       const persisted = loadPendingTurns(_threadKey())
       const merged = [...history]
