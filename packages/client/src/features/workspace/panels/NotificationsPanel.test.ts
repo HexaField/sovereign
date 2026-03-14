@@ -65,4 +65,11 @@ describe('NotificationsPanel', () => {
       expect(true).toBe(true)
     })
   })
+
+  describe('Phase 7 enhancements', () => {
+    it.todo('fetches notifications from /api/notifications')
+    it.todo('toggle between All and By Entity views')
+    it.todo('unread badge count on sidebar tab')
+    it.todo('WS subscription for real-time updates')
+  })
 })

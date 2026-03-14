@@ -121,4 +121,22 @@ describe('Logs WS Channel', () => {
       }
     })
   })
+
+  describe('log persistence', () => {
+    it.todo('writes daily JSONL files')
+    it.todo('rotates by day')
+  })
+
+  describe('GET /api/system/logs', () => {
+    it.todo('returns entries with pagination')
+    it.todo('filters by level')
+    it.todo('filters by module')
+    it.todo('filters by since timestamp')
+  })
+
+  describe('LogEntry extended fields', () => {
+    it.todo('supports optional entityId field')
+    it.todo('supports optional threadKey field')
+    it.todo('supports optional metadata field')
+  })
 })
