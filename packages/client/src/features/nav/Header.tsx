@@ -29,6 +29,7 @@ import {
   type PlanningViewMode
 } from '../planning/store.js'
 import { activeWorkspace } from '../workspace/store.js'
+import { threadKey, switchThread, threads } from '../threads/store.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -90,6 +91,14 @@ function DashboardHeaderContent() {
 
 function WorkspaceHeaderContent() {
   const ws = () => activeWorkspace()
+  const [threadPickerOpen, setThreadPickerOpen] = createSignal(false)
+
+  const activeThreadLabel = () => {
+    const key = threadKey()
+    const t = threads().find((th) => th.key === key)
+    return t?.label ?? t?.key ?? key
+  }
+
   return (
     <div class="flex items-center gap-1.5 text-sm">
       <span class="font-semibold" style={{ color: 'var(--c-text-heading)' }}>
@@ -99,6 +108,53 @@ function WorkspaceHeaderContent() {
         <span style={{ color: 'var(--c-text-muted)' }}>/</span>
         <span style={{ color: 'var(--c-text)' }}>{ws()!.activeProjectName}</span>
       </Show>
+      <span style={{ color: 'var(--c-text-muted)' }}>/</span>
+      <div class="relative">
+        <button
+          class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-medium transition-colors"
+          style={{ color: 'var(--c-accent)' }}
+          onClick={() => setThreadPickerOpen(!threadPickerOpen())}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          {activeThreadLabel()}
+          <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+            ▾
+          </span>
+        </button>
+        <Show when={threadPickerOpen()}>
+          <div class="fixed inset-0 z-[199]" onClick={() => setThreadPickerOpen(false)} />
+          <div
+            class="absolute top-full left-0 z-[200] mt-1 min-w-[160px] overflow-hidden rounded-lg shadow-lg"
+            style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
+          >
+            <For each={threads().filter((t) => t.key)}>
+              {(t) => (
+                <button
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors"
+                  style={{
+                    color: t.key === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
+                    background: t.key === threadKey() ? 'var(--c-hover-bg)' : undefined
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = t.key === threadKey() ? 'var(--c-hover-bg)' : '')
+                  }
+                  onClick={() => {
+                    switchThread(t.key)
+                    setThreadPickerOpen(false)
+                  }}
+                >
+                  <Show when={t.key === threadKey()}>
+                    <span class="text-xs">●</span>
+                  </Show>
+                  <span>{t.label ?? t.key}</span>
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
     </div>
   )
 }
