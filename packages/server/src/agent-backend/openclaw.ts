@@ -245,7 +245,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         } else if (phase === 'end' || phase === 'error') {
           if (phase === 'error') {
             const reason = data.error || data.reason || data.stopReason || ''
-            emitter.emit('chat.error', { sessionKey, error: reason || 'Agent error', retryAfterMs: undefined })
+            emitter.emit('chat.error', { sessionKey, error: reason || 'Agent error', retryAfterMs: data.retryAfterMs })
           }
           state.agentStatus = 'idle'
           emitter.emit('chat.status', { sessionKey, status: 'idle' })
