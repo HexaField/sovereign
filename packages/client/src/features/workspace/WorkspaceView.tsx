@@ -24,9 +24,20 @@ import {
   activeThreadKey,
   setActiveThreadKey,
   sidebarCollapsed,
+  setSidebarCollapsed,
+  sidebarWidth,
+  setSidebarWidth,
+  chatCollapsed,
+  setChatCollapsed,
   SIDEBAR_TABS,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_SNAP_THRESHOLD,
+  CHAT_PANEL_DEFAULT_WIDTH,
   CHAT_PANEL_MIN_WIDTH,
   CHAT_PANEL_MAX_WIDTH,
+  CHAT_SNAP_THRESHOLD,
   activeMobileTab,
   setActiveMobileTab,
   swipeMobileTab,
@@ -231,38 +242,139 @@ const MainContentArea: Component = () => {
   )
 }
 
+// Generic resize handle hook
+function createResizeHandle(opts: {
+  getWidth: () => number
+  setWidth: (w: number) => void
+  minWidth: number
+  maxWidth: number
+  defaultWidth: number
+  snapThreshold: number
+  collapsed: () => boolean
+  setCollapsed: (v: boolean) => void
+  side: 'left' | 'right'
+}) {
+  const [dragging, setDragging] = createSignal(false)
+  const [hovered, setHovered] = createSignal(false)
+
+  const onMouseDown = (e: MouseEvent) => {
+    e.preventDefault()
+    setDragging(true)
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+
+    const onMouseMove = (e: MouseEvent) => {
+      const rawWidth = opts.side === 'right' ? window.innerWidth - e.clientX : e.clientX
+
+      if (opts.collapsed()) {
+        // Snap open if dragged past threshold
+        if (rawWidth > opts.snapThreshold) {
+          opts.setCollapsed(false)
+          opts.setWidth(opts.defaultWidth)
+        }
+      } else {
+        // Snap closed if below threshold
+        if (rawWidth < opts.snapThreshold) {
+          opts.setCollapsed(true)
+          opts.setWidth(0)
+        } else {
+          opts.setWidth(Math.max(opts.minWidth, Math.min(opts.maxWidth, rawWidth)))
+        }
+      }
+    }
+
+    const onMouseUp = () => {
+      setDragging(false)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }
+
+  return { dragging, hovered, setHovered, onMouseDown }
+}
+
+// Resize divider component
+const ResizeDivider: Component<{
+  dragging: boolean
+  hovered: boolean
+  onMouseDown: (e: MouseEvent) => void
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}> = (props) => {
+  return (
+    <div
+      style={{
+        width: '4px',
+        cursor: 'col-resize',
+        background: props.dragging
+          ? 'var(--c-accent)'
+          : props.hovered
+            ? 'color-mix(in srgb, var(--c-accent) 40%, transparent)'
+            : 'var(--c-border)',
+        transition: props.dragging ? 'none' : 'background 150ms ease',
+        'flex-shrink': '0'
+      }}
+      onMouseDown={props.onMouseDown}
+      onMouseEnter={props.onMouseEnter}
+      onMouseLeave={props.onMouseLeave}
+    />
+  )
+}
+
+// Small toggle button to reopen a collapsed panel
+const ReopenButton: Component<{ side: 'left' | 'right'; onClick: () => void }> = (props) => {
+  return (
+    <button
+      style={{
+        position: 'absolute',
+        top: '50%',
+        transform: 'translateY(-50%)',
+        [props.side === 'left' ? 'left' : 'right']: '0',
+        width: '16px',
+        height: '48px',
+        background: 'var(--c-bg-raised)',
+        border: '1px solid var(--c-border)',
+        'border-radius': props.side === 'left' ? '0 4px 4px 0' : '4px 0 0 4px',
+        cursor: 'pointer',
+        display: 'flex',
+        'align-items': 'center',
+        'justify-content': 'center',
+        color: 'var(--c-text-muted)',
+        'font-size': '10px',
+        'z-index': '10',
+        padding: '0'
+      }}
+      onClick={props.onClick}
+      title={props.side === 'left' ? 'Show sidebar' : 'Show chat'}
+    >
+      {props.side === 'left' ? '›' : '‹'}
+    </button>
+  )
+}
+
 // §3.5 — Right Panel Chat (now functional)
 const ChatPanel: Component = () => {
-  const [dragging, setDragging] = createSignal(false)
-
   // Init chat store for the active thread
   onMount(() => {
     const cleanup = initChatStore(threadKey, wsStore)
     onCleanup(() => cleanup?.())
   })
 
-  const onMouseDown = (e: MouseEvent) => {
-    e.preventDefault()
-    setDragging(true)
-  }
-
-  const onMouseMove = (e: MouseEvent) => {
-    if (!dragging()) return
-    const newWidth = window.innerWidth - e.clientX
-    setChatPanelWidth(Math.max(CHAT_PANEL_MIN_WIDTH, Math.min(CHAT_PANEL_MAX_WIDTH, newWidth)))
-  }
-
-  const onMouseUp = () => setDragging(false)
-
-  createEffect(() => {
-    if (dragging()) {
-      document.addEventListener('mousemove', onMouseMove)
-      document.addEventListener('mouseup', onMouseUp)
-    }
-    onCleanup(() => {
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    })
+  const resize = createResizeHandle({
+    getWidth: chatPanelWidth,
+    setWidth: setChatPanelWidth,
+    minWidth: CHAT_PANEL_MIN_WIDTH,
+    maxWidth: CHAT_PANEL_MAX_WIDTH,
+    defaultWidth: CHAT_PANEL_DEFAULT_WIDTH,
+    snapThreshold: CHAT_SNAP_THRESHOLD,
+    collapsed: chatCollapsed,
+    setCollapsed: setChatCollapsed,
+    side: 'right'
   })
 
   // Build messages from turns
@@ -275,77 +387,85 @@ const ChatPanel: Component = () => {
   return (
     <>
       {/* Resize divider */}
-      <div
-        class="w-1 cursor-col-resize transition-colors hover:bg-blue-500/30"
-        style={{ background: dragging() ? 'var(--c-accent)' : 'var(--c-border)' }}
-        onMouseDown={onMouseDown}
+      <ResizeDivider
+        dragging={resize.dragging()}
+        hovered={resize.hovered()}
+        onMouseDown={resize.onMouseDown}
+        onMouseEnter={() => resize.setHovered(true)}
+        onMouseLeave={() => resize.setHovered(false)}
       />
-      <div
-        class="flex h-full flex-col overflow-hidden"
-        style={{
-          width: `${chatPanelWidth()}px`,
-          'min-width': `${CHAT_PANEL_MIN_WIDTH}px`,
-          'max-width': `${CHAT_PANEL_MAX_WIDTH}px`
-        }}
-      >
-        {/* Chat panel header with thread info */}
-        <div class="flex items-center justify-between border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
-          <div class="flex min-w-0 flex-1 items-center gap-2">
-            <span class="truncate text-sm font-medium" style={{ color: 'var(--c-text-heading)' }}>
-              {threadKey()}
-            </span>
-            <Show when={agentStatus() === 'working' || agentStatus() === 'thinking'}>
-              <span
-                class="flex h-[18px] min-w-[18px] shrink-0 animate-pulse items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
-                style={{ background: '#f59e0b' }}
-              >
-                {agentStatus() === 'thinking' ? 'thinking' : '...'}
+      <Show when={!chatCollapsed()}>
+        <div
+          class="flex h-full flex-col overflow-hidden"
+          style={{
+            width: `${chatPanelWidth()}px`,
+            'min-width': `${CHAT_PANEL_MIN_WIDTH}px`,
+            'max-width': `${CHAT_PANEL_MAX_WIDTH}px`,
+            transition: resize.dragging() ? 'none' : 'width 200ms ease'
+          }}
+        >
+          {/* Chat panel header with thread info */}
+          <div
+            class="flex items-center justify-between border-b px-3 py-2"
+            style={{ 'border-color': 'var(--c-border)' }}
+          >
+            <div class="flex min-w-0 flex-1 items-center gap-2">
+              <span class="truncate text-sm font-medium" style={{ color: 'var(--c-text-heading)' }}>
+                {threadKey()}
               </span>
-            </Show>
+              <Show when={agentStatus() === 'working' || agentStatus() === 'thinking'}>
+                <span
+                  class="flex h-[18px] min-w-[18px] shrink-0 animate-pulse items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+                  style={{ background: '#f59e0b' }}
+                >
+                  {agentStatus() === 'thinking' ? 'thinking' : '...'}
+                </span>
+              </Show>
+            </div>
+            <div class="flex items-center gap-1">
+              {/* Thread selector dropdown */}
+              <select
+                class="rounded border px-1.5 py-0.5 text-[11px]"
+                style={{
+                  background: 'var(--c-bg)',
+                  'border-color': 'var(--c-border)',
+                  color: 'var(--c-text)'
+                }}
+                value={threadKey()}
+                onChange={(e) => switchThread(e.currentTarget.value)}
+              >
+                <option value="main">main</option>
+                <For each={threads()}>{(t) => <option value={t.key}>{t.label ?? t.key}</option>}</For>
+              </select>
+              <button
+                class="rounded p-1 text-sm transition-colors hover:bg-white/10"
+                onClick={toggleChatExpanded}
+                title="Expand chat (Cmd+Shift+E)"
+              >
+                <ExpandIcon class="h-4 w-4" />
+              </button>
+            </div>
           </div>
-          <div class="flex items-center gap-1">
-            {/* Thread selector dropdown */}
-            <select
-              class="rounded border px-1.5 py-0.5 text-[11px]"
-              style={{
-                background: 'var(--c-bg)',
-                'border-color': 'var(--c-border)',
-                color: 'var(--c-text)'
-              }}
-              value={threadKey()}
-              onChange={(e) => switchThread(e.currentTarget.value)}
-            >
-              <option value="main">main</option>
-              <For each={threads()}>{(t) => <option value={t.key}>{t.label ?? t.key}</option>}</For>
-            </select>
-            <button
-              class="rounded p-1 text-sm transition-colors hover:bg-white/10"
-              onClick={toggleChatExpanded}
-              title="Expand chat (Cmd+Shift+E)"
-            >
-              <ExpandIcon class="h-4 w-4" />
-            </button>
-          </div>
+
+          {/* Chat messages */}
+          <ChatView
+            messages={messages()}
+            streamingHtml={streamingHtml()}
+            agentStatus={agentStatus()}
+            liveWork={liveWork()}
+            liveThinkingText={liveThinkingText()}
+            compacting={compacting()}
+            isRetryCountdownActive={isRetryCountdownActive()}
+            retryCountdownSeconds={retryCountdownSeconds()}
+            onSend={sendMessage}
+            onAbort={abortChat}
+            threadKey={threadKey()}
+          />
+
+          {/* Input area */}
+          <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
         </div>
-
-        {/* Chat messages */}
-        <ChatView
-          messages={messages()}
-          streamingHtml={streamingHtml()}
-          agentStatus={agentStatus()}
-          liveWork={liveWork()}
-          liveThinkingText={liveThinkingText()}
-          compacting={compacting()}
-          isRetryCountdownActive={isRetryCountdownActive()}
-          retryCountdownSeconds={retryCountdownSeconds()}
-          onSend={sendMessage}
-          onAbort={abortChat}
-          threadKey={threadKey()}
-        />
-
-        {/* Input area */}
-        <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
-      </div>
+      </Show>
     </>
   )
 }
@@ -599,10 +719,19 @@ const MobileWorkspace: Component = () => {
 }
 
 // Main Workspace View
-// Uses a single component tree with CSS-based responsive layout.
-// Mobile (<768px): full-screen swipeable tabs via MobileWorkspace
-// Desktop (≥768px): 3-column sidebar + main + chat
 const WorkspaceView: Component = () => {
+  const sidebarResize = createResizeHandle({
+    getWidth: sidebarWidth,
+    setWidth: setSidebarWidth,
+    minWidth: SIDEBAR_MIN_WIDTH,
+    maxWidth: SIDEBAR_MAX_WIDTH,
+    defaultWidth: SIDEBAR_DEFAULT_WIDTH,
+    snapThreshold: SIDEBAR_SNAP_THRESHOLD,
+    collapsed: sidebarCollapsed,
+    setCollapsed: setSidebarCollapsed,
+    side: 'left'
+  })
+
   const handleKeydown = (e: KeyboardEvent) => {
     // Only register keyboard shortcuts on desktop
     if (window.innerWidth < 768) return
@@ -635,16 +764,30 @@ const WorkspaceView: Component = () => {
         {chatExpanded() ? (
           <ExpandedChatView />
         ) : (
-          <div class="flex flex-1 overflow-hidden">
+          <div class="relative flex flex-1 overflow-hidden">
+            {/* Sidebar reopen button */}
+            <Show when={sidebarCollapsed()}>
+              <ReopenButton
+                side="left"
+                onClick={() => {
+                  setSidebarCollapsed(false)
+                  setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)
+                }}
+              />
+            </Show>
+
             {/* §3.1 — Sidebar */}
             <Show when={!sidebarCollapsed()}>
               <div
                 class="flex flex-col border-r"
                 style={{
-                  width: '260px',
-                  'min-width': '260px',
+                  width: `${sidebarWidth()}px`,
+                  'min-width': `${SIDEBAR_MIN_WIDTH}px`,
+                  'max-width': `${SIDEBAR_MAX_WIDTH}px`,
                   'border-color': 'var(--c-border)',
-                  background: 'var(--c-bg-raised)'
+                  background: 'var(--c-bg-raised)',
+                  transition: sidebarResize.dragging() ? 'none' : 'width 200ms ease',
+                  'flex-shrink': '0'
                 }}
               >
                 <SidebarTabBar />
@@ -652,11 +795,31 @@ const WorkspaceView: Component = () => {
               </div>
             </Show>
 
+            {/* Sidebar resize divider */}
+            <ResizeDivider
+              dragging={sidebarResize.dragging()}
+              hovered={sidebarResize.hovered()}
+              onMouseDown={sidebarResize.onMouseDown}
+              onMouseEnter={() => sidebarResize.setHovered(true)}
+              onMouseLeave={() => sidebarResize.setHovered(false)}
+            />
+
             {/* §3.1 — Main Content with file tabs */}
             <MainContentArea />
 
             {/* §3.5 — Right Panel Chat */}
             <ChatPanel />
+
+            {/* Chat reopen button */}
+            <Show when={chatCollapsed()}>
+              <ReopenButton
+                side="right"
+                onClick={() => {
+                  setChatCollapsed(false)
+                  setChatPanelWidth(CHAT_PANEL_DEFAULT_WIDTH)
+                }}
+              />
+            </Show>
           </div>
         )}
       </div>
