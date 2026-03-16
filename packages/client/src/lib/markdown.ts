@@ -25,53 +25,65 @@ marked.setOptions({ renderer, breaks: true, gfm: true })
  */
 export function renderMarkdown(text: string): string {
   try {
-    return marked.parse(text, { async: false }) as string
+    let html = marked.parse(text, { async: false }) as string
+    html = injectFileChips(html)
+    return html
   } catch {
     return escapeHtml(text)
   }
 }
 
+/** Inject clickable file chips for absolute file paths in rendered HTML.
+ *  Skips paths already inside tags or code blocks. */
+function injectFileChips(html: string): string {
+  // Match absolute paths that look like files (have an extension)
+  const pathRe = /(\/[\w.+-]+(?:\/[\w.+-]+)*\.\w{1,10})/g
+  // Split on HTML tags to avoid replacing inside tag attributes
+  return html
+    .split(/(<[^>]+>)/g)
+    .map((part) => {
+      if (part.startsWith('<')) return part
+      return part.replace(pathRe, (_match, path) => {
+        const name = path.split('/').pop() || path
+        return `<span class="file-chip" data-file-path="${path}" title="${path}">📄 ${name}<button class="file-chip-copy" data-copy-path="${path}" title="Copy path">⧉</button></span>`
+      })
+    })
+    .join('')
+}
+
+/** Force refresh of workspace file cache (called after final turns) */
+export function refreshWorkspaceFiles(): void {
+  // Placeholder for future workspace file cache integration
+}
+
 /**
  * Strip thinking blocks from message content.
- * Removes:
- *   - <details class="thinking">...</details>
- *   - <antThinking>...</antThinking>
- *   - <thinking>...</thinking>
- *   - <think>...</think>
- *   - <thought>...</thought>
- * Protects code blocks (``` ... ```) from false matches.
+ * Removes tags AND content between them, plus unclosed blocks.
+ * Protects all backtick patterns (inline code and code blocks) from false matches.
  */
 export function stripThinkingBlocks(text: string): string {
   if (!text) return text
 
-  // Extract code blocks to protect them from replacement
-  const codeBlocks: string[] = []
-  const placeholder = '\x00CB'
-  let protected_ = text.replace(/```[\s\S]*?```/g, (match) => {
-    codeBlocks.push(match)
-    return `${placeholder}${codeBlocks.length - 1}${placeholder}`
+  // Protect all code blocks and inline code from being matched
+  const codeSlots: string[] = []
+  let protected_ = text.replace(/(`{1,})([\s\S]*?)\1/g, (m) => {
+    codeSlots.push(m)
+    return `\x00CODE${codeSlots.length - 1}\x00`
   })
 
-  // Remove thinking block patterns (including unclosed blocks at end of streaming)
+  // Strip complete blocks (content between open and close tags)
+  protected_ = protected_.replace(/<(think(?:ing)?|thought|antthinking)[^>]*>[\s\S]*?<\/\1>/gi, '')
   protected_ = protected_.replace(/<details\s+class="thinking">[\s\S]*?<\/details>/gi, '')
-  protected_ = protected_.replace(/<antThinking>[\s\S]*?<\/antThinking>/gi, '')
-  protected_ = protected_.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-  protected_ = protected_.replace(/<think>[\s\S]*?<\/think>/gi, '')
-  protected_ = protected_.replace(/<thought>[\s\S]*?<\/thought>/gi, '')
 
-  // Remove unclosed thinking blocks (streaming mid-thought)
+  // Strip unclosed blocks (tag opened but not yet closed — streaming mid-thought)
+  protected_ = protected_.replace(/<(?:think(?:ing)?|thought|antthinking)[^>]*>[\s\S]*$/gi, '')
   protected_ = protected_.replace(/<details\s+class="thinking">[\s\S]*$/gi, '')
-  protected_ = protected_.replace(/<antThinking>[\s\S]*$/gi, '')
-  protected_ = protected_.replace(/<thinking>[\s\S]*$/gi, '')
-  protected_ = protected_.replace(/<think>[\s\S]*$/gi, '')
-  protected_ = protected_.replace(/<thought>[\s\S]*$/gi, '')
+
+  // Strip orphaned closing tags
+  protected_ = protected_.replace(/<\/(?:think(?:ing)?|thought|antthinking)[^>]*>/gi, '')
 
   // Restore code blocks
-  for (let i = 0; i < codeBlocks.length; i++) {
-    protected_ = protected_.replace(`${placeholder}${i}${placeholder}`, codeBlocks[i])
-  }
-
-  return protected_.trim()
+  return protected_.replace(/\x00CODE(\d+)\x00/g, (_, i) => codeSlots[Number(i)]).trim()
 }
 
 export function escapeHtml(text: string): string {
