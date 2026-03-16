@@ -132,9 +132,11 @@ describe('§3.2 Chat Store', () => {
 
   it('MUST subscribe to chat WS channel for chat.stream messages', () => {
     ws._emit('chat.stream', { type: 'chat.stream', text: 'hello ' })
-    expect(streamingHtml()).toBe('hello ')
+    // streamingHtml() now returns markdown-rendered HTML
+    expect(streamingHtml()).toContain('hello')
     ws._emit('chat.stream', { type: 'chat.stream', text: 'world' })
-    expect(streamingHtml()).toBe('hello world')
+    expect(streamingHtml()).toContain('hello')
+    expect(streamingHtml()).toContain('world')
   })
 
   it('MUST subscribe to chat WS channel for chat.turn messages', () => {
