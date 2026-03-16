@@ -79,6 +79,7 @@ beforeEach(() => {
   mockFetch.mockReset()
   setThreadKey('main')
   setThreads([])
+  setActiveOrgIdForThreads('_global')
   ;(globalThis as any).location = { hash: '', pathname: '/' }
   vi.mocked(history.pushState).mockClear()
   vi.stubGlobal('fetch', mockFetch)
@@ -193,6 +194,7 @@ describe('initThreadStore', () => {
   })
 
   it('fetches threads on init', () => {
+    setActiveOrgIdForThreads('_global')
     mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
     const cleanup = initThreadStore()
     expect(mockFetch).toHaveBeenCalledWith('/api/threads?orgId=_global')
