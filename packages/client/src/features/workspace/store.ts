@@ -151,8 +151,48 @@ export function closeFileTab(id: string): void {
   })
 }
 
-// §3.1 — Sidebar collapsed state
-export const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
+// §3.1 — Sidebar width and collapsed state
+export const SIDEBAR_DEFAULT_WIDTH = 260
+export const SIDEBAR_MIN_WIDTH = 180
+export const SIDEBAR_MAX_WIDTH = 400
+export const SIDEBAR_SNAP_THRESHOLD = 100
+
+export const CHAT_SNAP_THRESHOLD = 140
+
+function loadBool(key: string, fallback: boolean): boolean {
+  if (typeof localStorage === 'undefined') return fallback
+  try {
+    const v = localStorage.getItem(key)
+    if (v === 'true') return true
+    if (v === 'false') return false
+  } catch {
+    /* ignore */
+  }
+  return fallback
+}
+
+function saveBool(key: string, val: boolean): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(key, String(val))
+  } catch {
+    /* ignore */
+  }
+}
+
+export const [sidebarCollapsed, _setSidebarCollapsed] = createSignal(loadBool('sovereign:sidebar-collapsed', false))
+export const [chatCollapsed, _setChatCollapsed] = createSignal(loadBool('sovereign:chat-collapsed', false))
+export const [sidebarWidth, setSidebarWidth] = createSignal(SIDEBAR_DEFAULT_WIDTH)
+
+export function setSidebarCollapsed(v: boolean): void {
+  _setSidebarCollapsed(v)
+  saveBool('sovereign:sidebar-collapsed', v)
+}
+
+export function setChatCollapsed(v: boolean): void {
+  _setChatCollapsed(v)
+  saveBool('sovereign:chat-collapsed', v)
+}
 
 export function toggleSidebar(): void {
   setSidebarCollapsed(!sidebarCollapsed())
