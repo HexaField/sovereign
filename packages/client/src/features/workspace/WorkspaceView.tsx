@@ -180,7 +180,12 @@ const MainContentArea: Component = () => {
                 }}
                 onClick={() => setActiveFileTabId(tab.id)}
               >
-                <span class="max-w-[120px] truncate">{tab.label}</span>
+                <span class="max-w-[200px] truncate" title={tab.path}>
+                  <span style={{ color: 'var(--c-text-muted)', 'font-size': '0.65rem' }}>
+                    {tab.path.split('/').slice(0, -1).join('/') ? tab.path.split('/').slice(0, -1).join('/') + '/' : ''}
+                  </span>
+                  {tab.label}
+                </span>
                 <button
                   class="ml-1 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
                   style={{ color: 'var(--c-text-muted)' }}
@@ -392,6 +397,65 @@ const ExpandedChatView: Component = () => {
   )
 }
 
+// §7.3 — Mobile Chat Panel (full-screen chat for mobile)
+const MobileChatPanel: Component = () => {
+  onMount(() => {
+    const cleanup = initChatStore(threadKey, wsStore)
+    onCleanup(() => cleanup?.())
+  })
+
+  const messages = (): ChatMessage[] =>
+    turns().map((t) => ({
+      turn: t,
+      pending: t.pending
+    }))
+
+  return (
+    <div class="flex h-full flex-col">
+      {/* Thread selector */}
+      <div class="flex items-center gap-2 border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
+        <select
+          class="flex-1 rounded border px-2 py-1 text-xs"
+          style={{
+            background: 'var(--c-bg)',
+            'border-color': 'var(--c-border)',
+            color: 'var(--c-text)'
+          }}
+          value={threadKey()}
+          onChange={(e) => switchThread(e.currentTarget.value)}
+        >
+          <option value="main">main</option>
+          <For each={threads()}>{(t) => <option value={t.key}>{t.label ?? t.key}</option>}</For>
+        </select>
+        <Show when={agentStatus() === 'working' || agentStatus() === 'thinking'}>
+          <span
+            class="flex h-[18px] min-w-[18px] shrink-0 animate-pulse items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+            style={{ background: '#f59e0b' }}
+          >
+            {agentStatus() === 'thinking' ? 'thinking' : '...'}
+          </span>
+        </Show>
+      </div>
+
+      <ChatView
+        messages={messages()}
+        streamingHtml={streamingHtml()}
+        agentStatus={agentStatus()}
+        liveWork={liveWork()}
+        liveThinkingText={liveThinkingText()}
+        compacting={compacting()}
+        isRetryCountdownActive={isRetryCountdownActive()}
+        retryCountdownSeconds={retryCountdownSeconds()}
+        onSend={sendMessage}
+        onAbort={abortChat}
+        threadKey={threadKey()}
+      />
+
+      <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+    </div>
+  )
+}
+
 // §7.3 — Mobile Workspace with swipeable tab strip
 const MobileWorkspace: Component = () => {
   const [dropdownOpen, setDropdownOpen] = createSignal(false)
@@ -478,14 +542,31 @@ const MobileWorkspace: Component = () => {
             <FileExplorerPanel />
           </Match>
           <Match when={activeMobileTab() === 'file-viewer'}>
-            <div class="p-4 text-sm" style={{ color: 'var(--c-text-muted)' }}>
-              File Viewer
-            </div>
+            <Show
+              when={activeFileTabId() && openFileTabs().find((t) => t.id === activeFileTabId())}
+              fallback={
+                <div class="flex h-full items-center justify-center">
+                  <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
+                    Select a file from the Files tab
+                  </p>
+                </div>
+              }
+            >
+              {(tab) => (
+                <Suspense
+                  fallback={
+                    <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                      Loading file...
+                    </p>
+                  }
+                >
+                  <FileViewerTab path={tab().path} projectId={tab().projectId} onClose={() => closeFileTab(tab().id)} />
+                </Suspense>
+              )}
+            </Show>
           </Match>
           <Match when={activeMobileTab() === 'chat'}>
-            <div class="p-4 text-sm" style={{ color: 'var(--c-text-muted)' }}>
-              Chat: {activeThreadKey()}
-            </div>
+            <MobileChatPanel />
           </Match>
           <Match when={activeMobileTab() === 'git'}>
             <GitPanel />
@@ -518,17 +599,13 @@ const MobileWorkspace: Component = () => {
 }
 
 // Main Workspace View
+// Uses a single component tree with CSS-based responsive layout.
+// Mobile (<768px): full-screen swipeable tabs via MobileWorkspace
+// Desktop (≥768px): 3-column sidebar + main + chat
 const WorkspaceView: Component = () => {
-  const [isMobile, setIsMobile] = createSignal(isMobileWidth())
-
-  createEffect(() => {
-    if (typeof window === 'undefined') return
-    const onResize = () => setIsMobile(window.innerWidth < 768)
-    window.addEventListener('resize', onResize)
-    onCleanup(() => window.removeEventListener('resize', onResize))
-  })
-
   const handleKeydown = (e: KeyboardEvent) => {
+    // Only register keyboard shortcuts on desktop
+    if (window.innerWidth < 768) return
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
       e.preventDefault()
       toggleChatExpanded()
@@ -548,33 +625,41 @@ const WorkspaceView: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
-      {chatExpanded() ? (
-        <ExpandedChatView />
-      ) : (
-        <div class="flex flex-1 overflow-hidden">
-          {/* §3.1 — Sidebar */}
-          <Show when={!sidebarCollapsed()}>
-            <div
-              class="flex flex-col border-r"
-              style={{
-                width: '260px',
-                'min-width': '260px',
-                'border-color': 'var(--c-border)',
-                background: 'var(--c-bg-raised)'
-              }}
-            >
-              <SidebarTabBar />
-              <SidebarContent />
-            </div>
-          </Show>
+      {/* Mobile layout — visible only below 768px */}
+      <div class="flex h-full flex-col md:hidden">
+        <MobileWorkspace />
+      </div>
 
-          {/* §3.1 — Main Content with file tabs */}
-          <MainContentArea />
+      {/* Desktop layout — visible only at 768px and above */}
+      <div class="hidden h-full md:flex md:flex-col">
+        {chatExpanded() ? (
+          <ExpandedChatView />
+        ) : (
+          <div class="flex flex-1 overflow-hidden">
+            {/* §3.1 — Sidebar */}
+            <Show when={!sidebarCollapsed()}>
+              <div
+                class="flex flex-col border-r"
+                style={{
+                  width: '260px',
+                  'min-width': '260px',
+                  'border-color': 'var(--c-border)',
+                  background: 'var(--c-bg-raised)'
+                }}
+              >
+                <SidebarTabBar />
+                <SidebarContent />
+              </div>
+            </Show>
 
-          {/* §3.5 — Right Panel Chat */}
-          <ChatPanel />
-        </div>
-      )}
+            {/* §3.1 — Main Content with file tabs */}
+            <MainContentArea />
+
+            {/* §3.5 — Right Panel Chat */}
+            <ChatPanel />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
