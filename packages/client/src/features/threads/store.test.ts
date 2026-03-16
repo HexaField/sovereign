@@ -1,19 +1,57 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Mock localStorage
+const store = new Map<string, string>()
+Object.defineProperty(globalThis, 'localStorage', {
+  value: {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => store.set(k, v),
+    removeItem: (k: string) => store.delete(k),
+    clear: () => store.clear()
+  },
+  writable: true
+})
+
+// Mock location/history
+Object.defineProperty(globalThis, 'location', {
+  value: { hash: '', pathname: '/' },
+  writable: true
+})
+Object.defineProperty(globalThis, 'history', {
+  value: { pushState: vi.fn() },
+  writable: true
+})
+
+// Mock fetch
+const mockFetch = vi.fn()
+
 import {
   threadKey,
+  setThreadKey,
   threads,
+  setThreads,
+  activeOrgIdForThreads,
+  setActiveOrgIdForThreads,
+  fetchThreadsForOrg,
+  switchWorkspaceThreads,
   switchThread,
   createThread,
   addEntity,
   removeEntity,
-  setThreadKey,
-  setThreads,
   initThreadStore,
   _triggerPopstate
 } from './store.js'
+import type { ThreadInfo } from './store.js'
 
-// Mock fetch globally
-const mockFetch = vi.fn()
+function mockThread(key: string, orgId = '_global'): ThreadInfo {
+  return {
+    key,
+    entities: [{ orgId, projectId: 'p1', entityType: 'branch', entityRef: 'main' }],
+    lastActivity: Date.now(),
+    unreadCount: 0,
+    agentStatus: 'idle'
+  }
+}
 
 function createMockWs() {
   const handlers = new Map<string, Set<(msg: any) => void>>()
@@ -36,162 +74,205 @@ function createMockWs() {
   }
 }
 
-describe('§3.3 Thread Store', () => {
-  let ws: ReturnType<typeof createMockWs>
-  let cleanup: () => void
-  const origFetch = globalThis.fetch
+beforeEach(() => {
+  store.clear()
+  mockFetch.mockReset()
+  setThreadKey('main')
+  setThreads([])
+  ;(globalThis as any).location = { hash: '', pathname: '/' }
+  vi.mocked(history.pushState).mockClear()
+  vi.stubGlobal('fetch', mockFetch)
+})
 
-  beforeEach(() => {
-    setThreadKey('main')
-    setThreads([])
-    ws = createMockWs()
-    // Mock location.hash
-    if (typeof globalThis.location === 'undefined') {
-      ;(globalThis as any).location = { hash: '', href: 'http://localhost', search: '' }
-    }
-    globalThis.location.hash = ''
-    mockFetch.mockResolvedValue({ json: () => Promise.resolve([]) })
-    globalThis.fetch = mockFetch as any
-    cleanup = initThreadStore(ws as any)
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('fetchThreadsForOrg', () => {
+  it('fetches threads with orgId query param', async () => {
+    const data = { threads: [mockThread('t1', 'org1')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    fetchThreadsForOrg('org1')
+    await vi.waitFor(() => expect(threads().length).toBe(1))
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/threads?orgId=org1')
+    expect(threads()[0].key).toBe('t1')
   })
 
-  afterEach(() => {
-    cleanup()
-    globalThis.fetch = origFetch
-    mockFetch.mockReset()
+  it('filters out threads without keys', async () => {
+    const data = { threads: [{ key: '', entities: [] }, mockThread('valid')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    fetchThreadsForOrg('org1')
+    await vi.waitFor(() => expect(threads().length).toBe(1))
+    expect(threads()[0].key).toBe('valid')
   })
 
-  it('MUST expose threadKey: Accessor<string>', () => {
+  it('uses activeOrgIdForThreads when no arg provided', async () => {
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ threads: [] }) })
+    setActiveOrgIdForThreads('myorg')
+    fetchThreadsForOrg()
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/threads?orgId=myorg'))
+  })
+
+  it('handles fetch failure gracefully', () => {
+    mockFetch.mockRejectedValueOnce(new Error('network'))
+    expect(() => fetchThreadsForOrg('org1')).not.toThrow()
+  })
+})
+
+describe('switchWorkspaceThreads', () => {
+  it('sets activeOrgIdForThreads and resets to main thread', () => {
+    setThreadKey('some-thread')
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ threads: [] }) })
+
+    switchWorkspaceThreads('org2')
+    expect(activeOrgIdForThreads()).toBe('org2')
     expect(threadKey()).toBe('main')
   })
 
-  it('MUST expose threads: Accessor<ThreadInfo[]>', () => {
-    expect(threads()).toEqual([])
+  it('pushes clean URL without hash', () => {
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ threads: [] }) })
+    switchWorkspaceThreads('org2')
+    expect(history.pushState).toHaveBeenCalledWith(null, '', '/')
   })
+})
 
-  it('switchThread MUST set the active thread key', () => {
-    switchThread('feature-x')
-    expect(threadKey()).toBe('feature-x')
-  })
-
-  it('switchThread MUST update the URL hash to #thread={key}', () => {
-    // Mock history.pushState
-    const pushState = vi.fn()
-    globalThis.history = { pushState } as any
+describe('switchThread', () => {
+  it('sets thread key and updates hash', () => {
     switchThread('my-thread')
-    expect(pushState).toHaveBeenCalledWith(null, '', '#thread=my-thread')
+    expect(threadKey()).toBe('my-thread')
+    expect(history.pushState).toHaveBeenCalledWith(null, '', '#thread=my-thread')
   })
+})
 
-  it('switchThread MUST NOT reload the page', () => {
-    // pushState doesn't reload — this is verified by using pushState instead of location.hash assignment
-    const pushState = vi.fn()
-    globalThis.history = { pushState } as any
-    switchThread('test')
-    // If we got here without error, no reload happened
-    expect(true).toBe(true)
-  })
+describe('createThread', () => {
+  it('creates thread and switches to it', async () => {
+    const newThread = mockThread('new-thread')
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ thread: newThread }) })
 
-  it('createThread MUST send POST /api/threads REST request', async () => {
-    const threadData = { key: 'new-1', entities: [], lastActivity: 0, unreadCount: 0, agentStatus: 'idle' as const }
-    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(threadData) })
     await createThread('My Thread')
-    expect(mockFetch).toHaveBeenCalledWith('/api/threads', expect.objectContaining({ method: 'POST' }))
-  })
-
-  it('createThread MUST add new thread to threads on success', async () => {
-    const threadData = { key: 'new-1', entities: [], lastActivity: 0, unreadCount: 0, agentStatus: 'idle' as const }
-    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(threadData) })
-    await createThread('My Thread')
-    expect(threads().length).toBe(1)
-    expect(threads()[0].key).toBe('new-1')
-  })
-
-  it('addEntity MUST send POST /api/threads/:key/entities', async () => {
-    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({}) })
-    await addEntity('main', { orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'feat-x' })
-    expect(mockFetch).toHaveBeenCalledWith('/api/threads/main/entities', expect.objectContaining({ method: 'POST' }))
-  })
-
-  it('removeEntity MUST send DELETE /api/threads/:key/entities/:entityType/:entityRef', async () => {
-    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({}) })
-    await removeEntity('main', 'branch', 'feat-x')
     expect(mockFetch).toHaveBeenCalledWith(
-      '/api/threads/main/entities/branch/feat-x',
-      expect.objectContaining({ method: 'DELETE' })
+      '/api/threads',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ label: 'My Thread' })
+      })
     )
+    expect(threads()).toContainEqual(expect.objectContaining({ key: 'new-thread' }))
+    expect(threadKey()).toBe('new-thread')
+  })
+})
+
+describe('addEntity', () => {
+  it('posts entity to thread endpoint', async () => {
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({}) })
+    const entity = { orgId: 'o', projectId: 'p', entityType: 'branch' as const, entityRef: 'main' }
+    await addEntity('t1', entity)
+    expect(mockFetch).toHaveBeenCalledWith('/api/threads/t1/entities', expect.objectContaining({ method: 'POST' }))
+  })
+})
+
+describe('removeEntity', () => {
+  it('sends DELETE request', async () => {
+    mockFetch.mockResolvedValueOnce({})
+    await removeEntity('t1', 'branch', 'main')
+    expect(mockFetch).toHaveBeenCalledWith('/api/threads/t1/entities/branch/main', { method: 'DELETE' })
+  })
+})
+
+describe('initThreadStore', () => {
+  it('reads thread from hash on init', () => {
+    ;(globalThis as any).location = { hash: '#thread=from-hash', pathname: '/' }
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+
+    const cleanup = initThreadStore()
+    expect(threadKey()).toBe('from-hash')
+    cleanup()
   })
 
-  it('MUST read thread key from URL hash on init', () => {
+  it('fetches threads on init', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const cleanup = initThreadStore()
+    expect(mockFetch).toHaveBeenCalledWith('/api/threads?orgId=_global')
     cleanup()
-    globalThis.location.hash = '#thread=feature-y'
-    cleanup = initThreadStore(ws as any)
-    expect(threadKey()).toBe('feature-y')
   })
 
-  it('MUST default to main if no hash is present', () => {
-    cleanup()
-    globalThis.location.hash = ''
-    cleanup = initThreadStore(ws as any)
+  it('defaults to main when no hash', () => {
+    ;(globalThis as any).location = { hash: '', pathname: '/' }
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+
+    const cleanup = initThreadStore()
     expect(threadKey()).toBe('main')
+    cleanup()
   })
 
-  it('MUST listen for popstate events and update threadKey', () => {
-    globalThis.location.hash = '#thread=popped'
+  it('subscribes to WS channels when ws provided', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+    expect(ws.subscribe).toHaveBeenCalledWith(['threads'])
+    cleanup()
+  })
+
+  it('handles thread.created WS events', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    ws._emit('thread.created', { payload: { thread: mockThread('ws-new') } })
+    expect(threads()).toContainEqual(expect.objectContaining({ key: 'ws-new' }))
+
+    // Duplicate should not add
+    ws._emit('thread.created', { payload: { thread: mockThread('ws-new') } })
+    expect(threads().filter((t) => t.key === 'ws-new')).toHaveLength(1)
+    cleanup()
+  })
+
+  it('handles thread.updated WS events', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    setThreads([mockThread('t1')])
+    ws._emit('thread.updated', { payload: { thread: { ...mockThread('t1'), unreadCount: 5 } } })
+    expect(threads().find((t) => t.key === 't1')?.unreadCount).toBe(5)
+    cleanup()
+  })
+
+  it('handles thread.status WS events', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    setThreads([mockThread('t1')])
+    ws._emit('thread.status', { payload: { key: 't1', agentStatus: 'working', unreadCount: 3 } })
+    const t = threads().find((t) => t.key === 't1')
+    expect(t?.agentStatus).toBe('working')
+    expect(t?.unreadCount).toBe(3)
+    cleanup()
+  })
+
+  it('ignores malformed thread.created events', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    ws._emit('thread.created', { payload: { thread: { key: '' } } })
+    ws._emit('thread.created', { payload: { thread: {} } })
+    expect(threads()).toHaveLength(0)
+    cleanup()
+  })
+
+  it('responds to popstate events', () => {
+    ;(globalThis as any).location = { hash: '', pathname: '/' }
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const cleanup = initThreadStore()
+
+    ;(globalThis as any).location = { hash: '#thread=popped', pathname: '/' }
     _triggerPopstate()
     expect(threadKey()).toBe('popped')
-  })
-
-  it('MUST subscribe to threads WS channel for thread.created messages', () => {
-    ws._emit('thread.created', {
-      type: 'thread.created',
-      key: 'ws-new',
-      entities: [],
-      lastActivity: 0,
-      unreadCount: 0,
-      agentStatus: 'idle'
-    })
-    expect(threads().some((t) => t.key === 'ws-new')).toBe(true)
-  })
-
-  it('MUST subscribe to threads WS channel for thread.updated messages', () => {
-    setThreads([{ key: 't1', entities: [], lastActivity: 0, unreadCount: 0, agentStatus: 'idle' }])
-    ws._emit('thread.updated', { type: 'thread.updated', key: 't1', label: 'Updated' })
-    expect(threads()[0].label).toBe('Updated')
-  })
-
-  it('MUST subscribe to threads WS channel for thread.status messages', () => {
-    setThreads([{ key: 't1', entities: [], lastActivity: 0, unreadCount: 0, agentStatus: 'idle' }])
-    ws._emit('thread.status', { type: 'thread.status', key: 't1', unreadCount: 5, agentStatus: 'working' })
-    expect(threads()[0].unreadCount).toBe(5)
-    expect(threads()[0].agentStatus).toBe('working')
-  })
-
-  it('MUST add new thread to threads on thread.created', () => {
-    ws._emit('thread.created', {
-      type: 'thread.created',
-      key: 'created-1',
-      entities: [],
-      lastActivity: 100,
-      unreadCount: 0,
-      agentStatus: 'idle'
-    })
-    expect(threads().find((t) => t.key === 'created-1')).toBeDefined()
-  })
-
-  it('MUST update matching thread metadata on thread.updated', () => {
-    setThreads([{ key: 'u1', entities: [], lastActivity: 0, unreadCount: 0, agentStatus: 'idle' }])
-    ws._emit('thread.updated', { type: 'thread.updated', key: 'u1', label: 'New Label' })
-    expect(threads()[0].label).toBe('New Label')
-  })
-
-  it('MUST update matching thread status on thread.status', () => {
-    setThreads([{ key: 's1', entities: [], lastActivity: 0, unreadCount: 0, agentStatus: 'idle' }])
-    ws._emit('thread.status', { type: 'thread.status', key: 's1', lastActivity: 999 })
-    expect(threads()[0].lastActivity).toBe(999)
-  })
-
-  it('MUST fetch initial thread list on init via GET /api/threads', () => {
-    // Already called in beforeEach init
-    expect(mockFetch).toHaveBeenCalledWith('/api/threads')
+    cleanup()
   })
 })
