@@ -170,7 +170,13 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   unsubs.push(
     ws.on('chat.stream', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      streamingRawText += msg.text
+      // Replay messages contain full accumulated text — reset state
+      if (msg.replay) {
+        streamingRawText = msg.text
+        streamTextOffset = 0
+      } else {
+        streamingRawText += msg.text
+      }
       const cleaned = stripThinkingBlocks(streamingRawText)
         .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
         .trim()

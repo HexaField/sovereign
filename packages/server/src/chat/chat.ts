@@ -66,6 +66,11 @@ export function createChatModule(
     persistMapping()
   }
 
+  // --- Live state cache for replay on reconnect ---
+  const currentStatus = new Map<string, string>()
+  const currentWork = new Map<string, any[]>()
+  const currentStreamText = new Map<string, string>()
+
   // Proxy backend events to WS subscribers
   const backendEvents: (keyof AgentBackendEvents)[] = [
     'chat.stream',
@@ -85,18 +90,34 @@ export function createChatModule(
         `[chat] backend event: ${eventName}, sessionKey: ${sessionKey}, threadKey: ${threadKey}, hasWsHandler: ${!!wsHandler}`
       )
 
+      // Cache live state per thread for replay on reconnect
+      if (threadKey) {
+        if (eventName === 'chat.status') {
+          currentStatus.set(threadKey, data.status as string)
+        } else if (eventName === 'chat.work') {
+          const items = currentWork.get(threadKey) ?? []
+          items.push(data.work)
+          currentWork.set(threadKey, items)
+        } else if (eventName === 'chat.stream') {
+          const prev = currentStreamText.get(threadKey) ?? ''
+          currentStreamText.set(threadKey, prev + (data.text as string))
+        } else if (eventName === 'chat.turn') {
+          // Turn complete — clear cached state
+          currentStatus.delete(threadKey)
+          currentWork.delete(threadKey)
+          currentStreamText.delete(threadKey)
+        }
+      }
+
       // Map WS message type
       const wsType = eventName === 'session.info' ? 'chat.session.info' : eventName
 
       if (wsHandler && threadKey) {
-        wsHandler.broadcastToChannel(
-          'chat',
-          {
-            type: wsType,
-            ...data,
-            threadKey
-          }
-        )
+        wsHandler.broadcastToChannel('chat', {
+          type: wsType,
+          ...data,
+          threadKey
+        })
       }
 
       // Emit bus event for chat.turn
@@ -165,6 +186,22 @@ export function createChatModule(
     }
     if (wsHandler) {
       wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history })
+
+      // Replay cached live state so reconnecting clients see in-progress work
+      const status = currentStatus.get(threadKey)
+      if (status && status !== 'idle') {
+        wsHandler.sendTo(deviceId, { type: 'chat.status', threadKey, status })
+        const work = currentWork.get(threadKey)
+        if (work?.length) {
+          for (const item of work) {
+            wsHandler.sendTo(deviceId, { type: 'chat.work', threadKey, work: item })
+          }
+        }
+        const text = currentStreamText.get(threadKey)
+        if (text) {
+          wsHandler.sendTo(deviceId, { type: 'chat.stream', threadKey, text, replay: true })
+        }
+      }
     }
   }
 
