@@ -82,7 +82,8 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
   function list(filter?: ThreadFilter): ThreadInfo[] {
     let results = [...threads.values()]
     if (filter) {
-      if (filter.orgId) results = results.filter((t) => t.entities.some((e) => e.orgId === filter.orgId))
+      if (filter.orgId)
+        results = results.filter((t) => t.entities.length === 0 || t.entities.some((e) => e.orgId === filter.orgId))
       if (filter.projectId) results = results.filter((t) => t.entities.some((e) => e.projectId === filter.projectId))
       if (filter.entityType) results = results.filter((t) => t.entities.some((e) => e.entityType === filter.entityType))
       if (filter.archived !== undefined) results = results.filter((t) => t.archived === filter.archived)
