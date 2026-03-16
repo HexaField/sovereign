@@ -12,7 +12,34 @@ export const [liveThinkingText, setLiveThinkingText] = createSignal('')
 export const [compacting, setCompacting] = createSignal(false)
 export const [isRetryCountdownActive, setRetryActive] = createSignal(false)
 export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
-export const [inputValue, setInputValue] = createSignal('')
+export const [inputValue, _setInputValue] = createSignal('')
+
+function draftKey(threadKey: string): string {
+  return `sovereign:draft:${threadKey}`
+}
+
+export function setInputValue(v: string): void {
+  _setInputValue(v)
+  if (currentThreadKey) {
+    const tk = currentThreadKey()
+    if (tk) {
+      try {
+        localStorage.setItem(draftKey(tk), v)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+function loadDraft(threadKey: string): void {
+  try {
+    const saved = localStorage.getItem(draftKey(threadKey))
+    _setInputValue(saved ?? '')
+  } catch {
+    _setInputValue('')
+  }
+}
 
 let retryTimer: ReturnType<typeof setInterval> | null = null
 let ws: WsStore | null = null
@@ -117,6 +144,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   // Request history for the current thread
   ws.send({ type: 'chat.history', threadKey: _threadKey() } as any)
+  loadDraft(_threadKey())
 
   // Track previous thread key to detect switches
   let prevThreadKey = _threadKey()
@@ -130,6 +158,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     if (key !== prevThreadKey) {
       prevThreadKey = key
       resetState()
+      loadDraft(key)
       ws?.send({ type: 'chat.history', threadKey: key } as any)
       ws?.send({ type: 'chat.session.switch', threadKey: key } as any)
     }
