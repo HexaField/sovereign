@@ -73,16 +73,36 @@ describe('ThreadManager', () => {
   })
 
   describe('list with filters', () => {
-    it('filters by orgId — includes threads with no entities', () => {
+    it('filters by orgId — includes threads with no orgId as global', () => {
       const tm = createThreadManager(bus, dataDir)
-      tm.create({ label: 'global' }) // no entities
+      tm.create({ label: 'global' }) // no entities, no orgId → global
       tm.create({ entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }] })
       tm.create({ entities: [{ orgId: 'o2', projectId: 'p2', entityType: 'branch', entityRef: 'b' }] })
 
+      // All three have no orgId, so all are global and show for any orgId filter
+      // Plus entity-based matching: o1 entity matches o1 filter
       const filtered = tm.list({ orgId: 'o1' })
-      expect(filtered).toHaveLength(2) // global (no entities) + o1
+      expect(filtered).toHaveLength(3) // all global (no orgId set)
       expect(filtered.map((t) => t.key)).toContain('global')
-      expect(filtered.map((t) => t.key)).toContain('o1/p1/branch:a')
+    })
+
+    it('filters by orgId — scoped threads only show in their workspace', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'ws1-thread', orgId: 'ws1' })
+      tm.create({ label: 'ws2-thread', orgId: 'ws2' })
+      tm.create({ label: 'global-thread' }) // no orgId → global
+      tm.create({ label: 'explicit-global', orgId: '_global' })
+
+      const ws1 = tm.list({ orgId: 'ws1' })
+      expect(ws1.map((t) => t.key)).toContain('ws1-thread')
+      expect(ws1.map((t) => t.key)).toContain('global-thread')
+      expect(ws1.map((t) => t.key)).toContain('explicit-global')
+      expect(ws1.map((t) => t.key)).not.toContain('ws2-thread')
+
+      const ws2 = tm.list({ orgId: 'ws2' })
+      expect(ws2.map((t) => t.key)).toContain('ws2-thread')
+      expect(ws2.map((t) => t.key)).toContain('global-thread')
+      expect(ws2.map((t) => t.key)).not.toContain('ws1-thread')
     })
 
     it('filters by projectId', () => {

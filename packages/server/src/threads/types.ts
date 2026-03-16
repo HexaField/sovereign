@@ -13,6 +13,7 @@ export interface EntityBinding {
 
 export interface ThreadInfo {
   key: string
+  orgId?: string
   entities: EntityBinding[]
   label?: string
   lastActivity: number
@@ -48,7 +49,7 @@ export interface ForwardedMessage {
 }
 
 export interface ThreadManager {
-  create(opts: { label?: string; entities?: EntityBinding[] }): ThreadInfo
+  create(opts: { label?: string; entities?: EntityBinding[]; orgId?: string }): ThreadInfo
   get(key: string): ThreadInfo | undefined
   list(filter?: ThreadFilter): ThreadInfo[]
   delete(key: string): boolean

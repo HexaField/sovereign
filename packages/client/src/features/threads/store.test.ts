@@ -164,6 +164,21 @@ describe('createThread', () => {
     expect(threads()).toContainEqual(expect.objectContaining({ key: 'new-thread' }))
     expect(threadKey()).toBe('new-thread')
   })
+
+  it('sends orgId when active workspace is not _global', async () => {
+    setActiveOrgIdForThreads('ws1')
+    const newThread = mockThread('scoped-thread')
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ thread: newThread }) })
+
+    await createThread('Scoped')
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ label: 'Scoped', orgId: 'ws1' })
+      })
+    )
+  })
 })
 
 describe('addEntity', () => {
