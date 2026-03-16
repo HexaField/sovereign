@@ -155,6 +155,18 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
     // Sort children by updatedAt descending
     mainNode.children.sort((a, b) => b.updatedAt - a.updatedAt)
 
+    // Prune stale subagents: remove subagent children older than 24h
+    // relative to main node's most recent activity
+    const DAY_MS = 24 * 60 * 60 * 1000
+    const parentLatest = mainNode.children.length > 0 ? mainNode.children[0].updatedAt : now
+    mainNode.children = mainNode.children.filter((child) => {
+      if (child.kind === 'subagent') {
+        const childAge = parentLatest - child.updatedAt
+        return childAge < DAY_MS
+      }
+      return true
+    })
+
     res.json({ tree: [mainNode] })
   })
 

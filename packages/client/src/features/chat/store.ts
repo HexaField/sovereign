@@ -19,6 +19,23 @@ let ws: WsStore | null = null
 let suppressLifecycleUntil = 0
 let currentThreadKey: Accessor<string> | null = null
 let streamingRawText = ''
+let streamTextOffset = 0
+
+/** Strip thinking blocks (tags AND content) from streamed text.
+ *  Handles: <think>...</think>, <thinking>...</thinking>, <thought>...</thought>, <antThinking>...</antThinking>
+ *  Also strips unclosed blocks (streaming case: <think>content with no closing tag yet).
+ *  Preserves literal mentions inside code blocks/inline code. */
+export function stripThinkingBlocks(text: string): string {
+  const codeSlots: string[] = []
+  let protected_ = text.replace(/(`{1,})([\s\S]*?)\1/g, (m) => {
+    codeSlots.push(m)
+    return `\x00CODE${codeSlots.length - 1}\x00`
+  })
+  protected_ = protected_.replace(/<(think(?:ing)?|thought|antthinking)[^>]*>[\s\S]*?<\/\1>/gi, '')
+  protected_ = protected_.replace(/<(?:think(?:ing)?|thought|antthinking)[^>]*>[\s\S]*$/gi, '')
+  protected_ = protected_.replace(/<\/(?:think(?:ing)?|thought|antthinking)[^>]*>/gi, '')
+  return protected_.replace(/\x00CODE(\d+)\x00/g, (_, i) => codeSlots[Number(i)])
+}
 
 // Pending turn persistence helpers
 function pendingStorageKey(threadKey: string): string {
@@ -71,6 +88,7 @@ function resetState(): void {
   setTurns([])
   setStreamingHtml('')
   streamingRawText = ''
+  streamTextOffset = 0
   setAgentStatus('idle')
   setLiveWork([])
   setLiveThinkingText('')
@@ -98,6 +116,7 @@ export function abortChat(): void {
   setAgentStatus('idle')
   setStreamingHtml('')
   streamingRawText = ''
+  streamTextOffset = 0
   setLiveWork([])
   setLiveThinkingText('')
   // Suppress lifecycle status updates for 30s to prevent flicker
@@ -139,7 +158,22 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     ws.on('chat.stream', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       streamingRawText += msg.text
-      setStreamingHtml(renderMarkdown(streamingRawText))
+      const cleaned = stripThinkingBlocks(streamingRawText)
+        .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+        .trim()
+      // Only show text generated AFTER the last tool call
+      const visible = cleaned.substring(streamTextOffset).trim()
+      // Suppress streaming bubble for subagent threads
+      const isSubagent = _threadKey().startsWith('subagent:')
+      const hasToolCalls = liveWork().some((w) => w.type === 'tool_call')
+      // Suppress partial sentinel strings (NO_REPLY, HEARTBEAT_OK)
+      const isSentinel = /^(NO_REPLY|HEARTBEAT_OK|NO_?|HEART)/.test(visible) && visible.length < 15
+      if (visible && !hasToolCalls && !isSubagent && !isSentinel) {
+        setStreamingHtml(renderMarkdown(visible))
+      } else {
+        setStreamingHtml('')
+        if (isSubagent && visible) setAgentStatus('working')
+      }
     })
   )
 
@@ -162,6 +196,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       })
       setStreamingHtml('')
       streamingRawText = ''
+      streamTextOffset = 0
       setLiveWork([])
       setLiveThinkingText('')
     })
@@ -170,7 +205,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   unsubs.push(
     ws.on('chat.status', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      // Suppress lifecycle updates after abort to prevent flicker
+      // Suppress lifecycle START updates after abort to prevent "Working…" flicker
+      // But always allow idle/end events through
       if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
       setAgentStatus(msg.status)
     })
@@ -179,6 +215,14 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   unsubs.push(
     ws.on('chat.work', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      // Reset streaming text offset on tool call to prevent accumulation
+      if (msg.work?.type === 'tool_call') {
+        const cleaned = stripThinkingBlocks(streamingRawText)
+          .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+          .trim()
+        streamTextOffset = cleaned.length
+        setStreamingHtml('')
+      }
       setLiveWork((prev) => [...prev, msg.work])
     })
   )
