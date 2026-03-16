@@ -124,7 +124,7 @@ describe('CanvasView', () => {
       // Component opens WebSocket on mount — tested via integration
       // We verify event icon utility
       expect(getEventIcon('issue.created')).toBe('list')
-      expect(getEventIcon('pr.merged')).toBe('🔀')
+      expect(getEventIcon('pr.merged')).toBe('git')
     })
 
     it('§4.3 — cross-workspace events animate line/particle between membranes', () => {
@@ -190,7 +190,7 @@ describe('CanvasView', () => {
     it('§4.5 — each event shows timestamp, workspace badge, event type icon, summary', () => {
       expect(formatEventTime(1700000000000)).toMatch(/\d/)
       expect(getEventIcon('agent.started')).toBe('bot')
-      expect(getEventIcon('ci.run')).toBe('🔨')
+      expect(getEventIcon('ci.run')).toBe('wrench')
     })
 
     it('§4.5 — clicking event highlights relevant workspace membrane', () => {
