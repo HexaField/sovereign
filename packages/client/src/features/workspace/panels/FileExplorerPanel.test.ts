@@ -1,76 +1,109 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const store: Record<string, string> = {}
-Object.defineProperty(globalThis, 'localStorage', {
-  value: {
-    getItem: (k: string) => store[k] ?? null,
-    setItem: (k: string, v: string) => {
-      store[k] = v
-    },
-    removeItem: (k: string) => {
-      delete store[k]
-    },
-    clear: () => Object.keys(store).forEach((k) => delete store[k])
-  },
-  writable: true
-})
+// Mock fetch
+const mockFetch = vi.fn()
+globalThis.fetch = mockFetch
 
-import { buildTreeUrl, getFileExtension, type FileNode } from './FileExplorerPanel.js'
-import { activeWorkspace, setActiveProject, _setActiveWorkspace } from '../store.js'
+import {
+  buildTreeUrl,
+  getFileExtension,
+  createFileOrFolder,
+  renameFileOrFolder,
+  deleteFileOrFolder
+} from './FileExplorerPanel.js'
 
 beforeEach(() => {
-  ;(globalThis as any).localStorage.clear()
-  _setActiveWorkspace({ orgId: '_global', orgName: 'Global', activeProjectId: null, activeProjectName: null })
+  mockFetch.mockReset()
 })
 
-describe('FileExplorerPanel', () => {
-  describe('§3.3.1 — File Explorer', () => {
-    it('§3.3.1 — renders tree view of active project filesystem', () => {
-      setActiveProject('proj-1', 'Project 1')
-      expect(activeWorkspace()!.activeProjectId).toBe('proj-1')
-    })
+describe('buildTreeUrl', () => {
+  it('encodes projectId in URL', () => {
+    expect(buildTreeUrl('my/project')).toBe('/api/files/tree?project=my%2Fproject')
+  })
 
-    it('§3.3.1 — fetches file tree from GET /api/files/tree?project=:projectId', () => {
-      expect(buildTreeUrl('my-project')).toBe('/api/files/tree?project=my-project')
-      expect(buildTreeUrl('has spaces')).toBe('/api/files/tree?project=has%20spaces')
-    })
+  it('handles simple projectId', () => {
+    expect(buildTreeUrl('proj1')).toBe('/api/files/tree?project=proj1')
+  })
+})
 
-    it('§3.3.1 — subscribes to files WS channel scoped to project', () => {
-      // WS subscription uses activeProjectId — tested structurally
-      setActiveProject('ws-proj')
-      expect(activeWorkspace()!.activeProjectId).toBe('ws-proj')
-    })
+describe('getFileExtension', () => {
+  it('returns extension for normal files', () => {
+    expect(getFileExtension('file.ts')).toBe('ts')
+    expect(getFileExtension('archive.tar.gz')).toBe('gz')
+  })
 
-    it('§3.3.1 — each node shows file icon based on extension, filename, git status indicator', () => {
-      expect(getFileExtension('foo.ts')).toBe('ts')
-      expect(getFileExtension('README.md')).toBe('md')
-      expect(getFileExtension('Makefile')).toBe('')
-    })
+  it('returns empty string for no extension', () => {
+    expect(getFileExtension('Dockerfile')).toBe('')
+    expect(getFileExtension('Makefile')).toBe('')
+  })
 
-    it('§3.3.1 — clicking a file opens it in a main content tab', () => {
-      // File click handler opens FileViewerTab — structural
-      const node: FileNode = { name: 'index.ts', path: '/src/index.ts', type: 'file' }
-      expect(node.type).toBe('file')
-    })
+  it('handles dotfiles', () => {
+    expect(getFileExtension('.gitignore')).toBe('gitignore')
+  })
 
-    it('§3.3.1 — clicking a directory expands/collapses it', () => {
-      const dir: FileNode = { name: 'src', path: '/src', type: 'directory', children: [] }
-      expect(dir.type).toBe('directory')
-      expect(dir.children).toEqual([])
-    })
+  it('handles empty string', () => {
+    expect(getFileExtension('')).toBe('')
+  })
+})
 
-    it('§3.3.1 — right-clicking shows context menu: Open, Open Diff, Copy Path, Reveal in Terminal', () => {
-      // Context menu is structural — rendered on right-click in component
-      expect(true).toBe(true)
+describe('createFileOrFolder', () => {
+  it('sends POST with correct body for file', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true })
+    const result = await createFileOrFolder('/proj', 'src', 'index.ts', 'file')
+    expect(result).toBe(true)
+    expect(mockFetch).toHaveBeenCalledWith('/api/files/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: '/proj', path: 'src/index.ts', type: 'file' })
     })
+  })
 
-    it('§3.3.1 — header shows active project name with dropdown to switch projects', () => {
-      setActiveProject('proj-x', 'Project X')
-      expect(activeWorkspace()!.activeProjectName).toBe('Project X')
+  it('sends POST for directory', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true })
+    const result = await createFileOrFolder('/proj', '', 'components', 'directory')
+    expect(result).toBe(true)
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/files/create',
+      expect.objectContaining({
+        body: JSON.stringify({ project: '/proj', path: '/components', type: 'directory' })
+      })
+    )
+  })
+
+  it('returns false on failure', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false })
+    const result = await createFileOrFolder('/proj', 'src', 'bad.ts', 'file')
+    expect(result).toBe(false)
+  })
+})
+
+describe('renameFileOrFolder', () => {
+  it('sends rename request', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true })
+    const result = await renameFileOrFolder('/proj', 'old.ts', 'new.ts')
+    expect(result).toBe(true)
+    expect(mockFetch).toHaveBeenCalledWith('/api/files/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: '/proj', oldPath: 'old.ts', newName: 'new.ts' })
     })
+  })
 
-    it('§3.3.1 — shows "No project selected" placeholder if no project active', () => {
-      expect(activeWorkspace()!.activeProjectId).toBeNull()
+  it('returns false on failure', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false })
+    expect(await renameFileOrFolder('/p', 'a', 'b')).toBe(false)
+  })
+})
+
+describe('deleteFileOrFolder', () => {
+  it('sends delete request', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true })
+    const result = await deleteFileOrFolder('/proj', 'src/old.ts')
+    expect(result).toBe(true)
+    expect(mockFetch).toHaveBeenCalledWith('/api/files/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: '/proj', path: 'src/old.ts' })
     })
   })
 })

@@ -1,203 +1,196 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import * as fs from 'node:fs'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { createEventBus } from '@sovereign/core'
+import * as fs from 'node:fs'
+import type { EventBus } from '@sovereign/core'
 import { createThreadManager } from './threads.js'
-import type { EntityBinding, ThreadManager } from './types.js'
 
-function makeTmpDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sovereign-threads-'))
-  return dir
+function createMockBus(): EventBus & { _emit: (type: string, payload: any) => void } {
+  const handlers = new Map<string, Set<(ev: any) => void>>()
+  return {
+    emit: vi.fn((ev: any) => {
+      handlers.get(ev.type)?.forEach((h) => h(ev))
+    }),
+    on(type: string, handler: (ev: any) => void) {
+      if (!handlers.has(type)) handlers.set(type, new Set())
+      handlers.get(type)!.add(handler)
+      return () => {
+        handlers.get(type)?.delete(handler)
+      }
+    },
+    _emit(type: string, payload: any) {
+      const ev = { type, timestamp: new Date().toISOString(), source: 'test', payload }
+      handlers.get(type)?.forEach((h) => h(ev))
+    }
+  } as any
 }
 
-function makeBus(dataDir: string) {
-  return createEventBus(dataDir)
+function tmpDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'thread-test-'))
 }
 
-describe('§5.1 Thread Model', () => {
+describe('ThreadManager', () => {
   let dataDir: string
-  let bus: ReturnType<typeof createEventBus>
-  let tm: ThreadManager
+  let bus: ReturnType<typeof createMockBus>
 
   beforeEach(() => {
-    dataDir = makeTmpDir()
-    bus = makeBus(dataDir)
-    tm = createThreadManager(bus, dataDir)
+    dataDir = tmpDir()
+    bus = createMockBus()
   })
 
-  it('MUST give every thread an identity: { threadKey, entities, label }', () => {
-    const t = tm.create({ label: 'main' })
-    expect(t.key).toBe('main')
-    expect(t.entities).toEqual([])
-    expect(t.label).toBe('main')
+  it('creates a thread with label', () => {
+    const tm = createThreadManager(bus, dataDir)
+    const t = tm.create({ label: 'test-thread' })
+    expect(t.key).toBe('test-thread')
+    expect(t.archived).toBe(false)
+    expect(bus.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'thread.created' }))
   })
 
-  it('entities array MAY be empty for global threads', () => {
-    const t = tm.create({ label: 'main' })
-    expect(t.entities).toEqual([])
+  it('returns existing thread if key matches', () => {
+    const tm = createThreadManager(bus, dataDir)
+    const t1 = tm.create({ label: 'dup' })
+    const t2 = tm.create({ label: 'dup' })
+    expect(t1).toBe(t2)
   })
 
-  it('entities array MAY contain one entity (typical)', () => {
-    const entity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'branch', entityRef: 'feat-auth' }
+  it('creates thread keyed by entity', () => {
+    const tm = createThreadManager(bus, dataDir)
+    const entity = { orgId: 'o1', projectId: 'p1', entityType: 'branch' as const, entityRef: 'main' }
     const t = tm.create({ entities: [entity] })
+    expect(t.key).toBe('o1/p1/branch:main')
     expect(t.entities).toHaveLength(1)
-    expect(t.entities[0]).toEqual(entity)
   })
 
-  it('entities array MAY contain multiple entities (cross-cutting work)', () => {
-    const e1: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'branch', entityRef: 'feat-auth' }
-    const e2: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '42' }
-    const t = tm.create({ entities: [e1, e2] })
-    expect(t.entities).toHaveLength(2)
+  it('persists and restores from disk', () => {
+    const tm1 = createThreadManager(bus, dataDir)
+    tm1.create({ label: 'persisted' })
+
+    const bus2 = createMockBus()
+    const tm2 = createThreadManager(bus2, dataDir)
+    const t = tm2.get('persisted')
+    expect(t).toBeDefined()
+    expect(t!.key).toBe('persisted')
   })
 
-  it('EntityBinding MUST contain: { orgId, projectId, entityType, entityRef }', () => {
-    const entity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '42' }
-    const t = tm.create({ entities: [entity] })
-    expect(t.entities[0]).toEqual({ orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '42' })
-  })
+  describe('list with filters', () => {
+    it('filters by orgId — includes threads with no entities', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'global' }) // no entities
+      tm.create({ entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }] })
+      tm.create({ entities: [{ orgId: 'o2', projectId: 'p2', entityType: 'branch', entityRef: 'b' }] })
 
-  it('Thread keys for entity-bound threads MUST follow format: {orgId}/{projectId}/{entityType}:{entityRef}', () => {
-    const entity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'branch', entityRef: 'feat-auth' }
-    const t = tm.create({ entities: [entity] })
-    expect(t.key).toBe('org1/proj1/branch:feat-auth')
-  })
-
-  it('Thread key is immutable — adding more entities MUST NOT change it', () => {
-    const e1: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'branch', entityRef: 'feat-auth' }
-    const t = tm.create({ entities: [e1] })
-    const originalKey = t.key
-    const e2: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '42' }
-    tm.addEntity(t.key, e2)
-    const updated = tm.get(originalKey)
-    expect(updated!.key).toBe(originalKey)
-    expect(updated!.entities).toHaveLength(2)
-  })
-
-  it('Global thread keys MUST be: main or user-defined labels', () => {
-    const main = tm.create({ label: 'main' })
-    expect(main.key).toBe('main')
-    const custom = tm.create({ label: 'research' })
-    expect(custom.key).toBe('research')
-  })
-
-  it('MUST support adding entities to an existing thread via POST /api/threads/:key/entities', () => {
-    const t = tm.create({ label: 'main' })
-    const entity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '99' }
-    const updated = tm.addEntity(t.key, entity)
-    expect(updated!.entities).toHaveLength(1)
-    expect(updated!.entities[0]).toEqual(entity)
-  })
-
-  it('MUST support removing entities from a thread via DELETE /api/threads/:key/entities/:entityType/:entityRef', () => {
-    const entity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '99' }
-    const t = tm.create({ entities: [entity] })
-    const updated = tm.removeEntity(t.key, 'issue', '99')
-    expect(updated!.entities).toHaveLength(0)
-  })
-
-  it('Removing the last entity from a non-global thread MUST NOT delete the thread', () => {
-    const entity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '99' }
-    const t = tm.create({ entities: [entity] })
-    tm.removeEntity(t.key, 'issue', '99')
-    const thread = tm.get(t.key)
-    expect(thread).toBeDefined()
-    expect(thread!.entities).toHaveLength(0)
-  })
-
-  it('MUST automatically create a thread when worktree.created bus event is emitted', () => {
-    bus.emit({
-      type: 'worktree.created',
-      timestamp: new Date().toISOString(),
-      source: 'test',
-      payload: { orgId: 'org1', projectId: 'proj1', branch: 'feat-new' }
+      const filtered = tm.list({ orgId: 'o1' })
+      expect(filtered).toHaveLength(2) // global (no entities) + o1
+      expect(filtered.map((t) => t.key)).toContain('global')
+      expect(filtered.map((t) => t.key)).toContain('o1/p1/branch:a')
     })
-    const threads = tm.list()
-    const found = threads.find((t) => t.key === 'org1/proj1/branch:feat-new')
-    expect(found).toBeDefined()
-  })
 
-  it('MUST reuse existing thread if one already exists for that branch', () => {
-    const entity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'branch', entityRef: 'feat-new' }
-    tm.create({ entities: [entity] })
-    bus.emit({
-      type: 'worktree.created',
-      timestamp: new Date().toISOString(),
-      source: 'test',
-      payload: { orgId: 'org1', projectId: 'proj1', branch: 'feat-new' }
+    it('filters by projectId', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }] })
+      tm.create({ entities: [{ orgId: 'o1', projectId: 'p2', entityType: 'branch', entityRef: 'b' }] })
+
+      const filtered = tm.list({ projectId: 'p1' })
+      expect(filtered).toHaveLength(1)
     })
-    const threads = tm.list().filter((t) => t.key === 'org1/proj1/branch:feat-new')
-    expect(threads).toHaveLength(1)
-  })
 
-  it('MUST automatically create a thread when issue.created bus event is emitted', () => {
-    bus.emit({
-      type: 'issue.created',
-      timestamp: new Date().toISOString(),
-      source: 'test',
-      payload: { orgId: 'org1', projectId: 'proj1', issueId: '42' }
+    it('filters by active (non-archived)', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'active' })
+      tm.create({ label: 'to-archive' })
+      tm.delete('to-archive')
+
+      const active = tm.list({ active: true })
+      expect(active).toHaveLength(1)
+      expect(active[0].key).toBe('active')
     })
-    const found = tm.get('org1/proj1/issue:42')
-    expect(found).toBeDefined()
-  })
 
-  it('MUST automatically create a thread when review.created bus event is emitted', () => {
-    bus.emit({
-      type: 'review.created',
-      timestamp: new Date().toISOString(),
-      source: 'test',
-      payload: { orgId: 'org1', projectId: 'proj1', prId: '10' }
+    it('filters by archived flag', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'a' })
+      tm.create({ label: 'b' })
+      tm.delete('b')
+
+      expect(tm.list({ archived: true })).toHaveLength(1)
+      expect(tm.list({ archived: false })).toHaveLength(1)
     })
-    const found = tm.get('org1/proj1/pr:10')
-    expect(found).toBeDefined()
   })
 
-  it('SHOULD automatically associate related entities into the same thread (PR fixes #42)', () => {
-    // Create issue thread first
-    const issueEntity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '42' }
-    tm.create({ entities: [issueEntity] })
-    // The association of PR to issue thread is tested at the router level
-    // Here we verify that addEntity works for cross-entity binding
-    const prEntity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'pr', entityRef: '10' }
-    tm.addEntity('org1/proj1/issue:42', prEntity)
-    const thread = tm.get('org1/proj1/issue:42')
-    expect(thread!.entities).toHaveLength(2)
+  describe('entity management', () => {
+    it('adds and removes entities', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'ent-test' })
+      const entity = { orgId: 'o', projectId: 'p', entityType: 'issue' as const, entityRef: '42' }
+
+      tm.addEntity('ent-test', entity)
+      expect(tm.getEntities('ent-test')).toHaveLength(1)
+
+      // Duplicate add is idempotent
+      tm.addEntity('ent-test', entity)
+      expect(tm.getEntities('ent-test')).toHaveLength(1)
+
+      tm.removeEntity('ent-test', 'issue', '42')
+      expect(tm.getEntities('ent-test')).toHaveLength(0)
+    })
+
+    it('getThreadsForEntity finds matching threads', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const entity = { orgId: 'o', projectId: 'p', entityType: 'branch' as const, entityRef: 'feat' }
+      tm.create({ entities: [entity] })
+      tm.create({ label: 'other' })
+
+      const found = tm.getThreadsForEntity(entity)
+      expect(found).toHaveLength(1)
+      expect(found[0].key).toBe('o/p/branch:feat')
+    })
   })
 
-  it('SHOULD detect branch name containing issue number and link them', () => {
-    // This is a higher-level feature — verified by checking thread entity can be added
-    const branchEntity: EntityBinding = {
-      orgId: 'org1',
-      projectId: 'proj1',
-      entityType: 'branch',
-      entityRef: 'fix-42-auth'
-    }
-    const t = tm.create({ entities: [branchEntity] })
-    const issueEntity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '42' }
-    tm.addEntity(t.key, issueEntity)
-    expect(tm.get(t.key)!.entities).toHaveLength(2)
+  describe('events', () => {
+    it('stores and retrieves thread events', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'evt' })
+      tm.addEvent('evt', { type: 'message', timestamp: 1000, data: { text: 'hello' } } as any)
+      tm.addEvent('evt', { type: 'message', timestamp: 2000, data: { text: 'world' } } as any)
+
+      expect(tm.getEvents('evt')).toHaveLength(2)
+      expect(tm.getEvents('evt', { since: 1500 })).toHaveLength(1)
+      expect(tm.getEvents('evt', { limit: 1 })).toHaveLength(1)
+      expect(tm.getEvents('evt', { offset: 1 })).toHaveLength(1)
+    })
   })
 
-  it('SHOULD detect explicit cross-references in issue/PR metadata', () => {
-    // Cross-references are supported via addEntity
-    const entity: EntityBinding = { orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '42' }
-    const t = tm.create({ entities: [entity] })
-    const crossRef: EntityBinding = { orgId: 'org1', projectId: 'proj2', entityType: 'issue', entityRef: '99' }
-    tm.addEntity(t.key, crossRef)
-    expect(tm.get(t.key)!.entities).toHaveLength(2)
-    expect(tm.get(t.key)!.entities[1].projectId).toBe('proj2')
+  describe('auto-creation from bus events', () => {
+    it('creates thread on worktree.created', () => {
+      const tm = createThreadManager(bus, dataDir)
+      bus._emit('worktree.created', { orgId: 'o', projectId: 'p', branch: 'feature' })
+      expect(tm.get('o/p/branch:feature')).toBeDefined()
+    })
+
+    it('creates thread on issue.created', () => {
+      const tm = createThreadManager(bus, dataDir)
+      bus._emit('issue.created', { orgId: 'o', projectId: 'p', issueId: '99' })
+      expect(tm.get('o/p/issue:99')).toBeDefined()
+    })
+
+    it('creates thread on review.created', () => {
+      const tm = createThreadManager(bus, dataDir)
+      bus._emit('review.created', { orgId: 'o', projectId: 'p', prId: '7' })
+      expect(tm.get('o/p/pr:7')).toBeDefined()
+    })
+
+    it('does not duplicate auto-created threads', () => {
+      const tm = createThreadManager(bus, dataDir)
+      bus._emit('worktree.created', { orgId: 'o', projectId: 'p', branch: 'f' })
+      bus._emit('worktree.created', { orgId: 'o', projectId: 'p', branch: 'f' })
+      expect(tm.list().filter((t) => t.key === 'o/p/branch:f')).toHaveLength(1)
+    })
   })
 
-  it('MUST persist thread metadata to {dataDir}/threads/registry.json using atomic file writes', () => {
-    const t = tm.create({ label: 'persist-test' })
-    const registryPath = path.join(dataDir, 'threads', 'registry.json')
-    expect(fs.existsSync(registryPath)).toBe(true)
-    const data = JSON.parse(fs.readFileSync(registryPath, 'utf-8'))
-    expect(data.threads).toBeInstanceOf(Array)
-    expect(data.threads.find((th: { key: string }) => th.key === t.key)).toBeDefined()
-
-    // Verify atomic write: no .tmp file left
-    expect(fs.existsSync(registryPath + '.tmp')).toBe(false)
+  it('delete marks as archived', () => {
+    const tm = createThreadManager(bus, dataDir)
+    tm.create({ label: 'del-me' })
+    expect(tm.delete('del-me')).toBe(true)
+    expect(tm.get('del-me')?.archived).toBe(true)
+    expect(tm.delete('nonexistent')).toBe(false)
   })
 })

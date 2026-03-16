@@ -1,4 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { createSignal } from 'solid-js'
+
+const store: Record<string, string> = {}
+const localStorageMock = {
+  getItem: (key: string) => store[key] ?? null,
+  setItem: (key: string, val: string) => {
+    store[key] = val
+  },
+  removeItem: (key: string) => {
+    delete store[key]
+  },
+  clear: () => Object.keys(store).forEach((k) => delete store[k])
+}
+Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
 import {
   turns,
   streamingHtml,
@@ -16,6 +30,8 @@ import {
   setTurns,
   setStreamingHtml,
   setAgentStatus,
+  inputValue,
+  setInputValue,
   _resetState
 } from './store.js'
 import type { ParsedTurn, WorkItem } from '@sovereign/core'
@@ -47,6 +63,7 @@ describe('§3.2 Chat Store', () => {
 
   beforeEach(() => {
     vi.useFakeTimers()
+    localStorageMock.clear()
     _resetState()
     ws = createMockWs()
     cleanup = initChatStore(() => 'main', ws as any)
@@ -123,6 +140,29 @@ describe('§3.2 Chat Store', () => {
     expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.send', text: 'test' }))
   })
 
+  it('setInputValue writes drafts to localStorage per thread key', () => {
+    setInputValue('draft text')
+    expect(localStorageMock.getItem('sovereign:draft:main')).toBe('draft text')
+  })
+
+  it('initChatStore loads draft from localStorage on init', () => {
+    localStorageMock.setItem('sovereign:draft:main', 'saved draft')
+    cleanup && cleanup()
+    cleanup = initChatStore(() => 'main', ws as any)
+    expect(inputValue()).toBe('saved draft')
+  })
+
+  it('loadDraft restores draft when thread changes', () => {
+    localStorageMock.setItem('sovereign:draft:thread-a', 'draft a')
+    localStorageMock.setItem('sovereign:draft:thread-b', 'draft b')
+    cleanup && cleanup()
+    const [threadKey, setThreadKey] = createSignal('thread-a')
+    cleanup = initChatStore(threadKey, ws as any)
+    expect(inputValue()).toBe('draft a')
+    setThreadKey('thread-b')
+    expect(inputValue()).toBe('draft b')
+  })
+
   it('abortChat MUST send chat.abort via WS and update agentStatus to idle', () => {
     setAgentStatus('working')
     abortChat()
@@ -137,6 +177,19 @@ describe('§3.2 Chat Store', () => {
     ws._emit('chat.stream', { type: 'chat.stream', text: 'world' })
     expect(streamingHtml()).toContain('hello')
     expect(streamingHtml()).toContain('world')
+  })
+
+  it('chat.stream with replay resets prior stream content', () => {
+    ws._emit('chat.stream', { type: 'chat.stream', text: 'old ' })
+    expect(streamingHtml()).toContain('old')
+    ws._emit('chat.stream', { type: 'chat.stream', text: 'new', replay: true })
+    expect(streamingHtml()).toContain('new')
+    expect(streamingHtml()).not.toContain('old')
+  })
+
+  it('chat.stream suppresses sentinel NO_REPLY output', () => {
+    ws._emit('chat.stream', { type: 'chat.stream', text: 'NO_REPLY' })
+    expect(streamingHtml()).toBe('')
   })
 
   it('MUST subscribe to chat WS channel for chat.turn messages', () => {
