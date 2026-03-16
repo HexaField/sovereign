@@ -1,4 +1,5 @@
 import { createSignal } from 'solid-js'
+import { switchWorkspaceThreads } from '../threads/store.js'
 
 export interface WorkspaceContext {
   orgId: string
@@ -272,6 +273,7 @@ export function setActiveWorkspace(orgId: string, orgName?: string): void {
   _setActiveWorkspace(ctx)
   saveToStorage(ctx)
   restoreWorkspacePanelState(orgId)
+  switchWorkspaceThreads(orgId)
 }
 
 /** Restore all per-workspace panel state from localStorage */
