@@ -1,6 +1,5 @@
-import { Show, For, createSignal, createResource, type Component } from 'solid-js'
+import { Show, For, createSignal, createResource, createEffect, type Component } from 'solid-js'
 import { activeWorkspace, openFileTab } from '../store.js'
-import WorkspacePicker from '../WorkspacePicker.js'
 
 export interface FileNode {
   name: string
@@ -196,27 +195,25 @@ const FileIconSvg: Component<{ node: FileNode }> = (props) => {
 const TreeNode: Component<{
   node: FileNode
   depth: number
+  rootPath: string
   onContextMenu: (e: MouseEvent, node: FileNode) => void
 }> = (props) => {
   const [expanded, setExpanded] = createSignal(false)
   const [children, setChildren] = createSignal<FileNode[]>([])
   const [loading, setLoading] = createSignal(false)
 
-  const ws = () => activeWorkspace()
-
   const toggle = async () => {
     if (props.node.type !== 'directory') {
       // Open file in viewer
-      const projId = ws()?.activeProjectId
-      if (projId) {
-        openFileTab(props.node.path, projId)
+      if (props.rootPath) {
+        openFileTab(props.node.path, props.rootPath)
       }
       return
     }
     if (!expanded()) {
       setLoading(true)
       try {
-        const projectPath = ws()?.activeProjectId
+        const projectPath = props.rootPath
         if (!projectPath) return
         const res = await fetch(
           `/api/files/tree?project=${encodeURIComponent(projectPath)}&path=${encodeURIComponent(props.node.path)}`
@@ -265,7 +262,14 @@ const TreeNode: Component<{
           </div>
         </Show>
         <For each={children()}>
-          {(child) => <TreeNode node={child} depth={props.depth + 1} onContextMenu={props.onContextMenu} />}
+          {(child) => (
+            <TreeNode
+              node={child}
+              depth={props.depth + 1}
+              rootPath={props.rootPath}
+              onContextMenu={props.onContextMenu}
+            />
+          )}
         </For>
       </Show>
     </div>
@@ -276,32 +280,32 @@ const TreeNode: Component<{
 
 const FileExplorerPanel: Component = () => {
   const ws = () => activeWorkspace()
-  const [projectPath, setProjectPath] = createSignal<string | null>(null)
+  const [orgPath, setOrgPath] = createSignal<string | null>(null)
   const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; node: FileNode | null } | null>(null)
   const [refreshKey, setRefreshKey] = createSignal(0)
 
-  const fetchProjectPath = async () => {
+  // Fetch org path when org changes
+  createEffect(async () => {
     const orgId = ws()?.orgId
-    const projectId = ws()?.activeProjectId
-    if (!orgId || !projectId) {
-      setProjectPath(null)
-      return null
+    if (!orgId) {
+      setOrgPath(null)
+      return
     }
-    const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`)
-    if (!res.ok) {
-      setProjectPath(null)
-      return null
+    try {
+      const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}`)
+      if (res.ok) {
+        const org = await res.json()
+        setOrgPath(org.path ?? null)
+      } else {
+        setOrgPath(null)
+      }
+    } catch {
+      setOrgPath(null)
     }
-    const project = await res.json()
-    setProjectPath(project.repoPath)
-    return project.repoPath as string
-  }
+  })
 
-  const projectKey = () => `${ws()?.orgId}:${ws()?.activeProjectId}`
-  const [_tree] = createResource(projectKey, fetchProjectPath)
-
-  const treeKey = () => `${projectPath()}:${refreshKey()}`
-  const [rootTree, { refetch }] = createResource(treeKey, () => fetchTree(projectPath()))
+  const treeKey = () => `${orgPath()}:${refreshKey()}`
+  const [rootTree, { refetch }] = createResource(treeKey, () => fetchTree(orgPath()))
 
   const handleContextMenu = (e: MouseEvent, node: FileNode | null) => {
     e.preventDefault()
@@ -319,10 +323,6 @@ const FileExplorerPanel: Component = () => {
 
   return (
     <div class="flex h-full flex-col">
-      <div class="border-b px-2 py-2" style={{ 'border-color': 'var(--c-border)' }}>
-        <WorkspacePicker />
-      </div>
-
       <div
         class="flex-1 overflow-auto p-1"
         onContextMenu={(e) => {
@@ -331,10 +331,10 @@ const FileExplorerPanel: Component = () => {
         }}
       >
         <Show
-          when={ws()?.activeProjectId}
+          when={orgPath()}
           fallback={
             <p class="px-2 py-4 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
-              Select a project above to browse files
+              No workspace selected
             </p>
           }
         >
@@ -347,7 +347,9 @@ const FileExplorerPanel: Component = () => {
             }
           >
             <For each={rootTree() ?? []}>
-              {(node) => <TreeNode node={node} depth={0} onContextMenu={handleContextMenu} />}
+              {(node) => (
+                <TreeNode node={node} depth={0} rootPath={orgPath() ?? ''} onContextMenu={handleContextMenu} />
+              )}
             </For>
             <Show when={(rootTree() ?? []).length === 0}>
               <p class="px-2 text-xs" style={{ color: 'var(--c-text-muted)' }}>
@@ -364,7 +366,7 @@ const FileExplorerPanel: Component = () => {
             x={menu().x}
             y={menu().y}
             node={menu().node}
-            projectPath={projectPath() ?? ''}
+            projectPath={orgPath() ?? ''}
             onClose={() => setCtxMenu(null)}
             onRefresh={handleRefresh}
           />
