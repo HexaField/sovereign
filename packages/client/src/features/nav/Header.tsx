@@ -331,10 +331,6 @@ function WorkspaceHeaderContent() {
           }}
         />
       </Show>
-      <Show when={ws()?.activeProjectName}>
-        <span style={{ color: 'var(--c-text-muted)' }}>/</span>
-        <span style={{ color: 'var(--c-text)' }}>{ws()!.activeProjectName}</span>
-      </Show>
       <span style={{ color: 'var(--c-text-muted)' }}>/</span>
       <div class="relative">
         <button
