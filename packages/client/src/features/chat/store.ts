@@ -48,33 +48,6 @@ let currentThreadKey: Accessor<string> | null = null
 let streamingRawText = ''
 let streamTextOffset = 0
 
-// Pending turn persistence helpers
-function pendingStorageKey(threadKey: string): string {
-  return `sovereign:pending-turns:${threadKey}`
-}
-
-function persistPendingTurns(threadKey: string, allTurns: ParsedTurn[]): void {
-  const pending = allTurns.filter((t) => t.pending)
-  try {
-    if (pending.length > 0) {
-      localStorage.setItem(pendingStorageKey(threadKey), JSON.stringify(pending))
-    } else {
-      localStorage.removeItem(pendingStorageKey(threadKey))
-    }
-  } catch {
-    // localStorage may be unavailable
-  }
-}
-
-function loadPendingTurns(threadKey: string): ParsedTurn[] {
-  try {
-    const raw = localStorage.getItem(pendingStorageKey(threadKey))
-    return raw ? JSON.parse(raw) : []
-  } catch {
-    return []
-  }
-}
-
 export function startRetryCountdown(seconds: number): void {
   clearRetryCountdown()
   setRetrySeconds(Math.ceil(seconds))
@@ -210,7 +183,6 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
         } else {
           next = [...prev, turn]
         }
-        persistPendingTurns(_threadKey(), next)
         return next
       })
       setStreamingHtml('')
@@ -264,17 +236,13 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
-      // Merge persisted pending turns, deduplicating by content
-      const persisted = loadPendingTurns(_threadKey())
-      const merged = [...history]
-      for (const pending of persisted) {
-        const alreadyConfirmed = history.some((t) => t.role === 'user' && t.content === pending.content)
-        if (!alreadyConfirmed) {
-          merged.push(pending)
-        }
+      // Clean up legacy localStorage pending turns
+      try {
+        localStorage.removeItem(`sovereign:pending-turns:${_threadKey()}`)
+      } catch {
+        /* */
       }
-      setTurns(merged)
-      persistPendingTurns(_threadKey(), merged)
+      setTurns(history)
     })
   )
 
