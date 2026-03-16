@@ -47,6 +47,44 @@ function isSystemInjected(text: string): boolean {
   )
 }
 
+/** Normalize system-injected message text for rendering. */
+function normalizeSystemText(text: string): string {
+  const stripped = stripTimestamp(text)
+  const isTaskCompletion =
+    /^OpenClaw runtime context \(internal\):/i.test(stripped) && /\[Internal task completion event\]/i.test(stripped)
+  const isSubagentResult = stripped.startsWith('[System Message]') && /subagent task .* completed/i.test(stripped)
+  const isCronResult = stripped.startsWith('[CronResult]')
+  const isScheduled = /^\[Scheduled[:\s]/.test(stripped)
+  const isSystemEvent = /^System:\s*\[/.test(text)
+
+  if (isTaskCompletion) return stripDirectives(stripped)
+
+  if (isSubagentResult) {
+    let cleanText = stripped
+      .replace(/^\[System Message\]\s*/, '')
+      .replace(/^\[sessionId:\s*[^\]]*\]\s*/, '')
+      .trim()
+    cleanText = cleanText
+      .replace(/\n\nStats:.*$/s, '')
+      .replace(/\n\n(?:There are still|A completed subagent task is ready).*$/s, '')
+      .trim()
+    return stripDirectives(cleanText)
+  }
+
+  if (isCronResult) return stripDirectives(stripped.replace(/^\[CronResult\]\s*/, '').trim())
+  if (isScheduled) return stripDirectives(stripped.replace(/^\[Scheduled:\s*[^\]]*\]\s*/, '').trim())
+  if (isSystemEvent) {
+    const cleanText = text
+      .replace(/^System:\s*\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
+      .trim()
+      .replace(/^Cron\s*\([^)]*\):\s*/, '')
+      .trim()
+    return stripDirectives(cleanText)
+  }
+
+  return stripDirectives(stripped)
+}
+
 /**
  * Parse raw gateway messages into ParsedTurn[].
  * Groups user→assistant turns, extracts tool calls as work items,
@@ -75,7 +113,7 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
       if (isSystemInjected(text)) {
         const systemTurn: ParsedTurn = {
           role: 'system',
-          content: cleaned,
+          content: normalizeSystemText(text),
           timestamp: m.timestamp ?? 0,
           workItems: [],
           thinkingBlocks: []
@@ -185,7 +223,7 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
     if (text) {
       turns.push({
         role: 'system',
-        content: text.trim(),
+        content: normalizeSystemText(text),
         timestamp: m.timestamp ?? 0,
         workItems: [],
         thinkingBlocks: []
@@ -210,9 +248,6 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
     // Starts with
     if (text.startsWith('Agent-to-agent announce step')) return false
     if (text.startsWith('No new comments on')) return false
-
-    // Contains
-    if (text.includes('[Internal task completion event]')) return false
 
     // Scheduled Result HH:MM\nCompaction
     if (/^Scheduled Result \d{2}:\d{2}/.test(text)) return false
