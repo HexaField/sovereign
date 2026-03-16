@@ -419,6 +419,23 @@ const ChatPanel: Component = () => {
             threadKey={threadKey()}
           />
 
+          {/* Agent status indicator */}
+          <Show when={agentStatus() === 'working' || agentStatus() === 'thinking'}>
+            <div
+              class="flex items-center gap-2 px-3 py-1.5"
+              style={{ color: 'var(--c-text-muted)', 'font-size': '12px' }}
+            >
+              <span
+                class="inline-block h-2 w-2 rounded-full"
+                style={{
+                  background: '#f59e0b',
+                  animation: 'pulse 1.5s ease-in-out infinite'
+                }}
+              />
+              <span>{agentStatus() === 'thinking' ? 'Thinking...' : 'Working...'}</span>
+            </div>
+          </Show>
+
           {/* Input area */}
           <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
         </div>
