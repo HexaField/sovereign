@@ -13,6 +13,7 @@ export interface ThreadInfo {
 
 export const [threadKey, setThreadKey] = createSignal('main')
 export const [threads, setThreads] = createSignal<ThreadInfo[]>([])
+export const [activeOrgIdForThreads, setActiveOrgIdForThreads] = createSignal('_global')
 
 let ws: WsStore | null = null
 let popstateHandler: ((e: PopStateEvent) => void) | null = null
@@ -22,6 +23,28 @@ function readThreadFromHash(): string {
   const hash = location.hash
   const match = hash.match(/#thread=(.+)/)
   return match ? match[1] : 'main'
+}
+
+export function fetchThreadsForOrg(orgId?: string): void {
+  const id = orgId ?? activeOrgIdForThreads()
+  const url = id ? `/api/threads?orgId=${encodeURIComponent(id)}` : '/api/threads'
+  fetch(url)
+    .then((r) => r.json())
+    .then((data: any) => {
+      const raw: ThreadInfo[] = data.threads ?? data ?? []
+      setThreads(raw.filter((t) => t.key))
+    })
+    .catch(() => {})
+}
+
+export function switchWorkspaceThreads(orgId: string): void {
+  setActiveOrgIdForThreads(orgId)
+  // Reset to main thread and clear hash
+  setThreadKey('main')
+  if (typeof history !== 'undefined') {
+    history.pushState(null, '', location.pathname)
+  }
+  fetchThreadsForOrg(orgId)
 }
 
 export function switchThread(key: string): void {
@@ -119,14 +142,8 @@ export function initThreadStore(wsStore?: WsStore): () => void {
     )
   }
 
-  // Fetch initial threads
-  fetch('/api/threads')
-    .then((r) => r.json())
-    .then((data: any) => {
-      const raw: ThreadInfo[] = data.threads ?? data ?? []
-      setThreads(raw.filter((t) => t.key))
-    })
-    .catch(() => {})
+  // Fetch initial threads for active org
+  fetchThreadsForOrg()
 
   return () => {
     unsubs.forEach((u) => u())
