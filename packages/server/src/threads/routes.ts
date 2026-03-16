@@ -35,8 +35,8 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
   })
 
   router.post('/api/threads', (req, res) => {
-    const { label, entities } = req.body ?? {}
-    const thread = threadManager.create({ label, entities })
+    const { label, entities, orgId } = req.body ?? {}
+    const thread = threadManager.create({ label, entities, orgId })
     res.status(201).json({ thread })
   })
 

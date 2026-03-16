@@ -4,6 +4,7 @@ import type { WsStore } from '../../ws/ws-store.js'
 
 export interface ThreadInfo {
   key: string
+  orgId?: string
   entities: { orgId: string; projectId: string; entityType: 'branch' | 'issue' | 'pr'; entityRef: string }[]
   label?: string
   lastActivity: number
@@ -55,10 +56,11 @@ export function switchThread(key: string): void {
 }
 
 export function createThread(label?: string): Promise<void> {
+  const orgId = activeOrgIdForThreads()
   return fetch('/api/threads', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label })
+    body: JSON.stringify({ label, orgId: orgId !== '_global' ? orgId : undefined })
   })
     .then((r) => r.json())
     .then((data: any) => {
