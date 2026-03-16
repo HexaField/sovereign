@@ -28,8 +28,9 @@ import {
   setViewMode as setPlanningViewMode,
   type PlanningViewMode
 } from '../planning/store.js'
-import { activeWorkspace } from '../workspace/store.js'
+import { activeWorkspace, chatExpanded, toggleChatExpanded } from '../workspace/store.js'
 import { threadKey, switchThread, threads } from '../threads/store.js'
+import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -155,6 +156,18 @@ function WorkspaceHeaderContent() {
           </div>
         </Show>
       </div>
+      <button
+        class="ml-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md border-none bg-transparent transition-colors"
+        style={{ color: 'var(--c-text-muted)' }}
+        onClick={() => toggleChatExpanded()}
+        onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--c-accent)')}
+        onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--c-text-muted)')}
+        title={chatExpanded() ? 'Collapse chat' : 'Expand chat'}
+      >
+        <Show when={chatExpanded()} fallback={<ExpandIcon class="h-3.5 w-3.5" />}>
+          <CollapseIcon class="h-3.5 w-3.5" />
+        </Show>
+      </button>
     </div>
   )
 }
