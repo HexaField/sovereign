@@ -404,6 +404,110 @@ pre:hover .code-copy-btn {
   opacity: 1 !important;
 }
 
+/* ── File chips ────────────────────────────────────────────────────────── */
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--c-bg-secondary, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--c-border-subtle, var(--c-border));
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
+  color: var(--c-text);
+  white-space: nowrap;
+}
+.file-chip:hover {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+.file-chip-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  color: var(--c-text-muted);
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 2px;
+}
+.file-chip:hover .file-chip-copy {
+  opacity: 0.6;
+}
+.file-chip-copy:hover {
+  opacity: 1 !important;
+  color: var(--c-accent);
+}
+
+/* Expanded inline file viewer */
+.file-chip-expanded {
+  display: block;
+  margin: 6px 0;
+  border: 1px solid var(--c-border-subtle, var(--c-border));
+  border-radius: 6px;
+  background: var(--c-bg-secondary, var(--c-bg-raised));
+  overflow: hidden;
+}
+.file-chip-expanded-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--c-bg-raised);
+  border-bottom: 1px solid var(--c-border-subtle, var(--c-border));
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: var(--c-text-muted);
+}
+.file-chip-expanded-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.file-chip-expanded-close {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--c-text-muted);
+  font-size: 13px;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.file-chip-expanded-close:hover {
+  color: var(--c-text);
+}
+.file-chip-expanded-body {
+  max-height: 400px;
+  overflow: auto;
+  padding: 8px;
+}
+.file-chip-expanded-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.file-chip-expanded-loading {
+  color: var(--c-text-muted);
+  font-size: 12px;
+}
+
 .msg-assistant blockquote {
   margin: 6px 0;
   padding: 4px 12px;
