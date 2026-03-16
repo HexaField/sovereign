@@ -39,7 +39,12 @@ export function createThread(label?: string): Promise<void> {
   })
     .then((r) => r.json())
     .then((data: any) => {
-      setThreads((prev) => [...prev, data as ThreadInfo])
+      const thread = (data.thread ?? data) as ThreadInfo
+      setThreads((prev) => [...prev, thread])
+      // Switch to the newly created thread
+      if (thread.key) {
+        switchThread(thread.key)
+      }
     })
 }
 

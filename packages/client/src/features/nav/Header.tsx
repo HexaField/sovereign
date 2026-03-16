@@ -334,7 +334,7 @@ export function Header() {
               >
                 <span class="flex w-5 items-center justify-center">{item.icon()}</span>
                 <span class="flex-1">{item.label}</span>
-                <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                <span class="hidden text-[10px] sm:inline" style={{ color: 'var(--c-text-muted)' }}>
                   {item.shortcut}
                 </span>
               </button>
