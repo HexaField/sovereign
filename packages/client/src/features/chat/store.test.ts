@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createSignal } from 'solid-js'
+import { createSignal, createRoot } from 'solid-js'
 
 const store: Record<string, string> = {}
 const localStorageMock = {
@@ -157,9 +157,13 @@ describe('§3.2 Chat Store', () => {
     localStorageMock.setItem('sovereign:draft:thread-b', 'draft b')
     cleanup && cleanup()
     const [threadKey, setThreadKey] = createSignal('thread-a')
-    cleanup = initChatStore(threadKey, ws as any)
+    cleanup = initChatStore(threadKey, ws as any) as () => void
     expect(inputValue()).toBe('draft a')
+
+    // Simulate a thread switch by re-initializing with a new accessor
+    cleanup && cleanup()
     setThreadKey('thread-b')
+    cleanup = initChatStore(threadKey, ws as any) as () => void
     expect(inputValue()).toBe('draft b')
   })
 
