@@ -28,7 +28,7 @@ import {
   setViewMode as setPlanningViewMode,
   type PlanningViewMode
 } from '../planning/store.js'
-import { activeWorkspace, chatExpanded, toggleChatExpanded } from '../workspace/store.js'
+import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from '../workspace/store.js'
 import { threadKey, switchThread, threads } from '../threads/store.js'
 import { agentStatus } from '../chat/store.js'
 import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
@@ -92,9 +92,145 @@ function DashboardHeaderContent() {
   )
 }
 
+interface OrgListItem {
+  id: string
+  name: string
+}
+
+function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgListItem) => void }) {
+  const [name, setName] = createSignal('')
+  const [wsPath, setWsPath] = createSignal('')
+  const [provider, setProvider] = createSignal<'github' | 'radicle'>('github')
+  const [error, setError] = createSignal('')
+  const [submitting, setSubmitting] = createSignal(false)
+
+  const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
+
+  const handleSubmit = async () => {
+    if (!name().trim() || !wsPath().trim()) {
+      setError('Name and path are required')
+      return
+    }
+    setSubmitting(true)
+    setError('')
+    try {
+      const res = await fetch(`${BASE}api/orgs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name().trim(), path: wsPath().trim(), provider: provider() })
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Failed to create workspace' }))
+        setError(data.error || 'Failed to create workspace')
+        return
+      }
+      const org = await res.json()
+      props.onCreated(org)
+    } catch (e: any) {
+      setError(e.message || 'Network error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <>
+      <div class="fixed inset-0 z-[300] bg-black/50" onClick={() => props.onClose()} />
+      <div
+        class="fixed top-1/2 left-1/2 z-[301] w-[400px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl p-5 shadow-2xl"
+        style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
+      >
+        <h2 class="mb-4 text-base font-semibold" style={{ color: 'var(--c-text-heading)' }}>
+          Add Workspace
+        </h2>
+        <div class="flex flex-col gap-3">
+          <div>
+            <label class="mb-1 block text-xs font-medium" style={{ color: 'var(--c-text-muted)' }}>
+              Name
+            </label>
+            <input
+              type="text"
+              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+              style={{ background: 'var(--c-bg)', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }}
+              placeholder="My Workspace"
+              value={name()}
+              onInput={(e) => setName(e.currentTarget.value)}
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium" style={{ color: 'var(--c-text-muted)' }}>
+              Path
+            </label>
+            <input
+              type="text"
+              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+              style={{ background: 'var(--c-bg)', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }}
+              placeholder="/home/user/projects"
+              value={wsPath()}
+              onInput={(e) => setWsPath(e.currentTarget.value)}
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium" style={{ color: 'var(--c-text-muted)' }}>
+              Provider
+            </label>
+            <select
+              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+              style={{ background: 'var(--c-bg)', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }}
+              value={provider()}
+              onChange={(e) => setProvider(e.currentTarget.value as 'github' | 'radicle')}
+            >
+              <option value="github">GitHub</option>
+              <option value="radicle">Radicle</option>
+            </select>
+          </div>
+          <Show when={error()}>
+            <p class="text-xs" style={{ color: 'var(--c-danger, #ef4444)' }}>
+              {error()}
+            </p>
+          </Show>
+          <div class="mt-1 flex justify-end gap-2">
+            <button
+              class="rounded-lg px-4 py-2 text-sm transition-colors"
+              style={{ color: 'var(--c-text-muted)' }}
+              onClick={() => props.onClose()}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+            >
+              Cancel
+            </button>
+            <button
+              class="rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors"
+              style={{ background: 'var(--c-accent)', opacity: submitting() ? '0.6' : '1' }}
+              disabled={submitting()}
+              onClick={handleSubmit}
+            >
+              {submitting() ? 'Creating…' : 'Create'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
 function WorkspaceHeaderContent() {
   const ws = () => activeWorkspace()
   const [threadPickerOpen, setThreadPickerOpen] = createSignal(false)
+  const [wsPickerOpen, setWsPickerOpen] = createSignal(false)
+  const [orgList, setOrgList] = createSignal<OrgListItem[]>([])
+  const [showAddDialog, setShowAddDialog] = createSignal(false)
+
+  const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
+
+  const fetchOrgs = async () => {
+    try {
+      const res = await fetch(`${BASE}api/orgs`)
+      if (res.ok) setOrgList(await res.json())
+    } catch {
+      /* ignore */
+    }
+  }
 
   // Start polling notifications
   startNotificationPolling()
@@ -107,9 +243,94 @@ function WorkspaceHeaderContent() {
 
   return (
     <div class="flex items-center gap-1.5 text-sm">
-      <span class="font-semibold" style={{ color: 'var(--c-text-heading)' }}>
-        {ws()?.orgName ?? 'Global'}
-      </span>
+      <div class="relative">
+        <button
+          class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-semibold transition-colors"
+          style={{ color: 'var(--c-text-heading)' }}
+          onClick={() => {
+            fetchOrgs()
+            setWsPickerOpen(!wsPickerOpen())
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          {ws()?.orgName ?? 'Global'}
+          <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+            ▾
+          </span>
+        </button>
+        <Show when={wsPickerOpen()}>
+          <div class="fixed inset-0 z-[199]" onClick={() => setWsPickerOpen(false)} />
+          <div
+            class="fixed z-[200] mt-1 min-w-[180px] overflow-hidden rounded-lg shadow-lg"
+            style={{
+              background: 'var(--c-bg-raised)',
+              border: '1px solid var(--c-border)',
+              top: 'var(--ws-picker-top, 40px)',
+              left: 'var(--ws-picker-left, 60px)'
+            }}
+            ref={(el) => {
+              // Position relative to parent button
+              const btn = el.previousElementSibling?.previousElementSibling as HTMLElement
+              if (btn) {
+                const rect = btn.getBoundingClientRect()
+                el.style.top = `${rect.bottom + 4}px`
+                el.style.left = `${rect.left}px`
+              }
+            }}
+          >
+            <For each={orgList()}>
+              {(org) => (
+                <button
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors"
+                  style={{
+                    color: org.id === ws()?.orgId ? 'var(--c-accent)' : 'var(--c-text)',
+                    background: org.id === ws()?.orgId ? 'var(--c-hover-bg)' : undefined
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = org.id === ws()?.orgId ? 'var(--c-hover-bg)' : '')
+                  }
+                  onClick={() => {
+                    setActiveWorkspace(org.id, org.name)
+                    setWsPickerOpen(false)
+                  }}
+                >
+                  <Show when={org.id === ws()?.orgId}>
+                    <span class="text-xs">●</span>
+                  </Show>
+                  <span>{org.name}</span>
+                </button>
+              )}
+            </For>
+            <div style={{ 'border-top': '1px solid var(--c-border)' }}>
+              <button
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors"
+                style={{ color: 'var(--c-text-muted)' }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                onClick={() => {
+                  setWsPickerOpen(false)
+                  setShowAddDialog(true)
+                }}
+              >
+                <span>+</span>
+                <span>Add Workspace…</span>
+              </button>
+            </div>
+          </div>
+        </Show>
+      </div>
+
+      <Show when={showAddDialog()}>
+        <AddWorkspaceDialog
+          onClose={() => setShowAddDialog(false)}
+          onCreated={(org) => {
+            setShowAddDialog(false)
+            setActiveWorkspace(org.id, org.name)
+          }}
+        />
+      </Show>
       <Show when={ws()?.activeProjectName}>
         <span style={{ color: 'var(--c-text-muted)' }}>/</span>
         <span style={{ color: 'var(--c-text)' }}>{ws()!.activeProjectName}</span>

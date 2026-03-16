@@ -14,6 +14,12 @@ export function createOrgRoutes(manager: OrgManager, authMiddleware: (req: any, 
   router.post('/orgs', (req, res) => {
     try {
       const org = manager.createOrg(req.body)
+      // Auto-detect projects in the new workspace
+      try {
+        manager.autoDetectProjects(org.id)
+      } catch {
+        /* ignore detection errors */
+      }
       res.status(201).json(org)
     } catch (e: any) {
       res.status(400).json({ error: e.message })
