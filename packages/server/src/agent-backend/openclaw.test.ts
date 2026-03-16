@@ -379,6 +379,25 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     expect(result.retryAfterMs).toBe(5000)
   })
 
+  it('MUST emit chat.error without retryAfterMs when gateway data omits it', async () => {
+    const serverWs = await connectBackend()
+    const p = waitForEvent<{ error: string; retryAfterMs?: number }>(backend, 'chat.error')
+    serverWs.send(
+      JSON.stringify({
+        type: 'event',
+        event: 'agent',
+        payload: {
+          stream: 'lifecycle',
+          data: { phase: 'error', error: 'oops' },
+          sessionKey: 'main'
+        }
+      })
+    )
+    const result = await p
+    expect(result.error).toContain('oops')
+    expect(result.retryAfterMs).toBeUndefined()
+  })
+
   it('MUST automatically retry the request after the indicated delay', async () => {
     // The new JSON-RPC protocol doesn't have a built-in retry mechanism from events.
     // Retry only applies to RPC request failures, not event-based errors.

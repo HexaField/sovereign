@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // Mock localStorage
 const store: Record<string, string> = {}
@@ -14,6 +14,10 @@ const localStorageMock = {
 }
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
 
+vi.mock('../threads/store.js', () => ({
+  switchWorkspaceThreads: vi.fn()
+}))
+
 import {
   activeWorkspace,
   setActiveWorkspace,
@@ -24,8 +28,19 @@ import {
   setActiveMobileTab,
   swipeMobileTab,
   MOBILE_TAB_ORDER,
-  _setActiveMobileTab
+  _setActiveMobileTab,
+  setSidebarWidth,
+  setChatPanelWidth,
+  setChatExpanded,
+  setSidebarCollapsed,
+  setChatCollapsed,
+  chatPanelWidth,
+  sidebarWidth,
+  chatExpanded,
+  sidebarCollapsed,
+  chatCollapsed
 } from './store.js'
+import { switchWorkspaceThreads } from '../threads/store.js'
 
 beforeEach(() => {
   localStorageMock.clear()
@@ -50,6 +65,11 @@ describe('Workspace Store', () => {
       setActiveWorkspace('my-org', 'My Org')
       expect(activeWorkspace()!.orgId).toBe('my-org')
       expect(activeWorkspace()!.orgName).toBe('My Org')
+    })
+
+    it('§0.2 — setActiveWorkspace calls switchWorkspaceThreads(orgId)', () => {
+      setActiveWorkspace('org-switch', 'Org Switch')
+      expect(switchWorkspaceThreads).toHaveBeenCalledWith('org-switch')
     })
 
     it('§0.2 — exposes setActiveProject(projectId: string): void', () => {
@@ -116,6 +136,29 @@ describe('Workspace Store', () => {
       expect(activeWorkspace()!.activeProjectId).toBe('proj-1')
       setActiveWorkspace('org-b', 'B')
       expect(activeWorkspace()!.activeProjectId).toBeNull()
+    })
+
+    it('§0.2 — panel state persists per workspace and restores on switch', () => {
+      setActiveWorkspace('org-a', 'A')
+      setSidebarWidth(300)
+      setChatPanelWidth(500)
+      setChatExpanded(true)
+      setSidebarCollapsed(true)
+      setChatCollapsed(true)
+
+      setActiveWorkspace('org-b', 'B')
+      expect(sidebarWidth()).not.toBe(300)
+      expect(chatPanelWidth()).not.toBe(500)
+      expect(chatExpanded()).toBe(false)
+      expect(sidebarCollapsed()).toBe(false)
+      expect(chatCollapsed()).toBe(false)
+
+      setActiveWorkspace('org-a', 'A')
+      expect(sidebarWidth()).toBe(300)
+      expect(chatPanelWidth()).toBe(500)
+      expect(chatExpanded()).toBe(true)
+      expect(sidebarCollapsed()).toBe(true)
+      expect(chatCollapsed()).toBe(true)
     })
   })
 
