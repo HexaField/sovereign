@@ -404,49 +404,6 @@ const ChatPanel: Component = () => {
             transition: resize.dragging() ? 'none' : 'width 200ms ease'
           }}
         >
-          {/* Chat panel header with thread info */}
-          <div
-            class="flex items-center justify-between border-b px-3 py-2"
-            style={{ 'border-color': 'var(--c-border)' }}
-          >
-            <div class="flex min-w-0 flex-1 items-center gap-2">
-              <span class="truncate text-sm font-medium" style={{ color: 'var(--c-text-heading)' }}>
-                {threadKey()}
-              </span>
-              <Show when={agentStatus() === 'working' || agentStatus() === 'thinking'}>
-                <span
-                  class="flex h-[18px] min-w-[18px] shrink-0 animate-pulse items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
-                  style={{ background: '#f59e0b' }}
-                >
-                  {agentStatus() === 'thinking' ? 'thinking' : '...'}
-                </span>
-              </Show>
-            </div>
-            <div class="flex items-center gap-1">
-              {/* Thread selector dropdown */}
-              <select
-                class="rounded border px-1.5 py-0.5 text-[11px]"
-                style={{
-                  background: 'var(--c-bg)',
-                  'border-color': 'var(--c-border)',
-                  color: 'var(--c-text)'
-                }}
-                value={threadKey()}
-                onChange={(e) => switchThread(e.currentTarget.value)}
-              >
-                <option value="main">main</option>
-                <For each={threads()}>{(t) => <option value={t.key}>{t.label ?? t.key}</option>}</For>
-              </select>
-              <button
-                class="rounded p-1 text-sm transition-colors hover:bg-white/10"
-                onClick={toggleChatExpanded}
-                title="Expand chat (Cmd+Shift+E)"
-              >
-                <ExpandIcon class="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
           {/* Chat messages */}
           <ChatView
             messages={messages()}
