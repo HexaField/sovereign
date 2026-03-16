@@ -11,7 +11,6 @@ export interface WorkspaceContext {
 export type SidebarTab =
   | 'files'
   | 'git'
-  | 'threads'
   | 'planning'
   | 'notifications'
   | 'terminal'
@@ -22,7 +21,6 @@ export type SidebarTab =
 export const SIDEBAR_TABS: { key: SidebarTab; label: string; iconKey: string }[] = [
   { key: 'files', label: 'Files', iconKey: 'files' },
   { key: 'git', label: 'Git', iconKey: 'git' },
-  { key: 'threads', label: 'Threads', iconKey: 'threads' },
   { key: 'planning', label: 'Planning', iconKey: 'planning' },
   { key: 'notifications', label: 'Notifications', iconKey: 'notifications' },
   { key: 'terminal', label: 'Terminal', iconKey: 'terminal' },
@@ -206,39 +204,23 @@ export const SIDEBAR_SNAP_THRESHOLD = 100
 
 export const CHAT_SNAP_THRESHOLD = 140
 
-function loadBool(key: string, fallback: boolean): boolean {
-  if (typeof localStorage === 'undefined') return fallback
-  try {
-    const v = localStorage.getItem(key)
-    if (v === 'true') return true
-    if (v === 'false') return false
-  } catch {
-    /* ignore */
-  }
-  return fallback
-}
+export const [sidebarCollapsed, _setSidebarCollapsed] = createSignal(false)
+export const [chatCollapsed, _setChatCollapsed] = createSignal(false)
+export const [sidebarWidth, _setSidebarWidth] = createSignal(SIDEBAR_DEFAULT_WIDTH)
 
-function saveBool(key: string, val: boolean): void {
-  if (typeof localStorage === 'undefined') return
-  try {
-    localStorage.setItem(key, String(val))
-  } catch {
-    /* ignore */
-  }
+export function setSidebarWidth(v: number): void {
+  _setSidebarWidth(v)
+  writeStorage(wsKey(currentOrgId(), 'sidebarWidth'), v)
 }
-
-export const [sidebarCollapsed, _setSidebarCollapsed] = createSignal(loadBool('sovereign:sidebar-collapsed', false))
-export const [chatCollapsed, _setChatCollapsed] = createSignal(loadBool('sovereign:chat-collapsed', false))
-export const [sidebarWidth, setSidebarWidth] = createSignal(SIDEBAR_DEFAULT_WIDTH)
 
 export function setSidebarCollapsed(v: boolean): void {
   _setSidebarCollapsed(v)
-  saveBool('sovereign:sidebar-collapsed', v)
+  writeStorage(wsKey(currentOrgId(), 'sidebarCollapsed'), v)
 }
 
 export function setChatCollapsed(v: boolean): void {
   _setChatCollapsed(v)
-  saveBool('sovereign:chat-collapsed', v)
+  writeStorage(wsKey(currentOrgId(), 'chatCollapsed'), v)
 }
 
 export function toggleSidebar(): void {
@@ -277,6 +259,9 @@ const initial = loadFromStorage() || {
 
 export const [activeWorkspace, _setActiveWorkspace] = createSignal<WorkspaceContext | null>(initial)
 
+// Restore panel state for the initially loaded workspace
+restoreWorkspacePanelState(initial.orgId)
+
 export function setActiveWorkspace(orgId: string, orgName?: string): void {
   const ctx: WorkspaceContext = {
     orgId,
@@ -286,6 +271,20 @@ export function setActiveWorkspace(orgId: string, orgName?: string): void {
   }
   _setActiveWorkspace(ctx)
   saveToStorage(ctx)
+  restoreWorkspacePanelState(orgId)
+}
+
+/** Restore all per-workspace panel state from localStorage */
+function restoreWorkspacePanelState(orgId: string): void {
+  _setSidebarWidth(readStorage(wsKey(orgId, 'sidebarWidth'), SIDEBAR_DEFAULT_WIDTH))
+  _setChatPanelWidth(readStorage(wsKey(orgId, 'chatPanelWidth'), CHAT_PANEL_DEFAULT_WIDTH))
+  _setSidebarCollapsed(readStorage(wsKey(orgId, 'sidebarCollapsed'), false))
+  _setChatCollapsed(readStorage(wsKey(orgId, 'chatCollapsed'), false))
+  _setChatExpanded(readStorage(wsKey(orgId, 'chatExpanded'), false))
+  const tab = readStorage<string>(wsKey(orgId, 'activeSidebarTab'), 'files', (v) => v)
+  if (SIDEBAR_TABS.some((t) => t.key === tab)) {
+    _setActiveSidebarTab(tab as SidebarTab)
+  }
 }
 
 export function setActiveProject(projectId: string, projectName?: string): void {
