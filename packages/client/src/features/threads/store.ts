@@ -82,26 +82,35 @@ export function initThreadStore(wsStore?: WsStore): () => void {
 
     unsubs.push(
       ws.on('thread.created', (msg: any) => {
-        setThreads((prev) => [...prev, msg as ThreadInfo])
+        const thread = (msg?.payload?.thread ?? msg) as ThreadInfo
+        if (!thread.key) return // skip malformed threads
+        setThreads((prev) => {
+          if (prev.some((t) => t.key === thread.key)) return prev
+          return [...prev, thread]
+        })
       })
     )
 
     unsubs.push(
       ws.on('thread.updated', (msg: any) => {
-        setThreads((prev) => prev.map((t) => (t.key === msg.key ? { ...t, ...msg } : t)))
+        const thread = (msg?.payload?.thread ?? msg) as ThreadInfo
+        if (!thread.key) return
+        setThreads((prev) => prev.map((t) => (t.key === thread.key ? { ...t, ...thread } : t)))
       })
     )
 
     unsubs.push(
       ws.on('thread.status', (msg: any) => {
+        const data = msg?.payload ?? msg
+        if (!data.key) return
         setThreads((prev) =>
           prev.map((t) =>
-            t.key === msg.key
+            t.key === data.key
               ? {
                   ...t,
-                  lastActivity: msg.lastActivity ?? t.lastActivity,
-                  unreadCount: msg.unreadCount ?? t.unreadCount,
-                  agentStatus: msg.agentStatus ?? t.agentStatus
+                  lastActivity: data.lastActivity ?? t.lastActivity,
+                  unreadCount: data.unreadCount ?? t.unreadCount,
+                  agentStatus: data.agentStatus ?? t.agentStatus
                 }
               : t
           )
@@ -113,7 +122,10 @@ export function initThreadStore(wsStore?: WsStore): () => void {
   // Fetch initial threads
   fetch('/api/threads')
     .then((r) => r.json())
-    .then((data: any) => setThreads(data.threads ?? data ?? []))
+    .then((data: any) => {
+      const raw: ThreadInfo[] = data.threads ?? data ?? []
+      setThreads(raw.filter((t) => t.key))
+    })
     .catch(() => {})
 
   return () => {
