@@ -11,7 +11,6 @@ import {
   MeetingsIcon,
   LogsIcon,
   ExpandIcon,
-  CollapseIcon,
   CloseIcon
 } from '../../ui/icons.js'
 import {
@@ -419,23 +418,6 @@ const ChatPanel: Component = () => {
             threadKey={threadKey()}
           />
 
-          {/* Agent status indicator */}
-          <Show when={agentStatus() === 'working' || agentStatus() === 'thinking'}>
-            <div
-              class="flex items-center gap-2 px-3 py-1.5"
-              style={{ color: 'var(--c-text-muted)', 'font-size': '12px' }}
-            >
-              <span
-                class="inline-block h-2 w-2 rounded-full"
-                style={{
-                  background: '#f59e0b',
-                  animation: 'pulse 1.5s ease-in-out infinite'
-                }}
-              />
-              <span>{agentStatus() === 'thinking' ? 'Thinking...' : 'Working...'}</span>
-            </div>
-          </Show>
-
           {/* Input area */}
           <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
         </div>
@@ -459,19 +441,6 @@ const ExpandedChatView: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
-      <div class="flex items-center border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
-        <button
-          class="mr-3 rounded p-1 text-sm transition-colors hover:bg-white/10"
-          onClick={toggleChatExpanded}
-          title="Back to Workspace"
-        >
-          <CollapseIcon class="h-4 w-4" />
-        </button>
-        <span class="text-sm font-medium" style={{ color: 'var(--c-text-heading)' }}>
-          Thread: {threadKey()}
-        </span>
-      </div>
-
       <ChatView
         messages={messages()}
         streamingHtml={streamingHtml()}
@@ -521,14 +490,6 @@ const MobileChatPanel: Component = () => {
           <option value="main">main</option>
           <For each={threads()}>{(t) => <option value={t.key}>{t.label ?? t.key}</option>}</For>
         </select>
-        <Show when={agentStatus() === 'working' || agentStatus() === 'thinking'}>
-          <span
-            class="flex h-[18px] min-w-[18px] shrink-0 animate-pulse items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
-            style={{ background: '#f59e0b' }}
-          >
-            {agentStatus() === 'thinking' ? 'thinking' : '...'}
-          </span>
-        </Show>
       </div>
 
       <ChatView
