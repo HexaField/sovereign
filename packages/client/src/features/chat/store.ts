@@ -2,7 +2,7 @@ import { createSignal, createEffect } from 'solid-js'
 import type { Accessor } from 'solid-js'
 import type { ParsedTurn, WorkItem, AgentStatus } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
-import { renderMarkdown } from '../../lib/markdown.js'
+import { renderMarkdown, stripThinkingBlocks } from '../../lib/markdown.js'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
 export const [streamingHtml, setStreamingHtml] = createSignal('')
@@ -20,22 +20,6 @@ let suppressLifecycleUntil = 0
 let currentThreadKey: Accessor<string> | null = null
 let streamingRawText = ''
 let streamTextOffset = 0
-
-/** Strip thinking blocks (tags AND content) from streamed text.
- *  Handles: <think>...</think>, <thinking>...</thinking>, <thought>...</thought>, <antThinking>...</antThinking>
- *  Also strips unclosed blocks (streaming case: <think>content with no closing tag yet).
- *  Preserves literal mentions inside code blocks/inline code. */
-export function stripThinkingBlocks(text: string): string {
-  const codeSlots: string[] = []
-  let protected_ = text.replace(/(`{1,})([\s\S]*?)\1/g, (m) => {
-    codeSlots.push(m)
-    return `\x00CODE${codeSlots.length - 1}\x00`
-  })
-  protected_ = protected_.replace(/<(think(?:ing)?|thought|antthinking)[^>]*>[\s\S]*?<\/\1>/gi, '')
-  protected_ = protected_.replace(/<(?:think(?:ing)?|thought|antthinking)[^>]*>[\s\S]*$/gi, '')
-  protected_ = protected_.replace(/<\/(?:think(?:ing)?|thought|antthinking)[^>]*>/gi, '')
-  return protected_.replace(/\x00CODE(\d+)\x00/g, (_, i) => codeSlots[Number(i)])
-}
 
 // Pending turn persistence helpers
 function pendingStorageKey(threadKey: string): string {
