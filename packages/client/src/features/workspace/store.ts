@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js'
+import { createEffect, createSignal } from 'solid-js'
 
 export interface WorkspaceContext {
   orgId: string
@@ -31,8 +31,45 @@ export const SIDEBAR_TABS: { key: SidebarTab; label: string; iconKey: string }[]
   { key: 'logs', label: 'Logs', iconKey: 'logs' }
 ]
 
+// --- Per-workspace persisted signal helper ---
+
+function wsKey(orgId: string, name: string): string {
+  return `sovereign:workspace:${orgId}:${name}`
+}
+
+function readStorage<T>(key: string, fallback: T, parse: (v: string) => T = JSON.parse): T {
+  if (typeof localStorage === 'undefined') return fallback
+  try {
+    const v = localStorage.getItem(key)
+    if (v !== null) return parse(v)
+  } catch {
+    /* ignore */
+  }
+  return fallback
+}
+
+function writeStorage(key: string, value: unknown): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Get the current orgId for keying. Called lazily so it works during init. */
+function currentOrgId(): string {
+  const ws = activeWorkspace()
+  return ws?.orgId ?? '_global'
+}
+
 // §3.3 — Active sidebar tab
-export const [activeSidebarTab, setActiveSidebarTab] = createSignal<SidebarTab>('files')
+export const [activeSidebarTab, _setActiveSidebarTab] = createSignal<SidebarTab>('files')
+
+export function setActiveSidebarTab(tab: SidebarTab): void {
+  _setActiveSidebarTab(tab)
+  writeStorage(wsKey(currentOrgId(), 'activeSidebarTab'), tab)
+}
 
 // §7.3 — Mobile workspace tab types
 export type MobileTab =
@@ -105,7 +142,12 @@ export function isMobileWidth(): boolean {
 }
 
 // §3.2 — Expand chat mode
-export const [chatExpanded, setChatExpanded] = createSignal(false)
+export const [chatExpanded, _setChatExpanded] = createSignal(false)
+
+export function setChatExpanded(v: boolean): void {
+  _setChatExpanded(v)
+  writeStorage(wsKey(currentOrgId(), 'chatExpanded'), v)
+}
 
 export function toggleChatExpanded(): void {
   setChatExpanded(!chatExpanded())
@@ -115,7 +157,12 @@ export function toggleChatExpanded(): void {
 export const CHAT_PANEL_DEFAULT_WIDTH = 360
 export const CHAT_PANEL_MIN_WIDTH = 280
 export const CHAT_PANEL_MAX_WIDTH = 600
-export const [chatPanelWidth, setChatPanelWidth] = createSignal(CHAT_PANEL_DEFAULT_WIDTH)
+export const [chatPanelWidth, _setChatPanelWidth] = createSignal(CHAT_PANEL_DEFAULT_WIDTH)
+
+export function setChatPanelWidth(v: number): void {
+  _setChatPanelWidth(v)
+  writeStorage(wsKey(currentOrgId(), 'chatPanelWidth'), v)
+}
 
 // §3.5 — Active thread key for right panel
 export const [activeThreadKey, setActiveThreadKey] = createSignal('main')

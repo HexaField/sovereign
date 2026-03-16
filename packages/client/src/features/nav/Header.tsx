@@ -30,6 +30,8 @@ import {
 } from '../planning/store.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded } from '../workspace/store.js'
 import { threadKey, switchThread, threads } from '../threads/store.js'
+import { agentStatus } from '../chat/store.js'
+import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
@@ -94,6 +96,9 @@ function WorkspaceHeaderContent() {
   const ws = () => activeWorkspace()
   const [threadPickerOpen, setThreadPickerOpen] = createSignal(false)
 
+  // Start polling notifications
+  startNotificationPolling()
+
   const activeThreadLabel = () => {
     const key = threadKey()
     const t = threads().find((th) => th.key === key)
@@ -156,6 +161,31 @@ function WorkspaceHeaderContent() {
           </div>
         </Show>
       </div>
+      {/* Agent status dot */}
+      <span
+        class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+        style={{
+          background:
+            agentStatus() === 'error'
+              ? '#ef4444'
+              : agentStatus() === 'working' || agentStatus() === 'thinking'
+                ? '#f59e0b'
+                : '#22c55e',
+          animation:
+            agentStatus() === 'working' || agentStatus() === 'thinking' ? 'pulse 1.5s ease-in-out infinite' : 'none'
+        }}
+        title={`Agent: ${agentStatus()}`}
+      />
+      {/* Unread notifications badge */}
+      <Show when={unreadNotificationCount() > 0}>
+        <span
+          class="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+          style={{ background: '#ef4444' }}
+          title={`${unreadNotificationCount()} unread notifications`}
+        >
+          {unreadNotificationCount() > 99 ? '99+' : unreadNotificationCount()}
+        </span>
+      </Show>
       <button
         class="ml-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md border-none bg-transparent transition-colors"
         style={{ color: 'var(--c-text-muted)' }}
