@@ -188,6 +188,32 @@ export function openFileTab(path: string, projectId: string): void {
   setActiveFileTabId(id)
 }
 
+// §3.4 — Main content view types
+export type MainContentView = 'files' | 'planning-dag' | 'issue-detail'
+
+export interface IssueDetailParams {
+  orgId: string
+  projectId: string
+  issueId: string
+}
+
+export const [mainContentView, setMainContentView] = createSignal<MainContentView>('files')
+export const [issueDetailParams, setIssueDetailParams] = createSignal<IssueDetailParams | null>(null)
+
+export function openPlanningDAG(): void {
+  setMainContentView('planning-dag')
+}
+
+export function openIssueDetail(orgId: string, projectId: string, issueId: string): void {
+  setIssueDetailParams({ orgId, projectId, issueId })
+  setMainContentView('issue-detail')
+}
+
+export function closePlanningView(): void {
+  setMainContentView('files')
+  setIssueDetailParams(null)
+}
+
 export function closeFileTab(id: string): void {
   setOpenFileTabs((prev) => {
     const next = prev.filter((t) => t.id !== id)
