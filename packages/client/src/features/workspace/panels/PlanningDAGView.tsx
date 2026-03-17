@@ -139,20 +139,23 @@ async function fetchGraphData(orgId: string): Promise<{
   issues: IssueInfo[]
   blocked: EntityRef[]
   ready: EntityRef[]
+  projects: Array<{ id: string; name: string }>
 }> {
-  const [graphRes, issuesRes, blockedRes, readyRes] = await Promise.all([
+  const [graphRes, issuesRes, blockedRes, readyRes, projectsRes] = await Promise.all([
     fetch(buildGraphUrl(orgId)),
     fetch(`/api/orgs/${encodeURIComponent(orgId)}/issues`),
     fetch(`/api/orgs/${encodeURIComponent(orgId)}/planning/blocked`),
-    fetch(`/api/orgs/${encodeURIComponent(orgId)}/planning/ready`)
+    fetch(`/api/orgs/${encodeURIComponent(orgId)}/planning/ready`),
+    fetch(`/api/orgs/${encodeURIComponent(orgId)}/projects`)
   ])
 
   const graph = graphRes.ok ? await graphRes.json() : { nodes: [], edges: [] }
   const issues = issuesRes.ok ? await issuesRes.json() : []
   const blocked = blockedRes.ok ? await blockedRes.json() : []
   const ready = readyRes.ok ? await readyRes.json() : []
+  const projects = projectsRes.ok ? await projectsRes.json() : []
 
-  return { graph, issues, blocked, ready }
+  return { graph, issues, blocked, ready, projects }
 }
 
 const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
@@ -194,10 +197,11 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
 
   const projects = createMemo(() => {
     const d = data()
-    if (!d) return []
-    const set = new Set<string>()
-    for (const n of d.graph.nodes) set.add(n.ref.projectId)
-    return [...set]
+    if (!d) return [] as Array<{ id: string; name: string }>
+    // Only include projects that have graph nodes
+    const nodeProjectIds = new Set<string>()
+    for (const n of d.graph.nodes) nodeProjectIds.add(n.ref.projectId)
+    return d.projects.filter((p: { id: string; name: string }) => nodeProjectIds.has(p.id))
   })
 
   const labels = createMemo(() => {
@@ -249,7 +253,7 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
               onChange={(e) => setFilterProject(e.currentTarget.value)}
             >
               <option value="">All projects</option>
-              <For each={projects()}>{(p) => <option value={p}>{p}</option>}</For>
+              <For each={projects()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
             </select>
           </Show>
           <Show when={labels().length > 0}>

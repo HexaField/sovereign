@@ -50,10 +50,17 @@ function refKey(r: EntityRef): string {
   return `${r.orgId}:${r.projectId}:${r.remote}:${r.issueId}`
 }
 
+interface ProjectInfo {
+  id: string
+  name: string
+}
+
 const PlanningPanel: Component = () => {
   const ws = () => activeWorkspace()
   const [completion, setCompletion] = createSignal<PlanningCompletion | null>(null)
   const [issues, setIssues] = createSignal<PlanningIssue[]>([])
+  const [projects, setProjects] = createSignal<ProjectInfo[]>([])
+  const [selectedProjectId, setSelectedProjectId] = createSignal<string | null>(null)
   const [blockedIds, setBlockedIds] = createSignal<Set<string>>(new Set())
   const [readyIds, setReadyIds] = createSignal<Set<string>>(new Set())
   const [loading, setLoading] = createSignal(false)
@@ -74,11 +81,12 @@ const PlanningPanel: Component = () => {
     setLoading(true)
     setError(null)
     try {
-      const [compRes, issuesRes, blockedRes, readyRes] = await Promise.all([
+      const [compRes, issuesRes, blockedRes, readyRes, projectsRes] = await Promise.all([
         fetch(buildPlanningUrl(orgId)),
         fetch(buildIssuesUrl(orgId)),
         fetch(buildBlockedUrl(orgId)),
-        fetch(buildReadyUrl(orgId))
+        fetch(buildReadyUrl(orgId)),
+        fetch(`/api/orgs/${encodeURIComponent(orgId)}/projects`)
       ])
 
       if (compRes.ok) {
@@ -108,6 +116,11 @@ const PlanningPanel: Component = () => {
       if (readyRes.ok) {
         const refs: EntityRef[] = await readyRes.json()
         setReadyIds(new Set(refs.map(refKey)))
+      }
+
+      if (projectsRes.ok) {
+        const projs: ProjectInfo[] = await projectsRes.json()
+        setProjects(projs)
       }
 
       // Compute counts from categorized issues
@@ -167,6 +180,8 @@ const PlanningPanel: Component = () => {
         else {
           setCompletion(null)
           setIssues([])
+          setProjects([])
+          setSelectedProjectId(null)
           setError(null)
           setSyncResult(null)
         }
@@ -174,8 +189,13 @@ const PlanningPanel: Component = () => {
     )
   )
 
+  const filteredIssues = () => {
+    const pid = selectedProjectId()
+    return pid ? issues().filter((i) => i.projectId === pid) : issues()
+  }
+
   const categorizedIssues = () => {
-    const all = issues()
+    const all = filteredIssues()
     const bSet = blockedIds()
     const rSet = readyIds()
     const ready: PlanningIssue[] = []
@@ -205,9 +225,26 @@ const PlanningPanel: Component = () => {
   return (
     <div class="flex h-full flex-col">
       <div class="border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
-        <span class="text-xs font-medium" style={{ color: 'var(--c-text-heading)' }}>
-          Planning
-        </span>
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium" style={{ color: 'var(--c-text-heading)' }}>
+            Planning
+          </span>
+          <Show when={projects().length > 1}>
+            <select
+              class="rounded border px-1.5 py-0.5 text-[10px]"
+              style={{
+                background: 'var(--c-bg-secondary)',
+                color: 'var(--c-text)',
+                'border-color': 'var(--c-border)'
+              }}
+              value={selectedProjectId() ?? ''}
+              onChange={(e) => setSelectedProjectId(e.currentTarget.value || null)}
+            >
+              <option value="">All projects</option>
+              <For each={projects()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
+            </select>
+          </Show>
+        </div>
       </div>
       <div class="flex-1 overflow-auto p-3">
         <Show
