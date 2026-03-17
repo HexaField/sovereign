@@ -12,6 +12,7 @@ function tmpDir(): string {
 const sampleIssues: Issue[] = [
   {
     id: '1',
+    kind: 'issue',
     projectId: 'proj1',
     orgId: 'org1',
     remote: 'origin',

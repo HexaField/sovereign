@@ -16,6 +16,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
   issueCounter++
   return {
     id: String(issueCounter),
+    kind: 'issue',
     projectId: 'proj1',
     orgId: 'org1',
     remote: 'github',

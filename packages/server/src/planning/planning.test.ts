@@ -14,6 +14,7 @@ function makeBus() {
 
 function makeIssue(overrides: Partial<Issue> & { id: string }): Issue {
   return {
+    kind: 'issue',
     projectId: 'proj',
     orgId: 'org1',
     remote: 'github',

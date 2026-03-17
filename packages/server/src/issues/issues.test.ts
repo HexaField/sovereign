@@ -6,6 +6,7 @@ import type { EventBus, BusEvent, BusHandler, Unsubscribe } from '@sovereign/cor
 
 const sampleIssue: Issue = {
   id: '1',
+  kind: 'issue',
   projectId: 'proj1',
   orgId: 'org1',
   remote: 'origin',
