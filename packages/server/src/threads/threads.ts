@@ -90,6 +90,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       if (filter.archived !== undefined) results = results.filter((t) => t.archived === filter.archived)
       if (filter.active) results = results.filter((t) => !t.archived)
     }
+    results.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
     return results
   }
 
