@@ -40,12 +40,31 @@ export function fetchThreadsForOrg(orgId?: string): void {
 
 export function switchWorkspaceThreads(orgId: string): void {
   setActiveOrgIdForThreads(orgId)
-  // Reset to main thread and clear hash
-  setThreadKey('main')
   if (typeof history !== 'undefined') {
     history.pushState(null, '', location.pathname)
   }
-  fetchThreadsForOrg(orgId)
+  // Fetch threads and auto-switch to most recent
+  const url = `/api/threads?orgId=${encodeURIComponent(orgId)}`
+  fetch(url)
+    .then((r) => r.json())
+    .then((data: any) => {
+      const raw: ThreadInfo[] = (data.threads ?? data ?? []).filter((t: any) => t.key)
+      setThreads(raw)
+      // Switch to most recent thread (server returns sorted by lastActivity desc)
+      const first = raw[0]
+      if (first) {
+        setThreadKey(first.key)
+        if (typeof history !== 'undefined') {
+          history.pushState(null, '', `#thread=${first.key}`)
+        }
+      } else {
+        setThreadKey('main')
+      }
+    })
+    .catch(() => {
+      setThreads([])
+      setThreadKey('main')
+    })
 }
 
 export function switchThread(key: string): void {
