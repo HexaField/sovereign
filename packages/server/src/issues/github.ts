@@ -22,16 +22,17 @@ export function createGitHubIssueProvider(config: GitHubProviderConfig): IssuePr
     return stdout
   }
 
-  function mapIssue(raw: Record<string, unknown>): Issue {
+  function mapIssue(raw: Record<string, unknown>, kind: 'issue' | 'pr' = 'issue'): Issue {
     return {
       id: String(raw.number),
+      kind,
       projectId: config.projectId,
       orgId: config.orgId,
       remote: config.remote,
       provider: 'github',
       title: String(raw.title ?? ''),
       body: String(raw.body ?? ''),
-      state: raw.state === 'CLOSED' ? 'closed' : 'open',
+      state: raw.state === 'CLOSED' || raw.state === 'MERGED' ? 'closed' : 'open',
       labels: Array.isArray(raw.labels)
         ? (raw.labels as Array<{ name: string }>).map((l) => (typeof l === 'string' ? l : l.name))
         : [],
@@ -66,7 +67,8 @@ export function createGitHubIssueProvider(config: GitHubProviderConfig): IssuePr
 
   return {
     async list(_repoPath: string, filter?: IssueFilter): Promise<Issue[]> {
-      const args = [
+      // Fetch issues
+      const issueArgs = [
         'issue',
         'list',
         '-R',
@@ -74,30 +76,51 @@ export function createGitHubIssueProvider(config: GitHubProviderConfig): IssuePr
         '--json',
         'number,title,body,state,labels,assignees,author,createdAt,updatedAt,url,comments'
       ]
-      if (filter?.state) args.push('--state', filter.state === 'closed' ? 'closed' : 'open')
-      if (filter?.label) args.push('--label', filter.label)
-      if (filter?.assignee) args.push('--assignee', filter.assignee)
-      if (filter?.q) args.push('--search', filter.q)
-      if (filter?.limit) args.push('--limit', String(filter.limit))
+      if (filter?.state) issueArgs.push('--state', filter.state === 'closed' ? 'closed' : 'open')
+      if (filter?.label) issueArgs.push('--label', filter.label)
+      if (filter?.assignee) issueArgs.push('--assignee', filter.assignee)
+      if (filter?.q) issueArgs.push('--search', filter.q)
+      if (filter?.limit) issueArgs.push('--limit', String(filter.limit))
 
-      const output = await gh(args)
-      const items = JSON.parse(output) as Array<Record<string, unknown>>
-      return items.map((i) => mapIssue(i))
+      const issueOutput = await gh(issueArgs)
+      const issues = (JSON.parse(issueOutput) as Array<Record<string, unknown>>).map((i) => mapIssue(i, 'issue'))
+
+      // Fetch PRs
+      const prArgs = [
+        'pr',
+        'list',
+        '-R',
+        config.repo,
+        '--json',
+        'number,title,body,state,labels,assignees,author,createdAt,updatedAt,url,comments'
+      ]
+      if (filter?.state) prArgs.push('--state', filter.state === 'closed' ? 'closed' : 'open')
+      if (filter?.label) prArgs.push('--label', filter.label)
+      if (filter?.assignee) prArgs.push('--assignee', filter.assignee)
+      if (filter?.q) prArgs.push('--search', filter.q)
+      if (filter?.limit) prArgs.push('--limit', String(filter.limit))
+
+      const prOutput = await gh(prArgs)
+      const prs = (JSON.parse(prOutput) as Array<Record<string, unknown>>).map((i) => mapIssue(i, 'pr'))
+
+      return [...issues, ...prs]
     },
 
     async get(_repoPath: string, issueId: string): Promise<Issue | undefined> {
+      const fields = 'number,title,body,state,labels,assignees,author,createdAt,updatedAt,url,comments'
+      // Try as issue first
       try {
-        const output = await gh([
-          'issue',
-          'view',
-          issueId,
-          '-R',
-          config.repo,
-          '--json',
-          'number,title,body,state,labels,assignees,author,createdAt,updatedAt,url,comments'
-        ])
+        const output = await gh(['issue', 'view', issueId, '-R', config.repo, '--json', fields])
         const raw = JSON.parse(output) as Record<string, unknown>
-        return mapIssue(raw)
+        return mapIssue(raw, 'issue')
+      } catch {
+        // Fall through to try as PR
+      }
+      // Try as PR
+      try {
+        const output = await gh(['pr', 'view', issueId, '-R', config.repo, '--json', fields])
+        const raw = JSON.parse(output) as Record<string, unknown>
+        return mapIssue(raw, 'pr')
       } catch {
         return undefined
       }
@@ -115,7 +138,7 @@ export function createGitHubIssueProvider(config: GitHubProviderConfig): IssuePr
 
       const output = await gh(args)
       const raw = JSON.parse(output) as Record<string, unknown>
-      return mapIssue(raw)
+      return mapIssue(raw, 'issue')
     },
 
     async update(

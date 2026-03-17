@@ -42,9 +42,10 @@ export function createRadicleIssueProvider(config: RadicleProviderConfig): Issue
     }
   }
 
-  function mapIssue(raw: Record<string, unknown>): Issue {
+  function mapIssue(raw: Record<string, unknown>, kind: 'issue' | 'pr' = 'issue'): Issue {
     return {
       id: String(raw.id ?? ''),
+      kind,
       projectId: config.projectId,
       orgId: config.orgId,
       remote: config.remote,
@@ -137,6 +138,7 @@ export function createRadicleIssueProvider(config: RadicleProviderConfig): Issue
       return (
         issue ?? {
           id,
+          kind: 'issue',
           projectId: config.projectId,
           orgId: config.orgId,
           remote: config.remote,

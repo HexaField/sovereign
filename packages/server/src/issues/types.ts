@@ -2,6 +2,7 @@
 
 export interface Issue {
   id: string
+  kind: 'issue' | 'pr'
   projectId: string
   orgId: string
   remote: string
