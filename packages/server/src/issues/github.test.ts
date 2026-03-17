@@ -37,7 +37,7 @@ const sampleComment = {
 describe('GitHubIssueProvider', () => {
   describe('list', () => {
     it('lists issues via gh issue list', async () => {
-      const execFn = mockExec({ 'issue list': JSON.stringify([sampleGhIssue]) })
+      const execFn = mockExec({ 'issue list': JSON.stringify([sampleGhIssue]), 'pr list': JSON.stringify([]) })
       const provider = createGitHubIssueProvider({
         repo: 'owner/repo',
         remote: 'origin',
@@ -50,8 +50,24 @@ describe('GitHubIssueProvider', () => {
       expect(execFn).toHaveBeenCalled()
     })
 
+    it('includes PRs in list results', async () => {
+      const samplePr = { ...sampleGhIssue, number: 99, title: 'Fix PR' }
+      const execFn = mockExec({ 'issue list': JSON.stringify([sampleGhIssue]), 'pr list': JSON.stringify([samplePr]) })
+      const provider = createGitHubIssueProvider({
+        repo: 'owner/repo',
+        remote: 'origin',
+        orgId: 'org1',
+        projectId: 'proj1',
+        execFn
+      })
+      const issues = await provider.list('')
+      expect(issues).toHaveLength(2)
+      expect(issues[0].kind).toBe('issue')
+      expect(issues[1].kind).toBe('pr')
+    })
+
     it('passes state filter to gh CLI', async () => {
-      const execFn = mockExec({ 'issue list': JSON.stringify([]) })
+      const execFn = mockExec({ 'issue list': JSON.stringify([]), 'pr list': JSON.stringify([]) })
       const provider = createGitHubIssueProvider({
         repo: 'owner/repo',
         remote: 'origin',
@@ -64,7 +80,7 @@ describe('GitHubIssueProvider', () => {
     })
 
     it('passes label filter to gh CLI', async () => {
-      const execFn = mockExec({ 'issue list': JSON.stringify([]) })
+      const execFn = mockExec({ 'issue list': JSON.stringify([]), 'pr list': JSON.stringify([]) })
       const provider = createGitHubIssueProvider({
         repo: 'owner/repo',
         remote: 'origin',
@@ -77,7 +93,7 @@ describe('GitHubIssueProvider', () => {
     })
 
     it('passes assignee filter to gh CLI', async () => {
-      const execFn = mockExec({ 'issue list': JSON.stringify([]) })
+      const execFn = mockExec({ 'issue list': JSON.stringify([]), 'pr list': JSON.stringify([]) })
       const provider = createGitHubIssueProvider({
         repo: 'owner/repo',
         remote: 'origin',
@@ -90,7 +106,7 @@ describe('GitHubIssueProvider', () => {
     })
 
     it('parses gh CLI JSON output into Issue objects', async () => {
-      const execFn = mockExec({ 'issue list': JSON.stringify([sampleGhIssue]) })
+      const execFn = mockExec({ 'issue list': JSON.stringify([sampleGhIssue]), 'pr list': JSON.stringify([]) })
       const provider = createGitHubIssueProvider({
         repo: 'owner/repo',
         remote: 'origin',
@@ -101,10 +117,11 @@ describe('GitHubIssueProvider', () => {
       const issues = await provider.list('')
       expect(issues[0].id).toBe('42')
       expect(issues[0].title).toBe('Fix bug')
+      expect(issues[0].kind).toBe('issue')
     })
 
     it('maps all unified issue model fields', async () => {
-      const execFn = mockExec({ 'issue list': JSON.stringify([sampleGhIssue]) })
+      const execFn = mockExec({ 'issue list': JSON.stringify([sampleGhIssue]), 'pr list': JSON.stringify([]) })
       const provider = createGitHubIssueProvider({
         repo: 'owner/repo',
         remote: 'origin',

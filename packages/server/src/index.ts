@@ -285,8 +285,8 @@ function parseGitRemotes(
       const url = urlMatch[1].trim()
 
       // GitHub: git@github.com:owner/repo.git or https://github.com/owner/repo.git
-      const ghSsh = url.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/)
-      const ghHttps = url.match(/github\.com\/([^/]+\/[^/.]+?)(?:\.git)?$/)
+      const ghSsh = url.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?\/?$/)
+      const ghHttps = url.match(/github\.com\/([^/]+\/[^/.]+?)(?:\.git)?\/?$/)
       if (ghSsh || ghHttps) {
         const repo = (ghSsh || ghHttps)![1]
         remotes.push({ name: remoteName, provider: 'github', repo })

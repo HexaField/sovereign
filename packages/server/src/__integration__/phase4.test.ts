@@ -32,6 +32,7 @@ function cleanup(dir: string) {
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
+    kind: 'issue',
     id: '1',
     projectId: 'proj1',
     orgId: 'org1',
