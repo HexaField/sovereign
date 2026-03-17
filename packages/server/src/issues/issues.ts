@@ -49,7 +49,7 @@ export function createIssueTracker(
       let allIssues: Issue[] = []
 
       for (const remote of filteredRemotes) {
-        const pid = projectId || remote.name
+        const pid = projectId || remote.projectId || remote.name
         try {
           const provider = makeProvider(remote, orgId, pid)
           const issues = await provider.list(repoPath(remote), filter)

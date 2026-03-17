@@ -233,8 +233,14 @@ app.use(createDiffRouter(changeSetManager))
 function getRemotes(
   orgId: string,
   projectId: string
-): Array<{ name: string; provider: 'github' | 'radicle'; repo?: string; rid?: string }> {
-  const allRemotes: Array<{ name: string; provider: 'github' | 'radicle'; repo?: string; rid?: string }> = []
+): Array<{ name: string; provider: 'github' | 'radicle'; repo?: string; rid?: string; projectId?: string }> {
+  const allRemotes: Array<{
+    name: string
+    provider: 'github' | 'radicle'
+    repo?: string
+    rid?: string
+    projectId?: string
+  }> = []
 
   // Determine which projects to scan
   let projects: Array<{ id: string; repoPath: string }> = []
@@ -252,7 +258,9 @@ function getRemotes(
 
   for (const project of projects) {
     const remotes = parseGitRemotes(project.repoPath)
-    allRemotes.push(...remotes)
+    for (const remote of remotes) {
+      allRemotes.push({ ...remote, projectId: project.id })
+    }
   }
 
   return allRemotes

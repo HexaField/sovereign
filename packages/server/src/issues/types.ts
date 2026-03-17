@@ -60,6 +60,7 @@ export interface Remote {
   provider: 'github' | 'radicle'
   repo?: string
   rid?: string
+  projectId?: string
 }
 
 export interface IssueTracker {
