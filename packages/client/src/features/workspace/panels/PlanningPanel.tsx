@@ -4,9 +4,11 @@ import { activeWorkspace } from '../store.js'
 
 export interface PlanningCompletion {
   total: number
+  completed: number
   ready: number
   blocked: number
-  inProgress: number
+  active: number
+  completionPct: number
 }
 
 export function buildPlanningUrl(orgId: string): string {
@@ -19,6 +21,7 @@ const PlanningPanel: Component = () => {
   const [loading, setLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [syncing, setSyncing] = createSignal(false)
+  const [syncResult, setSyncResult] = createSignal<string | null>(null)
 
   async function fetchCompletion(orgId: string) {
     setLoading(true)
@@ -41,13 +44,23 @@ const PlanningPanel: Component = () => {
 
   async function syncPlanning(orgId: string) {
     setSyncing(true)
+    setSyncResult(null)
     try {
       const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}/planning/sync`, { method: 'POST' })
       if (res.ok) {
+        const data = await res.json()
         await fetchCompletion(orgId)
+        const c = completion()
+        if (c && c.total === 0) {
+          setSyncResult(
+            `Synced — ${data.parsed ?? 0} issues found. No planning items yet. Add issues via your configured provider (GitHub/Radicle) to populate the plan.`
+          )
+        }
+      } else {
+        setSyncResult('Sync failed — check provider configuration.')
       }
     } catch {
-      // ignore
+      setSyncResult('Sync failed — could not reach server.')
     } finally {
       setSyncing(false)
     }
@@ -61,6 +74,7 @@ const PlanningPanel: Component = () => {
         else {
           setCompletion(null)
           setError(null)
+          setSyncResult(null)
         }
       }
     )
@@ -92,7 +106,7 @@ const PlanningPanel: Component = () => {
             </p>
           }
         >
-          <Show when={loading()}>
+          <Show when={loading() && !syncing()}>
             <p class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
               Loading...
             </p>
@@ -139,16 +153,19 @@ const PlanningPanel: Component = () => {
                   if (orgId) syncPlanning(orgId)
                 }}
               >
-                {syncing() ? 'Syncing...' : 'Initialize Planning'}
+                {syncing() ? 'Syncing...' : 'Sync from Provider'}
               </button>
+              <Show when={syncResult()}>
+                <p class="text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  {syncResult()}
+                </p>
+              </Show>
             </div>
           </Show>
 
           <Show when={!loading() && !error() && hasData()}>
             {(() => {
               const c = completion()!
-              const completedPct =
-                c.total > 0 ? Math.round(((c.total - c.ready - c.blocked - c.inProgress) / c.total) * 100) : 0
               return (
                 <div class="flex flex-col gap-3">
                   <div class="flex items-center gap-2">
@@ -158,19 +175,35 @@ const PlanningPanel: Component = () => {
                     >
                       <div
                         class="h-full rounded-full transition-all"
-                        style={{ width: `${completedPct}%`, background: 'var(--c-accent)' }}
+                        style={{ width: `${c.completionPct}%`, background: 'var(--c-accent)' }}
                       />
                     </div>
                     <span class="text-xs tabular-nums" style={{ color: 'var(--c-text-muted)' }}>
-                      {completedPct}%
+                      {c.completionPct}%
                     </span>
                   </div>
                   <div class="grid grid-cols-2 gap-2">
                     <StatCard label="Total" value={c.total} color="var(--c-text)" />
                     <StatCard label="Ready" value={c.ready} color="var(--c-success)" />
-                    <StatCard label="In Progress" value={c.inProgress} color="var(--c-accent)" />
+                    <StatCard label="Active" value={c.active} color="var(--c-accent)" />
                     <StatCard label="Blocked" value={c.blocked} color="var(--c-error)" />
                   </div>
+                  <button
+                    class="mt-1 rounded px-2 py-1 text-xs transition-colors"
+                    style={{
+                      background: 'var(--c-bg-secondary)',
+                      color: 'var(--c-text-muted)',
+                      cursor: syncing() ? 'not-allowed' : 'pointer',
+                      opacity: syncing() ? '0.6' : '1'
+                    }}
+                    disabled={syncing()}
+                    onClick={() => {
+                      const orgId = ws()?.orgId
+                      if (orgId) syncPlanning(orgId)
+                    }}
+                  >
+                    {syncing() ? 'Syncing...' : 'Refresh from provider'}
+                  </button>
                 </div>
               )
             })()}
