@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js'
 import { switchWorkspaceThreads } from '../threads/store.js'
+import { syncViewToUrl, activeView } from '../nav/store.js'
 
 export interface WorkspaceContext {
   orgId: string
@@ -230,25 +231,35 @@ export function toggleSidebar(): void {
 
 const STORAGE_KEY = 'sovereign:active-workspace'
 
+function readWorkspaceFromUrl(): string | null {
+  if (typeof location === 'undefined') return null
+  const params = new URLSearchParams(location.search)
+  return params.get('workspace')
+}
+
 function loadFromStorage(): WorkspaceContext | null {
+  // URL takes priority
+  const urlWorkspace = readWorkspaceFromUrl()
+  if (urlWorkspace) {
+    return { orgId: urlWorkspace, orgName: urlWorkspace, activeProjectId: null, activeProjectName: null }
+  }
+  // Fall back to localStorage for backward compat (first load migration)
   if (typeof localStorage === 'undefined') return null
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) {
+      // Migrate: remove from localStorage so it doesn't interfere with other tabs
+      localStorage.removeItem(STORAGE_KEY)
+      return JSON.parse(raw)
+    }
   } catch {
     /* ignore */
   }
   return null
 }
 
-function saveToStorage(ctx: WorkspaceContext | null): void {
-  if (typeof localStorage === 'undefined') return
-  try {
-    if (ctx) localStorage.setItem(STORAGE_KEY, JSON.stringify(ctx))
-    else localStorage.removeItem(STORAGE_KEY)
-  } catch {
-    /* ignore */
-  }
+function saveToStorage(_ctx: WorkspaceContext | null): void {
+  // No-op — workspace is persisted in URL, not localStorage
 }
 
 const initial = loadFromStorage() || {
@@ -272,6 +283,7 @@ export function setActiveWorkspace(orgId: string, orgName?: string): void {
   }
   _setActiveWorkspace(ctx)
   saveToStorage(ctx)
+  syncViewToUrl(activeView(), orgId)
   restoreWorkspacePanelState(orgId)
   switchWorkspaceThreads(orgId)
 }
@@ -321,7 +333,25 @@ export function _resetWorkspaceStore(): void {
  */
 export async function autoSelectProject(): Promise<void> {
   const ws = activeWorkspace()
-  if (!ws || ws.activeProjectId) return // already selected
+  if (!ws) return
+
+  // Resolve org name if we only had an ID from URL
+  if (ws.orgName === ws.orgId && ws.orgId !== '_global') {
+    try {
+      const res = await fetch(`/api/orgs/${encodeURIComponent(ws.orgId)}`)
+      if (res.ok) {
+        const org: { id: string; name: string } = await res.json()
+        if (org.name) {
+          const updated = { ...ws, orgName: org.name }
+          _setActiveWorkspace(updated)
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (ws.activeProjectId) return // already selected
 
   try {
     const res = await fetch(`/api/orgs/${encodeURIComponent(ws.orgId)}/projects`)
