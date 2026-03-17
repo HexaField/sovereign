@@ -45,7 +45,10 @@ import {
   openFileTabs,
   activeFileTabId,
   setActiveFileTabId,
-  closeFileTab
+  closeFileTab,
+  mainContentView,
+  issueDetailParams,
+  activeWorkspace
 } from './store.js'
 
 // Chat imports
@@ -81,6 +84,8 @@ const MeetingsPanel = lazy(() =>
 )
 const LogsPanel = lazy(() => import('./panels/LogsPanel.js'))
 const FileViewerTab = lazy(() => import('./tabs/FileViewerTab.js'))
+const PlanningDAGView = lazy(() => import('./panels/PlanningDAGView.js'))
+const IssueDetailView = lazy(() => import('./panels/IssueDetailView.js'))
 
 // Icon component lookup
 const SIDEBAR_ICON_MAP: Record<string, Component<{ class?: string }>> = {
@@ -165,78 +170,111 @@ const SidebarContent: Component = () => {
   )
 }
 
-// §3.6 — Main Content Area with file tabs
+// §3.6 — Main Content Area with file tabs and planning views
 const MainContentArea: Component = () => {
   const tabs = openFileTabs
   const activeId = activeFileTabId
+  const view = mainContentView
+  const ws = activeWorkspace
 
   return (
     <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
-      {/* Tab bar */}
-      <Show when={tabs().length > 0}>
-        <div
-          class="scrollbar-none flex shrink-0 overflow-x-auto border-b"
-          style={{ 'border-color': 'var(--c-border)', background: 'var(--c-bg-raised)' }}
-        >
-          <For each={tabs()}>
-            {(tab) => (
-              <div
-                class="group flex shrink-0 cursor-pointer items-center gap-1.5 border-r px-3 py-1.5 text-xs"
-                style={{
-                  'border-color': 'var(--c-border)',
-                  background: activeId() === tab.id ? 'var(--c-bg)' : 'transparent',
-                  color: activeId() === tab.id ? 'var(--c-text)' : 'var(--c-text-muted)',
-                  'border-bottom': activeId() === tab.id ? '2px solid var(--c-accent)' : '2px solid transparent'
-                }}
-                onClick={() => setActiveFileTabId(tab.id)}
-              >
-                <span class="max-w-[200px] truncate" title={tab.path}>
-                  <span style={{ color: 'var(--c-text-muted)', 'font-size': '0.65rem' }}>
-                    {tab.path.split('/').slice(0, -1).join('/') ? tab.path.split('/').slice(0, -1).join('/') + '/' : ''}
-                  </span>
-                  {tab.label}
-                </span>
-                <button
-                  class="ml-1 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
-                  style={{ color: 'var(--c-text-muted)' }}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeFileTab(tab.id)
-                  }}
-                >
-                  <CloseIcon class="h-3 w-3" />
-                </button>
-              </div>
-            )}
-          </For>
-        </div>
-      </Show>
-
-      {/* Content */}
-      <div class="flex-1 overflow-auto">
-        <Show
-          when={activeId() && tabs().find((t) => t.id === activeId())}
-          fallback={
-            <div class="flex h-full items-center justify-center">
-              <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
-                Select a file to get started
+      <Switch>
+        <Match when={view() === 'planning-dag' && ws()}>
+          <Suspense
+            fallback={
+              <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                Loading...
               </p>
+            }
+          >
+            <PlanningDAGView orgId={ws()!.orgId} />
+          </Suspense>
+        </Match>
+        <Match when={view() === 'issue-detail' && issueDetailParams()}>
+          <Suspense
+            fallback={
+              <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                Loading...
+              </p>
+            }
+          >
+            {(() => {
+              const params = issueDetailParams()!
+              return <IssueDetailView orgId={params.orgId} projectId={params.projectId} issueId={params.issueId} />
+            })()}
+          </Suspense>
+        </Match>
+        <Match when={view() === 'files'}>
+          {/* Tab bar */}
+          <Show when={tabs().length > 0}>
+            <div
+              class="scrollbar-none flex shrink-0 overflow-x-auto border-b"
+              style={{ 'border-color': 'var(--c-border)', background: 'var(--c-bg-raised)' }}
+            >
+              <For each={tabs()}>
+                {(tab) => (
+                  <div
+                    class="group flex shrink-0 cursor-pointer items-center gap-1.5 border-r px-3 py-1.5 text-xs"
+                    style={{
+                      'border-color': 'var(--c-border)',
+                      background: activeId() === tab.id ? 'var(--c-bg)' : 'transparent',
+                      color: activeId() === tab.id ? 'var(--c-text)' : 'var(--c-text-muted)',
+                      'border-bottom': activeId() === tab.id ? '2px solid var(--c-accent)' : '2px solid transparent'
+                    }}
+                    onClick={() => setActiveFileTabId(tab.id)}
+                  >
+                    <span class="max-w-[200px] truncate" title={tab.path}>
+                      <span style={{ color: 'var(--c-text-muted)', 'font-size': '0.65rem' }}>
+                        {tab.path.split('/').slice(0, -1).join('/')
+                          ? tab.path.split('/').slice(0, -1).join('/') + '/'
+                          : ''}
+                      </span>
+                      {tab.label}
+                    </span>
+                    <button
+                      class="ml-1 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+                      style={{ color: 'var(--c-text-muted)' }}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        closeFileTab(tab.id)
+                      }}
+                    >
+                      <CloseIcon class="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+              </For>
             </div>
-          }
-        >
-          {(tab) => (
-            <Suspense
+          </Show>
+
+          {/* Content */}
+          <div class="flex-1 overflow-auto">
+            <Show
+              when={activeId() && tabs().find((t) => t.id === activeId())}
               fallback={
-                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                  Loading file...
-                </p>
+                <div class="flex h-full items-center justify-center">
+                  <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
+                    Select a file to get started
+                  </p>
+                </div>
               }
             >
-              <FileViewerTab path={tab().path} projectId={tab().projectId} onClose={() => closeFileTab(tab().id)} />
-            </Suspense>
-          )}
-        </Show>
-      </div>
+              {(tab) => (
+                <Suspense
+                  fallback={
+                    <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                      Loading file...
+                    </p>
+                  }
+                >
+                  <FileViewerTab path={tab().path} projectId={tab().projectId} onClose={() => closeFileTab(tab().id)} />
+                </Suspense>
+              )}
+            </Show>
+          </div>
+        </Match>
+      </Switch>
     </div>
   )
 }

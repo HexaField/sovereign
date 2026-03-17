@@ -1,39 +1,132 @@
-import { Show, createSignal, createEffect, on } from 'solid-js'
+import { Show, For, createSignal, createEffect, on } from 'solid-js'
 import type { Component } from 'solid-js'
-import { activeWorkspace } from '../store.js'
+import { activeWorkspace, openPlanningDAG, openIssueDetail } from '../store.js'
 
 export interface PlanningCompletion {
   total: number
-  completed: number
+  closed: number
+  percentage: number
   ready: number
   blocked: number
-  active: number
-  completionPct: number
+  inProgress: number
+}
+
+export interface PlanningIssue {
+  id: string
+  projectId: string
+  orgId: string
+  remote: string
+  title: string
+  state: 'open' | 'closed'
+  labels: string[]
+  assignees: string[]
+  providerUrl?: string
 }
 
 export function buildPlanningUrl(orgId: string): string {
   return `/api/orgs/${encodeURIComponent(orgId)}/planning/completion`
 }
 
+export function buildIssuesUrl(orgId: string): string {
+  return `/api/orgs/${encodeURIComponent(orgId)}/issues`
+}
+
+export function buildBlockedUrl(orgId: string): string {
+  return `/api/orgs/${encodeURIComponent(orgId)}/planning/blocked`
+}
+
+export function buildReadyUrl(orgId: string): string {
+  return `/api/orgs/${encodeURIComponent(orgId)}/planning/ready`
+}
+
+interface EntityRef {
+  orgId: string
+  projectId: string
+  remote: string
+  issueId: string
+}
+
+function refKey(r: EntityRef): string {
+  return `${r.orgId}:${r.projectId}:${r.remote}:${r.issueId}`
+}
+
 const PlanningPanel: Component = () => {
   const ws = () => activeWorkspace()
   const [completion, setCompletion] = createSignal<PlanningCompletion | null>(null)
+  const [issues, setIssues] = createSignal<PlanningIssue[]>([])
+  const [blockedIds, setBlockedIds] = createSignal<Set<string>>(new Set())
+  const [readyIds, setReadyIds] = createSignal<Set<string>>(new Set())
   const [loading, setLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [syncing, setSyncing] = createSignal(false)
   const [syncResult, setSyncResult] = createSignal<string | null>(null)
+  const [expandedSections, setExpandedSections] = createSignal<Record<string, boolean>>({
+    ready: true,
+    blocked: true,
+    inProgress: true
+  })
 
-  async function fetchCompletion(orgId: string) {
+  function toggleSection(key: string): void {
+    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  async function fetchAll(orgId: string) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(buildPlanningUrl(orgId))
-      if (!res.ok) {
+      const [compRes, issuesRes, blockedRes, readyRes] = await Promise.all([
+        fetch(buildPlanningUrl(orgId)),
+        fetch(buildIssuesUrl(orgId)),
+        fetch(buildBlockedUrl(orgId)),
+        fetch(buildReadyUrl(orgId))
+      ])
+
+      if (compRes.ok) {
+        const data = await compRes.json()
+        // Map raw API shape to our interface
+        setCompletion({
+          total: data.total ?? 0,
+          closed: data.closed ?? 0,
+          percentage: data.percentage ?? 0,
+          ready: 0,
+          blocked: 0,
+          inProgress: 0
+        })
+      } else {
         setCompletion(null)
-        return
       }
-      const data = await res.json()
-      setCompletion(data)
+
+      if (issuesRes.ok) {
+        setIssues(await issuesRes.json())
+      }
+
+      if (blockedRes.ok) {
+        const refs: EntityRef[] = await blockedRes.json()
+        setBlockedIds(new Set(refs.map(refKey)))
+      }
+
+      if (readyRes.ok) {
+        const refs: EntityRef[] = await readyRes.json()
+        setReadyIds(new Set(refs.map(refKey)))
+      }
+
+      // Compute counts from categorized issues
+      const allIssues = issues()
+      const bSet = blockedIds()
+      const rSet = readyIds()
+      let readyCount = 0
+      let blockedCount = 0
+      let inProgressCount = 0
+      for (const issue of allIssues) {
+        if (issue.state === 'closed') continue
+        const key = refKey({ orgId: issue.orgId, projectId: issue.projectId, remote: issue.remote, issueId: issue.id })
+        if (bSet.has(key)) blockedCount++
+        else if (rSet.has(key)) readyCount++
+        else inProgressCount++
+      }
+      setCompletion((prev) =>
+        prev ? { ...prev, ready: readyCount, blocked: blockedCount, inProgress: inProgressCount } : prev
+      )
     } catch {
       setError('Failed to load planning data')
       setCompletion(null)
@@ -49,7 +142,7 @@ const PlanningPanel: Component = () => {
       const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}/planning/sync`, { method: 'POST' })
       if (res.ok) {
         const data = await res.json()
-        await fetchCompletion(orgId)
+        await fetchAll(orgId)
         const c = completion()
         if (c && c.total === 0) {
           setSyncResult(
@@ -70,15 +163,34 @@ const PlanningPanel: Component = () => {
     on(
       () => ws()?.orgId,
       (orgId) => {
-        if (orgId) fetchCompletion(orgId)
+        if (orgId) fetchAll(orgId)
         else {
           setCompletion(null)
+          setIssues([])
           setError(null)
           setSyncResult(null)
         }
       }
     )
   )
+
+  const categorizedIssues = () => {
+    const all = issues()
+    const bSet = blockedIds()
+    const rSet = readyIds()
+    const ready: PlanningIssue[] = []
+    const blocked: PlanningIssue[] = []
+    const inProgress: PlanningIssue[] = []
+
+    for (const issue of all) {
+      if (issue.state === 'closed') continue
+      const key = refKey({ orgId: issue.orgId, projectId: issue.projectId, remote: issue.remote, issueId: issue.id })
+      if (bSet.has(key)) blocked.push(issue)
+      else if (rSet.has(key)) ready.push(issue)
+      else inProgress.push(issue)
+    }
+    return { ready, blocked, inProgress }
+  }
 
   const isEmpty = () => {
     const c = completion()
@@ -165,9 +277,11 @@ const PlanningPanel: Component = () => {
 
           <Show when={!loading() && !error() && hasData()}>
             {(() => {
-              const c = completion()!
+              const c = () => completion()!
+              const cats = categorizedIssues
               return (
                 <div class="flex flex-col gap-3">
+                  {/* Progress bar */}
                   <div class="flex items-center gap-2">
                     <div
                       class="h-1.5 flex-1 overflow-hidden rounded-full"
@@ -175,21 +289,37 @@ const PlanningPanel: Component = () => {
                     >
                       <div
                         class="h-full rounded-full transition-all"
-                        style={{ width: `${c.completionPct}%`, background: 'var(--c-accent)' }}
+                        style={{ width: `${c().percentage}%`, background: 'var(--c-accent)' }}
                       />
                     </div>
                     <span class="text-xs tabular-nums" style={{ color: 'var(--c-text-muted)' }}>
-                      {c.completionPct}%
+                      {c().percentage}%
                     </span>
                   </div>
+
+                  {/* Stats grid */}
                   <div class="grid grid-cols-2 gap-2">
-                    <StatCard label="Total" value={c.total} color="var(--c-text)" />
-                    <StatCard label="Ready" value={c.ready} color="var(--c-success)" />
-                    <StatCard label="Active" value={c.active} color="var(--c-accent)" />
-                    <StatCard label="Blocked" value={c.blocked} color="var(--c-error)" />
+                    <StatCard label="Total" value={c().total} color="var(--c-text)" />
+                    <StatCard label="Ready" value={c().ready} color="var(--c-success)" />
+                    <StatCard label="In Progress" value={c().inProgress} color="var(--c-warning, #f59e0b)" />
+                    <StatCard label="Blocked" value={c().blocked} color="var(--c-error)" />
                   </div>
+
+                  {/* View Full DAG button */}
                   <button
-                    class="mt-1 rounded px-2 py-1 text-xs transition-colors"
+                    class="mt-1 rounded px-2 py-1.5 text-xs font-medium transition-colors"
+                    style={{
+                      background: 'var(--c-accent)',
+                      color: 'var(--c-text-on-accent)'
+                    }}
+                    onClick={() => openPlanningDAG()}
+                  >
+                    View Full DAG
+                  </button>
+
+                  {/* Sync button */}
+                  <button
+                    class="rounded px-2 py-1 text-xs transition-colors"
                     style={{
                       background: 'var(--c-bg-secondary)',
                       color: 'var(--c-text-muted)',
@@ -204,6 +334,29 @@ const PlanningPanel: Component = () => {
                   >
                     {syncing() ? 'Syncing...' : 'Refresh from provider'}
                   </button>
+
+                  {/* Issue sections */}
+                  <IssueSection
+                    title="Ready"
+                    issues={cats().ready}
+                    color="var(--c-success)"
+                    expanded={expandedSections().ready}
+                    onToggle={() => toggleSection('ready')}
+                  />
+                  <IssueSection
+                    title="Blocked"
+                    issues={cats().blocked}
+                    color="var(--c-error)"
+                    expanded={expandedSections().blocked}
+                    onToggle={() => toggleSection('blocked')}
+                  />
+                  <IssueSection
+                    title="In Progress"
+                    issues={cats().inProgress}
+                    color="var(--c-warning, #f59e0b)"
+                    expanded={expandedSections().inProgress}
+                    onToggle={() => toggleSection('inProgress')}
+                  />
                 </div>
               )
             })()}
@@ -213,6 +366,72 @@ const PlanningPanel: Component = () => {
     </div>
   )
 }
+
+const IssueSection: Component<{
+  title: string
+  issues: PlanningIssue[]
+  color: string
+  expanded: boolean
+  onToggle: () => void
+}> = (props) => (
+  <div>
+    <button
+      class="flex w-full items-center gap-2 rounded px-1 py-1 text-xs font-medium"
+      style={{ color: props.color }}
+      onClick={props.onToggle}
+    >
+      <svg
+        width="10"
+        height="10"
+        viewBox="0 0 10 10"
+        fill="currentColor"
+        style={{ transform: props.expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 150ms' }}
+      >
+        <polygon points="2,0 8,5 2,10" />
+      </svg>
+      {props.title} ({props.issues.length})
+    </button>
+    <Show when={props.expanded}>
+      <div class="ml-1 flex flex-col gap-0.5">
+        <For each={props.issues}>{(issue) => <IssueItem issue={issue} />}</For>
+        <Show when={props.issues.length === 0}>
+          <p class="py-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+            None
+          </p>
+        </Show>
+      </div>
+    </Show>
+  </div>
+)
+
+const IssueItem: Component<{ issue: PlanningIssue }> = (props) => (
+  <button
+    class="flex w-full flex-col gap-0.5 rounded px-2 py-1.5 text-left transition-colors hover:opacity-80"
+    style={{ background: 'var(--c-bg-secondary)' }}
+    onClick={() => openIssueDetail(props.issue.orgId, props.issue.projectId, props.issue.id)}
+  >
+    <span class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+      {props.issue.title}
+    </span>
+    <div class="flex flex-wrap items-center gap-1">
+      <For each={props.issue.labels}>
+        {(label) => (
+          <span
+            class="rounded-full px-1.5 py-0 text-[10px]"
+            style={{ background: 'var(--c-bg-tertiary)', color: 'var(--c-text-muted)' }}
+          >
+            {label}
+          </span>
+        )}
+      </For>
+      <Show when={props.issue.assignees.length > 0}>
+        <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+          {props.issue.assignees.join(', ')}
+        </span>
+      </Show>
+    </div>
+  </button>
+)
 
 const StatCard: Component<{ label: string; value: number; color: string }> = (props) => (
   <div class="rounded p-2" style={{ background: 'var(--c-bg-secondary)' }}>
