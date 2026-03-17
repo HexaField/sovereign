@@ -15,7 +15,8 @@ Object.defineProperty(globalThis, 'localStorage', {
   writable: true
 })
 
-import { buildPlanningUrl, type PlanningCompletion } from './PlanningPanel.js'
+import { buildPlanningUrl, buildIssuesUrl, buildBlockedUrl, buildReadyUrl } from './PlanningPanel.js'
+import type { PlanningCompletion } from './PlanningPanel.js'
 import { activeWorkspace, _setActiveWorkspace } from '../store.js'
 
 beforeEach(() => {
@@ -33,8 +34,20 @@ describe('PlanningPanel', () => {
       expect(buildPlanningUrl('my-org')).toBe('/api/orgs/my-org/planning/completion')
     })
 
+    it('builds issues URL correctly', () => {
+      expect(buildIssuesUrl('my-org')).toBe('/api/orgs/my-org/issues')
+    })
+
+    it('builds blocked URL correctly', () => {
+      expect(buildBlockedUrl('my-org')).toBe('/api/orgs/my-org/planning/blocked')
+    })
+
+    it('builds ready URL correctly', () => {
+      expect(buildReadyUrl('my-org')).toBe('/api/orgs/my-org/planning/ready')
+    })
+
     it('§3.3.4 — shows total items, ready count, blocked count, in-progress count', () => {
-      const data: PlanningCompletion = { total: 20, ready: 5, blocked: 3, inProgress: 7 }
+      const data: PlanningCompletion = { total: 20, closed: 5, percentage: 25, ready: 5, blocked: 3, inProgress: 7 }
       expect(data.total).toBe(20)
       expect(data.ready).toBe(5)
       expect(data.blocked).toBe(3)
@@ -42,7 +55,6 @@ describe('PlanningPanel', () => {
     })
 
     it('§3.3.4 — clicking "View Full DAG" opens PlanningTab in main content', () => {
-      // Structural — button click opens PlanningTab
       expect(true).toBe(true)
     })
 
