@@ -40,9 +40,6 @@ export function fetchThreadsForOrg(orgId?: string): void {
 
 export function switchWorkspaceThreads(orgId: string): void {
   setActiveOrgIdForThreads(orgId)
-  if (typeof history !== 'undefined') {
-    history.pushState(null, '', location.pathname)
-  }
   // Fetch threads and auto-switch to most recent
   const url = `/api/threads?orgId=${encodeURIComponent(orgId)}`
   fetch(url)
@@ -55,7 +52,9 @@ export function switchWorkspaceThreads(orgId: string): void {
       if (first) {
         setThreadKey(first.key)
         if (typeof history !== 'undefined') {
-          history.pushState(null, '', `#thread=${first.key}`)
+          const u = new URL(location.href)
+          u.hash = `thread=${first.key}`
+          history.replaceState(null, '', u.toString())
         }
       } else {
         setThreadKey('main')
@@ -70,7 +69,9 @@ export function switchWorkspaceThreads(orgId: string): void {
 export function switchThread(key: string): void {
   setThreadKey(key)
   if (typeof history !== 'undefined') {
-    history.pushState(null, '', `#thread=${key}`)
+    const u = new URL(location.href)
+    u.hash = `thread=${key}`
+    history.replaceState(null, '', u.toString())
   }
 }
 
