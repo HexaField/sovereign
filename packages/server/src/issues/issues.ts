@@ -40,26 +40,54 @@ export function createIssueTracker(
 
   const tracker: IssueTracker = {
     async list(orgId: string, filter?: IssueFilter): Promise<Issue[]> {
-      // If projectId is specified, get remotes for that project; otherwise we'd need all projects
-      // For simplicity, if no projectId, we still need remotes — caller should provide via filter
       const projectId = filter?.projectId ?? ''
       const remotes = getRemotes(orgId, projectId)
       const filteredRemotes = filter?.remote ? remotes.filter((r) => r.name === filter.remote) : remotes
 
       let allIssues: Issue[] = []
+      const staleRemotes: Array<{ remote: (typeof filteredRemotes)[0]; pid: string }> = []
 
       for (const remote of filteredRemotes) {
         const pid = projectId || remote.projectId || remote.name
-        try {
-          const provider = makeProvider(remote, orgId, pid)
-          const issues = await provider.list(repoPath(remote), filter)
-          allIssues.push(...issues)
-          cache.setCached(orgId, pid, issues)
-        } catch {
-          // Provider unreachable — serve from cache
+        // Serve from cache immediately if fresh enough
+        if (!cache.isStale(orgId, pid)) {
           const cached = cache.getCached(orgId, pid)
-          if (cached) allIssues.push(...cached)
+          if (cached) {
+            allIssues.push(...cached)
+            continue
+          }
         }
+        // Cache is stale or missing — try to serve stale data and revalidate in background
+        const cached = cache.getCached(orgId, pid)
+        if (cached) {
+          allIssues.push(...cached)
+          staleRemotes.push({ remote, pid })
+        } else {
+          // No cache at all — must fetch synchronously
+          try {
+            const provider = makeProvider(remote, orgId, pid)
+            const issues = await provider.list(repoPath(remote), filter)
+            allIssues.push(...issues)
+            cache.setCached(orgId, pid, issues)
+          } catch {
+            // Nothing to serve
+          }
+        }
+      }
+
+      // Background revalidation for stale remotes
+      if (staleRemotes.length > 0) {
+        void (async () => {
+          for (const { remote, pid } of staleRemotes) {
+            try {
+              const provider = makeProvider(remote, orgId, pid)
+              const issues = await provider.list(repoPath(remote), filter)
+              cache.setCached(orgId, pid, issues)
+            } catch {
+              // Keep stale cache
+            }
+          }
+        })()
       }
 
       // Apply local filters that providers might not support
