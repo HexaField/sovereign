@@ -171,12 +171,11 @@ export function createChatModule(
   }
 
   async function handleHistory(threadKey: string, deviceId: string): Promise<void> {
-    const sessionKey = threadToSession.get(threadKey)
+    let sessionKey = threadToSession.get(threadKey)
     if (!sessionKey) {
-      if (wsHandler) {
-        wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, history: [] })
-      }
-      return
+      // Derive and persist the session key for threads not yet in the map
+      sessionKey = deriveSessionKey(threadKey)
+      setMapping(threadKey, sessionKey)
     }
     let history: any[] = []
     try {
