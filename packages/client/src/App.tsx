@@ -8,7 +8,7 @@ import { activeView, initNavStore } from './features/nav/store.js'
 import { loadIdentity } from './lib/identity.js'
 
 // Workspace auto-init
-import { autoSelectProject } from './features/workspace/store.js'
+import { activeWorkspace, autoSelectProject } from './features/workspace/store.js'
 
 // WS + connection stores
 import { wsStore } from './ws/index.js'
@@ -41,7 +41,7 @@ export default function App() {
     const cleanupConnection = initConnectionStore(wsStore)
     cleanups.push(cleanupConnection)
 
-    const cleanupThreads = initThreadStore(wsStore)
+    const cleanupThreads = initThreadStore(wsStore, activeWorkspace()?.orgId)
     cleanups.push(cleanupThreads)
 
     const checkInterval = setInterval(() => {
