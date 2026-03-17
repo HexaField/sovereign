@@ -106,8 +106,13 @@ export function removeEntity(threadKeyVal: string, entityType: string, entityRef
   }).then(() => {})
 }
 
-export function initThreadStore(wsStore?: WsStore): () => void {
+export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () => void {
   ws = wsStore ?? null
+
+  // Sync org filter with the workspace that was restored from localStorage
+  if (initialOrgId) {
+    setActiveOrgIdForThreads(initialOrgId)
+  }
 
   // Read initial thread from hash
   setThreadKey(readThreadFromHash())
