@@ -15,17 +15,13 @@ export type ViewMode =
 // --- New NavView type (§1.2) ---
 export type NavView = 'dashboard' | 'workspace' | 'canvas' | 'planning' | 'system'
 
-const VIEW_STORAGE_KEY = 'sovereign:active-view'
+const VALID_NAV_VIEWS: NavView[] = ['dashboard', 'workspace', 'canvas', 'planning', 'system']
 
-function readNavViewFromStorage(): NavView {
-  if (typeof localStorage === 'undefined') return 'dashboard'
-  try {
-    const val = localStorage.getItem(VIEW_STORAGE_KEY)
-    const valid: NavView[] = ['dashboard', 'workspace', 'canvas', 'planning', 'system']
-    if (val && valid.includes(val as NavView)) return val as NavView
-  } catch {
-    /* ignore */
-  }
+function readNavViewFromUrl(): NavView {
+  if (typeof location === 'undefined') return 'dashboard'
+  const params = new URLSearchParams(location.search)
+  const v = params.get('view')
+  if (v && VALID_NAV_VIEWS.includes(v as NavView)) return v as NavView
   return 'dashboard'
 }
 
@@ -49,19 +45,27 @@ function readViewModeFromUrl(): ViewMode {
 }
 
 export const [viewMode, _setViewMode] = createSignal<ViewMode>(readViewModeFromUrl())
-export const [activeView, _setActiveView] = createSignal<NavView>(readNavViewFromStorage())
+export const [activeView, _setActiveView] = createSignal<NavView>(readNavViewFromUrl())
 export const [drawerOpen, _setDrawerOpen] = createSignal(false)
 export const [settingsOpen, _setSettingsOpen] = createSignal(false)
 
+/** Write current view + workspace to URL search params (replaceState, no navigation) */
+export function syncViewToUrl(view: NavView, workspaceId?: string): void {
+  if (typeof history === 'undefined' || typeof location === 'undefined') return
+  const url = new URL(location.href)
+  if (view === 'dashboard') url.searchParams.delete('view')
+  else url.searchParams.set('view', view)
+  // If workspaceId provided, update it; otherwise preserve existing
+  if (workspaceId !== undefined) {
+    if (workspaceId && workspaceId !== '_global') url.searchParams.set('workspace', workspaceId)
+    else url.searchParams.delete('workspace')
+  }
+  history.replaceState(null, '', url.toString())
+}
+
 export function setActiveView(view: NavView): void {
   _setActiveView(view)
-  if (typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(VIEW_STORAGE_KEY, view)
-    } catch {
-      /* ignore */
-    }
-  }
+  syncViewToUrl(view)
 }
 
 export function setViewMode(mode: ViewMode): void {
@@ -89,8 +93,11 @@ let popstateHandler: (() => void) | null = null
 
 export function initNavStore(): () => void {
   _setViewMode(readViewModeFromUrl())
-  _setActiveView(readNavViewFromStorage())
-  popstateHandler = () => _setViewMode(readViewModeFromUrl())
+  _setActiveView(readNavViewFromUrl())
+  popstateHandler = () => {
+    _setViewMode(readViewModeFromUrl())
+    _setActiveView(readNavViewFromUrl())
+  }
   if (typeof globalThis.addEventListener === 'function') {
     globalThis.addEventListener('popstate', popstateHandler)
   }
