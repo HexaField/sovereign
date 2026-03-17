@@ -61,7 +61,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     const now = Date.now()
     const thread: ThreadInfo = {
       key,
-      orgId: opts.orgId,
+      orgId: opts.orgId ?? '_global',
       entities: opts.entities ?? [],
       label: opts.label,
       lastActivity: now,
@@ -84,13 +84,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     let results = [...threads.values()]
     if (filter) {
       if (filter.orgId)
-        results = results.filter(
-          (t) =>
-            !t.orgId ||
-            t.orgId === '_global' ||
-            t.orgId === filter.orgId ||
-            t.entities.some((e) => e.orgId === filter.orgId)
-        )
+        results = results.filter((t) => t.orgId === filter.orgId || t.entities.some((e) => e.orgId === filter.orgId))
       if (filter.projectId) results = results.filter((t) => t.entities.some((e) => e.projectId === filter.projectId))
       if (filter.entityType) results = results.filter((t) => t.entities.some((e) => e.entityType === filter.entityType))
       if (filter.archived !== undefined) results = results.filter((t) => t.archived === filter.archived)
