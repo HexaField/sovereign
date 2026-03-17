@@ -50,6 +50,27 @@ function refKey(r: EntityRef): string {
   return `${r.orgId}:${r.projectId}:${r.remote}:${r.issueId}`
 }
 
+function planningFilterKey(orgId: string): string {
+  return `sovereign:planning-projects:${orgId}`
+}
+
+function loadProjectFilter(orgId: string): string[] | null {
+  try {
+    const raw = localStorage.getItem(planningFilterKey(orgId))
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function saveProjectFilter(orgId: string, ids: Set<string>): void {
+  try {
+    localStorage.setItem(planningFilterKey(orgId), JSON.stringify([...ids]))
+  } catch {
+    /* ignore */
+  }
+}
+
 interface ProjectInfo {
   id: string
   name: string
@@ -60,7 +81,7 @@ const PlanningPanel: Component = () => {
   const [completion, setCompletion] = createSignal<PlanningCompletion | null>(null)
   const [issues, setIssues] = createSignal<PlanningIssue[]>([])
   const [projects, setProjects] = createSignal<ProjectInfo[]>([])
-  const [selectedProjectId, setSelectedProjectId] = createSignal<string | null>(null)
+  const [enabledProjectIds, setEnabledProjectIds] = createSignal<Set<string>>(new Set())
   const [blockedIds, setBlockedIds] = createSignal<Set<string>>(new Set())
   const [readyIds, setReadyIds] = createSignal<Set<string>>(new Set())
   const [loading, setLoading] = createSignal(false)
@@ -75,6 +96,17 @@ const PlanningPanel: Component = () => {
 
   function toggleSection(key: string): void {
     setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  function toggleProject(projectId: string): void {
+    const orgId = ws()?.orgId
+    setEnabledProjectIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(projectId)) next.delete(projectId)
+      else next.add(projectId)
+      if (orgId) saveProjectFilter(orgId, next)
+      return next
+    })
   }
 
   async function fetchAll(orgId: string) {
@@ -121,6 +153,13 @@ const PlanningPanel: Component = () => {
       if (projectsRes.ok) {
         const projs: ProjectInfo[] = await projectsRes.json()
         setProjects(projs)
+        // Load persisted filter from localStorage, default all enabled
+        const stored = loadProjectFilter(orgId)
+        if (stored) {
+          setEnabledProjectIds(new Set(stored.filter((id: string) => projs.some((p) => p.id === id))))
+        } else {
+          setEnabledProjectIds(new Set(projs.map((p) => p.id)))
+        }
       }
 
       // Compute counts from categorized issues
@@ -181,7 +220,7 @@ const PlanningPanel: Component = () => {
           setCompletion(null)
           setIssues([])
           setProjects([])
-          setSelectedProjectId(null)
+          setEnabledProjectIds(new Set())
           setError(null)
           setSyncResult(null)
         }
@@ -190,8 +229,10 @@ const PlanningPanel: Component = () => {
   )
 
   const filteredIssues = () => {
-    const pid = selectedProjectId()
-    return pid ? issues().filter((i) => i.projectId === pid) : issues()
+    const enabled = enabledProjectIds()
+    const all = issues()
+    if (enabled.size === 0 || enabled.size === projects().length) return all
+    return all.filter((i) => enabled.has(i.projectId))
   }
 
   const categorizedIssues = () => {
@@ -229,22 +270,28 @@ const PlanningPanel: Component = () => {
           <span class="text-xs font-medium" style={{ color: 'var(--c-text-heading)' }}>
             Planning
           </span>
-          <Show when={projects().length > 1}>
-            <select
-              class="rounded border px-1.5 py-0.5 text-[10px]"
-              style={{
-                background: 'var(--c-bg-secondary)',
-                color: 'var(--c-text)',
-                'border-color': 'var(--c-border)'
-              }}
-              value={selectedProjectId() ?? ''}
-              onChange={(e) => setSelectedProjectId(e.currentTarget.value || null)}
-            >
-              <option value="">All projects</option>
-              <For each={projects()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
-            </select>
-          </Show>
         </div>
+        <Show when={projects().length > 1}>
+          <div class="flex flex-wrap gap-x-3 gap-y-1 px-3 pb-2">
+            <For each={projects()}>
+              {(p) => (
+                <label
+                  class="flex cursor-pointer items-center gap-1 text-[10px]"
+                  style={{ color: enabledProjectIds().has(p.id) ? 'var(--c-text)' : 'var(--c-text-muted)' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabledProjectIds().has(p.id)}
+                    onChange={() => toggleProject(p.id)}
+                    class="h-3 w-3 rounded"
+                    style={{ 'accent-color': 'var(--c-accent)' }}
+                  />
+                  {p.name}
+                </label>
+              )}
+            </For>
+          </div>
+        </Show>
       </div>
       <div class="flex-1 overflow-auto p-3">
         <Show
