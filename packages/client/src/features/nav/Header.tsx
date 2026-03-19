@@ -326,17 +326,7 @@ function WorkspaceHeaderContent() {
       <div class="relative flex items-center">
         <button
           class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-medium transition-colors"
-          style={{ color: 'var(--c-accent)' }}
-          onClick={() => toggleChatExpanded()}
-          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-          title={chatExpanded() ? 'Close chat' : 'Open chat'}
-        >
-          {activeThreadLabel()}
-        </button>
-        <button
-          class="flex cursor-pointer items-center rounded-md border-none bg-transparent px-0.5 py-0.5 text-[10px] transition-colors"
-          style={{ color: 'var(--c-text-muted)' }}
+          style={{ color: 'var(--c-accent)', 'max-width': '140px', overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
           onClick={() => {
             fetchOrgs()
             setThreadPickerOpen(!threadPickerOpen())
@@ -347,7 +337,8 @@ function WorkspaceHeaderContent() {
           onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
           title="Switch thread"
         >
-          ▾
+          <span class="overflow-hidden text-ellipsis whitespace-nowrap">{activeThreadLabel()}</span>
+          <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>▾</span>
         </button>
         <button
           class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
