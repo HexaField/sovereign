@@ -63,6 +63,10 @@ import { createPlanningService } from './planning/planning.js'
 import { createPlanningRouter } from './planning/routes.js'
 import { registerPlanningWs } from './planning/ws.js'
 
+// --- Drafts ---
+import { createDraftStore } from './drafts/store.js'
+import { createDraftRouter } from './drafts/routes.js'
+
 // --- Phase 6: Chat, Threads, Voice, Recordings, System ---
 import { createOpenClawBackend } from './agent-backend/openclaw.js'
 import { createThreadManager } from './threads/threads.js'
@@ -332,6 +336,10 @@ const planningService = createPlanningService(bus, dataDir, {
 })
 app.use(createPlanningRouter(planningService))
 registerPlanningWs(wsHandler, bus)
+
+// --- Drafts ---
+const draftStore = createDraftStore(dataDir)
+app.use(createDraftRouter(bus, draftStore, { issueTracker, getRemotes }))
 
 // ============================================================
 // Phase 6 — Chat, Threads, Voice, Recordings, System

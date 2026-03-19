@@ -23,12 +23,15 @@ export interface CycleError {
 
 export interface GraphNode {
   ref: EntityRef
+  source: 'provider' | 'draft'
   state: 'open' | 'closed'
   labels: string[]
   milestone?: string
   assignees: string[]
   dependencies: EntityRef[]
   dependents: EntityRef[]
+  draftId?: string
+  draftTitle?: string
 }
 
 export interface GraphQueryResult {
@@ -81,6 +84,7 @@ export interface GraphEngine {
 export interface PlanningDeps {
   issueTracker: IssueTracker
   getConfig: () => Record<string, unknown>
+  draftStore?: import('../drafts/types.js').DraftStore
 }
 
 export interface CreateIssueWithDeps {

@@ -5,12 +5,13 @@ import type { DependencyEdge, EntityRef } from './types.js'
 const PATTERNS = [
   // "depends on" / "blocked by" → depends_on (this issue depends on the referenced one)
   {
-    regex: /(?:depends\s+on|blocked\s+by)\s+((?:rad:[a-zA-Z0-9]+|[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)#(\d+)|#(\d+))/gi,
+    regex:
+      /(?:depends\s+on|blocked\s+by)\s+((?:draft:[a-f0-9-]+)|(?:rad:[a-zA-Z0-9]+|[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)#(\d+)|#(\d+))/gi,
     type: 'depends_on' as const
   },
   // "blocks" → blocks (this issue blocks the referenced one, i.e., referenced depends on this)
   {
-    regex: /\bblocks\s+((?:rad:[a-zA-Z0-9]+|[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)#(\d+)|#(\d+))/gi,
+    regex: /\bblocks\s+((?:draft:[a-f0-9-]+)|(?:rad:[a-zA-Z0-9]+|[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)#(\d+)|#(\d+))/gi,
     type: 'blocks' as const
   }
 ]
@@ -19,9 +20,21 @@ function parseRef(
   match: RegExpExecArray,
   context: { orgId: string; projectId: string; remote: string }
 ): { ref: EntityRef; crossRepo: boolean } {
-  // match[1] = full cross-repo ref or undefined
+  // match[1] = full cross-repo ref, draft ref, or undefined
   // match[2] = issue number for cross-repo
   // match[3] = issue number for bare #N
+
+  const full = match[1]
+
+  // Draft reference: draft:<uuid>
+  if (full && full.startsWith('draft:')) {
+    const draftId = full.slice(6)
+    return {
+      ref: { orgId: '_drafts', projectId: '_local', remote: '_local', issueId: draftId },
+      crossRepo: true
+    }
+  }
+
   if (match[3]) {
     // Bare #N reference
     return {
@@ -30,10 +43,9 @@ function parseRef(
     }
   }
 
-  const full = match[1]!
   const issueNum = match[2]!
 
-  if (full.startsWith('rad:')) {
+  if (full!.startsWith('rad:')) {
     // Radicle: rad:z...#42
     const radId = full.split('#')[0]!
     return {
