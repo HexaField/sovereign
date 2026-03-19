@@ -100,7 +100,6 @@ interface OrgListItem {
 function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgListItem) => void }) {
   const [name, setName] = createSignal('')
   const [wsPath, setWsPath] = createSignal('')
-  const [provider, setProvider] = createSignal<'github' | 'radicle'>('github')
   const [error, setError] = createSignal('')
   const [submitting, setSubmitting] = createSignal(false)
 
@@ -117,7 +116,7 @@ function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgLi
       const res = await fetch(`${BASE}api/orgs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name().trim(), path: wsPath().trim(), provider: provider() })
+        body: JSON.stringify({ name: name().trim(), path: wsPath().trim() })
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: 'Failed to create workspace' }))
@@ -169,20 +168,6 @@ function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgLi
               value={wsPath()}
               onInput={(e) => setWsPath(e.currentTarget.value)}
             />
-          </div>
-          <div>
-            <label class="mb-1 block text-xs font-medium" style={{ color: 'var(--c-text-muted)' }}>
-              Provider
-            </label>
-            <select
-              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-              style={{ background: 'var(--c-bg)', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }}
-              value={provider()}
-              onChange={(e) => setProvider(e.currentTarget.value as 'github' | 'radicle')}
-            >
-              <option value="github">GitHub</option>
-              <option value="radicle">Radicle</option>
-            </select>
           </div>
           <Show when={error()}>
             <p class="text-xs" style={{ color: 'var(--c-danger, #ef4444)' }}>
