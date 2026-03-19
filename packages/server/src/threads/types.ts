@@ -51,6 +51,7 @@ export interface ForwardedMessage {
 export interface ThreadManager {
   create(opts: { label?: string; entities?: EntityBinding[]; orgId?: string }): ThreadInfo
   get(key: string): ThreadInfo | undefined
+  update(key: string, patch: { label?: string; orgId?: string }): ThreadInfo | undefined
   list(filter?: ThreadFilter): ThreadInfo[]
   delete(key: string): boolean
   addEntity(key: string, entity: EntityBinding): ThreadInfo | undefined

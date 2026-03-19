@@ -94,6 +94,22 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     return results
   }
 
+  function update(key: string, patch: { label?: string; orgId?: string }): ThreadInfo | undefined {
+    const thread = threads.get(key)
+    if (!thread) return undefined
+    if (patch.label !== undefined) thread.label = patch.label
+    if (patch.orgId !== undefined) thread.orgId = patch.orgId
+    thread.lastActivity = Date.now()
+    persist()
+    bus.emit({
+      type: 'thread.updated',
+      timestamp: new Date().toISOString(),
+      source: 'threads',
+      payload: { threadKey: key, patch }
+    })
+    return thread
+  }
+
   function del(key: string): boolean {
     const thread = threads.get(key)
     if (!thread) return false
@@ -200,6 +216,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
   return {
     create,
     get,
+    update,
     list,
     delete: del,
     addEntity,

@@ -29,7 +29,7 @@ import {
   type PlanningViewMode
 } from '../planning/store.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from '../workspace/store.js'
-import { threadKey, switchThread, threads } from '../threads/store.js'
+import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
 import { agentStatus } from '../chat/store.js'
 import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
@@ -202,6 +202,9 @@ function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgLi
 function WorkspaceHeaderContent() {
   const ws = () => activeWorkspace()
   const [threadPickerOpen, setThreadPickerOpen] = createSignal(false)
+  const [newThreadInput, setNewThreadInput] = createSignal(false)
+  const [newThreadLabel, setNewThreadLabel] = createSignal('')
+  const [moveThreadKey, setMoveThreadKey] = createSignal<string | null>(null)
   const [wsPickerOpen, setWsPickerOpen] = createSignal(false)
   const [orgList, setOrgList] = createSignal<OrgListItem[]>([])
   const [showAddDialog, setShowAddDialog] = createSignal(false)
@@ -321,7 +324,12 @@ function WorkspaceHeaderContent() {
         <button
           class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-medium transition-colors"
           style={{ color: 'var(--c-accent)' }}
-          onClick={() => setThreadPickerOpen(!threadPickerOpen())}
+          onClick={() => {
+            fetchOrgs()
+            setThreadPickerOpen(!threadPickerOpen())
+            setNewThreadInput(false)
+            setMoveThreadKey(null)
+          }}
           onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
           onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
@@ -333,13 +341,13 @@ function WorkspaceHeaderContent() {
         <Show when={threadPickerOpen()}>
           <div class="fixed inset-0 z-[199]" onClick={() => setThreadPickerOpen(false)} />
           <div
-            class="absolute top-full left-0 z-[200] mt-1 min-w-[160px] overflow-hidden rounded-lg shadow-lg"
+            class="absolute top-full left-0 z-[200] mt-1 min-w-[200px] overflow-hidden rounded-lg shadow-lg"
             style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
           >
             <For each={threads().filter((t) => t.key)}>
               {(t) => (
-                <button
-                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors"
+                <div
+                  class="group relative flex w-full items-center text-left text-sm transition-colors"
                   style={{
                     color: t.key === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
                     background: t.key === threadKey() ? 'var(--c-hover-bg)' : undefined
@@ -348,18 +356,121 @@ function WorkspaceHeaderContent() {
                   onMouseLeave={(e) =>
                     (e.currentTarget.style.background = t.key === threadKey() ? 'var(--c-hover-bg)' : '')
                   }
-                  onClick={() => {
-                    switchThread(t.key)
-                    setThreadPickerOpen(false)
-                  }}
                 >
-                  <Show when={t.key === threadKey()}>
-                    <span class="text-xs">●</span>
-                  </Show>
-                  <span>{t.label ?? t.key}</span>
-                </button>
+                  <button
+                    class="flex flex-1 items-center gap-2 px-3 py-2"
+                    onClick={() => {
+                      switchThread(t.key)
+                      setThreadPickerOpen(false)
+                    }}
+                  >
+                    <Show when={t.key === threadKey()}>
+                      <span class="text-xs">●</span>
+                    </Show>
+                    <span class="truncate">{t.label ?? t.key}</span>
+                  </button>
+                  {/* Move to workspace button */}
+                  <div class="relative">
+                    <button
+                      class="px-2 py-2 text-xs opacity-0 transition-opacity group-hover:opacity-60 hover:!opacity-100"
+                      style={{ color: 'var(--c-text-muted)' }}
+                      title="Move to workspace"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setMoveThreadKey(moveThreadKey() === t.key ? null : t.key)
+                      }}
+                    >
+                      ⇄
+                    </button>
+                    <Show when={moveThreadKey() === t.key}>
+                      <div
+                        class="absolute top-0 left-full z-[210] ml-1 min-w-[150px] overflow-hidden rounded-lg shadow-lg"
+                        style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
+                      >
+                        <div
+                          class="px-3 py-1.5 text-[10px] font-semibold tracking-wide uppercase"
+                          style={{ color: 'var(--c-text-muted)' }}
+                        >
+                          Move to…
+                        </div>
+                        <For each={orgList().filter((o) => o.id !== t.orgId)}>
+                          {(org) => (
+                            <button
+                              class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+                              style={{ color: 'var(--c-text)' }}
+                              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                              onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                              onClick={() => {
+                                moveThread(t.key, org.id)
+                                setMoveThreadKey(null)
+                                setThreadPickerOpen(false)
+                              }}
+                            >
+                              {org.name}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  </div>
+                </div>
               )}
             </For>
+
+            {/* Separator + New Thread */}
+            <div class="mx-2 my-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+            <Show
+              when={newThreadInput()}
+              fallback={
+                <button
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors"
+                  style={{ color: 'var(--c-text-muted)' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                  onClick={() => setNewThreadInput(true)}
+                >
+                  + New Thread
+                </button>
+              }
+            >
+              <div class="flex items-center gap-1 px-2 py-1.5">
+                <input
+                  class="flex-1 rounded border px-2 py-1 text-xs outline-none"
+                  style={{ background: 'var(--c-bg)', 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
+                  placeholder="Thread name…"
+                  value={newThreadLabel()}
+                  onInput={(e) => setNewThreadLabel(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newThreadLabel().trim()) {
+                      createThread(newThreadLabel().trim())
+                      setNewThreadLabel('')
+                      setNewThreadInput(false)
+                      setThreadPickerOpen(false)
+                    }
+                    if (e.key === 'Escape') {
+                      setNewThreadLabel('')
+                      setNewThreadInput(false)
+                    }
+                  }}
+                  ref={(el) => setTimeout(() => el.focus(), 0)}
+                />
+                <button
+                  class="rounded px-2 py-1 text-xs font-medium text-white"
+                  style={{ background: 'var(--c-accent)', opacity: newThreadLabel().trim() ? '1' : '0.4' }}
+                  disabled={!newThreadLabel().trim()}
+                  onClick={() => {
+                    if (newThreadLabel().trim()) {
+                      createThread(newThreadLabel().trim())
+                      setNewThreadLabel('')
+                      setNewThreadInput(false)
+                      setThreadPickerOpen(false)
+                    }
+                  }}
+                >
+                  Create
+                </button>
+              </div>
+            </Show>
           </div>
         </Show>
       </div>

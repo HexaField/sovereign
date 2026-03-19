@@ -46,6 +46,13 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
     res.json({ success: true })
   })
 
+  router.patch('/api/threads/:key', (req, res) => {
+    const { label, orgId } = req.body
+    const thread = threadManager.update(req.params.key, { label, orgId })
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    res.json({ thread })
+  })
+
   router.post('/api/threads/:key/entities', (req, res) => {
     const thread = threadManager.addEntity(req.params.key, req.body)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
