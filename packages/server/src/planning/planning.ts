@@ -81,6 +81,49 @@ export function createPlanningService(bus: EventBus, dataDir: string, deps: Plan
     const snapshots: IssueSnapshot[] = issues.map(issueToSnapshot)
     const allEdges: DependencyEdge[] = []
 
+    // Inject drafts into the graph
+    if (deps.draftStore) {
+      const drafts = deps.draftStore.list() // all non-published drafts
+      for (const draft of drafts) {
+        // Include if orgId matches or draft is unassigned
+        if (draft.orgId !== null && draft.orgId !== orgId) continue
+        const syntheticRef: EntityRef = {
+          orgId: '_drafts',
+          projectId: '_local',
+          remote: '_local',
+          issueId: draft.id
+        }
+        const snap: IssueSnapshot & { source: string; draftId: string; draftTitle: string } = {
+          ref: syntheticRef,
+          state: 'open',
+          labels: draft.labels,
+          milestone: undefined,
+          assignees: draft.assignees,
+          body: draft.body,
+          bodyHash: hashBody(draft.body),
+          source: 'draft',
+          draftId: draft.id,
+          draftTitle: draft.title
+        }
+        snapshots.push(snap)
+
+        // Resolve draft dependencies to edges
+        for (const dep of draft.dependencies) {
+          let toRef: EntityRef
+          if (dep.target.kind === 'draft') {
+            toRef = { orgId: '_drafts', projectId: '_local', remote: '_local', issueId: dep.target.draftId }
+          } else {
+            toRef = dep.target.ref
+          }
+          if (dep.type === 'depends_on') {
+            allEdges.push({ from: syntheticRef, to: toRef, type: 'depends_on', source: 'body' })
+          } else {
+            allEdges.push({ from: toRef, to: syntheticRef, type: 'blocks', source: 'body' })
+          }
+        }
+      }
+    }
+
     for (const snap of snapshots) {
       const edges = parseDependencies(snap.body, {
         orgId: snap.ref.orgId,

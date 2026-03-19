@@ -31,12 +31,15 @@ export function createGraph(issues: IssueSnapshot[], edges: DependencyEdge[]): G
       const key = refKey(issue.ref)
       nodes.set(key, {
         ref: issue.ref,
+        source: (issue as any).source ?? 'provider',
         state: issue.state,
         labels: issue.labels,
         milestone: issue.milestone,
         assignees: issue.assignees,
         dependencies: [],
-        dependents: []
+        dependents: [],
+        draftId: (issue as any).draftId,
+        draftTitle: (issue as any).draftTitle
       })
     }
 
