@@ -348,6 +348,16 @@ function WorkspaceHeaderContent() {
         >
           ▾
         </button>
+        <button
+          class="flex cursor-pointer items-center rounded-md border-none bg-transparent px-1 py-0.5 text-sm transition-colors"
+          style={{ color: 'var(--c-text-muted)' }}
+          onClick={() => toggleChatExpanded()}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          title={chatExpanded() ? 'Minimize chat' : 'Maximize chat'}
+        >
+          {chatExpanded() ? '↙' : '↗'}
+        </button>
         <Show when={threadPickerOpen()}>
           <div class="fixed inset-0 z-[199]" onClick={() => setThreadPickerOpen(false)} />
           <div
