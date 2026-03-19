@@ -57,12 +57,18 @@ export function switchWorkspaceThreads(orgId: string): void {
           history.replaceState(null, '', u.toString())
         }
       } else {
-        setThreadKey('main')
+        // No threads in this workspace — clear selection
+        setThreadKey('')
+        if (typeof history !== 'undefined') {
+          const u = new URL(location.href)
+          u.hash = ''
+          history.replaceState(null, '', u.toString())
+        }
       }
     })
     .catch(() => {
       setThreads([])
-      setThreadKey('main')
+      setThreadKey('')
     })
 }
 

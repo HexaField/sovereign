@@ -225,6 +225,7 @@ function WorkspaceHeaderContent() {
 
   const activeThreadLabel = () => {
     const key = threadKey()
+    if (!key) return 'No thread'
     const t = threads().find((th) => th.key === key)
     return t?.label ?? t?.key ?? key
   }
@@ -372,8 +373,8 @@ function WorkspaceHeaderContent() {
                   {/* Move to workspace button */}
                   <div class="relative">
                     <button
-                      class="px-2 py-2 text-xs opacity-0 transition-opacity group-hover:opacity-60 hover:!opacity-100"
-                      style={{ color: 'var(--c-text-muted)' }}
+                      class="px-2 py-2 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
+                      style={{ color: 'var(--c-accent)' }}
                       title="Move to workspace"
                       onClick={(e) => {
                         e.stopPropagation()
