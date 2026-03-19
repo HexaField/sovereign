@@ -61,7 +61,8 @@ const SYSTEM_TAB_IDS: SystemTabId[] = [
   'config',
   'devices',
   'jobs',
-  'events'
+  'events',
+  'threads'
 ]
 const SYSTEM_TAB_LABELS: Record<SystemTabId, string> = {
   overview: 'Overview',
@@ -71,7 +72,8 @@ const SYSTEM_TAB_LABELS: Record<SystemTabId, string> = {
   config: 'Config',
   devices: 'Devices',
   jobs: 'Jobs',
-  events: 'Events'
+  events: 'Events',
+  threads: 'Threads'
 }
 
 // ── Planning mode icons ──────────────────────────────────────────────

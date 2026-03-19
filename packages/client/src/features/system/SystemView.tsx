@@ -12,6 +12,7 @@ import ConfigTab from './ConfigTab'
 import DevicesTab from './DevicesTab'
 import JobsTab from './JobsTab'
 import EventStreamTab from './EventStreamTab'
+import ThreadsTab from './ThreadsTab'
 
 export type { SystemTabId } from '../nav/store.js'
 export { activeSystemTab, setActiveSystemTab } from '../nav/store.js'
@@ -30,7 +31,8 @@ export const SYSTEM_TABS: SystemTab[] = [
   { id: 'config', label: 'Config', component: ConfigTab },
   { id: 'devices', label: 'Devices', component: DevicesTab },
   { id: 'jobs', label: 'Jobs', component: JobsTab },
-  { id: 'events', label: 'Events', component: EventStreamTab }
+  { id: 'events', label: 'Events', component: EventStreamTab },
+  { id: 'threads', label: 'Threads', component: ThreadsTab }
 ]
 
 const SystemView: Component = () => {

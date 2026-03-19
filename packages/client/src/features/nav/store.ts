@@ -86,7 +86,16 @@ export function setSettingsOpen(open: boolean): void {
 }
 
 // System view active tab (shared so Header can render it)
-export type SystemTabId = 'overview' | 'architecture' | 'logs' | 'health' | 'config' | 'devices' | 'jobs' | 'events'
+export type SystemTabId =
+  | 'overview'
+  | 'architecture'
+  | 'logs'
+  | 'health'
+  | 'config'
+  | 'devices'
+  | 'jobs'
+  | 'events'
+  | 'threads'
 export const [activeSystemTab, setActiveSystemTab] = createSignal<SystemTabId>('overview')
 
 let popstateHandler: (() => void) | null = null
