@@ -671,14 +671,8 @@ const MobileWorkspace: Component = () => {
               )}
             </Show>
           </Match>
-          <Match when={activeMobileTab() === 'chat'}>
-            <MobileChatPanel />
-          </Match>
           <Match when={activeMobileTab() === 'git'}>
             <GitPanel />
-          </Match>
-          <Match when={activeMobileTab() === 'threads'}>
-            <ThreadsPanel />
           </Match>
           <Match when={activeMobileTab() === 'planning'}>
             <PlanningPanel />
@@ -742,7 +736,9 @@ const WorkspaceView: Component = () => {
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
       {/* Mobile layout — visible only below 768px */}
       <div class="flex h-full flex-col md:hidden">
-        <MobileWorkspace />
+        <Show when={chatExpanded()} fallback={<MobileWorkspace />}>
+          <MobileChatPanel />
+        </Show>
       </div>
 
       {/* Desktop layout — visible only at 768px and above */}
@@ -792,20 +788,6 @@ const WorkspaceView: Component = () => {
 
             {/* §3.1 — Main Content with file tabs */}
             <MainContentArea />
-
-            {/* §3.5 — Right Panel Chat */}
-            <ChatPanel />
-
-            {/* Chat reopen button */}
-            <Show when={chatCollapsed()}>
-              <ReopenButton
-                side="right"
-                onClick={() => {
-                  setChatCollapsed(false)
-                  setChatPanelWidth(CHAT_PANEL_DEFAULT_WIDTH)
-                }}
-              />
-            </Show>
           </div>
         )}
       </div>
