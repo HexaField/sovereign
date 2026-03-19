@@ -1,4 +1,4 @@
-import { lazy, Switch, Match, onCleanup, onMount } from 'solid-js'
+import { lazy, Switch, Match, onCleanup, onMount, Suspense } from 'solid-js'
 import './app.css'
 
 // Nav store
@@ -13,7 +13,8 @@ import { activeWorkspace, autoSelectProject } from './features/workspace/store.j
 // WS + connection stores
 import { wsStore } from './ws/index.js'
 import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
-import { initThreadStore } from './features/threads/store.js'
+import { initThreadStore, threadKey } from './features/threads/store.js'
+import { initChatStore } from './features/chat/store.js'
 
 // Global keyboard shortcuts
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
@@ -44,6 +45,10 @@ export default function App() {
     const cleanupThreads = initThreadStore(wsStore, activeWorkspace()?.orgId)
     cleanups.push(cleanupThreads)
 
+    // Init chat store at app level so dashboard GlobalChat has data on fresh load
+    const cleanupChat = initChatStore(threadKey, wsStore)
+    if (cleanupChat) cleanups.push(cleanupChat)
+
     const checkInterval = setInterval(() => {
       setConnectionStatus(wsStore.connected() ? 'connected' : 'disconnected')
     }, 1000)
@@ -70,23 +75,25 @@ export default function App() {
       <Header />
 
       <main class="flex-1 overflow-hidden">
-        <Switch>
-          <Match when={activeView() === 'dashboard'}>
-            <DashboardView />
-          </Match>
-          <Match when={activeView() === 'workspace'}>
-            <WorkspaceView />
-          </Match>
-          <Match when={activeView() === 'canvas'}>
-            <CanvasView />
-          </Match>
-          <Match when={activeView() === 'planning'}>
-            <GlobalPlanningView />
-          </Match>
-          <Match when={activeView() === 'system'}>
-            <SystemView />
-          </Match>
-        </Switch>
+        <Suspense>
+          <Switch>
+            <Match when={activeView() === 'dashboard'}>
+              <DashboardView />
+            </Match>
+            <Match when={activeView() === 'workspace'}>
+              <WorkspaceView />
+            </Match>
+            <Match when={activeView() === 'canvas'}>
+              <CanvasView />
+            </Match>
+            <Match when={activeView() === 'planning'}>
+              <GlobalPlanningView />
+            </Match>
+            <Match when={activeView() === 'system'}>
+              <SystemView />
+            </Match>
+          </Switch>
+        </Suspense>
       </main>
 
       <SettingsModal />
