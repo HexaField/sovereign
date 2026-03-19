@@ -11,7 +11,7 @@ import { generateKeyPairSync, sign, createPrivateKey, createHash } from 'node:cr
 
 const DEFAULT_INITIAL_DELAY = 1000
 const DEFAULT_MAX_DELAY = 30000
-const HISTORY_RELOAD_DEBOUNCE = 300
+const HISTORY_RELOAD_DEBOUNCE = 2000
 const REQUEST_TIMEOUT = 30000
 
 function createEventEmitter() {
@@ -311,10 +311,12 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   }
 
   function scheduleHistoryReload(sessionKey: string) {
-    // Only reload history for the active session — skip subagent sessions
-    // (subagent history is fetched on-demand via HTTP with caching)
+    // Only reload history for the active session — skip subagent and cron sessions
     if (sessionKey.includes(':subagent:')) return
-    if (state.activeSessionKey && sessionKey !== state.activeSessionKey) return
+    if (sessionKey.includes(':cron:')) return
+    // If no active session set, don't auto-reload (client must explicitly request via chat.history)
+    if (!state.activeSessionKey) return
+    if (sessionKey !== state.activeSessionKey) return
 
     if (state.historyReloadTimer) {
       clearTimeout(state.historyReloadTimer)
