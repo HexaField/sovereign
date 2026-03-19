@@ -61,12 +61,19 @@ export function SubagentCard(props: SubagentCardProps) {
 
   createEffect(() => {
     fetchInfo()
-    // Poll every 5s while working
-    pollTimer = setInterval(fetchInfo, 5000)
+    // Poll every 10s but only while not completed/failed
+    pollTimer = setInterval(() => {
+      const s = info()?.status
+      if (s === 'completed' || s === 'failed') {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+        return
+      }
+      fetchInfo()
+    }, 10000)
   })
 
   onCleanup(() => {
-    if (pollTimer) clearInterval(pollTimer)
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   })
 
   const statusColor = () => {
