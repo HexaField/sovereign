@@ -88,9 +88,7 @@ export type MobileTab =
 export const MOBILE_TAB_ORDER: { key: MobileTab; label: string }[] = [
   { key: 'files', label: 'Files' },
   { key: 'file-viewer', label: 'File Viewer' },
-  { key: 'chat', label: 'Chat' },
   { key: 'git', label: 'Git' },
-  { key: 'threads', label: 'Threads' },
   { key: 'planning', label: 'Planning' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'terminal', label: 'Terminal' },

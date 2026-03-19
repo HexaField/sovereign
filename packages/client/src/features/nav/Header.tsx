@@ -28,11 +28,10 @@ import {
   setViewMode as setPlanningViewMode,
   type PlanningViewMode
 } from '../planning/store.js'
-import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from '../workspace/store.js'
+import { activeWorkspace, chatExpanded, toggleChatExpanded, setChatExpanded, setActiveWorkspace } from '../workspace/store.js'
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
 import { agentStatus } from '../chat/store.js'
 import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
-import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -327,6 +326,16 @@ function WorkspaceHeaderContent() {
         <button
           class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-medium transition-colors"
           style={{ color: 'var(--c-accent)' }}
+          onClick={() => toggleChatExpanded()}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          title={chatExpanded() ? 'Close chat' : 'Open chat'}
+        >
+          {activeThreadLabel()}
+        </button>
+        <button
+          class="flex cursor-pointer items-center rounded-md border-none bg-transparent px-0.5 py-0.5 text-[10px] transition-colors"
+          style={{ color: 'var(--c-text-muted)' }}
           onClick={() => {
             fetchOrgs()
             setThreadPickerOpen(!threadPickerOpen())
@@ -335,11 +344,9 @@ function WorkspaceHeaderContent() {
           }}
           onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
           onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          title="Switch thread"
         >
-          {activeThreadLabel()}
-          <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-            ▾
-          </span>
+          ▾
         </button>
         <Show when={threadPickerOpen()}>
           <div class="fixed inset-0 z-[199]" onClick={() => setThreadPickerOpen(false)} />
@@ -502,18 +509,6 @@ function WorkspaceHeaderContent() {
           {unreadNotificationCount() > 99 ? '99+' : unreadNotificationCount()}
         </span>
       </Show>
-      <button
-        class="ml-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md border-none bg-transparent transition-colors"
-        style={{ color: 'var(--c-text-muted)' }}
-        onClick={() => toggleChatExpanded()}
-        onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--c-accent)')}
-        onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--c-text-muted)')}
-        title={chatExpanded() ? 'Collapse chat' : 'Expand chat'}
-      >
-        <Show when={chatExpanded()} fallback={<ExpandIcon class="h-3.5 w-3.5" />}>
-          <CollapseIcon class="h-3.5 w-3.5" />
-        </Show>
-      </button>
     </div>
   )
 }
@@ -689,10 +684,12 @@ export function Header() {
         <ContextBudgetModal onClose={() => setShowContextBudget(false)} />
       </Show>
 
-      {/* Status badge */}
-      <span class="shrink-0 rounded-[10px] px-2 py-[3px] text-[11px] whitespace-nowrap" style={statusStyle()}>
-        {statusLabel()}
-      </span>
+      {/* Status dot */}
+      <span
+        class="inline-block h-2 w-2 shrink-0 rounded-full"
+        style={{ background: statusStyle().color }}
+        title={statusLabel()}
+      />
 
       {/* Hamburger menu */}
       <div class="relative">
