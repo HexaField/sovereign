@@ -311,6 +311,11 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   }
 
   function scheduleHistoryReload(sessionKey: string) {
+    // Only reload history for the active session — skip subagent sessions
+    // (subagent history is fetched on-demand via HTTP with caching)
+    if (sessionKey.includes(':subagent:')) return
+    if (state.activeSessionKey && sessionKey !== state.activeSessionKey) return
+
     if (state.historyReloadTimer) {
       clearTimeout(state.historyReloadTimer)
     }
