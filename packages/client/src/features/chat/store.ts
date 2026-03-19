@@ -118,9 +118,11 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // Subscribe to chat channel (no scope filter — we filter by threadKey client-side)
   ws.subscribe(['chat'])
 
-  // Request history for the current thread
-  ws.send({ type: 'chat.history', threadKey: _threadKey() } as any)
-  loadDraft(_threadKey())
+  // Request history for the current thread (skip if no thread selected)
+  if (_threadKey()) {
+    ws.send({ type: 'chat.history', threadKey: _threadKey() } as any)
+    loadDraft(_threadKey())
+  }
 
   // Track previous thread key to detect switches
   let prevThreadKey = _threadKey()
@@ -135,8 +137,10 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       prevThreadKey = key
       resetState()
       loadDraft(key)
-      ws?.send({ type: 'chat.history', threadKey: key } as any)
-      ws?.send({ type: 'chat.session.switch', threadKey: key } as any)
+      if (key) {
+        ws?.send({ type: 'chat.history', threadKey: key } as any)
+        ws?.send({ type: 'chat.session.switch', threadKey: key } as any)
+      }
     }
   })
 
