@@ -426,10 +426,26 @@ app.get('/api/threads/:key/subagents', async (req, res) => {
 })
 
 // Subagent history — fetch chat history for a subagent session key
+// Simple cache for subagent history to avoid hammering the gateway
+const subagentHistoryCache = new Map<string, { data: any; ts: number }>()
+const SUBAGENT_CACHE_TTL = 5000 // 5 seconds
+
 app.get('/api/threads/:key/history', async (req, res) => {
   try {
     const sessionKey = req.params.key.startsWith('agent:') ? req.params.key : `agent:main:subagent:${req.params.key}`
+    const cached = subagentHistoryCache.get(sessionKey)
+    if (cached && Date.now() - cached.ts < SUBAGENT_CACHE_TTL) {
+      return res.json({ history: cached.data })
+    }
     const history = await backend.getHistory(sessionKey)
+    subagentHistoryCache.set(sessionKey, { data: history, ts: Date.now() })
+    // Evict old entries
+    if (subagentHistoryCache.size > 50) {
+      const now = Date.now()
+      for (const [k, v] of subagentHistoryCache) {
+        if (now - v.ts > 30000) subagentHistoryCache.delete(k)
+      }
+    }
     res.json({ history })
   } catch (err: any) {
     console.error('Failed to get subagent history:', err.message)
