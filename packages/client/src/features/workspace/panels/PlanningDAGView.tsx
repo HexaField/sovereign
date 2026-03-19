@@ -1,5 +1,6 @@
 import { Component, createResource, createSignal, createMemo, Show, For, onCleanup, createEffect } from 'solid-js'
 import { closePlanningView, openIssueDetail } from '../store.js'
+import { draftsStore } from '../../drafts/index.js'
 
 interface EntityRef {
   orgId: string
@@ -364,6 +365,44 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
                       {/* Labels preview */}
                       <text x="28" y="44" font-size="9" fill="var(--c-text-muted)" font-family="sans-serif">
                         {node.labels.slice(0, 3).join(', ')}
+                      </text>
+                    </g>
+                  )
+                }}
+              </For>
+
+              {/* Draft nodes */}
+              <For each={draftsStore.drafts().filter((d) => d.status === 'draft')}>
+                {(draft, i) => {
+                  const totalProviderNodes = filteredGraph().nodes.length
+                  const x = 40
+                  const y = (totalProviderNodes + i()) * (NODE_HEIGHT + V_GAP) + 40
+                  return (
+                    <g
+                      transform={`translate(${x},${y})`}
+                      class="cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        draftsStore.selectDraft(draft.id)
+                      }}
+                    >
+                      <rect
+                        width={NODE_WIDTH}
+                        height={NODE_HEIGHT}
+                        rx="6"
+                        fill="#FEF3C7"
+                        stroke="#D97706"
+                        stroke-width="2"
+                        stroke-dasharray="6 3"
+                      />
+                      <circle cx="14" cy={NODE_HEIGHT / 2} r="5" fill="#D97706" />
+                      <text x="28" y="24" font-size="11" fill="#78350F" font-family="sans-serif">
+                        {(draft.title || 'Untitled').length > 26
+                          ? (draft.title || 'Untitled').slice(0, 26) + '...'
+                          : draft.title || 'Untitled'}
+                      </text>
+                      <text x="28" y="44" font-size="9" fill="#92400E" font-family="sans-serif">
+                        {draft.labels.slice(0, 3).join(', ') || 'draft'}
                       </text>
                     </g>
                   )

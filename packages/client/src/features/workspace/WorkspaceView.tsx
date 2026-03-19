@@ -69,6 +69,7 @@ import {
 } from '../chat/store.js'
 import { threadKey, switchThread, threads, createThread } from '../threads/store.js'
 import { wsStore } from '../../ws/index.js'
+import { draftsStore } from '../drafts/index.js'
 import type { ChatMessage } from '../chat/types.js'
 
 // Lazy-loaded sidebar panels
@@ -86,6 +87,7 @@ const LogsPanel = lazy(() => import('./panels/LogsPanel.js'))
 const FileViewerTab = lazy(() => import('./tabs/FileViewerTab.js'))
 const PlanningDAGView = lazy(() => import('./panels/PlanningDAGView.js'))
 const IssueDetailView = lazy(() => import('./panels/IssueDetailView.js'))
+const DraftEditPanel = lazy(() => import('../../features/drafts/DraftEditPanel.js'))
 
 // Icon component lookup
 const SIDEBAR_ICON_MAP: Record<string, Component<{ class?: string }>> = {
@@ -180,6 +182,17 @@ const MainContentArea: Component = () => {
   return (
     <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
       <Switch>
+        <Match when={draftsStore.selectedDraftId()}>
+          <Suspense
+            fallback={
+              <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                Loading...
+              </p>
+            }
+          >
+            <DraftEditPanel />
+          </Suspense>
+        </Match>
         <Match when={view() === 'planning-dag' && ws()}>
           <Suspense
             fallback={
