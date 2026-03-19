@@ -54,6 +54,8 @@ import {
 // Chat imports
 import { ChatView } from '../chat/ChatView.js'
 import { InputArea } from '../chat/InputArea.js'
+import { SubagentView } from '../chat/SubagentView.js'
+import type { SubagentNavEntry } from '../chat/SubagentView.js'
 import {
   turns,
   streamingHtml,
@@ -71,6 +73,32 @@ import { threadKey, switchThread, threads, createThread } from '../threads/store
 import { wsStore } from '../../ws/index.js'
 import { draftsStore } from '../drafts/index.js'
 import type { ChatMessage } from '../chat/types.js'
+
+// Subagent navigation stack — shared across all chat panels
+const [subagentNavStack, setSubagentNavStack] = createSignal<SubagentNavEntry[]>([])
+
+function pushSubagent(sessionKey: string, label: string): void {
+  setSubagentNavStack((prev) => [...prev, { sessionKey, label }])
+}
+
+function popSubagent(): void {
+  setSubagentNavStack((prev) => {
+    if (prev.length <= 1) return []
+    return prev.slice(0, -1)
+  })
+}
+
+function navigateToDepth(depth: number): void {
+  if (depth === -1) {
+    setSubagentNavStack([])
+  } else {
+    setSubagentNavStack((prev) => prev.slice(0, depth + 1))
+  }
+}
+
+function isViewingSubagent(): boolean {
+  return subagentNavStack().length > 0
+}
 
 // Lazy-loaded sidebar panels
 const FileExplorerPanel = lazy(() => import('./panels/FileExplorerPanel.js'))
@@ -454,23 +482,37 @@ const ChatPanel: Component = () => {
             transition: resize.dragging() ? 'none' : 'width 200ms ease'
           }}
         >
-          {/* Chat messages */}
-          <ChatView
-            messages={messages()}
-            streamingHtml={streamingHtml()}
-            agentStatus={agentStatus()}
-            liveWork={liveWork()}
-            liveThinkingText={liveThinkingText()}
-            compacting={compacting()}
-            isRetryCountdownActive={isRetryCountdownActive()}
-            retryCountdownSeconds={retryCountdownSeconds()}
-            onSend={sendMessage}
-            onAbort={abortChat}
-            threadKey={threadKey()}
-          />
+          <Show
+            when={!isViewingSubagent()}
+            fallback={
+              <SubagentView
+                navStack={subagentNavStack()}
+                parentLabel={threadKey() || 'Main'}
+                onBack={() => popSubagent()}
+                onNavigateTo={navigateToDepth}
+                onViewSubagent={pushSubagent}
+              />
+            }
+          >
+            {/* Chat messages */}
+            <ChatView
+              messages={messages()}
+              streamingHtml={streamingHtml()}
+              agentStatus={agentStatus()}
+              liveWork={liveWork()}
+              liveThinkingText={liveThinkingText()}
+              compacting={compacting()}
+              isRetryCountdownActive={isRetryCountdownActive()}
+              retryCountdownSeconds={retryCountdownSeconds()}
+              onSend={sendMessage}
+              onAbort={abortChat}
+              threadKey={threadKey()}
+              onViewSubagent={pushSubagent}
+            />
 
-          {/* Input area */}
-          <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+            {/* Input area */}
+            <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+          </Show>
         </div>
       </Show>
     </>
@@ -492,21 +534,35 @@ const ExpandedChatView: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
-      <ChatView
-        messages={messages()}
-        streamingHtml={streamingHtml()}
-        agentStatus={agentStatus()}
-        liveWork={liveWork()}
-        liveThinkingText={liveThinkingText()}
-        compacting={compacting()}
-        isRetryCountdownActive={isRetryCountdownActive()}
-        retryCountdownSeconds={retryCountdownSeconds()}
-        onSend={sendMessage}
-        onAbort={abortChat}
-        threadKey={threadKey()}
-      />
+      <Show
+        when={!isViewingSubagent()}
+        fallback={
+          <SubagentView
+            navStack={subagentNavStack()}
+            parentLabel={threadKey() || 'Main'}
+            onBack={() => popSubagent()}
+            onNavigateTo={navigateToDepth}
+            onViewSubagent={pushSubagent}
+          />
+        }
+      >
+        <ChatView
+          messages={messages()}
+          streamingHtml={streamingHtml()}
+          agentStatus={agentStatus()}
+          liveWork={liveWork()}
+          liveThinkingText={liveThinkingText()}
+          compacting={compacting()}
+          isRetryCountdownActive={isRetryCountdownActive()}
+          retryCountdownSeconds={retryCountdownSeconds()}
+          onSend={sendMessage}
+          onAbort={abortChat}
+          threadKey={threadKey()}
+          onViewSubagent={pushSubagent}
+        />
 
-      <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+        <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+      </Show>
     </div>
   )
 }
@@ -526,21 +582,35 @@ const MobileChatPanel: Component = () => {
 
   return (
     <div class="flex h-full flex-col">
-      <ChatView
-        messages={messages()}
-        streamingHtml={streamingHtml()}
-        agentStatus={agentStatus()}
-        liveWork={liveWork()}
-        liveThinkingText={liveThinkingText()}
-        compacting={compacting()}
-        isRetryCountdownActive={isRetryCountdownActive()}
-        retryCountdownSeconds={retryCountdownSeconds()}
-        onSend={sendMessage}
-        onAbort={abortChat}
-        threadKey={threadKey()}
-      />
+      <Show
+        when={!isViewingSubagent()}
+        fallback={
+          <SubagentView
+            navStack={subagentNavStack()}
+            parentLabel={threadKey() || 'Main'}
+            onBack={() => popSubagent()}
+            onNavigateTo={navigateToDepth}
+            onViewSubagent={pushSubagent}
+          />
+        }
+      >
+        <ChatView
+          messages={messages()}
+          streamingHtml={streamingHtml()}
+          agentStatus={agentStatus()}
+          liveWork={liveWork()}
+          liveThinkingText={liveThinkingText()}
+          compacting={compacting()}
+          isRetryCountdownActive={isRetryCountdownActive()}
+          retryCountdownSeconds={retryCountdownSeconds()}
+          onSend={sendMessage}
+          onAbort={abortChat}
+          threadKey={threadKey()}
+          onViewSubagent={pushSubagent}
+        />
 
-      <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+        <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+      </Show>
     </div>
   )
 }
@@ -683,6 +753,11 @@ const MobileWorkspace: Component = () => {
 
 // Main Workspace View
 const WorkspaceView: Component = () => {
+  // Clear subagent nav stack when thread changes
+  createEffect(() => {
+    threadKey() // track dependency
+    setSubagentNavStack([])
+  })
   const sidebarResize = createResizeHandle({
     getWidth: sidebarWidth,
     setWidth: setSidebarWidth,

@@ -3,6 +3,7 @@ import type { WorkItem, AgentStatus } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
+import { SubagentCard } from './SubagentCard.js'
 import { ChatIcon } from '../../ui/icons.js'
 import { renderMarkdown } from '../../lib/markdown.js'
 
@@ -18,6 +19,43 @@ export interface ChatViewProps {
   onSend: (text: string, attachments?: File[]) => void
   onAbort: () => void
   threadKey: string
+  onViewSubagent?: (sessionKey: string, label: string) => void
+}
+
+/** Extract subagent spawns from a turn's work items */
+function extractSubagentSpawns(workItems: WorkItem[]): Array<{ sessionKey: string; task: string }> {
+  const spawns: Array<{ sessionKey: string; task: string }> = []
+  for (const w of workItems) {
+    if (w.type === 'tool_call' && w.name === 'sessions_spawn') {
+      // Parse the task from input
+      let task = ''
+      try {
+        const inp = typeof w.input === 'string' ? JSON.parse(w.input) : w.input
+        task = inp?.task || inp?.message || ''
+      } catch { /* ignore */ }
+
+      // Find corresponding result by toolCallId
+      const result = workItems.find(
+        (r) => r.type === 'tool_result' && r.toolCallId === w.toolCallId
+      )
+      if (result?.output) {
+        try {
+          const out = typeof result.output === 'string' ? JSON.parse(result.output) : result.output
+          const sessionKey = out?.childSessionKey || out?.sessionKey || out?.key || ''
+          if (sessionKey) {
+            spawns.push({ sessionKey, task: task.slice(0, 200) })
+          }
+        } catch {
+          // Try regex fallback for non-JSON output
+          const match = result.output.match(/(?:childSessionKey|sessionKey)['":\s]+['"]([^'"]+)['"]/)
+          if (match) {
+            spawns.push({ sessionKey: match[1], task: task.slice(0, 200) })
+          }
+        }
+      }
+    }
+  }
+  return spawns
 }
 
 /** Check if two timestamps fall on different days */
@@ -145,6 +183,15 @@ export function ChatView(props: ChatViewProps) {
 
               {/* Message bubble */}
               <MessageBubble turn={msg.turn} pending={msg.pending} />
+
+              {/* Subagent cards for sessions_spawn tool calls */}
+              {extractSubagentSpawns(msg.turn.workItems || []).map((spawn) => (
+                <SubagentCard
+                  sessionKey={spawn.sessionKey}
+                  task={spawn.task}
+                  onView={(key, label) => props.onViewSubagent?.(key, label)}
+                />
+              ))}
             </>
           )
         })}
