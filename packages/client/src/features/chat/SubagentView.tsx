@@ -53,13 +53,22 @@ export function SubagentView(props: SubagentViewProps) {
     setTurns([])
     fetchHistory()
 
-    // Poll every 3s for live updates
+    // Poll every 10s for live updates, stop when completed
     if (pollTimer) clearInterval(pollTimer)
-    pollTimer = setInterval(fetchHistory, 3000)
+    pollTimer = setInterval(() => {
+      const t = turns()
+      const last = t[t.length - 1]
+      const isComplete = last?.role === 'assistant' && last?.content && !last?.workItems?.length
+      if (isComplete) {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+        return
+      }
+      fetchHistory()
+    }, 10000)
   })
 
   onCleanup(() => {
-    if (pollTimer) clearInterval(pollTimer)
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   })
 
   const messages = (): ChatMessage[] =>
