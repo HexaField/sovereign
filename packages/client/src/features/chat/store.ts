@@ -107,10 +107,13 @@ export function abortChat(): void {
   suppressLifecycleUntil = Date.now() + 30_000
 }
 
+let chatInitialized = false
 export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): (() => void) | void {
   ws = wsStore ?? null
   currentThreadKey = _threadKey
   if (!ws) return
+  if (chatInitialized) return
+  chatInitialized = true
 
   // Subscribe to chat channel (no scope filter — we filter by threadKey client-side)
   ws.subscribe(['chat'])
