@@ -20,10 +20,10 @@ let ws: WsStore | null = null
 let popstateHandler: ((e: PopStateEvent) => void) | null = null
 
 function readThreadFromHash(): string {
-  if (typeof location === 'undefined') return 'main'
+  if (typeof location === 'undefined') return ''
   const hash = location.hash
   const match = hash.match(/#thread=(.+)/)
-  return match ? match[1] : 'main'
+  return match ? match[1] : ''
 }
 
 export function fetchThreadsForOrg(orgId?: string): void {
@@ -32,8 +32,29 @@ export function fetchThreadsForOrg(orgId?: string): void {
   fetch(url)
     .then((r) => r.json())
     .then((data: any) => {
-      const raw: ThreadInfo[] = data.threads ?? data ?? []
-      setThreads(raw.filter((t) => t.key))
+      const raw: ThreadInfo[] = (data.threads ?? data ?? []).filter((t: any) => t.key)
+      setThreads(raw)
+      // Reconcile: if current threadKey doesn't exist in this workspace's threads, fix it
+      const current = threadKey()
+      const exists = raw.some((t) => t.key === current)
+      if (!exists) {
+        const first = raw[0]
+        if (first) {
+          setThreadKey(first.key)
+          if (typeof history !== 'undefined') {
+            const u = new URL(location.href)
+            u.hash = `thread=${first.key}`
+            history.replaceState(null, '', u.toString())
+          }
+        } else {
+          setThreadKey('')
+          if (typeof history !== 'undefined') {
+            const u = new URL(location.href)
+            u.hash = ''
+            history.replaceState(null, '', u.toString())
+          }
+        }
+      }
     })
     .catch(() => {})
 }
