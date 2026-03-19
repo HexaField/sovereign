@@ -327,7 +327,7 @@ const GlobalPlanningView: Component = () => {
       await Promise.all(
         orgList.map(async (org: { id: string }) => {
           try {
-            const res = await fetch(`/orgs/${org.id}/projects`)
+            const res = await fetch(`/api/orgs/${org.id}/projects`)
             if (!res.ok) return
             const projects = await res.json()
             for (const p of Array.isArray(projects) ? projects : projects.projects || []) {
