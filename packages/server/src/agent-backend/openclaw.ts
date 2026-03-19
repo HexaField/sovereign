@@ -618,6 +618,33 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         gatewayUrl: config.gatewayUrl,
         reconnectAttempt: state.reconnectAttempt
       }
+    },
+
+    async listGatewaySessions(): Promise<
+      Array<{
+        key: string
+        label?: string
+        kind?: string
+        lastActivity?: number
+        agentStatus?: string
+      }>
+    > {
+      try {
+        const result = (await request('sessions.list', { limit: 200 })) as {
+          sessions?: any[]
+        }
+        console.log('[gateway] sessions.list count:', (result?.sessions ?? []).length)
+        return (result?.sessions ?? []).map((s: any) => ({
+          key: s.key ?? s.sessionKey ?? '',
+          label: s.label,
+          kind: s.kind,
+          lastActivity: s.lastActivity ?? s.updatedAt,
+          agentStatus: s.agentStatus ?? s.status
+        }))
+      } catch (err: any) {
+        console.error('[gateway] sessions.list failed:', err.message)
+        return []
+      }
     }
   }
 
