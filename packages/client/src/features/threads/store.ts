@@ -93,6 +93,19 @@ export function createThread(label?: string): Promise<void> {
     })
 }
 
+export function moveThread(key: string, orgId: string): Promise<void> {
+  return fetch(`/api/threads/${key}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ orgId })
+  })
+    .then((r) => r.json())
+    .then((data: any) => {
+      const updated = data.thread as ThreadInfo
+      setThreads((prev) => prev.map((t) => (t.key === key ? updated : t)))
+    })
+}
+
 export function addEntity(threadKeyVal: string, entity: ThreadInfo['entities'][0]): Promise<void> {
   return fetch(`/api/threads/${threadKeyVal}/entities`, {
     method: 'POST',
