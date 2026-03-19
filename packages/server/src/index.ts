@@ -330,16 +330,18 @@ app.use('/api/radicle', createRadicleRouter(radicleManager))
 // Phase 5 — Planning
 // ============================================================
 
+// --- Drafts (created first so planning can include them) ---
+const draftStore = createDraftStore(dataDir)
+
 const planningService = createPlanningService(bus, dataDir, {
   issueTracker,
   getConfig: () => ({}),
-  listOrgIds: () => orgManager.listOrgs().map((o: any) => o.id)
+  listOrgIds: () => orgManager.listOrgs().map((o: any) => o.id),
+  draftStore
 })
 app.use(createPlanningRouter(planningService))
 registerPlanningWs(wsHandler, bus)
 
-// --- Drafts ---
-const draftStore = createDraftStore(dataDir)
 app.use(createDraftRouter(bus, draftStore, { issueTracker, getRemotes }))
 
 // ============================================================
