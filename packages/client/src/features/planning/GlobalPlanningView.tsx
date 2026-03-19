@@ -1,4 +1,4 @@
-import { type Component, createSignal, onMount, For, Show, createMemo, type JSX } from 'solid-js'
+import { type Component, createSignal, onMount, onCleanup, For, Show, createMemo, type JSX } from 'solid-js'
 import {
   viewMode,
   setViewMode,
@@ -10,7 +10,16 @@ import {
   setSearchQuery,
   type PlanningViewMode
 } from './store'
-import { LinkIcon, KanbanIcon, ListIcon, TreeIcon } from '../../ui/icons.js'
+import {
+  LinkIcon,
+  KanbanIcon,
+  ListIcon,
+  TreeIcon,
+  SearchIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CloseIcon
+} from '../../ui/icons.js'
 
 // ── Server response types ────────────────────────────────────────────
 
@@ -85,17 +94,12 @@ function refToId(ref: EntityRef): string {
 
 function deriveStatus(node: ServerGraphNode, nodeMap: Map<string, ServerGraphNode>): PlanningNode['status'] {
   if (node.state === 'closed') return 'done'
-
-  // Check if blocked: has open dependencies
   const hasOpenDep = node.dependencies.some((dep) => {
     const depNode = nodeMap.get(refToId(dep))
     return depNode && depNode.state === 'open'
   })
   if (hasOpenDep) return 'blocked'
-
-  // Heuristic: has assignee → in-progress
   if (node.assignees.length > 0) return 'in-progress'
-
   return 'open'
 }
 
@@ -112,7 +116,6 @@ function computeDepths(nodes: ServerGraphNode[]): Map<string, number> {
   const nodeMap = new Map<string, ServerGraphNode>()
   for (const n of nodes) nodeMap.set(refToId(n.ref), n)
 
-  // Topological sort via Kahn's
   const inDegree = new Map<string, number>()
   for (const n of nodes) {
     const id = refToId(n.ref)
@@ -132,7 +135,6 @@ function computeDepths(nodes: ServerGraphNode[]): Map<string, number> {
       .reduce((max, d) => Math.max(max, d + 1), 0)
     depths.set(id, myDepth)
 
-    // Process dependents
     for (const dep of node.dependents) {
       const depId = refToId(dep)
       const newDeg = (inDegree.get(depId) ?? 1) - 1
@@ -141,7 +143,6 @@ function computeDepths(nodes: ServerGraphNode[]): Map<string, number> {
     }
   }
 
-  // Handle any nodes not reached (cycles) — assign depth 0
   for (const n of nodes) {
     const id = refToId(n.ref)
     if (!depths.has(id)) depths.set(id, 0)
@@ -182,7 +183,6 @@ export function getStatusLabel(status: PlanningNode['status']): string {
   }
 }
 
-// Priority icon SVG components (no emoji)
 export function PriorityIcon(props: { priority: PlanningNode['priority']; class?: string }): JSX.Element {
   const size = props.class ?? 'h-3 w-3'
   switch (props.priority) {
@@ -243,7 +243,6 @@ export function getPriorityIcon(priority: PlanningNode['priority']): string {
   }
 }
 
-// Workspace color palette
 const WORKSPACE_COLORS = [
   '#89b4fa',
   '#f38ba8',
@@ -262,7 +261,6 @@ export function getWorkspaceColor(workspace: string, allWorkspaces: string[]): s
   return WORKSPACE_COLORS[idx % WORKSPACE_COLORS.length]!
 }
 
-// View mode labels/icons
 export const VIEW_MODES: Array<{ key: PlanningViewMode; label: string; icon: () => JSX.Element }> = [
   { key: 'dag', label: 'DAG', icon: () => <LinkIcon class="h-3.5 w-3.5" /> },
   { key: 'kanban', label: 'Kanban', icon: () => <KanbanIcon class="h-3.5 w-3.5" /> },
@@ -270,10 +268,10 @@ export const VIEW_MODES: Array<{ key: PlanningViewMode; label: string; icon: () 
   { key: 'tree', label: 'Tree', icon: () => <TreeIcon class="h-3.5 w-3.5" /> }
 ]
 
-// Filter keys
 export const FILTER_KEYS = ['workspace', 'project', 'status', 'assignee', 'label', 'priority'] as const
 
-// DAG layout helper: position nodes by depth
+// ── DAG layout — exported for tests ──────────────────────────────────
+
 export function dagLayout(nodes: PlanningNode[]): Array<{ node: PlanningNode; x: number; y: number }> {
   const byDepth = new Map<number, PlanningNode[]>()
   for (const n of nodes) {
@@ -290,6 +288,213 @@ export function dagLayout(nodes: PlanningNode[]): Array<{ node: PlanningNode; x:
   return result
 }
 
+// ── Improved DAG layout: split connected vs unconnected ──────────────
+
+const DAG_NODE_W = 220
+const DAG_NODE_H = 68
+const DAG_H_GAP = 60
+const DAG_V_GAP = 24
+const GRID_CARD_W = 180
+const GRID_CARD_H = 52
+const GRID_GAP = 12
+
+interface LayoutResult {
+  connected: Array<{ node: PlanningNode; x: number; y: number }>
+  unconnected: Array<{ node: PlanningNode; x: number; y: number }>
+  connectedBounds: { w: number; h: number }
+  totalHeight: number
+}
+
+function improvedLayout(nodes: PlanningNode[], edges: PlanningEdge[]): LayoutResult {
+  const edgeNodeIds = new Set<string>()
+  for (const e of edges) {
+    edgeNodeIds.add(e.from)
+    edgeNodeIds.add(e.to)
+  }
+  // Also include transitive: any node with deps pointing to/from edge nodes
+  for (const n of nodes) {
+    if (n.dependencies.some((d) => edgeNodeIds.has(d))) edgeNodeIds.add(n.id)
+  }
+
+  const connected = nodes.filter((n) => edgeNodeIds.has(n.id))
+  const unconnected = nodes.filter((n) => !edgeNodeIds.has(n.id))
+
+  // Hierarchical layout for connected nodes (left to right by depth)
+  const byDepth = new Map<number, PlanningNode[]>()
+  for (const n of connected) {
+    const list = byDepth.get(n.depth) || []
+    list.push(n)
+    byDepth.set(n.depth, list)
+  }
+
+  const connectedPositions: Array<{ node: PlanningNode; x: number; y: number }> = []
+  let maxX = 0
+  let maxY = 0
+  const sortedDepths = [...byDepth.keys()].sort((a, b) => a - b)
+  for (const depth of sortedDepths) {
+    const items = byDepth.get(depth)!
+    const colX = depth * (DAG_NODE_W + DAG_H_GAP) + 40
+    items.forEach((node, i) => {
+      const y = i * (DAG_NODE_H + DAG_V_GAP) + 40
+      connectedPositions.push({ node, x: colX, y })
+      maxX = Math.max(maxX, colX + DAG_NODE_W)
+      maxY = Math.max(maxY, y + DAG_NODE_H)
+    })
+  }
+
+  const connectedBounds = { w: maxX + 40, h: maxY + 40 }
+
+  // Grid layout for unconnected, grouped by project
+  const byProject = new Map<string, PlanningNode[]>()
+  for (const n of unconnected) {
+    const key = `${n.workspaceName}/${n.projectName}`
+    const list = byProject.get(key) || []
+    list.push(n)
+    byProject.set(key, list)
+  }
+
+  const unconnectedPositions: Array<{ node: PlanningNode; x: number; y: number }> = []
+  const gridStartY = connectedBounds.h + 60
+  // Compute available width — use a reasonable default
+  const gridCols = 5
+  let curX = 40
+  let curY = gridStartY
+  let colIdx = 0
+
+  for (const [, items] of byProject) {
+    for (const node of items) {
+      unconnectedPositions.push({ node, x: curX, y: curY })
+      colIdx++
+      if (colIdx >= gridCols) {
+        colIdx = 0
+        curX = 40
+        curY += GRID_CARD_H + GRID_GAP
+      } else {
+        curX += GRID_CARD_W + GRID_GAP
+      }
+    }
+  }
+
+  const totalHeight =
+    unconnectedPositions.length > 0 ? Math.max(curY + GRID_CARD_H + 40, connectedBounds.h) : connectedBounds.h
+
+  return { connected: connectedPositions, unconnected: unconnectedPositions, connectedBounds, totalHeight }
+}
+
+// ── Filter Dropdown Component ────────────────────────────────────────
+
+function FilterDropdown(props: {
+  label: string
+  filterKey: string
+  options: Array<{ value: string; label: string }>
+  selected: string[]
+  onToggle: (value: string) => void
+}) {
+  const [open, setOpen] = createSignal(false)
+  const [search, setSearch] = createSignal('')
+  let containerRef: HTMLDivElement | undefined
+
+  const filteredOptions = createMemo(() => {
+    const q = search().toLowerCase()
+    if (!q) return props.options
+    return props.options.filter((o) => o.label.toLowerCase().includes(q))
+  })
+
+  // Close on outside click
+  function handleClickOutside(e: MouseEvent) {
+    if (containerRef && !containerRef.contains(e.target as Node)) {
+      setOpen(false)
+    }
+  }
+
+  onMount(() => document.addEventListener('mousedown', handleClickOutside))
+  onCleanup(() => document.removeEventListener('mousedown', handleClickOutside))
+
+  return (
+    <div ref={containerRef} class="relative" data-testid={`filter-${props.filterKey}`}>
+      <button
+        class="flex items-center gap-1 rounded px-2 py-1 text-xs"
+        style={{
+          background: props.selected.length > 0 ? 'var(--c-accent, #89b4fa)' : 'var(--c-surface, #181825)',
+          color: props.selected.length > 0 ? 'var(--c-bg, #1e1e2e)' : 'var(--c-text, #cdd6f4)',
+          border: '1px solid var(--c-border, #45475a)'
+        }}
+        onClick={() => setOpen(!open())}
+      >
+        <span>{props.label}</span>
+        <Show when={props.selected.length > 0}>
+          <span
+            class="flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold"
+            style={{
+              background: props.selected.length > 0 ? 'var(--c-bg, #1e1e2e)' : 'var(--c-accent)',
+              color: props.selected.length > 0 ? 'var(--c-accent, #89b4fa)' : 'var(--c-bg)'
+            }}
+          >
+            {props.selected.length}
+          </span>
+        </Show>
+        <ChevronDownIcon class="h-3 w-3" />
+      </button>
+      <Show when={open()}>
+        <div
+          class="absolute top-full left-0 z-50 mt-1 flex w-56 flex-col rounded-lg shadow-lg"
+          style={{
+            background: 'var(--c-bg-raised, #1e1e2e)',
+            border: '1px solid var(--c-border, #45475a)'
+          }}
+        >
+          <Show when={props.options.length > 6}>
+            <div class="p-1.5">
+              <input
+                type="text"
+                placeholder="Search..."
+                class="w-full rounded px-2 py-1 text-xs"
+                style={{
+                  background: 'var(--c-surface, #181825)',
+                  color: 'var(--c-text, #cdd6f4)',
+                  border: '1px solid var(--c-border, #45475a)'
+                }}
+                value={search()}
+                onInput={(e) => setSearch(e.currentTarget.value)}
+              />
+            </div>
+          </Show>
+          <div class="max-h-48 overflow-y-auto p-1">
+            <For each={filteredOptions()}>
+              {(opt) => {
+                const isSelected = () => props.selected.includes(opt.value)
+                return (
+                  <button
+                    class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:opacity-80"
+                    style={{
+                      background: isSelected() ? 'rgba(137, 180, 250, 0.1)' : 'transparent',
+                      color: 'var(--c-text, #cdd6f4)'
+                    }}
+                    onClick={() => props.onToggle(opt.value)}
+                  >
+                    <span
+                      class="flex h-3.5 w-3.5 items-center justify-center rounded border"
+                      style={{
+                        background: isSelected() ? 'var(--c-accent, #89b4fa)' : 'transparent',
+                        'border-color': isSelected() ? 'var(--c-accent, #89b4fa)' : 'var(--c-border, #45475a)'
+                      }}
+                    >
+                      <Show when={isSelected()}>
+                        <CheckIcon class="h-2.5 w-2.5" style={{ color: 'var(--c-bg, #1e1e2e)' }} />
+                      </Show>
+                    </span>
+                    <span>{opt.label}</span>
+                  </button>
+                )
+              }}
+            </For>
+          </div>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
 // ── Component ────────────────────────────────────────────────────────
 
 const GlobalPlanningView: Component = () => {
@@ -300,9 +505,23 @@ const GlobalPlanningView: Component = () => {
   const [criticalPathIds, setCriticalPathIds] = createSignal<Set<string>>(new Set())
   const [showCreateDialog, setShowCreateDialog] = createSignal(false)
   const [showAssignDialog, setShowAssignDialog] = createSignal(false)
-  const [svgZoom, _setSvgZoom] = createSignal(1)
-  const [svgPanX, _setSvgPanX] = createSignal(0)
-  const [svgPanY, _setSvgPanY] = createSignal(0)
+
+  // Pan/zoom state
+  const [panX, setPanX] = createSignal(0)
+  const [panY, setPanY] = createSignal(0)
+  const [zoom, setZoom] = createSignal(1)
+  const [isPanning, setIsPanning] = createSignal(false)
+  const [panStartX, setPanStartX] = createSignal(0)
+  const [panStartY, setPanStartY] = createSignal(0)
+  const [panStartPanX, setPanStartPanX] = createSignal(0)
+  const [panStartPanY, setPanStartPanY] = createSignal(0)
+
+  // Hover state for edge highlighting
+  const [hoveredNodeId, setHoveredNodeId] = createSignal<string | null>(null)
+
+  // Unconnected grid page
+  const [unconnectedPage, setUnconnectedPage] = createSignal(0)
+  const UNCONNECTED_PAGE_SIZE = 50
 
   // Create dialog state
   const [createOrgId, setCreateOrgId] = createSignal('')
@@ -310,9 +529,15 @@ const GlobalPlanningView: Component = () => {
   const [createBody, setCreateBody] = createSignal('')
   const [createSubmitting, setCreateSubmitting] = createSignal(false)
 
+  // Expose pan/zoom for legacy test compat
+  const svgZoom = zoom
+  const svgPanX = panX
+  const svgPanY = panY
+
+  let svgRef: SVGSVGElement | undefined
+
   async function fetchGraph() {
     try {
-      // Fetch orgs
       const orgsRes = await fetch('/api/orgs')
       if (!orgsRes.ok) return
       const orgsData = await orgsRes.json()
@@ -322,7 +547,6 @@ const GlobalPlanningView: Component = () => {
       }))
       setOrgs(orgList)
 
-      // Fetch project names for all orgs
       const names = new Map<string, string>()
       await Promise.all(
         orgList.map(async (org: { id: string }) => {
@@ -340,13 +564,11 @@ const GlobalPlanningView: Component = () => {
       )
       setProjectNames(names)
 
-      // Fetch cross-org graph
       let graphData: ServerGraphResponse
       const graphRes = await fetch('/api/planning/graph')
       if (graphRes.ok) {
         graphData = await graphRes.json()
       } else {
-        // Fallback: fetch per-org
         const allNodes: ServerGraphNode[] = []
         const allEdges: ServerEdge[] = []
         for (const org of orgList) {
@@ -363,49 +585,36 @@ const GlobalPlanningView: Component = () => {
         graphData = { nodes: allNodes, edges: allEdges }
       }
 
-      // Build node map for status derivation
       const serverNodeMap = new Map<string, ServerGraphNode>()
-      for (const n of graphData.nodes) {
-        serverNodeMap.set(refToId(n.ref), n)
-      }
+      for (const n of graphData.nodes) serverNodeMap.set(refToId(n.ref), n)
 
-      // Compute depths
       const depths = computeDepths(graphData.nodes)
 
-      // Fetch critical path
       const cpIds = new Set<string>()
       try {
         const cpRes = await fetch('/api/planning/critical-path')
         if (cpRes.ok) {
           const cp = await cpRes.json()
-          for (const ref of cp.path || []) {
-            cpIds.add(refToId(ref))
-          }
+          for (const ref of cp.path || []) cpIds.add(refToId(ref))
         }
       } catch {
         /* skip */
       }
       setCriticalPathIds(cpIds)
 
-      // Cross-workspace edge set
       const crossWsEdgeKeys = new Set<string>()
       for (const e of graphData.crossWorkspaceEdges || []) {
         crossWsEdgeKeys.add(`${refToId(e.from)}->${refToId(e.to)}`)
       }
-      // Also detect from edge data
       for (const e of graphData.edges) {
         if (e.from.orgId !== e.to.orgId) {
           crossWsEdgeKeys.add(`${refToId(e.from)}->${refToId(e.to)}`)
         }
       }
 
-      // Map org names
       const orgNameMap = new Map<string, string>()
-      for (const org of orgList) {
-        orgNameMap.set(org.id, org.name)
-      }
+      for (const org of orgList) orgNameMap.set(org.id, org.name)
 
-      // Map server nodes to client PlanningNodes
       const planningNodes: PlanningNode[] = graphData.nodes.map((n) => {
         const id = refToId(n.ref)
         const title = n.title || n.draftTitle || `${n.ref.projectId}#${n.ref.issueId}`
@@ -442,9 +651,7 @@ const GlobalPlanningView: Component = () => {
     }
   }
 
-  // Fetch planning data
   onMount(async () => {
-    // §7.5 — Default to list view on mobile
     if (typeof window !== 'undefined' && window.innerWidth < 768) {
       setViewMode('list')
     }
@@ -453,7 +660,6 @@ const GlobalPlanningView: Component = () => {
 
   const allWorkspaces = createMemo(() => [...new Set(nodes().map((n) => n.workspace))])
 
-  // Apply filters + search
   const filteredNodes = createMemo(() => {
     let result = nodes()
     const f = filters()
@@ -475,17 +681,97 @@ const GlobalPlanningView: Component = () => {
     return edges().filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to))
   })
 
+  // Layout memo
+  const layout = createMemo(() => improvedLayout(filteredNodes(), filteredEdges()))
+
+  // Position lookup for edges
+  const positionMap = createMemo(() => {
+    const map = new Map<string, { x: number; y: number; w: number; h: number }>()
+    for (const p of layout().connected) {
+      map.set(p.node.id, { x: p.x, y: p.y, w: DAG_NODE_W, h: DAG_NODE_H })
+    }
+    for (const p of layout().unconnected) {
+      map.set(p.node.id, { x: p.x, y: p.y, w: GRID_CARD_W, h: GRID_CARD_H })
+    }
+    return map
+  })
+
+  // Connected edges for highlighting
+  const connectedEdgeIds = createMemo(() => {
+    const hid = hoveredNodeId()
+    if (!hid) return new Set<string>()
+    const ids = new Set<string>()
+    for (const e of filteredEdges()) {
+      if (e.from === hid || e.to === hid) {
+        ids.add(`${e.from}->${e.to}`)
+        ids.add(e.from)
+        ids.add(e.to)
+      }
+    }
+    return ids
+  })
+
+  // Summary stats
+  const stats = createMemo(() => {
+    const n = filteredNodes()
+    const issueCount = n.filter((x) => !x.isDraft).length
+    const draftCount = n.filter((x) => x.isDraft).length
+    const depCount = filteredEdges().length
+    return { issueCount, draftCount, depCount }
+  })
+
   // Active filter pills
   const activeFilterPills = createMemo(() => {
     const f = filters()
     const pills: Array<{ key: string; value: string }> = []
     for (const [key, values] of Object.entries(f)) {
-      for (const v of values) {
-        pills.push({ key, value: v })
-      }
+      for (const v of values) pills.push({ key, value: v })
     }
     return pills
   })
+
+  // Filter options
+  const filterOptions = createMemo(() => {
+    const n = nodes()
+    const workspaces = [...new Set(n.map((x) => x.workspace))].map((w) => ({
+      value: w,
+      label: n.find((x) => x.workspace === w)?.workspaceName || w
+    }))
+    const projects = [...new Set(n.map((x) => x.project))].map((p) => ({
+      value: p,
+      label: n.find((x) => x.project === p)?.projectName || p
+    }))
+    const statuses = (['open', 'in-progress', 'review', 'done', 'blocked'] as const).map((s) => ({
+      value: s,
+      label: getStatusLabel(s)
+    }))
+    const assignees = [...new Set(n.map((x) => x.assignee).filter(Boolean))].map((a) => ({
+      value: a!,
+      label: a!
+    }))
+    const labels = [...new Set(n.flatMap((x) => x.labels))].map((l) => ({ value: l, label: l }))
+    const priorities = (['low', 'medium', 'high', 'critical'] as const).map((p) => ({ value: p, label: p }))
+    return {
+      workspace: workspaces,
+      project: projects,
+      status: statuses,
+      assignee: assignees,
+      label: labels,
+      priority: priorities
+    }
+  })
+
+  function handleFilterToggle(key: string, value: string) {
+    const current = filters()[key] || []
+    if (current.includes(value)) {
+      setFilter(
+        key,
+        current.filter((v) => v !== value)
+      )
+    } else {
+      setFilter(key, [...current, value])
+    }
+  }
 
   function handleNodeClick(node: PlanningNode) {
     if (typeof window !== 'undefined') {
@@ -497,6 +783,105 @@ const GlobalPlanningView: Component = () => {
     }
   }
 
+  // Pan/zoom handlers
+  function handleMouseDown(e: MouseEvent) {
+    if (e.button !== 0) return
+    setIsPanning(true)
+    setPanStartX(e.clientX)
+    setPanStartY(e.clientY)
+    setPanStartPanX(panX())
+    setPanStartPanY(panY())
+  }
+
+  function handleMouseMove(e: MouseEvent) {
+    if (!isPanning()) return
+    const dx = e.clientX - panStartX()
+    const dy = e.clientY - panStartY()
+    setPanX(panStartPanX() + dx)
+    setPanY(panStartPanY() + dy)
+  }
+
+  function handleMouseUp() {
+    setIsPanning(false)
+  }
+
+  function handleWheel(e: WheelEvent) {
+    e.preventDefault()
+    const delta = e.deltaY > 0 ? 0.9 : 1.1
+    const newZoom = Math.max(0.1, Math.min(3, zoom() * delta))
+
+    // Zoom towards mouse position
+    if (svgRef) {
+      const rect = svgRef.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      const scale = newZoom / zoom()
+      setPanX(mx - scale * (mx - panX()))
+      setPanY(my - scale * (my - panY()))
+    }
+
+    setZoom(newZoom)
+  }
+
+  function resetZoom() {
+    // Fit all content in view
+    const l = layout()
+    const allPositions = [...l.connected, ...l.unconnected]
+    if (allPositions.length === 0 || !svgRef) {
+      setPanX(0)
+      setPanY(0)
+      setZoom(1)
+      return
+    }
+
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity
+    for (const p of allPositions) {
+      const isConnected = l.connected.includes(p)
+      const w = isConnected ? DAG_NODE_W : GRID_CARD_W
+      const h = isConnected ? DAG_NODE_H : GRID_CARD_H
+      minX = Math.min(minX, p.x)
+      minY = Math.min(minY, p.y)
+      maxX = Math.max(maxX, p.x + w)
+      maxY = Math.max(maxY, p.y + h)
+    }
+
+    const contentW = maxX - minX + 80
+    const contentH = maxY - minY + 80
+    const rect = svgRef.getBoundingClientRect()
+    const scaleX = rect.width / contentW
+    const scaleY = rect.height / contentH
+    const newZoom = Math.min(scaleX, scaleY, 1.5)
+
+    setPanX(-minX * newZoom + 40)
+    setPanY(-minY * newZoom + 40)
+    setZoom(newZoom)
+  }
+
+  // Bezier edge path
+  function edgePath(fromId: string, toId: string): string {
+    const from = positionMap().get(fromId)
+    const to = positionMap().get(toId)
+    if (!from || !to) return ''
+    const x1 = from.x + from.w
+    const y1 = from.y + from.h / 2
+    const x2 = to.x
+    const y2 = to.y + to.h / 2
+    const cpOffset = Math.abs(x2 - x1) * 0.4
+    return `M${x1},${y1} C${x1 + cpOffset},${y1} ${x2 - cpOffset},${y2} ${x2},${y2}`
+  }
+
+  // Paginated unconnected nodes
+  const paginatedUnconnected = createMemo(() => {
+    const all = layout().unconnected
+    const start = unconnectedPage() * UNCONNECTED_PAGE_SIZE
+    return all.slice(start, start + UNCONNECTED_PAGE_SIZE)
+  })
+
+  const totalUnconnectedPages = createMemo(() => Math.ceil(layout().unconnected.length / UNCONNECTED_PAGE_SIZE))
+
   async function handleCreateIssue() {
     const orgId = createOrgId()
     const title = createTitle()
@@ -507,12 +892,7 @@ const GlobalPlanningView: Component = () => {
       const res = await fetch(`/api/orgs/${orgId}/planning/issues`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          body: createBody(),
-          remote: '',
-          projectId: ''
-        })
+        body: JSON.stringify({ title, body: createBody(), remote: '', projectId: '' })
       })
       if (res.ok) {
         setShowCreateDialog(false)
@@ -531,24 +911,13 @@ const GlobalPlanningView: Component = () => {
   function handleAssignAgent(issueId: string) {
     const node = nodes().find((n) => n.id === issueId)
     if (!node) return
-    console.log('sovereign:assign-agent', { ref: node.ref, id: issueId })
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('sovereign:assign-agent', {
-          detail: { ref: node.ref }
-        })
-      )
+      window.dispatchEvent(new CustomEvent('sovereign:assign-agent', { detail: { ref: node.ref } }))
     }
     setShowAssignDialog(false)
   }
 
-  // Kanban columns
   const kanbanStatuses = ['open', 'in-progress', 'review', 'done', 'blocked'] as const
-
-  // Draft node style helpers
-  function draftBorderStyle(isDraft: boolean): string {
-    return isDraft ? '2px dashed #f59e0b' : ''
-  }
 
   return (
     <div
@@ -558,7 +927,7 @@ const GlobalPlanningView: Component = () => {
     >
       {/* Toolbar */}
       <div
-        class="flex shrink-0 items-center gap-3 px-4 py-2"
+        class="flex shrink-0 items-center gap-2 px-4 py-2"
         style={{
           background: 'var(--c-bg-raised, #1e1e2e)',
           'border-bottom': '1px solid var(--c-border, #45475a)'
@@ -566,99 +935,90 @@ const GlobalPlanningView: Component = () => {
         data-testid="planning-toolbar"
       >
         {/* View mode selector */}
-        <div class="flex gap-1" data-testid="view-mode-selector">
+        <div
+          class="flex gap-0.5 rounded-md p-0.5"
+          style={{ background: 'var(--c-surface, #181825)' }}
+          data-testid="view-mode-selector"
+        >
           <For each={VIEW_MODES}>
             {(mode) => (
               <button
-                class="rounded px-2 py-1 text-xs font-medium"
+                class="rounded px-1.5 py-1 text-xs"
                 style={{
                   background: viewMode() === mode.key ? 'var(--c-accent, #89b4fa)' : 'transparent',
-                  color: viewMode() === mode.key ? 'var(--c-bg, #1e1e2e)' : 'var(--c-text, #cdd6f4)',
-                  border: viewMode() === mode.key ? 'none' : '1px solid var(--c-border, #45475a)'
+                  color: viewMode() === mode.key ? 'var(--c-bg, #1e1e2e)' : 'var(--c-text-muted, #a6adc8)'
                 }}
                 onClick={() => setViewMode(mode.key)}
+                title={mode.label}
                 data-testid={`view-mode-${mode.key}`}
               >
-                <span class="flex items-center gap-1">
-                  {mode.icon()} {mode.label}
-                </span>
+                {mode.icon()}
               </button>
             )}
           </For>
         </div>
 
         {/* Search */}
-        <input
-          type="text"
-          placeholder="Search issues..."
-          class="max-w-xs flex-1 rounded px-2 py-1 text-xs"
-          style={{
-            background: 'var(--c-surface, #181825)',
-            color: 'var(--c-text, #cdd6f4)',
-            border: '1px solid var(--c-border, #45475a)'
-          }}
-          value={searchQuery()}
-          onInput={(e) => setSearchQuery(e.currentTarget.value)}
-          data-testid="planning-search"
-        />
+        <div class="relative max-w-xs flex-1">
+          <span
+            class="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2"
+            style={{ color: 'var(--c-text-muted, #a6adc8)' }}
+          >
+            <SearchIcon class="h-3 w-3" />
+          </span>
+          <input
+            type="text"
+            placeholder="Search issues..."
+            class="w-full rounded py-1 pr-2 pl-7 text-xs"
+            style={{
+              background: 'var(--c-surface, #181825)',
+              color: 'var(--c-text, #cdd6f4)',
+              border: '1px solid var(--c-border, #45475a)'
+            }}
+            value={searchQuery()}
+            onInput={(e) => setSearchQuery(e.currentTarget.value)}
+            data-testid="planning-search"
+          />
+        </div>
 
         {/* Filter dropdowns */}
         <For each={FILTER_KEYS}>
           {(filterKey) => (
-            <select
-              class="rounded px-1 py-1 text-xs"
-              style={{
-                background: 'var(--c-surface, #181825)',
-                color: 'var(--c-text, #cdd6f4)',
-                border: '1px solid var(--c-border, #45475a)'
-              }}
-              onChange={(e) => {
-                const val = e.currentTarget.value
-                if (val) {
-                  const current = filters()[filterKey] || []
-                  if (!current.includes(val)) setFilter(filterKey, [...current, val])
-                }
-                e.currentTarget.value = ''
-              }}
-              data-testid={`filter-${filterKey}`}
-            >
-              <option value="">{filterKey}</option>
-              <Show when={filterKey === 'workspace'}>
-                <For each={orgs()}>{(o) => <option value={o.id}>{o.name}</option>}</For>
-              </Show>
-              <Show when={filterKey === 'status'}>
-                <For each={kanbanStatuses}>{(s) => <option value={s}>{getStatusLabel(s)}</option>}</For>
-              </Show>
-              <Show when={filterKey === 'priority'}>
-                <For each={['low', 'medium', 'high', 'critical'] as const}>{(p) => <option value={p}>{p}</option>}</For>
-              </Show>
-            </select>
+            <FilterDropdown
+              label={filterKey.charAt(0).toUpperCase() + filterKey.slice(1)}
+              filterKey={filterKey}
+              options={filterOptions()[filterKey] || []}
+              selected={filters()[filterKey] || []}
+              onToggle={(val) => handleFilterToggle(filterKey, val)}
+            />
           )}
         </For>
 
-        {/* Action buttons */}
-        <button
-          class="rounded px-2 py-1 text-xs font-medium"
-          style={{
-            background: 'var(--c-accent, #89b4fa)',
-            color: 'var(--c-bg, #1e1e2e)'
-          }}
-          onClick={() => setShowAssignDialog(true)}
-          data-testid="assign-agent-button"
-        >
-          Assign to Agent
-        </button>
-        <button
-          class="rounded px-2 py-1 text-xs font-medium"
-          style={{
-            background: 'var(--c-success, #22c55e)',
-            color: 'var(--c-bg, #1e1e2e)'
-          }}
-          onClick={() => setShowCreateDialog(true)}
-          data-testid="create-issue-button"
-        >
-          + Create Issue
-        </button>
+        <div class="ml-auto flex items-center gap-2">
+          {/* Stats */}
+          <span class="text-xs opacity-60" style={{ color: 'var(--c-text-muted, #a6adc8)' }}>
+            {stats().issueCount} issues, {stats().depCount} deps
+            <Show when={stats().draftCount > 0}>, {stats().draftCount} drafts</Show>
+          </span>
+
+          {/* Action buttons */}
+          <button
+            class="rounded px-2 py-1 text-xs font-medium"
+            style={{ background: 'var(--c-accent, #89b4fa)', color: 'var(--c-bg, #1e1e2e)' }}
+            onClick={() => setShowAssignDialog(true)}
+            data-testid="assign-agent-button"
+          >
+            Assign to Agent
+          </button>
+          <button
+            class="rounded px-2 py-1 text-xs font-medium"
+            style={{ background: 'var(--c-success, #22c55e)', color: 'var(--c-bg, #1e1e2e)' }}
+            onClick={() => setShowCreateDialog(true)}
+            data-testid="create-issue-button"
+          >
+            + Create Issue
+          </button>
+        </div>
       </div>
 
       {/* Filter pills */}
@@ -672,10 +1032,7 @@ const GlobalPlanningView: Component = () => {
             {(pill) => (
               <span
                 class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
-                style={{
-                  background: 'var(--c-accent, #89b4fa)',
-                  color: 'var(--c-bg, #1e1e2e)'
-                }}
+                style={{ background: 'var(--c-accent, #89b4fa)', color: 'var(--c-bg, #1e1e2e)' }}
                 data-testid={`filter-pill-${pill.key}-${pill.value}`}
               >
                 {pill.key}: {pill.value}
@@ -697,35 +1054,71 @@ const GlobalPlanningView: Component = () => {
       </Show>
 
       {/* Content area */}
-      <div class="relative flex-1 overflow-auto">
+      <div class="relative flex-1 overflow-hidden">
         {/* DAG View */}
         <Show when={viewMode() === 'dag'}>
-          <svg class="h-full w-full" style={{ 'min-height': '600px', cursor: 'grab' }} data-testid="dag-svg">
-            <g transform={`translate(${svgPanX()}, ${svgPanY()}) scale(${svgZoom()})`}>
-              {/* Edges */}
-              <For each={filteredEdges()}>
-                {(edge) => {
-                  const fromNode = () => dagLayout(filteredNodes()).find((n) => n.node.id === edge.from)
-                  const toNode = () => dagLayout(filteredNodes()).find((n) => n.node.id === edge.to)
-                  return (
-                    <Show when={fromNode() && toNode()}>
-                      <line
-                        x1={fromNode()!.x + 100}
-                        y1={fromNode()!.y + 30}
-                        x2={toNode()!.x}
-                        y2={toNode()!.y + 30}
-                        stroke={edge.crossWorkspace ? 'var(--c-warning, #f59e0b)' : 'var(--c-border, #45475a)'}
-                        stroke-width={fromNode()!.node.isCriticalPath && toNode()!.node.isCriticalPath ? 3 : 1.5}
-                        stroke-dasharray={edge.crossWorkspace ? '6,4' : 'none'}
-                        marker-end="url(#arrow)"
-                        data-testid={`edge-${edge.from}-${edge.to}`}
-                      />
-                    </Show>
-                  )
+          <div class="absolute inset-0 overflow-hidden">
+            {/* Zoom controls */}
+            <div class="absolute top-3 right-3 z-10 flex flex-col gap-1">
+              <button
+                class="flex h-7 w-7 items-center justify-center rounded text-xs font-bold"
+                style={{
+                  background: 'var(--c-bg-raised, #1e1e2e)',
+                  color: 'var(--c-text, #cdd6f4)',
+                  border: '1px solid var(--c-border, #45475a)'
                 }}
-              </For>
+                onClick={() => setZoom(Math.min(3, zoom() * 1.2))}
+                title="Zoom in"
+              >
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+              <button
+                class="flex h-7 w-7 items-center justify-center rounded text-xs font-bold"
+                style={{
+                  background: 'var(--c-bg-raised, #1e1e2e)',
+                  color: 'var(--c-text, #cdd6f4)',
+                  border: '1px solid var(--c-border, #45475a)'
+                }}
+                onClick={() => setZoom(Math.max(0.1, zoom() * 0.8))}
+                title="Zoom out"
+              >
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+              <button
+                class="flex h-7 w-7 items-center justify-center rounded text-[10px] font-bold"
+                style={{
+                  background: 'var(--c-bg-raised, #1e1e2e)',
+                  color: 'var(--c-text, #cdd6f4)',
+                  border: '1px solid var(--c-border, #45475a)'
+                }}
+                onClick={resetZoom}
+                title="Fit to view"
+              >
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                </svg>
+              </button>
+              <span class="mt-1 text-center text-[10px] opacity-50" style={{ color: 'var(--c-text-muted)' }}>
+                {Math.round(zoom() * 100)}%
+              </span>
+            </div>
 
-              {/* Arrow marker */}
+            <svg
+              ref={svgRef}
+              class="h-full w-full"
+              style={{ cursor: isPanning() ? 'grabbing' : 'grab' }}
+              data-testid="dag-svg"
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              onWheel={handleWheel}
+            >
               <defs>
                 <marker
                   id="arrow"
@@ -738,47 +1131,306 @@ const GlobalPlanningView: Component = () => {
                 >
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--c-border, #45475a)" />
                 </marker>
+                <marker
+                  id="arrow-amber"
+                  viewBox="0 0 10 10"
+                  refX="10"
+                  refY="5"
+                  markerWidth="8"
+                  markerHeight="8"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#f59e0b" />
+                </marker>
+                <marker
+                  id="arrow-highlight"
+                  viewBox="0 0 10 10"
+                  refX="10"
+                  refY="5"
+                  markerWidth="8"
+                  markerHeight="8"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--c-accent, #89b4fa)" />
+                </marker>
+                <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+                  <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.3)" flood-opacity="0.5" />
+                </filter>
               </defs>
 
-              {/* Nodes */}
-              <For each={dagLayout(filteredNodes())}>
-                {({ node, x, y }) => (
-                  <g
-                    transform={`translate(${x}, ${y})`}
-                    onClick={() => handleNodeClick(node)}
-                    style={{ cursor: 'pointer' }}
-                    data-testid={`dag-node-${node.id}`}
+              <g
+                style={{ transform: `translate(${panX()}px, ${panY()}px) scale(${zoom()})`, 'transform-origin': '0 0' }}
+              >
+                {/* Section label for connected DAG */}
+                <Show when={layout().connected.length > 0}>
+                  <text
+                    x="40"
+                    y="24"
+                    fill="var(--c-text-muted, #a6adc8)"
+                    font-size="11"
+                    font-weight="600"
+                    opacity="0.5"
                   >
-                    <rect
-                      width={200}
-                      height={60}
-                      rx={6}
-                      fill="var(--c-surface, #181825)"
-                      stroke={node.isDraft ? '#f59e0b' : getStatusColor(node.status)}
-                      stroke-width={node.isCriticalPath ? 2.5 : 1.5}
-                      stroke-dasharray={node.isDraft ? '6,3' : 'none'}
-                    />
-                    {/* Workspace color indicator */}
-                    <rect width={4} height={60} rx={2} fill={getWorkspaceColor(node.workspace, allWorkspaces())} />
-                    <text x={14} y={22} fill="var(--c-text-heading, #cdd6f4)" font-size="12" font-weight="600">
-                      {node.title.length > 22 ? node.title.slice(0, 22) + '...' : node.title}
-                    </text>
-                    <text x={14} y={40} fill="var(--c-text-muted, #a6adc8)" font-size="10">
-                      {node.workspaceName} / {node.projectName}
-                    </text>
-                    <text x={14} y={54} fill={getStatusColor(node.status)} font-size="10">
-                      {getStatusLabel(node.status)}
-                    </text>
-                    <Show when={node.isDraft}>
-                      <text x={170} y={54} text-anchor="end" font-size="8" fill="#f59e0b" font-weight="600">
-                        DRAFT
-                      </text>
-                    </Show>
-                  </g>
-                )}
-              </For>
-            </g>
-          </svg>
+                    DEPENDENCY GRAPH
+                  </text>
+                </Show>
+
+                {/* Edges — bezier curves */}
+                <For each={filteredEdges()}>
+                  {(edge) => {
+                    const path = () => edgePath(edge.from, edge.to)
+                    const edgeKey = () => `${edge.from}->${edge.to}`
+                    const isHighlighted = () => connectedEdgeIds().has(edgeKey())
+                    return (
+                      <Show when={path()}>
+                        <path
+                          d={path()}
+                          fill="none"
+                          stroke={
+                            isHighlighted()
+                              ? 'var(--c-accent, #89b4fa)'
+                              : edge.crossWorkspace
+                                ? '#f59e0b'
+                                : 'var(--c-border, #45475a)'
+                          }
+                          stroke-width={isHighlighted() ? 2.5 : 1.5}
+                          stroke-dasharray={edge.crossWorkspace ? '6,4' : 'none'}
+                          opacity={hoveredNodeId() && !isHighlighted() ? 0.2 : 0.8}
+                          marker-end={
+                            isHighlighted()
+                              ? 'url(#arrow-highlight)'
+                              : edge.crossWorkspace
+                                ? 'url(#arrow-amber)'
+                                : 'url(#arrow)'
+                          }
+                          data-testid={`edge-${edge.from}-${edge.to}`}
+                          style={{ transition: 'opacity 0.15s, stroke-width 0.15s' }}
+                        />
+                      </Show>
+                    )
+                  }}
+                </For>
+
+                {/* Connected nodes */}
+                <For each={layout().connected}>
+                  {({ node, x, y }) => {
+                    const isHovered = () => hoveredNodeId() === node.id
+                    const isConnectedToHovered = () => connectedEdgeIds().has(node.id)
+                    const dimmed = () => hoveredNodeId() !== null && !isHovered() && !isConnectedToHovered()
+                    return (
+                      <g
+                        transform={`translate(${x}, ${y})`}
+                        onClick={() => handleNodeClick(node)}
+                        onMouseEnter={() => setHoveredNodeId(node.id)}
+                        onMouseLeave={() => setHoveredNodeId(null)}
+                        style={{
+                          cursor: 'pointer',
+                          transition: 'opacity 0.15s, transform 0.15s',
+                          opacity: dimmed() ? 0.35 : 1
+                        }}
+                        data-testid={`dag-node-${node.id}`}
+                      >
+                        <g
+                          style={{
+                            transform: isHovered() ? 'scale(1.03)' : 'scale(1)',
+                            'transform-origin': `${DAG_NODE_W / 2}px ${DAG_NODE_H / 2}px`,
+                            transition: 'transform 0.15s'
+                          }}
+                        >
+                          <rect
+                            width={DAG_NODE_W}
+                            height={DAG_NODE_H}
+                            rx={8}
+                            fill="var(--c-surface, #181825)"
+                            stroke={
+                              node.isDraft
+                                ? '#f59e0b'
+                                : isHovered()
+                                  ? 'var(--c-accent, #89b4fa)'
+                                  : 'var(--c-border, #45475a)'
+                            }
+                            stroke-width={node.isCriticalPath ? 2.5 : isHovered() ? 2 : 1}
+                            stroke-dasharray={node.isDraft ? '6,3' : 'none'}
+                            filter="url(#shadow)"
+                          />
+                          {/* Workspace color strip */}
+                          <rect
+                            x={0}
+                            y={0}
+                            width={4}
+                            height={DAG_NODE_H}
+                            rx={2}
+                            fill={getWorkspaceColor(node.workspace, allWorkspaces())}
+                          />
+                          {/* Status dot */}
+                          <circle cx={DAG_NODE_W - 14} cy={14} r={4} fill={getStatusColor(node.status)} />
+                          {/* PR icon */}
+                          <Show when={node.kind === 'pr'}>
+                            <g transform={`translate(${DAG_NODE_W - 30}, 8)`}>
+                              <svg width="12" height="12" viewBox="0 0 16 16" fill="var(--c-text-muted, #a6adc8)">
+                                <path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm0 9.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm7.5-9.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM4.25 1A2.25 2.25 0 0 0 2 3.25v9.5A2.25 2.25 0 0 0 4.25 15a2.25 2.25 0 0 0 2.25-2.25V3.25A2.25 2.25 0 0 0 4.25 1Zm7.5 0A2.25 2.25 0 0 0 9.5 3.25v2.122a.75.75 0 0 0 1.5 0V3.25a.75.75 0 0 1 1.5 0v2.122a.75.75 0 0 0 1.5 0V3.25A2.25 2.25 0 0 0 11.75 1Z" />
+                              </svg>
+                            </g>
+                          </Show>
+                          {/* Title */}
+                          <text x={14} y={24} fill="var(--c-text-heading, #cdd6f4)" font-size="12" font-weight="600">
+                            <title>{node.title}</title>
+                            {node.title.length > 26 ? node.title.slice(0, 26) + '...' : node.title}
+                          </text>
+                          {/* Subtitle */}
+                          <text x={14} y={42} fill="var(--c-text-muted, #a6adc8)" font-size="10">
+                            {node.workspaceName} / {node.projectName}
+                          </text>
+                          {/* Status label + draft badge */}
+                          <text x={14} y={58} fill={getStatusColor(node.status)} font-size="9">
+                            {getStatusLabel(node.status)}
+                          </text>
+                          <Show when={node.isDraft}>
+                            <rect
+                              x={DAG_NODE_W - 46}
+                              y={46}
+                              width={36}
+                              height={16}
+                              rx={3}
+                              fill="#f59e0b"
+                              opacity="0.9"
+                            />
+                            <text
+                              x={DAG_NODE_W - 28}
+                              y={58}
+                              text-anchor="middle"
+                              font-size="8"
+                              fill="#000"
+                              font-weight="700"
+                            >
+                              DRAFT
+                            </text>
+                          </Show>
+                        </g>
+                      </g>
+                    )
+                  }}
+                </For>
+
+                {/* Separator line between DAG and grid */}
+                <Show when={layout().connected.length > 0 && layout().unconnected.length > 0}>
+                  <line
+                    x1={20}
+                    y1={layout().connectedBounds.h + 30}
+                    x2={1000}
+                    y2={layout().connectedBounds.h + 30}
+                    stroke="var(--c-border, #45475a)"
+                    stroke-width={0.5}
+                    stroke-dasharray="4,4"
+                    opacity="0.4"
+                  />
+                  <text
+                    x={40}
+                    y={layout().connectedBounds.h + 50}
+                    fill="var(--c-text-muted, #a6adc8)"
+                    font-size="11"
+                    font-weight="600"
+                    opacity="0.5"
+                  >
+                    UNCONNECTED ({layout().unconnected.length})
+                  </text>
+                </Show>
+
+                {/* Unconnected nodes — compact cards */}
+                <For each={paginatedUnconnected()}>
+                  {({ node, x, y }) => {
+                    const isHovered = () => hoveredNodeId() === node.id
+                    return (
+                      <g
+                        transform={`translate(${x}, ${y})`}
+                        onClick={() => handleNodeClick(node)}
+                        onMouseEnter={() => setHoveredNodeId(node.id)}
+                        onMouseLeave={() => setHoveredNodeId(null)}
+                        style={{ cursor: 'pointer' }}
+                        data-testid={`dag-node-${node.id}`}
+                      >
+                        <rect
+                          width={GRID_CARD_W}
+                          height={GRID_CARD_H}
+                          rx={6}
+                          fill="var(--c-surface, #181825)"
+                          stroke={
+                            isHovered()
+                              ? 'var(--c-accent, #89b4fa)'
+                              : node.isDraft
+                                ? '#f59e0b'
+                                : 'var(--c-border, #45475a)'
+                          }
+                          stroke-width={isHovered() ? 1.5 : 0.5}
+                          stroke-dasharray={node.isDraft ? '4,2' : 'none'}
+                          opacity={0.85}
+                        />
+                        <rect
+                          x={0}
+                          y={0}
+                          width={3}
+                          height={GRID_CARD_H}
+                          rx={1.5}
+                          fill={getWorkspaceColor(node.workspace, allWorkspaces())}
+                        />
+                        <circle cx={GRID_CARD_W - 10} cy={10} r={3} fill={getStatusColor(node.status)} />
+                        <text x={10} y={20} fill="var(--c-text-heading, #cdd6f4)" font-size="10" font-weight="500">
+                          <title>{node.title}</title>
+                          {node.title.length > 22 ? node.title.slice(0, 22) + '...' : node.title}
+                        </text>
+                        <text x={10} y={36} fill="var(--c-text-muted, #a6adc8)" font-size="8">
+                          {node.projectName}
+                        </text>
+                        <Show when={node.isDraft}>
+                          <text
+                            x={GRID_CARD_W - 8}
+                            y={44}
+                            text-anchor="end"
+                            font-size="7"
+                            fill="#f59e0b"
+                            font-weight="600"
+                          >
+                            DRAFT
+                          </text>
+                        </Show>
+                      </g>
+                    )
+                  }}
+                </For>
+              </g>
+            </svg>
+
+            {/* Pagination for unconnected */}
+            <Show when={totalUnconnectedPages() > 1}>
+              <div
+                class="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg px-3 py-1.5"
+                style={{
+                  background: 'var(--c-bg-raised, #1e1e2e)',
+                  border: '1px solid var(--c-border, #45475a)'
+                }}
+              >
+                <button
+                  class="text-xs"
+                  style={{ color: 'var(--c-text, #cdd6f4)' }}
+                  disabled={unconnectedPage() === 0}
+                  onClick={() => setUnconnectedPage((p) => Math.max(0, p - 1))}
+                >
+                  Prev
+                </button>
+                <span class="text-xs opacity-60" style={{ color: 'var(--c-text-muted)' }}>
+                  {unconnectedPage() + 1} / {totalUnconnectedPages()}
+                </span>
+                <button
+                  class="text-xs"
+                  style={{ color: 'var(--c-text, #cdd6f4)' }}
+                  disabled={unconnectedPage() >= totalUnconnectedPages() - 1}
+                  onClick={() => setUnconnectedPage((p) => Math.min(totalUnconnectedPages() - 1, p + 1))}
+                >
+                  Next
+                </button>
+              </div>
+            </Show>
+          </div>
         </Show>
 
         {/* Kanban View */}
@@ -863,7 +1515,7 @@ const GlobalPlanningView: Component = () => {
 
         {/* List View */}
         <Show when={viewMode() === 'list'}>
-          <div class="p-4" data-testid="list-view">
+          <div class="overflow-auto p-4" data-testid="list-view">
             <table class="w-full text-xs" style={{ color: 'var(--c-text, #cdd6f4)' }}>
               <thead>
                 <tr style={{ 'border-bottom': '1px solid var(--c-border, #45475a)' }}>
@@ -927,7 +1579,7 @@ const GlobalPlanningView: Component = () => {
 
         {/* Tree View */}
         <Show when={viewMode() === 'tree'}>
-          <div class="p-4" data-testid="tree-view">
+          <div class="overflow-auto p-4" data-testid="tree-view">
             <For each={allWorkspaces()}>
               {(ws) => {
                 const wsNodes = createMemo(() => filteredNodes().filter((n) => n.workspace === ws))
