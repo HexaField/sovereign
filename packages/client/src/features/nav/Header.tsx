@@ -488,21 +488,7 @@ function WorkspaceHeaderContent() {
           </div>
         </Show>
       </div>
-      {/* Agent status dot */}
-      <span
-        class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-        style={{
-          background:
-            agentStatus() === 'error'
-              ? '#ef4444'
-              : agentStatus() === 'working' || agentStatus() === 'thinking'
-                ? '#f59e0b'
-                : '#22c55e',
-          animation:
-            agentStatus() === 'working' || agentStatus() === 'thinking' ? 'pulse 1.5s ease-in-out infinite' : 'none'
-        }}
-        title={`Agent: ${agentStatus()}`}
-      />
+
       {/* Unread notifications badge */}
       <Show when={unreadNotificationCount() > 0}>
         <span
