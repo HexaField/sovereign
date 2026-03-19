@@ -4,6 +4,7 @@ import { fetchThreadsForOrg } from '../threads/store.js'
 
 interface GatewaySession {
   key: string
+  shortKey: string
   label?: string
   localLabel?: string
   kind?: string
@@ -59,10 +60,10 @@ const ThreadsTab: Component = () => {
     return org?.name ?? orgId
   }
 
-  const assignSession = async (key: string, orgId: string) => {
-    setMoving(key)
+  const assignSession = async (fullKey: string, shortKey: string, orgId: string) => {
+    setMoving(fullKey)
     try {
-      const res = await fetch(`/api/threads/${key}`, {
+      const res = await fetch(`/api/threads/${shortKey}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orgId })
@@ -72,7 +73,7 @@ const ThreadsTab: Component = () => {
         const createRes = await fetch('/api/threads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key, orgId, label: key })
+          body: JSON.stringify({ key: shortKey, orgId, label: shortKey })
         })
         if (!createRes.ok) throw new Error(`HTTP ${createRes.status}`)
       }
@@ -154,7 +155,7 @@ const ThreadsTab: Component = () => {
               onChange={(e) => {
                 const orgId = e.currentTarget.value
                 if (orgId) {
-                  assignSession(s.key, orgId)
+                  assignSession(s.key, s.shortKey, orgId)
                   e.currentTarget.value = ''
                 }
               }}
@@ -173,7 +174,7 @@ const ThreadsTab: Component = () => {
               onChange={(e) => {
                 const orgId = e.currentTarget.value
                 if (orgId) {
-                  assignSession(s.key, orgId === '_global' ? '_global' : orgId)
+                  assignSession(s.key, s.shortKey, orgId === '_global' ? '_global' : orgId)
                   e.currentTarget.value = ''
                 }
               }}

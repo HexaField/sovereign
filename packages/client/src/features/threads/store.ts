@@ -34,23 +34,17 @@ export function fetchThreadsForOrg(orgId?: string): void {
     .then((data: any) => {
       const raw: ThreadInfo[] = (data.threads ?? data ?? []).filter((t: any) => t.key)
       setThreads(raw)
-      // Reconcile: if current threadKey doesn't exist in this workspace's threads, fix it
+      // Reconcile: if current threadKey doesn't exist in this workspace's threads,
+      // keep it anyway if it looks like a valid thread key (user navigated directly).
+      // Only auto-switch if the current key is empty.
       const current = threadKey()
-      const exists = raw.some((t) => t.key === current)
-      if (!exists) {
+      if (!current) {
         const first = raw[0]
         if (first) {
           setThreadKey(first.key)
           if (typeof history !== 'undefined') {
             const u = new URL(location.href)
             u.hash = `thread=${first.key}`
-            history.replaceState(null, '', u.toString())
-          }
-        } else {
-          setThreadKey('')
-          if (typeof history !== 'undefined') {
-            const u = new URL(location.href)
-            u.hash = ''
             history.replaceState(null, '', u.toString())
           }
         }

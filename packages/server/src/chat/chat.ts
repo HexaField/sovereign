@@ -144,6 +144,8 @@ export function createChatModule(
 
   function deriveSessionKey(threadKey: string): string {
     // Map thread keys to OpenClaw gateway session keys
+    // Handle already-qualified keys (e.g. agent:main:thread:adam)
+    if (threadKey.startsWith('agent:')) return threadKey
     if (threadKey === 'main') return 'agent:main:main'
     return `agent:main:thread:${threadKey}`
   }
