@@ -1265,7 +1265,7 @@ const GlobalPlanningView: Component = () => {
                 {/* Edges — orthogonal Manhattan routing */}
                 <For each={filteredEdges()}>
                   {(edge) => {
-                    const path = () => edgePath(edge.from, edge.to)
+                    const path = () => edgePath(edge.to, edge.from)
                     const edgeKey = () => `${edge.from}->${edge.to}`
                     const isHighlighted = () => connectedEdgeIds().has(edgeKey())
                     return (
