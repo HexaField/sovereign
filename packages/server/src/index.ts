@@ -374,12 +374,45 @@ registerChatWs(wsHandler, chatModule)
 app.use(createChatRoutes(chatModule, backend))
 
 const forwardHandler = createForwardHandler(bus, threadManager)
-// Gateway sessions endpoint — returns all sessions from the OpenClaw gateway
+// Gateway sessions endpoint — returns all sessions from the OpenClaw sessions file
 // merged with local thread registry metadata (orgId, label overrides)
 // MUST be before thread routes so /api/threads/gateway-sessions doesn't match :key
 app.get('/api/threads/gateway-sessions', async (_req, res) => {
   try {
-    const gatewaySessions = await (backend as any).listGatewaySessions()
+    const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+    let allSessions: Array<{ key: string; label?: string; kind: string; shortKey: string }> = []
+
+    try {
+      const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
+      const sessionsData = JSON.parse(raw) as Record<string, any>
+
+      allSessions = Object.entries(sessionsData)
+        .map(([fullKey, meta]) => {
+          let kind = 'unknown'
+          let shortKey = fullKey
+          if (fullKey.startsWith('agent:main:')) shortKey = fullKey.slice('agent:main:'.length)
+
+          if (fullKey.endsWith(':main') || shortKey === 'main') kind = 'main'
+          else if (fullKey.includes(':thread:')) kind = 'thread'
+          else if (fullKey.includes(':cron:')) kind = 'cron'
+          else if (fullKey.includes(':subagent:')) kind = 'subagent'
+          else if (fullKey.includes(':event-agent:')) kind = 'event-agent'
+
+          if (shortKey.startsWith('thread:')) shortKey = shortKey.slice('thread:'.length)
+
+          return {
+            key: fullKey,
+            shortKey,
+            kind,
+            label: (meta as any)?.label || shortKey,
+            lastActivity: (meta as any)?.updatedAt || (meta as any)?.createdAt
+          }
+        })
+        .filter((s) => s.kind === 'main' || s.kind === 'thread')
+    } catch (e: any) {
+      console.error('Failed to read sessions.json:', e.message)
+    }
+
     const localThreads = threadManager.list()
     const localMap = new Map(localThreads.map((t: any) => [t.key, t]))
     // Also map by full gateway key format
@@ -388,38 +421,20 @@ app.get('/api/threads/gateway-sessions', async (_req, res) => {
       else if (!t.key.startsWith('agent:')) localMap.set(`agent:main:thread:${t.key}`, t)
     }
 
-    const merged = gatewaySessions
-      .map((gs: any) => {
-        const local = localMap.get(gs.key)
-        // Derive kind from session key pattern
-        const key = gs.key as string
-        let kind = 'unknown'
-        if (key === 'agent:main:main' || key === 'main') kind = 'main'
-        else if (key.includes(':thread:')) kind = 'thread'
-        else if (key.includes(':cron:')) kind = 'cron'
-        else if (key.includes(':subagent:')) kind = 'subagent'
-
-        // Derive short key (what the thread picker uses)
-        let shortKey = key
-        if (key.startsWith('agent:main:')) shortKey = key.slice('agent:main:'.length)
-        if (shortKey.startsWith('thread:')) shortKey = shortKey.slice('thread:'.length)
-
-        return {
-          ...gs,
-          kind,
-          shortKey,
-          orgId: local?.orgId,
-          localLabel: local?.label,
-          isRegistered: !!local
-        }
-      })
-      // Filter: only main + thread sessions (skip cron, subagent, etc.)
-      .filter((s: any) => s.kind === 'main' || s.kind === 'thread')
+    const merged = allSessions.map((gs) => {
+      const local = localMap.get(gs.key) || localMap.get(gs.shortKey)
+      return {
+        ...gs,
+        orgId: (local as any)?.orgId,
+        localLabel: (local as any)?.label,
+        isRegistered: !!local
+      }
+    })
 
     res.json({ sessions: merged })
   } catch (err: any) {
-    console.error('Failed to list gateway sessions:', err.message)
-    res.status(500).json({ error: 'Failed to list gateway sessions' })
+    console.error('Failed to list sessions:', err.message)
+    res.status(500).json({ error: 'Failed to list sessions' })
   }
 })
 
