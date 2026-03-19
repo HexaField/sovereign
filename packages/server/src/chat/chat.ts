@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
 import type { ThreadManager } from '../threads/types.js'
+import { deriveSessionKey } from './derive-session-key.js'
 
 export interface ChatModule {
   status(): ModuleStatus
@@ -142,13 +143,7 @@ export function createChatModule(
     }
   })
 
-  function deriveSessionKey(threadKey: string): string {
-    // Map thread keys to OpenClaw gateway session keys
-    // Handle already-qualified keys (e.g. agent:main:thread:adam)
-    if (threadKey.startsWith('agent:')) return threadKey
-    if (threadKey === 'main') return 'agent:main:main'
-    return `agent:main:thread:${threadKey}`
-  }
+  // deriveSessionKey is imported at module level from ./derive-session-key.js
 
   async function handleSend(threadKey: string, text: string, attachments?: Buffer[]): Promise<void> {
     let sessionKey = threadToSession.get(threadKey)

@@ -12,13 +12,18 @@ Object.defineProperty(globalThis, 'localStorage', {
   writable: true
 })
 
-// Mock location/history
-Object.defineProperty(globalThis, 'location', {
-  value: { hash: '', pathname: '/' },
-  writable: true
-})
+// Mock location/history with full href
+function setLocation(hash = '', pathname = '/') {
+  ;(globalThis as any).location = {
+    hash,
+    pathname,
+    href: `http://localhost${pathname}${hash}`
+  }
+}
+setLocation()
+
 Object.defineProperty(globalThis, 'history', {
-  value: { pushState: vi.fn() },
+  value: { pushState: vi.fn(), replaceState: vi.fn() },
   writable: true
 })
 
@@ -80,8 +85,9 @@ beforeEach(() => {
   setThreadKey('main')
   setThreads([])
   setActiveOrgIdForThreads('_global')
-  ;(globalThis as any).location = { hash: '', pathname: '/' }
+  setLocation()
   vi.mocked(history.pushState).mockClear()
+  vi.mocked(history.replaceState).mockClear()
   vi.stubGlobal('fetch', mockFetch)
 })
 
@@ -123,33 +129,92 @@ describe('fetchThreadsForOrg', () => {
   })
 })
 
-describe('switchWorkspaceThreads', () => {
-  it('sets activeOrgIdForThreads and resets to main thread', () => {
-    setThreadKey('some-thread')
-    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ threads: [] }) })
+describe('fetchThreadsForOrg — reconciliation', () => {
+  it('keeps threadKey when it is set but not in fetched list (no override)', async () => {
+    setThreadKey('custom-thread')
+    const data = { threads: [mockThread('t1'), mockThread('t2')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
 
-    switchWorkspaceThreads('org2')
-    expect(activeOrgIdForThreads()).toBe('org2')
-    expect(threadKey()).toBe('main')
+    fetchThreadsForOrg('org1')
+    await vi.waitFor(() => expect(threads().length).toBe(2))
+    // Should NOT auto-switch — current key is non-empty
+    expect(threadKey()).toBe('custom-thread')
   })
 
-  it('pushes clean URL without hash', () => {
+  it('auto-selects first thread when threadKey is empty', async () => {
+    setThreadKey('')
+    setLocation()
+    const data = { threads: [mockThread('first'), mockThread('second')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    fetchThreadsForOrg('org1')
+    await vi.waitFor(() => expect(threadKey()).toBe('first'))
+  })
+
+  it('keeps threadKey when it matches a fetched thread', async () => {
+    setThreadKey('t2')
+    const data = { threads: [mockThread('t1'), mockThread('t2')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    fetchThreadsForOrg('org1')
+    await vi.waitFor(() => expect(threads().length).toBe(2))
+    expect(threadKey()).toBe('t2')
+  })
+
+  it('preserves unregistered thread keys for gateway-only threads', async () => {
+    // Simulates navigating to a thread that exists in gateway but not local registry
+    setThreadKey('adam')
+    const data = { threads: [mockThread('main'), mockThread('upgrades')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    fetchThreadsForOrg('_global')
+    await vi.waitFor(() => expect(threads().length).toBe(2))
+    // adam is not in registry but should NOT be overridden
+    expect(threadKey()).toBe('adam')
+  })
+})
+
+describe('switchWorkspaceThreads', () => {
+  it('sets activeOrgIdForThreads', () => {
     mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ threads: [] }) })
     switchWorkspaceThreads('org2')
-    expect(history.pushState).toHaveBeenCalledWith(null, '', '/')
+    expect(activeOrgIdForThreads()).toBe('org2')
+  })
+
+  it('auto-selects first thread from new workspace', async () => {
+    setLocation()
+    const data = { threads: [mockThread('ws2-thread', 'org2')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    switchWorkspaceThreads('org2')
+    await vi.waitFor(() => expect(threadKey()).toBe('ws2-thread'))
+  })
+
+  it('clears threadKey when workspace has no threads', async () => {
+    setLocation()
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ threads: [] }) })
+
+    switchWorkspaceThreads('empty-org')
+    await vi.waitFor(() => expect(threadKey()).toBe(''))
   })
 })
 
 describe('switchThread', () => {
   it('sets thread key and updates hash', () => {
+    setLocation('', '/')
     switchThread('my-thread')
     expect(threadKey()).toBe('my-thread')
-    expect(history.pushState).toHaveBeenCalledWith(null, '', '#thread=my-thread')
+    expect(history.replaceState).toHaveBeenCalledWith(
+      null,
+      '',
+      expect.stringContaining('#thread=my-thread')
+    )
   })
 })
 
 describe('createThread', () => {
   it('creates thread and switches to it', async () => {
+    setLocation('', '/')
     const newThread = mockThread('new-thread')
     mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ thread: newThread }) })
 
@@ -166,6 +231,7 @@ describe('createThread', () => {
   })
 
   it('sends orgId when active workspace is not _global', async () => {
+    setLocation('', '/')
     setActiveOrgIdForThreads('ws1')
     const newThread = mockThread('scoped-thread')
     mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ thread: newThread }) })
@@ -200,7 +266,7 @@ describe('removeEntity', () => {
 
 describe('initThreadStore', () => {
   it('reads thread from hash on init', () => {
-    ;(globalThis as any).location = { hash: '#thread=from-hash', pathname: '/' }
+    setLocation('#thread=from-hash')
     mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
 
     const cleanup = initThreadStore()
@@ -216,12 +282,13 @@ describe('initThreadStore', () => {
     cleanup()
   })
 
-  it('defaults to main when no hash', () => {
-    ;(globalThis as any).location = { hash: '', pathname: '/' }
+  it('returns empty string when no hash present', () => {
+    setLocation('')
     mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
 
     const cleanup = initThreadStore()
-    expect(threadKey()).toBe('main')
+    // No hash = empty threadKey (reconciliation may auto-select later)
+    expect(threadKey()).toBe('')
     cleanup()
   })
 
@@ -283,11 +350,11 @@ describe('initThreadStore', () => {
   })
 
   it('responds to popstate events', () => {
-    ;(globalThis as any).location = { hash: '', pathname: '/' }
+    setLocation('')
     mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
     const cleanup = initThreadStore()
 
-    ;(globalThis as any).location = { hash: '#thread=popped', pathname: '/' }
+    setLocation('#thread=popped')
     _triggerPopstate()
     expect(threadKey()).toBe('popped')
     cleanup()

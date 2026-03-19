@@ -380,56 +380,23 @@ const forwardHandler = createForwardHandler(bus, threadManager)
 app.get('/api/threads/gateway-sessions', async (_req, res) => {
   try {
     const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
-    let allSessions: Array<{ key: string; label?: string; kind: string; shortKey: string }> = []
+    let allSessions: import('./threads/parse-gateway-sessions.js').ParsedSession[] = []
 
     try {
       const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
       const sessionsData = JSON.parse(raw) as Record<string, any>
+      const { parseSessionEntry, filterMainAndThread } = await import('./threads/parse-gateway-sessions.js')
 
-      allSessions = Object.entries(sessionsData)
-        .map(([fullKey, meta]) => {
-          let kind = 'unknown'
-          let shortKey = fullKey
-          if (fullKey.startsWith('agent:main:')) shortKey = fullKey.slice('agent:main:'.length)
-
-          if (fullKey.endsWith(':main') || shortKey === 'main') kind = 'main'
-          else if (fullKey.includes(':thread:')) kind = 'thread'
-          else if (fullKey.includes(':cron:')) kind = 'cron'
-          else if (fullKey.includes(':subagent:')) kind = 'subagent'
-          else if (fullKey.includes(':event-agent:')) kind = 'event-agent'
-
-          if (shortKey.startsWith('thread:')) shortKey = shortKey.slice('thread:'.length)
-
-          return {
-            key: fullKey,
-            shortKey,
-            kind,
-            label: (meta as any)?.label || shortKey,
-            lastActivity: (meta as any)?.updatedAt || (meta as any)?.createdAt
-          }
-        })
-        .filter((s) => s.kind === 'main' || s.kind === 'thread')
+      allSessions = filterMainAndThread(
+        Object.entries(sessionsData).map(([fullKey, meta]) => parseSessionEntry(fullKey, meta))
+      )
     } catch (e: any) {
       console.error('Failed to read sessions.json:', e.message)
     }
 
+    const { mergeWithLocal } = await import('./threads/parse-gateway-sessions.js')
     const localThreads = threadManager.list()
-    const localMap = new Map(localThreads.map((t: any) => [t.key, t]))
-    // Also map by full gateway key format
-    for (const t of localThreads as any[]) {
-      if (t.key === 'main') localMap.set('agent:main:main', t)
-      else if (!t.key.startsWith('agent:')) localMap.set(`agent:main:thread:${t.key}`, t)
-    }
-
-    const merged = allSessions.map((gs) => {
-      const local = localMap.get(gs.key) || localMap.get(gs.shortKey)
-      return {
-        ...gs,
-        orgId: (local as any)?.orgId,
-        localLabel: (local as any)?.label,
-        isRegistered: !!local
-      }
-    })
+    const merged = mergeWithLocal(allSessions, localThreads as any[])
 
     res.json({ sessions: merged })
   } catch (err: any) {
