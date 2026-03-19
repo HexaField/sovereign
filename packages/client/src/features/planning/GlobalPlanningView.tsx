@@ -12,7 +12,45 @@ import {
 } from './store'
 import { LinkIcon, KanbanIcon, ListIcon, TreeIcon } from '../../ui/icons.js'
 
-// Types
+// ── Server response types ────────────────────────────────────────────
+
+interface EntityRef {
+  orgId: string
+  projectId: string
+  remote: string
+  issueId: string
+}
+
+interface ServerGraphNode {
+  ref: EntityRef
+  source: 'provider' | 'draft'
+  state: 'open' | 'closed'
+  labels: string[]
+  milestone?: string
+  assignees: string[]
+  dependencies: EntityRef[]
+  dependents: EntityRef[]
+  draftId?: string
+  draftTitle?: string
+  title?: string
+  kind?: 'issue' | 'pr'
+}
+
+interface ServerEdge {
+  from: EntityRef
+  to: EntityRef
+  type: string
+  source: string
+}
+
+interface ServerGraphResponse {
+  nodes: ServerGraphNode[]
+  edges: ServerEdge[]
+  crossWorkspaceEdges?: ServerEdge[]
+}
+
+// ── Client types ─────────────────────────────────────────────────────
+
 export interface PlanningNode {
   id: string
   title: string
@@ -20,6 +58,7 @@ export interface PlanningNode {
   workspace: string
   workspaceName: string
   project: string
+  projectName: string
   status: 'open' | 'in-progress' | 'review' | 'done' | 'blocked'
   assignee?: string
   labels: string[]
@@ -27,6 +66,9 @@ export interface PlanningNode {
   dependencies: string[]
   isCriticalPath: boolean
   depth: number
+  isDraft: boolean
+  kind?: 'issue' | 'pr'
+  ref: EntityRef
 }
 
 export interface PlanningEdge {
@@ -35,7 +77,81 @@ export interface PlanningEdge {
   crossWorkspace: boolean
 }
 
-// Status colors
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function refToId(ref: EntityRef): string {
+  return `${ref.remote}:${ref.orgId}/${ref.projectId}#${ref.issueId}`
+}
+
+function deriveStatus(node: ServerGraphNode, nodeMap: Map<string, ServerGraphNode>): PlanningNode['status'] {
+  if (node.state === 'closed') return 'done'
+
+  // Check if blocked: has open dependencies
+  const hasOpenDep = node.dependencies.some((dep) => {
+    const depNode = nodeMap.get(refToId(dep))
+    return depNode && depNode.state === 'open'
+  })
+  if (hasOpenDep) return 'blocked'
+
+  // Heuristic: has assignee → in-progress
+  if (node.assignees.length > 0) return 'in-progress'
+
+  return 'open'
+}
+
+function derivePriority(node: ServerGraphNode): PlanningNode['priority'] {
+  const labels = node.labels.map((l) => l.toLowerCase())
+  if (labels.some((l) => l.includes('critical') || l.includes('p0'))) return 'critical'
+  if (labels.some((l) => l.includes('high') || l.includes('p1') || l.includes('urgent'))) return 'high'
+  if (labels.some((l) => l.includes('low') || l.includes('p3'))) return 'low'
+  return 'medium'
+}
+
+function computeDepths(nodes: ServerGraphNode[]): Map<string, number> {
+  const depths = new Map<string, number>()
+  const nodeMap = new Map<string, ServerGraphNode>()
+  for (const n of nodes) nodeMap.set(refToId(n.ref), n)
+
+  // Topological sort via Kahn's
+  const inDegree = new Map<string, number>()
+  for (const n of nodes) {
+    const id = refToId(n.ref)
+    inDegree.set(id, n.dependencies.filter((d) => nodeMap.has(refToId(d))).length)
+  }
+
+  const queue: string[] = []
+  for (const [id, deg] of inDegree) {
+    if (deg === 0) queue.push(id)
+  }
+
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    const node = nodeMap.get(id)!
+    const myDepth = node.dependencies
+      .map((d) => depths.get(refToId(d)) ?? 0)
+      .reduce((max, d) => Math.max(max, d + 1), 0)
+    depths.set(id, myDepth)
+
+    // Process dependents
+    for (const dep of node.dependents) {
+      const depId = refToId(dep)
+      const newDeg = (inDegree.get(depId) ?? 1) - 1
+      inDegree.set(depId, newDeg)
+      if (newDeg === 0) queue.push(depId)
+    }
+  }
+
+  // Handle any nodes not reached (cycles) — assign depth 0
+  for (const n of nodes) {
+    const id = refToId(n.ref)
+    if (!depths.has(id)) depths.set(id, 0)
+  }
+
+  return depths
+}
+
+// ── Status colors ────────────────────────────────────────────────────
+
 export function getStatusColor(status: PlanningNode['status']): string {
   switch (status) {
     case 'blocked':
@@ -66,16 +182,64 @@ export function getStatusLabel(status: PlanningNode['status']): string {
   }
 }
 
+// Priority icon SVG components (no emoji)
+export function PriorityIcon(props: { priority: PlanningNode['priority']; class?: string }): JSX.Element {
+  const size = props.class ?? 'h-3 w-3'
+  switch (props.priority) {
+    case 'critical':
+      return (
+        <svg class={size} viewBox="0 0 12 12" fill="none">
+          <circle cx="6" cy="6" r="5" fill="#ef4444" stroke="#ef4444" stroke-width="1" />
+          <path d="M6 3v4M6 8.5v.5" stroke="#fff" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+      )
+    case 'high':
+      return (
+        <svg class={size} viewBox="0 0 12 12" fill="none">
+          <circle cx="6" cy="6" r="5" fill="#f97316" stroke="#f97316" stroke-width="1" />
+          <path
+            d="M6 8V4M4 6l2-2 2 2"
+            stroke="#fff"
+            stroke-width="1.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      )
+    case 'medium':
+      return (
+        <svg class={size} viewBox="0 0 12 12" fill="none">
+          <circle cx="6" cy="6" r="5" fill="#3b82f6" stroke="#3b82f6" stroke-width="1" />
+          <path d="M3.5 6h5" stroke="#fff" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+      )
+    case 'low':
+      return (
+        <svg class={size} viewBox="0 0 12 12" fill="none">
+          <circle cx="6" cy="6" r="5" fill="#6b7280" stroke="#6b7280" stroke-width="1" />
+          <path
+            d="M6 4v4M4 6l2 2 2-2"
+            stroke="#fff"
+            stroke-width="1.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      )
+  }
+}
+
+/** @deprecated Use PriorityIcon component instead */
 export function getPriorityIcon(priority: PlanningNode['priority']): string {
   switch (priority) {
     case 'critical':
-      return 'blocked'
+      return 'crit'
     case 'high':
-      return '🟠'
+      return 'high'
     case 'medium':
-      return 'active'
+      return 'med'
     case 'low':
-      return 'ready'
+      return 'low'
   }
 }
 
@@ -95,7 +259,7 @@ const WORKSPACE_COLORS = [
 
 export function getWorkspaceColor(workspace: string, allWorkspaces: string[]): string {
   const idx = allWorkspaces.indexOf(workspace)
-  return WORKSPACE_COLORS[idx % WORKSPACE_COLORS.length]
+  return WORKSPACE_COLORS[idx % WORKSPACE_COLORS.length]!
 }
 
 // View mode labels/icons
@@ -126,23 +290,29 @@ export function dagLayout(nodes: PlanningNode[]): Array<{ node: PlanningNode; x:
   return result
 }
 
+// ── Component ────────────────────────────────────────────────────────
+
 const GlobalPlanningView: Component = () => {
   const [nodes, setNodes] = createSignal<PlanningNode[]>([])
   const [edges, setEdges] = createSignal<PlanningEdge[]>([])
   const [orgs, setOrgs] = createSignal<Array<{ id: string; name: string }>>([])
+  const [projectNames, setProjectNames] = createSignal<Map<string, string>>(new Map())
+  const [criticalPathIds, setCriticalPathIds] = createSignal<Set<string>>(new Set())
   const [showCreateDialog, setShowCreateDialog] = createSignal(false)
   const [showAssignDialog, setShowAssignDialog] = createSignal(false)
   const [svgZoom, _setSvgZoom] = createSignal(1)
   const [svgPanX, _setSvgPanX] = createSignal(0)
   const [svgPanY, _setSvgPanY] = createSignal(0)
 
-  // Fetch planning data
-  onMount(async () => {
-    // §7.5 — Default to list view on mobile
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-      setViewMode('list')
-    }
+  // Create dialog state
+  const [createOrgId, setCreateOrgId] = createSignal('')
+  const [createTitle, setCreateTitle] = createSignal('')
+  const [createBody, setCreateBody] = createSignal('')
+  const [createSubmitting, setCreateSubmitting] = createSignal(false)
+
+  async function fetchGraph() {
     try {
+      // Fetch orgs
       const orgsRes = await fetch('/api/orgs')
       if (!orgsRes.ok) return
       const orgsData = await orgsRes.json()
@@ -152,48 +322,133 @@ const GlobalPlanningView: Component = () => {
       }))
       setOrgs(orgList)
 
-      const allNodes: PlanningNode[] = []
-      const allEdges: PlanningEdge[] = []
+      // Fetch project names for all orgs
+      const names = new Map<string, string>()
+      await Promise.all(
+        orgList.map(async (org: { id: string }) => {
+          try {
+            const res = await fetch(`/orgs/${org.id}/projects`)
+            if (!res.ok) return
+            const projects = await res.json()
+            for (const p of Array.isArray(projects) ? projects : projects.projects || []) {
+              names.set(p.id || p.projectId, p.name || p.id)
+            }
+          } catch {
+            /* skip */
+          }
+        })
+      )
+      setProjectNames(names)
 
-      for (const org of orgList) {
-        try {
-          const res = await fetch(`/api/orgs/${org.id}/planning/graph`)
-          if (!res.ok) continue
-          const graph = await res.json()
-          for (const n of graph.nodes || []) {
-            allNodes.push({
-              id: n.id,
-              title: n.title || n.id,
-              body: n.body,
-              workspace: org.id,
-              workspaceName: org.name,
-              project: n.project || '',
-              status: n.status || 'open',
-              assignee: n.assignee,
-              labels: n.labels || [],
-              priority: n.priority || 'medium',
-              dependencies: n.dependencies || [],
-              isCriticalPath: !!n.isCriticalPath,
-              depth: n.depth ?? 0
-            })
+      // Fetch cross-org graph
+      let graphData: ServerGraphResponse
+      const graphRes = await fetch('/api/planning/graph')
+      if (graphRes.ok) {
+        graphData = await graphRes.json()
+      } else {
+        // Fallback: fetch per-org
+        const allNodes: ServerGraphNode[] = []
+        const allEdges: ServerEdge[] = []
+        for (const org of orgList) {
+          try {
+            const res = await fetch(`/api/orgs/${org.id}/planning/graph`)
+            if (!res.ok) continue
+            const graph = await res.json()
+            allNodes.push(...(graph.nodes || []))
+            allEdges.push(...(graph.edges || []))
+          } catch {
+            /* skip */
           }
-          for (const e of graph.edges || []) {
-            allEdges.push({
-              from: e.from,
-              to: e.to,
-              crossWorkspace: !!e.crossWorkspace
-            })
+        }
+        graphData = { nodes: allNodes, edges: allEdges }
+      }
+
+      // Build node map for status derivation
+      const serverNodeMap = new Map<string, ServerGraphNode>()
+      for (const n of graphData.nodes) {
+        serverNodeMap.set(refToId(n.ref), n)
+      }
+
+      // Compute depths
+      const depths = computeDepths(graphData.nodes)
+
+      // Fetch critical path
+      const cpIds = new Set<string>()
+      try {
+        const cpRes = await fetch('/api/planning/critical-path')
+        if (cpRes.ok) {
+          const cp = await cpRes.json()
+          for (const ref of cp.path || []) {
+            cpIds.add(refToId(ref))
           }
-        } catch {
-          /* skip */
+        }
+      } catch {
+        /* skip */
+      }
+      setCriticalPathIds(cpIds)
+
+      // Cross-workspace edge set
+      const crossWsEdgeKeys = new Set<string>()
+      for (const e of graphData.crossWorkspaceEdges || []) {
+        crossWsEdgeKeys.add(`${refToId(e.from)}->${refToId(e.to)}`)
+      }
+      // Also detect from edge data
+      for (const e of graphData.edges) {
+        if (e.from.orgId !== e.to.orgId) {
+          crossWsEdgeKeys.add(`${refToId(e.from)}->${refToId(e.to)}`)
         }
       }
 
-      setNodes(allNodes)
-      setEdges(allEdges)
+      // Map org names
+      const orgNameMap = new Map<string, string>()
+      for (const org of orgList) {
+        orgNameMap.set(org.id, org.name)
+      }
+
+      // Map server nodes to client PlanningNodes
+      const planningNodes: PlanningNode[] = graphData.nodes.map((n) => {
+        const id = refToId(n.ref)
+        const title = n.title || n.draftTitle || `${n.ref.projectId}#${n.ref.issueId}`
+        return {
+          id,
+          title,
+          workspace: n.ref.orgId,
+          workspaceName: orgNameMap.get(n.ref.orgId) || n.ref.orgId,
+          project: n.ref.projectId,
+          projectName: names.get(n.ref.projectId) || n.ref.projectId,
+          status: deriveStatus(n, serverNodeMap),
+          assignee: n.assignees[0],
+          labels: n.labels,
+          priority: derivePriority(n),
+          dependencies: n.dependencies.map(refToId),
+          isCriticalPath: cpIds.has(id),
+          depth: depths.get(id) ?? 0,
+          isDraft: n.source === 'draft',
+          kind: n.kind,
+          ref: n.ref
+        }
+      })
+
+      const planningEdges: PlanningEdge[] = graphData.edges.map((e) => ({
+        from: refToId(e.from),
+        to: refToId(e.to),
+        crossWorkspace: crossWsEdgeKeys.has(`${refToId(e.from)}->${refToId(e.to)}`)
+      }))
+
+      setNodes(planningNodes)
+      setEdges(planningEdges)
     } catch {
       /* network error */
     }
+  }
+
+  // Fetch planning data
+  onMount(async () => {
+    // §7.5 — Default to list view on mobile
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setViewMode('list')
+    }
+    await fetchGraph()
   })
 
   const allWorkspaces = createMemo(() => [...new Set(nodes().map((n) => n.workspace))])
@@ -242,8 +497,58 @@ const GlobalPlanningView: Component = () => {
     }
   }
 
+  async function handleCreateIssue() {
+    const orgId = createOrgId()
+    const title = createTitle()
+    if (!orgId || !title) return
+
+    setCreateSubmitting(true)
+    try {
+      const res = await fetch(`/api/orgs/${orgId}/planning/issues`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          body: createBody(),
+          remote: '',
+          projectId: ''
+        })
+      })
+      if (res.ok) {
+        setShowCreateDialog(false)
+        setCreateOrgId('')
+        setCreateTitle('')
+        setCreateBody('')
+        await fetchGraph()
+      }
+    } catch {
+      /* network error */
+    } finally {
+      setCreateSubmitting(false)
+    }
+  }
+
+  function handleAssignAgent(issueId: string) {
+    const node = nodes().find((n) => n.id === issueId)
+    if (!node) return
+    console.log('sovereign:assign-agent', { ref: node.ref, id: issueId })
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('sovereign:assign-agent', {
+          detail: { ref: node.ref }
+        })
+      )
+    }
+    setShowAssignDialog(false)
+  }
+
   // Kanban columns
   const kanbanStatuses = ['open', 'in-progress', 'review', 'done', 'blocked'] as const
+
+  // Draft node style helpers
+  function draftBorderStyle(isDraft: boolean): string {
+    return isDraft ? '2px dashed #f59e0b' : ''
+  }
 
   return (
     <div
@@ -352,7 +657,7 @@ const GlobalPlanningView: Component = () => {
           onClick={() => setShowCreateDialog(true)}
           data-testid="create-issue-button"
         >
-          ＋ Create Issue
+          + Create Issue
         </button>
       </div>
 
@@ -375,7 +680,7 @@ const GlobalPlanningView: Component = () => {
               >
                 {pill.key}: {pill.value}
                 <button class="ml-0.5 font-bold" onClick={() => removeFilterValue(pill.key, pill.value)}>
-                  ×
+                  x
                 </button>
               </span>
             )}
@@ -449,23 +754,26 @@ const GlobalPlanningView: Component = () => {
                       height={60}
                       rx={6}
                       fill="var(--c-surface, #181825)"
-                      stroke={getStatusColor(node.status)}
+                      stroke={node.isDraft ? '#f59e0b' : getStatusColor(node.status)}
                       stroke-width={node.isCriticalPath ? 2.5 : 1.5}
+                      stroke-dasharray={node.isDraft ? '6,3' : 'none'}
                     />
                     {/* Workspace color indicator */}
                     <rect width={4} height={60} rx={2} fill={getWorkspaceColor(node.workspace, allWorkspaces())} />
                     <text x={14} y={22} fill="var(--c-text-heading, #cdd6f4)" font-size="12" font-weight="600">
-                      {node.title.length > 22 ? node.title.slice(0, 22) + '…' : node.title}
+                      {node.title.length > 22 ? node.title.slice(0, 22) + '...' : node.title}
                     </text>
                     <text x={14} y={40} fill="var(--c-text-muted, #a6adc8)" font-size="10">
-                      {node.workspaceName} / {node.project}
+                      {node.workspaceName} / {node.projectName}
                     </text>
                     <text x={14} y={54} fill={getStatusColor(node.status)} font-size="10">
-                      ● {getStatusLabel(node.status)}
+                      {getStatusLabel(node.status)}
                     </text>
-                    <text x={170} y={22} text-anchor="end" font-size="10" fill="var(--c-text-muted)">
-                      {getPriorityIcon(node.priority)}
-                    </text>
+                    <Show when={node.isDraft}>
+                      <text x={170} y={54} text-anchor="end" font-size="8" fill="#f59e0b" font-weight="600">
+                        DRAFT
+                      </text>
+                    </Show>
                   </g>
                 )}
               </For>
@@ -506,23 +814,39 @@ const GlobalPlanningView: Component = () => {
                           <div
                             class="cursor-pointer rounded p-2.5 hover:opacity-90"
                             style={{
-                              background: 'var(--c-surface, #181825)',
-                              'border-left': `3px solid ${getWorkspaceColor(node.workspace, allWorkspaces())}`
+                              background: node.isDraft ? 'rgba(245, 158, 11, 0.08)' : 'var(--c-surface, #181825)',
+                              'border-left': `3px solid ${node.isDraft ? '#f59e0b' : getWorkspaceColor(node.workspace, allWorkspaces())}`,
+                              border: node.isDraft ? '1px dashed #f59e0b' : 'none',
+                              'border-left-width': '3px',
+                              'border-left-style': 'solid'
                             }}
                             onClick={() => handleNodeClick(node)}
                             data-testid={`kanban-card-${node.id}`}
                           >
-                            <div class="text-xs font-medium" style={{ color: 'var(--c-text-heading, #cdd6f4)' }}>
-                              {node.title}
+                            <div class="flex items-center gap-1">
+                              <div
+                                class="flex-1 text-xs font-medium"
+                                style={{ color: 'var(--c-text-heading, #cdd6f4)' }}
+                              >
+                                {node.title}
+                              </div>
+                              <Show when={node.isDraft}>
+                                <span
+                                  class="rounded px-1 py-0.5 text-[9px] font-semibold"
+                                  style={{ background: '#f59e0b', color: '#000' }}
+                                >
+                                  DRAFT
+                                </span>
+                              </Show>
                             </div>
                             <div class="mt-1 text-xs opacity-60" style={{ color: 'var(--c-text-muted)' }}>
-                              {node.workspaceName} / {node.project}
+                              {node.workspaceName} / {node.projectName}
                             </div>
                             <div class="mt-1.5 flex items-center gap-1">
-                              <span class="text-xs">{getPriorityIcon(node.priority)}</span>
+                              <PriorityIcon priority={node.priority} />
                               <Show when={node.assignee}>
                                 <span class="text-xs opacity-50" style={{ color: 'var(--c-text-muted)' }}>
-                                  👤 {node.assignee}
+                                  {node.assignee}
                                 </span>
                               </Show>
                             </div>
@@ -561,7 +885,19 @@ const GlobalPlanningView: Component = () => {
                       onClick={() => handleNodeClick(node)}
                       data-testid={`list-row-${node.id}`}
                     >
-                      <td class="p-2 font-medium">{node.title}</td>
+                      <td class="p-2 font-medium">
+                        <span class="flex items-center gap-1.5">
+                          {node.title}
+                          <Show when={node.isDraft}>
+                            <span
+                              class="rounded px-1 py-0.5 text-[9px] font-semibold"
+                              style={{ background: '#f59e0b', color: '#000' }}
+                            >
+                              DRAFT
+                            </span>
+                          </Show>
+                        </span>
+                      </td>
                       <td class="p-2">
                         <span
                           class="mr-1 inline-block h-2 w-2 rounded-full"
@@ -569,13 +905,16 @@ const GlobalPlanningView: Component = () => {
                         />
                         {node.workspaceName}
                       </td>
-                      <td class="p-2">{node.project}</td>
+                      <td class="p-2">{node.projectName}</td>
                       <td class="p-2">
-                        <span style={{ color: getStatusColor(node.status) }}>● {getStatusLabel(node.status)}</span>
+                        <span style={{ color: getStatusColor(node.status) }}>{getStatusLabel(node.status)}</span>
                       </td>
-                      <td class="p-2">{node.assignee || '—'}</td>
+                      <td class="p-2">{node.assignee || '--'}</td>
                       <td class="p-2">
-                        {getPriorityIcon(node.priority)} {node.priority}
+                        <span class="flex items-center gap-1">
+                          <PriorityIcon priority={node.priority} />
+                          {node.priority}
+                        </span>
                       </td>
                       <td class="p-2">{node.dependencies.length}</td>
                     </tr>
@@ -611,16 +950,25 @@ const GlobalPlanningView: Component = () => {
                             <div
                               class="flex cursor-pointer items-center gap-2 rounded p-2 text-xs hover:opacity-80"
                               style={{
-                                background: 'var(--c-surface, #181825)',
-                                color: 'var(--c-text, #cdd6f4)'
+                                background: node.isDraft ? 'rgba(245, 158, 11, 0.08)' : 'var(--c-surface, #181825)',
+                                color: 'var(--c-text, #cdd6f4)',
+                                border: node.isDraft ? '1px dashed #f59e0b' : 'none'
                               }}
                               onClick={() => handleNodeClick(node)}
                               data-testid={`tree-node-${node.id}`}
                             >
-                              <span style={{ color: getStatusColor(node.status) }}>●</span>
+                              <span style={{ color: getStatusColor(node.status) }}>&#x25CF;</span>
                               <span class="font-medium">{node.title}</span>
-                              <span class="ml-auto opacity-50">{node.project}</span>
-                              <span>{getPriorityIcon(node.priority)}</span>
+                              <Show when={node.isDraft}>
+                                <span
+                                  class="rounded px-1 py-0.5 text-[9px] font-semibold"
+                                  style={{ background: '#f59e0b', color: '#000' }}
+                                >
+                                  DRAFT
+                                </span>
+                              </Show>
+                              <span class="ml-auto opacity-50">{node.projectName}</span>
+                              <PriorityIcon priority={node.priority} />
                             </div>
                           )}
                         </For>
@@ -651,6 +999,8 @@ const GlobalPlanningView: Component = () => {
             <select
               class="rounded px-2 py-1.5 text-xs"
               style={{ background: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
+              value={createOrgId()}
+              onChange={(e) => setCreateOrgId(e.currentTarget.value)}
               data-testid="create-issue-workspace"
             >
               <option value="">Select workspace</option>
@@ -661,12 +1011,16 @@ const GlobalPlanningView: Component = () => {
               placeholder="Title"
               class="rounded px-2 py-1.5 text-xs"
               style={{ background: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
+              value={createTitle()}
+              onInput={(e) => setCreateTitle(e.currentTarget.value)}
               data-testid="create-issue-title"
             />
             <textarea
               placeholder="Description"
               class="h-20 resize-none rounded px-2 py-1.5 text-xs"
               style={{ background: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
+              value={createBody()}
+              onInput={(e) => setCreateBody(e.currentTarget.value)}
               data-testid="create-issue-description"
             />
             <div class="flex justify-end gap-2">
@@ -680,9 +1034,11 @@ const GlobalPlanningView: Component = () => {
               <button
                 class="rounded px-3 py-1 text-xs font-medium"
                 style={{ background: 'var(--c-success)', color: 'var(--c-bg)' }}
+                disabled={createSubmitting() || !createOrgId() || !createTitle()}
+                onClick={handleCreateIssue}
                 data-testid="create-issue-submit"
               >
-                Create
+                {createSubmitting() ? 'Creating...' : 'Create'}
               </button>
             </div>
           </div>
@@ -707,9 +1063,14 @@ const GlobalPlanningView: Component = () => {
               class="rounded px-2 py-1.5 text-xs"
               style={{ background: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
               data-testid="assign-issue-select"
+              onChange={(e) => {
+                if (e.currentTarget.value) handleAssignAgent(e.currentTarget.value)
+              }}
             >
               <option value="">Select issue</option>
-              <For each={nodes()}>{(n) => <option value={n.id}>{n.title}</option>}</For>
+              <For each={nodes().filter((n) => n.status !== 'done')}>
+                {(n) => <option value={n.id}>{n.title}</option>}
+              </For>
             </select>
             <div class="flex justify-end gap-2">
               <button
@@ -718,13 +1079,6 @@ const GlobalPlanningView: Component = () => {
                 onClick={() => setShowAssignDialog(false)}
               >
                 Cancel
-              </button>
-              <button
-                class="rounded px-3 py-1 text-xs font-medium"
-                style={{ background: 'var(--c-accent)', color: 'var(--c-bg)' }}
-                data-testid="assign-agent-submit"
-              >
-                Assign
               </button>
             </div>
           </div>

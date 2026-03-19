@@ -33,7 +33,9 @@ function issueToSnapshot(issue: Issue): IssueSnapshot {
     milestone: undefined,
     assignees: issue.assignees,
     body: issue.body,
-    bodyHash: hashBody(issue.body)
+    bodyHash: hashBody(issue.body),
+    title: issue.title,
+    kind: issue.kind
   }
 }
 
@@ -351,6 +353,67 @@ export function createPlanningService(bus: EventBus, dataDir: string, deps: Plan
 
     status() {
       return { module: 'planning', status: 'ok' }
+    },
+
+    async getCrossOrgGraph(filter?) {
+      const orgIds = deps.listOrgIds?.() ?? []
+      const allNodes: import('./types.js').GraphNode[] = []
+      const allEdges: DependencyEdge[] = []
+      const seenKeys = new Set<string>()
+
+      for (const orgId of orgIds) {
+        try {
+          const graph = await service.getGraph(orgId, filter)
+          for (const node of graph.nodes) {
+            const key = `${node.ref.remote}:${node.ref.orgId}/${node.ref.projectId}#${node.ref.issueId}`
+            if (!seenKeys.has(key)) {
+              seenKeys.add(key)
+              allNodes.push(node)
+            }
+          }
+          allEdges.push(...graph.edges)
+        } catch {
+          /* skip failing orgs */
+        }
+      }
+
+      // Detect cross-workspace edges
+      const crossWorkspaceEdges = allEdges.filter((e) => e.from.orgId !== e.to.orgId)
+
+      // Deduplicate edges
+      const edgeKeys = new Set<string>()
+      const dedupedEdges = allEdges.filter((e) => {
+        const key = `${e.from.orgId}/${e.from.projectId}#${e.from.issueId}->${e.to.orgId}/${e.to.projectId}#${e.to.issueId}`
+        if (edgeKeys.has(key)) return false
+        edgeKeys.add(key)
+        return true
+      })
+
+      return { nodes: allNodes, edges: dedupedEdges, crossWorkspaceEdges }
+    },
+
+    async getCrossOrgCriticalPath(target?) {
+      // Build unified graph across all orgs
+      const { nodes, edges } = await service.getCrossOrgGraph!()
+      const snapshots: IssueSnapshot[] = nodes.map(
+        (n) =>
+          ({
+            ref: n.ref,
+            state: n.state,
+            labels: n.labels,
+            milestone: n.milestone,
+            assignees: n.assignees,
+            body: '',
+            bodyHash: '',
+            title: n.title,
+            kind: n.kind,
+            source: n.source,
+            draftId: n.draftId,
+            draftTitle: n.draftTitle
+          }) as any
+      )
+      const { graph } = createGraph(snapshots, edges)
+      return graph.criticalPath(target)
     }
   }
 
