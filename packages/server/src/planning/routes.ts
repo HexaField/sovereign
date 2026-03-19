@@ -30,6 +30,45 @@ export function createPlanningRouter(service: PlanningService): Router {
     }
   })
 
+  // Cross-org unified graph
+  router.get('/api/planning/graph', async (req: Request, res: Response) => {
+    try {
+      if (!service.getCrossOrgGraph) {
+        return res.status(501).json({ error: 'Cross-org graph not available' })
+      }
+      const filter: GraphFilter = {
+        projectId: req.query.projectId as string | undefined,
+        milestone: req.query.milestone as string | undefined,
+        label: req.query.label as string | undefined,
+        assignee: req.query.assignee as string | undefined
+      }
+      const result = await service.getCrossOrgGraph(filter)
+      res.json(result)
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
+  // Cross-org critical path
+  router.get('/api/planning/critical-path', async (req: Request, res: Response) => {
+    try {
+      if (!service.getCrossOrgCriticalPath) {
+        return res.status(501).json({ error: 'Cross-org critical path not available' })
+      }
+      let target: EntityRef | undefined
+      if (req.query.target) {
+        const parts = (req.query.target as string).split('/')
+        if (parts.length >= 3) {
+          target = { orgId: parts[0]!, projectId: parts[1]!, remote: '', issueId: parts[2]! }
+        }
+      }
+      const result = await service.getCrossOrgCriticalPath(target)
+      res.json(result)
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
   router.get('/api/orgs/:orgId/planning/graph', async (req: Request, res: Response) => {
     try {
       const { orgId } = req.params

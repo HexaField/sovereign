@@ -332,7 +332,8 @@ app.use('/api/radicle', createRadicleRouter(radicleManager))
 
 const planningService = createPlanningService(bus, dataDir, {
   issueTracker,
-  getConfig: () => ({})
+  getConfig: () => ({}),
+  listOrgIds: () => orgManager.listOrgs().map((o: any) => o.id)
 })
 app.use(createPlanningRouter(planningService))
 registerPlanningWs(wsHandler, bus)

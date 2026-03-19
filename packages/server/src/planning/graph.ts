@@ -39,7 +39,9 @@ export function createGraph(issues: IssueSnapshot[], edges: DependencyEdge[]): G
         dependencies: [],
         dependents: [],
         draftId: (issue as any).draftId,
-        draftTitle: (issue as any).draftTitle
+        draftTitle: (issue as any).draftTitle,
+        title: issue.title ?? (issue as any).draftTitle,
+        kind: issue.kind
       })
     }
 
