@@ -1,6 +1,7 @@
-import { Show, For, createSignal, createEffect, on } from 'solid-js'
+import { Show, For, createSignal, createEffect, on, onMount } from 'solid-js'
 import type { Component } from 'solid-js'
 import { activeWorkspace, openPlanningDAG, openIssueDetail } from '../store.js'
+import { draftsStore } from '../../drafts/index.js'
 
 export interface PlanningCompletion {
   total: number
@@ -88,7 +89,10 @@ const PlanningPanel: Component = () => {
   const [error, setError] = createSignal<string | null>(null)
   const [syncing, setSyncing] = createSignal(false)
   const [syncResult, setSyncResult] = createSignal<string | null>(null)
+  const [newDraftTitle, setNewDraftTitle] = createSignal('')
+  const [creatingDraft, setCreatingDraft] = createSignal(false)
   const [expandedSections, setExpandedSections] = createSignal<Record<string, boolean>>({
+    drafts: true,
     ready: true,
     blocked: true,
     inProgress: true
@@ -216,7 +220,8 @@ const PlanningPanel: Component = () => {
       () => ws()?.orgId,
       (orgId) => {
         if (orgId) fetchAll(orgId)
-        else {
+        draftsStore.fetchDrafts(orgId || undefined)
+        if (!orgId) {
           setCompletion(null)
           setIssues([])
           setProjects([])
@@ -419,6 +424,28 @@ const PlanningPanel: Component = () => {
                     {syncing() ? 'Syncing...' : 'Refresh from provider'}
                   </button>
 
+                  {/* Drafts section */}
+                  <DraftsSection
+                    expanded={expandedSections().drafts}
+                    onToggle={() => toggleSection('drafts')}
+                    newTitle={newDraftTitle()}
+                    onNewTitleChange={setNewDraftTitle}
+                    creatingDraft={creatingDraft()}
+                    onCreateDraft={async () => {
+                      const t = newDraftTitle().trim()
+                      if (!t) return
+                      setCreatingDraft(true)
+                      try {
+                        const d = await draftsStore.createDraft(t)
+                        setNewDraftTitle('')
+                        draftsStore.selectDraft(d.id)
+                      } finally {
+                        setCreatingDraft(false)
+                      }
+                    }}
+                    orgs={[]}
+                  />
+
                   {/* Issue sections */}
                   <IssueSection
                     title="Ready"
@@ -516,6 +543,117 @@ const IssueItem: Component<{ issue: PlanningIssue }> = (props) => (
     </div>
   </button>
 )
+
+const DraftsSection: Component<{
+  expanded: boolean
+  onToggle: () => void
+  newTitle: string
+  onNewTitleChange: (v: string) => void
+  creatingDraft: boolean
+  onCreateDraft: () => void
+  orgs: Array<{ id: string; name: string }>
+}> = (props) => {
+  const allDrafts = () => draftsStore.drafts().filter((d) => d.status === 'draft')
+
+  return (
+    <div>
+      <button
+        class="flex w-full items-center gap-2 rounded px-1 py-1 text-xs font-medium"
+        style={{ color: '#d97706' }}
+        onClick={props.onToggle}
+      >
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 10 10"
+          fill="currentColor"
+          style={{ transform: props.expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 150ms' }}
+        >
+          <polygon points="2,0 8,5 2,10" />
+        </svg>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+        Drafts ({allDrafts().length})
+      </button>
+      <Show when={props.expanded}>
+        <div class="ml-1 flex flex-col gap-1">
+          {/* New draft input */}
+          <div class="flex gap-1">
+            <input
+              type="text"
+              value={props.newTitle}
+              onInput={(e) => props.onNewTitleChange(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  props.onCreateDraft()
+                }
+              }}
+              disabled={props.creatingDraft}
+              class="flex-1 rounded border px-2 py-1 text-xs"
+              style={{
+                background: 'var(--c-bg-secondary)',
+                'border-color': 'var(--c-border)',
+                color: 'var(--c-text)',
+                'border-style': 'dashed'
+              }}
+              placeholder="New draft title + Enter"
+            />
+          </div>
+
+          <For each={allDrafts()}>
+            {(draft) => (
+              <button
+                class="flex w-full flex-col gap-0.5 rounded px-2 py-1.5 text-left transition-colors hover:opacity-80"
+                style={{
+                  background: '#fef3c7',
+                  border: '1px dashed #d97706',
+                  opacity: draftsStore.selectedDraftId() === draft.id ? '1' : '0.85'
+                }}
+                onClick={() => draftsStore.selectDraft(draft.id)}
+              >
+                <span class="text-xs font-medium" style={{ color: '#78350f' }}>
+                  {draft.title || 'Untitled draft'}
+                </span>
+                <div class="flex flex-wrap items-center gap-1">
+                  <For each={draft.labels}>
+                    {(label) => (
+                      <span
+                        class="rounded-full px-1.5 py-0 text-[10px]"
+                        style={{ background: '#fde68a', color: '#92400e' }}
+                      >
+                        {label}
+                      </span>
+                    )}
+                  </For>
+                  <span class="text-[10px]" style={{ color: '#92400e' }}>
+                    {draft.orgId ? 'Assigned' : 'Unassigned'}
+                  </span>
+                </div>
+              </button>
+            )}
+          </For>
+          <Show when={allDrafts().length === 0}>
+            <p class="py-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              No drafts yet
+            </p>
+          </Show>
+        </div>
+      </Show>
+    </div>
+  )
+}
 
 const StatCard: Component<{ label: string; value: number; color: string }> = (props) => (
   <div class="rounded p-2" style={{ background: 'var(--c-bg-secondary)' }}>
