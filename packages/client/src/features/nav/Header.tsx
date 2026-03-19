@@ -32,6 +32,7 @@ import { activeWorkspace, chatExpanded, toggleChatExpanded, setChatExpanded, set
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
 import { agentStatus } from '../chat/store.js'
 import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
+import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -349,14 +350,16 @@ function WorkspaceHeaderContent() {
           ▾
         </button>
         <button
-          class="flex cursor-pointer items-center rounded-md border-none bg-transparent px-1 py-0.5 text-sm transition-colors"
-          style={{ color: 'var(--c-text-muted)' }}
+          class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
+          style={{ color: 'var(--c-text-muted)', 'border-color': 'var(--c-border)' }}
           onClick={() => toggleChatExpanded()}
-          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-hover-bg)'; e.currentTarget.style.color = 'var(--c-accent)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--c-text-muted)' }}
           title={chatExpanded() ? 'Minimize chat' : 'Maximize chat'}
         >
-          {chatExpanded() ? '↙' : '↗'}
+          <Show when={chatExpanded()} fallback={<ExpandIcon class="h-3.5 w-3.5" />}>
+            <CollapseIcon class="h-3.5 w-3.5" />
+          </Show>
         </button>
         <Show when={threadPickerOpen()}>
           <div class="fixed inset-0 z-[199]" onClick={() => setThreadPickerOpen(false)} />

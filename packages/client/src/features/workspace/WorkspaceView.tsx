@@ -526,23 +526,6 @@ const MobileChatPanel: Component = () => {
 
   return (
     <div class="flex h-full flex-col">
-      {/* Thread selector */}
-      <div class="flex items-center gap-2 border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
-        <select
-          class="flex-1 rounded border px-2 py-1 text-xs"
-          style={{
-            background: 'var(--c-bg)',
-            'border-color': 'var(--c-border)',
-            color: 'var(--c-text)'
-          }}
-          value={threadKey()}
-          onChange={(e) => switchThread(e.currentTarget.value)}
-        >
-          <option value="main">main</option>
-          <For each={threads()}>{(t) => <option value={t.key}>{t.label ?? t.key}</option>}</For>
-        </select>
-      </div>
-
       <ChatView
         messages={messages()}
         streamingHtml={streamingHtml()}
