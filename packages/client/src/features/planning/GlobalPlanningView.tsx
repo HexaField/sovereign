@@ -319,7 +319,17 @@ function improvedLayout(nodes: PlanningNode[], edges: PlanningEdge[]): LayoutRes
   const connected = nodes.filter((n) => edgeNodeIds.has(n.id))
   const unconnected = nodes.filter((n) => !edgeNodeIds.has(n.id))
 
-  // Hierarchical layout for connected nodes (left to right by depth)
+  // Build adjacency for median heuristic
+  // edge.from depends on edge.to, so edge.to is at lower depth (left)
+  const leftNeighbors = new Map<string, string[]>() // node -> nodes in previous column it connects to
+  for (const e of edges) {
+    // e.from (dependent, higher depth) connects to e.to (dependency, lower depth)
+    const list = leftNeighbors.get(e.from) || []
+    list.push(e.to)
+    leftNeighbors.set(e.from, list)
+  }
+
+  // Group by depth
   const byDepth = new Map<number, PlanningNode[]>()
   for (const n of connected) {
     const list = byDepth.get(n.depth) || []
@@ -327,15 +337,55 @@ function improvedLayout(nodes: PlanningNode[], edges: PlanningEdge[]): LayoutRes
     byDepth.set(n.depth, list)
   }
 
+  const sortedDepths = [...byDepth.keys()].sort((a, b) => a - b)
+
+  // First pass: assign initial y positions
+  const nodeYPos = new Map<string, number>()
+  for (const depth of sortedDepths) {
+    const items = byDepth.get(depth)!
+    items.forEach((node, i) => {
+      nodeYPos.set(node.id, i * (DAG_NODE_H + DAG_V_GAP) + 40)
+    })
+  }
+
+  // Median heuristic: sort nodes in each column by median y of their left neighbors
+  // Run a few iterations for convergence
+  for (let iter = 0; iter < 3; iter++) {
+    for (const depth of sortedDepths) {
+      if (depth === 0) continue // first column has no left neighbors
+      const items = byDepth.get(depth)!
+      items.sort((a, b) => {
+        const aNeighbors = (leftNeighbors.get(a.id) || []).map((id) => nodeYPos.get(id) ?? 0)
+        const bNeighbors = (leftNeighbors.get(b.id) || []).map((id) => nodeYPos.get(id) ?? 0)
+        const medianA = aNeighbors.length > 0 ? aNeighbors.sort((x, y) => x - y)[Math.floor(aNeighbors.length / 2)] : 0
+        const medianB = bNeighbors.length > 0 ? bNeighbors.sort((x, y) => x - y)[Math.floor(bNeighbors.length / 2)] : 0
+        return medianA - medianB
+      })
+      // Re-assign y positions after sort
+      items.forEach((node, i) => {
+        nodeYPos.set(node.id, i * (DAG_NODE_H + DAG_V_GAP) + 40)
+      })
+    }
+  }
+
+  // Center each column vertically relative to the tallest column
+  let globalMaxItems = 0
+  for (const depth of sortedDepths) {
+    globalMaxItems = Math.max(globalMaxItems, byDepth.get(depth)!.length)
+  }
+  const totalColumnHeight = globalMaxItems * (DAG_NODE_H + DAG_V_GAP) - DAG_V_GAP
+
   const connectedPositions: Array<{ node: PlanningNode; x: number; y: number }> = []
   let maxX = 0
   let maxY = 0
-  const sortedDepths = [...byDepth.keys()].sort((a, b) => a - b)
   for (const depth of sortedDepths) {
     const items = byDepth.get(depth)!
     const colX = depth * (DAG_NODE_W + DAG_H_GAP) + 40
+    const colHeight = items.length * (DAG_NODE_H + DAG_V_GAP) - DAG_V_GAP
+    const offsetY = Math.max(0, (totalColumnHeight - colHeight) / 2)
     items.forEach((node, i) => {
-      const y = i * (DAG_NODE_H + DAG_V_GAP) + 40
+      const y = i * (DAG_NODE_H + DAG_V_GAP) + 40 + offsetY
+      nodeYPos.set(node.id, y) // update for edge routing
       connectedPositions.push({ node, x: colX, y })
       maxX = Math.max(maxX, colX + DAG_NODE_W)
       maxY = Math.max(maxY, y + DAG_NODE_H)
@@ -860,17 +910,54 @@ const GlobalPlanningView: Component = () => {
     setZoom(newZoom)
   }
 
-  // Bezier edge path
+  // Orthogonal Manhattan-style edge routing
   function edgePath(fromId: string, toId: string): string {
     const from = positionMap().get(fromId)
     const to = positionMap().get(toId)
     if (!from || !to) return ''
-    const x1 = from.x + from.w
-    const y1 = from.y + from.h / 2
-    const x2 = to.x
-    const y2 = to.y + to.h / 2
-    const cpOffset = Math.abs(x2 - x1) * 0.4
-    return `M${x1},${y1} C${x1 + cpOffset},${y1} ${x2 - cpOffset},${y2} ${x2},${y2}`
+
+    // Edge goes from "from" (dependent, right) to "to" (dependency, left)
+    // Visual: draw from RIGHT side of "from" to LEFT side of "to"
+    // But since "from" is at higher depth (right) and "to" at lower depth (left),
+    // we actually want to draw from the dependency (to) toward the dependent (from)
+    // However, the arrow marker-end points at "to", so we keep the direction as-is:
+    // Start at right side of from, end at left side of to
+
+    // Determine source and target for routing
+    const srcRight = from.x + from.w
+    const srcCY = from.y + from.h / 2
+    const tgtLeft = to.x
+    const tgtCY = to.y + to.h / 2
+
+    const STUB = 20
+
+    if (srcRight < tgtLeft) {
+      // Normal case: source is to the left of target (or same position)
+      // Route: right stub → vertical → left stub into target
+      const midX = (srcRight + tgtLeft) / 2
+      if (Math.abs(srcCY - tgtCY) < 1) {
+        // Same y — straight horizontal line
+        return `M${srcRight},${srcCY} H${tgtLeft}`
+      }
+      return `M${srcRight},${srcCY} H${midX} V${tgtCY} H${tgtLeft}`
+    } else {
+      // Back-edge: source is to the right of target
+      // Route around: go right, then up/down around, then left into target
+      const allPositions = positionMap()
+      let minY = Infinity
+      let maxY = -Infinity
+      for (const [, pos] of allPositions) {
+        minY = Math.min(minY, pos.y)
+        maxY = Math.max(maxY, pos.y + pos.h)
+      }
+      // Route above or below depending on which is closer
+      const avgY = (srcCY + tgtCY) / 2
+      const midGraph = (minY + maxY) / 2
+      const routeY = avgY < midGraph ? minY - 30 : maxY + 30
+      const exitX = srcRight + STUB
+      const enterX = tgtLeft - STUB
+      return `M${srcRight},${srcCY} H${exitX} V${routeY} H${enterX} V${tgtCY} H${tgtLeft}`
+    }
   }
 
   // Paginated unconnected nodes
@@ -1140,7 +1227,7 @@ const GlobalPlanningView: Component = () => {
                   markerHeight="8"
                   orient="auto-start-reverse"
                 >
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#f59e0b" />
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#D97706" />
                 </marker>
                 <marker
                   id="arrow-highlight"
@@ -1175,7 +1262,7 @@ const GlobalPlanningView: Component = () => {
                   </text>
                 </Show>
 
-                {/* Edges — bezier curves */}
+                {/* Edges — orthogonal Manhattan routing */}
                 <For each={filteredEdges()}>
                   {(edge) => {
                     const path = () => edgePath(edge.from, edge.to)
@@ -1190,12 +1277,13 @@ const GlobalPlanningView: Component = () => {
                             isHighlighted()
                               ? 'var(--c-accent, #89b4fa)'
                               : edge.crossWorkspace
-                                ? '#f59e0b'
+                                ? '#D97706'
                                 : 'var(--c-border, #45475a)'
                           }
-                          stroke-width={isHighlighted() ? 2.5 : 1.5}
+                          stroke-width={isHighlighted() ? 3 : 2}
+                          stroke-linejoin="round"
                           stroke-dasharray={edge.crossWorkspace ? '6,4' : 'none'}
-                          opacity={hoveredNodeId() && !isHighlighted() ? 0.2 : 0.8}
+                          opacity={hoveredNodeId() && !isHighlighted() ? 0.15 : 0.9}
                           marker-end={
                             isHighlighted()
                               ? 'url(#arrow-highlight)'
