@@ -322,7 +322,7 @@ function WorkspaceHeaderContent() {
         />
       </Show>
       <span style={{ color: 'var(--c-text-muted)' }}>/</span>
-      <div class="relative">
+      <div class="relative flex items-center">
         <button
           class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-medium transition-colors"
           style={{ color: 'var(--c-accent)' }}
