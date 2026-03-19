@@ -86,6 +86,15 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     gatewayUrl: string
     reconnectAttempt: number
   }
+  listGatewaySessions(): Promise<
+    Array<{
+      key: string
+      label?: string
+      kind?: string
+      lastActivity?: number
+      agentStatus?: string
+    }>
+  >
 } {
   const emitter = createEventEmitter()
 

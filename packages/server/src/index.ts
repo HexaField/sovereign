@@ -373,6 +373,70 @@ const chatModule = createChatModule(bus, backend, threadManager, { dataDir, wsHa
 registerChatWs(wsHandler, chatModule)
 app.use(createChatRoutes(chatModule, backend))
 
+// Subagent listing — queries gateway sessions for children of a thread
+app.get('/api/threads/:key/subagents', async (req, res) => {
+  try {
+    const threadKey = req.params.key
+    // Derive the parent gateway session key
+    const parentSessionKey =
+      threadKey === 'main'
+        ? 'agent:main:main'
+        : threadKey.startsWith('agent:')
+          ? threadKey
+          : `agent:main:thread:${threadKey}`
+
+    const allSessions = await backend.listGatewaySessions()
+
+    // Filter for subagent sessions whose key indicates they're children of this parent
+    // Subagent keys look like: agent:main:subagent:<uuid>
+    // They are children of whichever session spawned them
+    // We also read the sessions.json file for parentKey info
+    const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+    let sessionsData: Record<string, any> = {}
+    try {
+      const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
+      sessionsData = JSON.parse(raw)
+    } catch { /* ignore */ }
+
+    const subagents = allSessions
+      .filter((s) => s.key.includes(':subagent:'))
+      .filter((s) => {
+        // Check parentKey from sessions.json metadata
+        const meta = sessionsData[s.key]
+        if (meta?.parentKey) {
+          return meta.parentKey === parentSessionKey
+        }
+        // Fallback: all subagents are children of main if no parentKey
+        return parentSessionKey === 'agent:main:main'
+      })
+      .map((s) => ({
+        sessionKey: s.key,
+        label: s.label || sessionsData[s.key]?.label || s.key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
+        status: s.agentStatus || 'idle',
+        lastActivity: s.lastActivity,
+        task: sessionsData[s.key]?.task || sessionsData[s.key]?.label || s.label || ''
+      }))
+      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
+
+    res.json({ subagents })
+  } catch (err: any) {
+    console.error('Failed to list subagents:', err.message)
+    res.status(500).json({ error: 'Failed to list subagents' })
+  }
+})
+
+// Subagent history — fetch chat history for a subagent session key
+app.get('/api/threads/:key/history', async (req, res) => {
+  try {
+    const sessionKey = req.params.key.startsWith('agent:') ? req.params.key : `agent:main:subagent:${req.params.key}`
+    const history = await backend.getHistory(sessionKey)
+    res.json({ history })
+  } catch (err: any) {
+    console.error('Failed to get subagent history:', err.message)
+    res.status(500).json({ error: 'Failed to get history' })
+  }
+})
+
 const forwardHandler = createForwardHandler(bus, threadManager)
 // Gateway sessions endpoint — returns all sessions from the OpenClaw sessions file
 // merged with local thread registry metadata (orgId, label overrides)
