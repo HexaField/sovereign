@@ -32,6 +32,8 @@ export interface GraphNode {
   dependents: EntityRef[]
   draftId?: string
   draftTitle?: string
+  title?: string
+  kind?: 'issue' | 'pr'
 }
 
 export interface GraphQueryResult {
@@ -52,6 +54,8 @@ export interface IssueSnapshot {
   assignees: string[]
   body: string
   bodyHash: string
+  title?: string
+  kind?: 'issue' | 'pr'
 }
 
 export interface GraphBuildResult {
@@ -85,6 +89,7 @@ export interface PlanningDeps {
   issueTracker: IssueTracker
   getConfig: () => Record<string, unknown>
   draftStore?: import('../drafts/types.js').DraftStore
+  listOrgIds?: () => string[]
 }
 
 export interface CreateIssueWithDeps {
@@ -116,4 +121,8 @@ export interface PlanningService {
   decompose(orgId: string, data: DecomposeRequest): Promise<{ issues: Issue[]; graph: GraphQueryResult }>
   sync(orgId: string, projectId?: string): Promise<{ parsed: number; edges: number; cycles: CycleError[] }>
   status(): { module: string; status: string }
+  /** Get unified graph across all orgs */
+  getCrossOrgGraph?(filter?: GraphFilter): Promise<GraphQueryResult & { crossWorkspaceEdges: DependencyEdge[] }>
+  /** Get critical path across all orgs */
+  getCrossOrgCriticalPath?(target?: EntityRef): Promise<CriticalPath>
 }
