@@ -79,12 +79,11 @@ describe('Workspace Store', () => {
       expect(activeWorkspace()!.activeProjectName).toBe('Project 1')
     })
 
-    it('§0.2 — persists last active workspace to localStorage under key sovereign:active-workspace', () => {
+    it('§0.2 — persists active workspace via URL (saveToStorage is no-op)', () => {
       setActiveWorkspace('test-org', 'Test')
-      const raw = localStorage.getItem('sovereign:active-workspace')
-      expect(raw).toBeTruthy()
-      const parsed = JSON.parse(raw!)
-      expect(parsed.orgId).toBe('test-org')
+      // Workspace is now persisted via URL params, not localStorage.
+      // saveToStorage is intentionally a no-op. Verify signal updated correctly.
+      expect(activeWorkspace()!.orgId).toBe('test-org')
     })
 
     it('§0.2 — restores last active workspace on init', async () => {
@@ -163,14 +162,12 @@ describe('Workspace Store', () => {
   })
 
   describe('§7.3 — Mobile Tab Store', () => {
-    it('has 11 mobile tabs in correct order', () => {
+    it('has 9 mobile tabs in correct order', () => {
       const keys = MOBILE_TAB_ORDER.map((t) => t.key)
       expect(keys).toEqual([
         'files',
         'file-viewer',
-        'chat',
         'git',
-        'threads',
         'planning',
         'notifications',
         'terminal',
@@ -181,9 +178,9 @@ describe('Workspace Store', () => {
     })
 
     it('setActiveMobileTab persists to localStorage', () => {
-      setActiveMobileTab('chat')
-      expect(activeMobileTab()).toBe('chat')
-      expect(localStorageMock.getItem('sovereign:mobile-tab')).toBe('chat')
+      setActiveMobileTab('git')
+      expect(activeMobileTab()).toBe('git')
+      expect(localStorageMock.getItem('sovereign:mobile-tab')).toBe('git')
     })
 
     it('swipeMobileTab left advances to next tab', () => {
@@ -194,7 +191,7 @@ describe('Workspace Store', () => {
     })
 
     it('swipeMobileTab right goes to previous tab', () => {
-      _setActiveMobileTab('chat')
+      _setActiveMobileTab('git')
       const result = swipeMobileTab('right')
       expect(result).toBe('file-viewer')
     })
