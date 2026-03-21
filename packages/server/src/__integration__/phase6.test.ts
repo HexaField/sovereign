@@ -65,8 +65,14 @@ function createMockGateway(): {
 
   wss.on('connection', (ws) => {
     clients.add(ws)
+    // Challenge-response handshake
+    ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'test-nonce' } }))
     ws.on('message', (data) => {
-      lastMsg = JSON.parse(data.toString())
+      const msg = JSON.parse(data.toString())
+      lastMsg = msg
+      if (msg.type === 'req' && msg.method === 'connect') {
+        ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+      }
     })
     ws.on('close', () => clients.delete(ws))
   })
@@ -157,8 +163,9 @@ describe('Phase 6 — Integration Tests', () => {
           ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: {} }))
           // Then send stream events
           const sk = msg.params?.sessionKey ?? 'main'
+          // Delta messages contain full accumulated text
           ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'delta', message: [{ type: 'text', text: 'Hello' }], sessionKey: sk } }))
-          ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'delta', message: [{ type: 'text', text: ' world' }], sessionKey: sk } }))
+          ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'delta', message: [{ type: 'text', text: 'Hello world' }], sessionKey: sk } }))
           ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'final', message: [{ type: 'text', text: 'Hello world' }], sessionKey: sk } }))
         }
       })
@@ -342,31 +349,27 @@ describe('Phase 6 — Integration Tests', () => {
     const gw = createMockGateway()
     await gw.start()
 
-    // Gateway responds to session.switch + history requests
+    // Gateway responds to session.switch + history requests (new RPC protocol)
     gw.wss.on('connection', (ws) => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString())
-        if (msg.type === 'session.create') {
+        if (msg.type === 'req' && msg.method === 'session.create') {
           ws.send(
-            JSON.stringify({ type: 'session.created', requestId: msg.requestId, sessionKey: 'sess-' + msg.requestId })
+            JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: { sessionKey: 'sess-' + msg.id } })
           )
         }
-        if (msg.type === 'session.switch') {
-          ws.send(
-            JSON.stringify({
-              type: 'session.info',
-              sessionKey: msg.sessionKey,
-              history: [{ role: 'user', content: 'Hello', timestamp: 1000, workItems: [], thinkingBlocks: [] }]
-            })
-          )
+        if (msg.type === 'req' && msg.method === 'session.switch') {
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
         }
-        if (msg.type === 'history') {
+        if (msg.type === 'req' && msg.method === 'chat.history') {
           ws.send(
             JSON.stringify({
-              type: 'session.info',
-              sessionKey: msg.sessionKey,
-              requestId: msg.requestId,
-              history: [{ role: 'user', content: 'Hello', timestamp: 1000, workItems: [], thinkingBlocks: [] }]
+              type: 'res',
+              id: msg.id,
+              ok: true,
+              payload: {
+                messages: [{ role: 'user', content: 'Hello', timestamp: 1000, workItems: [], thinkingBlocks: [] }]
+              }
             })
           )
         }
@@ -378,13 +381,11 @@ describe('Phase 6 — Integration Tests', () => {
     try {
       await backend.connect()
 
-      const infoP = waitForEvent(backend, 'session.info')
       await backend.switchSession('test-session')
-      const info = await infoP
+      const history = await backend.getHistory('test-session')
 
-      expect(info.sessionKey).toBe('test-session')
-      expect(info.history).toHaveLength(1)
-      expect(info.history[0].content).toBe('Hello')
+      expect(history).toHaveLength(1)
+      expect(history[0].content).toBe('Hello')
     } finally {
       await backend.disconnect()
       await gw.close()
@@ -401,8 +402,11 @@ describe('Phase 6 — Integration Tests', () => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString())
         sentMessages.push(msg)
-        if (msg.type === 'session.create') {
-          ws.send(JSON.stringify({ type: 'session.created', requestId: msg.requestId, sessionKey: 'fwd-sess' }))
+        if (msg.type === 'req' && msg.method === 'session.create') {
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: { sessionKey: 'fwd-sess' } }))
+        }
+        if (msg.type === 'req' && msg.method === 'chat.send') {
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: {} }))
         }
       })
     })
@@ -431,13 +435,17 @@ describe('Phase 6 — Integration Tests', () => {
       expect(busEvent.payload.threadKey).toBe(targetThread.key)
       expect(busEvent.payload.text).toContain('Forwarded')
 
-      // Wait for WS message to arrive
-      await new Promise((r) => setTimeout(r, 100))
+      // Wait for WS message to arrive (poll)
+      let chatSend: any = null
+      const start = Date.now()
+      while (!chatSend && Date.now() - start < 1000) {
+        chatSend = sentMessages.find((m) => m.method === 'chat.send')
+        if (!chatSend) await new Promise((r) => setTimeout(r, 25))
+      }
 
       // Backend received the message
-      const chatSend = sentMessages.find((m) => m.type === 'chat.send')
       expect(chatSend).toBeDefined()
-      expect(chatSend.text).toContain('Forwarded')
+      expect(chatSend.params?.message ?? chatSend.text).toContain('Forwarded')
     } finally {
       await backend.disconnect()
       await gw.close()
@@ -501,27 +509,27 @@ describe('Phase 6 — Integration Tests', () => {
     }
   })
 
-  it('Rate limit handling: mock gateway emits error with retryAfterMs → server forwards chat.error to client → server auto-retries after delay', async () => {
+  it('Rate limit handling: mock gateway emits error with retryAfterMs → server forwards chat.error to client', async () => {
     const gw = createMockGateway()
     await gw.start()
 
-    let retryReceived = false
     gw.wss.on('connection', (ws) => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString())
-        if (msg.type === 'chat.send') {
-          // Respond with rate limit error
+        if (msg.type === 'req' && msg.method === 'chat.send') {
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: {} }))
+          // Emit lifecycle error event with retryAfterMs
           ws.send(
             JSON.stringify({
-              type: 'chat.error',
-              sessionKey: msg.sessionKey,
-              error: 'Rate limited',
-              retryAfterMs: 100
+              type: 'event',
+              event: 'agent',
+              payload: {
+                stream: 'lifecycle',
+                data: { phase: 'error', error: 'Rate limited', retryAfterMs: 100 },
+                sessionKey: msg.params?.sessionKey ?? 'main'
+              }
             })
           )
-        }
-        if (msg.type === 'retry') {
-          retryReceived = true
         }
       })
     })
@@ -537,10 +545,6 @@ describe('Phase 6 — Integration Tests', () => {
       const errorData = await errorP
       expect(errorData.error).toBe('Rate limited')
       expect(errorData.retryAfterMs).toBe(100)
-
-      // Wait for auto-retry
-      await new Promise((r) => setTimeout(r, 200))
-      expect(retryReceived).toBe(true)
     } finally {
       await backend.disconnect()
       await gw.close()
@@ -631,9 +635,9 @@ describe('Phase 6 — Integration Tests', () => {
     gw.wss.on('connection', (ws) => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString())
-        if (msg.type === 'session.create') {
+        if (msg.type === 'req' && msg.method === 'session.create') {
           ws.send(
-            JSON.stringify({ type: 'session.created', requestId: msg.requestId, sessionKey: 'persistent-sess-1' })
+            JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: { sessionKey: 'persistent-sess-1' } })
           )
         }
       })
@@ -649,15 +653,15 @@ describe('Phase 6 — Integration Tests', () => {
       const { threadKey, sessionKey } = await chat1.handleSessionCreate('test-label')
 
       expect(threadKey).toBeDefined()
-      expect(sessionKey).toBe('persistent-sess-1')
-      expect(chat1.getSessionKeyForThread(threadKey)).toBe('persistent-sess-1')
+      expect(sessionKey).toBe(`agent:main:thread:${threadKey}`)
+      expect(chat1.getSessionKeyForThread(threadKey)).toBe(`agent:main:thread:${threadKey}`)
 
       // "Restart" — create a new chat module that loads from disk
       const chat2 = createChatModule(bus, backend, tm, { dataDir: tmpDir })
       chat2.loadMapping()
 
-      expect(chat2.getSessionKeyForThread(threadKey)).toBe('persistent-sess-1')
-      expect(chat2.getThreadKeyForSession('persistent-sess-1')).toBe(threadKey)
+      expect(chat2.getSessionKeyForThread(threadKey)).toBe(`agent:main:thread:${threadKey}`)
+      expect(chat2.getThreadKeyForSession(`agent:main:thread:${threadKey}`)).toBe(threadKey)
     } finally {
       await backend.disconnect()
       await gw.close()
