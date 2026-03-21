@@ -79,11 +79,10 @@ describe('ThreadManager', () => {
       tm.create({ entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }] })
       tm.create({ entities: [{ orgId: 'o2', projectId: 'p2', entityType: 'branch', entityRef: 'b' }] })
 
-      // All three have no orgId, so all are global and show for any orgId filter
-      // Plus entity-based matching: o1 entity matches o1 filter
+      // Only threads that match orgId or have entity orgId match are included
       const filtered = tm.list({ orgId: 'o1' })
-      expect(filtered).toHaveLength(3) // all global (no orgId set)
-      expect(filtered.map((t) => t.key)).toContain('global')
+      expect(filtered).toHaveLength(1)
+      expect(filtered.map((t) => t.key)).toContain('o1/p1/branch:a')
     })
 
     it('filters by orgId — scoped threads only show in their workspace', () => {
@@ -95,13 +94,14 @@ describe('ThreadManager', () => {
 
       const ws1 = tm.list({ orgId: 'ws1' })
       expect(ws1.map((t) => t.key)).toContain('ws1-thread')
-      expect(ws1.map((t) => t.key)).toContain('global-thread')
-      expect(ws1.map((t) => t.key)).toContain('explicit-global')
+      // Global threads are no longer implicitly included when filtering by orgId
+      expect(ws1.map((t) => t.key)).not.toContain('global-thread')
+      expect(ws1.map((t) => t.key)).not.toContain('explicit-global')
       expect(ws1.map((t) => t.key)).not.toContain('ws2-thread')
 
       const ws2 = tm.list({ orgId: 'ws2' })
       expect(ws2.map((t) => t.key)).toContain('ws2-thread')
-      expect(ws2.map((t) => t.key)).toContain('global-thread')
+      expect(ws2.map((t) => t.key)).not.toContain('global-thread')
       expect(ws2.map((t) => t.key)).not.toContain('ws1-thread')
     })
 
