@@ -257,6 +257,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   return () => {
     unsubs.forEach((u) => u())
     ws?.unsubscribe(['chat'])
+    chatInitialized = false
   }
 }
 

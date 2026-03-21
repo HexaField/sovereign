@@ -417,11 +417,17 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   it('MUST emit backend.status with error and include metadata about pending pairing request', async () => {
     // In the new protocol, pairing issues surface as connect request rejections.
     // The backend sets status to 'error' with errorType 'auth_rejected' when pairing fails.
-    // We test this by checking that a non-pairing error still produces correct status.
-    const events: any[] = []
-    backend.on('backend.status', (e) => events.push(e))
-    // The backend is already connected. Disconnect and reconnect will test status flow.
-    expect(backend.status()).toBe('connected')
+    wss.removeAllListeners('connection')
+    installHandshake(wss, { rejectConnect: true })
+    const statuses: Array<{ status: string; errorType?: string }> = []
+    backend = createOpenClawBackend(getConfig())
+    backend.on('backend.status', (e: any) => statuses.push(e))
+    try {
+      await backend.connect()
+    } catch {
+      // Expected — connect rejected with 'pairing required'
+    }
+    expect(statuses.some((s) => s.errorType === 'auth_rejected')).toBe(true)
   })
 
   it('MUST NOT block or crash when pairing is pending — MUST continue reconnection attempts', async () => {
@@ -479,7 +485,18 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     const serverWs = await connectBackend()
 
     const messages: string[] = []
-    serverWs.on('message', (d: any) => messages.push(d.toString()))
+    serverWs.on('message', (d: any) => {
+      const msg = JSON.parse(d.toString())
+      messages.push(d.toString())
+      // Handle session.switch RPC
+      if (msg.type === 'req' && msg.method === 'session.switch') {
+        serverWs.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+      }
+    })
+
+    // Set activeSessionKey so history reload is not skipped
+    await backend.switchSession('main')
+    messages.length = 0 // clear switch messages
 
     serverWs.send(
       JSON.stringify({
@@ -496,16 +513,26 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
         payload: { stream: 'lifecycle', data: { phase: 'end' }, sessionKey: 'main' }
       })
     )
-    await waitFor(400) // > 300ms debounce
+    await waitFor(2500) // > 2000ms debounce
 
     expect(messages.some((m) => m.includes('chat.history'))).toBe(true)
   })
 
-  it('MUST debounce history reload (300ms) to avoid unnecessary refetches during rapid state changes', async () => {
+  it('MUST debounce history reload (2000ms) to avoid unnecessary refetches during rapid state changes', async () => {
     const serverWs = await connectBackend()
 
     const messages: string[] = []
-    serverWs.on('message', (d: any) => messages.push(d.toString()))
+    serverWs.on('message', (d: any) => {
+      const msg = JSON.parse(d.toString())
+      messages.push(d.toString())
+      if (msg.type === 'req' && msg.method === 'session.switch') {
+        serverWs.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+      }
+    })
+
+    // Set activeSessionKey
+    await backend.switchSession('main')
+    messages.length = 0
 
     // Rapid working -> idle -> working -> idle
     serverWs.send(
@@ -523,7 +550,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
         payload: { stream: 'lifecycle', data: { phase: 'end' }, sessionKey: 'main' }
       })
     )
-    await waitFor(50) // < 300ms
+    await waitFor(50) // < 2000ms
     serverWs.send(
       JSON.stringify({
         type: 'event',
@@ -539,7 +566,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
         payload: { stream: 'lifecycle', data: { phase: 'end' }, sessionKey: 'main' }
       })
     )
-    await waitFor(400)
+    await waitFor(2500)
 
     const historyMsgs = messages.filter((m) => m.includes('chat.history'))
     expect(historyMsgs.length).toBe(1)
@@ -630,7 +657,13 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
           })
         )
       }
+      if (msg.type === 'req' && msg.method === 'session.switch') {
+        serverWs.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+      }
     })
+
+    // Set activeSessionKey
+    await backend.switchSession('main')
 
     const received = waitForEvent<any>(backend, 'session.info', 5000)
 
