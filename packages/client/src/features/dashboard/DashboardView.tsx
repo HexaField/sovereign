@@ -165,7 +165,7 @@ export function DashboardView() {
         {/* Activity + Chat — responsive grid */}
         <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-3">
           {/* Mobile: chat first, then activity */}
-          <div class="max-h-[40vh] overflow-hidden md:hidden">
+          <div class="max-h-[40vh] overflow-y-auto md:hidden">
             <GlobalChat />
           </div>
           <div class="md:col-span-2">
