@@ -518,12 +518,7 @@ export function InputArea(props: InputAreaProps) {
         </div>
       </Show>
 
-      {/* Status indicator */}
-      <Show when={statusText()}>
-        <div class="w-full px-0.5 text-xs" style={{ color: 'var(--c-text-muted)' }}>
-          {statusText()}
-        </div>
-      </Show>
+      {/* Status indicator removed — header dot is sufficient */}
 
       {/* Attached files */}
       <Show when={attachedFiles().length > 0}>
