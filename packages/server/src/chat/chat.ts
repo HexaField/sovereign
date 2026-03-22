@@ -118,10 +118,7 @@ export function createChatModule(
         })
       }
 
-      // Update thread lastActivity on meaningful events
-      if (threadKey && (eventName === 'chat.turn' || eventName === 'chat.status')) {
-        threadManager.touch(threadKey)
-      }
+      // Emit bus event for chat.turn
       if (eventName === 'chat.turn' && threadKey) {
         bus.emit({
           type: 'chat.turn.completed',
