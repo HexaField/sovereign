@@ -4,12 +4,12 @@ import type { ActivityEvent, EventType } from './dashboard-helpers.js'
 
 /** Whitelist of event type prefixes/patterns worth showing */
 const ALLOWED_EVENT_PREFIXES = [
-  'ws.connected', 'ws.disconnected',
-  'notification.', 'scheduler.job.',
-  'git.', 'config.changed',
-  'recording.', 'meeting.',
+  'git.',
   'issue.', 'review.',
-  'chat.status', 'worktree.',
+  'scheduler.job.',
+  'meeting.',
+  'recording.',
+  'worktree.',
 ]
 
 function isEventAllowed(eventType: string, payload?: any): boolean {
