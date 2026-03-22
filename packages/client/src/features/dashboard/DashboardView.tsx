@@ -115,7 +115,7 @@ export function DashboardView() {
   onCleanup(() => {})
 
   return (
-    <div class="min-h-full overflow-y-auto" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
+    <div class="h-full overflow-y-auto" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
       {/* §2.6 System Status Strip */}
       <div class="flex items-center gap-3 px-3 py-1.5 text-[11px] opacity-70" style={{ 'border-bottom': '1px solid var(--c-border)' }}>
         <span class="flex items-center gap-1">
