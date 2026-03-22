@@ -126,12 +126,10 @@ describe('§3.2 Chat Store', () => {
     expect(retryCountdownSeconds()).toBe(0)
   })
 
-  it('sendMessage MUST add an optimistic pending turn to turns immediately', () => {
+  it('sendMessage MUST send chat.send via WS without creating optimistic turn', () => {
     sendMessage('hello')
-    expect(turns().length).toBe(1)
-    expect(turns()[0].role).toBe('user')
-    expect(turns()[0].content).toBe('hello')
-    expect(turns()[0].pending).toBe(true)
+    expect(turns().length).toBe(0) // No optimistic turn — server owns the queue
+    expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.send', text: 'hello' }))
   })
 
   it('sendMessage MUST clear the input scratchpad for the current thread', () => {
@@ -235,13 +233,11 @@ describe('§3.2 Chat Store', () => {
     expect(turns().length).toBe(2)
   })
 
-  it('MUST replace optimistic pending turn with confirmed turn on chat.turn', () => {
-    sendMessage('hello')
-    expect(turns()[0].pending).toBe(true)
+  it('MUST append confirmed turn on chat.turn (no pending replacement)', () => {
     const confirmed: ParsedTurn = { role: 'user', content: 'hello', timestamp: 1, workItems: [], thinkingBlocks: [] }
     ws._emit('chat.turn', { type: 'chat.turn', turn: confirmed })
     expect(turns().length).toBe(1)
-    expect(turns()[0].pending).toBeUndefined()
+    expect(turns()[0].content).toBe('hello')
   })
 
   it('MUST call startRetryCountdown when chat.error arrives with retryAfterMs', () => {

@@ -472,8 +472,7 @@ export function InputArea(props: InputAreaProps) {
 
   const isBusyOrStreaming = () =>
     busy() ||
-    !!streamingHtml() ||
-    (turns().length > 0 && turns()[turns().length - 1]?.role === 'user' && turns()[turns().length - 1]?.pending)
+    !!streamingHtml()
 
   return (
     <div

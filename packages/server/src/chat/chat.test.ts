@@ -144,7 +144,7 @@ describe('§2.4 Chat Module (Server)', () => {
     // First create a session mapping
     const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
     await chatModule.handleSend(threadKey, 'hello')
-    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'hello', undefined)
+    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'hello')
   })
 
   it('MUST proxy chat.abort to backend.abort(sessionKey)', async () => {

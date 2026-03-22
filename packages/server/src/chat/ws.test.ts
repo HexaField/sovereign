@@ -29,8 +29,10 @@ function createMockChatModule(): ChatModule {
     handleHistory: vi.fn(async () => {}),
     handleSessionSwitch: vi.fn(async () => {}),
     handleSessionCreate: vi.fn(async () => ({ threadKey: 't1', sessionKey: 's1' })),
+    handleCancel: vi.fn(() => true),
     getSessionKeyForThread: vi.fn(() => undefined),
     getThreadKeyForSession: vi.fn(() => undefined),
+    getQueue: vi.fn(() => []),
     loadMapping: vi.fn()
   }
 }
@@ -54,7 +56,8 @@ describe('Chat WS Channel', () => {
           'chat.abort',
           'chat.history',
           'chat.session.switch',
-          'chat.session.create'
+          'chat.session.create',
+          'chat.cancel'
         ]),
         serverMessages: expect.arrayContaining([
           'chat.stream',
@@ -63,7 +66,8 @@ describe('Chat WS Channel', () => {
           'chat.work',
           'chat.compacting',
           'chat.error',
-          'chat.session.info'
+          'chat.session.info',
+          'chat.queue.update'
         ])
       })
     )
@@ -97,6 +101,12 @@ describe('Chat WS Channel', () => {
     const opts = wsHandler._channels.get('chat')!
     opts.onMessage!('chat.session.create', { type: 'chat.session.create', label: 'new' }, 'device-1')
     expect(chatModule.handleSessionCreate).toHaveBeenCalledWith('new')
+  })
+
+  it('MUST handle chat.cancel messages from clients', () => {
+    const opts = wsHandler._channels.get('chat')!
+    opts.onMessage!('chat.cancel', { type: 'chat.cancel', id: 'msg-1' }, 'device-1')
+    expect(chatModule.handleCancel).toHaveBeenCalledWith('msg-1')
   })
 
   it('MUST broadcast chat.stream to scoped subscribers', () => {

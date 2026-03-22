@@ -18,8 +18,8 @@ describe('deriveSessionKey', () => {
     expect(deriveSessionKey('agent:main:main')).toBe('agent:main:main')
   })
 
-  it('handles empty string as a thread name', () => {
-    expect(deriveSessionKey('')).toBe('agent:main:thread:')
+  it('handles empty string by returning empty', () => {
+    expect(deriveSessionKey('')).toBe('')
   })
 
   it('passes through other agent:-prefixed keys', () => {
