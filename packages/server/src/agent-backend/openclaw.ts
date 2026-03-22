@@ -11,7 +11,6 @@ import { generateKeyPairSync, sign, createPrivateKey, createHash } from 'node:cr
 
 const DEFAULT_INITIAL_DELAY = 1000
 const DEFAULT_MAX_DELAY = 30000
-const HISTORY_RELOAD_DEBOUNCE = 2000
 const REQUEST_TIMEOUT = 30000
 
 function createEventEmitter() {
@@ -105,7 +104,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     activeSessionKey: null,
     ws: null,
     reconnectTimer: null,
-    historyReloadTimer: null,
     retryTimer: null,
     destroyed: false
   }
@@ -186,7 +184,9 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   function handleEvent(event: string, payload: any) {
     if (!payload) return
 
-    const sessionKey = payload.sessionKey ?? state.activeSessionKey ?? 'main'
+    const sessionKey = payload.sessionKey as string | undefined
+
+    if (!sessionKey) return // No session key — can't route, drop event
 
     switch (event) {
       case 'chat': {
@@ -238,7 +238,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         emitter.emit('chat.turn', { sessionKey, turn })
       }
       emitter.emit('chat.status', { sessionKey, status: 'idle' })
-      scheduleHistoryReload(sessionKey)
     }
   }
 
@@ -259,7 +258,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
           }
           state.agentStatus = 'idle'
           emitter.emit('chat.status', { sessionKey, status: 'idle' })
-          scheduleHistoryReload(sessionKey)
         }
         break
       }
@@ -309,32 +307,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       return extractText((message as any).content)
     }
     return null
-  }
-
-  function scheduleHistoryReload(sessionKey: string) {
-    // Only reload history for the active session — skip subagent and cron sessions
-    if (sessionKey.includes(':subagent:')) return
-    if (sessionKey.includes(':cron:')) return
-    // If no active session set, don't auto-reload (client must explicitly request via chat.history)
-    if (!state.activeSessionKey) return
-    if (sessionKey !== state.activeSessionKey) return
-
-    if (state.historyReloadTimer) {
-      clearTimeout(state.historyReloadTimer)
-    }
-    state.historyReloadTimer = setTimeout(async () => {
-      state.historyReloadTimer = null
-      try {
-        const res = (await request('chat.history', { sessionKey, limit: 1000 })) as {
-          messages?: any[]
-        }
-        const rawMessages = res?.messages ?? []
-        const history = parseTurns(rawMessages)
-        emitter.emit('session.info', { sessionKey, label: undefined, history })
-      } catch {
-        // History fetch failed — non-critical
-      }
-    }, HISTORY_RELOAD_DEBOUNCE)
   }
 
   function connectWs(): Promise<void> {
@@ -540,10 +512,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     if (state.reconnectTimer) {
       clearTimeout(state.reconnectTimer)
       state.reconnectTimer = null
-    }
-    if (state.historyReloadTimer) {
-      clearTimeout(state.historyReloadTimer)
-      state.historyReloadTimer = null
     }
     // Reject all pending requests
     pending.forEach((p) => p.reject(new Error('Backend disconnected')))
