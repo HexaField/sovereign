@@ -90,6 +90,7 @@ import { createLogger } from './system/logger.js'
 import { createEventStream } from './system/event-stream.js'
 import { createNotifications } from './notifications/notifications.js'
 import { createNotificationRoutes } from './notifications/routes.js'
+import { createDashboardRoutes } from './dashboard/routes.js'
 
 // --- Phase 8: Meetings, Recording enhancements, Voice enhancements ---
 import { createMeetingsService } from './meetings/meetings.js'
@@ -645,6 +646,7 @@ eventStream.subscribe((entry) => {
 // --- Notifications module ---
 const notificationsModule = createNotifications(bus, dataDir)
 app.use(createNotificationRoutes(notificationsModule))
+app.use(createDashboardRoutes({ orgManager, threadManager, notifications: notificationsModule, system: systemModule }))
 
 // --- Bus wildcard logging (debug level) ---
 const sysLogger = createLogger(logsChannel, 'bus')

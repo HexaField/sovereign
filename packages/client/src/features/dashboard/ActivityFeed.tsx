@@ -53,7 +53,7 @@ export function ActivityFeed() {
 
     // Subscribe to WS for live updates
     try {
-      const { wsStore } = await import('../../ws/ws-store-instance.js').catch(() => ({ wsStore: null }))
+      const { wsStore } = await import('../../ws/index.js').catch(() => ({ wsStore: null }))
       if (wsStore) {
         wsUnsub = wsStore.on('system.event', (msg: any) => {
           store.addEntry({
