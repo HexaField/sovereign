@@ -5,10 +5,7 @@ html, body, #root {
   height: 100dvh;
   max-height: 100dvh;
   overflow: hidden;
-}
-html {
-  position: fixed;
-  width: 100%;
+  overscroll-behavior: none;
 }
 
 /* ── Stark Industries font ─────────────────────────────────────────────── */
