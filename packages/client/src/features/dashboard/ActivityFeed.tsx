@@ -2,6 +2,31 @@ import { createSignal, onMount, onCleanup, For, Show } from 'solid-js'
 import { getEventIcon, getEventDescription, formatEventTime, MAX_FEED_EVENTS } from './dashboard-helpers.js'
 import type { ActivityEvent, EventType } from './dashboard-helpers.js'
 
+/** Whitelist of event type prefixes/patterns worth showing */
+const ALLOWED_EVENT_PREFIXES = [
+  'ws.connected', 'ws.disconnected',
+  'notification.', 'scheduler.job.',
+  'git.', 'config.changed',
+  'recording.', 'meeting.',
+  'issue.', 'review.',
+  'chat.status', 'worktree.',
+]
+
+function isEventAllowed(eventType: string, payload?: any): boolean {
+  // Always filter out architecture spam
+  if (eventType === 'system.architecture.updated') return false
+  // Filter log.entry noise — only keep if message isn't echoing another event name
+  if (eventType === 'log.entry') {
+    const msg = payload?.message ?? ''
+    if (!msg || msg.includes('system.architecture') || msg.includes('log.entry')) return false
+    // Only keep log entries with meaningful content
+    return ALLOWED_EVENT_PREFIXES.some((p) => msg.startsWith(p))
+  }
+  // Filter system.health.updated — too frequent
+  if (eventType === 'system.health.updated') return false
+  return ALLOWED_EVENT_PREFIXES.some((p) => eventType.startsWith(p))
+}
+
 /** Map raw bus event names to human-readable descriptions */
 const EVENT_LABEL_MAP: Record<string, string> = {
   'log.entry': 'Log entry',
@@ -72,6 +97,7 @@ export function ActivityFeed() {
       if (res.ok) {
         const data = await res.json()
         const events: ActivityFeedEntry[] = (data.entries ?? data.events ?? [])
+          .filter((e: any) => isEventAllowed(e.event?.type ?? e.type ?? '', e.event?.payload ?? e.payload))
           .slice(0, MAX_FEED_EVENTS)
           .map((e: any) => ({
             id: String(e.id ?? e.capturedAt ?? Date.now()),
@@ -90,6 +116,8 @@ export function ActivityFeed() {
       const { wsStore } = await import('../../ws/index.js').catch(() => ({ wsStore: null }))
       if (wsStore) {
         wsUnsub = wsStore.on('system.event', (msg: any) => {
+          const eventType = msg.eventType ?? msg.description ?? ''
+          if (!isEventAllowed(eventType, msg.payload)) return
           store.addEntry({
             id: String(msg.id ?? Date.now()),
             type: (msg.eventType?.split('.')[0] ?? 'system') as EventType,
