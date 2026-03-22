@@ -13,6 +13,7 @@ import DevicesTab from './DevicesTab'
 import JobsTab from './JobsTab'
 import EventStreamTab from './EventStreamTab'
 import ThreadsTab from './ThreadsTab'
+import FlowGraph from './FlowGraph'
 
 export type { SystemTabId } from '../nav/store.js'
 export { activeSystemTab, setActiveSystemTab } from '../nav/store.js'
@@ -32,7 +33,8 @@ export const SYSTEM_TABS: SystemTab[] = [
   { id: 'devices', label: 'Devices', component: DevicesTab },
   { id: 'jobs', label: 'Jobs', component: JobsTab },
   { id: 'events', label: 'Events', component: EventStreamTab },
-  { id: 'threads', label: 'Threads', component: ThreadsTab }
+  { id: 'threads', label: 'Threads', component: ThreadsTab },
+  { id: 'flow', label: 'Flow', component: FlowGraph }
 ]
 
 const SystemView: Component = () => {

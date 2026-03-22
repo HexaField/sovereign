@@ -3,6 +3,7 @@
 
 import { createSignal, onMount, onCleanup, For, Show, type Component } from 'solid-js'
 import { SectionCard } from '../../ui/SectionCard.js'
+import { ContextBudgetModal } from './ContextBudgetModal.js'
 import {
   HeartIcon,
   BotIcon,
@@ -83,6 +84,7 @@ const OverviewTab: Component = () => {
   const [data, setData] = createSignal<ArchitectureData | null>(null)
   const [error, setError] = createSignal<string | null>(null)
   const [planSummary, setPlanSummary] = createSignal<PlanSummary | null>(null)
+  const [showContextBudget, setShowContextBudget] = createSignal(false)
 
   const load = async () => {
     try {
@@ -294,8 +296,14 @@ const OverviewTab: Component = () => {
 
               {/* 7. LLM Context */}
               <SectionCard title="LLM Context" icon={<BrainIcon class="h-5 w-5" />}>
-                <div class="mt-2 text-xs italic" style={{ color: 'var(--c-text-muted)' }}>
-                  Use the context budget button in the header for detailed breakdown
+                <div class="mt-2">
+                  <button
+                    class="cursor-pointer rounded border px-3 py-1.5 text-xs transition-colors"
+                    style={{ 'border-color': 'var(--c-border)', background: 'transparent', color: 'var(--c-accent)' }}
+                    onClick={() => setShowContextBudget(true)}
+                  >
+                    View Context Budget
+                  </button>
                 </div>
               </SectionCard>
 
@@ -464,6 +472,9 @@ const OverviewTab: Component = () => {
             </div>
           )
         }}
+      </Show>
+      <Show when={showContextBudget()}>
+        <ContextBudgetModal onClose={() => setShowContextBudget(false)} />
       </Show>
     </div>
   )
