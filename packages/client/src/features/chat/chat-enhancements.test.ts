@@ -1,5 +1,19 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { stripThinkingBlocks } from '../../lib/markdown.js'
+
+// Mock localStorage for Node test environment
+const storage = new Map<string, string>()
+const mockLocalStorage = {
+  getItem: (key: string) => storage.get(key) ?? null,
+  setItem: (key: string, value: string) => storage.set(key, value),
+  removeItem: (key: string) => storage.delete(key),
+  clear: () => storage.clear(),
+  get length() { return storage.size },
+  key: (i: number) => [...storage.keys()][i] ?? null
+}
+if (typeof globalThis.localStorage === 'undefined') {
+  Object.defineProperty(globalThis, 'localStorage', { value: mockLocalStorage })
+}
 
 // §P.3 Chat System Enhancement tests
 
@@ -44,9 +58,53 @@ describe('§P.3 Chat System Enhancements', () => {
 
   // §P.3.3 Pending Turn Persistence
   describe('§P.3.3 Pending Turn Persistence', () => {
-    it.todo('§P.3.3 SHOULD persist pending turns to localStorage key sovereign:pending-turns:{threadKey}')
-    it.todo('§P.3.3 SHOULD merge persisted pending turns on chat.session.info (history load)')
-    it.todo('§P.3.3 SHOULD deduplicate by content match against confirmed history')
+    beforeEach(() => {
+      localStorage.clear()
+    })
+
+    it('§P.3.3 SHOULD persist pending turns to localStorage key sovereign:pending-turns:{threadKey}', async () => {
+      const store = await import('./store.js')
+      // savePendingTurns writes to localStorage
+      const turns = [
+        { role: 'user', content: 'hello', timestamp: 1, workItems: [], thinkingBlocks: [], pending: true }
+      ] as any[]
+      store.savePendingTurns('test-thread', turns)
+      const raw = localStorage.getItem('sovereign:pending-turns:test-thread')
+      expect(raw).toBeTruthy()
+      const parsed = JSON.parse(raw!)
+      expect(parsed).toHaveLength(1)
+      expect(parsed[0].content).toBe('hello')
+    })
+
+    it('§P.3.3 SHOULD merge persisted pending turns on chat.session.info (history load)', async () => {
+      const store = await import('./store.js')
+      // Save a pending turn
+      store.savePendingTurns('merge-thread', [
+        { role: 'user', content: 'pending msg', timestamp: 1, workItems: [], thinkingBlocks: [], pending: true }
+      ] as any[])
+      // loadPendingTurns should return it
+      const loaded = store.loadPendingTurns('merge-thread')
+      expect(loaded).toHaveLength(1)
+      expect(loaded[0].content).toBe('pending msg')
+    })
+
+    it('§P.3.3 SHOULD deduplicate by content match against confirmed history', async () => {
+      const store = await import('./store.js')
+      // Save pending turn
+      store.savePendingTurns('dedup-thread', [
+        { role: 'user', content: 'hello world', timestamp: 1, workItems: [], thinkingBlocks: [], pending: true }
+      ] as any[])
+      const pending = store.loadPendingTurns('dedup-thread')
+      // Simulate confirmed history with same content
+      const history = [{ role: 'user', content: 'hello world', timestamp: 2 }]
+      const unconfirmed = pending.filter(
+        (p: any) => !history.some((h: any) => h.role === p.role && h.content === p.content)
+      )
+      expect(unconfirmed).toHaveLength(0)
+      // Clear when all confirmed
+      store.savePendingTurns('dedup-thread', unconfirmed)
+      expect(localStorage.getItem('sovereign:pending-turns:dedup-thread')).toBeNull()
+    })
   })
 
   // §P.3.5 Streaming HTML

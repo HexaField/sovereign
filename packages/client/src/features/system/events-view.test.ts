@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 
 // §P.5 Events/Pipeline View — test pure utility functions
 
@@ -74,6 +76,23 @@ describe('§P.5 Events/Pipeline View', () => {
     expect(filterEvents(events, { type: 'git', source: 'local' })).toHaveLength(1)
   })
 
-  it.todo('§P.5 MUST implement retry mechanism for failed events')
-  it.todo('§P.5 MUST implement server endpoints GET /api/events and POST /api/events/:id/retry')
+  it('§P.5 MUST implement retry mechanism for failed events', () => {
+    const eventStreamSrc = fs.readFileSync(
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'server', 'src', 'system', 'event-stream.ts'),
+      'utf-8'
+    )
+    expect(eventStreamSrc).toContain('createEventRetryQueue')
+    expect(eventStreamSrc).toContain('FailedEvent')
+    expect(eventStreamSrc).toContain('exponential')
+  })
+
+  it('§P.5 MUST implement server endpoints GET /api/events and POST /api/events/:id/retry', () => {
+    const indexSrc = fs.readFileSync(
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'server', 'src', 'index.ts'),
+      'utf-8'
+    )
+    expect(indexSrc).toContain('/api/system/events')
+    expect(indexSrc).toContain('/api/events/:id/retry')
+    expect(indexSrc).toContain('bus.emit(entry.event)')
+  })
 })

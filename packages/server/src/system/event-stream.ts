@@ -145,3 +145,105 @@ export function createEventStream(bus: EventBus, options?: EventStreamOptions): 
 
   return { query, stats, subscribe, getBuffer, dispose }
 }
+
+// ── Event Retry with Exponential Backoff ──
+
+export interface FailedEvent {
+  id: string
+  event: BusEvent
+  failedAt: number
+  retryCount: number
+  maxRetries: number
+  nextRetryAt: number
+  status: 'pending' | 'retrying' | 'exhausted'
+  error?: string
+}
+
+export interface EventRetryQueue {
+  add(event: BusEvent, error?: string): FailedEvent
+  retry(id: string): FailedEvent | null
+  list(): FailedEvent[]
+  dispose(): void
+}
+
+export function createEventRetryQueue(bus: EventBus, maxRetries: number = 3): EventRetryQueue {
+  const failed = new Map<string, FailedEvent>()
+  let nextId = 1
+  const timers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function scheduleRetry(entry: FailedEvent): void {
+    // exponential backoff: 1s, 2s, 4s
+    const delayMs = Math.pow(2, entry.retryCount) * 1000
+    entry.nextRetryAt = Date.now() + delayMs
+    const timer = setTimeout(() => {
+      timers.delete(entry.id)
+      entry.retryCount++
+      entry.status = 'retrying'
+      try {
+        bus.emit(entry.event)
+        // If no error thrown, consider it delivered — remove
+        failed.delete(entry.id)
+      } catch (err: any) {
+        if (entry.retryCount >= entry.maxRetries) {
+          entry.status = 'exhausted'
+          entry.error = err?.message ?? 'Max retries exceeded'
+        } else {
+          entry.status = 'pending'
+          scheduleRetry(entry)
+        }
+      }
+    }, delayMs)
+    timers.set(entry.id, timer)
+  }
+
+  return {
+    add(event: BusEvent, error?: string): FailedEvent {
+      const id = `retry-${nextId++}`
+      const entry: FailedEvent = {
+        id,
+        event,
+        failedAt: Date.now(),
+        retryCount: 0,
+        maxRetries,
+        nextRetryAt: 0,
+        status: 'pending',
+        error
+      }
+      failed.set(id, entry)
+      scheduleRetry(entry)
+      return entry
+    },
+    retry(id: string): FailedEvent | null {
+      const entry = failed.get(id)
+      if (!entry) return null
+      // Cancel existing timer
+      const existing = timers.get(id)
+      if (existing) clearTimeout(existing)
+      timers.delete(id)
+      // Reset and re-emit
+      entry.retryCount++
+      try {
+        bus.emit(entry.event)
+        failed.delete(id)
+        return { ...entry, status: 'pending' }
+      } catch (err: any) {
+        if (entry.retryCount >= entry.maxRetries) {
+          entry.status = 'exhausted'
+          entry.error = err?.message
+        } else {
+          entry.status = 'pending'
+          scheduleRetry(entry)
+        }
+        return entry
+      }
+    },
+    list(): FailedEvent[] {
+      return [...failed.values()]
+    },
+    dispose(): void {
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+      failed.clear()
+    }
+  }
+}

@@ -10,6 +10,8 @@ export const [agentStatus, setAgentStatus] = createSignal<AgentStatus>('idle')
 export const [liveWork, setLiveWork] = createSignal<WorkItem[]>([])
 export const [liveThinkingText, setLiveThinkingText] = createSignal('')
 export const [compacting, setCompacting] = createSignal(false)
+export const [agentWorkingStartTime, setAgentWorkingStartTime] = createSignal<number | null>(null)
+export const [agentDurationText, setAgentDurationText] = createSignal('')
 export const [isRetryCountdownActive, setRetryActive] = createSignal(false)
 export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
 export const [inputValue, _setInputValue] = createSignal('')
@@ -39,6 +41,33 @@ function loadDraft(threadKey: string): void {
   } catch {
     _setInputValue('')
   }
+}
+
+let durationTimer: ReturnType<typeof setInterval> | null = null
+
+function startDurationTimer(): void {
+  stopDurationTimer()
+  setAgentWorkingStartTime(Date.now())
+  updateDurationText()
+  durationTimer = setInterval(updateDurationText, 1000)
+}
+
+function stopDurationTimer(): void {
+  if (durationTimer) {
+    clearInterval(durationTimer)
+    durationTimer = null
+  }
+  setAgentWorkingStartTime(null)
+  setAgentDurationText('')
+}
+
+function updateDurationText(): void {
+  const start = agentWorkingStartTime()
+  if (!start) return
+  const elapsed = Math.floor((Date.now() - start) / 1000)
+  const mins = Math.floor(elapsed / 60)
+  const secs = elapsed % 60
+  setAgentDurationText(`${mins}:${secs.toString().padStart(2, '0')}`)
 }
 
 let retryTimer: ReturnType<typeof setInterval> | null = null
@@ -78,7 +107,36 @@ function resetState(): void {
   setLiveThinkingText('')
   setCompacting(false)
   clearRetryCountdown()
+  stopDurationTimer()
   suppressLifecycleUntil = 0
+}
+
+function pendingTurnsKey(threadKey: string): string {
+  return `sovereign:pending-turns:${threadKey}`
+}
+
+export function savePendingTurns(threadKey: string, pendingTurns: ParsedTurn[]): void {
+  try {
+    if (pendingTurns.length === 0) {
+      localStorage.removeItem(pendingTurnsKey(threadKey))
+    } else {
+      localStorage.setItem(pendingTurnsKey(threadKey), JSON.stringify(pendingTurns))
+    }
+  } catch { /* ignore */ }
+}
+
+export function loadPendingTurns(threadKey: string): ParsedTurn[] {
+  try {
+    const raw = localStorage.getItem(pendingTurnsKey(threadKey))
+    if (!raw) return []
+    return JSON.parse(raw) as ParsedTurn[]
+  } catch {
+    return []
+  }
+}
+
+function getPendingFromTurns(allTurns: ParsedTurn[]): ParsedTurn[] {
+  return allTurns.filter((t) => t.pending === true)
 }
 
 export function sendMessage(text: string, _attachments?: File[]): void {
@@ -91,7 +149,13 @@ export function sendMessage(text: string, _attachments?: File[]): void {
     thinkingBlocks: [],
     pending: true
   }
-  setTurns((prev) => [...prev, pending])
+  setTurns((prev) => {
+    const next = [...prev, pending]
+    // Persist pending turns
+    const tk = currentThreadKey?.() ?? 'main'
+    savePendingTurns(tk, getPendingFromTurns(next))
+    return next
+  })
   ws?.send({ type: 'chat.send', text, threadKey: currentThreadKey?.() ?? 'main' } as any)
 }
 
@@ -194,6 +258,9 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
         } else {
           next = [...prev, turn]
         }
+        // Persist remaining pending turns (or clear if none left)
+        const tk = _threadKey()
+        savePendingTurns(tk, getPendingFromTurns(next))
         return next
       })
       setStreamingHtml('')
@@ -211,6 +278,12 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       // But always allow idle/end events through
       if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
       setAgentStatus(msg.status)
+      // Duration timer: start on working/thinking, stop on idle/error
+      if (msg.status === 'working' || msg.status === 'thinking') {
+        if (!agentWorkingStartTime()) startDurationTimer()
+      } else {
+        stopDurationTimer()
+      }
     })
   )
 
@@ -247,13 +320,20 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
-      // Clean up legacy localStorage pending turns
-      try {
-        localStorage.removeItem(`sovereign:pending-turns:${_threadKey()}`)
-      } catch {
-        /* */
+      // Merge persisted pending turns that aren't already in confirmed history
+      const tk = _threadKey()
+      const persisted = loadPendingTurns(tk)
+      const unconfirmed = persisted.filter(
+        (p) => !history.some((h) => h.role === p.role && h.content === p.content)
+      )
+      if (unconfirmed.length === 0) {
+        // All pending turns confirmed — clear storage
+        savePendingTurns(tk, [])
+        setTurns(history)
+      } else {
+        savePendingTurns(tk, unconfirmed)
+        setTurns([...history, ...unconfirmed])
       }
-      setTurns(history)
     })
   )
 

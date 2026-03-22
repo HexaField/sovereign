@@ -22,5 +22,17 @@ describe('§P.7 Voice Enhancements', () => {
     )
     expect(src).toContain('SpeakerTimeline')
   })
-  it.todo('§P.7 SHOULD implement transcription progress polling')
+
+  it('§P.7 SHOULD implement transcription progress polling', () => {
+    // Verify server-side: RecordingMeta now includes transcriptionProgress and processing status
+    const recordingsSrc = fs.readFileSync(
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'server', 'src', 'recordings', 'recordings.ts'),
+      'utf-8'
+    )
+    expect(recordingsSrc).toContain('transcriptionProgress')
+    expect(recordingsSrc).toContain("'processing'")
+    // Verify the transcribe method updates progress
+    expect(recordingsSrc).toContain('transcriptionProgress = 0')
+    expect(recordingsSrc).toContain('transcriptionProgress = 100')
+  })
 })

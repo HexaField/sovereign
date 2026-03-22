@@ -1,6 +1,7 @@
 import { createSignal, createEffect, Show, For } from 'solid-js'
 import type { AgentStatus } from '@sovereign/core'
 import { AttachIcon, CloseIcon, LoaderIcon } from '../../ui/icons.js'
+import { renderMarkdown } from '../../lib/markdown.js'
 import {
   inputValue,
   setInputValue,
@@ -167,6 +168,7 @@ export function InputArea(props: InputAreaProps) {
   const [scratchpad, setScratchpad] = createSignal<ScratchpadEntry[]>(loadScratchpadEntries(threadKey()))
   const [scratchpadOpen, setScratchpadOpen] = createSignal(false)
   const [editingId, setEditingId] = createSignal<number | null>(null)
+  const [markdownPreview, setMarkdownPreview] = createSignal(false)
 
   // File attachment state
   const [attachedFiles, setAttachedFiles] = createSignal<{ name: string; path: string; size: number }[]>([])
@@ -722,6 +724,38 @@ export function InputArea(props: InputAreaProps) {
               'max-sm:max-h-none max-sm:h-full': textFocused()
             }}
             disabled={props.disabled}
+          />
+        </Show>
+
+        {/* Markdown preview toggle */}
+        <Show when={inputValue().trim()}>
+          <button
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors"
+            style={{
+              color: markdownPreview() ? 'var(--c-accent)' : 'var(--c-text-muted)',
+              background: markdownPreview() ? 'var(--c-accent-bg, rgba(99,102,241,0.1))' : 'transparent'
+            }}
+            onClick={() => setMarkdownPreview(!markdownPreview())}
+            title={markdownPreview() ? 'Hide preview' : 'Preview markdown'}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+        </Show>
+
+        {/* Markdown rendered preview */}
+        <Show when={markdownPreview() && inputValue().trim()}>
+          <div
+            class="max-h-32 overflow-y-auto rounded-lg border px-3 py-2 text-sm"
+            style={{
+              background: 'var(--c-bg)',
+              'border-color': 'var(--c-border)',
+              color: 'var(--c-text)'
+            }}
+            innerHTML={renderMarkdown(inputValue())}
           />
         </Show>
 
