@@ -34,6 +34,7 @@ import { registerOrgsChannel } from './orgs/ws.js'
 import { createFileService } from './files/files.js'
 import { createFileRouter } from './files/routes.js'
 import { registerFilesChannel } from './files/ws.js'
+import { createFileWatcher } from './files/watcher.js'
 import { createGitCli } from './git/git.js'
 import { createGitService } from './git/service.js'
 import { createGitRoutes } from './git/routes.js'
@@ -190,6 +191,10 @@ const fileProjectResolver = (projectId: string): string => {
 }
 app.use('/api/files', createFileRouter(fileService, undefined, fileProjectResolver))
 registerFilesChannel(wsHandler, bus)
+
+// Start file watcher for active org root path
+const fileWatcher = createFileWatcher(bus, globalPath)
+fileWatcher.start()
 
 // Project resolver: maps orgId+projectId to filesystem path
 const resolveProject = (orgId: string, projectId: string, _worktreeId?: string) => {
@@ -807,6 +812,7 @@ backend.connect().catch((err) => {
 // ============================================================
 
 function shutdown() {
+  fileWatcher.stop()
   scheduler.destroy()
   terminalManager.dispose()
   backend.disconnect().catch(() => {})

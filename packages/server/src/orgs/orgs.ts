@@ -205,11 +205,41 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
   }
 
   const SKIP_DIRS = new Set(['.git', 'node_modules', '.sovereign-data'])
+  const DEFAULT_IGNORE = ['node_modules', 'vendor', 'dist', '.git']
 
-  const autoDetectProjects = (orgId: string): Project[] => {
+  function loadIgnorePatterns(orgPath: string): string[] {
+    const ignoreFile = path.join(orgPath, '.sovereign-ignore')
+    try {
+      if (!fs.existsSync(ignoreFile)) return DEFAULT_IGNORE
+      const content = fs.readFileSync(ignoreFile, 'utf-8')
+      const patterns = content
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith('#'))
+      return [...new Set([...DEFAULT_IGNORE, ...patterns])]
+    } catch {
+      return DEFAULT_IGNORE
+    }
+  }
+
+  function matchesIgnorePattern(dirPath: string, orgPath: string, patterns: string[]): boolean {
+    const rel = path.relative(orgPath, dirPath)
+    const parts = rel.split(path.sep)
+    for (const pattern of patterns) {
+      // Simple matching: if any path segment matches the pattern, ignore
+      if (parts.some((p) => p === pattern)) return true
+      // Also check if the relative path contains the pattern as a segment
+      if (rel.includes(`${pattern}/`) || rel.endsWith(pattern)) return true
+    }
+    return false
+  }
+
+  const autoDetectProjects = (orgId: string, opts?: { maxDepth?: number }): Project[] => {
     const org = getOrg(orgId)
     if (!org) throw new Error(`Org not found: ${orgId}`)
 
+    const maxDepth = opts?.maxDepth ?? 2
+    const ignorePatterns = loadIgnorePatterns(org.path)
     const existingPaths = new Set(state.projects.filter((p) => p.orgId === orgId).map((p) => p.repoPath))
     const added: Project[] = []
 
@@ -217,6 +247,7 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
       const resolved = path.resolve(dirPath)
       if (existingPaths.has(resolved)) return
       if (!fs.existsSync(path.join(resolved, '.git'))) return
+      if (matchesIgnorePattern(resolved, org.path, ignorePatterns)) return
       try {
         const project = addProject(orgId, { name: path.basename(resolved), repoPath: resolved })
         added.push(project)
@@ -229,17 +260,25 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
     // Check if org path itself is a git repo
     tryRegister(org.path)
 
-    // Scan immediate subdirectories
-    try {
-      const entries = fs.readdirSync(org.path, { withFileTypes: true })
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue
-        if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
-        tryRegister(path.join(org.path, entry.name))
+    // Scan directories up to maxDepth
+    const scanDir = (dirPath: string, depth: number) => {
+      if (depth > maxDepth) return
+      try {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue
+          if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
+          const fullPath = path.join(dirPath, entry.name)
+          if (matchesIgnorePattern(fullPath, org.path, ignorePatterns)) continue
+          tryRegister(fullPath)
+          if (depth < maxDepth) scanDir(fullPath, depth + 1)
+        }
+      } catch {
+        // Can't read directory — skip
       }
-    } catch {
-      // Can't read directory — skip
     }
+
+    scanDir(org.path, 1)
 
     return added
   }
