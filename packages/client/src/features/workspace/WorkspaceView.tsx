@@ -54,6 +54,7 @@ import {
 // Chat imports
 import { ChatView } from '../chat/ChatView.js'
 import { InputArea } from '../chat/InputArea.js'
+import { QueueIndicator } from '../chat/QueueIndicator.js'
 import { SubagentView } from '../chat/SubagentView.js'
 import type { SubagentNavEntry } from '../chat/SubagentView.js'
 import {
@@ -511,6 +512,7 @@ const ChatPanel: Component = () => {
             />
 
             {/* Input area */}
+            <QueueIndicator />
             <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
           </Show>
         </div>
@@ -561,6 +563,7 @@ const ExpandedChatView: Component = () => {
           onViewSubagent={pushSubagent}
         />
 
+        <QueueIndicator />
         <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
       </Show>
     </div>
@@ -609,6 +612,7 @@ const MobileChatPanel: Component = () => {
           onViewSubagent={pushSubagent}
         />
 
+        <QueueIndicator />
         <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
       </Show>
     </div>

@@ -56,54 +56,22 @@ describe('§P.3 Chat System Enhancements', () => {
     })
   })
 
-  // §P.3.3 Pending Turn Persistence
-  describe('§P.3.3 Pending Turn Persistence', () => {
-    beforeEach(() => {
-      localStorage.clear()
+  // §P.3.3 Server-Side Message Queue (replaced client-side pending turns)
+  describe('§P.3.3 Server-Side Message Queue', () => {
+    it('§P.3.3 SHOULD export messageQueue signal', async () => {
+      const store = await import('./store.js')
+      expect(typeof store.messageQueue).toBe('function')
+      expect(store.messageQueue()).toEqual([])
     })
 
-    it('§P.3.3 SHOULD persist pending turns to localStorage key sovereign:pending-turns:{threadKey}', async () => {
+    it('§P.3.3 SHOULD export cancelMessage function', async () => {
       const store = await import('./store.js')
-      // savePendingTurns writes to localStorage
-      const turns = [
-        { role: 'user', content: 'hello', timestamp: 1, workItems: [], thinkingBlocks: [], pending: true }
-      ] as any[]
-      store.savePendingTurns('test-thread', turns)
-      const raw = localStorage.getItem('sovereign:pending-turns:test-thread')
-      expect(raw).toBeTruthy()
-      const parsed = JSON.parse(raw!)
-      expect(parsed).toHaveLength(1)
-      expect(parsed[0].content).toBe('hello')
+      expect(typeof store.cancelMessage).toBe('function')
     })
 
-    it('§P.3.3 SHOULD merge persisted pending turns on chat.session.info (history load)', async () => {
+    it('§P.3.3 SHOULD export setMessageQueue for queue updates', async () => {
       const store = await import('./store.js')
-      // Save a pending turn
-      store.savePendingTurns('merge-thread', [
-        { role: 'user', content: 'pending msg', timestamp: 1, workItems: [], thinkingBlocks: [], pending: true }
-      ] as any[])
-      // loadPendingTurns should return it
-      const loaded = store.loadPendingTurns('merge-thread')
-      expect(loaded).toHaveLength(1)
-      expect(loaded[0].content).toBe('pending msg')
-    })
-
-    it('§P.3.3 SHOULD deduplicate by content match against confirmed history', async () => {
-      const store = await import('./store.js')
-      // Save pending turn
-      store.savePendingTurns('dedup-thread', [
-        { role: 'user', content: 'hello world', timestamp: 1, workItems: [], thinkingBlocks: [], pending: true }
-      ] as any[])
-      const pending = store.loadPendingTurns('dedup-thread')
-      // Simulate confirmed history with same content
-      const history = [{ role: 'user', content: 'hello world', timestamp: 2 }]
-      const unconfirmed = pending.filter(
-        (p: any) => !history.some((h: any) => h.role === p.role && h.content === p.content)
-      )
-      expect(unconfirmed).toHaveLength(0)
-      // Clear when all confirmed
-      store.savePendingTurns('dedup-thread', unconfirmed)
-      expect(localStorage.getItem('sovereign:pending-turns:dedup-thread')).toBeNull()
+      expect(typeof store.setMessageQueue).toBe('function')
     })
   })
 
