@@ -234,6 +234,42 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
 
   const handleMouseUp = () => setDragging(false)
 
+  // Touch support for mobile pan/zoom
+  let touchDragStart = { x: 0, y: 0 }
+  let lastPinchDist = 0
+
+  const pinchDistance = (t1: Touch, t2: Touch) =>
+    Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+
+  const handleTouchStart = (e: TouchEvent) => {
+    if (e.touches.length === 1) {
+      setDragging(true)
+      touchDragStart = { x: e.touches[0].clientX - pan().x, y: e.touches[0].clientY - pan().y }
+    } else if (e.touches.length === 2) {
+      setDragging(false)
+      lastPinchDist = pinchDistance(e.touches[0], e.touches[1])
+    }
+  }
+
+  const handleTouchMove = (e: TouchEvent) => {
+    e.preventDefault()
+    if (e.touches.length === 1 && dragging()) {
+      setPan({ x: e.touches[0].clientX - touchDragStart.x, y: e.touches[0].clientY - touchDragStart.y })
+    } else if (e.touches.length === 2) {
+      const dist = pinchDistance(e.touches[0], e.touches[1])
+      if (lastPinchDist > 0) {
+        const scale = dist / lastPinchDist
+        setZoom((z) => Math.max(0.2, Math.min(3, z * scale)))
+      }
+      lastPinchDist = dist
+    }
+  }
+
+  const handleTouchEnd = () => {
+    setDragging(false)
+    lastPinchDist = 0
+  }
+
   return (
     <div class="flex h-full flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
       {/* Header */}
@@ -295,11 +331,15 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
           <svg
             class="h-full w-full cursor-grab"
             classList={{ 'cursor-grabbing': dragging() }}
+            style={{ 'touch-action': 'none' }}
             onWheel={handleWheel}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
           >
             <defs>
               <marker id="dag-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
