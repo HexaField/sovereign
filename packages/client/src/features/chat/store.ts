@@ -355,6 +355,28 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
+  // Re-fetch history on WS reconnect (e.g. after mobile tab goes to background)
+  unsubs.push(
+    ws.on('ws.reconnected' as any, () => {
+      const key = _threadKey()
+      if (key) {
+        ws?.send({ type: 'chat.history', threadKey: key } as any)
+      }
+    })
+  )
+
+  // Re-fetch when tab becomes visible again (covers cases where WS stayed alive but deltas were missed)
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible') {
+      const key = _threadKey()
+      if (key && ws?.connected()) {
+        ws.send({ type: 'chat.history', threadKey: key } as any)
+      }
+    }
+  }
+  document.addEventListener('visibilitychange', onVisibility)
+  unsubs.push(() => document.removeEventListener('visibilitychange', onVisibility))
+
   // Return cleanup
   return () => {
     unsubs.forEach((u) => u())
