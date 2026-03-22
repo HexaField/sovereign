@@ -493,7 +493,7 @@ app.get('/api/threads/gateway-sessions', async (_req, res) => {
   }
 })
 
-app.use(createThreadRoutes(threadManager, forwardHandler))
+app.use(createThreadRoutes(threadManager, forwardHandler, { chatModule, backend }))
 registerThreadsWs(wsHandler as any, threadManager, bus)
 
 const voiceModule = createVoiceModule(bus, {

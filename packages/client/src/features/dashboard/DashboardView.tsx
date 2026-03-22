@@ -57,6 +57,7 @@ import GlobalChat from './GlobalChat'
 import VoiceWidget from './VoiceWidget'
 import NotificationFeed from './NotificationFeed'
 import { ActivityFeed } from './ActivityFeed'
+import ThreadPreviews from './ThreadPreviews'
 import { createSignal, onMount, onCleanup, Show, For } from 'solid-js'
 import { setActiveView } from '../nav/store'
 
@@ -155,9 +156,14 @@ export function DashboardView() {
         <Show when={orgs().length > 0} fallback={
           <p class="mb-3 text-xs opacity-40">No workspaces configured</p>
         }>
-          <div class="mb-3 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+          <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
             <For each={orgs()}>
-              {(org) => <WorkspaceCard org={org} />}
+              {(org) => (
+                <div>
+                  <WorkspaceCard org={org} />
+                  <ThreadPreviews orgId={org.orgId} orgName={org.orgName} />
+                </div>
+              )}
             </For>
           </div>
         </Show>
