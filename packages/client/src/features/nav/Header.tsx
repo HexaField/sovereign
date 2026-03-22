@@ -341,7 +341,7 @@ function WorkspaceHeaderContent() {
           <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>▾</span>
         </button>
         <button
-          class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
+          class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
           style={{ color: 'var(--c-text-muted)', 'border-color': 'var(--c-border)' }}
           onClick={() => toggleChatExpanded()}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-hover-bg)'; e.currentTarget.style.color = 'var(--c-accent)' }}
@@ -647,7 +647,7 @@ export function Header() {
 
       {/* Right: Context budget */}
       <button
-        class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
+        class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
         style={{
           'border-color': showContextBudget() ? 'var(--c-accent)' : 'var(--c-border)',
           color: showContextBudget() ? 'var(--c-accent)' : 'var(--c-text-muted)'
