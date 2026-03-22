@@ -1,11 +1,10 @@
 @import 'tailwindcss';
 
-/* ── Lock viewport — prevent mobile overscroll ─────────────────────────── */
-html, body, #root {
+/* ── Lock viewport — prevent bounce scroll while allowing pull-to-refresh ── */
+#root {
   height: 100dvh;
   max-height: 100dvh;
   overflow: hidden;
-  overscroll-behavior: none;
 }
 
 /* ── Stark Industries font ─────────────────────────────────────────────── */
