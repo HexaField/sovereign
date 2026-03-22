@@ -205,7 +205,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   }
 
   // Track accumulated streaming text per session to compute true deltas
-  let lastStreamLength = 0
+  const lastStreamLengths = new Map<string, number>()
 
   function handleChatEvent(sessionKey: string, ev: any) {
     if (ev.state === 'delta') {
@@ -216,13 +216,14 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
             .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
             .trim()
         : ''
-      if (cleaned && cleaned.length > lastStreamLength) {
-        const delta = cleaned.substring(lastStreamLength)
-        lastStreamLength = cleaned.length
+      const lastLen = lastStreamLengths.get(sessionKey) ?? 0
+      if (cleaned && cleaned.length > lastLen) {
+        const delta = cleaned.substring(lastLen)
+        lastStreamLengths.set(sessionKey, cleaned.length)
         emitter.emit('chat.stream', { sessionKey, text: delta })
       }
     } else if (ev.state === 'final') {
-      lastStreamLength = 0
+      lastStreamLengths.delete(sessionKey)
       // Completed turn
       const text = extractText(ev.message)
       const cleaned = text ? stripThinkingBlocks(text) : ''

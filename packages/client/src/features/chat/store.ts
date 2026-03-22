@@ -330,7 +330,10 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       // Gateway history is the source of truth — clear all pending state
       const tk = _threadKey()
       savePendingTurns(tk, [])
+      // Update confirmed turns but don't touch streaming state
+      // (streamingHtml/streamingRawText are separate signals)
       setTurns(history)
+      // If server replayed cached stream text, it arrives as a separate chat.stream with replay:true
     })
   )
 
@@ -366,7 +369,10 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   const onVisibility = () => {
     if (document.visibilityState === 'visible') {
       const key = _threadKey()
-      if (key && ws?.connected()) {
+      const status = currentAgentStatus()
+      // Don't re-fetch if agent is actively streaming — we're already receiving live events
+      // and a history fetch would wipe the in-progress streaming state
+      if (key && ws?.connected() && status !== 'working' && status !== 'thinking') {
         ws.send({ type: 'chat.history', threadKey: key } as any)
       }
     }
