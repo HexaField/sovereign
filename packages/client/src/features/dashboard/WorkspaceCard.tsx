@@ -8,6 +8,7 @@ export interface OrgSummary {
   branchesAhead: number
   branchesBehind: number
   activeThreads: number
+  threadCount: number
   unreadThreads: number
   errorThreads: number
   notificationCount: number
@@ -89,9 +90,9 @@ export default function WorkspaceCard(props: { org: OrgSummary; compact?: boolea
               {props.org.gitDirtyCount}✎
             </span>
           </Show>
-          <Show when={props.org.activeThreads > 0}>
+          <Show when={props.org.threadCount > 0}>
             <span class="rounded bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-400">
-              {props.org.activeThreads}💬
+              {props.org.threadCount}💬
             </span>
           </Show>
           <Show when={props.org.notificationCount > 0}>
@@ -139,7 +140,7 @@ export default function WorkspaceCard(props: { org: OrgSummary; compact?: boolea
         </div>
         <div class="flex items-center gap-1">
           <span>💬</span>
-          <span>{formatThreadSummary(props.org.activeThreads, props.org.unreadThreads, props.org.errorThreads)}</span>
+          <span>{formatThreadSummary(props.org.threadCount, props.org.unreadThreads, props.org.errorThreads)}</span>
         </div>
       </div>
     </button>
