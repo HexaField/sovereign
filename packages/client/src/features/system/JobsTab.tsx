@@ -1,7 +1,7 @@
 // §6.7 Jobs Tab — Scheduled jobs list
 // Name, schedule, last run time+status, next run. Actions: trigger now, enable/disable, view history.
 
-import { createSignal, onMount, Show, For, type Component } from 'solid-js'
+import { createSignal, onMount, onCleanup, Show, For, type Component } from 'solid-js'
 
 export interface Job {
   id: string
@@ -63,11 +63,17 @@ export async function fetchJobHistory(jobId: string): Promise<JobHistoryEntry[]>
   return res.json()
 }
 
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Failed to delete job: ${res.status}`)
+}
+
 const JobsTab: Component = () => {
   const [jobs, setJobs] = createSignal<Job[]>([])
   const [error, setError] = createSignal<string | null>(null)
   const [expandedJob, setExpandedJob] = createSignal<string | null>(null)
   const [history, setHistory] = createSignal<JobHistoryEntry[]>([])
+  let pollTimer: ReturnType<typeof setInterval> | undefined
 
   const load = async () => {
     try {
@@ -79,7 +85,14 @@ const JobsTab: Component = () => {
     }
   }
 
-  onMount(load)
+  onMount(() => {
+    load()
+    pollTimer = setInterval(load, 10000)
+  })
+
+  onCleanup(() => {
+    if (pollTimer) clearInterval(pollTimer)
+  })
 
   const handleTrigger = async (jobId: string) => {
     try {
@@ -108,6 +121,15 @@ const JobsTab: Component = () => {
       const hist = await fetchJobHistory(jobId)
       setHistory(hist)
       setExpandedJob(jobId)
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  const handleDelete = async (jobId: string) => {
+    try {
+      await deleteJob(jobId)
+      await load()
     } catch (e: any) {
       setError(e.message)
     }
@@ -170,6 +192,14 @@ const JobsTab: Component = () => {
                   title="View history"
                 >
                   History
+                </button>
+                <button
+                  class="rounded border px-2 py-1 text-xs hover:opacity-80"
+                  style={{ 'border-color': 'var(--c-error, #ef4444)', color: 'var(--c-error, #ef4444)' }}
+                  onClick={() => handleDelete(job.id)}
+                  title="Delete job"
+                >
+                  Delete
                 </button>
               </div>
             </div>

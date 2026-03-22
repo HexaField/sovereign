@@ -2,6 +2,13 @@
 import { createSignal, onMount, For, Show, type Component } from 'solid-js'
 import { fetchThreadsForOrg } from '../threads/store.js'
 
+interface EntityBinding {
+  entityType: 'branch' | 'issue' | 'pr'
+  entityRef: string
+  orgId?: string
+  projectId?: string
+}
+
 interface GatewaySession {
   key: string
   shortKey: string
@@ -12,6 +19,7 @@ interface GatewaySession {
   agentStatus?: string
   orgId?: string
   isRegistered?: boolean
+  entities?: EntityBinding[]
 }
 
 interface OrgInfo {
@@ -135,6 +143,21 @@ const ThreadsTab: Component = () => {
               </span>
             )}
           </div>
+          <Show when={s.entities && s.entities.length > 0}>
+            <div class="mt-0.5 flex flex-wrap gap-1">
+              <For each={s.entities ?? []}>
+                {(e) => (
+                  <span
+                    class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px]"
+                    style={{ background: 'var(--c-accent-bg, #1e3a5f)', color: 'var(--c-accent, #60a5fa)' }}
+                  >
+                    {e.entityType === 'branch' ? '🌿' : e.entityType === 'issue' ? '🎫' : '🔀'}
+                    {e.entityRef}
+                  </span>
+                )}
+              </For>
+            </div>
+          </Show>
           <div class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
             {s.orgId && s.orgId !== '_global' ? `${orgName(s.orgId!)} · ` : ''}
             {s.key !== displayLabel(s) ? `${s.key} · ` : ''}
