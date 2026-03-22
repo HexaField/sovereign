@@ -58,3 +58,22 @@ export function mergeWithLocal(sessions: ParsedSession[], localThreads: any[]): 
     }
   })
 }
+
+/** Read gateway sessions.json and return a map of shortKey → lastActivity */
+export async function getGatewayActivityMap(): Promise<Map<string, number>> {
+  const map = new Map<string, number>()
+  try {
+    const { readFile } = await import('fs/promises')
+    const { join } = await import('path')
+    const sessionsPath = join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+    const raw = await readFile(sessionsPath, 'utf-8')
+    const data = JSON.parse(raw) as Record<string, any>
+    for (const [fullKey, meta] of Object.entries(data)) {
+      const parsed = parseSessionEntry(fullKey, meta)
+      if ((parsed.kind === 'main' || parsed.kind === 'thread') && parsed.lastActivity) {
+        map.set(parsed.shortKey, parsed.lastActivity)
+      }
+    }
+  } catch { /* ignore read errors */ }
+  return map
+}
