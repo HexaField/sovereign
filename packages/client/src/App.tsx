@@ -66,7 +66,7 @@ export default function App() {
 
   return (
     <div
-      class="flex h-screen flex-col"
+      class="flex h-dvh flex-col overflow-hidden"
       style={{
         background: 'var(--c-bg)',
         color: 'var(--c-text)',
