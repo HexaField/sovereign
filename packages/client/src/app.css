@@ -2,8 +2,11 @@
 
 /* ── Lock viewport — prevent mobile overscroll ─────────────────────────── */
 html, body, #root {
-  height: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
   overflow: hidden;
+}
+html {
   position: fixed;
   width: 100%;
 }
