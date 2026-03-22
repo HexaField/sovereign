@@ -368,6 +368,27 @@ const PlanningPanel: Component = () => {
             {(() => {
               const c = () => completion()!
               const cats = categorizedIssues
+              // Compute filtered stats reactively
+              const filteredStats = () => {
+                const fi = filteredIssues()
+                const bSet = blockedIds()
+                const rSet = readyIds()
+                let total = fi.length
+                let closed = 0
+                let readyCount = 0
+                let blockedCount = 0
+                let inProgressCount = 0
+                for (const issue of fi) {
+                  if (issue.state === 'closed') { closed++; continue }
+                  const key = refKey({ orgId: issue.orgId, projectId: issue.projectId, remote: issue.remote, issueId: issue.id })
+                  if (bSet.has(key)) blockedCount++
+                  else if (rSet.has(key)) readyCount++
+                  else inProgressCount++
+                }
+                const percentage = total > 0 ? Math.round((closed / total) * 100) : 0
+                return { total, closed, percentage, ready: readyCount, blocked: blockedCount, inProgress: inProgressCount }
+              }
+              const fs = filteredStats
               return (
                 <div class="flex flex-col gap-3">
                   {/* Progress bar */}
@@ -378,20 +399,20 @@ const PlanningPanel: Component = () => {
                     >
                       <div
                         class="h-full rounded-full transition-all"
-                        style={{ width: `${c().percentage}%`, background: 'var(--c-accent)' }}
+                        style={{ width: `${fs().percentage}%`, background: 'var(--c-accent)' }}
                       />
                     </div>
                     <span class="text-xs tabular-nums" style={{ color: 'var(--c-text-muted)' }}>
-                      {c().percentage}%
+                      {fs().percentage}%
                     </span>
                   </div>
 
                   {/* Stats grid */}
                   <div class="grid grid-cols-2 gap-2">
-                    <StatCard label="Total" value={c().total} color="var(--c-text)" />
-                    <StatCard label="Ready" value={c().ready} color="var(--c-success)" />
-                    <StatCard label="In Progress" value={c().inProgress} color="var(--c-warning, #f59e0b)" />
-                    <StatCard label="Blocked" value={c().blocked} color="var(--c-error)" />
+                    <StatCard label="Total" value={fs().total} color="var(--c-text)" />
+                    <StatCard label="Ready" value={fs().ready} color="var(--c-success)" />
+                    <StatCard label="In Progress" value={fs().inProgress} color="var(--c-warning, #f59e0b)" />
+                    <StatCard label="Blocked" value={fs().blocked} color="var(--c-error)" />
                   </div>
 
                   {/* View Full DAG button */}
