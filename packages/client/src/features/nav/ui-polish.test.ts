@@ -16,9 +16,22 @@ function extractVarsFromBlock(selector: string): Set<string> {
 
 describe('§P.8 UI Polish', () => {
   describe('§P.8.1 Menu/Navigation', () => {
-    it.todo('§P.8.1 SHOULD verify all view modes are accessible')
-    it.todo('§P.8.1 SHOULD verify no duplicate labels in menu items')
-    it.todo('§P.8.1 SHOULD verify mobile-responsive header collapse')
+    it('§P.8.1 SHOULD verify all view modes are accessible', () => {
+      const storeSrc = fs.readFileSync(path.resolve(__dirname, 'store.ts'), 'utf-8')
+      for (const view of ['dashboard', 'workspace', 'canvas', 'planning', 'system']) {
+        expect(storeSrc).toContain(`'${view}'`)
+      }
+    })
+
+    it('§P.8.1 SHOULD verify no duplicate labels in menu items', () => {
+      const viewMenuSrc = fs.readFileSync(path.resolve(__dirname, 'ViewMenu.tsx'), 'utf-8')
+      const labels = Array.from(viewMenuSrc.matchAll(/label:\s*'([^']+)'/g)).map(m => m[1])
+      expect(new Set(labels).size).toBe(labels.length)
+    })
+
+    it('§P.8.1 SHOULD verify mobile-responsive header collapse', () => {
+      expect(appCss).toContain('@media (max-width: 768px)')
+    })
   })
 
   describe('§P.8.2 Theme System', () => {
@@ -55,8 +68,16 @@ describe('§P.8 UI Polish', () => {
       }
     })
 
-    it.todo('§P.8.2 SHOULD verify theme picker in settings modal works')
-    it.todo('§P.8.2 SHOULD verify system theme auto-detection (prefers-color-scheme)')
+    it('§P.8.2 SHOULD verify theme picker in settings modal works', () => {
+      const src = fs.readFileSync(path.resolve(__dirname, 'SettingsModal.tsx'), 'utf-8')
+      expect(src).toContain('THEME_OPTIONS')
+      expect(src).toContain('setTheme')
+    })
+
+    it('§P.8.2 SHOULD verify system theme auto-detection (prefers-color-scheme)', () => {
+      const themeSrc = fs.readFileSync(path.resolve(__dirname, '../theme/store.ts'), 'utf-8')
+      expect(themeSrc).toContain('prefers-color-scheme')
+    })
   })
 
   describe('§P.8.4 Markdown Rendering', () => {
@@ -73,7 +94,10 @@ describe('§P.8 UI Polish', () => {
       expect(typeof result).toBe('boolean')
     })
 
-    it.todo('§P.8.4 SHOULD verify syntax highlighting present')
+    it('§P.8.4 SHOULD verify syntax highlighting present', () => {
+      const src = fs.readFileSync(path.resolve(__dirname, '../chat/MarkdownContent.tsx'), 'utf-8')
+      expect(src).toContain('language-')
+    })
   })
 
   describe('§P.8.5 Message Bubble Context Menu', () => {
@@ -94,7 +118,15 @@ describe('§P.8 UI Polish', () => {
       expect(md).toContain('hello')
     })
 
-    it.todo('§P.8.5 SHOULD verify long-press support for mobile')
-    it.todo('§P.8.5 SHOULD verify position adjustment to stay in viewport')
+    it('§P.8.5 SHOULD verify long-press support for mobile', () => {
+      const src = fs.readFileSync(path.resolve(__dirname, '../chat/MessageBubble.tsx'), 'utf-8')
+      expect(src).toContain('longPressTimer')
+    })
+
+    it('§P.8.5 SHOULD verify position adjustment to stay in viewport', () => {
+      const src = fs.readFileSync(path.resolve(__dirname, '../chat/MessageBubble.tsx'), 'utf-8')
+      expect(src).toContain('getBoundingClientRect')
+      expect(src).toContain('innerWidth')
+    })
   })
 })

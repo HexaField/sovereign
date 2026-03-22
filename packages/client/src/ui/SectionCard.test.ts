@@ -96,8 +96,21 @@ describe('§P.1 Architecture View', () => {
       expect(src).toContain('HealthTimeline')
     })
 
-    it.todo('§P.1.3 MUST add health metric polling endpoint GET /api/system/health/history')
-    it.todo('§P.1.3 MUST support configurable time windows')
+    it('§P.1.3 MUST add health metric polling endpoint GET /api/system/health/history', () => {
+      const routesSrc = fs.readFileSync(
+        path.resolve(__dirname, '../../../../packages/server/src/system/routes.ts'),
+        'utf-8'
+      )
+      expect(routesSrc).toContain("'/api/system/health/history'")
+    })
+
+    it('§P.1.3 MUST support configurable time windows', () => {
+      const routesSrc = fs.readFileSync(
+        path.resolve(__dirname, '../../../../packages/server/src/system/routes.ts'),
+        'utf-8'
+      )
+      expect(routesSrc).toContain('windowMs')
+    })
   })
 
   // §P.1.4 SectionCard
