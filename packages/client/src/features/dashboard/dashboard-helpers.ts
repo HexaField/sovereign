@@ -60,24 +60,25 @@ export interface ActivityEvent {
   title?: string
 }
 
+/** Returns a colored dot character for the event type */
 export function getEventIcon(eventType: EventType): string {
   switch (eventType) {
     case 'git.status.changed':
-      return 'git-change'
+      return '🟠'
     case 'chat.status':
-      return 'bot'
+      return '🔵'
     case 'review.created':
     case 'review.updated':
-      return 'eye'
+      return '🟣'
     case 'issue.updated':
     case 'issue.created':
-      return 'ticket'
+      return '🟡'
     case 'worktree.created':
-      return 'tree'
+      return '🟢'
     case 'worktree.removed':
-      return 'axe'
+      return '🔴'
     default:
-      return 'pin'
+      return '⚪'
   }
 }
 

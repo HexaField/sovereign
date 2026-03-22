@@ -116,35 +116,35 @@ describe('§7 Dashboard', () => {
     })
 
     it('includes commit events (git.status.changed)', () => {
-      expect(getEventIcon('git.status.changed')).toBe('git-change')
+      expect(getEventIcon('git.status.changed')).toBe('🟠')
       const ev: ActivityEvent = { type: 'git.status.changed', timestamp: Date.now(), workspace: 'my-repo' }
       expect(getEventDescription(ev)).toContain('Files changed')
     })
 
     it('includes active agent events (chat.status with working/thinking)', () => {
-      expect(getEventIcon('chat.status')).toBe('bot')
+      expect(getEventIcon('chat.status')).toBe('🔵')
       const ev: ActivityEvent = { type: 'chat.status', timestamp: Date.now() }
       expect(getEventDescription(ev)).toBe('Agent activity')
     })
 
     it('includes open review events (review.created, review.updated)', () => {
-      expect(getEventIcon('review.created')).toBe('eye')
-      expect(getEventIcon('review.updated')).toBe('eye')
+      expect(getEventIcon('review.created')).toBe('🟣')
+      expect(getEventIcon('review.updated')).toBe('🟣')
       const ev: ActivityEvent = { type: 'review.created', timestamp: Date.now(), title: 'PR #42' }
       expect(getEventDescription(ev)).toContain('Review created')
       expect(getEventDescription(ev)).toContain('PR #42')
     })
 
     it('includes issue update events (issue.updated, issue.created)', () => {
-      expect(getEventIcon('issue.created')).toBe('ticket')
-      expect(getEventIcon('issue.updated')).toBe('ticket')
+      expect(getEventIcon('issue.created')).toBe('🟡')
+      expect(getEventIcon('issue.updated')).toBe('🟡')
       const ev: ActivityEvent = { type: 'issue.created', timestamp: Date.now(), title: 'Bug fix' }
       expect(getEventDescription(ev)).toContain('Issue created')
     })
 
     it('includes worktree activity events (worktree.created, worktree.removed)', () => {
-      expect(getEventIcon('worktree.created')).toBe('tree')
-      expect(getEventIcon('worktree.removed')).toBe('axe')
+      expect(getEventIcon('worktree.created')).toBe('🟢')
+      expect(getEventIcon('worktree.removed')).toBe('🔴')
     })
 
     it('shows event icon, description text, workspace/project label, relative timestamp for each entry', () => {
@@ -153,7 +153,7 @@ describe('§7 Dashboard', () => {
         timestamp: Date.now() - 120000,
         workspace: 'sovereign'
       }
-      expect(getEventIcon(ev.type)).toBe('git-change')
+      expect(getEventIcon(ev.type)).toBe('🟠')
       expect(getEventDescription(ev)).toContain('sovereign')
       expect(formatEventTime(ev.timestamp)).toMatch(/2m ago/)
     })

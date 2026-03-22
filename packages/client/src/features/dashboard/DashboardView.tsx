@@ -73,12 +73,8 @@ interface HealthData {
 export function DashboardView() {
   const [orgs, setOrgs] = createSignal<OrgSummary[]>([])
   const [diskPct, setDiskPct] = createSignal<number | null>(null)
-  const [isMobile, setIsMobile] = createSignal(window.innerWidth < 768)
-
-  const checkMobile = () => setIsMobile(window.innerWidth < 768)
 
   onMount(async () => {
-    window.addEventListener('resize', checkMobile)
 
     // Fetch dashboard summary (aggregated per-org data)
     try {
@@ -92,6 +88,7 @@ export function DashboardView() {
           branchesAhead: s.branchesAhead ?? 0,
           branchesBehind: s.branchesBehind ?? 0,
           activeThreads: s.activeThreadCount ?? 0,
+          threadCount: s.threadCount ?? 0,
           unreadThreads: s.unreadThreadCount ?? 0,
           errorThreads: 0,
           notificationCount: s.notificationCount ?? 0,
@@ -115,9 +112,7 @@ export function DashboardView() {
     } catch { /* ignore */ }
   })
 
-  onCleanup(() => {
-    window.removeEventListener('resize', checkMobile)
-  })
+  onCleanup(() => {})
 
   return (
     <div class="min-h-full overflow-y-auto" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
@@ -160,49 +155,41 @@ export function DashboardView() {
         <Show when={orgs().length > 0} fallback={
           <p class="mb-3 text-xs opacity-40">No workspaces configured</p>
         }>
-          <div class={isMobile() ? 'mb-3 space-y-2' : 'mb-3 grid grid-cols-2 gap-2 lg:grid-cols-3'}>
+          <div class="mb-3 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
             <For each={orgs()}>
-              {(org) => <WorkspaceCard org={org} compact={isMobile()} />}
+              {(org) => <WorkspaceCard org={org} />}
             </For>
           </div>
         </Show>
 
-        {/* Desktop: Activity + Chat side by side; Mobile: stacked */}
-        <Show when={!isMobile()} fallback={
-          <>
-            {/* Mobile: Chat capped at 40vh */}
-            <div class="mb-3 overflow-hidden" style={{ 'max-height': '40vh' }}>
-              <GlobalChat />
-            </div>
-            <div class="mb-3">
-              <ActivityFeed />
-            </div>
-            <div class="mb-3">
-              <NotificationFeed />
-            </div>
-          </>
-        }>
-          <div class="mb-3 grid grid-cols-3 gap-3">
-            <div class="col-span-2">
-              <ActivityFeed />
-            </div>
-            <div class="col-span-1">
-              <GlobalChat />
-            </div>
+        {/* Activity + Chat — responsive grid */}
+        <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          {/* Mobile: chat first, then activity */}
+          <div class="max-h-[40vh] overflow-hidden md:hidden">
+            <GlobalChat />
           </div>
-          <div class="mb-3">
-            <NotificationFeed />
+          <div class="md:col-span-2">
+            <ActivityFeed />
           </div>
-          <div class="max-w-xs">
-            <VoiceWidget />
+          <div class="hidden md:block">
+            <GlobalChat />
           </div>
-        </Show>
+        </div>
+
+        <div class="mb-3">
+          <NotificationFeed />
+        </div>
+
+        {/* Desktop voice widget */}
+        <div class="hidden max-w-xs md:block">
+          <VoiceWidget />
+        </div>
       </div>
 
       {/* Mobile: Voice FAB */}
-      <Show when={isMobile()}>
+      <div class="md:hidden">
         <VoiceWidget fab />
-      </Show>
+      </div>
     </div>
   )
 }

@@ -20,6 +20,7 @@ export interface OrgDashboardSummary {
   branchesAhead: number
   branchesBehind: number
   activeThreadCount: number
+  threadCount: number
   unreadThreadCount: number
   notificationCount: number
   hasActiveAgent: boolean
@@ -38,8 +39,8 @@ export function createDashboardRoutes(opts: DashboardRoutesOptions): Router {
         const orgId = org.id ?? org.orgId
         const orgName = org.name ?? org.orgName ?? orgId
 
-        // Thread stats for this org
         const orgThreads = allThreads.filter((t) => t.orgId === orgId)
+        const threadCount = orgThreads.filter((t) => !t.archived).length
         const activeThreadCount = orgThreads.filter((t) => t.agentStatus !== 'idle' && !t.archived).length
         const unreadThreadCount = orgThreads.filter((t) => t.unreadCount > 0).length
         const hasActiveAgent = orgThreads.some((t) => t.agentStatus === 'working' || t.agentStatus === 'thinking')
@@ -55,6 +56,7 @@ export function createDashboardRoutes(opts: DashboardRoutesOptions): Router {
           branchesAhead: 0,
           branchesBehind: 0,
           activeThreadCount,
+          threadCount,
           unreadThreadCount,
           notificationCount,
           hasActiveAgent
