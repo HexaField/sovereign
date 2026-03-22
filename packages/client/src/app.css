@@ -1,5 +1,13 @@
 @import 'tailwindcss';
 
+/* ── Lock viewport — prevent mobile overscroll ─────────────────────────── */
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+}
+
 /* ── Stark Industries font ─────────────────────────────────────────────── */
 @font-face {
   font-family: 'Orbitron';
