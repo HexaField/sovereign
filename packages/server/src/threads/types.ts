@@ -2,7 +2,7 @@
 
 import type { AgentStatus } from '@sovereign/core'
 
-export type EntityType = 'branch' | 'issue' | 'pr'
+export type EntityType = 'branch' | 'issue' | 'pr' | 'file'
 
 export interface EntityBinding {
   orgId: string
