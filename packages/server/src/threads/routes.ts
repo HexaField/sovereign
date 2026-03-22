@@ -3,17 +3,27 @@
 import { Router } from 'express'
 import type { ThreadManager } from './types.js'
 import type { ForwardHandler } from './forward.js'
+import { getGatewayActivityMap } from './parse-gateway-sessions.js'
 
 export function createThreadRoutes(threadManager: ThreadManager, forwardHandler: ForwardHandler): Router {
   const router = Router()
 
-  router.get('/api/threads', (req, res) => {
+  router.get('/api/threads', async (req, res) => {
     const filter: Record<string, unknown> = {}
     if (req.query.orgId) filter.orgId = req.query.orgId
     if (req.query.projectId) filter.projectId = req.query.projectId
     if (req.query.active) filter.active = req.query.active === 'true'
     const threads = threadManager.list(Object.keys(filter).length > 0 ? (filter as never) : undefined)
-    res.json({ threads })
+
+    // Merge lastActivity from gateway (source of truth)
+    const activityMap = await getGatewayActivityMap()
+    const merged = threads.map((t) => {
+      const gwActivity = activityMap.get(t.key)
+      return gwActivity ? { ...t, lastActivity: gwActivity } : t
+    })
+    merged.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
+
+    res.json({ threads: merged })
   })
 
   router.get('/api/threads/:key/messages', (req, res) => {
