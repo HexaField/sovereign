@@ -7,6 +7,16 @@
   overflow: hidden;
 }
 
+/* PWA standalone: account for safe area insets */
+@supports (padding-top: env(safe-area-inset-top)) {
+  @media (display-mode: standalone) {
+    #root {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
+}
+
 /* ── Stark Industries font ─────────────────────────────────────────────── */
 @font-face {
   font-family: 'Orbitron';
