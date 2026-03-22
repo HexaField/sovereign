@@ -29,13 +29,14 @@ export function createVoiceRoutes(voice: VoiceModule): Router {
 
   router.post('/api/voice/tts', async (req: Request, res: Response) => {
     try {
-      const { text, voice: voiceName } = req.body ?? {}
+      const { text, voice: voiceName, deviceId } = req.body ?? {}
       if (!text) {
         res.status(400).json({ error: 'No text provided' })
         return
       }
       const result = await voice.synthesize(text, voiceName)
       res.set('Content-Type', 'audio/wav')
+      if (deviceId) res.set('X-Device-Id', deviceId)
       res.send(result.audio)
     } catch (err: any) {
       if (err.message === 'No TTS URL configured') {

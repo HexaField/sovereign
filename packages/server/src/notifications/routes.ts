@@ -2,9 +2,31 @@
 
 import { Router } from 'express'
 import type { Notifications } from './notifications.js'
+import type { PushManager } from './push.js'
 
-export function createNotificationRoutes(notifications: Notifications): Router {
+export function createNotificationRoutes(notifications: Notifications, pushManager?: PushManager): Router {
   const router = Router()
+
+  // VAPID public key for push subscription
+  router.get('/api/notifications/vapid-public-key', (_req, res) => {
+    const key = pushManager?.getVapidPublicKey()
+    if (!key) {
+      res.status(503).json({ error: 'Push notifications not configured' })
+      return
+    }
+    res.json({ publicKey: key })
+  })
+
+  // Subscribe a device for push notifications
+  router.post('/api/notifications/push/subscribe', (req, res) => {
+    const { deviceId, subscription } = req.body as { deviceId?: string; subscription?: any }
+    if (!deviceId || !subscription?.endpoint || !subscription?.keys) {
+      res.status(400).json({ error: 'deviceId and subscription (with endpoint + keys) required' })
+      return
+    }
+    pushManager?.subscribe(deviceId, subscription)
+    res.json({ ok: true })
+  })
 
   router.get('/api/notifications', (req, res) => {
     const { severity, read, limit, offset, groupBy } = req.query as Record<string, string | undefined>

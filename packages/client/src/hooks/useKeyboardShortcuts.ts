@@ -1,6 +1,7 @@
 import { createEffect, onCleanup } from 'solid-js'
 import { setActiveView, type NavView } from '../features/nav/store.js'
 import { toggleChatExpanded, toggleSidebar } from '../features/workspace/store.js'
+import { setQuickSwitchOpen, quickSwitchOpen } from '../features/threads/QuickSwitchModal.js'
 
 /** Map of Cmd+N view shortcuts */
 export const VIEW_SHORTCUTS: Record<string, NavView> = {
@@ -33,6 +34,13 @@ export function handleShortcut(e: KeyboardEvent): boolean {
   if (!e.shiftKey && (e.key === 'b' || e.key === 'B')) {
     e.preventDefault()
     toggleSidebar()
+    return true
+  }
+
+  // Cmd+K — thread quick-switch
+  if (!e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault()
+    setQuickSwitchOpen(!quickSwitchOpen())
     return true
   }
 

@@ -96,6 +96,7 @@ export type SystemTabId =
   | 'jobs'
   | 'events'
   | 'threads'
+  | 'flow'
 export const [activeSystemTab, setActiveSystemTab] = createSignal<SystemTabId>('overview')
 
 let popstateHandler: (() => void) | null = null
