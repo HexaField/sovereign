@@ -1,7 +1,7 @@
 // §2.3 GlobalChat — Compact chat panel for _global main thread on dashboard
 // Self-contained: fetches messages independently so it works even when no workspace is open
 
-import { createSignal, onMount } from 'solid-js'
+import { createSignal } from 'solid-js'
 import type { ParsedTurn } from '@sovereign/core'
 
 export const GLOBAL_CHAT_MESSAGE_LIMIT = 5
@@ -31,30 +31,9 @@ export function navigateToGlobalChat(): void {
 import { turns as sharedTurns, agentStatus, sendMessage } from '../chat/store'
 
 export default function GlobalChat() {
-  const [localTurns, setLocalTurns] = createSignal<ParsedTurn[]>([])
-
-  // Fetch main thread messages independently on mount
-  onMount(async () => {
-    try {
-      const res = await fetch('/api/threads/main/messages')
-      if (res.ok) {
-        const data = await res.json()
-        const messages: ParsedTurn[] = (data.messages ?? data ?? []).map((m: any) => ({
-          role: m.role ?? 'assistant',
-          content: m.content ?? m.text ?? '',
-          timestamp: m.timestamp ?? Date.now()
-        }))
-        setLocalTurns(messages)
-      }
-    } catch { /* endpoint may not exist */ }
-  })
-
-  // Use shared turns if available (chat store initialized), otherwise local fetch
-  const lastMessages = () => {
-    const shared = sharedTurns()
-    const source = shared.length > 0 ? shared : localTurns()
-    return getLastMessages(source, GLOBAL_CHAT_MESSAGE_LIMIT)
-  }
+  // Show the last N messages from whatever thread the chat store is connected to.
+  // On dashboard, the active thread defaults to 'main' (the global thread).
+  const lastMessages = () => getLastMessages(sharedTurns(), GLOBAL_CHAT_MESSAGE_LIMIT)
 
   let inputRef: HTMLInputElement | undefined
 

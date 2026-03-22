@@ -15,13 +15,8 @@ const ALLOWED_EVENT_PREFIXES = [
 function isEventAllowed(eventType: string, payload?: any): boolean {
   // Always filter out architecture spam
   if (eventType === 'system.architecture.updated') return false
-  // Filter log.entry noise — only keep if message isn't echoing another event name
-  if (eventType === 'log.entry') {
-    const msg = payload?.message ?? ''
-    if (!msg || msg.includes('system.architecture') || msg.includes('log.entry')) return false
-    // Only keep log entries with meaningful content
-    return ALLOWED_EVENT_PREFIXES.some((p) => msg.startsWith(p))
-  }
+  // Filter all log.entry events — too noisy for dashboard activity feed
+  if (eventType === 'log.entry') return false
   // Filter system.health.updated — too frequent
   if (eventType === 'system.health.updated') return false
   return ALLOWED_EVENT_PREFIXES.some((p) => eventType.startsWith(p))
