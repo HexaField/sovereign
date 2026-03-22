@@ -79,6 +79,7 @@ export type MobileTab =
   | 'git'
   | 'threads'
   | 'planning'
+  | 'planning-dag'
   | 'notifications'
   | 'terminal'
   | 'recordings'
@@ -200,6 +201,8 @@ export const [issueDetailParams, setIssueDetailParams] = createSignal<IssueDetai
 
 export function openPlanningDAG(): void {
   setMainContentView('planning-dag')
+  // Also switch mobile tab so it works on mobile
+  setActiveMobileTab('planning-dag')
 }
 
 export function openIssueDetail(orgId: string, projectId: string, issueId: string): void {
