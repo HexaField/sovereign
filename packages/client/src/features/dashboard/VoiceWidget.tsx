@@ -2,7 +2,7 @@
 // Pure functions exported for testability; SolidJS component uses Tailwind + var(--c-*) tokens
 
 import { voiceState, voiceStatusText, startRecording, stopRecording } from '../voice/store'
-import { createSignal } from 'solid-js'
+import { createSignal, Show } from 'solid-js'
 
 export type VoiceWidgetState = 'idle' | 'listening' | 'processing'
 
@@ -49,12 +49,27 @@ export async function handleVoiceToggle(): Promise<void> {
   }
 }
 
-export default function VoiceWidget() {
+export default function VoiceWidget(props: { fab?: boolean }) {
   const widgetState = () => mapVoiceState(voiceState())
 
+  // FAB mode for mobile
+  if (props.fab) {
+    return (
+      <button
+        class={`fixed bottom-4 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full shadow-lg text-xl text-white transition-colors ${getMicButtonColor(widgetState())}`}
+        onClick={handleVoiceToggle}
+        disabled={widgetState() === 'processing'}
+        title={getMicButtonLabel(widgetState())}
+      >
+        🎙
+      </button>
+    )
+  }
+
+  // Desktop card mode
   return (
     <div
-      class="flex flex-col items-center gap-3 rounded-lg border p-4"
+      class="flex flex-col items-center gap-2 rounded-lg border p-3"
       style={{
         background: 'var(--c-bg-raised)',
         'border-color': 'var(--c-border)',
@@ -62,25 +77,25 @@ export default function VoiceWidget() {
       }}
     >
       <button
-        class={`flex h-16 w-16 items-center justify-center rounded-full text-2xl text-white transition-colors ${getMicButtonColor(widgetState())}`}
+        class={`flex h-12 w-12 items-center justify-center rounded-full text-lg text-white transition-colors ${getMicButtonColor(widgetState())}`}
         onClick={handleVoiceToggle}
         disabled={widgetState() === 'processing'}
       >
-        mic
+        🎙
       </button>
-      <p class="text-xs opacity-70" style={{ color: 'var(--c-text)' }}>
+      <p class="text-[11px] opacity-70" style={{ color: 'var(--c-text)' }}>
         {voiceStatusText()}
       </p>
-      {lastTranscript() && (
-        <div class="w-full rounded p-2 text-xs" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
+      <Show when={lastTranscript()}>
+        <div class="w-full rounded p-1.5 text-[11px]" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
           <span class="font-medium">You:</span> {lastTranscript()}
         </div>
-      )}
-      {lastResponse() && (
-        <div class="w-full rounded p-2 text-xs" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
+      </Show>
+      <Show when={lastResponse()}>
+        <div class="w-full rounded p-1.5 text-[11px]" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
           <span class="font-medium">Agent:</span> {lastResponse()}
         </div>
-      )}
+      </Show>
     </div>
   )
 }
