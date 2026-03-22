@@ -754,7 +754,7 @@ export function InputArea(props: InputAreaProps) {
         >
           {/* Scratchpad button */}
           <button
-            class="relative flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-all sm:h-11 sm:w-11"
+            class="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-all"
             style={{
               background: 'var(--c-bg)',
               'border-color': inputValue().trim() ? 'var(--c-accent)' : 'var(--c-border)',
@@ -812,7 +812,7 @@ export function InputArea(props: InputAreaProps) {
 
           {/* Mic button */}
           <button
-            class="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-all sm:h-11 sm:w-11"
+            class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-all"
             classList={{
               'animate-mic-pulse': isRecording()
             }}
@@ -844,7 +844,7 @@ export function InputArea(props: InputAreaProps) {
             when={isBusyOrStreaming()}
             fallback={
               <button
-                class="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30 sm:h-11 sm:w-11"
+                class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30"
                 style={{ background: 'var(--c-accent)' }}
                 disabled={retryCountdownSeconds() > 0 || (!inputValue().trim() && !attachedFiles().length)}
                 onClick={handleSend}
@@ -866,7 +866,7 @@ export function InputArea(props: InputAreaProps) {
             }
           >
             <button
-              class="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all sm:h-11 sm:w-11"
+              class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all"
               style={{ background: 'var(--c-danger, #ef4444)' }}
               onClick={() => {
                 if (props.onAbort) props.onAbort()
