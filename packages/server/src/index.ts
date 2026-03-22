@@ -517,12 +517,41 @@ const summarizationPipeline = createSummarizationPipeline({
   bus,
   meetings: meetingsService,
   dataDir,
-  onSummarize: async (_meeting, _transcriptText) => ({
-    text: 'Auto-generated summary placeholder',
-    actionItems: [],
-    decisions: [],
-    keyTopics: []
-  })
+  onSummarize: async (_meeting, transcriptText) => {
+    const url = process.env.SOVEREIGN_SUMMARIZE_URL
+    if (!url) {
+      return {
+        text: 'Summarization not configured — set SOVEREIGN_SUMMARIZE_URL',
+        actionItems: [],
+        decisions: [],
+        keyTopics: []
+      }
+    }
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: `Summarize the following meeting transcript. Return JSON with fields: text (string summary), actionItems (array of {text, assignee?}), decisions (string[]), keyTopics (string[]).\n\nTranscript:\n${transcriptText}`
+        })
+      })
+      if (!res.ok) throw new Error(`Summarize endpoint returned ${res.status}`)
+      const data = await res.json()
+      return {
+        text: data.text ?? data.summary ?? 'No summary returned',
+        actionItems: data.actionItems ?? [],
+        decisions: data.decisions ?? [],
+        keyTopics: data.keyTopics ?? []
+      }
+    } catch (err: any) {
+      return {
+        text: `Summarization failed: ${err.message}`,
+        actionItems: [],
+        decisions: [],
+        keyTopics: []
+      }
+    }
+  }
 })
 
 const importHandler = createImportHandler({

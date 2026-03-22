@@ -34,6 +34,11 @@ function extractEntity(event: { type: string; payload: unknown }): EntityBinding
   if (event.type.startsWith('review.')) {
     return { orgId, projectId, entityType: 'pr', entityRef: (p.prId ?? p.entityRef) as string }
   }
+  if (event.type === 'ci.status') {
+    // CI status events typically reference a branch or PR
+    if (p.branch) return { orgId, projectId, entityType: 'branch', entityRef: p.branch as string }
+    if (p.prId) return { orgId, projectId, entityType: 'pr', entityRef: p.prId as string }
+  }
   // Webhook with explicit entity
   if (p.entityType && p.entityRef) {
     return {
@@ -49,7 +54,7 @@ function extractEntity(event: { type: string; payload: unknown }): EntityBinding
 export function createEventRouter(bus: EventBus, threadManager: ThreadManager): { destroy: () => void } {
   const unsubs: Array<() => void> = []
 
-  const patterns = ['git.status.*', 'issue.*', 'review.*', 'webhook.*']
+  const patterns = ['git.status.*', 'git.push', 'issue.*', 'review.*', 'webhook.*', 'ci.status']
 
   for (const pattern of patterns) {
     const unsub = bus.on(pattern, (event) => {

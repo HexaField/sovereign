@@ -257,6 +257,24 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
+  // Thread event routing — show as system messages
+  unsubs.push(
+    ws.on('thread.event.routed' as any, (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      const entity = msg.entityBinding
+      const evtType = msg.event?.type ?? 'unknown'
+      const text = `[${msg.classification ?? 'NOTIFY'}] ${evtType} on ${entity?.entityType ?? ''}:${entity?.entityRef ?? ''}`
+      setTurns((prev) => [
+        ...prev,
+        {
+          role: 'system',
+          content: text,
+          timestamp: msg.event?.timestamp ?? new Date().toISOString()
+        } as ParsedTurn
+      ])
+    })
+  )
+
   // Return cleanup
   return () => {
     unsubs.forEach((u) => u())
