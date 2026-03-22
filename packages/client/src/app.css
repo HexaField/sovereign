@@ -559,9 +559,7 @@ pre:hover .code-copy-btn {
 }
 
 .msg-assistant hr {
-  border: none;
-  border-top: 1px solid var(--c-border);
-  margin: 10px 0;
+  display: none;
 }
 
 .msg-assistant strong {
