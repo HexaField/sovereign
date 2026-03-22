@@ -97,14 +97,18 @@ export function sendMessage(text: string, _attachments?: File[]): void {
 
 export function abortChat(): void {
   ws?.send({ type: 'chat.abort', threadKey: currentThreadKey?.() ?? 'main' } as any)
-  setAgentStatus('idle')
   setStreamingHtml('')
   streamingRawText = ''
   streamTextOffset = 0
   setLiveWork([])
   setLiveThinkingText('')
-  // Suppress lifecycle status updates for 30s to prevent flicker
-  suppressLifecycleUntil = Date.now() + 30_000
+  // Suppress lifecycle status updates for 2s to prevent flicker
+  suppressLifecycleUntil = Date.now() + 2000
+  // Show brief "Cancelled" status then go idle
+  setAgentStatus('cancelled' as AgentStatus)
+  setTimeout(() => {
+    setAgentStatus('idle')
+  }, 1500)
 }
 
 let chatInitialized = false

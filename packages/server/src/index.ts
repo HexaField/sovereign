@@ -24,6 +24,7 @@ import { createWsHandler } from './ws/handler.js'
 // --- Phase 1: Foundation ---
 import { createScheduler } from './scheduler/scheduler.js'
 import { registerSchedulerChannel } from './scheduler/ws.js'
+import { createSchedulerRoutes } from './scheduler/routes.js'
 import { registerNotificationsChannel } from './notifications/ws.js'
 
 // --- Phase 2: Orgs, Projects & Code ---
@@ -151,6 +152,7 @@ const wsHandler = createWsHandler(bus)
 
 const scheduler = createScheduler(bus, dataDir)
 registerSchedulerChannel(wsHandler, bus)
+app.use(createSchedulerRoutes(scheduler))
 registerNotificationsChannel(wsHandler, bus)
 
 // ============================================================
