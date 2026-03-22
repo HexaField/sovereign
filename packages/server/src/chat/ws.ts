@@ -13,9 +13,10 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
       'chat.compacting',
       'chat.error',
       'chat.session.info',
+      'chat.queue.update',
       'backend.status'
     ],
-    clientMessages: ['chat.send', 'chat.abort', 'chat.history', 'chat.session.switch', 'chat.session.create'],
+    clientMessages: ['chat.send', 'chat.abort', 'chat.history', 'chat.session.switch', 'chat.session.create', 'chat.cancel'],
     onMessage: (type: string, payload: unknown, deviceId: string) => {
       const msg = payload as Record<string, unknown>
       const threadKey = msg.threadKey as string
