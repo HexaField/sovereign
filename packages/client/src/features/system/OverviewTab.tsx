@@ -456,7 +456,7 @@ const OverviewTab: Component = () => {
                       <div class="mt-2 h-1.5 w-full rounded-full" style={{ background: 'var(--c-border)' }}>
                         <div class="h-full rounded-full bg-green-500" style={{ width: `${ps().completionPct}%` }} />
                       </div>
-                      <div class="text-right text-[10px] opacity-60">{ps().completionPct.toFixed(0)}% complete</div>
+                      <div class="text-right text-[10px] opacity-60">{(ps().completionPct ?? 0).toFixed(0)}% complete</div>
                     </div>
                   )}
                 </Show>

@@ -139,7 +139,8 @@ function MiniChart(props: {
   const current = () => {
     const snaps = props.snapshots
     if (!snaps.length) return '—'
-    const val = snaps[snaps.length - 1][props.metric] as number
+    const val = snaps[snaps.length - 1][props.metric] as number | undefined
+    if (val == null) return '—'
     return props.metric === 'loadAvg' ? val.toFixed(2) : `${val}%`
   }
 
@@ -270,7 +271,7 @@ const HealthTimeline: Component = () => {
                 style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
               >
                 <div class="text-2xl font-bold">
-                  {d().stats.avgCronDurationMs > 0 ? `${(d().stats.avgCronDurationMs / 1000).toFixed(1)}s` : '—'}
+                  {(d().stats.avgCronDurationMs ?? 0) > 0 ? `${((d().stats.avgCronDurationMs ?? 0) / 1000).toFixed(1)}s` : '—'}
                 </div>
                 <div class="text-[10px] tracking-wider uppercase opacity-60">Avg Cron Duration</div>
               </div>

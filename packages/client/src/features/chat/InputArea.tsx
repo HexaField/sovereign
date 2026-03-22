@@ -846,7 +846,7 @@ export function InputArea(props: InputAreaProps) {
               <button
                 class="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30 sm:h-11 sm:w-11"
                 style={{ background: 'var(--c-accent)' }}
-                disabled={!inputValue().trim() && !attachedFiles().length}
+                disabled={retryCountdownSeconds() > 0 || (!inputValue().trim() && !attachedFiles().length)}
                 onClick={handleSend}
               >
                 <svg
