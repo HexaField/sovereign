@@ -167,11 +167,11 @@ describe('§3.2 Chat Store', () => {
     expect(inputValue()).toBe('draft b')
   })
 
-  it('abortChat MUST send chat.abort via WS and update agentStatus to idle', () => {
+  it('abortChat MUST send chat.abort via WS and show cancelled status', () => {
     setAgentStatus('working')
     abortChat()
     expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.abort' }))
-    expect(agentStatus()).toBe('idle')
+    expect(agentStatus()).toBe('cancelled')
   })
 
   it('MUST subscribe to chat WS channel for chat.stream messages', () => {

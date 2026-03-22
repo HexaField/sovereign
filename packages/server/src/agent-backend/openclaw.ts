@@ -649,7 +649,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         const result = (await request('sessions.list', { limit: 200 })) as {
           sessions?: any[]
         }
-        console.log('[gateway] sessions.list count:', (result?.sessions ?? []).length)
         return (result?.sessions ?? []).map((s: any) => ({
           key: s.key ?? s.sessionKey ?? '',
           label: s.label,

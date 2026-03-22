@@ -87,9 +87,6 @@ export function createChatModule(
     backend.on(eventName, (data: Record<string, unknown>) => {
       const sessionKey = data.sessionKey as string | undefined
       const threadKey = sessionKey ? sessionToThread.get(sessionKey) : undefined
-      console.log(
-        `[chat] backend event: ${eventName}, sessionKey: ${sessionKey}, threadKey: ${threadKey}, hasWsHandler: ${!!wsHandler}`
-      )
 
       // Cache live state per thread for replay on reconnect
       if (threadKey) {

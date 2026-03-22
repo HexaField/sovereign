@@ -33,16 +33,39 @@ DATA_DIR="${SOVEREIGN_DATA_DIR:-$(_read_env_var SOVEREIGN_DATA_DIR)}"
 DATA_DIR="${DATA_DIR:-$REPO_DIR/packages/server/.data}"
 PID_FILE="$DATA_DIR/sovereign.pid"
 LOG_FILE="$DATA_DIR/sovereign.log"
+PLIST_LABEL="com.sovereign.server"
+PLIST_DEST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+PLIST_TEMPLATE="$REPO_DIR/support/com.sovereign.server.plist"
 
 mkdir -p "$DATA_DIR"
 
+_is_macos() {
+  [[ "$(uname -s)" == "Darwin" ]]
+}
+
+_node_path() {
+  command -v node 2>/dev/null || echo "/usr/local/bin/node"
+}
+
+_install_plist() {
+  mkdir -p "$(dirname "$PLIST_DEST")"
+  sed -e "s|REPO_DIR_PLACEHOLDER|${REPO_DIR}|g" \
+      -e "s|LOG_PATH_PLACEHOLDER|${LOG_FILE}|g" \
+      -e "s|/usr/local/bin/node|$(_node_path)|g" \
+      "$PLIST_TEMPLATE" > "$PLIST_DEST"
+}
+
 _is_running() {
+  if _is_macos && [ -f "$PLIST_DEST" ]; then
+    launchctl list "$PLIST_LABEL" &>/dev/null
+    return $?
+  fi
   [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
 }
 
 _start_server() {
   if _is_running; then
-    echo "Already running (pid $(cat "$PID_FILE"))"
+    echo "Already running"
     return 1
   fi
 
@@ -51,25 +74,50 @@ _start_server() {
     return 1
   fi
 
-  echo "Starting Sovereign..."
-  cd "$REPO_DIR" && nohup node "$SERVER_ENTRY" >> "$LOG_FILE" 2>&1 &
-  local pid=$!
-  echo "$pid" > "$PID_FILE"
-  
-  # Wait briefly to check it didn't crash immediately
-  sleep 1
-  if kill -0 "$pid" 2>/dev/null; then
-    echo "Sovereign running (pid $pid)"
-    echo "Logs: $LOG_FILE"
+  if _is_macos; then
+    echo "Starting Sovereign via launchd..."
+    _install_plist
+    launchctl load "$PLIST_DEST"
+    sleep 1
+    if launchctl list "$PLIST_LABEL" &>/dev/null; then
+      echo "Sovereign running (launchd: $PLIST_LABEL)"
+      echo "Logs: $LOG_FILE"
+    else
+      echo "Failed to start. Check logs: $LOG_FILE"
+      tail -20 "$LOG_FILE"
+      return 1
+    fi
   else
-    echo "Failed to start. Check logs: $LOG_FILE"
-    rm -f "$PID_FILE"
-    tail -20 "$LOG_FILE"
-    return 1
+    echo "Starting Sovereign..."
+    cd "$REPO_DIR" && nohup node "$SERVER_ENTRY" >> "$LOG_FILE" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$PID_FILE"
+    disown "$pid" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Sovereign running (pid $pid)"
+      echo "Logs: $LOG_FILE"
+    else
+      echo "Failed to start. Check logs: $LOG_FILE"
+      rm -f "$PID_FILE"
+      tail -20 "$LOG_FILE"
+      return 1
+    fi
   fi
 }
 
 _stop_server() {
+  if _is_macos && [ -f "$PLIST_DEST" ]; then
+    if launchctl list "$PLIST_LABEL" &>/dev/null; then
+      echo "Stopping Sovereign (launchd)..."
+      launchctl unload "$PLIST_DEST"
+      echo "Stopped"
+    else
+      echo "Not running"
+    fi
+    return 0
+  fi
+
   if ! _is_running; then
     echo "Not running"
     rm -f "$PID_FILE"
@@ -126,14 +174,17 @@ case "${1:-help}" in
   
   status)
     if _is_running; then
-      local_pid=$(cat "$PID_FILE")
-      echo "Running (pid $local_pid)"
+      if _is_macos && [ -f "$PLIST_DEST" ]; then
+        echo "Running (launchd: $PLIST_LABEL)"
+      else
+        local_pid=$(cat "$PID_FILE")
+        echo "Running (pid $local_pid)"
+        if command -v ps &>/dev/null; then
+          ps -o etime= -p "$local_pid" 2>/dev/null | xargs echo "Uptime:"
+        fi
+      fi
       echo "Data: $DATA_DIR"
       echo "Logs: $LOG_FILE"
-      # Show uptime
-      if command -v ps &>/dev/null; then
-        ps -o etime= -p "$local_pid" 2>/dev/null | xargs echo "Uptime:"
-      fi
     else
       echo "Not running"
     fi
