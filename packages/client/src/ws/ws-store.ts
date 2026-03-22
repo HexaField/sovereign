@@ -65,6 +65,34 @@ export function createWsStore(options: WsStoreOptions): WsStore {
     }
   }
 
+  // ── Heartbeat: detect dead connections on mobile ──────────────────
+  let heartbeatInterval: ReturnType<typeof setInterval> | null = null
+  let lastPong = 0
+  const HEARTBEAT_MS = 15_000 // send ping every 15s
+  const HEARTBEAT_TIMEOUT = 10_000 // if no pong in 10s, reconnect
+
+  const startHeartbeat = (): void => {
+    stopHeartbeat()
+    lastPong = Date.now()
+    heartbeatInterval = setInterval(() => {
+      if (!ws || ws.readyState !== WS_OPEN) return
+      // Check if we got a pong since last ping
+      if (Date.now() - lastPong > HEARTBEAT_MS + HEARTBEAT_TIMEOUT) {
+        // Connection is dead — force close to trigger reconnect
+        ws.close()
+        return
+      }
+      sendRaw({ type: 'ping' } as unknown as WsMessage)
+    }, HEARTBEAT_MS)
+  }
+
+  const stopHeartbeat = (): void => {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval)
+      heartbeatInterval = null
+    }
+  }
+
   const connect = (): void => {
     if (closed) return
     if (!WsCtor) return
@@ -75,6 +103,7 @@ export function createWsStore(options: WsStoreOptions): WsStore {
       reconnector.reset()
       resubscribe()
       flushQueue()
+      startHeartbeat()
       // Notify listeners of reconnect so they can re-fetch state
       const set = handlers.get('ws.reconnected')
       if (set) for (const h of set) h({ type: 'ws.reconnected' })
@@ -83,6 +112,7 @@ export function createWsStore(options: WsStoreOptions): WsStore {
     ws.onclose = () => {
       isConnected = false
       ws = null
+      stopHeartbeat()
       if (!closed) {
         scheduleReconnect()
       }
@@ -95,6 +125,13 @@ export function createWsStore(options: WsStoreOptions): WsStore {
     ws.onmessage = (ev: { data: string }) => {
       try {
         const msg = JSON.parse(ev.data) as WsMessage
+        // Heartbeat pong — update last seen time
+        if (msg.type === 'pong') {
+          lastPong = Date.now()
+          return
+        }
+        // Any message from server counts as alive
+        lastPong = Date.now()
         const set = handlers.get(msg.type)
         if (set) {
           for (const h of set) h(msg)
@@ -142,6 +179,7 @@ export function createWsStore(options: WsStoreOptions): WsStore {
 
   const close = (): void => {
     closed = true
+    stopHeartbeat()
     if (reconnectTimer) clearTimeout(reconnectTimer)
     ws?.close()
   }
