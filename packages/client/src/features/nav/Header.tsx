@@ -358,7 +358,7 @@ function WorkspaceHeaderContent() {
             class="absolute top-full left-0 z-[200] mt-1 min-w-[200px] overflow-hidden rounded-lg shadow-lg"
             style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
           >
-            <For each={threads().filter((t) => t.key)}>
+            <For each={[...threads().filter((t) => t.key)].sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}>
               {(t) => (
                 <div
                   class="group relative flex w-full items-center text-left text-sm transition-colors"
