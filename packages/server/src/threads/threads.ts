@@ -183,6 +183,14 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     }
   }
 
+  function touch(key: string): void {
+    const thread = threads.get(key)
+    if (thread) {
+      thread.lastActivity = Date.now()
+      persist()
+    }
+  }
+
   function getEvents(key: string, opts?: { limit?: number; offset?: number; since?: number }): ThreadEvent[] {
     let evts = events.get(key) ?? []
     if (opts?.since) evts = evts.filter((e) => e.timestamp >= opts.since!)
@@ -224,6 +232,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     getEntities,
     getThreadsForEntity,
     addEvent,
+    touch,
     getEvents
   }
 }

@@ -59,5 +59,6 @@ export interface ThreadManager {
   getEntities(key: string): EntityBinding[]
   getThreadsForEntity(entity: EntityBinding): ThreadInfo[]
   addEvent(key: string, event: ThreadEvent): void
+  touch(key: string): void
   getEvents(key: string, opts?: { limit?: number; offset?: number; since?: number }): ThreadEvent[]
 }
