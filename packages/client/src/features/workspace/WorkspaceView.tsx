@@ -648,7 +648,22 @@ const MobileWorkspace: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
-      <div class="relative flex items-center border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
+      <div
+        class="relative flex items-center border-b px-3 py-2"
+        style={{ 'border-color': 'var(--c-border)' }}
+        ref={(el: HTMLDivElement) => {
+          onMount(() => {
+            el.addEventListener('touchstart', handleTouchStart, { passive: true })
+            el.addEventListener('touchmove', handleTouchMove, { passive: false })
+            el.addEventListener('touchend', handleTouchEnd, { passive: true })
+            onCleanup(() => {
+              el.removeEventListener('touchstart', handleTouchStart)
+              el.removeEventListener('touchmove', handleTouchMove)
+              el.removeEventListener('touchend', handleTouchEnd)
+            })
+          })
+        }}
+      >
         <button
           class="text-sm font-medium"
           style={{ color: 'var(--c-text-heading)' }}
@@ -681,21 +696,7 @@ const MobileWorkspace: Component = () => {
           </div>
         </Show>
       </div>
-      <div
-        ref={(el: HTMLDivElement) => {
-          onMount(() => {
-            el.addEventListener('touchstart', handleTouchStart, { passive: true })
-            el.addEventListener('touchmove', handleTouchMove, { passive: false })
-            el.addEventListener('touchend', handleTouchEnd, { passive: true })
-            onCleanup(() => {
-              el.removeEventListener('touchstart', handleTouchStart)
-              el.removeEventListener('touchmove', handleTouchMove)
-              el.removeEventListener('touchend', handleTouchEnd)
-            })
-          })
-        }}
-        class="flex-1 overflow-auto"
-      >
+      <div class="flex-1 overflow-auto">
         <Switch>
           <Match when={activeMobileTab() === 'files'}>
             <FileExplorerPanel />
