@@ -4,8 +4,18 @@ import { Router } from 'express'
 import type { ThreadManager } from './types.js'
 import type { ForwardHandler } from './forward.js'
 import { getGatewayActivityMap } from './parse-gateway-sessions.js'
+import type { ChatModule } from '../chat/chat.js'
+import { deriveSessionKey } from '../chat/derive-session-key.js'
 
-export function createThreadRoutes(threadManager: ThreadManager, forwardHandler: ForwardHandler): Router {
+interface AgentBackendLike {
+  getHistory(sessionKey: string): Promise<Array<{ role: string; content: string }>>
+}
+
+export function createThreadRoutes(
+  threadManager: ThreadManager,
+  forwardHandler: ForwardHandler,
+  opts?: { chatModule?: ChatModule; backend?: AgentBackendLike }
+): Router {
   const router = Router()
 
   router.get('/api/threads', async (req, res) => {
@@ -88,6 +98,35 @@ export function createThreadRoutes(threadManager: ThreadManager, forwardHandler:
       since: req.query.since ? Number(req.query.since) : undefined
     })
     res.json({ events })
+  })
+
+  // ── Thread preview (latest message) ──────────────────────────────────
+
+  router.get('/api/threads/:key/preview', async (req, res) => {
+    const threadKey = req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    let lastMessage: string | null = null
+    if (opts?.backend) {
+      try {
+        const sessionKey = opts.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+        const history = await opts.backend.getHistory(sessionKey)
+        // Find last assistant turn
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (history[i].role === 'assistant' && history[i].content) {
+            const content = history[i].content
+            lastMessage = content.length > 120 ? content.slice(0, 120) + '...' : content
+            break
+          }
+        }
+      } catch { /* no history available */ }
+    }
+
+    res.json({
+      lastMessage,
+      agentStatus: thread.agentStatus ?? 'idle'
+    })
   })
 
   // ── Thread management endpoints ──────────────────────────────────────
