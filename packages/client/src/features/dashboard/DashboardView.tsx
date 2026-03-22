@@ -171,7 +171,7 @@ export function DashboardView() {
         <Show when={!isMobile()} fallback={
           <>
             {/* Mobile: Chat capped at 40vh */}
-            <div class="mb-3" style={{ 'max-height': '40vh' }}>
+            <div class="mb-3 overflow-hidden" style={{ 'max-height': '40vh' }}>
               <GlobalChat />
             </div>
             <div class="mb-3">

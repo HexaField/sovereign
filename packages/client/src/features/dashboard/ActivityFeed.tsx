@@ -2,6 +2,40 @@ import { createSignal, onMount, onCleanup, For, Show } from 'solid-js'
 import { getEventIcon, getEventDescription, formatEventTime, MAX_FEED_EVENTS } from './dashboard-helpers.js'
 import type { ActivityEvent, EventType } from './dashboard-helpers.js'
 
+/** Map raw bus event names to human-readable descriptions */
+const EVENT_LABEL_MAP: Record<string, string> = {
+  'log.entry': 'Log entry',
+  'system.health.updated': 'Health check',
+  'system.architecture.updated': 'Architecture updated',
+  'ws.connected': 'Client connected',
+  'ws.disconnected': 'Client disconnected',
+  'config.changed': 'Config updated',
+}
+
+const EVENT_PREFIX_MAP: [string, string][] = [
+  ['notification.', 'Notification'],
+  ['scheduler.job.', 'Job executed'],
+  ['git.', 'Git activity'],
+]
+
+function humanizeEventName(raw: string): string {
+  // Strip "pin " prefix (internal detail)
+  const cleaned = raw.replace(/^pin\s+/, '')
+
+  // Exact match
+  if (EVENT_LABEL_MAP[cleaned]) return EVENT_LABEL_MAP[cleaned]
+
+  // Prefix match
+  for (const [prefix, label] of EVENT_PREFIX_MAP) {
+    if (cleaned.startsWith(prefix)) return label
+  }
+
+  // Default: capitalize and clean up
+  return cleaned
+    .replace(/\./g, ' ')
+    .replace(/^\w/, (c) => c.toUpperCase())
+}
+
 export interface ActivityFeedEntry {
   id: string
   type: EventType
@@ -42,7 +76,7 @@ export function ActivityFeed() {
           .map((e: any) => ({
             id: String(e.id ?? e.capturedAt ?? Date.now()),
             type: (e.event?.type?.split('.')[0] ?? e.type ?? 'system') as EventType,
-            description: e.event?.type ?? e.type ?? 'Event',
+            description: humanizeEventName(e.event?.type ?? e.type ?? 'Event'),
             timestamp: e.capturedAt ?? e.timestamp ?? Date.now()
           }))
         for (const evt of events.reverse()) {
@@ -59,7 +93,7 @@ export function ActivityFeed() {
           store.addEntry({
             id: String(msg.id ?? Date.now()),
             type: (msg.eventType?.split('.')[0] ?? 'system') as EventType,
-            description: msg.description ?? msg.eventType ?? 'Event',
+            description: humanizeEventName(msg.description ?? msg.eventType ?? 'Event'),
             timestamp: msg.timestamp ?? Date.now()
           })
         })
