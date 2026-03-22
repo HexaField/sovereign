@@ -731,6 +731,11 @@ const MobileWorkspace: Component = () => {
           <Match when={activeMobileTab() === 'planning'}>
             <PlanningPanel />
           </Match>
+          <Match when={activeMobileTab() === 'planning-dag' && activeWorkspace()}>
+            <Suspense fallback={<p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>Loading...</p>}>
+              <PlanningDAGView orgId={activeWorkspace()!.orgId} />
+            </Suspense>
+          </Match>
           <Match when={activeMobileTab() === 'notifications'}>
             <NotificationsPanel />
           </Match>
