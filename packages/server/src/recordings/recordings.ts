@@ -18,7 +18,8 @@ export interface RecordingMeta {
   updatedAt: string
   threadKey?: string
   entities?: unknown[]
-  transcriptStatus: 'none' | 'pending' | 'completed' | 'failed'
+  transcriptStatus: 'none' | 'pending' | 'processing' | 'completed' | 'failed'
+  transcriptionProgress?: number
   tags?: string[]
   transcript?: string
 }
@@ -208,10 +209,32 @@ export function createRecordingsService(
     const meta = await get(orgId, id)
     if (!meta) throw new Error('Recording not found')
     if (transcriptionProvider?.available()) {
-      const audio = fs.readFileSync(audioPath(dataDir, orgId, id))
-      const result = await transcriptionProvider.transcribe(audio, meta.mimeType)
-      meta.transcript = result.text
-      meta.transcriptStatus = 'completed'
+      meta.transcriptStatus = 'processing'
+      meta.transcriptionProgress = 0
+      meta.updatedAt = new Date().toISOString()
+      atomicWrite(metaPath(dataDir, orgId, id), JSON.stringify(meta, null, 2))
+
+      // Simulate progress updates (provider doesn't expose real progress)
+      const progressInterval = setInterval(() => {
+        if (meta.transcriptionProgress != null && meta.transcriptionProgress < 90) {
+          meta.transcriptionProgress = Math.min(meta.transcriptionProgress + 10, 90)
+          meta.updatedAt = new Date().toISOString()
+          atomicWrite(metaPath(dataDir, orgId, id), JSON.stringify(meta, null, 2))
+        }
+      }, 1000)
+
+      try {
+        const audio = fs.readFileSync(audioPath(dataDir, orgId, id))
+        const result = await transcriptionProvider.transcribe(audio, meta.mimeType)
+        meta.transcript = result.text
+        meta.transcriptStatus = 'completed'
+        meta.transcriptionProgress = 100
+      } catch (err: any) {
+        meta.transcriptStatus = 'failed'
+        meta.transcriptionProgress = undefined
+      } finally {
+        clearInterval(progressInterval)
+      }
     } else {
       meta.transcript = '[Transcription pending — STT service not configured]'
     }
