@@ -22,6 +22,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
 // Components
 import { Header } from './features/nav/Header.js'
 import { SettingsModal } from './features/nav/SettingsModal.js'
+import { QuickSwitchModal } from './features/threads/QuickSwitchModal.js'
 // Lazy-loaded views
 const DashboardView = lazy(() => import('./features/dashboard/DashboardView.js'))
 const WorkspaceView = lazy(() => import('./features/workspace/WorkspaceView.js'))
@@ -97,6 +98,7 @@ export default function App() {
       </main>
 
       <SettingsModal />
+      <QuickSwitchModal />
     </div>
   )
 }
