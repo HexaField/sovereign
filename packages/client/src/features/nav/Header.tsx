@@ -623,8 +623,8 @@ export function Header() {
       class="safe-top z-[100] flex shrink-0 items-center gap-2 px-4 py-2"
       style={{ 'border-bottom': '1px solid var(--c-border)', background: 'var(--c-bg-raised)' }}
     >
-      {/* Left: Agent icon */}
-      <span class="shrink-0 text-xl">{agentIcon()}</span>
+      {/* Left: Agent icon — always navigates to dashboard */}
+      <button class="shrink-0 cursor-pointer text-xl" onClick={() => setActiveView('dashboard')} title="Dashboard">{agentIcon()}</button>
 
       {/* Center: View-specific content */}
       <div class="min-w-0 flex-1 px-2">
