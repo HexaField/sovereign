@@ -1,6 +1,6 @@
 import { createSignal, createEffect } from 'solid-js'
 import type { Accessor } from 'solid-js'
-import type { ParsedTurn, WorkItem, AgentStatus } from '@sovereign/core'
+import type { ParsedTurn, WorkItem, AgentStatus, QueuedMessage } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
 import { renderMarkdown, stripThinkingBlocks } from '../../lib/markdown.js'
 
@@ -15,6 +15,7 @@ export const [agentDurationText, setAgentDurationText] = createSignal('')
 export const [isRetryCountdownActive, setRetryActive] = createSignal(false)
 export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
 export const [inputValue, _setInputValue] = createSignal('')
+export const [messageQueue, setMessageQueue] = createSignal<QueuedMessage[]>([])
 
 function draftKey(threadKey: string): string {
   return `sovereign:draft:${threadKey}`
@@ -109,54 +110,15 @@ function resetState(): void {
   clearRetryCountdown()
   stopDurationTimer()
   suppressLifecycleUntil = 0
-}
-
-function pendingTurnsKey(threadKey: string): string {
-  return `sovereign:pending-turns:${threadKey}`
-}
-
-export function savePendingTurns(threadKey: string, pendingTurns: ParsedTurn[]): void {
-  try {
-    if (pendingTurns.length === 0) {
-      localStorage.removeItem(pendingTurnsKey(threadKey))
-    } else {
-      localStorage.setItem(pendingTurnsKey(threadKey), JSON.stringify(pendingTurns))
-    }
-  } catch { /* ignore */ }
-}
-
-export function loadPendingTurns(threadKey: string): ParsedTurn[] {
-  try {
-    const raw = localStorage.getItem(pendingTurnsKey(threadKey))
-    if (!raw) return []
-    return JSON.parse(raw) as ParsedTurn[]
-  } catch {
-    return []
-  }
-}
-
-function getPendingFromTurns(allTurns: ParsedTurn[]): ParsedTurn[] {
-  return allTurns.filter((t) => t.pending === true)
+  setMessageQueue([])
 }
 
 export function sendMessage(text: string, _attachments?: File[]): void {
-  // Add optimistic pending turn
-  const pending: ParsedTurn = {
-    role: 'user',
-    content: text,
-    timestamp: Date.now(),
-    workItems: [],
-    thinkingBlocks: [],
-    pending: true
-  }
-  setTurns((prev) => {
-    const next = [...prev, pending]
-    // Persist pending turns
-    const tk = currentThreadKey?.() ?? 'main'
-    savePendingTurns(tk, getPendingFromTurns(next))
-    return next
-  })
   ws?.send({ type: 'chat.send', text, threadKey: currentThreadKey?.() ?? 'main' } as any)
+}
+
+export function cancelMessage(id: string): void {
+  ws?.send({ type: 'chat.cancel', id } as any)
 }
 
 export function abortChat(): void {
@@ -248,21 +210,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     ws.on('chat.turn', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
-      // Replace optimistic pending turn if present
-      setTurns((prev) => {
-        const idx = prev.findIndex((t) => t.pending && t.role === 'user')
-        let next: ParsedTurn[]
-        if (turn.role === 'user' && idx >= 0) {
-          next = [...prev]
-          next[idx] = turn
-        } else {
-          next = [...prev, turn]
-        }
-        // Persist remaining pending turns (or clear if none left)
-        const tk = _threadKey()
-        savePendingTurns(tk, getPendingFromTurns(next))
-        return next
-      })
+      setTurns((prev) => [...prev, turn])
       setStreamingHtml('')
       streamingRawText = ''
       streamTextOffset = 0
@@ -278,15 +226,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       // But always allow idle/end events through
       if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
       setAgentStatus(msg.status)
-      // Agent acknowledged our message — clear any pending/queued state
       if (msg.status === 'working' || msg.status === 'thinking') {
-        setTurns((prev) => {
-          const hadPending = prev.some((t) => t.pending)
-          if (!hadPending) return prev
-          const next = prev.map((t) => t.pending ? { ...t, pending: false } : t)
-          savePendingTurns(_threadKey(), [])
-          return next
-        })
         if (!agentWorkingStartTime()) startDurationTimer()
       } else {
         stopDurationTimer()
@@ -327,13 +267,16 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
-      // Gateway history is the source of truth — clear all pending state
-      const tk = _threadKey()
-      savePendingTurns(tk, [])
-      // Update confirmed turns but don't touch streaming state
-      // (streamingHtml/streamingRawText are separate signals)
       setTurns(history)
       // If server replayed cached stream text, it arrives as a separate chat.stream with replay:true
+    })
+  )
+
+  // Queue updates from server
+  unsubs.push(
+    ws.on('chat.queue.update' as any, (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      setMessageQueue(msg.queue ?? [])
     })
   )
 

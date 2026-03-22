@@ -15,6 +15,7 @@ export interface MessageQueue {
   peek(threadKey: string): QueuedMessage | undefined
   getQueue(threadKey: string): QueuedMessage[]
   markSending(id: string): boolean
+  markQueued(id: string): boolean
   removeSent(id: string): void
   getAllQueues(): Map<string, QueuedMessage[]>
 }
@@ -114,6 +115,15 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       if (!found) return false
       const items = queues.get(found.threadKey)!
       items[found.index].status = 'sending'
+      persist(found.threadKey)
+      return true
+    },
+
+    markQueued(id: string): boolean {
+      const found = findById(id)
+      if (!found) return false
+      const items = queues.get(found.threadKey)!
+      items[found.index].status = 'queued'
       persist(found.threadKey)
       return true
     },

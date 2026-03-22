@@ -7,7 +7,6 @@ import type { WsHandler } from '../ws/handler.js'
 import type { ThreadManager } from '../threads/types.js'
 import { deriveSessionKey } from './derive-session-key.js'
 import { createMessageQueue } from './message-queue.js'
-import type { MessageQueue } from './message-queue.js'
 
 export interface ChatModule {
   status(): ModuleStatus
@@ -82,6 +81,7 @@ export function createChatModule(
     const status = currentStatus.get(threadKey)
     // Only process if agent is idle (or no status yet = idle)
     if (status && status !== 'idle') return
+    if (backend.status() !== 'connected') return
     const next = messageQueue.peek(threadKey)
     if (!next || next.status === 'sending') return
     messageQueue.markSending(next.id)
@@ -96,14 +96,7 @@ export function createChatModule(
       messageQueue.removeSent(next.id)
       broadcastQueueUpdate(threadKey)
     }).catch(() => {
-      // On failure, reset status back to queued so it can be retried
-      // Find the item — if it's still there (not cancelled)
-      const queue = messageQueue.getQueue(threadKey)
-      const item = queue.find((m) => m.id === next.id)
-      if (item && item.status === 'sending') {
-        // Re-enqueue by removing and re-adding at front — but since we can't easily
-        // do that with current API, just leave it. The queue will be retried on next idle.
-      }
+      messageQueue.markQueued(next.id)
       broadcastQueueUpdate(threadKey)
     })
     bus.emit({
@@ -200,7 +193,7 @@ export function createChatModule(
 
   // deriveSessionKey is imported at module level from ./derive-session-key.js
 
-  async function handleSend(threadKey: string, text: string, attachments?: Buffer[]): Promise<void> {
+  async function handleSend(threadKey: string, text: string, _attachments?: Buffer[]): Promise<void> {
     if (!threadKey) return // No thread — don't send
     // Enqueue the message — server owns the queue
     messageQueue.enqueue(threadKey, text)

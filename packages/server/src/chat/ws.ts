@@ -37,6 +37,9 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
         case 'chat.session.create':
           chatModule.handleSessionCreate(msg.label as string | undefined)
           break
+        case 'chat.cancel':
+          chatModule.handleCancel(msg.id as string)
+          break
       }
     }
   })
