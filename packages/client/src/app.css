@@ -577,3 +577,10 @@ pre:hover .code-copy-btn {
     padding-bottom: max(24px, env(safe-area-inset-bottom));
   }
 }
+
+/* Mobile touch optimisations */
+@media (max-width: 768px) {
+  button, [role="button"], a, input, textarea, select {
+    touch-action: manipulation;
+  }
+}
