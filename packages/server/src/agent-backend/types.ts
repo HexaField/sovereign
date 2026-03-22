@@ -40,7 +40,7 @@ export interface InternalState {
   activeSessionKey: string | null
   ws: import('ws').WebSocket | null
   reconnectTimer: ReturnType<typeof setTimeout> | null
-  historyReloadTimer: ReturnType<typeof setTimeout> | null
+
   retryTimer: ReturnType<typeof setTimeout> | null
   destroyed: boolean
 }

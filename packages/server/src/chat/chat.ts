@@ -62,6 +62,7 @@ export function createChatModule(
   loadMapping()
 
   function setMapping(threadKey: string, sessionKey: string): void {
+    if (!threadKey || !sessionKey) return // Never store empty mappings
     threadToSession.set(threadKey, sessionKey)
     sessionToThread.set(sessionKey, threadKey)
     persistMapping()
@@ -143,6 +144,7 @@ export function createChatModule(
   // deriveSessionKey is imported at module level from ./derive-session-key.js
 
   async function handleSend(threadKey: string, text: string, attachments?: Buffer[]): Promise<void> {
+    if (!threadKey) return // No thread — don't send
     let sessionKey = threadToSession.get(threadKey)
     if (!sessionKey) {
       sessionKey = deriveSessionKey(threadKey)
@@ -165,6 +167,7 @@ export function createChatModule(
   }
 
   async function handleHistory(threadKey: string, deviceId: string): Promise<void> {
+    if (!threadKey) return // No thread selected — nothing to fetch
     let sessionKey = threadToSession.get(threadKey)
     if (!sessionKey) {
       // Derive and persist the session key for threads not yet in the map
