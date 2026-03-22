@@ -75,6 +75,9 @@ export function createWsStore(options: WsStoreOptions): WsStore {
       reconnector.reset()
       resubscribe()
       flushQueue()
+      // Notify listeners of reconnect so they can re-fetch state
+      const set = handlers.get('ws.reconnected')
+      if (set) for (const h of set) h({ type: 'ws.reconnected' })
     }
 
     ws.onclose = () => {
