@@ -278,8 +278,15 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       // But always allow idle/end events through
       if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
       setAgentStatus(msg.status)
-      // Duration timer: start on working/thinking, stop on idle/error
+      // Agent acknowledged our message — clear any pending/queued state
       if (msg.status === 'working' || msg.status === 'thinking') {
+        setTurns((prev) => {
+          const hadPending = prev.some((t) => t.pending)
+          if (!hadPending) return prev
+          const next = prev.map((t) => t.pending ? { ...t, pending: false } : t)
+          savePendingTurns(_threadKey(), [])
+          return next
+        })
         if (!agentWorkingStartTime()) startDurationTimer()
       } else {
         stopDurationTimer()
@@ -320,20 +327,10 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
-      // Merge persisted pending turns that aren't already in confirmed history
+      // Gateway history is the source of truth — clear all pending state
       const tk = _threadKey()
-      const persisted = loadPendingTurns(tk)
-      const unconfirmed = persisted.filter(
-        (p) => !history.some((h) => h.role === p.role && h.content === p.content)
-      )
-      if (unconfirmed.length === 0) {
-        // All pending turns confirmed — clear storage
-        savePendingTurns(tk, [])
-        setTurns(history)
-      } else {
-        savePendingTurns(tk, unconfirmed)
-        setTurns([...history, ...unconfirmed])
-      }
+      savePendingTurns(tk, [])
+      setTurns(history)
     })
   )
 
