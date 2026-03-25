@@ -43,7 +43,8 @@ function isSystemInjected(text: string): boolean {
     stripped.startsWith('[Subagent Task]') ||
     /^Heartbeat prompt:/i.test(stripped) ||
     stripped === 'HEARTBEAT_OK' ||
-    /^OpenClaw runtime context \(internal\):/i.test(stripped)
+    /^OpenClaw runtime context \(internal\):/i.test(stripped) ||
+    /^Exec (?:completed|failed)\s*\(/i.test(stripped)
   )
 }
 
@@ -244,6 +245,9 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
     // Exact matches
     if (text === 'NO_REPLY' || text === 'ANNOUNCE_SKIP' || text === 'REPLY_SKIP' || text === 'HEARTBEAT_OK')
       return false
+
+    // Filter exec notifications — these are noise
+    if (/^Exec (?:completed|failed)\s*\(/i.test(text)) return false
 
     // Starts with
     if (text.startsWith('Agent-to-agent announce step')) return false

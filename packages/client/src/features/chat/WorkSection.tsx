@@ -133,10 +133,24 @@ export function getToolIcon(name: string): string {
 
 export function summarizeWork(items: WorkItem[]): string {
   if (items.length === 0) return 'No work items'
-  const toolCalls = items.filter((w) => w.type === 'tool_call').length
+  const calls = items.filter((w) => w.type === 'tool_call')
   const thinking = items.filter((w) => w.type === 'thinking').length
   const parts: string[] = []
-  if (toolCalls > 0) parts.push(`${toolCalls} tool call${toolCalls !== 1 ? 's' : ''}`)
+  if (calls.length > 0) {
+    // Group by tool name with counts
+    const counts = new Map<string, number>()
+    for (const c of calls) {
+      const name = c.name || 'tool'
+      counts.set(name, (counts.get(name) || 0) + 1)
+    }
+    const uniqueTools = Array.from(counts.entries())
+    if (uniqueTools.length <= 5) {
+      parts.push(uniqueTools.map(([name, n]) => n > 1 ? `${name} (${n})` : name).join(', '))
+    } else {
+      // Too many unique tools — show count only
+      parts.push(`${calls.length} tool call${calls.length !== 1 ? 's' : ''}`)
+    }
+  }
   if (thinking > 0) parts.push(`${thinking} thinking block${thinking !== 1 ? 's' : ''}`)
   return parts.join(', ') || `${items.length} item${items.length !== 1 ? 's' : ''}`
 }
@@ -220,6 +234,10 @@ export function WorkSection(props: { work: WorkItem[] }) {
 
   const paired = createMemo(() => pairTools(props.work))
 
+  const hasErrors = createMemo(() =>
+    props.work.some((w) => w.type === 'tool_result' && w.output && /error/i.test(w.output))
+  )
+
   const preview = (): { icon: JSX.Element; text: string } => {
     for (let i = props.work.length - 1; i >= 0; i--) {
       const w = props.work[i]
@@ -255,10 +273,18 @@ export function WorkSection(props: { work: WorkItem[] }) {
   }
 
   const stepLabel = () => {
-    const toolCount = props.work.filter((w) => w.type === 'tool_call' || w.type === 'tool_result').length
-    if (toolCount > 0) {
-      const calls = Math.ceil(toolCount / 2)
-      return `${calls} tool call${calls !== 1 ? 's' : ''}`
+    const calls = props.work.filter((w) => w.type === 'tool_call')
+    if (calls.length > 0) {
+      const counts = new Map<string, number>()
+      for (const c of calls) {
+        const name = c.name || 'tool'
+        counts.set(name, (counts.get(name) || 0) + 1)
+      }
+      const uniqueTools = Array.from(counts.entries())
+      if (uniqueTools.length <= 5) {
+        return uniqueTools.map(([name, n]) => n > 1 ? `${name} (${n})` : name).join(', ')
+      }
+      return `${calls.length} tool call${calls.length !== 1 ? 's' : ''}`
     }
     return `${props.work.length} step${props.work.length !== 1 ? 's' : ''}`
   }
@@ -272,6 +298,9 @@ export function WorkSection(props: { work: WorkItem[] }) {
       >
         <span class="shrink-0 text-[9px] transition-transform duration-200" classList={{ 'rotate-90': open() }}>
           ▶
+        </span>
+        <span class="shrink-0" style={{ color: hasErrors() ? 'var(--c-warning, #f59e0b)' : 'var(--c-success, #4ade80)', 'font-size': '11px' }}>
+          {hasErrors() ? '!' : '✓'}
         </span>
         <span class="flex items-center gap-1 overflow-hidden text-ellipsis whitespace-nowrap">
           {preview().icon} {preview().text || stepLabel()}

@@ -230,6 +230,14 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
         if (!agentWorkingStartTime()) startDurationTimer()
       } else {
         stopDurationTimer()
+        // Clear lingering streaming state when agent goes idle
+        if (msg.status === 'idle') {
+          setStreamingHtml('')
+          streamingRawText = ''
+          streamTextOffset = 0
+          setLiveWork([])
+          setLiveThinkingText('')
+        }
       }
     })
   )
@@ -268,7 +276,12 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
       setTurns(history)
-      // If server replayed cached stream text, it arrives as a separate chat.stream with replay:true
+      // Clear streaming state when history is loaded fresh
+      setStreamingHtml('')
+      streamingRawText = ''
+      streamTextOffset = 0
+      setLiveWork([])
+      setLiveThinkingText('')
     })
   )
 
@@ -312,7 +325,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   const onVisibility = () => {
     if (document.visibilityState === 'visible') {
       const key = _threadKey()
-      const status = currentAgentStatus()
+      const status = agentStatus()
       // Don't re-fetch if agent is actively streaming — we're already receiving live events
       // and a history fetch would wipe the in-progress streaming state
       if (key && ws?.connected() && status !== 'working' && status !== 'thinking') {
