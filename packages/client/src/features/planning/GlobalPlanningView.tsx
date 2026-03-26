@@ -823,6 +823,93 @@ const GlobalPlanningView: Component = () => {
     return map
   })
 
+  // Pre-compute edge port Y assignments so multiple edges from/to same node are spread out
+  const edgePorts = createMemo(() => {
+    const edges = filteredEdges()
+    const positions = positionMap()
+    const PORT_PAD = 8
+
+    // edge rendering calls edgePath(edge.to, edge.from)
+    // so visual src = edge.to (dependency, left), visual tgt = edge.from (dependent, right)
+    const outgoing = new Map<string, string[]>() // nodeId -> targetIds (right-side exits)
+    const incoming = new Map<string, string[]>() // nodeId -> sourceIds (left-side entries)
+
+    for (const edge of edges) {
+      const src = edge.to
+      const tgt = edge.from
+      const oList = outgoing.get(src)
+      if (oList) oList.push(tgt)
+      else outgoing.set(src, [tgt])
+      const iList = incoming.get(tgt)
+      if (iList) iList.push(src)
+      else incoming.set(tgt, [src])
+    }
+
+    const portY = new Map<string, number>()
+
+    for (const [nodeId, targets] of outgoing) {
+      const pos = positions.get(nodeId)
+      if (!pos) continue
+      targets.sort((a, b) => (positions.get(a)?.y ?? 0) - (positions.get(b)?.y ?? 0))
+      const count = targets.length
+      targets.forEach((tgt, i) => {
+        const fraction = count === 1 ? 0.5 : (i + 1) / (count + 1)
+        const y = pos.y + Math.max(PORT_PAD, Math.min(pos.h - PORT_PAD, pos.h * fraction))
+        portY.set(`${nodeId}->${tgt}:src`, y)
+      })
+    }
+
+    for (const [nodeId, sources] of incoming) {
+      const pos = positions.get(nodeId)
+      if (!pos) continue
+      sources.sort((a, b) => (positions.get(a)?.y ?? 0) - (positions.get(b)?.y ?? 0))
+      const count = sources.length
+      sources.forEach((src, i) => {
+        const fraction = count === 1 ? 0.5 : (i + 1) / (count + 1)
+        const y = pos.y + Math.max(PORT_PAD, Math.min(pos.h - PORT_PAD, pos.h * fraction))
+        portY.set(`${src}->${nodeId}:tgt`, y)
+      })
+    }
+
+    // Pre-compute midpoint X offsets for edges sharing the same column pair
+    const colPairEdges = new Map<string, { fromId: string; toId: string }[]>()
+    for (const edge of edges) {
+      const src = edge.to
+      const tgt = edge.from
+      const fromPos = positions.get(src)
+      const toPos = positions.get(tgt)
+      if (!fromPos || !toPos) continue
+      const srcRight = fromPos.x + fromPos.w
+      const tgtLeft = toPos.x
+      if (srcRight < tgtLeft) {
+        const key = `${srcRight}:${tgtLeft}`
+        const list = colPairEdges.get(key)
+        if (list) list.push({ fromId: src, toId: tgt })
+        else colPairEdges.set(key, [{ fromId: src, toId: tgt }])
+      }
+    }
+
+    const midXOffsets = new Map<string, number>() // "fromId->toId:midX" -> offset
+    const EDGE_SPACING = 10
+    for (const [, edgeList] of colPairEdges) {
+      if (edgeList.length <= 1) continue
+      // Sort by average Y to keep consistent ordering
+      edgeList.sort((a, b) => {
+        const aAvg =
+          ((portY.get(`${a.fromId}->${a.toId}:src`) ?? 0) + (portY.get(`${a.fromId}->${a.toId}:tgt`) ?? 0)) / 2
+        const bAvg =
+          ((portY.get(`${b.fromId}->${b.toId}:src`) ?? 0) + (portY.get(`${b.fromId}->${b.toId}:tgt`) ?? 0)) / 2
+        return aAvg - bAvg
+      })
+      const total = edgeList.length
+      edgeList.forEach((e, i) => {
+        midXOffsets.set(`${e.fromId}->${e.toId}:midX`, (i - (total - 1) / 2) * EDGE_SPACING)
+      })
+    }
+
+    return { portY, midXOffsets }
+  })
+
   // Connected edges for highlighting
   const connectedEdgeIds = createMemo(() => {
     const hid = hoveredNodeId()
@@ -1112,36 +1199,53 @@ const GlobalPlanningView: Component = () => {
     // Start at right side of from, end at left side of to
 
     // Determine source and target for routing
+    const { portY, midXOffsets } = edgePorts()
     const srcRight = from.x + from.w
-    const srcCY = from.y + from.h / 2
+    const srcCY = portY.get(`${fromId}->${toId}:src`) ?? from.y + from.h / 2
     const tgtLeft = to.x
-    const tgtCY = to.y + to.h / 2
+    const tgtCY = portY.get(`${fromId}->${toId}:tgt`) ?? to.y + to.h / 2
 
     const STUB = 20
 
     if (srcRight < tgtLeft) {
-      // Normal case: source is to the left of target (or same position)
-      // Route: right stub → vertical → left stub into target
-      const midX = (srcRight + tgtLeft) / 2
-      if (Math.abs(srcCY - tgtCY) < 1) {
-        // Same y — straight horizontal line
+      const baseMidX = (srcRight + tgtLeft) / 2
+      const midXOffset = midXOffsets.get(`${fromId}->${toId}:midX`) ?? 0
+      const midX = baseMidX + midXOffset
+      if (Math.abs(srcCY - tgtCY) < 1 && midXOffset === 0) {
         return `M${srcRight},${srcCY} H${tgtLeft}`
       }
       return `M${srcRight},${srcCY} H${midX} V${tgtCY} H${tgtLeft}`
     } else {
-      // Back-edge: source is to the right of target
-      // Route around: go right, then up/down around, then left into target
+      // Back-edge: route around local component bounding box, not entire graph
       const allPositions = positionMap()
+      // Find connected component containing fromId and toId
+      const visited = new Set<string>()
+      const queue = [fromId, toId]
+      const edgeList = filteredEdges()
+      while (queue.length) {
+        const nid = queue.pop()!
+        if (visited.has(nid)) continue
+        visited.add(nid)
+        for (const e of edgeList) {
+          if (e.from === nid && !visited.has(e.to)) queue.push(e.to)
+          if (e.to === nid && !visited.has(e.from)) queue.push(e.from)
+        }
+      }
       let minY = Infinity
       let maxY = -Infinity
-      for (const [, pos] of allPositions) {
+      for (const nid of visited) {
+        const pos = allPositions.get(nid)
+        if (!pos) continue
         minY = Math.min(minY, pos.y)
         maxY = Math.max(maxY, pos.y + pos.h)
       }
-      // Route above or below depending on which is closer
+      if (minY === Infinity) {
+        minY = 0
+        maxY = 100
+      }
       const avgY = (srcCY + tgtCY) / 2
-      const midGraph = (minY + maxY) / 2
-      const routeY = avgY < midGraph ? minY - 30 : maxY + 30
+      const midComp = (minY + maxY) / 2
+      const routeY = avgY < midComp ? minY - 30 : maxY + 30
       const exitX = srcRight + STUB
       const enterX = tgtLeft - STUB
       return `M${srcRight},${srcCY} H${exitX} V${routeY} H${enterX} V${tgtCY} H${tgtLeft}`
