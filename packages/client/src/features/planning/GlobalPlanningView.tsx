@@ -569,6 +569,13 @@ const GlobalPlanningView: Component = () => {
   // Hover state for edge highlighting
   const [hoveredNodeId, setHoveredNodeId] = createSignal<string | null>(null)
 
+  // Selected node for detail drawer
+  const [selectedNodeId, setSelectedNodeId] = createSignal<string | null>(null)
+  const [mouseDownPos, setMouseDownPos] = createSignal<{ x: number; y: number } | null>(null)
+  const [showAddUpstream, setShowAddUpstream] = createSignal(false)
+  const [showAddDownstream, setShowAddDownstream] = createSignal(false)
+  const [depLoading, setDepLoading] = createSignal(false)
+
   // Unconnected grid page
   const [unconnectedPage, setUnconnectedPage] = createSignal(0)
   const UNCONNECTED_PAGE_SIZE = 50
@@ -770,6 +777,92 @@ const GlobalPlanningView: Component = () => {
     return { issueCount, draftCount, depCount }
   })
 
+  // Selected node
+  const selectedNode = createMemo(() => {
+    const id = selectedNodeId()
+    if (!id) return null
+    return nodes().find((n) => n.id === id) ?? null
+  })
+
+  // Node title map for dependency display
+  const nodeTitleMap = createMemo(() => {
+    const map = new Map<string, string>()
+    for (const n of nodes()) map.set(n.id, n.title)
+    return map
+  })
+
+  // Upstream dependencies (nodes this one depends on)
+  const upstreamDeps = createMemo(() => {
+    const node = selectedNode()
+    if (!node) return [] as PlanningNode[]
+    return node.dependencies.map((depId) => nodes().find((n) => n.id === depId)).filter(Boolean) as PlanningNode[]
+  })
+
+  // Downstream dependents (nodes that depend on this one)
+  const downstreamDeps = createMemo(() => {
+    const node = selectedNode()
+    if (!node) return [] as PlanningNode[]
+    return nodes().filter((n) => n.dependencies.includes(node.id))
+  })
+
+  // Available nodes for adding as upstream
+  const availableUpstream = createMemo(() => {
+    const node = selectedNode()
+    if (!node) return [] as PlanningNode[]
+    const existingUp = new Set(node.dependencies)
+    return filteredNodes().filter((n) => n.id !== node.id && !existingUp.has(n.id))
+  })
+
+  // Available nodes for adding as downstream
+  const availableDownstream = createMemo(() => {
+    const node = selectedNode()
+    if (!node) return [] as PlanningNode[]
+    const existingDown = new Set(downstreamDeps().map((n) => n.id))
+    return filteredNodes().filter((n) => n.id !== node.id && !existingDown.has(n.id))
+  })
+
+  // Find orgId for dependency API calls (use first org or selected node's workspace)
+  function getOrgIdForDeps(): string {
+    const node = selectedNode()
+    if (node) return node.ref.orgId
+    const o = orgs()
+    return o.length > 0 ? o[0].id : ''
+  }
+
+  async function addDependency(from: EntityRef, to: EntityRef, type: 'depends_on' | 'blocks') {
+    const orgId = getOrgIdForDeps()
+    if (!orgId) return
+    setDepLoading(true)
+    try {
+      await fetch(`/api/orgs/${encodeURIComponent(orgId)}/planning/dependencies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from, to, type })
+      })
+      await fetchGraph()
+    } finally {
+      setDepLoading(false)
+      setShowAddUpstream(false)
+      setShowAddDownstream(false)
+    }
+  }
+
+  async function removeDependency(from: EntityRef, to: EntityRef) {
+    const orgId = getOrgIdForDeps()
+    if (!orgId) return
+    setDepLoading(true)
+    try {
+      await fetch(`/api/orgs/${encodeURIComponent(orgId)}/planning/dependencies`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from, to })
+      })
+      await fetchGraph()
+    } finally {
+      setDepLoading(false)
+    }
+  }
+
   // Active filter pills
   const activeFilterPills = createMemo(() => {
     const f = filters()
@@ -824,6 +917,12 @@ const GlobalPlanningView: Component = () => {
   }
 
   function handleNodeClick(node: PlanningNode) {
+    if (viewMode() === 'dag') {
+      setSelectedNodeId(node.id)
+      setShowAddUpstream(false)
+      setShowAddDownstream(false)
+      return
+    }
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('sovereign:navigate', {
@@ -841,6 +940,7 @@ const GlobalPlanningView: Component = () => {
     setPanStartY(e.clientY)
     setPanStartPanX(panX())
     setPanStartPanY(panY())
+    setMouseDownPos({ x: e.clientX, y: e.clientY })
   }
 
   function handleMouseMove(e: MouseEvent) {
@@ -851,8 +951,24 @@ const GlobalPlanningView: Component = () => {
     setPanY(panStartPanY() + dy)
   }
 
-  function handleMouseUp() {
+  function handleMouseUp(e: MouseEvent) {
     setIsPanning(false)
+    const startPos = mouseDownPos()
+    if (startPos) {
+      const dx = Math.abs(e.clientX - startPos.x)
+      const dy = Math.abs(e.clientY - startPos.y)
+      if (dx < 5 && dy < 5) {
+        // Click on background — check if target is a node
+        const target = e.target as SVGElement
+        const isNodeClick = target.closest('[data-testid^="dag-node-"]')
+        if (!isNodeClick) {
+          setSelectedNodeId(null)
+          setShowAddUpstream(false)
+          setShowAddDownstream(false)
+        }
+      }
+    }
+    setMouseDownPos(null)
   }
 
   function handleWheel(e: WheelEvent) {
@@ -1120,379 +1236,826 @@ const GlobalPlanningView: Component = () => {
       <div class="relative flex-1 overflow-hidden">
         {/* DAG View */}
         <Show when={viewMode() === 'dag'}>
-          <div class="absolute inset-0 overflow-hidden">
-            {/* Zoom controls */}
-            <div class="absolute top-3 right-3 z-10 flex flex-col gap-1">
-              <button
-                class="flex h-7 w-7 items-center justify-center rounded text-xs font-bold"
-                style={{
-                  background: 'var(--c-bg-raised, #1e1e2e)',
-                  color: 'var(--c-text, #cdd6f4)',
-                  border: '1px solid var(--c-border, #45475a)'
-                }}
-                onClick={() => setZoom(Math.min(3, zoom() * 1.2))}
-                title="Zoom in"
-              >
-                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-              <button
-                class="flex h-7 w-7 items-center justify-center rounded text-xs font-bold"
-                style={{
-                  background: 'var(--c-bg-raised, #1e1e2e)',
-                  color: 'var(--c-text, #cdd6f4)',
-                  border: '1px solid var(--c-border, #45475a)'
-                }}
-                onClick={() => setZoom(Math.max(0.1, zoom() * 0.8))}
-                title="Zoom out"
-              >
-                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-              <button
-                class="flex h-7 w-7 items-center justify-center rounded text-[10px] font-bold"
-                style={{
-                  background: 'var(--c-bg-raised, #1e1e2e)',
-                  color: 'var(--c-text, #cdd6f4)',
-                  border: '1px solid var(--c-border, #45475a)'
-                }}
-                onClick={resetZoom}
-                title="Fit to view"
-              >
-                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
-                </svg>
-              </button>
-              <span class="mt-1 text-center text-[10px] opacity-50" style={{ color: 'var(--c-text-muted)' }}>
-                {Math.round(zoom() * 100)}%
-              </span>
-            </div>
-
-            <svg
-              ref={svgRef}
-              class="h-full w-full"
-              style={{ cursor: isPanning() ? 'grabbing' : 'grab' }}
-              data-testid="dag-svg"
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
-              onWheel={handleWheel}
-            >
-              <defs>
-                <marker
-                  id="arrow"
-                  viewBox="0 0 10 10"
-                  refX="10"
-                  refY="5"
-                  markerWidth="8"
-                  markerHeight="8"
-                  orient="auto-start-reverse"
-                >
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--c-border, #45475a)" />
-                </marker>
-                <marker
-                  id="arrow-amber"
-                  viewBox="0 0 10 10"
-                  refX="10"
-                  refY="5"
-                  markerWidth="8"
-                  markerHeight="8"
-                  orient="auto-start-reverse"
-                >
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#D97706" />
-                </marker>
-                <marker
-                  id="arrow-highlight"
-                  viewBox="0 0 10 10"
-                  refX="10"
-                  refY="5"
-                  markerWidth="8"
-                  markerHeight="8"
-                  orient="auto-start-reverse"
-                >
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--c-accent, #89b4fa)" />
-                </marker>
-                <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
-                  <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.3)" flood-opacity="0.5" />
-                </filter>
-              </defs>
-
-              <g
-                style={{ transform: `translate(${panX()}px, ${panY()}px) scale(${zoom()})`, 'transform-origin': '0 0' }}
-              >
-                {/* Section label for connected DAG */}
-                <Show when={layout().connected.length > 0}>
-                  <text
-                    x="40"
-                    y="24"
-                    fill="var(--c-text-muted, #a6adc8)"
-                    font-size="11"
-                    font-weight="600"
-                    opacity="0.5"
-                  >
-                    DEPENDENCY GRAPH
-                  </text>
-                </Show>
-
-                {/* Edges — orthogonal Manhattan routing */}
-                <For each={filteredEdges()}>
-                  {(edge) => {
-                    const path = () => edgePath(edge.to, edge.from)
-                    const edgeKey = () => `${edge.from}->${edge.to}`
-                    const isHighlighted = () => connectedEdgeIds().has(edgeKey())
-                    return (
-                      <Show when={path()}>
-                        <path
-                          d={path()}
-                          fill="none"
-                          stroke={
-                            isHighlighted()
-                              ? 'var(--c-accent, #89b4fa)'
-                              : edge.crossWorkspace
-                                ? '#D97706'
-                                : 'var(--c-border, #45475a)'
-                          }
-                          stroke-width={isHighlighted() ? 3 : 2}
-                          stroke-linejoin="round"
-                          stroke-dasharray={edge.crossWorkspace ? '6,4' : 'none'}
-                          opacity={hoveredNodeId() && !isHighlighted() ? 0.15 : 0.9}
-                          marker-end={
-                            isHighlighted()
-                              ? 'url(#arrow-highlight)'
-                              : edge.crossWorkspace
-                                ? 'url(#arrow-amber)'
-                                : 'url(#arrow)'
-                          }
-                          data-testid={`edge-${edge.from}-${edge.to}`}
-                          style={{ transition: 'opacity 0.15s, stroke-width 0.15s' }}
-                        />
-                      </Show>
-                    )
+          <div class="flex h-full">
+            <div class="relative flex-1 overflow-hidden">
+              {/* Zoom controls */}
+              <div class="absolute top-3 right-3 z-10 flex flex-col gap-1">
+                <button
+                  class="flex h-7 w-7 items-center justify-center rounded text-xs font-bold"
+                  style={{
+                    background: 'var(--c-bg-raised, #1e1e2e)',
+                    color: 'var(--c-text, #cdd6f4)',
+                    border: '1px solid var(--c-border, #45475a)'
                   }}
-                </For>
+                  onClick={() => setZoom(Math.min(3, zoom() * 1.2))}
+                  title="Zoom in"
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                </button>
+                <button
+                  class="flex h-7 w-7 items-center justify-center rounded text-xs font-bold"
+                  style={{
+                    background: 'var(--c-bg-raised, #1e1e2e)',
+                    color: 'var(--c-text, #cdd6f4)',
+                    border: '1px solid var(--c-border, #45475a)'
+                  }}
+                  onClick={() => setZoom(Math.max(0.1, zoom() * 0.8))}
+                  title="Zoom out"
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                </button>
+                <button
+                  class="flex h-7 w-7 items-center justify-center rounded text-[10px] font-bold"
+                  style={{
+                    background: 'var(--c-bg-raised, #1e1e2e)',
+                    color: 'var(--c-text, #cdd6f4)',
+                    border: '1px solid var(--c-border, #45475a)'
+                  }}
+                  onClick={resetZoom}
+                  title="Fit to view"
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                  </svg>
+                </button>
+                <span class="mt-1 text-center text-[10px] opacity-50" style={{ color: 'var(--c-text-muted)' }}>
+                  {Math.round(zoom() * 100)}%
+                </span>
+              </div>
 
-                {/* Connected nodes */}
-                <For each={layout().connected}>
-                  {({ node, x, y }) => {
-                    const isHovered = () => hoveredNodeId() === node.id
-                    const isConnectedToHovered = () => connectedEdgeIds().has(node.id)
-                    const dimmed = () => hoveredNodeId() !== null && !isHovered() && !isConnectedToHovered()
-                    return (
-                      <g
-                        transform={`translate(${x}, ${y})`}
-                        onClick={() => handleNodeClick(node)}
-                        onMouseEnter={() => setHoveredNodeId(node.id)}
-                        onMouseLeave={() => setHoveredNodeId(null)}
-                        style={{
-                          cursor: 'pointer',
-                          transition: 'opacity 0.15s, transform 0.15s',
-                          opacity: dimmed() ? 0.35 : 1
-                        }}
-                        data-testid={`dag-node-${node.id}`}
-                      >
-                        <g
-                          style={{
-                            transform: isHovered() ? 'scale(1.03)' : 'scale(1)',
-                            'transform-origin': `${DAG_NODE_W / 2}px ${DAG_NODE_H / 2}px`,
-                            transition: 'transform 0.15s'
-                          }}
-                        >
-                          <rect
-                            width={DAG_NODE_W}
-                            height={DAG_NODE_H}
-                            rx={8}
-                            fill="var(--c-surface, #181825)"
+              <svg
+                ref={svgRef}
+                class="h-full w-full"
+                style={{ cursor: isPanning() ? 'grabbing' : 'grab' }}
+                data-testid="dag-svg"
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+                onWheel={handleWheel}
+              >
+                <defs>
+                  <marker
+                    id="arrow"
+                    viewBox="0 0 10 10"
+                    refX="10"
+                    refY="5"
+                    markerWidth="8"
+                    markerHeight="8"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--c-border, #45475a)" />
+                  </marker>
+                  <marker
+                    id="arrow-amber"
+                    viewBox="0 0 10 10"
+                    refX="10"
+                    refY="5"
+                    markerWidth="8"
+                    markerHeight="8"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#D97706" />
+                  </marker>
+                  <marker
+                    id="arrow-highlight"
+                    viewBox="0 0 10 10"
+                    refX="10"
+                    refY="5"
+                    markerWidth="8"
+                    markerHeight="8"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--c-accent, #89b4fa)" />
+                  </marker>
+                  <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+                    <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.3)" flood-opacity="0.5" />
+                  </filter>
+                </defs>
+
+                <g
+                  style={{
+                    transform: `translate(${panX()}px, ${panY()}px) scale(${zoom()})`,
+                    'transform-origin': '0 0'
+                  }}
+                >
+                  {/* Section label for connected DAG */}
+                  <Show when={layout().connected.length > 0}>
+                    <text
+                      x="40"
+                      y="24"
+                      fill="var(--c-text-muted, #a6adc8)"
+                      font-size="11"
+                      font-weight="600"
+                      opacity="0.5"
+                    >
+                      DEPENDENCY GRAPH
+                    </text>
+                  </Show>
+
+                  {/* Edges — orthogonal Manhattan routing */}
+                  <For each={filteredEdges()}>
+                    {(edge) => {
+                      const path = () => edgePath(edge.to, edge.from)
+                      const edgeKey = () => `${edge.from}->${edge.to}`
+                      const isHighlighted = () => connectedEdgeIds().has(edgeKey())
+                      return (
+                        <Show when={path()}>
+                          <path
+                            d={path()}
+                            fill="none"
                             stroke={
-                              node.isDraft
-                                ? '#f59e0b'
-                                : isHovered()
-                                  ? 'var(--c-accent, #89b4fa)'
+                              isHighlighted()
+                                ? 'var(--c-accent, #89b4fa)'
+                                : edge.crossWorkspace
+                                  ? '#D97706'
                                   : 'var(--c-border, #45475a)'
                             }
-                            stroke-width={node.isCriticalPath ? 2.5 : isHovered() ? 2 : 1}
-                            stroke-dasharray={node.isDraft ? '6,3' : 'none'}
-                            filter="url(#shadow)"
+                            stroke-width={isHighlighted() ? 3 : 2}
+                            stroke-linejoin="round"
+                            stroke-dasharray={edge.crossWorkspace ? '6,4' : 'none'}
+                            opacity={hoveredNodeId() && !isHighlighted() ? 0.15 : 0.9}
+                            marker-end={
+                              isHighlighted()
+                                ? 'url(#arrow-highlight)'
+                                : edge.crossWorkspace
+                                  ? 'url(#arrow-amber)'
+                                  : 'url(#arrow)'
+                            }
+                            data-testid={`edge-${edge.from}-${edge.to}`}
+                            style={{ transition: 'opacity 0.15s, stroke-width 0.15s' }}
                           />
-                          {/* Workspace color strip */}
+                        </Show>
+                      )
+                    }}
+                  </For>
+
+                  {/* Connected nodes */}
+                  <For each={layout().connected}>
+                    {({ node, x, y }) => {
+                      const isHovered = () => hoveredNodeId() === node.id
+                      const isSelected = () => selectedNodeId() === node.id
+                      const isConnectedToHovered = () => connectedEdgeIds().has(node.id)
+                      const dimmed = () => hoveredNodeId() !== null && !isHovered() && !isConnectedToHovered()
+                      return (
+                        <g
+                          transform={`translate(${x}, ${y})`}
+                          onClick={() => handleNodeClick(node)}
+                          onMouseEnter={() => setHoveredNodeId(node.id)}
+                          onMouseLeave={() => setHoveredNodeId(null)}
+                          style={{
+                            cursor: 'pointer',
+                            transition: 'opacity 0.15s, transform 0.15s',
+                            opacity: dimmed() ? 0.35 : 1
+                          }}
+                          data-testid={`dag-node-${node.id}`}
+                        >
+                          <g
+                            style={{
+                              transform: isHovered() ? 'scale(1.03)' : 'scale(1)',
+                              'transform-origin': `${DAG_NODE_W / 2}px ${DAG_NODE_H / 2}px`,
+                              transition: 'transform 0.15s'
+                            }}
+                          >
+                            <rect
+                              width={DAG_NODE_W}
+                              height={DAG_NODE_H}
+                              rx={8}
+                              fill="var(--c-surface, #181825)"
+                              stroke={
+                                isSelected()
+                                  ? 'var(--c-accent, #89b4fa)'
+                                  : node.isDraft
+                                    ? '#f59e0b'
+                                    : isHovered()
+                                      ? 'var(--c-accent, #89b4fa)'
+                                      : 'var(--c-border, #45475a)'
+                              }
+                              stroke-width={isSelected() ? 3 : node.isCriticalPath ? 2.5 : isHovered() ? 2 : 1}
+                              stroke-dasharray={node.isDraft ? '6,3' : 'none'}
+                              filter="url(#shadow)"
+                            />
+                            {/* Workspace color strip */}
+                            <rect
+                              x={0}
+                              y={0}
+                              width={4}
+                              height={DAG_NODE_H}
+                              rx={2}
+                              fill={getWorkspaceColor(node.workspace, allWorkspaces())}
+                            />
+                            {/* Status dot */}
+                            <circle cx={DAG_NODE_W - 14} cy={14} r={4} fill={getStatusColor(node.status)} />
+                            {/* PR icon */}
+                            <Show when={node.kind === 'pr'}>
+                              <g transform={`translate(${DAG_NODE_W - 30}, 8)`}>
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="var(--c-text-muted, #a6adc8)">
+                                  <path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm0 9.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm7.5-9.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM4.25 1A2.25 2.25 0 0 0 2 3.25v9.5A2.25 2.25 0 0 0 4.25 15a2.25 2.25 0 0 0 2.25-2.25V3.25A2.25 2.25 0 0 0 4.25 1Zm7.5 0A2.25 2.25 0 0 0 9.5 3.25v2.122a.75.75 0 0 0 1.5 0V3.25a.75.75 0 0 1 1.5 0v2.122a.75.75 0 0 0 1.5 0V3.25A2.25 2.25 0 0 0 11.75 1Z" />
+                                </svg>
+                              </g>
+                            </Show>
+                            {/* Title */}
+                            <text x={14} y={24} fill="var(--c-text-heading, #cdd6f4)" font-size="12" font-weight="600">
+                              <title>{node.title}</title>
+                              {node.title.length > 26 ? node.title.slice(0, 26) + '...' : node.title}
+                            </text>
+                            {/* Subtitle */}
+                            <text x={14} y={42} fill="var(--c-text-muted, #a6adc8)" font-size="10">
+                              {node.workspaceName} / {node.projectName}
+                            </text>
+                            {/* Status label + draft badge */}
+                            <text x={14} y={58} fill={getStatusColor(node.status)} font-size="9">
+                              {getStatusLabel(node.status)}
+                            </text>
+                            <Show when={node.isDraft}>
+                              <rect
+                                x={DAG_NODE_W - 46}
+                                y={46}
+                                width={36}
+                                height={16}
+                                rx={3}
+                                fill="#f59e0b"
+                                opacity="0.9"
+                              />
+                              <text
+                                x={DAG_NODE_W - 28}
+                                y={58}
+                                text-anchor="middle"
+                                font-size="8"
+                                fill="#000"
+                                font-weight="700"
+                              >
+                                DRAFT
+                              </text>
+                            </Show>
+                          </g>
+                        </g>
+                      )
+                    }}
+                  </For>
+
+                  {/* Separator line between DAG and grid */}
+                  <Show when={layout().connected.length > 0 && layout().unconnected.length > 0}>
+                    <line
+                      x1={20}
+                      y1={layout().connectedBounds.h + 30}
+                      x2={1000}
+                      y2={layout().connectedBounds.h + 30}
+                      stroke="var(--c-border, #45475a)"
+                      stroke-width={0.5}
+                      stroke-dasharray="4,4"
+                      opacity="0.4"
+                    />
+                    <text
+                      x={40}
+                      y={layout().connectedBounds.h + 50}
+                      fill="var(--c-text-muted, #a6adc8)"
+                      font-size="11"
+                      font-weight="600"
+                      opacity="0.5"
+                    >
+                      UNCONNECTED ({layout().unconnected.length})
+                    </text>
+                  </Show>
+
+                  {/* Unconnected nodes — compact cards */}
+                  <For each={paginatedUnconnected()}>
+                    {({ node, x, y }) => {
+                      const isHovered = () => hoveredNodeId() === node.id
+                      return (
+                        <g
+                          transform={`translate(${x}, ${y})`}
+                          onClick={() => handleNodeClick(node)}
+                          onMouseEnter={() => setHoveredNodeId(node.id)}
+                          onMouseLeave={() => setHoveredNodeId(null)}
+                          style={{ cursor: 'pointer' }}
+                          data-testid={`dag-node-${node.id}`}
+                        >
+                          <rect
+                            width={GRID_CARD_W}
+                            height={GRID_CARD_H}
+                            rx={6}
+                            fill="var(--c-surface, #181825)"
+                            stroke={
+                              isHovered()
+                                ? 'var(--c-accent, #89b4fa)'
+                                : node.isDraft
+                                  ? '#f59e0b'
+                                  : 'var(--c-border, #45475a)'
+                            }
+                            stroke-width={isHovered() ? 1.5 : 0.5}
+                            stroke-dasharray={node.isDraft ? '4,2' : 'none'}
+                            opacity={0.85}
+                          />
                           <rect
                             x={0}
                             y={0}
-                            width={4}
-                            height={DAG_NODE_H}
-                            rx={2}
+                            width={3}
+                            height={GRID_CARD_H}
+                            rx={1.5}
                             fill={getWorkspaceColor(node.workspace, allWorkspaces())}
                           />
-                          {/* Status dot */}
-                          <circle cx={DAG_NODE_W - 14} cy={14} r={4} fill={getStatusColor(node.status)} />
-                          {/* PR icon */}
-                          <Show when={node.kind === 'pr'}>
-                            <g transform={`translate(${DAG_NODE_W - 30}, 8)`}>
-                              <svg width="12" height="12" viewBox="0 0 16 16" fill="var(--c-text-muted, #a6adc8)">
-                                <path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm0 9.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm7.5-9.5a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM4.25 1A2.25 2.25 0 0 0 2 3.25v9.5A2.25 2.25 0 0 0 4.25 15a2.25 2.25 0 0 0 2.25-2.25V3.25A2.25 2.25 0 0 0 4.25 1Zm7.5 0A2.25 2.25 0 0 0 9.5 3.25v2.122a.75.75 0 0 0 1.5 0V3.25a.75.75 0 0 1 1.5 0v2.122a.75.75 0 0 0 1.5 0V3.25A2.25 2.25 0 0 0 11.75 1Z" />
-                              </svg>
-                            </g>
-                          </Show>
-                          {/* Title */}
-                          <text x={14} y={24} fill="var(--c-text-heading, #cdd6f4)" font-size="12" font-weight="600">
+                          <circle cx={GRID_CARD_W - 10} cy={10} r={3} fill={getStatusColor(node.status)} />
+                          <text x={10} y={20} fill="var(--c-text-heading, #cdd6f4)" font-size="10" font-weight="500">
                             <title>{node.title}</title>
-                            {node.title.length > 26 ? node.title.slice(0, 26) + '...' : node.title}
+                            {node.title.length > 22 ? node.title.slice(0, 22) + '...' : node.title}
                           </text>
-                          {/* Subtitle */}
-                          <text x={14} y={42} fill="var(--c-text-muted, #a6adc8)" font-size="10">
-                            {node.workspaceName} / {node.projectName}
-                          </text>
-                          {/* Status label + draft badge */}
-                          <text x={14} y={58} fill={getStatusColor(node.status)} font-size="9">
-                            {getStatusLabel(node.status)}
+                          <text x={10} y={36} fill="var(--c-text-muted, #a6adc8)" font-size="8">
+                            {node.projectName}
                           </text>
                           <Show when={node.isDraft}>
-                            <rect
-                              x={DAG_NODE_W - 46}
-                              y={46}
-                              width={36}
-                              height={16}
-                              rx={3}
-                              fill="#f59e0b"
-                              opacity="0.9"
-                            />
                             <text
-                              x={DAG_NODE_W - 28}
-                              y={58}
-                              text-anchor="middle"
-                              font-size="8"
-                              fill="#000"
-                              font-weight="700"
+                              x={GRID_CARD_W - 8}
+                              y={44}
+                              text-anchor="end"
+                              font-size="7"
+                              fill="#f59e0b"
+                              font-weight="600"
                             >
                               DRAFT
                             </text>
                           </Show>
                         </g>
-                      </g>
-                    )
-                  }}
-                </For>
+                      )
+                    }}
+                  </For>
+                </g>
+              </svg>
 
-                {/* Separator line between DAG and grid */}
-                <Show when={layout().connected.length > 0 && layout().unconnected.length > 0}>
-                  <line
-                    x1={20}
-                    y1={layout().connectedBounds.h + 30}
-                    x2={1000}
-                    y2={layout().connectedBounds.h + 30}
-                    stroke="var(--c-border, #45475a)"
-                    stroke-width={0.5}
-                    stroke-dasharray="4,4"
-                    opacity="0.4"
-                  />
-                  <text
-                    x={40}
-                    y={layout().connectedBounds.h + 50}
-                    fill="var(--c-text-muted, #a6adc8)"
-                    font-size="11"
-                    font-weight="600"
-                    opacity="0.5"
+              {/* Pagination for unconnected */}
+              <Show when={totalUnconnectedPages() > 1}>
+                <div
+                  class="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg px-3 py-1.5"
+                  style={{
+                    background: 'var(--c-bg-raised, #1e1e2e)',
+                    border: '1px solid var(--c-border, #45475a)'
+                  }}
+                >
+                  <button
+                    class="text-xs"
+                    style={{ color: 'var(--c-text, #cdd6f4)' }}
+                    disabled={unconnectedPage() === 0}
+                    onClick={() => setUnconnectedPage((p) => Math.max(0, p - 1))}
                   >
-                    UNCONNECTED ({layout().unconnected.length})
-                  </text>
-                </Show>
+                    Prev
+                  </button>
+                  <span class="text-xs opacity-60" style={{ color: 'var(--c-text-muted)' }}>
+                    {unconnectedPage() + 1} / {totalUnconnectedPages()}
+                  </span>
+                  <button
+                    class="text-xs"
+                    style={{ color: 'var(--c-text, #cdd6f4)' }}
+                    disabled={unconnectedPage() >= totalUnconnectedPages() - 1}
+                    onClick={() => setUnconnectedPage((p) => Math.min(totalUnconnectedPages() - 1, p + 1))}
+                  >
+                    Next
+                  </button>
+                </div>
+              </Show>
+            </div>
 
-                {/* Unconnected nodes — compact cards */}
-                <For each={paginatedUnconnected()}>
-                  {({ node, x, y }) => {
-                    const isHovered = () => hoveredNodeId() === node.id
-                    return (
-                      <g
-                        transform={`translate(${x}, ${y})`}
-                        onClick={() => handleNodeClick(node)}
-                        onMouseEnter={() => setHoveredNodeId(node.id)}
-                        onMouseLeave={() => setHoveredNodeId(null)}
-                        style={{ cursor: 'pointer' }}
-                        data-testid={`dag-node-${node.id}`}
+            {/* Detail Drawer */}
+            <Show when={selectedNode()}>
+              {(node) => {
+                const getPriorityLabel = (p: string) => p.charAt(0).toUpperCase() + p.slice(1)
+                return (
+                  <div
+                    style={{
+                      width: '320px',
+                      'min-width': '320px',
+                      'border-left': '1px solid var(--c-border, #45475a)',
+                      background: 'var(--c-bg-raised, #1e1e2e)',
+                      'overflow-y': 'auto'
+                    }}
+                  >
+                    <div style={{ padding: '12px' }}>
+                      {/* Close button */}
+                      <div class="flex items-center justify-between" style={{ 'margin-bottom': '12px' }}>
+                        <span class="text-xs" style={{ color: 'var(--c-text-muted, #a6adc8)' }}>
+                          {node().ref.projectId}#{node().ref.issueId}
+                        </span>
+                        <button
+                          class="hover:opacity-80"
+                          style={{
+                            color: 'var(--c-text-muted, #a6adc8)',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            'font-size': '16px',
+                            'line-height': '1'
+                          }}
+                          onClick={() => {
+                            setSelectedNodeId(null)
+                            setShowAddUpstream(false)
+                            setShowAddDownstream(false)
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Title */}
+                      <h3
+                        style={{
+                          color: 'var(--c-text, #cdd6f4)',
+                          'font-size': '14px',
+                          'font-weight': '600',
+                          margin: '0 0 8px 0',
+                          'line-height': '1.3'
+                        }}
                       >
-                        <rect
-                          width={GRID_CARD_W}
-                          height={GRID_CARD_H}
-                          rx={6}
-                          fill="var(--c-surface, #181825)"
-                          stroke={
-                            isHovered()
-                              ? 'var(--c-accent, #89b4fa)'
-                              : node.isDraft
-                                ? '#f59e0b'
-                                : 'var(--c-border, #45475a)'
-                          }
-                          stroke-width={isHovered() ? 1.5 : 0.5}
-                          stroke-dasharray={node.isDraft ? '4,2' : 'none'}
-                          opacity={0.85}
-                        />
-                        <rect
-                          x={0}
-                          y={0}
-                          width={3}
-                          height={GRID_CARD_H}
-                          rx={1.5}
-                          fill={getWorkspaceColor(node.workspace, allWorkspaces())}
-                        />
-                        <circle cx={GRID_CARD_W - 10} cy={10} r={3} fill={getStatusColor(node.status)} />
-                        <text x={10} y={20} fill="var(--c-text-heading, #cdd6f4)" font-size="10" font-weight="500">
-                          <title>{node.title}</title>
-                          {node.title.length > 22 ? node.title.slice(0, 22) + '...' : node.title}
-                        </text>
-                        <text x={10} y={36} fill="var(--c-text-muted, #a6adc8)" font-size="8">
-                          {node.projectName}
-                        </text>
-                        <Show when={node.isDraft}>
-                          <text
-                            x={GRID_CARD_W - 8}
-                            y={44}
-                            text-anchor="end"
-                            font-size="7"
-                            fill="#f59e0b"
-                            font-weight="600"
-                          >
-                            DRAFT
-                          </text>
-                        </Show>
-                      </g>
-                    )
-                  }}
-                </For>
-              </g>
-            </svg>
+                        {node().title}
+                      </h3>
 
-            {/* Pagination for unconnected */}
-            <Show when={totalUnconnectedPages() > 1}>
-              <div
-                class="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-lg px-3 py-1.5"
-                style={{
-                  background: 'var(--c-bg-raised, #1e1e2e)',
-                  border: '1px solid var(--c-border, #45475a)'
-                }}
-              >
-                <button
-                  class="text-xs"
-                  style={{ color: 'var(--c-text, #cdd6f4)' }}
-                  disabled={unconnectedPage() === 0}
-                  onClick={() => setUnconnectedPage((p) => Math.max(0, p - 1))}
-                >
-                  Prev
-                </button>
-                <span class="text-xs opacity-60" style={{ color: 'var(--c-text-muted)' }}>
-                  {unconnectedPage() + 1} / {totalUnconnectedPages()}
-                </span>
-                <button
-                  class="text-xs"
-                  style={{ color: 'var(--c-text, #cdd6f4)' }}
-                  disabled={unconnectedPage() >= totalUnconnectedPages() - 1}
-                  onClick={() => setUnconnectedPage((p) => Math.min(totalUnconnectedPages() - 1, p + 1))}
-                >
-                  Next
-                </button>
-              </div>
+                      {/* Status badge */}
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '2px 8px',
+                          'border-radius': '9999px',
+                          'font-size': '11px',
+                          'font-weight': '500',
+                          color: '#fff',
+                          background: getStatusColor(node().status),
+                          'margin-bottom': '10px'
+                        }}
+                      >
+                        {getStatusLabel(node().status)}
+                      </span>
+
+                      {/* Priority */}
+                      <div style={{ 'margin-bottom': '10px' }} class="flex items-center gap-1">
+                        <PriorityIcon priority={node().priority} />
+                        <span style={{ color: 'var(--c-text, #cdd6f4)', 'font-size': '11px' }}>
+                          {getPriorityLabel(node().priority)}
+                        </span>
+                      </div>
+
+                      {/* Workspace / Project */}
+                      <div style={{ 'margin-bottom': '10px' }}>
+                        <div
+                          style={{
+                            color: 'var(--c-text-muted, #a6adc8)',
+                            'font-size': '10px',
+                            'text-transform': 'uppercase',
+                            'letter-spacing': '0.05em',
+                            'margin-bottom': '4px'
+                          }}
+                        >
+                          Location
+                        </div>
+                        <div class="flex items-center gap-1">
+                          <span
+                            class="inline-block h-2 w-2 rounded-full"
+                            style={{ background: getWorkspaceColor(node().workspace, allWorkspaces()) }}
+                          />
+                          <span style={{ color: 'var(--c-text, #cdd6f4)', 'font-size': '12px' }}>
+                            {node().workspaceName} / {node().projectName}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Labels */}
+                      <Show when={node().labels.length > 0}>
+                        <div style={{ 'margin-bottom': '10px' }}>
+                          <div
+                            style={{
+                              color: 'var(--c-text-muted, #a6adc8)',
+                              'font-size': '10px',
+                              'text-transform': 'uppercase',
+                              'letter-spacing': '0.05em',
+                              'margin-bottom': '4px'
+                            }}
+                          >
+                            Labels
+                          </div>
+                          <div class="flex flex-wrap gap-1">
+                            <For each={node().labels}>
+                              {(label) => (
+                                <span
+                                  style={{
+                                    padding: '1px 6px',
+                                    'border-radius': '4px',
+                                    'font-size': '11px',
+                                    background: 'var(--c-surface, #181825)',
+                                    color: 'var(--c-text, #cdd6f4)',
+                                    border: '1px solid var(--c-border, #45475a)'
+                                  }}
+                                >
+                                  {label}
+                                </span>
+                              )}
+                            </For>
+                          </div>
+                        </div>
+                      </Show>
+
+                      {/* Assignee */}
+                      <Show when={node().assignee}>
+                        <div style={{ 'margin-bottom': '10px' }}>
+                          <div
+                            style={{
+                              color: 'var(--c-text-muted, #a6adc8)',
+                              'font-size': '10px',
+                              'text-transform': 'uppercase',
+                              'letter-spacing': '0.05em',
+                              'margin-bottom': '4px'
+                            }}
+                          >
+                            Assignee
+                          </div>
+                          <span
+                            style={{
+                              padding: '1px 6px',
+                              'border-radius': '4px',
+                              'font-size': '11px',
+                              background: 'var(--c-surface, #181825)',
+                              color: 'var(--c-text, #cdd6f4)',
+                              border: '1px solid var(--c-border, #45475a)'
+                            }}
+                          >
+                            {node().assignee}
+                          </span>
+                        </div>
+                      </Show>
+
+                      {/* Upstream dependencies */}
+                      <div
+                        style={{
+                          'margin-top': '16px',
+                          'border-top': '1px solid var(--c-border, #45475a)',
+                          'padding-top': '12px'
+                        }}
+                      >
+                        <div
+                          style={{
+                            color: 'var(--c-text-muted, #a6adc8)',
+                            'font-size': '10px',
+                            'text-transform': 'uppercase',
+                            'letter-spacing': '0.05em',
+                            'margin-bottom': '6px'
+                          }}
+                        >
+                          Depends on ({upstreamDeps().length})
+                        </div>
+                        <For each={upstreamDeps()}>
+                          {(dep) => (
+                            <div
+                              class="flex items-center justify-between"
+                              style={{ padding: '4px 0', 'font-size': '12px' }}
+                            >
+                              <div style={{ 'min-width': '0', flex: '1' }}>
+                                <div
+                                  style={{
+                                    color: 'var(--c-text, #cdd6f4)',
+                                    'white-space': 'nowrap',
+                                    overflow: 'hidden',
+                                    'text-overflow': 'ellipsis'
+                                  }}
+                                >
+                                  {dep.title}
+                                </div>
+                                <div style={{ color: 'var(--c-text-muted, #a6adc8)', 'font-size': '10px' }}>
+                                  {dep.ref.projectId}#{dep.ref.issueId}
+                                </div>
+                              </div>
+                              <button
+                                style={{
+                                  color: 'var(--c-error, #ef4444)',
+                                  background: 'none',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  'font-size': '14px',
+                                  padding: '0 4px',
+                                  'flex-shrink': '0'
+                                }}
+                                disabled={depLoading()}
+                                onClick={() => removeDependency(node().ref, dep.ref)}
+                                title="Remove dependency"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          )}
+                        </For>
+                        <Show when={!showAddUpstream()}>
+                          <button
+                            style={{
+                              color: 'var(--c-accent, #89b4fa)',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              'font-size': '11px',
+                              padding: '4px 0'
+                            }}
+                            onClick={() => {
+                              setShowAddUpstream(true)
+                              setShowAddDownstream(false)
+                            }}
+                          >
+                            + Add upstream dependency
+                          </button>
+                        </Show>
+                        <Show when={showAddUpstream()}>
+                          <div
+                            style={{
+                              'max-height': '150px',
+                              overflow: 'auto',
+                              border: '1px solid var(--c-border, #45475a)',
+                              'border-radius': '4px',
+                              'margin-top': '4px'
+                            }}
+                          >
+                            <For
+                              each={availableUpstream()}
+                              fallback={
+                                <div
+                                  style={{ padding: '6px', 'font-size': '11px', color: 'var(--c-text-muted, #a6adc8)' }}
+                                >
+                                  No available nodes
+                                </div>
+                              }
+                            >
+                              {(n) => (
+                                <div
+                                  style={{
+                                    padding: '4px 8px',
+                                    cursor: 'pointer',
+                                    'font-size': '11px',
+                                    'border-bottom': '1px solid var(--c-border, #45475a)'
+                                  }}
+                                  class="hover:opacity-80"
+                                  onClick={() => addDependency(node().ref, n.ref, 'depends_on')}
+                                >
+                                  <div style={{ color: 'var(--c-text, #cdd6f4)' }}>{n.title}</div>
+                                  <div style={{ color: 'var(--c-text-muted, #a6adc8)', 'font-size': '10px' }}>
+                                    {n.ref.projectId}#{n.ref.issueId}
+                                  </div>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
+                      </div>
+
+                      {/* Downstream dependents */}
+                      <div
+                        style={{
+                          'margin-top': '16px',
+                          'border-top': '1px solid var(--c-border, #45475a)',
+                          'padding-top': '12px'
+                        }}
+                      >
+                        <div
+                          style={{
+                            color: 'var(--c-text-muted, #a6adc8)',
+                            'font-size': '10px',
+                            'text-transform': 'uppercase',
+                            'letter-spacing': '0.05em',
+                            'margin-bottom': '6px'
+                          }}
+                        >
+                          Blocks ({downstreamDeps().length})
+                        </div>
+                        <For each={downstreamDeps()}>
+                          {(dep) => (
+                            <div
+                              class="flex items-center justify-between"
+                              style={{ padding: '4px 0', 'font-size': '12px' }}
+                            >
+                              <div style={{ 'min-width': '0', flex: '1' }}>
+                                <div
+                                  style={{
+                                    color: 'var(--c-text, #cdd6f4)',
+                                    'white-space': 'nowrap',
+                                    overflow: 'hidden',
+                                    'text-overflow': 'ellipsis'
+                                  }}
+                                >
+                                  {dep.title}
+                                </div>
+                                <div style={{ color: 'var(--c-text-muted, #a6adc8)', 'font-size': '10px' }}>
+                                  {dep.ref.projectId}#{dep.ref.issueId}
+                                </div>
+                              </div>
+                              <button
+                                style={{
+                                  color: 'var(--c-error, #ef4444)',
+                                  background: 'none',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  'font-size': '14px',
+                                  padding: '0 4px',
+                                  'flex-shrink': '0'
+                                }}
+                                disabled={depLoading()}
+                                onClick={() => removeDependency(dep.ref, node().ref)}
+                                title="Remove dependent"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          )}
+                        </For>
+                        <Show when={!showAddDownstream()}>
+                          <button
+                            style={{
+                              color: 'var(--c-accent, #89b4fa)',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              'font-size': '11px',
+                              padding: '4px 0'
+                            }}
+                            onClick={() => {
+                              setShowAddDownstream(true)
+                              setShowAddUpstream(false)
+                            }}
+                          >
+                            + Add downstream dependent
+                          </button>
+                        </Show>
+                        <Show when={showAddDownstream()}>
+                          <div
+                            style={{
+                              'max-height': '150px',
+                              overflow: 'auto',
+                              border: '1px solid var(--c-border, #45475a)',
+                              'border-radius': '4px',
+                              'margin-top': '4px'
+                            }}
+                          >
+                            <For
+                              each={availableDownstream()}
+                              fallback={
+                                <div
+                                  style={{ padding: '6px', 'font-size': '11px', color: 'var(--c-text-muted, #a6adc8)' }}
+                                >
+                                  No available nodes
+                                </div>
+                              }
+                            >
+                              {(n) => (
+                                <div
+                                  style={{
+                                    padding: '4px 8px',
+                                    cursor: 'pointer',
+                                    'font-size': '11px',
+                                    'border-bottom': '1px solid var(--c-border, #45475a)'
+                                  }}
+                                  class="hover:opacity-80"
+                                  onClick={() => addDependency(n.ref, node().ref, 'depends_on')}
+                                >
+                                  <div style={{ color: 'var(--c-text, #cdd6f4)' }}>{n.title}</div>
+                                  <div style={{ color: 'var(--c-text-muted, #a6adc8)', 'font-size': '10px' }}>
+                                    {n.ref.projectId}#{n.ref.issueId}
+                                  </div>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
+                      </div>
+
+                      {/* Open full detail */}
+                      <div
+                        style={{
+                          'margin-top': '16px',
+                          'border-top': '1px solid var(--c-border, #45475a)',
+                          'padding-top': '12px'
+                        }}
+                      >
+                        <button
+                          style={{
+                            color: 'var(--c-accent, #89b4fa)',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            'font-size': '11px',
+                            padding: '0'
+                          }}
+                          onClick={() => {
+                            if (typeof window !== 'undefined') {
+                              window.dispatchEvent(
+                                new CustomEvent('sovereign:navigate', {
+                                  detail: { view: 'workspace', orgId: node().workspace, entityId: node().id }
+                                })
+                              )
+                            }
+                          }}
+                        >
+                          Open full detail →
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              }}
             </Show>
           </div>
         </Show>
