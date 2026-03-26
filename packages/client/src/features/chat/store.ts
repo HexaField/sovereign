@@ -13,6 +13,8 @@ export const [isRetryCountdownActive, setRetryActive] = createSignal(false)
 export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
 export const [inputValue, _setInputValue] = createSignal('')
 export const [messageQueue, setMessageQueue] = createSignal<QueuedMessage[]>([])
+export const [hasOlderMessages, setHasOlderMessages] = createSignal(false)
+export const [loadingOlder, setLoadingOlder] = createSignal(false)
 
 // Kept for backward compat — these are now derived from the streaming turn in turns[]
 // but some ChatView code may still reference them during transition
@@ -131,10 +133,7 @@ function ensureStreamingTurn(prev: ParsedTurn[]): ParsedTurn[] {
 }
 
 /** Update the streaming turn in-place (immutably). */
-function updateStreamingTurn(
-  prev: ParsedTurn[],
-  updater: (turn: ParsedTurn) => ParsedTurn
-): ParsedTurn[] {
+function updateStreamingTurn(prev: ParsedTurn[], updater: (turn: ParsedTurn) => ParsedTurn): ParsedTurn[] {
   const idx = findStreamingTurnIndex(prev)
   if (idx < 0) return prev
   const next = [...prev]
@@ -168,6 +167,8 @@ function resetState(): void {
   stopDurationTimer()
   suppressLifecycleUntil = 0
   setMessageQueue([])
+  setHasOlderMessages(false)
+  setLoadingOlder(false)
 }
 
 export function sendMessage(text: string, _attachments?: File[]): void {
@@ -183,6 +184,13 @@ export function sendMessage(text: string, _attachments?: File[]): void {
     }
   ])
   ws?.send({ type: 'chat.send', text, threadKey: currentThreadKey?.() ?? 'main' } as any)
+}
+
+export function loadOlderMessages(): void {
+  if (!ws || loadingOlder() || !hasOlderMessages()) return
+  setLoadingOlder(true)
+  const threadKey = currentThreadKey?.() ?? 'main'
+  ws.send({ type: 'chat.history.full', threadKey } as any)
 }
 
 export function cancelMessage(id: string): void {
@@ -346,10 +354,14 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   )
 
   // ── chat.session.info: full history replace ──
+  let _hasOlderMessages = false
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
+      _hasOlderMessages = msg.hasMore ?? false
+      setHasOlderMessages(_hasOlderMessages)
+      setLoadingOlder(false)
       setTurns(history)
       streamingRawText = ''
       setStreamingHtml('')

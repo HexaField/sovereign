@@ -49,7 +49,8 @@ function createMockBackend(): AgentBackend & { _handlers: Map<string, Array<(...
     abort: vi.fn(async () => {}),
     switchSession: vi.fn(async () => {}),
     createSession: vi.fn(async (_label?: string) => `session-${Date.now()}`),
-    getHistory: vi.fn(async () => []),
+    getHistory: vi.fn(async () => ({ turns: [], hasMore: false })),
+    getFullHistory: vi.fn(async () => []),
     on: vi.fn(<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void) => {
       if (!handlers.has(event)) handlers.set(event, [])
       handlers.get(event)!.push(handler as (...args: unknown[]) => void)
@@ -155,7 +156,7 @@ describe('§2.4 Chat Module (Server)', () => {
 
   it('MUST proxy chat.history to backend.getHistory(sessionKey) and respond with chat.session.info', async () => {
     const turns: ParsedTurn[] = [{ role: 'user', content: 'hi', timestamp: 1, workItems: [], thinkingBlocks: [] }]
-    ;(backend.getHistory as ReturnType<typeof vi.fn>).mockResolvedValue(turns)
+    ;(backend.getHistory as ReturnType<typeof vi.fn>).mockResolvedValue({ turns, hasMore: false })
     const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
     await chatModule.handleHistory(threadKey, 'device-1')
     expect(backend.getHistory).toHaveBeenCalledWith(sessionKey)
