@@ -1,9 +1,28 @@
-import { createSignal } from 'solid-js'
+import { createSignal, createMemo } from 'solid-js'
 import type { WsStore } from '../../ws/ws-store.js'
 
 export type ConnectionStatus = 'connecting' | 'authenticating' | 'connected' | 'disconnected' | 'error'
 
-export const [connectionStatus, setConnectionStatus] = createSignal<ConnectionStatus>('disconnected')
+/** Browser ↔ Sovereign WebSocket status */
+export const [wsStatus, setWsStatus] = createSignal<ConnectionStatus>('disconnected')
+
+/** Sovereign ↔ OpenClaw agent backend status */
+export const [backendStatus, setBackendStatus] = createSignal<ConnectionStatus>('disconnected')
+
+/** Combined status: green only when both browser↔Sovereign AND Sovereign↔OpenClaw are connected */
+export const connectionStatus = createMemo<ConnectionStatus>(() => {
+  const ws = wsStatus()
+  const backend = backendStatus()
+  // If the browser WS isn't connected, show that status
+  if (ws !== 'connected') return ws
+  // Browser WS is connected but agent backend isn't — show backend status
+  if (backend === 'disconnected' || backend === 'error') return 'disconnected'
+  if (backend === 'connecting' || backend === 'authenticating') return 'connecting'
+  return 'connected'
+})
+
+/** For backward compat — callers that set connectionStatus directly now set wsStatus */
+export const setConnectionStatus = setWsStatus
 
 const STATUS_TEXT_MAP: Record<ConnectionStatus, string> = {
   connecting: 'Connecting…',
@@ -20,7 +39,7 @@ export function statusText(): string {
 export function initConnectionStore(ws: WsStore): () => void {
   const unsub = ws.on('backend.status', (msg: any) => {
     const status = msg.status as ConnectionStatus
-    setConnectionStatus(status)
+    setBackendStatus(status)
   })
   return unsub
 }
