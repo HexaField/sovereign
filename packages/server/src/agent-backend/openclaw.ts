@@ -588,9 +588,13 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       const filePath = getSessionFilePath(sessionKey)
       if (filePath) {
         try {
-          const { messages, hasMore } = readRecentMessages(filePath, 80)
+          const t0 = Date.now()
+          const { messages, hasMore } = readRecentMessages(filePath, 500)
           if (messages.length > 0) {
-            return { turns: parseTurns(messages), hasMore }
+            const turns = parseTurns(messages)
+            const elapsed = Date.now() - t0
+            if (elapsed > 50) console.log(`[session-reader] ${sessionKey}: ${elapsed}ms, ${messages.length} raw → ${turns.length} turns`)
+            return { turns, hasMore }
           }
         } catch {
           /* fall through to RPC */
