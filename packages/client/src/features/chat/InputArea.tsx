@@ -6,7 +6,6 @@ import {
   inputValue,
   setInputValue,
   agentStatus as storeAgentStatus,
-  streamingHtml,
   turns,
   sendMessage,
   abortChat,
@@ -470,9 +469,7 @@ export function InputArea(props: InputAreaProps) {
   const statusText = () => getStatusText(currentAgentStatus())
   const busy = () => isAgentBusy(currentAgentStatus())
 
-  const isBusyOrStreaming = () =>
-    busy() ||
-    !!streamingHtml()
+  const isBusyOrStreaming = () => busy()
 
   return (
     <div
