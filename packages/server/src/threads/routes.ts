@@ -153,6 +153,55 @@ export function createThreadRoutes(
     })
   })
 
+  // ── Thread preview messages (last N user/assistant messages as text) ──
+  router.get('/api/threads/:key/preview-messages', async (req, res) => {
+    const threadKey = req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    const limit = Math.min(parseInt(req.query.limit as string) || 5, 20)
+    const messages: Array<{ role: string; content: string }> = []
+
+    try {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      const { getSessionFilePath, readRecentMessages } = await import('../agent-backend/session-reader.js')
+      const filePath = getSessionFilePath(sessionKey)
+      if (filePath) {
+        // Read more raw messages than needed since many will be tool calls
+        const { messages: raw } = readRecentMessages(filePath, limit * 10)
+        for (let i = raw.length - 1; i >= 0 && messages.length < limit; i--) {
+          const role = raw[i]?.role
+          if (role !== 'assistant' && role !== 'user') continue
+          const content = raw[i].content
+          let text = ''
+          if (typeof content === 'string') {
+            text = content
+          } else if (Array.isArray(content)) {
+            // Include text blocks (skip toolCall blocks)
+            text = content
+              .filter((b: any) => b.type === 'text')
+              .map((b: any) => b.text ?? '')
+              .join(' ')
+          }
+          text = text
+            .replace(/<antThinking>[\s\S]*?<\/antThinking>/g, '')
+            .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+            .replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
+            .trim()
+          if (!text || text === 'NO_REPLY' || text === 'HEARTBEAT_OK') continue
+          // Skip system-injected user messages
+          if (role === 'user' && (/^\(System\)/i.test(text) || /^OpenClaw runtime context/i.test(text) || /^Write any lasting notes/i.test(text) || /^Heartbeat prompt:/i.test(text))) continue
+          messages.unshift({ role, content: text.length > 200 ? text.slice(0, 200) + '...' : text })
+        }
+      }
+    } catch { /* ignore */ }
+
+    res.json({
+      messages,
+      agentStatus: thread.agentStatus ?? 'idle'
+    })
+  })
+
   // ── Thread management endpoints ──────────────────────────────────────
 
   router.post('/api/threads/clear-lock', (req, res) => {
