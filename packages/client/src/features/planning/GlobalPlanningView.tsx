@@ -20,6 +20,8 @@ import {
   ChevronDownIcon,
   CloseIcon
 } from '../../ui/icons.js'
+import { setActiveView } from '../nav/store.js'
+import { setActiveWorkspace, openIssueDetail } from '../workspace/store.js'
 
 // ── Server response types ────────────────────────────────────────────
 
@@ -923,13 +925,10 @@ const GlobalPlanningView: Component = () => {
       setShowAddDownstream(false)
       return
     }
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('sovereign:navigate', {
-          detail: { view: 'workspace', orgId: node.workspace, entityId: node.id }
-        })
-      )
-    }
+    // Navigate to workspace view and open issue detail
+    setActiveWorkspace(node.workspace, node.workspaceName)
+    openIssueDetail(node.ref.orgId, node.ref.projectId, node.ref.issueId)
+    setActiveView('workspace')
   }
 
   // Pan/zoom handlers
@@ -2044,13 +2043,12 @@ const GlobalPlanningView: Component = () => {
                             padding: '0'
                           }}
                           onClick={() => {
-                            if (typeof window !== 'undefined') {
-                              window.dispatchEvent(
-                                new CustomEvent('sovereign:navigate', {
-                                  detail: { view: 'workspace', orgId: node().workspace, entityId: node().id }
-                                })
-                              )
-                            }
+                            const n = node()
+                            if (!n) return
+                            // Navigate to workspace view and open issue detail
+                            setActiveWorkspace(n.workspace, n.workspaceName)
+                            openIssueDetail(n.ref.orgId, n.ref.projectId, n.ref.issueId)
+                            setActiveView('workspace')
                           }}
                         >
                           Open full detail →
