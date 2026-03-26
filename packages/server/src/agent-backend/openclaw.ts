@@ -262,11 +262,13 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'tool': {
+        const rawInput = data.input
+        const rawOutput = data.output
         const work: WorkItem = {
           type: phase === 'result' ? 'tool_result' : 'tool_call',
           name: data.name,
-          input: data.input,
-          output: data.output,
+          input: typeof rawInput === 'string' ? rawInput : rawInput ? JSON.stringify(rawInput) : undefined,
+          output: typeof rawOutput === 'string' ? rawOutput : rawOutput ? JSON.stringify(rawOutput) : undefined,
           toolCallId: data.toolCallId,
           timestamp: data.timestamp ?? Date.now()
         }
@@ -592,7 +594,10 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
           if (messages.length > 0) {
             const turns = parseTurns(messages)
             const elapsed = Date.now() - t0
-            if (elapsed > 50) console.log(`[session-reader] ${sessionKey}: ${elapsed}ms, ${messages.length} raw → ${turns.length} turns`)
+            if (elapsed > 50)
+              console.log(
+                `[session-reader] ${sessionKey}: ${elapsed}ms, ${messages.length} raw → ${turns.length} turns`
+              )
             return { turns, hasMore }
           }
         } catch {
