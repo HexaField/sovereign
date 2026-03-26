@@ -319,8 +319,21 @@ function WorkspaceHeaderContent() {
   const activeThreadLabel = () => {
     const key = threadKey()
     if (!key) return 'No thread'
+    // Check regular threads first
     const t = threads().find((th) => th.key === key)
-    return t?.label ?? t?.key ?? key
+    if (t) return t.label ?? t.key
+    // Check if it's a subagent session key — find label from activeSubagents
+    const subs = activeSubagents()
+    for (const children of Object.values(subs)) {
+      const match = children.find((sa) => sa.sessionKey === key)
+      if (match) return match.label
+    }
+    // Fallback: extract short ID from agent:main:subagent:uuid
+    if (key.includes(':subagent:')) {
+      const uuid = key.split(':subagent:')[1]
+      return uuid ? uuid.slice(0, 8) : key
+    }
+    return key
   }
 
   return (
