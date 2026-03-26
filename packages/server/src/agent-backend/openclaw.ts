@@ -186,8 +186,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     if (!payload) return
 
     const sessionKey = payload.sessionKey as string | undefined
-
-    if (!sessionKey) return // No session key — can't route, drop event
+    if (!sessionKey) return
 
     switch (event) {
       case 'chat': {
@@ -411,7 +410,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
                     },
                     auth: { token: storedToken },
                     userAgent: `Sovereign/0.1.0 (Node ${process.version})`,
-                    caps: []
+                    caps: ['tool-events']
                   }
                 })
               )
