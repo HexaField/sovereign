@@ -114,6 +114,17 @@ function resetState(): void {
 }
 
 export function sendMessage(text: string, _attachments?: File[]): void {
+  // Immediately add user turn so it's visible in the chat
+  setTurns((prev) => [
+    ...prev,
+    {
+      role: 'user' as const,
+      content: text,
+      timestamp: Date.now(),
+      workItems: [],
+      thinkingBlocks: []
+    }
+  ])
   ws?.send({ type: 'chat.send', text, threadKey: currentThreadKey?.() ?? 'main' } as any)
 }
 
