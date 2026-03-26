@@ -159,7 +159,8 @@ function cleanStreamText(raw: string): string {
 
 function resetState(): void {
   setTurns([])
-  streamingRawText = ''; streamTextOffset = 0
+  streamingRawText = ''
+  streamTextOffset = 0
   setAgentStatus('idle')
   setStreamingHtml('')
   setLiveWork([])
@@ -174,17 +175,9 @@ function resetState(): void {
 }
 
 export function sendMessage(text: string, _attachments?: File[]): void {
-  // Immediately add user turn so it's visible in the chat
-  setTurns((prev) => [
-    ...prev,
-    {
-      role: 'user' as const,
-      content: text,
-      timestamp: Date.now(),
-      workItems: [],
-      thinkingBlocks: []
-    }
-  ])
+  // Send to server — the message will appear in chat when the server
+  // processes it and sends back history via chat.session.info / chat.turn.
+  // The queue UI shows it as pending in the meantime.
   ws?.send({ type: 'chat.send', text, threadKey: currentThreadKey?.() ?? 'main' } as any)
 }
 
@@ -203,7 +196,8 @@ export function abortChat(): void {
   ws?.send({ type: 'chat.abort', threadKey: currentThreadKey?.() ?? 'main' } as any)
   // Remove the streaming turn and clear state
   setTurns((prev) => removeStreamingTurn(prev))
-  streamingRawText = ''; streamTextOffset = 0
+  streamingRawText = ''
+  streamTextOffset = 0
   setStreamingHtml('')
   setLiveWork([])
   setLiveThinkingText('')
@@ -245,7 +239,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     }
   })
 
-  streamingRawText = ''; streamTextOffset = 0
+  streamingRawText = ''
+  streamTextOffset = 0
 
   // ── chat.stream: update the streaming turn's content ──
   unsubs.push(
@@ -295,7 +290,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
         const without = removeStreamingTurn(prev)
         return [...without, turn]
       })
-      streamingRawText = ''; streamTextOffset = 0
+      streamingRawText = ''
+      streamTextOffset = 0
       setStreamingHtml('')
       setLiveWork([])
       setLiveThinkingText('')
@@ -315,7 +311,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
         if (msg.status === 'idle') {
           // Agent done — remove any lingering streaming turn that wasn't finalized
           setTurns((prev) => removeStreamingTurn(prev))
-          streamingRawText = ''; streamTextOffset = 0
+          streamingRawText = ''
+          streamTextOffset = 0
           setStreamingHtml('')
           setLiveWork([])
           setLiveThinkingText('')
@@ -384,7 +381,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       setHasOlderMessages(_hasOlderMessages)
       setLoadingOlder(false)
       setTurns(history)
-      streamingRawText = ''; streamTextOffset = 0
+      streamingRawText = ''
+      streamTextOffset = 0
       setStreamingHtml('')
       setLiveWork([])
       setLiveThinkingText('')
