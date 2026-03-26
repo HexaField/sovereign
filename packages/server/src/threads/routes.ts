@@ -108,21 +108,43 @@ export function createThreadRoutes(
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
 
     let lastMessage: string | null = null
-    if (opts?.backend) {
-      try {
-        const sessionKey = opts.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-        const { turns: history } = await opts.backend.getHistory(sessionKey)
-        // Find last assistant turn
-        for (let i = history.length - 1; i >= 0; i--) {
-          if (history[i].role === 'assistant' && history[i].content) {
-            const content = history[i].content
-            lastMessage = content.length > 120 ? content.slice(0, 120) + '...' : content
-            break
+
+    // Fast path: read last 10 lines from JSONL directly
+    try {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      const { getSessionFilePath, readRecentMessages } = await import('../agent-backend/session-reader.js')
+      const filePath = getSessionFilePath(sessionKey)
+      if (filePath) {
+        const { messages } = readRecentMessages(filePath, 10)
+        // Find last user or assistant message (skip toolResult, system)
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const role = messages[i]?.role
+          if ((role === 'assistant' || role === 'user') && messages[i].content) {
+            // Extract text from content (may be string or array of blocks)
+            let text = ''
+            const content = messages[i].content
+            if (typeof content === 'string') {
+              text = content
+            } else if (Array.isArray(content)) {
+              text = content
+                .filter((b: any) => b.type === 'text')
+                .map((b: any) => b.text ?? '')
+                .join(' ')
+            }
+            // Strip thinking blocks and directive tags
+            text = text
+              .replace(/<antThinking>[\s\S]*?<\/antThinking>/g, '')
+              .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+              .trim()
+            if (text && text !== 'NO_REPLY' && text !== 'HEARTBEAT_OK') {
+              lastMessage = text.length > 120 ? text.slice(0, 120) + '...' : text
+              break
+            }
           }
         }
-      } catch {
-        /* no history available */
       }
+    } catch {
+      /* fall through */
     }
 
     res.json({
