@@ -201,6 +201,83 @@ function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgLi
   )
 }
 
+interface SubagentInfo {
+  sessionKey: string
+  label: string
+  status: string
+  task: string
+}
+
+/** Recursive subagent tree — renders subagents nested under their parent, fractal. */
+function SubagentTree(props: {
+  subagents: SubagentInfo[]
+  allSubagents: Record<string, SubagentInfo[]>
+  depth: number
+  activeKey: string
+  onSelect: (sessionKey: string) => void
+}) {
+  return (
+    <div style={{ 'padding-left': `${props.depth * 16}px` }} class="pb-0.5">
+      <For each={props.subagents}>
+        {(sa) => {
+          const isActive = () => sa.status === 'working' || sa.status === 'thinking'
+          const isSelected = () => props.activeKey === sa.sessionKey
+          const children = () => props.allSubagents[sa.sessionKey] || []
+          return (
+            <>
+              <button
+                class="flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-3 py-1.5 text-left text-xs transition-colors"
+                style={{
+                  color: isSelected() ? 'var(--c-accent)' : 'var(--c-text-muted)',
+                  background: isSelected() ? 'var(--c-hover-bg)' : 'transparent'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-hover-bg)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = isSelected() ? 'var(--c-hover-bg)' : 'transparent' }}
+                onClick={() => props.onSelect(sa.sessionKey)}
+                title={sa.task || sa.label}
+              >
+                <span
+                  class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{
+                    background: isActive()
+                      ? 'var(--c-warning, #f59e0b)'
+                      : 'var(--c-text-muted)',
+                    animation: isActive()
+                      ? 'pulse-dot 2s ease-in-out infinite'
+                      : 'none'
+                  }}
+                />
+                <Show when={isSelected()}>
+                  <span class="text-[10px]">●</span>
+                </Show>
+                <span class="min-w-0 flex-1 truncate">{sa.label}</span>
+                <Show when={isActive()}>
+                  <span
+                    class="shrink-0 text-[10px]"
+                    style={{ color: 'var(--c-warning, #f59e0b)' }}
+                  >
+                    {sa.status}
+                  </span>
+                </Show>
+              </button>
+              {/* Recursive: show this subagent's own children */}
+              <Show when={children().length > 0}>
+                <SubagentTree
+                  subagents={children()}
+                  allSubagents={props.allSubagents}
+                  depth={props.depth + 1}
+                  activeKey={props.activeKey}
+                  onSelect={props.onSelect}
+                />
+              </Show>
+            </>
+          )
+        }}
+      </For>
+    </div>
+  )
+}
+
 function WorkspaceHeaderContent() {
   const ws = () => activeWorkspace()
   const [threadPickerOpen, setThreadPickerOpen] = createSignal(false)
@@ -445,39 +522,16 @@ function WorkspaceHeaderContent() {
                   </div>
                 </div>
                 <Show when={(activeSubagents()[t.key] || []).length > 0}>
-                  <div class="pl-6 pb-1">
-                    <For each={activeSubagents()[t.key]}>
-                      {(sa) => (
-                        <div
-                          class="flex items-center gap-2 px-3 py-1 text-xs"
-                          style={{ color: 'var(--c-text-muted)' }}
-                        >
-                          <span
-                            class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-                            style={{
-                              background: sa.status === 'working' || sa.status === 'thinking'
-                                ? 'var(--c-warning, #f59e0b)'
-                                : 'var(--c-text-muted)',
-                              animation: sa.status === 'working' || sa.status === 'thinking'
-                                ? 'pulse-dot 2s ease-in-out infinite'
-                                : 'none'
-                            }}
-                          />
-                          <span class="truncate" title={sa.task || sa.label}>
-                            {sa.label}
-                          </span>
-                          <Show when={sa.status === 'working' || sa.status === 'thinking'}>
-                            <span
-                              class="ml-auto shrink-0 text-[10px]"
-                              style={{ color: 'var(--c-warning, #f59e0b)' }}
-                            >
-                              {sa.status}
-                            </span>
-                          </Show>
-                        </div>
-                      )}
-                    </For>
-                  </div>
+                  <SubagentTree
+                    subagents={activeSubagents()[t.key]}
+                    allSubagents={activeSubagents()}
+                    depth={1}
+                    activeKey={threadKey()}
+                    onSelect={(key) => {
+                      switchThread(key)
+                      setThreadPickerOpen(false)
+                    }}
+                  />
                 </Show>
                 </>
               )}
