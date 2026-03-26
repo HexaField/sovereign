@@ -141,7 +141,16 @@ export function createPlanningService(bus: EventBus, dataDir: string, deps: Plan
       allEdges.push(...fixedEdges)
     }
 
-    const result = createGraph(snapshots, allEdges)
+    // Deduplicate edges — same from/to/type pair should only appear once
+    const edgeKeys = new Set<string>()
+    const dedupedEdges = allEdges.filter((e) => {
+      const key = `${e.from.orgId}/${e.from.projectId}#${e.from.issueId}->${e.to.orgId}/${e.to.projectId}#${e.to.issueId}:${e.type}`
+      if (edgeKeys.has(key)) return false
+      edgeKeys.add(key)
+      return true
+    })
+
+    const result = createGraph(snapshots, dedupedEdges)
     return result
   }
 
@@ -356,7 +365,18 @@ export function createPlanningService(bus: EventBus, dataDir: string, deps: Plan
       const issue = await deps.issueTracker.get(orgId, from.projectId, from.issueId)
       if (!issue) throw new Error(`Issue not found: ${from.projectId}#${from.issueId}`)
 
-      const depLine = type === 'depends_on' ? `depends on ${formatRefString(to)}` : `blocks ${formatRefString(to)}`
+      // Check if this dependency already exists in the body
+      const toStr = formatRefString(to)
+      const bareRef = `#${to.issueId}`
+      const existingLines = (issue.body || '').split('\n')
+      const alreadyExists = existingLines.some((line) => {
+        const trimmed = line.trim().toLowerCase()
+        const keyword = type === 'depends_on' ? 'depends on' : 'blocks'
+        return trimmed.startsWith(keyword) && (trimmed.includes(toStr.toLowerCase()) || trimmed.includes(bareRef))
+      })
+      if (alreadyExists) return // Already has this dependency
+
+      const depLine = type === 'depends_on' ? `depends on ${toStr}` : `blocks ${toStr}`
 
       const newBody = issue.body ? `${issue.body}\n${depLine}` : depLine
       await deps.issueTracker.update(orgId, from.projectId, from.issueId, { body: newBody })
