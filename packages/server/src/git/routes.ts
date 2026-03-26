@@ -89,6 +89,21 @@ export function createGitRoutes(
     }
   })
 
+  router.get('/diff', async (req: Request, res: Response) => {
+    try {
+      const { orgId, projectId, path, worktreeId } = req.query as {
+        orgId: string
+        projectId: string
+        path: string
+        worktreeId?: string
+      }
+      const diff = await gitService.diff(orgId, projectId, path, worktreeId)
+      res.json({ diff })
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
   router.get('/branches', async (req: Request, res: Response) => {
     try {
       const { orgId, projectId } = req.query as { orgId: string; projectId: string }
