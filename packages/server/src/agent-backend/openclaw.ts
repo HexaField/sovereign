@@ -4,6 +4,7 @@ import type { AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedT
 import type { OpenClawConfig, DeviceIdentity, InternalState } from './types.js'
 import { stripThinkingBlocks } from './thinking.js'
 import { parseTurns } from './parse-turns.js'
+import { getSessionFilePath, readRecentMessages } from './session-reader.js'
 import WebSocket from 'ws'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -582,12 +583,45 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       return result.sessionKey
     },
 
-    async getHistory(sessionKey: string): Promise<ParsedTurn[]> {
-      const result = (await request('chat.history', { sessionKey, limit: 1000 })) as {
+    async getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }> {
+      // Fast path: read session JSONL file directly (sub-millisecond)
+      const filePath = getSessionFilePath(sessionKey)
+      if (filePath) {
+        try {
+          const { messages, hasMore } = readRecentMessages(filePath, 80)
+          if (messages.length > 0) {
+            return { turns: parseTurns(messages), hasMore }
+          }
+        } catch {
+          /* fall through to RPC */
+        }
+      }
+
+      // Fallback: gateway RPC (slow, 200-600ms)
+      const result = (await request('chat.history', { sessionKey, limit: 200 })) as {
         messages?: any[]
       }
       const raw = result?.messages ?? []
-      return parseTurns(raw)
+      return { turns: parseTurns(raw), hasMore: false }
+    },
+
+    async getFullHistory(sessionKey: string): Promise<ParsedTurn[]> {
+      // Read ALL messages from file (no limit)
+      const filePath = getSessionFilePath(sessionKey)
+      if (filePath) {
+        try {
+          const { messages } = readRecentMessages(filePath, 100000)
+          if (messages.length > 0) {
+            return parseTurns(messages)
+          }
+        } catch {
+          /* fall through to RPC */
+        }
+      }
+      const result = (await request('chat.history', { sessionKey, limit: 10000 })) as {
+        messages?: any[]
+      }
+      return parseTurns(result?.messages ?? [])
     },
 
     on: emitter.on,

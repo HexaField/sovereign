@@ -8,7 +8,7 @@ import type { ChatModule } from '../chat/chat.js'
 import { deriveSessionKey } from '../chat/derive-session-key.js'
 
 interface AgentBackendLike {
-  getHistory(sessionKey: string): Promise<Array<{ role: string; content: string }>>
+  getHistory(sessionKey: string): Promise<{ turns: Array<{ role: string; content: string }>; hasMore: boolean }>
 }
 
 export function createThreadRoutes(
@@ -111,7 +111,7 @@ export function createThreadRoutes(
     if (opts?.backend) {
       try {
         const sessionKey = opts.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-        const history = await opts.backend.getHistory(sessionKey)
+        const { turns: history } = await opts.backend.getHistory(sessionKey)
         // Find last assistant turn
         for (let i = history.length - 1; i >= 0; i--) {
           if (history[i].role === 'assistant' && history[i].content) {
@@ -120,7 +120,9 @@ export function createThreadRoutes(
             break
           }
         }
-      } catch { /* no history available */ }
+      } catch {
+        /* no history available */
+      }
     }
 
     res.json({

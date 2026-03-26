@@ -390,14 +390,19 @@ app.get('/api/threads/active-subagents', async (_req, res) => {
     try {
       const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
       sessionsData = JSON.parse(raw)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
-    const result: Record<string, Array<{
-      sessionKey: string
-      label: string
-      status: string
-      task: string
-    }>> = {}
+    const result: Record<
+      string,
+      Array<{
+        sessionKey: string
+        label: string
+        status: string
+        task: string
+      }>
+    > = {}
 
     for (const s of allSessions) {
       if (!s.key.includes(':subagent:')) continue
@@ -405,12 +410,13 @@ app.get('/api/threads/active-subagents', async (_req, res) => {
       if (!meta?.spawnedBy) continue
 
       const isActive = s.agentStatus === 'working' || s.agentStatus === 'thinking'
-      const isRecent = s.lastActivity && (Date.now() - s.lastActivity) < 30 * 60 * 1000
+      const isRecent = s.lastActivity && Date.now() - s.lastActivity < 30 * 60 * 1000
       if (!isActive && !isRecent) continue
 
       let threadKey = 'main'
       if (meta.spawnedBy === 'agent:main:main') threadKey = 'main'
-      else if (meta.spawnedBy.startsWith('agent:main:thread:')) threadKey = meta.spawnedBy.replace('agent:main:thread:', '')
+      else if (meta.spawnedBy.startsWith('agent:main:thread:'))
+        threadKey = meta.spawnedBy.replace('agent:main:thread:', '')
       else if (meta.spawnedBy.includes(':subagent:')) threadKey = meta.spawnedBy
 
       if (!result[threadKey]) result[threadKey] = []
@@ -451,7 +457,9 @@ app.get('/api/threads/:key/subagents', async (req, res) => {
     try {
       const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
       sessionsData = JSON.parse(raw)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     const subagents = allSessions
       .filter((s) => s.key.includes(':subagent:'))
@@ -490,7 +498,7 @@ app.get('/api/threads/:key/history', async (req, res) => {
     if (cached && Date.now() - cached.ts < SUBAGENT_CACHE_TTL) {
       return res.json({ history: cached.data })
     }
-    const history = await backend.getHistory(sessionKey)
+    const { turns: history } = await backend.getHistory(sessionKey)
     subagentHistoryCache.set(sessionKey, { data: history, ts: Date.now() })
     // Evict old entries
     if (subagentHistoryCache.size > 50) {
@@ -538,7 +546,7 @@ app.get('/api/threads/gateway-sessions', async (_req, res) => {
   }
 })
 
-app.use(createThreadRoutes(threadManager, forwardHandler, { chatModule, backend }))
+app.use(createThreadRoutes(threadManager, forwardHandler, { chatModule, backend: backend as any }))
 registerThreadsWs(wsHandler as any, threadManager, bus)
 
 const voiceModule = createVoiceModule(bus, {

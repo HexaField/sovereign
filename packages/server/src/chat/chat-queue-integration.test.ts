@@ -23,7 +23,9 @@ function createMockBackend() {
   let backendStatus: BackendConnectionStatus = 'connected'
   return {
     _handlers: handlers,
-    _setStatus: (status: BackendConnectionStatus) => { backendStatus = status },
+    _setStatus: (status: BackendConnectionStatus) => {
+      backendStatus = status
+    },
     connect: vi.fn(async () => {}),
     disconnect: vi.fn(async () => {}),
     status: vi.fn(() => backendStatus),
@@ -31,7 +33,8 @@ function createMockBackend() {
     abort: vi.fn(async () => {}),
     switchSession: vi.fn(async () => {}),
     createSession: vi.fn(async (_label?: string) => `session-${Date.now()}`),
-    getHistory: vi.fn(async () => []),
+    getHistory: vi.fn(async () => ({ turns: [], hasMore: false })),
+    getFullHistory: vi.fn(async () => []),
     on: vi.fn(<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void) => {
       if (!handlers.has(event)) handlers.set(event, [])
       handlers.get(event)!.push(handler as (...args: unknown[]) => void)
@@ -172,7 +175,10 @@ describe('Chat Module Queue Integration', () => {
       // Make backend hang so the message stays in 'sending' state
       let resolveSend!: () => void
       ;(backend.sendMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
-        () => new Promise<void>((resolve) => { resolveSend = resolve })
+        () =>
+          new Promise<void>((resolve) => {
+            resolveSend = resolve
+          })
       )
       const sendPromise = chatModule.handleSend(threadKey, 'sending')
       // Queue should have message in 'sending' state now
