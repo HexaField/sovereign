@@ -973,8 +973,12 @@ const GlobalPlanningView: Component = () => {
 
   function handleWheel(e: WheelEvent) {
     e.preventDefault()
-    const delta = e.deltaY > 0 ? 0.9 : 1.1
-    const newZoom = Math.max(0.1, Math.min(3, zoom() * delta))
+    // Use deltaY magnitude for smooth proportional zoom.
+    // macOS trackpads fire many small-delta events; mouse wheels fire fewer large ones.
+    // Clamp the per-event factor so a single tick never jumps more than ~5%.
+    const raw = -e.deltaY * 0.002
+    const clamped = Math.max(-0.05, Math.min(0.05, raw))
+    const newZoom = Math.max(0.1, Math.min(3, zoom() * (1 + clamped)))
 
     // Zoom towards mouse position
     if (svgRef) {
