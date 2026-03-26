@@ -351,6 +351,83 @@ export function createPlanningService(bus: EventBus, dataDir: string, deps: Plan
       return { parsed, edges: edgeCount, cycles: allCycles }
     },
 
+    async addDependency(orgId, from, to, type) {
+      // Get the source issue and append a dependency line to its body
+      const issue = await deps.issueTracker.get(orgId, from.projectId, from.issueId)
+      if (!issue) throw new Error(`Issue not found: ${from.projectId}#${from.issueId}`)
+
+      const depLine = type === 'depends_on' ? `depends on ${formatRefString(to)}` : `blocks ${formatRefString(to)}`
+
+      const newBody = issue.body ? `${issue.body}\n${depLine}` : depLine
+      await deps.issueTracker.update(orgId, from.projectId, from.issueId, { body: newBody })
+
+      bus.emit({
+        type: 'planning.graph.updated',
+        timestamp: new Date().toISOString(),
+        source: 'planning',
+        payload: { orgId }
+      })
+    },
+
+    async removeDependency(orgId, from, to) {
+      // Get the source issue and remove dependency lines referencing `to`
+      const issue = await deps.issueTracker.get(orgId, from.projectId, from.issueId)
+      if (!issue) throw new Error(`Issue not found: ${from.projectId}#${from.issueId}`)
+
+      const toStr = formatRefString(to)
+      const bareRef = `#${to.issueId}`
+      const lines = issue.body.split('\n')
+      const filtered = lines.filter((line) => {
+        const trimmed = line.trim().toLowerCase()
+        const refLower = toStr.toLowerCase()
+        // Remove lines like "depends on org/project#id" or "blocks org/project#id" or bare #id refs
+        if (trimmed === `depends on ${refLower}` || trimmed === `blocked by ${refLower}`) return false
+        if (trimmed === `blocks ${refLower}`) return false
+        if (trimmed === `depends on ${bareRef}` || trimmed === `blocked by ${bareRef}`) return false
+        if (trimmed === `blocks ${bareRef}`) return false
+        return true
+      })
+
+      const newBody = filtered
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+      await deps.issueTracker.update(orgId, from.projectId, from.issueId, { body: newBody })
+
+      // Also check the reverse: if `to` issue has a "blocks from" line, remove it
+      try {
+        const toIssue = await deps.issueTracker.get(orgId, to.projectId, to.issueId)
+        if (toIssue) {
+          const fromStr = formatRefString(from).toLowerCase()
+          const fromBare = `#${from.issueId}`
+          const toLines = toIssue.body.split('\n')
+          const toFiltered = toLines.filter((line) => {
+            const trimmed = line.trim().toLowerCase()
+            if (trimmed === `blocks ${fromStr}` || trimmed === `blocks ${fromBare}`) return false
+            if (trimmed === `depends on ${fromStr}` || trimmed === `blocked by ${fromStr}`) return false
+            if (trimmed === `depends on ${fromBare}` || trimmed === `blocked by ${fromBare}`) return false
+            return true
+          })
+          if (toFiltered.length !== toLines.length) {
+            const newToBody = toFiltered
+              .join('\n')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim()
+            await deps.issueTracker.update(orgId, to.projectId, to.issueId, { body: newToBody })
+          }
+        }
+      } catch {
+        /* best effort */
+      }
+
+      bus.emit({
+        type: 'planning.graph.updated',
+        timestamp: new Date().toISOString(),
+        source: 'planning',
+        payload: { orgId }
+      })
+    },
+
     status() {
       return { module: 'planning', status: 'ok' }
     },
