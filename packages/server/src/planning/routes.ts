@@ -195,6 +195,30 @@ export function createPlanningRouter(service: PlanningService): Router {
     }
   })
 
+  router.post('/api/orgs/:orgId/planning/dependencies', async (req: Request, res: Response) => {
+    try {
+      const { orgId } = req.params
+      const { from, to, type } = req.body as { from: EntityRef; to: EntityRef; type: 'depends_on' | 'blocks' }
+      if (!from || !to || !type) return res.status(400).json({ error: 'Missing from, to, or type' })
+      await service.addDependency(orgId, from, to, type)
+      res.json({ ok: true })
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
+  router.delete('/api/orgs/:orgId/planning/dependencies', async (req: Request, res: Response) => {
+    try {
+      const { orgId } = req.params
+      const { from, to } = req.body as { from: EntityRef; to: EntityRef }
+      if (!from || !to) return res.status(400).json({ error: 'Missing from or to' })
+      await service.removeDependency(orgId, from, to)
+      res.json({ ok: true })
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
   router.post('/api/orgs/:orgId/planning/sync', async (req: Request, res: Response) => {
     try {
       const { orgId } = req.params
