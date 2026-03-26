@@ -95,6 +95,7 @@ export function createChatModule(
     backend.sendMessage(sessionKey, next.text).then(() => {
       messageQueue.removeSent(next.id)
       broadcastQueueUpdate(threadKey)
+      historyCache.delete(threadKey) // New message sent — invalidate cache
     }).catch(() => {
       messageQueue.markQueued(next.id)
       broadcastQueueUpdate(threadKey)
@@ -118,6 +119,9 @@ export function createChatModule(
   const currentStatus = new Map<string, string>()
   const currentWork = new Map<string, any[]>()
   const currentStreamText = new Map<string, string>()
+
+  // --- History cache: avoids re-reading session files from gateway on every switch ---
+  const historyCache = new Map<string, { turns: any[]; ts: number }>()
 
   // Proxy backend events to WS subscribers
   const backendEvents: (keyof AgentBackendEvents)[] = [
@@ -151,10 +155,11 @@ export function createChatModule(
           const prev = currentStreamText.get(threadKey) ?? ''
           currentStreamText.set(threadKey, prev + (data.text as string))
         } else if (eventName === 'chat.turn') {
-          // Turn complete — clear cached state
+          // Turn complete — clear cached state and invalidate history cache
           currentStatus.delete(threadKey)
           currentWork.delete(threadKey)
           currentStreamText.delete(threadKey)
+          historyCache.delete(threadKey)
         }
       }
 
@@ -210,18 +215,29 @@ export function createChatModule(
 
   async function handleHistory(threadKey: string, deviceId: string): Promise<void> {
     if (!threadKey) return // No thread selected — nothing to fetch
+    const t0 = Date.now()
     let sessionKey = threadToSession.get(threadKey)
     if (!sessionKey) {
-      // Derive and persist the session key for threads not yet in the map
       sessionKey = deriveSessionKey(threadKey)
       setMapping(threadKey, sessionKey)
     }
-    let history: any[] = []
-    try {
-      history = await backend.getHistory(sessionKey)
-    } catch {
-      // timeout or connection error — return empty history
+
+    // Check cache first — valid until invalidated by chat.turn
+    const cached = historyCache.get(threadKey)
+    let history: any[]
+    if (cached) {
+      history = cached.turns
+    } else {
+      try {
+        history = await backend.getHistory(sessionKey)
+      } catch {
+        history = []
+      }
+      historyCache.set(threadKey, { turns: history, ts: Date.now() })
     }
+
+    const elapsed = Date.now() - t0
+    if (elapsed > 50) console.log(`[chat] history fetch ${threadKey}: ${elapsed}ms, ${history.length} turns${cached ? ' (cached)' : ''}`)
     if (wsHandler) {
       wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history })
 
