@@ -773,10 +773,11 @@ const GlobalPlanningView: Component = () => {
   // Summary stats
   const stats = createMemo(() => {
     const n = filteredNodes()
-    const issueCount = n.filter((x) => !x.isDraft).length
+    const issueCount = n.filter((x) => !x.isDraft && x.kind !== 'pr').length
+    const prCount = n.filter((x) => x.kind === 'pr').length
     const draftCount = n.filter((x) => x.isDraft).length
     const depCount = filteredEdges().length
-    return { issueCount, draftCount, depCount }
+    return { issueCount, prCount, draftCount, depCount }
   })
 
   // Selected node
@@ -1179,7 +1180,7 @@ const GlobalPlanningView: Component = () => {
         <div class="ml-auto flex items-center gap-2">
           {/* Stats */}
           <span class="text-xs opacity-60" style={{ color: 'var(--c-text-muted, #a6adc8)' }}>
-            {stats().issueCount} issues, {stats().depCount} deps
+            {stats().issueCount} issues, {stats().prCount} PRs, {stats().depCount} deps
             <Show when={stats().draftCount > 0}>, {stats().draftCount} drafts</Show>
           </span>
 
@@ -1581,6 +1582,18 @@ const GlobalPlanningView: Component = () => {
                               font-weight="600"
                             >
                               DRAFT
+                            </text>
+                          </Show>
+                          <Show when={node.kind === 'pr' && !node.isDraft}>
+                            <text
+                              x={GRID_CARD_W - 8}
+                              y={44}
+                              text-anchor="end"
+                              font-size="7"
+                              fill="var(--c-accent, #89b4fa)"
+                              font-weight="600"
+                            >
+                              PR
                             </text>
                           </Show>
                         </g>
