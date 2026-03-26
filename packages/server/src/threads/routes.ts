@@ -204,6 +204,43 @@ export function createThreadRoutes(
 
   // ── Thread management endpoints ──────────────────────────────────────
 
+  // Thread session info — model, tokens, compaction, etc.
+  router.get('/api/threads/:key/session-info', async (_req, res) => {
+    const threadKey = _req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    try {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      const sessionsPath = (await import('node:path')).join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+      const fs = await import('node:fs')
+      const raw = fs.readFileSync(sessionsPath, 'utf-8')
+      const sessions = JSON.parse(raw)
+      const meta = sessions[sessionKey] ?? {}
+
+      res.json({
+        model: meta.model ?? null,
+        modelProvider: meta.modelProvider ?? null,
+        contextTokens: meta.contextTokens ?? null,
+        totalTokens: meta.totalTokens ?? 0,
+        inputTokens: meta.inputTokens ?? 0,
+        outputTokens: meta.outputTokens ?? 0,
+        compactionCount: meta.compactionCount ?? 0,
+        thinkingLevel: meta.thinkingLevel ?? null,
+        agentStatus: thread.agentStatus ?? 'idle',
+        sessionKey
+      })
+    } catch {
+      res.json({
+        model: null, modelProvider: null, contextTokens: null,
+        totalTokens: 0, inputTokens: 0, outputTokens: 0,
+        compactionCount: 0, thinkingLevel: null,
+        agentStatus: thread.agentStatus ?? 'idle',
+        sessionKey: null
+      })
+    }
+  })
+
   router.post('/api/threads/clear-lock', (req, res) => {
     const { sessionKey } = req.body ?? {}
     if (!sessionKey) return res.status(400).json({ error: 'sessionKey required' })
