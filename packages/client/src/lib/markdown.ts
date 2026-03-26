@@ -97,34 +97,26 @@ async function loadWorkspaceFiles(): Promise<void> {
       }
     }
 
-    // Also load workspace-level files (membranes, memory, etc.)
-    // These are in the OpenClaw workspace, not project repos
-    // Try the _global workspace files
+    // Also load OpenClaw workspace files (membranes, memory, etc.)
     try {
-      const globalRes = await fetch(`/api/files/tree?project=_global&path=.&depth=3`)
-      if (globalRes.ok) {
-        const tree = await globalRes.json()
-        const entries = tree.entries || tree.children || (Array.isArray(tree) ? tree : [])
-        function walkGlobal(entries: any[], prefix: string) {
-          for (const entry of entries) {
-            if (entry.type === 'directory' || entry.isDirectory) {
-              if (['node_modules', '.git'].includes(entry.name)) continue
-              const subPath = prefix ? `${prefix}/${entry.name}` : entry.name
-              if (entry.children) walkGlobal(entry.children, subPath)
-            } else {
-              const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
-              const absPath = entry.path || relPath
-              workspaceFiles!.add(relPath)
-              if (!workspaceFilePaths.has(relPath)) workspaceFilePaths.set(relPath, absPath)
-              absoluteToRelative.set(absPath, relPath)
-              if (!workspaceFilePaths.has(entry.name)) {
-                workspaceFiles!.add(entry.name)
-                workspaceFilePaths.set(entry.name, absPath)
-              }
-            }
+      const wsRes = await fetch('/api/files/workspace')
+      if (wsRes.ok) {
+        const wsData = await wsRes.json()
+        const entries: Array<{ name: string; path: string; isDirectory: boolean }> = wsData.entries || []
+        for (const e of entries) {
+          if (e.isDirectory) continue
+          const relPath = e.name
+          const absPath = e.path
+          workspaceFiles!.add(relPath)
+          if (!workspaceFilePaths.has(relPath)) workspaceFilePaths.set(relPath, absPath)
+          absoluteToRelative.set(absPath, relPath)
+          // Also store bare filename
+          const bareName = relPath.split('/').pop() || relPath
+          if (!workspaceFilePaths.has(bareName)) {
+            workspaceFiles!.add(bareName)
+            workspaceFilePaths.set(bareName, absPath)
           }
         }
-        walkGlobal(entries, '')
       }
     } catch {
       /* ignore */
