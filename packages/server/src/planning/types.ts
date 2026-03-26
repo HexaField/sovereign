@@ -120,6 +120,8 @@ export interface PlanningService {
   createIssue(orgId: string, data: CreateIssueWithDeps): Promise<{ issue: Issue; ref: EntityRef }>
   decompose(orgId: string, data: DecomposeRequest): Promise<{ issues: Issue[]; graph: GraphQueryResult }>
   sync(orgId: string, projectId?: string): Promise<{ parsed: number; edges: number; cycles: CycleError[] }>
+  addDependency(orgId: string, from: EntityRef, to: EntityRef, type: 'depends_on' | 'blocks'): Promise<void>
+  removeDependency(orgId: string, from: EntityRef, to: EntityRef): Promise<void>
   status(): { module: string; status: string }
   /** Get unified graph across all orgs */
   getCrossOrgGraph?(filter?: GraphFilter): Promise<GraphQueryResult & { crossWorkspaceEdges: DependencyEdge[] }>
