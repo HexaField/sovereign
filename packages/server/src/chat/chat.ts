@@ -157,8 +157,10 @@ export function createChatModule(
       if (threadKey) {
         if (eventName === 'chat.status') {
           currentStatus.set(threadKey, data.status as string)
-          // When agent becomes idle, try processing the next queued message
+          // When agent becomes idle, invalidate history cache so next load picks up
+          // all messages (including those from context overflow resets, compaction, etc.)
           if (data.status === 'idle') {
+            historyCache.delete(threadKey)
             tryProcessQueue(threadKey)
           }
         } else if (eventName === 'chat.work') {
