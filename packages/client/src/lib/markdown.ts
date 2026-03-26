@@ -34,15 +34,23 @@ export function renderMarkdown(text: string): string {
 }
 
 /** Inject clickable file chips for absolute file paths in rendered HTML.
- *  Skips paths already inside tags or code blocks. */
+ *  Skips paths inside code/pre blocks and tag attributes. */
 function injectFileChips(html: string): string {
   // Match absolute paths that look like files (have an extension)
   const pathRe = /(\/[\w.+-]+(?:\/[\w.+-]+)*\.\w{1,10})/g
   // Split on HTML tags to avoid replacing inside tag attributes
+  let insideCode = 0
   return html
-    .split(/(<[^>]+>)/g)
+    .split(/(<\/?[^>]+>)/g)
     .map((part) => {
-      if (part.startsWith('<')) return part
+      if (part.startsWith('<')) {
+        const lower = part.toLowerCase()
+        if (lower.startsWith('<code') || lower.startsWith('<pre')) insideCode++
+        else if (lower.startsWith('</code') || lower.startsWith('</pre')) insideCode = Math.max(0, insideCode - 1)
+        return part
+      }
+      // Don't inject chips inside code/pre blocks
+      if (insideCode > 0) return part
       return part.replace(pathRe, (_match, path) => {
         const name = path.split('/').pop() || path
         return `<span class="file-chip" data-file-path="${path}" title="${path}">📄 ${name}<button class="file-chip-copy" data-copy-path="${path}" title="Copy path">⧉</button></span>`
