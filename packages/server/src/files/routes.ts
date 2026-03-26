@@ -26,6 +26,66 @@ export function createFileRouter(
     return project
   }
 
+  // GET /api/files/workspace — list OpenClaw workspace files for file chip resolution
+  const openclawWorkspace = process.env.OPENCLAW_WORKSPACE || ''
+  router.get('/workspace', (async (_req, res) => {
+    if (!openclawWorkspace) {
+      res.json({ entries: [] })
+      return
+    }
+    try {
+      const depth = 4
+      const skip = new Set([
+        'node_modules',
+        '.git',
+        'dist',
+        'build',
+        '.next',
+        '.turbo',
+        '__pycache__',
+        '.state',
+        'temp_outputs'
+      ])
+      interface Entry {
+        name: string
+        path: string
+        isDirectory: boolean
+      }
+      const entries: Entry[] = []
+
+      async function scan(dir: string, rel: string, d: number): Promise<void> {
+        if (d <= 0) return
+        let items: string[]
+        try {
+          items = await fs.readdir(dir)
+        } catch {
+          return
+        }
+        for (const name of items) {
+          if (skip.has(name) || name.startsWith('.')) continue
+          const full = nodePath.join(dir, name)
+          const relPath = rel ? `${rel}/${name}` : name
+          try {
+            const stat = await fs.stat(full)
+            if (stat.isDirectory()) {
+              entries.push({ name: relPath, path: full, isDirectory: true })
+              await scan(full, relPath, d - 1)
+            } else {
+              entries.push({ name: relPath, path: full, isDirectory: false })
+            }
+          } catch {
+            /* skip */
+          }
+        }
+      }
+
+      await scan(openclawWorkspace, '', depth)
+      res.json({ entries, basePath: openclawWorkspace })
+    } catch (err: any) {
+      res.status(500).json({ error: err.message })
+    }
+  }) as RequestHandler)
+
   // GET /api/files/tree?path=...&project=...
   router.get('/tree', (async (req, res) => {
     const dirPath = req.query.path as string | undefined
