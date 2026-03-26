@@ -33,6 +33,8 @@ export interface ParsedTurn {
   workItems: WorkItem[]
   thinkingBlocks: string[]
   pending?: boolean
+  /** True while the agent is actively producing this turn */
+  streaming?: boolean
 }
 
 /**

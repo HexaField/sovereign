@@ -359,7 +359,8 @@ export function MessageBubble(props: MessageBubbleProps) {
           class="group relative max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed break-words select-text"
           classList={{
             'rounded-br-sm whitespace-pre-wrap': role() === 'user',
-            'rounded-bl-sm msg-assistant': role() === 'assistant'
+            'rounded-bl-sm msg-assistant': role() === 'assistant',
+            'streaming-dots': !!props.turn.streaming
           }}
           style={{
             background: role() === 'user' ? 'var(--c-user-bubble)' : 'var(--c-bg-raised)',
