@@ -307,54 +307,87 @@ interface LayoutResult {
   totalHeight: number
 }
 
-function improvedLayout(nodes: PlanningNode[], edges: PlanningEdge[]): LayoutResult {
-  const edgeNodeIds = new Set<string>()
+const COMPONENT_GAP = 50
+
+/** Find connected components via BFS on the undirected edge graph */
+function findConnectedComponents(nodes: PlanningNode[], edges: PlanningEdge[]): PlanningNode[][] {
+  const nodeMap = new Map<string, PlanningNode>()
+  for (const n of nodes) nodeMap.set(n.id, n)
+
+  // Build undirected adjacency
+  const adj = new Map<string, Set<string>>()
+  for (const n of nodes) adj.set(n.id, new Set())
   for (const e of edges) {
-    edgeNodeIds.add(e.from)
-    edgeNodeIds.add(e.to)
+    adj.get(e.from)?.add(e.to)
+    adj.get(e.to)?.add(e.from)
   }
-  // Also include transitive: any node with deps pointing to/from edge nodes
+
+  const visited = new Set<string>()
+  const components: PlanningNode[][] = []
+
   for (const n of nodes) {
-    if (n.dependencies.some((d) => edgeNodeIds.has(d))) edgeNodeIds.add(n.id)
+    if (visited.has(n.id)) continue
+    const component: PlanningNode[] = []
+    const queue = [n.id]
+    while (queue.length > 0) {
+      const id = queue.shift()!
+      if (visited.has(id)) continue
+      visited.add(id)
+      const node = nodeMap.get(id)
+      if (node) component.push(node)
+      for (const neighbor of adj.get(id) ?? []) {
+        if (!visited.has(neighbor)) queue.push(neighbor)
+      }
+    }
+    if (component.length > 0) components.push(component)
   }
 
-  const connected = nodes.filter((n) => edgeNodeIds.has(n.id))
-  const unconnected = nodes.filter((n) => !edgeNodeIds.has(n.id))
+  return components
+}
 
-  // Build adjacency for median heuristic
-  // edge.from depends on edge.to, so edge.to is at lower depth (left)
-  const leftNeighbors = new Map<string, string[]>() // node -> nodes in previous column it connects to
-  for (const e of edges) {
-    // e.from (dependent, higher depth) connects to e.to (dependency, lower depth)
+/** Layout a single connected component, returning positions offset by yStart */
+function layoutComponent(
+  compNodes: PlanningNode[],
+  compEdges: PlanningEdge[],
+  yStart: number
+): { positions: Array<{ node: PlanningNode; x: number; y: number }>; maxX: number; maxY: number } {
+  const leftNeighbors = new Map<string, string[]>()
+  for (const e of compEdges) {
     const list = leftNeighbors.get(e.from) || []
     list.push(e.to)
     leftNeighbors.set(e.from, list)
   }
 
-  // Group by depth
   const byDepth = new Map<number, PlanningNode[]>()
-  for (const n of connected) {
+  for (const n of compNodes) {
     const list = byDepth.get(n.depth) || []
     list.push(n)
     byDepth.set(n.depth, list)
   }
 
-  const sortedDepths = [...byDepth.keys()].sort((a, b) => a - b)
+  // Normalize depths to start from 0 within this component
+  const minDepth = Math.min(...byDepth.keys())
+  if (minDepth !== 0) {
+    const entries = [...byDepth.entries()]
+    byDepth.clear()
+    for (const [d, items] of entries) byDepth.set(d - minDepth, items)
+  }
 
-  // First pass: assign initial y positions
+  const sortedDepths = [...byDepth.keys()].sort((a, b) => a - b)
   const nodeYPos = new Map<string, number>()
+
+  // Initial y positions
   for (const depth of sortedDepths) {
     const items = byDepth.get(depth)!
     items.forEach((node, i) => {
-      nodeYPos.set(node.id, i * (DAG_NODE_H + DAG_V_GAP) + 40)
+      nodeYPos.set(node.id, i * (DAG_NODE_H + DAG_V_GAP) + yStart)
     })
   }
 
-  // Median heuristic: sort nodes in each column by median y of their left neighbors
-  // Run a few iterations for convergence
+  // Median heuristic iterations
   for (let iter = 0; iter < 3; iter++) {
     for (const depth of sortedDepths) {
-      if (depth === 0) continue // first column has no left neighbors
+      if (depth === 0) continue
       const items = byDepth.get(depth)!
       items.sort((a, b) => {
         const aNeighbors = (leftNeighbors.get(a.id) || []).map((id) => nodeYPos.get(id) ?? 0)
@@ -363,38 +396,73 @@ function improvedLayout(nodes: PlanningNode[], edges: PlanningEdge[]): LayoutRes
         const medianB = bNeighbors.length > 0 ? bNeighbors.sort((x, y) => x - y)[Math.floor(bNeighbors.length / 2)] : 0
         return medianA - medianB
       })
-      // Re-assign y positions after sort
       items.forEach((node, i) => {
-        nodeYPos.set(node.id, i * (DAG_NODE_H + DAG_V_GAP) + 40)
+        nodeYPos.set(node.id, i * (DAG_NODE_H + DAG_V_GAP) + yStart)
       })
     }
   }
 
-  // Center each column vertically relative to the tallest column
-  let globalMaxItems = 0
+  // Center columns vertically within this component
+  let compMaxItems = 0
   for (const depth of sortedDepths) {
-    globalMaxItems = Math.max(globalMaxItems, byDepth.get(depth)!.length)
+    compMaxItems = Math.max(compMaxItems, byDepth.get(depth)!.length)
   }
-  const totalColumnHeight = globalMaxItems * (DAG_NODE_H + DAG_V_GAP) - DAG_V_GAP
+  const totalColHeight = compMaxItems * (DAG_NODE_H + DAG_V_GAP) - DAG_V_GAP
 
-  const connectedPositions: Array<{ node: PlanningNode; x: number; y: number }> = []
+  const positions: Array<{ node: PlanningNode; x: number; y: number }> = []
   let maxX = 0
   let maxY = 0
+
   for (const depth of sortedDepths) {
     const items = byDepth.get(depth)!
     const colX = depth * (DAG_NODE_W + DAG_H_GAP) + 40
     const colHeight = items.length * (DAG_NODE_H + DAG_V_GAP) - DAG_V_GAP
-    const offsetY = Math.max(0, (totalColumnHeight - colHeight) / 2)
+    const offsetY = Math.max(0, (totalColHeight - colHeight) / 2)
     items.forEach((node, i) => {
-      const y = i * (DAG_NODE_H + DAG_V_GAP) + 40 + offsetY
-      nodeYPos.set(node.id, y) // update for edge routing
-      connectedPositions.push({ node, x: colX, y })
+      const y = i * (DAG_NODE_H + DAG_V_GAP) + yStart + offsetY
+      nodeYPos.set(node.id, y)
+      positions.push({ node, x: colX, y })
       maxX = Math.max(maxX, colX + DAG_NODE_W)
       maxY = Math.max(maxY, y + DAG_NODE_H)
     })
   }
 
-  const connectedBounds = { w: maxX + 40, h: maxY + 40 }
+  return { positions, maxX, maxY }
+}
+
+function improvedLayout(nodes: PlanningNode[], edges: PlanningEdge[]): LayoutResult {
+  const edgeNodeIds = new Set<string>()
+  for (const e of edges) {
+    edgeNodeIds.add(e.from)
+    edgeNodeIds.add(e.to)
+  }
+  for (const n of nodes) {
+    if (n.dependencies.some((d) => edgeNodeIds.has(d))) edgeNodeIds.add(n.id)
+  }
+
+  const connected = nodes.filter((n) => edgeNodeIds.has(n.id))
+  const unconnected = nodes.filter((n) => !edgeNodeIds.has(n.id))
+
+  // Find connected components and sort largest first
+  const components = findConnectedComponents(connected, edges)
+  components.sort((a, b) => b.length - a.length)
+
+  // Layout each component independently, stacking vertically
+  const connectedPositions: Array<{ node: PlanningNode; x: number; y: number }> = []
+  let maxX = 0
+  let maxY = 40 // start with padding
+
+  for (const comp of components) {
+    const compNodeIds = new Set(comp.map((n) => n.id))
+    const compEdges = edges.filter((e) => compNodeIds.has(e.from) && compNodeIds.has(e.to))
+
+    const result = layoutComponent(comp, compEdges, maxY)
+    connectedPositions.push(...result.positions)
+    maxX = Math.max(maxX, result.maxX)
+    maxY = result.maxY + COMPONENT_GAP
+  }
+
+  const connectedBounds = { w: maxX + 40, h: maxY }
 
   // Grid layout for unconnected, grouped by project
   const byProject = new Map<string, PlanningNode[]>()
