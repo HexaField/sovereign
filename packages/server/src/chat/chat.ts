@@ -13,6 +13,7 @@ export interface ChatModule {
   handleSend(threadKey: string, text: string, attachments?: Buffer[]): Promise<void>
   handleAbort(threadKey: string): Promise<void>
   handleHistory(threadKey: string, deviceId: string): Promise<void>
+  handleFullHistory(threadKey: string, deviceId: string): Promise<void>
   handleSessionSwitch(threadKey: string): Promise<void>
   handleSessionCreate(label?: string): Promise<{ threadKey: string; sessionKey: string }>
   handleCancel(id: string): boolean
@@ -92,14 +93,17 @@ export function createChatModule(
       sessionKey = deriveSessionKey(threadKey)
       setMapping(threadKey, sessionKey)
     }
-    backend.sendMessage(sessionKey, next.text).then(() => {
-      messageQueue.removeSent(next.id)
-      broadcastQueueUpdate(threadKey)
-      historyCache.delete(threadKey) // New message sent — invalidate cache
-    }).catch(() => {
-      messageQueue.markQueued(next.id)
-      broadcastQueueUpdate(threadKey)
-    })
+    backend
+      .sendMessage(sessionKey, next.text)
+      .then(() => {
+        messageQueue.removeSent(next.id)
+        broadcastQueueUpdate(threadKey)
+        historyCache.delete(threadKey) // New message sent — invalidate cache
+      })
+      .catch(() => {
+        messageQueue.markQueued(next.id)
+        broadcastQueueUpdate(threadKey)
+      })
     bus.emit({
       type: 'chat.message.sent',
       timestamp: new Date().toISOString(),
@@ -121,7 +125,7 @@ export function createChatModule(
   const currentStreamText = new Map<string, string>()
 
   // --- History cache: avoids re-reading session files from gateway on every switch ---
-  const historyCache = new Map<string, { turns: any[]; ts: number }>()
+  const historyCache = new Map<string, { turns: any[]; hasMore: boolean; ts: number }>()
 
   // Proxy backend events to WS subscribers
   const backendEvents: (keyof AgentBackendEvents)[] = [
@@ -225,21 +229,28 @@ export function createChatModule(
     // Check cache first — valid until invalidated by chat.turn
     const cached = historyCache.get(threadKey)
     let history: any[]
+    let hasMore = false
     if (cached) {
       history = cached.turns
+      hasMore = cached.hasMore ?? false
     } else {
       try {
-        history = await backend.getHistory(sessionKey)
+        const result = await backend.getHistory(sessionKey)
+        history = result.turns
+        hasMore = result.hasMore
       } catch {
         history = []
       }
-      historyCache.set(threadKey, { turns: history, ts: Date.now() })
+      historyCache.set(threadKey, { turns: history, hasMore, ts: Date.now() })
     }
 
     const elapsed = Date.now() - t0
-    if (elapsed > 50) console.log(`[chat] history fetch ${threadKey}: ${elapsed}ms, ${history.length} turns${cached ? ' (cached)' : ''}`)
+    if (elapsed > 50)
+      console.log(
+        `[chat] history fetch ${threadKey}: ${elapsed}ms, ${history.length} turns${cached ? ' (cached)' : ''}`
+      )
     if (wsHandler) {
-      wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history })
+      wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore })
 
       // Replay cached live state so reconnecting clients see in-progress work
       const status = currentStatus.get(threadKey)
@@ -273,6 +284,26 @@ export function createChatModule(
     }
   }
 
+  async function handleFullHistory(threadKey: string, deviceId: string): Promise<void> {
+    if (!threadKey) return
+    let sessionKey = threadToSession.get(threadKey)
+    if (!sessionKey) {
+      sessionKey = deriveSessionKey(threadKey)
+      setMapping(threadKey, sessionKey)
+    }
+
+    try {
+      // Full history via gateway RPC or direct file read — slower but complete
+      const history = await backend.getFullHistory(sessionKey)
+      historyCache.set(threadKey, { turns: history, hasMore: false, ts: Date.now() })
+      if (wsHandler) {
+        wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore: false })
+      }
+    } catch {
+      // Silently fail — client already has partial history
+    }
+  }
+
   function handleCancel(id: string): boolean {
     // Find the threadKey before cancelling (item will be removed)
     let targetThreadKey: string | undefined
@@ -301,6 +332,7 @@ export function createChatModule(
     handleSend,
     handleAbort,
     handleHistory,
+    handleFullHistory,
     handleSessionSwitch,
     handleSessionCreate,
     handleCancel,

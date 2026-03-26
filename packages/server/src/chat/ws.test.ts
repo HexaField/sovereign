@@ -27,6 +27,7 @@ function createMockChatModule(): ChatModule {
     handleSend: vi.fn(async () => {}),
     handleAbort: vi.fn(async () => {}),
     handleHistory: vi.fn(async () => {}),
+    handleFullHistory: vi.fn(async () => {}),
     handleSessionSwitch: vi.fn(async () => {}),
     handleSessionCreate: vi.fn(async () => ({ threadKey: 't1', sessionKey: 's1' })),
     handleCancel: vi.fn(() => true),
@@ -55,6 +56,7 @@ describe('Chat WS Channel', () => {
           'chat.send',
           'chat.abort',
           'chat.history',
+          'chat.history.full',
           'chat.session.switch',
           'chat.session.create',
           'chat.cancel'

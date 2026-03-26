@@ -79,7 +79,8 @@ export interface AgentBackend {
   /** Create a new session */
   createSession(label?: string): Promise<string>
   /** Get conversation history for a session */
-  getHistory(sessionKey: string): Promise<ParsedTurn[]>
+  getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }>
+  getFullHistory(sessionKey: string): Promise<ParsedTurn[]>
   /** Register a callback for backend events */
   on<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void): void
   /** Unregister a callback */

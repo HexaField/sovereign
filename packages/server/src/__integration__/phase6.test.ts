@@ -164,9 +164,27 @@ describe('Phase 6 — Integration Tests', () => {
           // Then send stream events
           const sk = msg.params?.sessionKey ?? 'main'
           // Delta messages contain full accumulated text
-          ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'delta', message: [{ type: 'text', text: 'Hello' }], sessionKey: sk } }))
-          ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'delta', message: [{ type: 'text', text: 'Hello world' }], sessionKey: sk } }))
-          ws.send(JSON.stringify({ type: 'event', event: 'chat', payload: { state: 'final', message: [{ type: 'text', text: 'Hello world' }], sessionKey: sk } }))
+          ws.send(
+            JSON.stringify({
+              type: 'event',
+              event: 'chat',
+              payload: { state: 'delta', message: [{ type: 'text', text: 'Hello' }], sessionKey: sk }
+            })
+          )
+          ws.send(
+            JSON.stringify({
+              type: 'event',
+              event: 'chat',
+              payload: { state: 'delta', message: [{ type: 'text', text: 'Hello world' }], sessionKey: sk }
+            })
+          )
+          ws.send(
+            JSON.stringify({
+              type: 'event',
+              event: 'chat',
+              payload: { state: 'final', message: [{ type: 'text', text: 'Hello world' }], sessionKey: sk }
+            })
+          )
         }
       })
     })
@@ -354,9 +372,7 @@ describe('Phase 6 — Integration Tests', () => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString())
         if (msg.type === 'req' && msg.method === 'session.create') {
-          ws.send(
-            JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: { sessionKey: 'sess-' + msg.id } })
-          )
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: { sessionKey: 'sess-' + msg.id } }))
         }
         if (msg.type === 'req' && msg.method === 'session.switch') {
           ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
@@ -384,8 +400,8 @@ describe('Phase 6 — Integration Tests', () => {
       await backend.switchSession('test-session')
       const history = await backend.getHistory('test-session')
 
-      expect(history).toHaveLength(1)
-      expect(history[0].content).toBe('Hello')
+      expect(history.turns).toHaveLength(1)
+      expect(history.turns[0].content).toBe('Hello')
     } finally {
       await backend.disconnect()
       await gw.close()
@@ -636,9 +652,7 @@ describe('Phase 6 — Integration Tests', () => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString())
         if (msg.type === 'req' && msg.method === 'session.create') {
-          ws.send(
-            JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: { sessionKey: 'persistent-sess-1' } })
-          )
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, ok: true, payload: { sessionKey: 'persistent-sess-1' } }))
         }
       })
     })

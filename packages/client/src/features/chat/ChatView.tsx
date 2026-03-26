@@ -4,6 +4,7 @@ import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
 import { SubagentCard } from './SubagentCard.js'
+import { hasOlderMessages, loadingOlder, loadOlderMessages } from './store.js'
 import { ChatIcon } from '../../ui/icons.js'
 import { renderMarkdown } from '../../lib/markdown.js'
 
@@ -32,12 +33,12 @@ function extractSubagentSpawns(workItems: WorkItem[]): Array<{ sessionKey: strin
       try {
         const inp = typeof w.input === 'string' ? JSON.parse(w.input) : w.input
         task = inp?.task || inp?.message || ''
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
 
       // Find corresponding result by toolCallId
-      const result = workItems.find(
-        (r) => r.type === 'tool_result' && r.toolCallId === w.toolCallId
-      )
+      const result = workItems.find((r) => r.type === 'tool_result' && r.toolCallId === w.toolCallId)
       if (result?.output) {
         try {
           const out = typeof result.output === 'string' ? JSON.parse(result.output) : result.output
@@ -117,7 +118,7 @@ export function ChatView(props: ChatViewProps) {
   // on refresh or for subagent threads that don't get real streaming events.
   const lastThoughtHtml = createMemo(() => {
     // Don't show if there's an active streaming turn
-    if (props.messages.some(m => m.turn.streaming)) return null
+    if (props.messages.some((m) => m.turn.streaming)) return null
     const msgs = props.messages
     if (msgs.length === 0) return null
     const last = msgs[msgs.length - 1]
@@ -140,6 +141,20 @@ export function ChatView(props: ChatViewProps) {
     <div class="flex min-h-0 flex-1 flex-col" style={{ background: 'var(--c-bg)' }}>
       {/* Message list */}
       <div ref={scrollRef} class="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
+        {/* Load older messages */}
+        {hasOlderMessages() && (
+          <div class="flex items-center justify-center">
+            <button
+              class="rounded-md border border-white/10 px-3 py-1 text-xs hover:bg-white/5"
+              onClick={loadOlderMessages}
+              disabled={loadingOlder()}
+              style={{ color: 'var(--c-text-muted)' }}
+            >
+              {loadingOlder() ? 'Loading older messages…' : 'Load older messages'}
+            </button>
+          </div>
+        )}
+
         {/* Empty state */}
         {isEmptyState(props.messages) && (
           <div class="flex h-full items-center justify-center">
@@ -190,7 +205,7 @@ export function ChatView(props: ChatViewProps) {
         {/* Streaming response — REMOVED: now rendered via streaming turn in messages[] */}
 
         {/* Last thought from history — shown when agent is mid-run but no live stream */}
-        {lastThoughtHtml() && !props.messages.some(m => m.turn.streaming) && (
+        {lastThoughtHtml() && !props.messages.some((m) => m.turn.streaming) && (
           <div
             class="msg-assistant streaming-dots max-w-[85%] self-start rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed break-words"
             style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)', opacity: '0.7' }}
