@@ -84,7 +84,13 @@ export function createChatModule(
     if (status && status !== 'idle') return
     if (backend.status() !== 'connected') return
     const next = messageQueue.peek(threadKey)
-    if (!next || next.status === 'sending') return
+    if (!next) return
+    // If the head item is still being sent (removeSent hasn't run yet),
+    // schedule a retry — the idle event fired before the send promise resolved
+    if (next.status === 'sending') {
+      setTimeout(() => tryProcessQueue(threadKey), 200)
+      return
+    }
     messageQueue.markSending(next.id)
     broadcastQueueUpdate(threadKey)
 
@@ -98,7 +104,11 @@ export function createChatModule(
       .then(() => {
         messageQueue.removeSent(next.id)
         broadcastQueueUpdate(threadKey)
-        historyCache.delete(threadKey) // New message sent — invalidate cache
+        historyCache.delete(threadKey)
+        // After removing the sent item, try to process the next one.
+        // tryProcessQueue checks currentStatus so it won't send while agent is busy.
+        // This handles the case where idle fired while this item was still 'sending'.
+        tryProcessQueue(threadKey)
       })
       .catch(() => {
         messageQueue.markQueued(next.id)
@@ -164,6 +174,13 @@ export function createChatModule(
           currentWork.delete(threadKey)
           currentStreamText.delete(threadKey)
           historyCache.delete(threadKey)
+        }
+      }
+
+      // Fallback: if idle event has no thread mapping, try all queues with pending items
+      if (!threadKey && eventName === 'chat.status' && data.status === 'idle') {
+        for (const [tk] of messageQueue.getAllQueues()) {
+          tryProcessQueue(tk)
         }
       }
 
