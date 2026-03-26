@@ -736,7 +736,13 @@ const MobileWorkspace: Component = () => {
             <PlanningPanel />
           </Match>
           <Match when={activeMobileTab() === 'planning-dag' && activeWorkspace()}>
-            <Suspense fallback={<p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>Loading...</p>}>
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
               <PlanningDAGView orgId={activeWorkspace()!.orgId} />
             </Suspense>
           </Match>
@@ -856,6 +862,20 @@ const WorkspaceView: Component = () => {
 
             {/* §3.1 — Main Content with file tabs */}
             <MainContentArea />
+
+            {/* §3.5 — Chat panel (right side, resizable) */}
+            <ChatPanel />
+
+            {/* Chat reopen button when collapsed */}
+            <Show when={chatCollapsed()}>
+              <ReopenButton
+                side="right"
+                onClick={() => {
+                  setChatCollapsed(false)
+                  setChatPanelWidth(CHAT_PANEL_DEFAULT_WIDTH)
+                }}
+              />
+            </Show>
           </div>
         )}
       </div>
