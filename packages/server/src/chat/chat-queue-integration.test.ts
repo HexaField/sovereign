@@ -157,6 +157,86 @@ describe('Chat Module Queue Integration', () => {
       await chatModule.handleSend(threadKey, 'two')
       expect(chatModule.getQueue(threadKey)).toHaveLength(2)
     })
+
+    it('should drain queue fully: send second message after first completes', async () => {
+      // Simulate: agent busy → two messages queued → agent goes idle →
+      // first message sent → agent finishes → second message sent
+      const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+      emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'working' })
+
+      await chatModule.handleSend(threadKey, 'first')
+      await chatModule.handleSend(threadKey, 'second')
+      expect(chatModule.getQueue(threadKey)).toHaveLength(2)
+
+      // Agent goes idle → first message should be dequeued and sent
+      emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
+      expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'first')
+
+      // Simulate: sendMessage resolves (gateway accepted), agent starts working
+      await new Promise((r) => setTimeout(r, 10))
+      emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'working' })
+
+      // Agent finishes first message → goes idle
+      emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
+
+      // Allow the send promise to resolve + setTimeout retry to fire
+      await new Promise((r) => setTimeout(r, 300))
+
+      // Second message should now have been sent
+      expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'second')
+      expect(backend.sendMessage).toHaveBeenCalledTimes(2)
+    })
+
+    it('should drain queue even when idle fires before removeSent', async () => {
+      // This is the race condition: idle event fires, but head item is still 'sending'
+      // because the sendMessage promise hasn't resolved yet
+      const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+
+      // Make sendMessage hang so the item stays in 'sending' state
+      let resolveSend!: () => void
+      ;(backend.sendMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        () => new Promise<void>((resolve) => { resolveSend = resolve })
+      )
+
+      await chatModule.handleSend(threadKey, 'first')
+      await chatModule.handleSend(threadKey, 'second')
+
+      // first is now 'sending', second is 'queued'
+      expect(chatModule.getQueue(threadKey)[0]?.status).toBe('sending')
+      expect(chatModule.getQueue(threadKey)[1]?.status).toBe('queued')
+
+      // Agent goes idle while first is still sending — tryProcessQueue should schedule retry
+      emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
+
+      // Now resolve the first send
+      resolveSend()
+      await new Promise((r) => setTimeout(r, 10))
+
+      // The removeSent.then() calls tryProcessQueue, which should now find second as head
+      // But status is idle so it will try to send
+      // Wait for the setTimeout retry too
+      await new Promise((r) => setTimeout(r, 300))
+
+      expect(backend.sendMessage).toHaveBeenCalledTimes(2)
+      expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'second')
+    })
+
+    it('should process queue for unmapped session when idle fires', async () => {
+      // Scenario: message queued while disconnected, then reconnect and idle fires
+      const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+      // Disconnect backend so tryProcessQueue skips
+      backend._setStatus('disconnected')
+      await chatModule.handleSend(threadKey, 'offline-msg')
+      expect(backend.sendMessage).not.toHaveBeenCalled()
+      expect(chatModule.getQueue(threadKey)).toHaveLength(1)
+
+      // Reconnect
+      backend._setStatus('connected')
+      // Fire idle from the actual session — should now process
+      emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
+      await new Promise((r) => setTimeout(r, 10))
+      expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'offline-msg')
+    })
   })
 
   describe('cancellation', () => {

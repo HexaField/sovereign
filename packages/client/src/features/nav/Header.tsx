@@ -32,7 +32,9 @@ import { activeWorkspace, chatExpanded, toggleChatExpanded, setChatExpanded, set
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
 import { agentStatus } from '../chat/store.js'
 import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
-import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
+import { ExpandIcon, CollapseIcon, SettingsIcon } from '../../ui/icons.js'
+import { lazy } from 'solid-js'
+const ThreadSettingsModal = lazy(() => import('../chat/ThreadSettingsModal.js'))
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
