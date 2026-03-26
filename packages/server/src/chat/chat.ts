@@ -271,6 +271,9 @@ export function createChatModule(
     if (wsHandler) {
       wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore })
 
+      // Send current backend connection status so the client indicator is accurate
+      wsHandler.sendTo(deviceId, { type: 'backend.status', status: backend.status() })
+
       // Replay cached live state so reconnecting clients see in-progress work
       const status = currentStatus.get(threadKey)
       if (status && status !== 'idle') {
