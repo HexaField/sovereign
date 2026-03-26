@@ -381,6 +381,53 @@ const chatModule = createChatModule(bus, backend, threadManager, { dataDir, wsHa
 registerChatWs(wsHandler, chatModule)
 app.use(createChatRoutes(chatModule, backend))
 
+// Bulk active subagents grouped by parent thread
+app.get('/api/threads/active-subagents', async (_req, res) => {
+  try {
+    const allSessions = await backend.listGatewaySessions()
+    const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+    let sessionsData: Record<string, any> = {}
+    try {
+      const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
+      sessionsData = JSON.parse(raw)
+    } catch { /* ignore */ }
+
+    const result: Record<string, Array<{
+      sessionKey: string
+      label: string
+      status: string
+      task: string
+    }>> = {}
+
+    for (const s of allSessions) {
+      if (!s.key.includes(':subagent:')) continue
+      const meta = sessionsData[s.key]
+      if (!meta?.spawnedBy) continue
+
+      const isActive = s.agentStatus === 'working' || s.agentStatus === 'thinking'
+      const isRecent = s.lastActivity && (Date.now() - s.lastActivity) < 30 * 60 * 1000
+      if (!isActive && !isRecent) continue
+
+      let threadKey = 'main'
+      if (meta.spawnedBy === 'agent:main:main') threadKey = 'main'
+      else if (meta.spawnedBy.startsWith('agent:main:thread:')) threadKey = meta.spawnedBy.replace('agent:main:thread:', '')
+      else if (meta.spawnedBy.includes(':subagent:')) threadKey = meta.spawnedBy
+
+      if (!result[threadKey]) result[threadKey] = []
+      result[threadKey].push({
+        sessionKey: s.key,
+        label: meta.label || s.label || s.key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
+        status: s.agentStatus || 'idle',
+        task: meta.task || meta.label || s.label || ''
+      })
+    }
+
+    res.json({ subagents: result })
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to list subagents' })
+  }
+})
+
 // Subagent listing — queries gateway sessions for children of a thread
 app.get('/api/threads/:key/subagents', async (req, res) => {
   try {
@@ -409,13 +456,11 @@ app.get('/api/threads/:key/subagents', async (req, res) => {
     const subagents = allSessions
       .filter((s) => s.key.includes(':subagent:'))
       .filter((s) => {
-        // Check parentKey from sessions.json metadata
         const meta = sessionsData[s.key]
-        if (meta?.parentKey) {
-          return meta.parentKey === parentSessionKey
+        if (meta?.spawnedBy) {
+          return meta.spawnedBy === parentSessionKey
         }
-        // Fallback: all subagents are children of main if no parentKey
-        return parentSessionKey === 'agent:main:main'
+        return false // Don't fall back to main — only show known parents
       })
       .map((s) => ({
         sessionKey: s.key,
