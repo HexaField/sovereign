@@ -304,8 +304,10 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
 
   const handleWheel = (e: WheelEvent) => {
     e.preventDefault()
-    const delta = e.deltaY > 0 ? -0.1 : 0.1
-    setZoom((z) => Math.max(0.2, Math.min(3, z + delta)))
+    // Smooth proportional zoom — small trackpad gestures stay gentle, mouse wheel clicks are reasonable
+    const raw = -e.deltaY * 0.002
+    const clamped = Math.max(-0.05, Math.min(0.05, raw))
+    setZoom((z) => Math.max(0.2, Math.min(3, z * (1 + clamped))))
   }
 
   const handleMouseDown = (e: MouseEvent) => {
