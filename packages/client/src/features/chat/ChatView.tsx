@@ -185,8 +185,10 @@ export function ChatView(props: ChatViewProps) {
               {/* Work section between user and assistant turns */}
               {(msg.turn.workItems?.length ?? 0) > 0 && <WorkSection work={msg.turn.workItems} />}
 
-              {/* Message bubble */}
-              <MessageBubble turn={msg.turn} pending={msg.pending} />
+              {/* Message bubble — skip for assistant turns with empty content (work-only turns) */}
+              {(msg.turn.content?.trim() || msg.turn.role !== 'assistant' || msg.turn.streaming) && (
+                <MessageBubble turn={msg.turn} pending={msg.pending} />
+              )}
 
               {/* Subagent cards for sessions_spawn tool calls */}
               {extractSubagentSpawns(msg.turn.workItems || []).map((spawn) => (

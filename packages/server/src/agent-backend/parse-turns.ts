@@ -28,6 +28,25 @@ function stripDirectives(text: string): string {
   return text.replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '').trim()
 }
 
+/** Strip the "Sender (untrusted metadata):" envelope from user messages */
+function stripSenderEnvelope(text: string): string {
+  return text.replace(/^Sender \(untrusted metadata\):\s*```json\s*\{[^}]*\}\s*```\s*/s, '').trim()
+}
+
+/** Try to extract a real user message embedded after a system prefix.
+ *  Returns the user message text if found, null otherwise. */
+function extractEmbeddedUserMessage(text: string): string | null {
+  // Pattern: system event text followed by "Sender (untrusted metadata):" user message
+  const senderIdx = text.indexOf('Sender (untrusted metadata):')
+  if (senderIdx > 0) {
+    const userPart = text.substring(senderIdx)
+    const cleaned = stripSenderEnvelope(userPart)
+    const stripped = stripTimestamp(cleaned)
+    if (stripped && stripped.length > 5) return stripped
+  }
+  return null
+}
+
 /** Check if text looks like a system-injected message */
 function isSystemInjected(text: string): boolean {
   const stripped = stripTimestamp(text)
@@ -112,23 +131,43 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
 
       // Skip system-injected messages — collapse into system turns
       if (isSystemInjected(text)) {
-        const systemTurn: ParsedTurn = {
-          role: 'system',
-          content: normalizeSystemText(text),
-          timestamp: m.timestamp ?? 0,
-          workItems: [],
-          thinkingBlocks: []
+        // Check for embedded user message after the system prefix
+        const embeddedUser = extractEmbeddedUserMessage(text)
+        if (embeddedUser) {
+          // Split: system part becomes a system turn (filtered later), user part becomes user turn
+          const userCleaned = stripDirectives(stripTimestamp(embeddedUser))
+          if (userCleaned) {
+            lastUserTurn = {
+              role: 'user',
+              content: userCleaned,
+              timestamp: m.timestamp ?? 0,
+              workItems: [],
+              thinkingBlocks: []
+            }
+          }
+        } else {
+          const systemTurn: ParsedTurn = {
+            role: 'system',
+            content: normalizeSystemText(text),
+            timestamp: m.timestamp ?? 0,
+            workItems: [],
+            thinkingBlocks: []
+          }
+          turns.push(systemTurn)
+          lastUserTurn = null
         }
-        turns.push(systemTurn)
-        lastUserTurn = null
         currentWork = []
         currentThinking = []
         continue
       }
 
+      // Strip sender envelope from regular user messages
+      const userText = stripSenderEnvelope(cleaned)
+      const finalText = stripTimestamp(userText) || userText
+
       lastUserTurn = {
         role: 'user',
-        content: cleaned,
+        content: finalText,
         timestamp: m.timestamp ?? 0,
         workItems: [],
         thinkingBlocks: []
