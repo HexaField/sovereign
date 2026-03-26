@@ -672,9 +672,9 @@ const GlobalPlanningView: Component = () => {
           id,
           title,
           workspace: n.ref.orgId,
-          workspaceName: orgNameMap.get(n.ref.orgId) || n.ref.orgId,
+          workspaceName: n.ref.orgId === '_drafts' ? 'Drafts' : orgNameMap.get(n.ref.orgId) || n.ref.orgId,
           project: n.ref.projectId,
-          projectName: names.get(n.ref.projectId) || n.ref.projectId,
+          projectName: n.ref.projectId === '_local' ? 'Local Drafts' : names.get(n.ref.projectId) || n.ref.projectId,
           status: deriveStatus(n, serverNodeMap),
           assignee: n.assignees[0],
           labels: n.labels,
@@ -1021,30 +1021,6 @@ const GlobalPlanningView: Component = () => {
         }}
         data-testid="planning-toolbar"
       >
-        {/* View mode selector */}
-        <div
-          class="flex gap-0.5 rounded-md p-0.5"
-          style={{ background: 'var(--c-surface, #181825)' }}
-          data-testid="view-mode-selector"
-        >
-          <For each={VIEW_MODES}>
-            {(mode) => (
-              <button
-                class="rounded px-1.5 py-1 text-xs"
-                style={{
-                  background: viewMode() === mode.key ? 'var(--c-accent, #89b4fa)' : 'transparent',
-                  color: viewMode() === mode.key ? 'var(--c-bg, #1e1e2e)' : 'var(--c-text-muted, #a6adc8)'
-                }}
-                onClick={() => setViewMode(mode.key)}
-                title={mode.label}
-                data-testid={`view-mode-${mode.key}`}
-              >
-                {mode.icon()}
-              </button>
-            )}
-          </For>
-        </div>
-
         {/* Search */}
         <div class="relative max-w-xs flex-1">
           <span
