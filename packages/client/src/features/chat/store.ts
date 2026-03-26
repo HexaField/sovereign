@@ -5,10 +5,7 @@ import type { WsStore } from '../../ws/ws-store.js'
 import { renderMarkdown, stripThinkingBlocks } from '../../lib/markdown.js'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
-export const [streamingHtml, setStreamingHtml] = createSignal('')
 export const [agentStatus, setAgentStatus] = createSignal<AgentStatus>('idle')
-export const [liveWork, setLiveWork] = createSignal<WorkItem[]>([])
-export const [liveThinkingText, setLiveThinkingText] = createSignal('')
 export const [compacting, setCompacting] = createSignal(false)
 export const [agentWorkingStartTime, setAgentWorkingStartTime] = createSignal<number | null>(null)
 export const [agentDurationText, setAgentDurationText] = createSignal('')
@@ -16,6 +13,12 @@ export const [isRetryCountdownActive, setRetryActive] = createSignal(false)
 export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
 export const [inputValue, _setInputValue] = createSignal('')
 export const [messageQueue, setMessageQueue] = createSignal<QueuedMessage[]>([])
+
+// Kept for backward compat — these are now derived from the streaming turn in turns[]
+// but some ChatView code may still reference them during transition
+export const [streamingHtml, setStreamingHtml] = createSignal('')
+export const [liveWork, setLiveWork] = createSignal<WorkItem[]>([])
+export const [liveThinkingText, setLiveThinkingText] = createSignal('')
 
 function draftKey(threadKey: string): string {
   return `sovereign:draft:${threadKey}`
@@ -75,8 +78,9 @@ let retryTimer: ReturnType<typeof setInterval> | null = null
 let ws: WsStore | null = null
 let suppressLifecycleUntil = 0
 let currentThreadKey: Accessor<string> | null = null
+
+// Accumulated raw streaming text for the current in-progress turn
 let streamingRawText = ''
-let streamTextOffset = 0
 
 export function startRetryCountdown(seconds: number): void {
   clearRetryCountdown()
@@ -98,12 +102,65 @@ export function clearRetryCountdown(): void {
   setRetrySeconds(0)
 }
 
+// ── Helpers for the in-progress streaming turn ──────────────
+
+/** Find the streaming turn index, or -1 */
+function findStreamingTurnIndex(list: ParsedTurn[]): number {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].streaming) return i
+  }
+  return -1
+}
+
+/** Ensure a streaming assistant turn exists at the end of turns[].
+ *  Returns the updated array. */
+function ensureStreamingTurn(prev: ParsedTurn[]): ParsedTurn[] {
+  const idx = findStreamingTurnIndex(prev)
+  if (idx >= 0) return prev // Already exists
+  return [
+    ...prev,
+    {
+      role: 'assistant' as const,
+      content: '',
+      timestamp: Date.now(),
+      workItems: [],
+      thinkingBlocks: [],
+      streaming: true
+    }
+  ]
+}
+
+/** Update the streaming turn in-place (immutably). */
+function updateStreamingTurn(
+  prev: ParsedTurn[],
+  updater: (turn: ParsedTurn) => ParsedTurn
+): ParsedTurn[] {
+  const idx = findStreamingTurnIndex(prev)
+  if (idx < 0) return prev
+  const next = [...prev]
+  next[idx] = updater(next[idx])
+  return next
+}
+
+/** Remove the streaming turn. */
+function removeStreamingTurn(prev: ParsedTurn[]): ParsedTurn[] {
+  return prev.filter((t) => !t.streaming)
+}
+
+/** Clean text: strip thinking blocks and directive tags */
+function cleanStreamText(raw: string): string {
+  return stripThinkingBlocks(raw)
+    .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+    .trim()
+}
+
+// ─────────────────────────────────────────────────────────────
+
 function resetState(): void {
   setTurns([])
-  setStreamingHtml('')
   streamingRawText = ''
-  streamTextOffset = 0
   setAgentStatus('idle')
+  setStreamingHtml('')
   setLiveWork([])
   setLiveThinkingText('')
   setCompacting(false)
@@ -134,14 +191,13 @@ export function cancelMessage(id: string): void {
 
 export function abortChat(): void {
   ws?.send({ type: 'chat.abort', threadKey: currentThreadKey?.() ?? 'main' } as any)
-  setStreamingHtml('')
+  // Remove the streaming turn and clear state
+  setTurns((prev) => removeStreamingTurn(prev))
   streamingRawText = ''
-  streamTextOffset = 0
+  setStreamingHtml('')
   setLiveWork([])
   setLiveThinkingText('')
-  // Suppress lifecycle status updates for 2s to prevent flicker
   suppressLifecycleUntil = Date.now() + 2000
-  // Show brief "Cancelled" status then go idle
   setAgentStatus('cancelled' as AgentStatus)
   setTimeout(() => {
     setAgentStatus('idle')
@@ -156,22 +212,16 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   if (chatInitialized) return
   chatInitialized = true
 
-  // Subscribe to chat channel (no scope filter — we filter by threadKey client-side)
   ws.subscribe(['chat'])
 
-  // Request history for the current thread (skip if no thread selected)
   if (_threadKey()) {
     ws.send({ type: 'chat.history', threadKey: _threadKey() } as any)
     loadDraft(_threadKey())
   }
 
-  // Track previous thread key to detect switches
   let prevThreadKey = _threadKey()
-
   const unsubs: Array<() => void> = []
 
-  // Watch for thread switches — reset state and request new history
-  // Note: createEffect must be called within a reactive owner (onMount provides one)
   const trackEffect = createEffect(() => {
     const key = _threadKey()
     if (key !== prevThreadKey) {
@@ -185,67 +235,75 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     }
   })
 
-  // Reset streaming text for new init
   streamingRawText = ''
 
+  // ── chat.stream: update the streaming turn's content ──
   unsubs.push(
     ws.on('chat.stream', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      // Replay messages contain full accumulated text — reset state
+
+      // Suppress for subagent threads
+      const isSubagent = _threadKey().startsWith('subagent:')
+
       if (msg.replay) {
         streamingRawText = msg.text
-        streamTextOffset = 0
       } else {
         streamingRawText += msg.text
       }
-      const cleaned = stripThinkingBlocks(streamingRawText)
-        .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
-        .trim()
-      // Only show text generated AFTER the last tool call
-      const visible = cleaned.substring(streamTextOffset).trim()
-      // Suppress streaming bubble for subagent threads
-      const isSubagent = _threadKey().startsWith('subagent:')
-      const hasToolCalls = liveWork().some((w) => w.type === 'tool_call')
-      // Suppress partial sentinel strings (NO_REPLY, HEARTBEAT_OK)
-      const isSentinel = /^(NO_REPLY|HEARTBEAT_OK|NO_?|HEART)/.test(visible) && visible.length < 15
-      if (visible && !hasToolCalls && !isSubagent && !isSentinel) {
-        setStreamingHtml(renderMarkdown(visible))
-      } else {
-        setStreamingHtml('')
-        if (isSubagent && visible) setAgentStatus('working')
+
+      const cleaned = cleanStreamText(streamingRawText)
+
+      // Suppress partial sentinel strings
+      const isSentinel = /^(NO_REPLY|HEARTBEAT_OK|NO_?|HEART)/.test(cleaned) && cleaned.length < 15
+
+      if (cleaned && !isSubagent && !isSentinel) {
+        // Ensure streaming turn exists, then update its content
+        setTurns((prev) => {
+          const withTurn = ensureStreamingTurn(prev)
+          return updateStreamingTurn(withTurn, (t) => ({
+            ...t,
+            content: cleaned
+          }))
+        })
+        // Keep legacy signal in sync for any ChatView code that still reads it
+        setStreamingHtml(renderMarkdown(cleaned))
+      } else if (isSubagent && cleaned) {
+        setAgentStatus('working')
       }
     })
   )
 
+  // ── chat.turn: replace streaming turn with final turn ──
   unsubs.push(
     ws.on('chat.turn', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
-      setTurns((prev) => [...prev, turn])
-      setStreamingHtml('')
+      setTurns((prev) => {
+        const without = removeStreamingTurn(prev)
+        return [...without, turn]
+      })
       streamingRawText = ''
-      streamTextOffset = 0
+      setStreamingHtml('')
       setLiveWork([])
       setLiveThinkingText('')
     })
   )
 
+  // ── chat.status: track agent status, clear on idle ──
   unsubs.push(
     ws.on('chat.status', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      // Suppress lifecycle START updates after abort to prevent "Working…" flicker
-      // But always allow idle/end events through
       if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
       setAgentStatus(msg.status)
       if (msg.status === 'working' || msg.status === 'thinking') {
         if (!agentWorkingStartTime()) startDurationTimer()
       } else {
         stopDurationTimer()
-        // Clear lingering streaming state when agent goes idle
         if (msg.status === 'idle') {
-          setStreamingHtml('')
+          // Agent done — remove any lingering streaming turn that wasn't finalized
+          setTurns((prev) => removeStreamingTurn(prev))
           streamingRawText = ''
-          streamTextOffset = 0
+          setStreamingHtml('')
           setLiveWork([])
           setLiveThinkingText('')
         }
@@ -253,18 +311,23 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
+  // ── chat.work: append work items to the streaming turn ──
   unsubs.push(
     ws.on('chat.work', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      // Reset streaming text offset on tool call to prevent accumulation
-      if (msg.work?.type === 'tool_call') {
-        const cleaned = stripThinkingBlocks(streamingRawText)
-          .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
-          .trim()
-        streamTextOffset = cleaned.length
-        setStreamingHtml('')
-      }
-      setLiveWork((prev) => [...prev, msg.work])
+      const work = msg.work as WorkItem
+
+      // Update the streaming turn's workItems
+      setTurns((prev) => {
+        const withTurn = ensureStreamingTurn(prev)
+        return updateStreamingTurn(withTurn, (t) => ({
+          ...t,
+          workItems: [...t.workItems, work]
+        }))
+      })
+
+      // Keep legacy signals in sync
+      setLiveWork((prev) => [...prev, work])
     })
   )
 
@@ -282,21 +345,20 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
+  // ── chat.session.info: full history replace ──
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
       setTurns(history)
-      // Clear streaming state when history is loaded fresh
-      setStreamingHtml('')
       streamingRawText = ''
-      streamTextOffset = 0
+      setStreamingHtml('')
       setLiveWork([])
       setLiveThinkingText('')
     })
   )
 
-  // Queue updates from server
+  // Queue updates
   unsubs.push(
     ws.on('chat.queue.update' as any, (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
@@ -304,7 +366,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
-  // Thread event routing — show as system messages
+  // Thread event routing
   unsubs.push(
     ws.on('thread.event.routed' as any, (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
@@ -322,7 +384,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
-  // Re-fetch history on WS reconnect (e.g. after mobile tab goes to background)
+  // Reconnect — re-fetch history
   unsubs.push(
     ws.on('ws.reconnected' as any, () => {
       const key = _threadKey()
@@ -332,13 +394,11 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
-  // Re-fetch when tab becomes visible again (covers cases where WS stayed alive but deltas were missed)
+  // Visibility change — re-fetch if idle
   const onVisibility = () => {
     if (document.visibilityState === 'visible') {
       const key = _threadKey()
       const status = agentStatus()
-      // Don't re-fetch if agent is actively streaming — we're already receiving live events
-      // and a history fetch would wipe the in-progress streaming state
       if (key && ws?.connected() && status !== 'working' && status !== 'thinking') {
         ws.send({ type: 'chat.history', threadKey: key } as any)
       }
@@ -347,7 +407,6 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   document.addEventListener('visibilitychange', onVisibility)
   unsubs.push(() => document.removeEventListener('visibilitychange', onVisibility))
 
-  // Return cleanup
   return () => {
     unsubs.forEach((u) => u())
     ws?.unsubscribe(['chat'])

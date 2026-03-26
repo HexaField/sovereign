@@ -98,11 +98,16 @@ export function ChatView(props: ChatViewProps) {
     }
   }
 
-  // Auto-scroll when messages change or streaming updates
+  // Auto-scroll when messages change (including streaming turn updates)
   createEffect(() => {
-    // Track reactive dependencies
+    // Track reactive dependencies — turns signal covers both history and streaming
     props.messages.length
-    props.streamingHtml
+    // Also track the last message's content for streaming updates
+    const last = props.messages[props.messages.length - 1]
+    if (last) {
+      last.turn.content
+      last.turn.workItems?.length
+    }
     // Schedule scroll after DOM update
     requestAnimationFrame(scrollToBottom)
   })
@@ -111,7 +116,8 @@ export function ChatView(props: ChatViewProps) {
   // thinking block from history as a streaming-like bubble so there's visible progress
   // on refresh or for subagent threads that don't get real streaming events.
   const lastThoughtHtml = createMemo(() => {
-    if (props.streamingHtml) return null // real streaming takes priority
+    // Don't show if there's an active streaming turn
+    if (props.messages.some(m => m.turn.streaming)) return null
     const msgs = props.messages
     if (msgs.length === 0) return null
     const last = msgs[msgs.length - 1]
@@ -128,23 +134,6 @@ export function ChatView(props: ChatViewProps) {
       }
     }
     return null
-  })
-
-  // Live work: show only recent activity, not full turn history
-  const recentLiveWork = createMemo(() => {
-    const all = props.liveWork
-    if (all.length <= 6) return all
-    return all.slice(-6)
-  })
-
-  const hiddenStepCount = createMemo(() => {
-    return Math.max(0, props.liveWork.length - recentLiveWork().length)
-  })
-
-  const liveWorkStepLabel = createMemo(() => {
-    const calls = props.liveWork.filter((w) => w.type === 'tool_call').length
-    if (calls > 0) return `${calls} tool call${calls !== 1 ? 's' : ''}`
-    return 'thinking…'
   })
 
   return (
@@ -196,81 +185,18 @@ export function ChatView(props: ChatViewProps) {
           )
         })}
 
-        {/* Live work section for in-progress turn — shows only recent activity */}
-        {props.liveWork.length > 0 && (
-          <div class="my-0.5 max-w-[85%] self-start">
-            <div
-              class="flex w-fit cursor-pointer items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-xs select-none"
-              style={{
-                background: 'var(--c-step-bg)',
-                border: '1px solid var(--c-border)',
-                color: 'var(--c-text-muted)'
-              }}
-            >
-              <span class="flex items-center gap-1 overflow-hidden text-ellipsis whitespace-nowrap">
-                {liveWorkStepLabel()}
-              </span>
-              <span
-                class="shrink-0 rounded-md px-1.5 py-px text-[10px]"
-                style={{ background: 'var(--c-step-badge-bg)' }}
-              >
-                {liveWorkStepLabel()}
-              </span>
-            </div>
-            <div class="mt-1.5 overflow-hidden rounded-[10px]" style={{ border: '1px solid var(--c-border)' }}>
-              {hiddenStepCount() > 0 && (
-                <div
-                  class="py-1 text-center text-xs opacity-50"
-                  style={{ 'border-bottom': '1px solid var(--c-border)' }}
-                >
-                  … {hiddenStepCount()} earlier steps
-                </div>
-              )}
-              {recentLiveWork().map((w) => (
-                <div
-                  class="px-3 py-1.5 text-xs last:border-b-0"
-                  style={{
-                    background: 'var(--c-work-body-bg)',
-                    'border-bottom': '1px solid var(--c-border)',
-                    color: 'var(--c-text-muted)'
-                  }}
-                >
-                  {w.type === 'tool_call' && (
-                    <span class="font-mono text-[11px]">
-                      <span style={{ color: 'var(--c-text)' }}>{w.name}</span>
-                    </span>
-                  )}
-                  {w.type === 'tool_result' && <span class="font-mono text-[11px]">✓ {w.name}</span>}
-                  {w.type === 'thinking' && <span class="italic">{(w.output || w.input || '').slice(0, 60)}…</span>}
-                  {w.type === 'system_event' && <span>{(w.output || '').slice(0, 80)}</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Live work section — REMOVED: now rendered via streaming turn in messages[] */}
+
+        {/* Streaming response — REMOVED: now rendered via streaming turn in messages[] */}
 
         {/* Last thought from history — shown when agent is mid-run but no live stream */}
-        {lastThoughtHtml() && !props.streamingHtml && (
+        {lastThoughtHtml() && !props.messages.some(m => m.turn.streaming) && (
           <div
             class="msg-assistant streaming-dots max-w-[85%] self-start rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed break-words"
             style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)', opacity: '0.7' }}
           >
             <div innerHTML={lastThoughtHtml()!} />
           </div>
-        )}
-
-        {/* Streaming response — three-dot indicator, not shown for subagent threads */}
-        {props.streamingHtml && (
-          <>
-            {/* Show live work alongside streaming if both active */}
-            {props.liveWork.length > 0 && recentLiveWork().length === 0 && <WorkSection work={props.liveWork} />}
-            <div
-              class="msg-assistant streaming-dots max-w-[85%] self-start rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed break-words"
-              style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
-            >
-              <div innerHTML={props.streamingHtml} />
-            </div>
-          </>
         )}
       </div>
 
