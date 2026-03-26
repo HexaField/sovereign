@@ -83,6 +83,8 @@ let currentThreadKey: Accessor<string> | null = null
 
 // Accumulated raw streaming text for the current in-progress turn
 let streamingRawText = ''
+// Offset into cleanStreamText after the last tool call — show only text after this point
+let streamTextOffset = 0
 
 export function startRetryCountdown(seconds: number): void {
   clearRetryCountdown()
@@ -157,7 +159,7 @@ function cleanStreamText(raw: string): string {
 
 function resetState(): void {
   setTurns([])
-  streamingRawText = ''
+  streamingRawText = ''; streamTextOffset = 0
   setAgentStatus('idle')
   setStreamingHtml('')
   setLiveWork([])
@@ -201,7 +203,7 @@ export function abortChat(): void {
   ws?.send({ type: 'chat.abort', threadKey: currentThreadKey?.() ?? 'main' } as any)
   // Remove the streaming turn and clear state
   setTurns((prev) => removeStreamingTurn(prev))
-  streamingRawText = ''
+  streamingRawText = ''; streamTextOffset = 0
   setStreamingHtml('')
   setLiveWork([])
   setLiveThinkingText('')
@@ -243,7 +245,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     }
   })
 
-  streamingRawText = ''
+  streamingRawText = ''; streamTextOffset = 0
 
   // ── chat.stream: update the streaming turn's content ──
   unsubs.push(
@@ -261,20 +263,23 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
       const cleaned = cleanStreamText(streamingRawText)
 
-      // Suppress partial sentinel strings
-      const isSentinel = /^(NO_REPLY|HEARTBEAT_OK|NO_?|HEART)/.test(cleaned) && cleaned.length < 15
+      // Only show text AFTER the last tool call offset
+      const visible = cleaned.substring(streamTextOffset).trim()
 
-      if (cleaned && !isSubagent && !isSentinel) {
+      // Suppress partial sentinel strings
+      const isSentinel = /^(NO_REPLY|HEARTBEAT_OK|NO_?|HEART)/.test(visible) && visible.length < 15
+
+      if (visible && !isSubagent && !isSentinel) {
         // Ensure streaming turn exists, then update its content
         setTurns((prev) => {
           const withTurn = ensureStreamingTurn(prev)
           return updateStreamingTurn(withTurn, (t) => ({
             ...t,
-            content: cleaned
+            content: visible
           }))
         })
         // Keep legacy signal in sync for any ChatView code that still reads it
-        setStreamingHtml(renderMarkdown(cleaned))
+        setStreamingHtml(renderMarkdown(visible))
       } else if (isSubagent && cleaned) {
         setAgentStatus('working')
       }
@@ -290,7 +295,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
         const without = removeStreamingTurn(prev)
         return [...without, turn]
       })
-      streamingRawText = ''
+      streamingRawText = ''; streamTextOffset = 0
       setStreamingHtml('')
       setLiveWork([])
       setLiveThinkingText('')
@@ -310,7 +315,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
         if (msg.status === 'idle') {
           // Agent done — remove any lingering streaming turn that wasn't finalized
           setTurns((prev) => removeStreamingTurn(prev))
-          streamingRawText = ''
+          streamingRawText = ''; streamTextOffset = 0
           setStreamingHtml('')
           setLiveWork([])
           setLiveThinkingText('')
@@ -325,14 +330,30 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const work = msg.work as WorkItem
 
-      // Update the streaming turn's workItems
-      setTurns((prev) => {
-        const withTurn = ensureStreamingTurn(prev)
-        return updateStreamingTurn(withTurn, (t) => ({
-          ...t,
-          workItems: [...t.workItems, work]
-        }))
-      })
+      // On tool call, advance the text offset so the bubble only shows text after this point
+      if (work.type === 'tool_call') {
+        const cleaned = cleanStreamText(streamingRawText)
+        streamTextOffset = cleaned.length
+        // Clear the streaming bubble text — tool call takes over
+        setTurns((prev) => {
+          const withTurn = ensureStreamingTurn(prev)
+          return updateStreamingTurn(withTurn, (t) => ({
+            ...t,
+            content: '',
+            workItems: [...t.workItems, work]
+          }))
+        })
+        setStreamingHtml('')
+      } else {
+        // Tool result, thinking — just append to workItems
+        setTurns((prev) => {
+          const withTurn = ensureStreamingTurn(prev)
+          return updateStreamingTurn(withTurn, (t) => ({
+            ...t,
+            workItems: [...t.workItems, work]
+          }))
+        })
+      }
 
       // Keep legacy signals in sync
       setLiveWork((prev) => [...prev, work])
@@ -363,7 +384,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       setHasOlderMessages(_hasOlderMessages)
       setLoadingOlder(false)
       setTurns(history)
-      streamingRawText = ''
+      streamingRawText = ''; streamTextOffset = 0
       setStreamingHtml('')
       setLiveWork([])
       setLiveThinkingText('')
