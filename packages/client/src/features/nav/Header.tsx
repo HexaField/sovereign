@@ -210,6 +210,20 @@ function WorkspaceHeaderContent() {
   const [wsPickerOpen, setWsPickerOpen] = createSignal(false)
   const [orgList, setOrgList] = createSignal<OrgListItem[]>([])
   const [showAddDialog, setShowAddDialog] = createSignal(false)
+  const [activeSubagents, setActiveSubagents] = createSignal<Record<string, Array<{
+    sessionKey: string
+    label: string
+    status: string
+    task: string
+  }>>>({})
+
+  const fetchActiveSubagents = async () => {
+    try {
+      const res = await fetch('/api/threads/active-subagents')
+      const data = await res.json()
+      setActiveSubagents(data.subagents || {})
+    } catch { /* ignore */ }
+  }
 
   const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
 
@@ -329,6 +343,7 @@ function WorkspaceHeaderContent() {
           style={{ color: 'var(--c-accent)', 'max-width': '140px', overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
           onClick={() => {
             fetchOrgs()
+            fetchActiveSubagents()
             setThreadPickerOpen(!threadPickerOpen())
             setNewThreadInput(false)
             setMoveThreadKey(null)
@@ -360,6 +375,7 @@ function WorkspaceHeaderContent() {
           >
             <For each={[...threads().filter((t) => t.key)].sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}>
               {(t) => (
+                <>
                 <div
                   class="group relative flex w-full items-center text-left text-sm transition-colors"
                   style={{
@@ -428,6 +444,42 @@ function WorkspaceHeaderContent() {
                     </Show>
                   </div>
                 </div>
+                <Show when={(activeSubagents()[t.key] || []).length > 0}>
+                  <div class="pl-6 pb-1">
+                    <For each={activeSubagents()[t.key]}>
+                      {(sa) => (
+                        <div
+                          class="flex items-center gap-2 px-3 py-1 text-xs"
+                          style={{ color: 'var(--c-text-muted)' }}
+                        >
+                          <span
+                            class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                            style={{
+                              background: sa.status === 'working' || sa.status === 'thinking'
+                                ? 'var(--c-warning, #f59e0b)'
+                                : 'var(--c-text-muted)',
+                              animation: sa.status === 'working' || sa.status === 'thinking'
+                                ? 'pulse-dot 2s ease-in-out infinite'
+                                : 'none'
+                            }}
+                          />
+                          <span class="truncate" title={sa.task || sa.label}>
+                            {sa.label}
+                          </span>
+                          <Show when={sa.status === 'working' || sa.status === 'thinking'}>
+                            <span
+                              class="ml-auto shrink-0 text-[10px]"
+                              style={{ color: 'var(--c-warning, #f59e0b)' }}
+                            >
+                              {sa.status}
+                            </span>
+                          </Show>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+                </>
               )}
             </For>
 
