@@ -508,8 +508,21 @@ pre:hover .code-copy-btn {
 .file-chip-expanded-close:hover {
   color: var(--c-text);
 }
+.file-chip-expanded-open {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--c-text-muted);
+  font-size: 13px;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.file-chip-expanded-open:hover {
+  color: var(--c-accent);
+}
 .file-chip-expanded-body {
-  max-height: 400px;
+  max-height: 300px;
   overflow: auto;
   padding: 8px;
 }
@@ -519,6 +532,61 @@ pre:hover .code-copy-btn {
   word-break: break-all;
   font-size: 11px;
   line-height: 1.5;
+}
+/* Code with line numbers */
+.file-chip-code {
+  display: flex;
+  gap: 0;
+}
+.file-chip-line-nums {
+  margin: 0;
+  padding-right: 8px;
+  text-align: right;
+  user-select: none;
+  color: var(--c-text-muted);
+  opacity: 0.4;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  flex-shrink: 0;
+  border-right: 1px solid var(--c-border-subtle, var(--c-border));
+  margin-right: 8px;
+}
+.file-chip-line-num {
+  display: block;
+}
+.file-chip-code-content {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 11px;
+  line-height: 1.5;
+}
+/* Markdown in file chip */
+.file-chip-markdown {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.file-chip-markdown h1,
+.file-chip-markdown h2,
+.file-chip-markdown h3 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.file-chip-markdown p {
+  margin: 4px 0;
+}
+.file-chip-markdown pre {
+  background: var(--c-bg);
+  padding: 6px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.file-chip-markdown code {
+  font-size: 11px;
 }
 .file-chip-expanded-loading {
   color: var(--c-text-muted);

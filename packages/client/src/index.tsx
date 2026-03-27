@@ -1,8 +1,22 @@
 import { render } from 'solid-js/web'
+import { renderMarkdown, escapeHtml } from './lib/markdown.js'
 import App from './App'
 import './app.css'
 
 render(() => <App />, document.getElementById('root') as HTMLElement)
+
+function openFileInWorkspace(filePath: string): void {
+  window.dispatchEvent(new CustomEvent('sovereign:open-file', { detail: { path: filePath } }))
+}
+
+// Also handle middle-click (auxclick) for file chips
+document.addEventListener('auxclick', (e) => {
+  if (e.button !== 1) return
+  const chip = (e.target as HTMLElement).closest('.file-chip') as HTMLElement | null
+  if (!chip?.dataset.filePath) return
+  e.preventDefault()
+  openFileInWorkspace(chip.dataset.filePath!)
+})
 
 // Global click handler for file-chip elements
 document.addEventListener('click', (e) => {
@@ -26,15 +40,25 @@ document.addEventListener('click', (e) => {
     return
   }
 
+  // Handle "Open in workspace" button inside expanded panel
+  const openBtn = target.closest('.file-chip-expanded-open') as HTMLElement | null
+  if (openBtn) {
+    e.preventDefault()
+    e.stopPropagation()
+    const path = openBtn.getAttribute('data-file-path') || ''
+    if (path) openFileInWorkspace(path)
+    return
+  }
+
   const chip = target.closest('.file-chip') as HTMLElement | null
   if (!chip?.dataset.filePath) return
   e.preventDefault()
   e.stopPropagation()
   const filePath = chip.dataset.filePath!
 
-  // Ctrl/Cmd+click copies path to clipboard
+  // Ctrl/Cmd+click opens file in workspace
   if (e.metaKey || e.ctrlKey) {
-    navigator.clipboard.writeText(filePath)
+    openFileInWorkspace(filePath)
     return
   }
 
@@ -47,18 +71,28 @@ document.addEventListener('click', (e) => {
 
   const panel = document.createElement('div')
   panel.className = 'file-chip-expanded'
-  panel.innerHTML = `<div class="file-chip-expanded-header"><span class="file-chip-expanded-path">${filePath}</span><button class="file-chip-expanded-close">✕</button></div><div class="file-chip-expanded-body"><span class="file-chip-expanded-loading">Loading…</span></div>`
+  panel.innerHTML = `<div class="file-chip-expanded-header"><span class="file-chip-expanded-path">${escapeHtml(filePath)}</span><div style="display:flex;gap:4px;flex-shrink:0"><button class="file-chip-expanded-open" data-file-path="${escapeHtml(filePath)}" title="Open in workspace">↗</button><button class="file-chip-expanded-close">✕</button></div></div><div class="file-chip-expanded-body"><span class="file-chip-expanded-loading">Loading…</span></div>`
   chip.insertAdjacentElement('afterend', panel)
 
   panel.querySelector('.file-chip-expanded-close')!.addEventListener('click', () => panel.remove())
 
-  // Fetch file content via the files API
-  fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`)
-    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
-    .then((content) => {
-      const ext = filePath.split('.').pop()?.toLowerCase() || ''
+  // Fetch file content via workspace read API
+  fetch(`/api/files/workspace/read?path=${encodeURIComponent(filePath)}`)
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
+    .then((data: { content: string; extension: string }) => {
       const body = panel.querySelector('.file-chip-expanded-body')!
-      body.innerHTML = `<pre><code class="language-${ext}">${content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`
+      const ext = data.extension || filePath.split('.').pop()?.toLowerCase() || ''
+
+      if (ext === 'md' || ext === 'markdown') {
+        // Render markdown
+        body.innerHTML = `<div class="file-chip-markdown">${renderMarkdown(data.content)}</div>`
+      } else {
+        // Render code with line numbers
+        const lines = data.content.split('\n')
+        const lineNums = lines.map((_, i) => `<span class="file-chip-line-num">${i + 1}</span>`).join('\n')
+        const code = escapeHtml(data.content)
+        body.innerHTML = `<div class="file-chip-code"><pre class="file-chip-line-nums">${lineNums}</pre><pre class="file-chip-code-content"><code class="language-${ext}">${code}</code></pre></div>`
+      }
     })
     .catch((err) => {
       const body = panel.querySelector('.file-chip-expanded-body')
