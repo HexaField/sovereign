@@ -184,7 +184,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
 
   function handleEvent(event: string, payload: any) {
     if (!payload) return
-
     const sessionKey = payload.sessionKey as string | undefined
     if (!sessionKey) return
 
@@ -354,7 +353,28 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         thinkingAccum.delete(sessionKey)
       }
 
-      // Completed turn
+      // Completed turn — read the FULL last turn from JSONL history
+      // This includes tool calls which aren't sent through WS events
+      const filePath = getSessionFilePath(sessionKey)
+      if (filePath) {
+        try {
+          const { messages } = readRecentMessages(filePath, 20)
+          if (messages.length > 0) {
+            const turns = parseTurns(messages)
+            // Find the last assistant turn — it has the complete data with workItems
+            const lastAssistant = [...turns].reverse().find((t) => t.role === 'assistant')
+            if (lastAssistant) {
+              emitter.emit('chat.turn', { sessionKey, turn: lastAssistant })
+              emitter.emit('chat.status', { sessionKey, status: 'idle' })
+              return
+            }
+          }
+        } catch {
+          /* fall through to basic emit */
+        }
+      }
+
+      // Fallback: emit basic turn from the delta text
       const text = extractText(ev.message)
       const cleaned = text ? stripThinkingBlocks(text) : ''
       const turn: ParsedTurn = {
@@ -376,7 +396,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     const data = ev.data ?? {}
     const stream = ev.stream as string | undefined
     const phase = data.phase as string | undefined
-
     switch (stream) {
       case 'lifecycle': {
         if (phase === 'start') {
@@ -439,7 +458,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'assistant': {
-        // Assistant stream — indicates agent is producing text, status can be cleared
+        // Text streaming — handled by handleChatEvent via chat events
         break
       }
     }
