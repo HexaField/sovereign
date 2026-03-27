@@ -284,7 +284,7 @@ const FileExplorerPanel: Component = () => {
   const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; node: FileNode | null } | null>(null)
   const [refreshKey, setRefreshKey] = createSignal(0)
 
-  // Fetch org path when org changes
+  // Fetch project repo path when org changes — use first project's repoPath for file browsing
   createEffect(async () => {
     const orgId = ws()?.orgId
     if (!orgId) {
@@ -292,6 +292,19 @@ const FileExplorerPanel: Component = () => {
       return
     }
     try {
+      // First try to get project repo paths (actual code directories)
+      const projRes = await fetch(`/api/orgs/${encodeURIComponent(orgId)}/projects`)
+      if (projRes.ok) {
+        const projects = await projRes.json()
+        const activeProj = ws()?.activeProjectId
+        // Use active project if set, otherwise first project
+        const proj = activeProj ? projects.find((p: any) => p.id === activeProj) || projects[0] : projects[0]
+        if (proj?.repoPath) {
+          setOrgPath(proj.repoPath)
+          return
+        }
+      }
+      // Fallback: org path
       const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}`)
       if (res.ok) {
         const org = await res.json()
