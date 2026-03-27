@@ -95,6 +95,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       agentStatus?: string
     }>
   >
+  listCronJobs(): Promise<any[]>
 } {
   const emitter = createEventEmitter()
 
@@ -838,6 +839,16 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         }))
       } catch (err: any) {
         console.error('[gateway] sessions.list failed:', err.message)
+        return []
+      }
+    },
+
+    async listCronJobs(): Promise<any[]> {
+      try {
+        const result = (await request('cron.list', {})) as { jobs?: any[] }
+        return result?.jobs ?? []
+      } catch (err: any) {
+        console.error('[gateway] cron.list failed:', err.message)
         return []
       }
     }

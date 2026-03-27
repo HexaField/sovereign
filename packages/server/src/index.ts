@@ -546,6 +546,33 @@ app.get('/api/threads/gateway-sessions', async (_req, res) => {
   }
 })
 
+// Thread cron jobs endpoint
+app.get('/api/threads/:key/crons', async (req, res) => {
+  try {
+    const threadKey = req.params.key
+    const sessionKey =
+      chatModule.getSessionKeyForThread(threadKey) ??
+      (threadKey === 'main'
+        ? 'agent:main:main'
+        : threadKey.startsWith('agent:')
+          ? threadKey
+          : `agent:main:thread:${threadKey}`)
+    const jobs = await backend.listCronJobs()
+    // Filter for crons targeting this thread's session
+    const filtered = jobs.filter((j: any) => {
+      if (j.sessionTarget === sessionKey) return true
+      if (j.payload?.sessionTarget === sessionKey) return true
+      // Check if payload text/message mentions the thread key
+      const text = j.payload?.message || j.payload?.text || ''
+      if (text.includes(threadKey)) return true
+      return false
+    })
+    res.json({ crons: filtered })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.use(createThreadRoutes(threadManager, forwardHandler, { chatModule, backend: backend as any }))
 registerThreadsWs(wsHandler as any, threadManager, bus)
 
