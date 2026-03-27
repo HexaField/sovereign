@@ -573,6 +573,12 @@ pre:hover .code-copy-btn {
 .msg-assistant ol {
   margin: 4px 0;
   padding-left: 1.5em;
+  list-style-type: decimal;
+}
+.msg-assistant ul {
+  margin: 4px 0;
+  padding-left: 1.5em;
+  list-style-type: disc;
 }
 .msg-assistant li {
   margin: 2px 0;
@@ -595,12 +601,22 @@ pre:hover .code-copy-btn {
 
 /* Mobile touch optimisations */
 @media (max-width: 768px) {
-  button, [role="button"], a, input, textarea, select {
+  button,
+  [role='button'],
+  a,
+  input,
+  textarea,
+  select {
     touch-action: manipulation;
   }
 }
 
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
