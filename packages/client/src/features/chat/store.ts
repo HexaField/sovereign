@@ -316,13 +316,23 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       } else {
         stopDurationTimer()
         if (msg.status === 'idle') {
-          // Agent done — remove any lingering streaming turn that wasn't finalized
-          setTurns((prev) => removeStreamingTurn(prev))
-          streamingRawText = ''
-          streamTextOffset = 0
-          setStreamingHtml('')
-          setLiveWork([])
-          setLiveThinkingText('')
+          // Agent done — wait briefly for chat.turn to arrive with the final turn.
+          // If it doesn't arrive in 500ms, reload history from JSONL to get complete data.
+          setTimeout(() => {
+            const hasFinalTurn = turns().some((t) => !t.streaming && t.role === 'assistant' && t.workItems?.length > 0)
+            // Remove streaming turn
+            setTurns((prev) => removeStreamingTurn(prev))
+            streamingRawText = ''
+            streamTextOffset = 0
+            setStreamingHtml('')
+            setLiveWork([])
+            setLiveThinkingText('')
+            // If no final turn arrived, reload history to get complete data
+            if (!hasFinalTurn) {
+              const threadKey = currentThreadKey?.() ?? 'main'
+              ws?.send({ type: 'chat.history', threadKey } as any)
+            }
+          }, 800)
         }
       }
     })
@@ -334,8 +344,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const work = msg.work as WorkItem
 
-      // On tool call or thinking, advance the text offset so the bubble only shows text after
-      if (work.type === 'tool_call' || work.type === 'thinking') {
+      // On tool call, advance the text offset so the bubble only shows text after
+      if (work.type === 'tool_call') {
         const cleaned = cleanStreamText(streamingRawText)
         streamTextOffset = cleaned.length
         // Clear the streaming bubble text — work section takes over
@@ -348,6 +358,21 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
           }))
         })
         setStreamingHtml('')
+      } else if (work.type === 'thinking') {
+        // Replace the last thinking item (accumulated text), don't append duplicates
+        setTurns((prev) => {
+          const withTurn = ensureStreamingTurn(prev)
+          return updateStreamingTurn(withTurn, (t) => {
+            const items = [...t.workItems]
+            const lastThinkIdx = items.findLastIndex((w) => w.type === 'thinking')
+            if (lastThinkIdx >= 0) {
+              items[lastThinkIdx] = work // replace with updated accumulated text
+            } else {
+              items.push(work)
+            }
+            return { ...t, workItems: items }
+          })
+        })
       } else {
         // Tool result, thinking — just append to workItems
         setTurns((prev) => {

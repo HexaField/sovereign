@@ -145,7 +145,7 @@ export function summarizeWork(items: WorkItem[]): string {
     }
     const uniqueTools = Array.from(counts.entries())
     if (uniqueTools.length <= 5) {
-      parts.push(uniqueTools.map(([name, n]) => n > 1 ? `${name} (${n})` : name).join(', '))
+      parts.push(uniqueTools.map(([name, n]) => (n > 1 ? `${name} (${n})` : name)).join(', '))
     } else {
       // Too many unique tools — show count only
       parts.push(`${calls.length} tool call${calls.length !== 1 ? 's' : ''}`)
@@ -282,7 +282,7 @@ export function WorkSection(props: { work: WorkItem[] }) {
       }
       const uniqueTools = Array.from(counts.entries())
       if (uniqueTools.length <= 5) {
-        return uniqueTools.map(([name, n]) => n > 1 ? `${name} (${n})` : name).join(', ')
+        return uniqueTools.map(([name, n]) => (n > 1 ? `${name} (${n})` : name)).join(', ')
       }
       return `${calls.length} tool call${calls.length !== 1 ? 's' : ''}`
     }
@@ -299,7 +299,13 @@ export function WorkSection(props: { work: WorkItem[] }) {
         <span class="shrink-0 text-[9px] transition-transform duration-200" classList={{ 'rotate-90': open() }}>
           ▶
         </span>
-        <span class="shrink-0" style={{ color: hasErrors() ? 'var(--c-warning, #f59e0b)' : 'var(--c-success, #4ade80)', 'font-size': '11px' }}>
+        <span
+          class="shrink-0"
+          style={{
+            color: hasErrors() ? 'var(--c-warning, #f59e0b)' : 'var(--c-success, #4ade80)',
+            'font-size': '11px'
+          }}
+        >
           {hasErrors() ? '!' : '✓'}
         </span>
         <span class="flex items-center gap-1 overflow-hidden text-ellipsis whitespace-nowrap">
@@ -389,7 +395,7 @@ function ThoughtRow(props: { text: string }) {
       }}
       onClick={() => needsTruncation() && setExpanded((v) => !v)}
     >
-      <span>thought {displayText()}</span>
+      <span>{displayText()}</span>
       <Show when={needsTruncation()}>
         <span class="ml-1" style={{ opacity: 0.5, 'font-style': 'normal', 'font-size': '10px' }}>
           {expanded() ? '▲' : '▼'}
