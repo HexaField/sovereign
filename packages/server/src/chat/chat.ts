@@ -7,6 +7,8 @@ import type { WsHandler } from '../ws/handler.js'
 import type { ThreadManager } from '../threads/types.js'
 import { deriveSessionKey } from './derive-session-key.js'
 import { createMessageQueue } from './message-queue.js'
+import { getSessionFilePath } from '../agent-backend/session-reader.js'
+import type { WorkItem } from '@sovereign/core'
 
 export interface ChatModule {
   status(): ModuleStatus
@@ -154,11 +156,13 @@ export function createChatModule(
       if (threadKey) {
         if (eventName === 'chat.status') {
           currentStatus.set(threadKey, data.status as string)
-          // When agent becomes idle, invalidate history cache so next load picks up
-          // all messages (including those from context overflow resets, compaction, etc.)
           if (data.status === 'idle') {
-            // cache removed
+            stopJsonlPoll(threadKey)
             tryProcessQueue(threadKey)
+          } else if (data.status === 'working' || data.status === 'thinking') {
+            // Start polling JSONL for tool calls since gateway WS doesn't stream them
+            const sessionKey2 = threadToSession.get(threadKey) ?? deriveSessionKey(threadKey)
+            startJsonlPoll(threadKey, sessionKey2)
           }
         } else if (eventName === 'chat.work') {
           const items = currentWork.get(threadKey) ?? []
@@ -204,6 +208,122 @@ export function createChatModule(
         })
       }
     })
+  }
+
+  // ── JSONL polling for live tool calls ──────────────────────────────
+  // The gateway WS doesn't stream tool_call/tool_result events.
+  // Poll the JSONL file every 2s while the agent is working to pick up new tool calls.
+  const pollTimers = new Map<string, ReturnType<typeof setInterval>>()
+  const pollFilePositions = new Map<string, number>() // track file read position
+  const pollSeenToolIds = new Map<string, Set<string>>()
+
+  function startJsonlPoll(threadKey: string, sessionKey: string): void {
+    if (pollTimers.has(threadKey)) return // already polling
+
+    const filePath = getSessionFilePath(sessionKey)
+    if (!filePath) return
+
+    // Start from current file size (only read NEW entries)
+    try {
+      const stat = fs.statSync(filePath)
+      pollFilePositions.set(threadKey, stat.size)
+    } catch {
+      return
+    }
+    pollSeenToolIds.set(threadKey, new Set())
+
+    const timer = setInterval(() => {
+      try {
+        const stat = fs.statSync(filePath)
+        const lastPos = pollFilePositions.get(threadKey) ?? 0
+        if (stat.size <= lastPos) return // no new data
+
+        // Read only the new portion
+        const fd = fs.openSync(filePath, 'r')
+        const buf = Buffer.alloc(stat.size - lastPos)
+        fs.readSync(fd, buf, 0, buf.length, lastPos)
+        fs.closeSync(fd)
+        pollFilePositions.set(threadKey, stat.size)
+
+        const newText = buf.toString('utf-8')
+        const lines = newText.split('\n').filter(Boolean)
+        const seen = pollSeenToolIds.get(threadKey)!
+
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line)
+            if (entry.type !== 'message') continue
+            const msg = entry.message
+            if (!msg) continue
+            const content = msg.content
+            if (!Array.isArray(content)) continue
+
+            for (const block of content) {
+              if (block.type === 'toolCall' || block.type === 'tool_use') {
+                const id = block.id || ''
+                if (id && seen.has(id)) continue
+                seen.add(id)
+                const input = block.arguments ?? block.input ?? {}
+                const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
+                const work: WorkItem = {
+                  type: 'tool_call',
+                  name: block.name || 'tool',
+                  input: inputStr,
+                  toolCallId: id,
+                  timestamp: Date.now()
+                }
+                // Emit to clients
+                if (wsHandler) {
+                  wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
+                }
+                const items = currentWork.get(threadKey) ?? []
+                items.push(work)
+                currentWork.set(threadKey, items)
+              }
+            }
+
+            // Also check for toolResult messages
+            if (msg.role === 'toolResult') {
+              const tcId = msg.toolCallId || ''
+              const resultKey = `result:${tcId}`
+              if (tcId && !seen.has(resultKey)) {
+                seen.add(resultKey)
+                const output = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content ?? '')
+                const work: WorkItem = {
+                  type: 'tool_result',
+                  name: msg.name,
+                  output,
+                  toolCallId: tcId,
+                  timestamp: Date.now()
+                }
+                if (wsHandler) {
+                  wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
+                }
+                const items = currentWork.get(threadKey) ?? []
+                items.push(work)
+                currentWork.set(threadKey, items)
+              }
+            }
+          } catch {
+            /* skip malformed lines */
+          }
+        }
+      } catch {
+        /* file read error — ignore */
+      }
+    }, 2000)
+
+    pollTimers.set(threadKey, timer)
+  }
+
+  function stopJsonlPoll(threadKey: string): void {
+    const timer = pollTimers.get(threadKey)
+    if (timer) {
+      clearInterval(timer)
+      pollTimers.delete(threadKey)
+    }
+    pollFilePositions.delete(threadKey)
+    pollSeenToolIds.delete(threadKey)
   }
 
   // Also proxy backend.status
