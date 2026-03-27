@@ -86,6 +86,31 @@ export function createFileRouter(
     }
   }) as RequestHandler)
 
+  // GET /api/files/workspace/read?path=... — read a workspace file by absolute path
+  router.get('/workspace/read', (async (req, res) => {
+    if (!openclawWorkspace) {
+      res.status(404).json({ error: 'Workspace not configured' })
+      return
+    }
+    const filePath = req.query.path as string
+    if (!filePath) {
+      res.status(400).json({ error: 'path parameter required' })
+      return
+    }
+    const resolved = nodePath.resolve(filePath)
+    if (!resolved.startsWith(openclawWorkspace)) {
+      res.status(403).json({ error: 'Path outside workspace' })
+      return
+    }
+    try {
+      const content = await fs.readFile(resolved, 'utf-8')
+      const ext = nodePath.extname(resolved).slice(1).toLowerCase()
+      res.json({ content, path: resolved, extension: ext })
+    } catch (err: any) {
+      res.status(404).json({ error: err.message })
+    }
+  }) as RequestHandler)
+
   // GET /api/files/tree?path=...&project=...
   router.get('/tree', (async (req, res) => {
     const dirPath = req.query.path as string | undefined
