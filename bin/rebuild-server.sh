@@ -1,39 +1,32 @@
 #!/bin/bash
-# Safe rebuild script for Sovereign server
-# Builds, then gracefully restarts via launchd (zero-downtime goal)
+# Safe rebuild script for Sovereign
+# Server runs via tsx watch — source changes auto-reload (no restart needed)
+# Client needs explicit build
+
 set -e
+cd /Users/josh/workspaces/hexafield/sovereign
 
-cd /Users/josh/workspaces/hexafield/sovereign/packages/server
+echo "Building client..."
+cd packages/client && pnpm build
+echo "Client built."
 
-echo "Building server..."
-pnpm build
+echo ""
+echo "Server runs via tsx watch — source changes auto-reload."
+echo "If server needs a hard restart: launchctl unload/load com.sovereign.server.plist"
 
-echo "Restarting via launchd..."
-PID=$(lsof -i :5801 -sTCP:LISTEN -t 2>/dev/null)
-if [ -n "$PID" ]; then
-  kill "$PID" 2>/dev/null
-fi
-
-# Wait for launchd to restart, with fallback to manual reload
-for i in 1 2 3 4 5 6 7 8 9 10; do
-  sleep 2
-  if curl -s "http://127.0.0.1:5801/" -o /dev/null 2>/dev/null; then
-    echo "Server restarted successfully (attempt $i)"
-    exit 0
-  fi
-done
-
-# Fallback: force unload/reload
-echo "Auto-restart failed, forcing launchd reload..."
-launchctl unload ~/Library/LaunchAgents/com.sovereign.server.plist 2>/dev/null
-sleep 1
-launchctl load ~/Library/LaunchAgents/com.sovereign.server.plist
-sleep 5
-
+# Verify server is still up
 if curl -s "http://127.0.0.1:5801/" -o /dev/null 2>/dev/null; then
-  echo "Server restarted via forced reload"
-  exit 0
+  echo "Server: ✅ running"
+else
+  echo "Server: ❌ not responding, forcing reload..."
+  launchctl unload ~/Library/LaunchAgents/com.sovereign.server.plist 2>/dev/null
+  sleep 1
+  launchctl load ~/Library/LaunchAgents/com.sovereign.server.plist
+  sleep 5
+  if curl -s "http://127.0.0.1:5801/" -o /dev/null 2>/dev/null; then
+    echo "Server: ✅ restarted"
+  else
+    echo "Server: ❌ FAILED TO START"
+    exit 1
+  fi
 fi
-
-echo "ERROR: Server did not restart"
-exit 1
