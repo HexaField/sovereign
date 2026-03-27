@@ -1503,39 +1503,6 @@ const GlobalPlanningView: Component = () => {
                 onWheel={handleWheel}
               >
                 <defs>
-                  <marker
-                    id="arrow"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="8"
-                    markerHeight="8"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--c-border, #45475a)" />
-                  </marker>
-                  <marker
-                    id="arrow-amber"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="8"
-                    markerHeight="8"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#D97706" />
-                  </marker>
-                  <marker
-                    id="arrow-highlight"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="8"
-                    markerHeight="8"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--c-accent, #89b4fa)" />
-                  </marker>
                   <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
                     <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.3)" flood-opacity="0.5" />
                   </filter>
@@ -1583,13 +1550,6 @@ const GlobalPlanningView: Component = () => {
                             stroke-linejoin="round"
                             stroke-dasharray={edge.crossWorkspace ? '6,4' : 'none'}
                             opacity={hoveredNodeId() && !isHighlighted() ? 0.15 : 0.9}
-                            marker-end={
-                              isHighlighted()
-                                ? 'url(#arrow-highlight)'
-                                : edge.crossWorkspace
-                                  ? 'url(#arrow-amber)'
-                                  : 'url(#arrow)'
-                            }
                             data-testid={`edge-${edge.from}-${edge.to}`}
                             style={{ transition: 'opacity 0.15s, stroke-width 0.15s' }}
                           />
@@ -1671,10 +1631,12 @@ const GlobalPlanningView: Component = () => {
                             <text x={14} y={42} fill="var(--c-text-muted, #a6adc8)" font-size="10">
                               {node.workspaceName} / {node.projectName}
                             </text>
-                            {/* Status label + draft badge */}
-                            <text x={14} y={58} fill={getStatusColor(node.status)} font-size="9">
-                              {getStatusLabel(node.status)}
-                            </text>
+                            {/* Status label + draft badge (skip for blocked — redundant in DAG) */}
+                            <Show when={node.status !== 'blocked'}>
+                              <text x={14} y={58} fill={getStatusColor(node.status)} font-size="9">
+                                {getStatusLabel(node.status)}
+                              </text>
+                            </Show>
                             <Show when={node.isDraft}>
                               <rect
                                 x={DAG_NODE_W - 46}
