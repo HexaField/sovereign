@@ -446,11 +446,18 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'thinking': {
-        // Accumulate thinking deltas — emit as one combined block when a tool call or lifecycle event arrives
+        // Accumulate thinking deltas and emit periodically so clients see thinking in progress
         const delta = data.text ?? data.content ?? data.delta ?? ''
         if (delta) {
           const prev = thinkingAccum.get(sessionKey) ?? ''
-          thinkingAccum.set(sessionKey, prev + delta)
+          const accumulated = prev + delta
+          thinkingAccum.set(sessionKey, accumulated)
+          // Emit the accumulated thinking as a work item so clients can show it
+          // Using a single 'thinking' work item that gets replaced (not appended)
+          emitter.emit('chat.work', {
+            sessionKey,
+            work: { type: 'thinking', output: accumulated, timestamp: Date.now() } as WorkItem
+          })
         }
         break
       }
