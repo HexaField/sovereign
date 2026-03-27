@@ -227,16 +227,16 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       // Completed turn
       const text = extractText(ev.message)
       const cleaned = text ? stripThinkingBlocks(text) : ''
-      if (cleaned) {
-        const turn: ParsedTurn = {
-          role: 'assistant',
-          content: cleaned,
-          timestamp: Date.now(),
-          workItems: [],
-          thinkingBlocks: []
-        }
-        emitter.emit('chat.turn', { sessionKey, turn })
+      // Always emit the final turn — even with empty content.
+      // The client has accumulated workItems during streaming that need to be preserved.
+      const turn: ParsedTurn = {
+        role: 'assistant',
+        content: cleaned.replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '').trim(),
+        timestamp: Date.now(),
+        workItems: [],
+        thinkingBlocks: []
       }
+      emitter.emit('chat.turn', { sessionKey, turn })
       emitter.emit('chat.status', { sessionKey, status: 'idle' })
     }
   }
