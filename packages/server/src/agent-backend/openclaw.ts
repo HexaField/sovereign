@@ -446,14 +446,21 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'thinking': {
-        // Accumulate thinking deltas and emit periodically so clients see thinking in progress
-        const delta = data.text ?? data.content ?? data.delta ?? ''
-        if (delta) {
+        // Gateway sends cumulative `text` (full thinking so far) and `delta` (new chunk only)
+        const fullText = (data.text as string) || (data.content as string) || ''
+        const delta = (data.delta as string) || ''
+
+        if (fullText) {
+          // Use cumulative text directly — don't concatenate
+          thinkingAccum.set(sessionKey, fullText)
+        } else if (delta) {
+          // Only delta provided — append to accumulated
           const prev = thinkingAccum.get(sessionKey) ?? ''
-          const accumulated = prev + delta
-          thinkingAccum.set(sessionKey, accumulated)
-          // Emit the accumulated thinking as a work item so clients can show it
-          // Using a single 'thinking' work item that gets replaced (not appended)
+          thinkingAccum.set(sessionKey, prev + delta)
+        }
+
+        const accumulated = thinkingAccum.get(sessionKey) ?? ''
+        if (accumulated) {
           emitter.emit('chat.work', {
             sessionKey,
             work: { type: 'thinking', output: accumulated, timestamp: Date.now() } as WorkItem
