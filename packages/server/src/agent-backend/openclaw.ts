@@ -590,7 +590,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       if (filePath) {
         try {
           const t0 = Date.now()
-          const { messages, hasMore } = readRecentMessages(filePath, 500)
+          const { messages, hasMore } = readRecentMessages(filePath, 50)
           if (messages.length > 0) {
             const turns = parseTurns(messages)
             const elapsed = Date.now() - t0
