@@ -2,13 +2,13 @@ import { lazy, Switch, Match, onCleanup, onMount, Suspense } from 'solid-js'
 import './app.css'
 
 // Nav store
-import { activeView, initNavStore } from './features/nav/store.js'
+import { activeView, initNavStore, setActiveView } from './features/nav/store.js'
 
 // Identity
 import { loadIdentity } from './lib/identity.js'
 
 // Workspace auto-init
-import { activeWorkspace, autoSelectProject } from './features/workspace/store.js'
+import { activeWorkspace, autoSelectProject, openFileTab, setChatExpanded } from './features/workspace/store.js'
 
 // WS + connection stores
 import { wsStore } from './ws/index.js'
@@ -49,6 +49,16 @@ export default function App() {
     // Init chat store at app level so dashboard GlobalChat has data on fresh load
     const cleanupChat = initChatStore(threadKey, wsStore)
     if (cleanupChat) cleanups.push(cleanupChat)
+
+    // Listen for sovereign:open-file events from file chips
+    const handleOpenFile = (e: Event) => {
+      const { path } = (e as CustomEvent).detail
+      setChatExpanded(false)
+      openFileTab(path, '_workspace')
+      setActiveView('workspace')
+    }
+    window.addEventListener('sovereign:open-file', handleOpenFile)
+    cleanups.push(() => window.removeEventListener('sovereign:open-file', handleOpenFile))
 
     const checkInterval = setInterval(() => {
       setConnectionStatus(wsStore.connected() ? 'connected' : 'disconnected')
