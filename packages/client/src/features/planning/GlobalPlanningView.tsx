@@ -80,6 +80,7 @@ export interface PlanningNode {
   isDraft: boolean
   kind?: 'issue' | 'pr'
   ref: EntityRef
+  providerUrl?: string
 }
 
 export interface PlanningEdge {
@@ -742,6 +743,31 @@ const GlobalPlanningView: Component = () => {
       const orgNameMap = new Map<string, string>()
       for (const org of orgList) orgNameMap.set(org.id, org.name)
 
+      // Fetch providerUrls from issues API
+      const providerUrlMap = new Map<string, string>()
+      await Promise.all(
+        orgList.map(async (org: { id: string }) => {
+          try {
+            const res = await fetch(`/api/orgs/${org.id}/issues`)
+            if (!res.ok) return
+            const issues = await res.json()
+            for (const issue of Array.isArray(issues) ? issues : []) {
+              if (issue.providerUrl) {
+                const key = refToId({
+                  orgId: issue.orgId,
+                  projectId: issue.projectId,
+                  remote: issue.remote || '',
+                  issueId: issue.id
+                })
+                providerUrlMap.set(key, issue.providerUrl)
+              }
+            }
+          } catch {
+            /* skip */
+          }
+        })
+      )
+
       const planningNodes: PlanningNode[] = graphData.nodes.map((n) => {
         const id = refToId(n.ref)
         const title = n.title || n.draftTitle || `${n.ref.projectId}#${n.ref.issueId}`
@@ -761,7 +787,8 @@ const GlobalPlanningView: Component = () => {
           depth: depths.get(id) ?? 0,
           isDraft: n.source === 'draft',
           kind: n.kind,
-          ref: n.ref
+          ref: n.ref,
+          providerUrl: providerUrlMap.get(id)
         }
       })
 
@@ -2210,35 +2237,29 @@ const GlobalPlanningView: Component = () => {
                         </Show>
                       </div>
 
-                      {/* Open full detail */}
-                      <div
-                        style={{
-                          'margin-top': '16px',
-                          'border-top': '1px solid var(--c-border, #45475a)',
-                          'padding-top': '12px'
-                        }}
-                      >
-                        <button
+                      {/* Open in provider */}
+                      <Show when={node()?.providerUrl}>
+                        <div
                           style={{
-                            color: 'var(--c-accent, #89b4fa)',
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            'font-size': '11px',
-                            padding: '0'
-                          }}
-                          onClick={() => {
-                            const n = node()
-                            if (!n) return
-                            // Navigate to workspace view and open issue detail
-                            setActiveWorkspace(n.workspace, n.workspaceName)
-                            openIssueDetail(n.ref.orgId, n.ref.projectId, n.ref.issueId)
-                            setActiveView('workspace')
+                            'margin-top': '16px',
+                            'border-top': '1px solid var(--c-border, #45475a)',
+                            'padding-top': '12px'
                           }}
                         >
-                          Open full detail →
-                        </button>
-                      </div>
+                          <a
+                            href={node()!.providerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              color: 'var(--c-accent, #89b4fa)',
+                              'font-size': '11px',
+                              'text-decoration': 'none'
+                            }}
+                          >
+                            Open in provider →
+                          </a>
+                        </div>
+                      </Show>
                     </div>
                   </div>
                 )
