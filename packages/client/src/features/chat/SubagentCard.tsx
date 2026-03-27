@@ -1,6 +1,8 @@
-import { createSignal, createEffect, onCleanup, Show } from 'solid-js'
-import type { ParsedTurn } from '@sovereign/core'
+import { createSignal, createEffect, onCleanup, Show, For } from 'solid-js'
+import type { ParsedTurn, WorkItem } from '@sovereign/core'
 import { SplitIcon } from '../../ui/icons.js'
+import { renderMarkdown } from '../../lib/markdown.js'
+import { switchThread } from '../threads/store.js'
 
 export interface SubagentInfo {
   sessionKey: string
@@ -18,66 +20,81 @@ export interface SubagentCardProps {
 }
 
 export function SubagentCard(props: SubagentCardProps) {
-  const [info, setInfo] = createSignal<SubagentInfo | null>(null)
-  const [loading, setLoading] = createSignal(true)
+  const [expanded, setExpanded] = createSignal(false)
+  const [history, setHistory] = createSignal<ParsedTurn[]>([])
+  const [loading, setLoading] = createSignal(false)
+  const [status, setStatus] = createSignal<string>('idle')
 
-  // Poll for subagent status
-  let pollTimer: ReturnType<typeof setInterval> | null = null
+  let refreshTimer: ReturnType<typeof setInterval> | undefined
 
-  const fetchInfo = async () => {
+  const fetchHistory = async () => {
     try {
-      // Fetch history to get last message preview
-      const histRes = await fetch(`/api/threads/${encodeURIComponent(props.sessionKey)}/history`)
-      if (histRes.ok) {
-        const data = await histRes.json()
-        const history: ParsedTurn[] = data.history ?? []
-        const lastAssistant = [...history].reverse().find((t) => t.role === 'assistant' && t.content)
-        const lastMessage = lastAssistant?.content?.slice(0, 120) || ''
+      if (!expanded()) return
+      setLoading(true)
+      const res = await fetch(`/api/threads/${encodeURIComponent(props.sessionKey)}/history`)
+      if (res.ok) {
+        const data = await res.json()
+        const turns: ParsedTurn[] = data.history ?? []
+        setHistory(turns)
 
-        // Determine status from history
-        const hasWork = history.some(
-          (t) => t.role === 'assistant' && t.workItems?.some((w) => w.type === 'tool_call')
+        // Derive status from history
+        const lastTurn = turns[turns.length - 1]
+        const hasActiveTool = turns.some(
+          (t) => t.role === 'assistant' && t.workItems?.some((w: WorkItem) => w.type === 'tool_call')
         )
-        const lastTurn = history[history.length - 1]
         const isComplete =
-          lastTurn?.role === 'assistant' && lastTurn?.content && !lastTurn?.workItems?.length
-        const status = isComplete ? 'completed' : hasWork ? 'working' : 'idle'
-
-        setInfo({
-          sessionKey: props.sessionKey,
-          label: props.task || 'Subagent',
-          task: props.task,
-          status,
-          lastMessage,
-          lastActivity: lastTurn?.timestamp
-        })
+          lastTurn?.role === 'assistant' && lastTurn?.content && !lastTurn?.pending && !lastTurn?.streaming
+        setStatus(
+          lastTurn?.streaming || lastTurn?.pending
+            ? 'working'
+            : isComplete
+              ? 'completed'
+              : hasActiveTool
+                ? 'working'
+                : 'idle'
+        )
       }
     } catch {
-      // ignore fetch errors
+      /* ignore */
     } finally {
       setLoading(false)
     }
   }
 
   createEffect(() => {
-    fetchInfo()
-    // Poll every 10s but only while not completed/failed
-    pollTimer = setInterval(() => {
-      const s = info()?.status
-      if (s === 'completed' || s === 'failed') {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-        return
+    if (expanded()) {
+      fetchHistory()
+      // Auto-refresh every 5s while not completed
+      refreshTimer = setInterval(() => {
+        const s = status()
+        if (s === 'completed' || s === 'failed') {
+          if (refreshTimer) {
+            clearInterval(refreshTimer)
+            refreshTimer = undefined
+          }
+          // One final fetch
+          fetchHistory()
+          return
+        }
+        fetchHistory()
+      }, 5000)
+    } else {
+      if (refreshTimer) {
+        clearInterval(refreshTimer)
+        refreshTimer = undefined
       }
-      fetchInfo()
-    }, 10000)
+    }
   })
 
   onCleanup(() => {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+    if (refreshTimer) {
+      clearInterval(refreshTimer)
+      refreshTimer = undefined
+    }
   })
 
   const statusColor = () => {
-    const s = info()?.status
+    const s = status()
     if (s === 'completed') return '#4ade80'
     if (s === 'failed') return '#ef4444'
     if (s === 'working') return 'var(--c-accent)'
@@ -85,7 +102,7 @@ export function SubagentCard(props: SubagentCardProps) {
   }
 
   const statusLabel = () => {
-    const s = info()?.status
+    const s = status()
     if (s === 'completed') return 'Completed'
     if (s === 'failed') return 'Failed'
     if (s === 'working') return 'Running'
@@ -95,8 +112,49 @@ export function SubagentCard(props: SubagentCardProps) {
   const taskLabel = () => {
     const t = props.task
     if (!t) return 'Subagent'
-    // Truncate long task descriptions
-    return t.length > 80 ? t.slice(0, 80) + '…' : t
+    return t.length > 120 ? t.slice(0, 120) + '…' : t
+  }
+
+  const lastMessage = () => {
+    if (expanded()) return ''
+    const turns = history()
+    const last = [...turns].reverse().find((t) => t.role === 'assistant' && t.content)
+    return last?.content?.slice(0, 120) || ''
+  }
+
+  // Fetch once on mount (collapsed) for status preview
+  createEffect(() => {
+    if (!expanded() && history().length === 0) {
+      const doFetch = async () => {
+        try {
+          const res = await fetch(`/api/threads/${encodeURIComponent(props.sessionKey)}/history`)
+          if (res.ok) {
+            const data = await res.json()
+            const turns: ParsedTurn[] = data.history ?? []
+            setHistory(turns)
+            const lastTurn = turns[turns.length - 1]
+            const isComplete =
+              lastTurn?.role === 'assistant' && lastTurn?.content && !lastTurn?.pending && !lastTurn?.streaming
+            setStatus(
+              lastTurn?.streaming || lastTurn?.pending
+                ? 'working'
+                : isComplete
+                  ? 'completed'
+                  : turns.length > 0
+                    ? 'working'
+                    : 'idle'
+            )
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      doFetch()
+    }
+  })
+
+  const openInThread = () => {
+    switchThread(props.sessionKey)
   }
 
   return (
@@ -107,70 +165,140 @@ export function SubagentCard(props: SubagentCardProps) {
         border: '1px solid color-mix(in srgb, var(--c-accent) 30%, var(--c-border))'
       }}
     >
-      {/* Header */}
-      <div
-        class="flex items-center gap-2 px-3 py-2"
-        style={{ 'border-bottom': '1px solid var(--c-border)' }}
+      {/* Header — clickable to expand/collapse */}
+      <button
+        class="flex w-full cursor-pointer items-center gap-2 border-none bg-transparent px-3 py-2 text-left transition-colors"
+        style={{
+          'border-bottom': expanded() ? '1px solid var(--c-border)' : 'none',
+          color: 'var(--c-text)'
+        }}
+        onClick={() => setExpanded(!expanded())}
+        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
         <SplitIcon class="h-4 w-4 shrink-0" />
-        <span class="text-xs font-medium" style={{ color: 'var(--c-text-heading)' }}>
-          Subagent
+        <span class="min-w-0 flex-1 truncate text-xs font-medium" style={{ color: 'var(--c-text-heading)' }}>
+          {taskLabel()}
         </span>
-        <span class="flex items-center gap-1 text-[10px]" style={{ color: statusColor() }}>
+        <span class="flex shrink-0 items-center gap-1 text-[10px]" style={{ color: statusColor() }}>
           <span
             class="inline-block h-1.5 w-1.5 rounded-full"
             style={{
               background: statusColor(),
-              animation: info()?.status === 'working' ? 'pulse 2s infinite' : 'none'
+              animation: status() === 'working' ? 'pulse 2s infinite' : 'none'
             }}
           />
           {statusLabel()}
         </span>
-      </div>
-
-      {/* Body */}
-      <div class="px-3 py-2">
-        <div
-          class="mb-1.5 text-xs leading-relaxed"
-          style={{ color: 'var(--c-text)' }}
-        >
-          {taskLabel()}
-        </div>
-
-        <Show when={info()?.lastMessage}>
-          <div
-            class="mb-2 text-[11px] leading-relaxed"
-            style={{
-              color: 'var(--c-text-muted)',
-              display: '-webkit-box',
-              '-webkit-box-orient': 'vertical',
-              '-webkit-line-clamp': '2',
-              overflow: 'hidden'
-            }}
-          >
-            {info()!.lastMessage}
-          </div>
-        </Show>
-
-        <Show when={loading()}>
-          <div class="mb-2 text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
-            Loading…
-          </div>
-        </Show>
-
-        <button
-          class="rounded-md px-3 py-1 text-xs font-medium transition-colors"
+        <span
+          class="shrink-0 text-[10px] transition-transform"
           style={{
-            background: 'var(--c-accent)',
-            color: 'var(--c-text)',
-            opacity: loading() ? '0.5' : '1'
+            color: 'var(--c-text-muted)',
+            transform: expanded() ? 'rotate(90deg)' : 'rotate(0deg)'
           }}
-          onClick={() => props.onView(props.sessionKey, taskLabel())}
-          disabled={loading()}
         >
-          View →
-        </button>
-      </div>
+          ▶
+        </span>
+      </button>
+
+      {/* Collapsed preview */}
+      <Show when={!expanded() && lastMessage()}>
+        <div
+          class="cursor-pointer px-3 py-1.5 text-[11px] leading-relaxed"
+          style={{
+            color: 'var(--c-text-muted)',
+            display: '-webkit-box',
+            '-webkit-box-orient': 'vertical',
+            '-webkit-line-clamp': '2',
+            overflow: 'hidden'
+          }}
+          onClick={() => setExpanded(true)}
+        >
+          {lastMessage()}
+        </div>
+      </Show>
+
+      {/* Expanded body */}
+      <Show when={expanded()}>
+        <div style={{ 'max-height': '400px', 'overflow-y': 'auto' }}>
+          {/* Toolbar */}
+          <div
+            class="flex items-center justify-between px-3 py-1.5"
+            style={{ 'border-bottom': '1px solid var(--c-border)' }}
+          >
+            <button
+              class="cursor-pointer rounded-md border-none bg-transparent px-2 py-1 text-[11px] font-medium transition-colors"
+              style={{ color: 'var(--c-accent)' }}
+              onClick={openInThread}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              Open in thread ↗
+            </button>
+            <Show when={loading()}>
+              <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                refreshing…
+              </span>
+            </Show>
+          </div>
+
+          {/* Messages */}
+          <div class="flex flex-col gap-1 px-3 py-2">
+            <Show when={history().length === 0 && loading()}>
+              <div class="py-4 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                Loading…
+              </div>
+            </Show>
+
+            <Show when={history().length === 0 && !loading()}>
+              <div class="py-4 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                No messages yet
+              </div>
+            </Show>
+
+            <For each={history()}>
+              {(turn) => (
+                <div class="flex flex-col gap-0.5">
+                  {/* Tool calls summary */}
+                  <Show when={(turn.workItems?.filter((w: WorkItem) => w.type === 'tool_call')?.length ?? 0) > 0}>
+                    <div class="flex flex-wrap gap-1 py-0.5">
+                      <For each={turn.workItems?.filter((w: WorkItem) => w.type === 'tool_call') ?? []}>
+                        {(w) => (
+                          <span
+                            class="rounded-full px-1.5 py-0.5 text-[10px]"
+                            style={{
+                              background: 'var(--c-hover-bg)',
+                              color: 'var(--c-text-muted)'
+                            }}
+                          >
+                            ⚙ {w.name}
+                          </span>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+
+                  {/* Message content */}
+                  <Show when={turn.content?.trim()}>
+                    <div
+                      class="rounded-lg px-2.5 py-1.5 text-[12px] leading-relaxed"
+                      style={{
+                        background: turn.role === 'user' ? 'var(--c-accent)' : 'transparent',
+                        color: turn.role === 'user' ? '#fff' : 'var(--c-text)',
+                        'align-self': turn.role === 'user' ? 'flex-end' : 'flex-start',
+                        'max-width': '95%'
+                      }}
+                      innerHTML={turn.role === 'assistant' ? renderMarkdown(turn.content!) : undefined}
+                    >
+                      {turn.role === 'user' ? turn.content : undefined}
+                    </div>
+                  </Show>
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
     </div>
   )
 }
