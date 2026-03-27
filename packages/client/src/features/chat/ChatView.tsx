@@ -1,10 +1,10 @@
-import { createEffect, createMemo, For } from 'solid-js'
+import { createEffect, createMemo, For, Show } from 'solid-js'
 import type { WorkItem, AgentStatus } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
 import { SubagentCard } from './SubagentCard.js'
-import { hasOlderMessages, loadingOlder, loadOlderMessages } from './store.js'
+import { hasOlderMessages, loadingOlder, loadOlderMessages, streamingText, streamingHtml, liveWork } from './store.js'
 import { ChatIcon } from '../../ui/icons.js'
 import { renderMarkdown } from '../../lib/markdown.js'
 
@@ -99,42 +99,18 @@ export function ChatView(props: ChatViewProps) {
     }
   }
 
-  // Auto-scroll when messages change (including streaming turn updates)
+  // Auto-scroll when messages or live state changes
   createEffect(() => {
-    // Track reactive dependencies — turns signal covers both history and streaming
     props.messages.length
-    // Also track the last message's content for streaming updates
     const last = props.messages[props.messages.length - 1]
     if (last) {
       last.turn.content
       last.turn.workItems?.length
     }
-    // Schedule scroll after DOM update
+    // Also track live state for scrolling
+    liveWork().length
+    streamingText()
     requestAnimationFrame(scrollToBottom)
-  })
-
-  // When agent is mid-run (last turn has work but no final reply), show the last
-  // thinking block from history as a streaming-like bubble so there's visible progress
-  // on refresh or for subagent threads that don't get real streaming events.
-  const lastThoughtHtml = createMemo(() => {
-    // Don't show if there's an active streaming turn
-    if (props.messages.some((m) => m.turn.streaming)) return null
-    const msgs = props.messages
-    if (msgs.length === 0) return null
-    const last = msgs[msgs.length - 1]
-    if (last.turn.role !== 'assistant' || !last.turn.workItems?.length) return null
-    // If the turn has content, it's complete
-    if (last.turn.content) return null
-    // Find last thinking block
-    for (let i = last.turn.workItems.length - 1; i >= 0; i--) {
-      const w = last.turn.workItems[i]
-      if (w.type === 'thinking' && (w.output || w.input)) {
-        const text = w.output || w.input || ''
-        const tail = text.length > 500 ? '…' + text.substring(text.length - 500) : text
-        return renderMarkdown(tail)
-      }
-    }
-    return null
   })
 
   return (
@@ -205,19 +181,20 @@ export function ChatView(props: ChatViewProps) {
           }}
         </For>
 
-        {/* Live work section — REMOVED: now rendered via streaming turn in messages[] */}
+        {/* ── Live streaming section (independent of history turns) ── */}
+        <Show when={liveWork().length > 0}>
+          <WorkSection work={liveWork()} />
+        </Show>
 
-        {/* Streaming response — REMOVED: now rendered via streaming turn in messages[] */}
-
-        {/* Last thought from history — shown when agent is mid-run but no live stream */}
-        {lastThoughtHtml() && !props.messages.some((m) => m.turn.streaming) && (
-          <div
-            class="msg-assistant streaming-dots max-w-[85%] self-start rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed break-words"
-            style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)', opacity: '0.7' }}
-          >
-            <div innerHTML={lastThoughtHtml()!} />
+        <Show when={streamingHtml()}>
+          <div class="flex w-full justify-start">
+            <div
+              class="msg-assistant streaming-dots max-w-[85%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed break-words"
+              style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)', opacity: '0.7' }}
+              innerHTML={streamingHtml()}
+            />
           </div>
-        )}
+        </Show>
       </div>
 
       {/* Compaction indicator */}
