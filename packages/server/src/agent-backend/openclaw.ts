@@ -241,6 +241,9 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     }
   }
 
+  // Accumulate thinking deltas per session — emit as single combined block
+  const thinkingAccum = new Map<string, string>()
+
   function handleAgentEvent(sessionKey: string, ev: any) {
     const data = ev.data ?? {}
     const stream = ev.stream as string | undefined
@@ -250,11 +253,21 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       case 'lifecycle': {
         if (phase === 'start') {
           state.agentStatus = 'working'
+          thinkingAccum.delete(sessionKey) // reset on new turn
           emitter.emit('chat.status', { sessionKey, status: 'working' })
         } else if (phase === 'end' || phase === 'error') {
           if (phase === 'error') {
             const reason = data.error || data.reason || data.stopReason || ''
             emitter.emit('chat.error', { sessionKey, error: reason || 'Agent error', retryAfterMs: data.retryAfterMs })
+          }
+          // Flush any remaining thinking
+          const accum = thinkingAccum.get(sessionKey)
+          if (accum) {
+            emitter.emit('chat.work', {
+              sessionKey,
+              work: { type: 'thinking', output: accum, timestamp: Date.now() } as WorkItem
+            })
+            thinkingAccum.delete(sessionKey)
           }
           state.agentStatus = 'idle'
           emitter.emit('chat.status', { sessionKey, status: 'idle' })
@@ -262,6 +275,15 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'tool': {
+        // Flush accumulated thinking before tool call
+        const accum = thinkingAccum.get(sessionKey)
+        if (accum) {
+          emitter.emit('chat.work', {
+            sessionKey,
+            work: { type: 'thinking', output: accum, timestamp: Date.now() } as WorkItem
+          })
+          thinkingAccum.delete(sessionKey)
+        }
         const rawInput = data.input
         const rawOutput = data.output
         const work: WorkItem = {
@@ -276,12 +298,12 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'thinking': {
-        const work: WorkItem = {
-          type: 'thinking',
-          output: data.text ?? data.content ?? data.delta ?? '',
-          timestamp: data.timestamp ?? Date.now()
+        // Accumulate thinking deltas — emit as one combined block when a tool call or lifecycle event arrives
+        const delta = data.text ?? data.content ?? data.delta ?? ''
+        if (delta) {
+          const prev = thinkingAccum.get(sessionKey) ?? ''
+          thinkingAccum.set(sessionKey, prev + delta)
         }
-        emitter.emit('chat.work', { sessionKey, work })
         break
       }
       case 'compaction': {
