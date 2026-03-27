@@ -16,8 +16,8 @@ export const [messageQueue, setMessageQueue] = createSignal<QueuedMessage[]>([])
 export const [hasOlderMessages, setHasOlderMessages] = createSignal(false)
 export const [loadingOlder, setLoadingOlder] = createSignal(false)
 
-// Kept for backward compat — these are now derived from the streaming turn in turns[]
-// but some ChatView code may still reference them during transition
+// Live streaming state — completely separate from turns[] (history)
+export const [streamingText, setStreamingText] = createSignal('')
 export const [streamingHtml, setStreamingHtml] = createSignal('')
 export const [liveWork, setLiveWork] = createSignal<WorkItem[]>([])
 export const [liveThinkingText, setLiveThinkingText] = createSignal('')
@@ -106,46 +106,19 @@ export function clearRetryCountdown(): void {
   setRetrySeconds(0)
 }
 
-// ── Helpers for the in-progress streaming turn ──────────────
+// ── Helpers ──────────────────────────────────────────────────
 
-/** Find the streaming turn index, or -1 */
-function findStreamingTurnIndex(list: ParsedTurn[]): number {
-  for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].streaming) return i
-  }
-  return -1
-}
+// Change 3: Deterministic turn completion flag
+let turnReceivedForCurrentRun = false
 
-/** Ensure a streaming assistant turn exists at the end of turns[].
- *  Returns the updated array. */
-function ensureStreamingTurn(prev: ParsedTurn[]): ParsedTurn[] {
-  const idx = findStreamingTurnIndex(prev)
-  if (idx >= 0) return prev // Already exists
-  return [
-    ...prev,
-    {
-      role: 'assistant' as const,
-      content: '',
-      timestamp: Date.now(),
-      workItems: [],
-      thinkingBlocks: [],
-      streaming: true
-    }
-  ]
-}
-
-/** Update the streaming turn in-place (immutably). */
-function updateStreamingTurn(prev: ParsedTurn[], updater: (turn: ParsedTurn) => ParsedTurn): ParsedTurn[] {
-  const idx = findStreamingTurnIndex(prev)
-  if (idx < 0) return prev
-  const next = [...prev]
-  next[idx] = updater(next[idx])
-  return next
-}
-
-/** Remove the streaming turn. */
-function removeStreamingTurn(prev: ParsedTurn[]): ParsedTurn[] {
-  return prev.filter((t) => !t.streaming)
+/** Clear all live streaming state */
+function clearLiveState(): void {
+  streamingRawText = ''
+  streamTextOffset = 0
+  setStreamingText('')
+  setStreamingHtml('')
+  setLiveWork([])
+  setLiveThinkingText('')
 }
 
 /** Clean text: strip thinking blocks and directive tags */
@@ -159,12 +132,9 @@ function cleanStreamText(raw: string): string {
 
 function resetState(): void {
   setTurns([])
-  streamingRawText = ''
-  streamTextOffset = 0
+  clearLiveState()
+  turnReceivedForCurrentRun = false
   setAgentStatus('idle')
-  setStreamingHtml('')
-  setLiveWork([])
-  setLiveThinkingText('')
   setCompacting(false)
   clearRetryCountdown()
   stopDurationTimer()
@@ -194,13 +164,7 @@ export function cancelMessage(id: string): void {
 
 export function abortChat(): void {
   ws?.send({ type: 'chat.abort', threadKey: currentThreadKey?.() ?? 'main' } as any)
-  // Remove the streaming turn and clear state
-  setTurns((prev) => removeStreamingTurn(prev))
-  streamingRawText = ''
-  streamTextOffset = 0
-  setStreamingHtml('')
-  setLiveWork([])
-  setLiveThinkingText('')
+  clearLiveState()
   suppressLifecycleUntil = Date.now() + 2000
   setAgentStatus('cancelled' as AgentStatus)
   setTimeout(() => {
@@ -239,15 +203,13 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     }
   })
 
-  streamingRawText = ''
-  streamTextOffset = 0
+  clearLiveState()
 
-  // ── chat.stream: update the streaming turn's content ──
+  // ── chat.stream: update live streaming text (NOT turns[]) ──
   unsubs.push(
     ws.on('chat.stream', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
 
-      // Suppress for subagent threads
       const isSubagent = _threadKey().startsWith('subagent:')
 
       if (msg.replay) {
@@ -257,23 +219,11 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       }
 
       const cleaned = cleanStreamText(streamingRawText)
-
-      // Only show text AFTER the last tool call offset
       const visible = cleaned.substring(streamTextOffset).trim()
-
-      // Suppress partial sentinel strings
       const isSentinel = /^(NO_REPLY|HEARTBEAT_OK|NO_?|HEART)/.test(visible) && visible.length < 15
 
       if (visible && !isSubagent && !isSentinel) {
-        // Ensure streaming turn exists, then update its content
-        setTurns((prev) => {
-          const withTurn = ensureStreamingTurn(prev)
-          return updateStreamingTurn(withTurn, (t) => ({
-            ...t,
-            content: visible
-          }))
-        })
-        // Keep legacy signal in sync for any ChatView code that still reads it
+        setStreamingText(visible)
         setStreamingHtml(renderMarkdown(visible))
       } else if (isSubagent && cleaned) {
         setAgentStatus('working')
@@ -281,111 +231,78 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
-  // ── chat.turn: replace streaming turn with final turn ──
+  // ── chat.turn: final turn from server — update history, clear live state ──
   unsubs.push(
     ws.on('chat.turn', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
-      setTurns((prev) => {
-        // Merge work items from the streaming turn into the final turn
-        const streamingIdx = prev.findIndex((t) => t.streaming)
-        const streamingWork = streamingIdx >= 0 ? prev[streamingIdx].workItems : []
-        const merged: ParsedTurn = {
-          ...turn,
-          workItems: streamingWork.length > 0 ? streamingWork : turn.workItems
-        }
-        const without = removeStreamingTurn(prev)
-        return [...without, merged]
-      })
-      streamingRawText = ''
-      streamTextOffset = 0
-      setStreamingHtml('')
-      setLiveWork([])
-      setLiveThinkingText('')
+      turnReceivedForCurrentRun = true
+
+      // Merge any live work items into the final turn if it has none
+      const liveWorkItems = liveWork()
+      const merged: ParsedTurn = {
+        ...turn,
+        workItems: turn.workItems?.length > 0 ? turn.workItems : liveWorkItems
+      }
+
+      setTurns((prev) => [...prev, merged])
+      clearLiveState()
     })
   )
 
-  // ── chat.status: track agent status, clear on idle ──
+  // ── chat.status: track agent status, deterministic turn completion ──
   unsubs.push(
     ws.on('chat.status', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
       setAgentStatus(msg.status)
       if (msg.status === 'working' || msg.status === 'thinking') {
+        turnReceivedForCurrentRun = false
         if (!agentWorkingStartTime()) startDurationTimer()
       } else {
         stopDurationTimer()
         if (msg.status === 'idle') {
-          // Agent done — wait briefly for chat.turn to arrive with the final turn.
-          // If it doesn't arrive in 500ms, reload history from JSONL to get complete data.
-          setTimeout(() => {
-            const hasFinalTurn = turns().some((t) => !t.streaming && t.role === 'assistant' && t.workItems?.length > 0)
-            // Remove streaming turn
-            setTurns((prev) => removeStreamingTurn(prev))
-            streamingRawText = ''
-            streamTextOffset = 0
-            setStreamingHtml('')
-            setLiveWork([])
-            setLiveThinkingText('')
-            // If no final turn arrived, reload history to get complete data
-            if (!hasFinalTurn) {
-              const threadKey = currentThreadKey?.() ?? 'main'
-              ws?.send({ type: 'chat.history', threadKey } as any)
-            }
-          }, 800)
+          clearLiveState()
+          // If chat.turn already arrived, we're done. Otherwise reload history as fallback.
+          if (!turnReceivedForCurrentRun) {
+            const threadKey = currentThreadKey?.() ?? 'main'
+            ws?.send({ type: 'chat.history', threadKey } as any)
+          }
         }
       }
     })
   )
 
-  // ── chat.work: append work items to the streaming turn ──
+  // ── chat.work: update live work items only (NOT turns[]) ──
   unsubs.push(
     ws.on('chat.work', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const work = msg.work as WorkItem
 
-      // On tool call, advance the text offset so the bubble only shows text after
       if (work.type === 'tool_call') {
+        // Advance text offset so streaming bubble only shows text after this tool call
         const cleaned = cleanStreamText(streamingRawText)
         streamTextOffset = cleaned.length
-        // Clear the streaming bubble text — work section takes over
-        setTurns((prev) => {
-          const withTurn = ensureStreamingTurn(prev)
-          return updateStreamingTurn(withTurn, (t) => ({
-            ...t,
-            content: '',
-            workItems: [...t.workItems, work]
-          }))
-        })
+        setStreamingText('')
         setStreamingHtml('')
-      } else if (work.type === 'thinking') {
-        // Replace the last thinking item (accumulated text), don't append duplicates
-        setTurns((prev) => {
-          const withTurn = ensureStreamingTurn(prev)
-          return updateStreamingTurn(withTurn, (t) => {
-            const items = [...t.workItems]
-            const lastThinkIdx = items.findLastIndex((w) => w.type === 'thinking')
-            if (lastThinkIdx >= 0) {
-              items[lastThinkIdx] = work // replace with updated accumulated text
-            } else {
-              items.push(work)
-            }
-            return { ...t, workItems: items }
-          })
-        })
-      } else {
-        // Tool result, thinking — just append to workItems
-        setTurns((prev) => {
-          const withTurn = ensureStreamingTurn(prev)
-          return updateStreamingTurn(withTurn, (t) => ({
-            ...t,
-            workItems: [...t.workItems, work]
-          }))
-        })
       }
 
-      // Keep legacy signals in sync
-      setLiveWork((prev) => [...prev, work])
+      if (work.type === 'thinking') {
+        // Replace the last thinking item (accumulated text)
+        setLiveWork((prev) => {
+          const items = [...prev]
+          const lastThinkIdx = items.findLastIndex((w) => w.type === 'thinking')
+          if (lastThinkIdx >= 0) {
+            items[lastThinkIdx] = work
+            return items
+          }
+          return [...prev, work]
+        })
+      } else {
+        setLiveWork((prev) => [...prev, work])
+      }
+
+      setLiveThinkingText(work.type === 'thinking' ? work.output || work.input || '' : '')
     })
   )
 
@@ -413,11 +330,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       setHasOlderMessages(_hasOlderMessages)
       setLoadingOlder(false)
       setTurns(history)
-      streamingRawText = ''
-      streamTextOffset = 0
-      setStreamingHtml('')
-      setLiveWork([])
-      setLiveThinkingText('')
+      clearLiveState()
     })
   )
 
