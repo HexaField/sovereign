@@ -104,7 +104,7 @@ export function createChatModule(
       .then(() => {
         messageQueue.removeSent(next.id)
         broadcastQueueUpdate(threadKey)
-        historyCache.delete(threadKey)
+        // cache removed
         // After removing the sent item, try to process the next one.
         // tryProcessQueue checks currentStatus so it won't send while agent is busy.
         // This handles the case where idle fired while this item was still 'sending'.
@@ -134,9 +134,6 @@ export function createChatModule(
   const currentWork = new Map<string, any[]>()
   const currentStreamText = new Map<string, string>()
 
-  // --- History cache: avoids re-reading session files from gateway on every switch ---
-  const historyCache = new Map<string, { turns: any[]; hasMore: boolean; ts: number }>()
-
   // Proxy backend events to WS subscribers
   const backendEvents: (keyof AgentBackendEvents)[] = [
     'chat.stream',
@@ -160,7 +157,7 @@ export function createChatModule(
           // When agent becomes idle, invalidate history cache so next load picks up
           // all messages (including those from context overflow resets, compaction, etc.)
           if (data.status === 'idle') {
-            historyCache.delete(threadKey)
+            // cache removed
             tryProcessQueue(threadKey)
           }
         } else if (eventName === 'chat.work') {
@@ -175,7 +172,7 @@ export function createChatModule(
           currentStatus.delete(threadKey)
           currentWork.delete(threadKey)
           currentStreamText.delete(threadKey)
-          historyCache.delete(threadKey)
+          // cache removed
         }
       }
 
@@ -245,29 +242,19 @@ export function createChatModule(
       setMapping(threadKey, sessionKey)
     }
 
-    // Check cache first — valid until invalidated by chat.turn
-    const cached = historyCache.get(threadKey)
+    // Always fetch fresh history from the backend
     let history: any[]
     let hasMore = false
-    if (cached) {
-      history = cached.turns
-      hasMore = cached.hasMore ?? false
-    } else {
-      try {
-        const result = await backend.getHistory(sessionKey)
-        history = result.turns
-        hasMore = result.hasMore
-      } catch {
-        history = []
-      }
-      historyCache.set(threadKey, { turns: history, hasMore, ts: Date.now() })
+    try {
+      const result = await backend.getHistory(sessionKey)
+      history = result.turns
+      hasMore = result.hasMore
+    } catch {
+      history = []
     }
 
     const elapsed = Date.now() - t0
-    if (elapsed > 50)
-      console.log(
-        `[chat] history fetch ${threadKey}: ${elapsed}ms, ${history.length} turns${cached ? ' (cached)' : ''}`
-      )
+    if (elapsed > 50) console.log(`[chat] history fetch ${threadKey}: ${elapsed}ms, ${history.length} turns`)
     if (wsHandler) {
       wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore })
 
@@ -317,7 +304,7 @@ export function createChatModule(
     try {
       // Full history via gateway RPC or direct file read — slower but complete
       const history = await backend.getFullHistory(sessionKey)
-      historyCache.set(threadKey, { turns: history, hasMore: false, ts: Date.now() })
+      // cache removed
       if (wsHandler) {
         wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore: false })
       }
