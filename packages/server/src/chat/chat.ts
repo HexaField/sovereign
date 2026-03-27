@@ -202,6 +202,38 @@ export function createChatModule(
           source: 'chat',
           payload: { threadKey, turn: data.turn }
         })
+
+        // Detect subagent spawns and auto-register them as threads
+        const turn = data.turn as {
+          workItems?: Array<{ type: string; name?: string; toolCallId?: string; input?: string; output?: string }>
+        }
+        if (turn?.workItems) {
+          for (const w of turn.workItems) {
+            if (w.type === 'tool_call' && w.name === 'sessions_spawn') {
+              try {
+                const input = typeof w.input === 'string' ? JSON.parse(w.input) : w.input
+                const task = (input?.task || input?.message || '') as string
+                const result = turn.workItems.find((r) => r.type === 'tool_result' && r.toolCallId === w.toolCallId)
+                if (result?.output) {
+                  const out = typeof result.output === 'string' ? JSON.parse(result.output) : result.output
+                  const childKey = out?.childSessionKey as string | undefined
+                  if (childKey) {
+                    const parentThread = threadManager.get(threadKey)
+                    threadManager.createIfNotExists({
+                      key: childKey,
+                      label: task.slice(0, 80) || childKey.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
+                      orgId: parentThread?.orgId,
+                      parentThreadKey: threadKey,
+                      isSubagent: true
+                    })
+                  }
+                }
+              } catch {
+                // Ignore parse errors — best-effort registration
+              }
+            }
+          }
+        }
       }
     })
   }
