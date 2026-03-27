@@ -287,8 +287,15 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
       setTurns((prev) => {
+        // Merge work items from the streaming turn into the final turn
+        const streamingIdx = prev.findIndex((t) => t.streaming)
+        const streamingWork = streamingIdx >= 0 ? prev[streamingIdx].workItems : []
+        const merged: ParsedTurn = {
+          ...turn,
+          workItems: streamingWork.length > 0 ? streamingWork : turn.workItems
+        }
         const without = removeStreamingTurn(prev)
-        return [...without, turn]
+        return [...without, merged]
       })
       streamingRawText = ''
       streamTextOffset = 0
@@ -327,11 +334,11 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const work = msg.work as WorkItem
 
-      // On tool call, advance the text offset so the bubble only shows text after this point
-      if (work.type === 'tool_call') {
+      // On tool call or thinking, advance the text offset so the bubble only shows text after
+      if (work.type === 'tool_call' || work.type === 'thinking') {
         const cleaned = cleanStreamText(streamingRawText)
         streamTextOffset = cleaned.length
-        // Clear the streaming bubble text — tool call takes over
+        // Clear the streaming bubble text — work section takes over
         setTurns((prev) => {
           const withTurn = ensureStreamingTurn(prev)
           return updateStreamingTurn(withTurn, (t) => ({
