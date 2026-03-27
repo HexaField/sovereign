@@ -1,4 +1,4 @@
-import { createEffect, createMemo } from 'solid-js'
+import { createEffect, createMemo, For } from 'solid-js'
 import type { WorkItem, AgentStatus } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
@@ -166,41 +166,44 @@ export function ChatView(props: ChatViewProps) {
         )}
 
         {/* Message list with date separators */}
-        {props.messages.map((msg, i) => {
-          const showSeparator = i === 0 || needsDateSeparator(props.messages[i - 1].turn.timestamp, msg.turn.timestamp)
+        <For each={props.messages}>
+          {(msg, i) => {
+            const showSeparator = () =>
+              i() === 0 || needsDateSeparator(props.messages[i() - 1]?.turn.timestamp, msg.turn.timestamp)
 
-          return (
-            <>
-              {/* Date separator */}
-              {showSeparator && (
-                <div class="flex items-center gap-2 py-2">
-                  <div class="flex-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
-                  <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                    {formatDateSeparator(msg.turn.timestamp)}
-                  </span>
-                  <div class="flex-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
-                </div>
-              )}
+            return (
+              <>
+                {/* Date separator */}
+                {showSeparator() && (
+                  <div class="flex items-center gap-2 py-2">
+                    <div class="flex-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+                    <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                      {formatDateSeparator(msg.turn.timestamp)}
+                    </span>
+                    <div class="flex-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+                  </div>
+                )}
 
-              {/* Work section between user and assistant turns */}
-              {(msg.turn.workItems?.length ?? 0) > 0 && <WorkSection work={msg.turn.workItems} />}
+                {/* Work section between user and assistant turns */}
+                {(msg.turn.workItems?.length ?? 0) > 0 && <WorkSection work={msg.turn.workItems} />}
 
-              {/* Message bubble — skip for assistant turns with empty content (work-only turns) */}
-              {(msg.turn.content?.trim() || msg.turn.role !== 'assistant' || msg.turn.streaming) && (
-                <MessageBubble turn={msg.turn} pending={msg.pending} />
-              )}
+                {/* Message bubble — skip for assistant turns with empty content (work-only turns) */}
+                {(msg.turn.content?.trim() || msg.turn.role !== 'assistant' || msg.turn.streaming) && (
+                  <MessageBubble turn={msg.turn} pending={msg.pending} />
+                )}
 
-              {/* Subagent cards for sessions_spawn tool calls */}
-              {extractSubagentSpawns(msg.turn.workItems || []).map((spawn) => (
-                <SubagentCard
-                  sessionKey={spawn.sessionKey}
-                  task={spawn.task}
-                  onView={(key, label) => props.onViewSubagent?.(key, label)}
-                />
-              ))}
-            </>
-          )
-        })}
+                {/* Subagent cards for sessions_spawn tool calls */}
+                {extractSubagentSpawns(msg.turn.workItems || []).map((spawn) => (
+                  <SubagentCard
+                    sessionKey={spawn.sessionKey}
+                    task={spawn.task}
+                    onView={(key, label) => props.onViewSubagent?.(key, label)}
+                  />
+                ))}
+              </>
+            )
+          }}
+        </For>
 
         {/* Live work section — REMOVED: now rendered via streaming turn in messages[] */}
 

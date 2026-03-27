@@ -581,7 +581,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
                     },
                     auth: { token: storedToken },
                     userAgent: `Sovereign/0.1.0 (Node ${process.version})`,
-                    caps: ['tool-events']
+                    caps: []
                   }
                 })
               )
