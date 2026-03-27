@@ -404,6 +404,34 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
+  // ── chat.user-message: sync user messages across tabs/devices ──
+  unsubs.push(
+    ws.on('chat.user-message' as any, (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      // Add the user turn if it's not already in the list
+      // (the sending tab may have already added it optimistically — but we removed that)
+      const text = msg.text as string
+      if (!text) return
+      setTurns((prev) => {
+        // Deduplicate: skip if the last user turn has the same text within 5 seconds
+        const last = prev.filter((t) => t.role === 'user').pop()
+        if (last && last.content === text && Math.abs((last.timestamp || 0) - (msg.timestamp || Date.now())) < 5000) {
+          return prev
+        }
+        return [
+          ...prev,
+          {
+            role: 'user' as const,
+            content: text,
+            timestamp: msg.timestamp || Date.now(),
+            workItems: [],
+            thinkingBlocks: []
+          }
+        ]
+      })
+    })
+  )
+
   // Thread event routing
   unsubs.push(
     ws.on('thread.event.routed' as any, (msg: any) => {
