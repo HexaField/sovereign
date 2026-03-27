@@ -55,6 +55,7 @@ import {
 import { ChatView } from '../chat/ChatView.js'
 import { InputArea } from '../chat/InputArea.js'
 import { QueueIndicator } from '../chat/QueueIndicator.js'
+import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { SubagentView } from '../chat/SubagentView.js'
 import type { SubagentNavEntry } from '../chat/SubagentView.js'
 import {
@@ -495,21 +496,34 @@ const ChatPanel: Component = () => {
               />
             }
           >
-            {/* Chat messages */}
-            <ChatView
-              messages={messages()}
-              streamingHtml={streamingHtml()}
-              agentStatus={agentStatus()}
-              liveWork={liveWork()}
-              liveThinkingText={liveThinkingText()}
-              compacting={compacting()}
-              isRetryCountdownActive={isRetryCountdownActive()}
-              retryCountdownSeconds={retryCountdownSeconds()}
-              onSend={sendMessage}
-              onAbort={abortChat}
-              threadKey={threadKey()}
-              onViewSubagent={pushSubagent}
-            />
+            {/* Chat messages with settings button */}
+            <div
+              style={{
+                position: 'relative',
+                display: 'flex',
+                'flex-direction': 'column',
+                flex: '1',
+                'min-height': '0'
+              }}
+            >
+              <div style={{ position: 'absolute', top: '8px', right: '8px', 'z-index': '50' }}>
+                <ChatSettingsButton />
+              </div>
+              <ChatView
+                messages={messages()}
+                streamingHtml={streamingHtml()}
+                agentStatus={agentStatus()}
+                liveWork={liveWork()}
+                liveThinkingText={liveThinkingText()}
+                compacting={compacting()}
+                isRetryCountdownActive={isRetryCountdownActive()}
+                retryCountdownSeconds={retryCountdownSeconds()}
+                onSend={sendMessage}
+                onAbort={abortChat}
+                threadKey={threadKey()}
+                onViewSubagent={pushSubagent}
+              />
+            </div>
 
             {/* Input area */}
             <QueueIndicator />
@@ -548,20 +562,27 @@ const ExpandedChatView: Component = () => {
           />
         }
       >
-        <ChatView
-          messages={messages()}
-          streamingHtml={streamingHtml()}
-          agentStatus={agentStatus()}
-          liveWork={liveWork()}
-          liveThinkingText={liveThinkingText()}
-          compacting={compacting()}
-          isRetryCountdownActive={isRetryCountdownActive()}
-          retryCountdownSeconds={retryCountdownSeconds()}
-          onSend={sendMessage}
-          onAbort={abortChat}
-          threadKey={threadKey()}
-          onViewSubagent={pushSubagent}
-        />
+        <div
+          style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
+        >
+          <div style={{ position: 'absolute', top: '8px', right: '8px', 'z-index': '50' }}>
+            <ChatSettingsButton />
+          </div>
+          <ChatView
+            messages={messages()}
+            streamingHtml={streamingHtml()}
+            agentStatus={agentStatus()}
+            liveWork={liveWork()}
+            liveThinkingText={liveThinkingText()}
+            compacting={compacting()}
+            isRetryCountdownActive={isRetryCountdownActive()}
+            retryCountdownSeconds={retryCountdownSeconds()}
+            onSend={sendMessage}
+            onAbort={abortChat}
+            threadKey={threadKey()}
+            onViewSubagent={pushSubagent}
+          />
+        </div>
 
         <QueueIndicator />
         <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
