@@ -21,8 +21,6 @@ export interface ThreadInfo {
   agentStatus: AgentStatus
   createdAt: number
   archived: boolean
-  parentThreadKey?: string
-  isSubagent?: boolean
 }
 
 export interface ThreadEvent {
@@ -52,13 +50,6 @@ export interface ForwardedMessage {
 
 export interface ThreadManager {
   create(opts: { label?: string; entities?: EntityBinding[]; orgId?: string }): ThreadInfo
-  createIfNotExists(opts: {
-    key: string
-    label?: string
-    orgId?: string
-    parentThreadKey?: string
-    isSubagent?: boolean
-  }): ThreadInfo
   get(key: string): ThreadInfo | undefined
   update(key: string, patch: { label?: string; orgId?: string }): ThreadInfo | undefined
   list(filter?: ThreadFilter): ThreadInfo[]

@@ -80,35 +80,6 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     return threads.get(key)
   }
 
-  function createIfNotExists(opts: {
-    key: string
-    label?: string
-    orgId?: string
-    parentThreadKey?: string
-    isSubagent?: boolean
-  }): ThreadInfo {
-    if (threads.has(opts.key)) return threads.get(opts.key)!
-
-    const now = Date.now()
-    const thread: ThreadInfo = {
-      key: opts.key,
-      orgId: opts.orgId ?? '_global',
-      entities: [],
-      label: opts.label,
-      lastActivity: now,
-      unreadCount: 0,
-      agentStatus: 'idle',
-      createdAt: now,
-      archived: false,
-      parentThreadKey: opts.parentThreadKey,
-      isSubagent: opts.isSubagent
-    }
-    threads.set(opts.key, thread)
-    persist()
-    bus.emit({ type: 'thread.created', timestamp: new Date().toISOString(), source: 'threads', payload: { thread } })
-    return thread
-  }
-
   function list(filter?: ThreadFilter): ThreadInfo[] {
     let results = [...threads.values()]
     if (filter) {
@@ -252,7 +223,6 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
 
   return {
     create,
-    createIfNotExists,
     get,
     update,
     list,

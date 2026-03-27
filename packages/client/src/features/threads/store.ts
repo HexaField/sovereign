@@ -10,8 +10,6 @@ export interface ThreadInfo {
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus
-  parentThreadKey?: string
-  isSubagent?: boolean
 }
 
 export const [threadKey, setThreadKey] = createSignal('main')
