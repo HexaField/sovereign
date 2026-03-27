@@ -4,5 +4,6 @@ export function deriveSessionKey(threadKey: string): string {
   // Already a full session key — don't double-prefix
   if (threadKey.startsWith('agent:')) return threadKey
   if (threadKey === 'main') return 'agent:main:main'
-  return `agent:main:thread:${threadKey}`
+  // OpenClaw uses lowercase thread keys in session keys
+  return `agent:main:thread:${threadKey.toLowerCase()}`
 }
