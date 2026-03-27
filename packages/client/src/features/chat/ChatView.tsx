@@ -187,8 +187,8 @@ export function ChatView(props: ChatViewProps) {
                 {/* Work section between user and assistant turns */}
                 {(msg.turn.workItems?.length ?? 0) > 0 && <WorkSection work={msg.turn.workItems} />}
 
-                {/* Message bubble — skip for assistant turns with empty content (work-only turns) */}
-                {(msg.turn.content?.trim() || msg.turn.role !== 'assistant' || msg.turn.streaming) && (
+                {/* Message bubble — skip for assistant turns with empty content */}
+                {(msg.turn.content?.trim() || msg.turn.role !== 'assistant') && (
                   <MessageBubble turn={msg.turn} pending={msg.pending} />
                 )}
 
