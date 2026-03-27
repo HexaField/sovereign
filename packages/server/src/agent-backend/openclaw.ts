@@ -211,7 +211,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   const seenToolCallIds = new Map<string, Set<string>>()
   const seenToolResultIds = new Map<string, Set<string>>()
 
-  /** Extract tool_use blocks from ContentBlock array */
+  /** Extract tool_use/toolCall blocks from ContentBlock array */
   function extractToolCalls(message: unknown): Array<{ id: string; name: string; input: any }> {
     if (!Array.isArray(message)) {
       if (message && typeof message === 'object' && 'content' in (message as any)) {
@@ -220,21 +220,32 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       return []
     }
     return message
-      .filter((b: any) => b.type === 'tool_use' || b.type === 'tool_call')
+      .filter((b: any) => b.type === 'tool_use' || b.type === 'tool_call' || b.type === 'toolCall')
       .map((b: any) => ({ id: b.id || b.toolCallId || '', name: b.name || '', input: b.input ?? b.arguments ?? {} }))
   }
 
-  /** Extract tool_result blocks from ContentBlock array */
-  function extractToolResults(message: unknown): Array<{ toolCallId: string; content: any }> {
+  /** Extract tool_result/toolResult blocks from ContentBlock array */
+  function extractToolResults(message: unknown): Array<{ toolCallId: string; name?: string; content: any }> {
     if (!Array.isArray(message)) {
       if (message && typeof message === 'object' && 'content' in (message as any)) {
         return extractToolResults((message as any).content)
       }
+      // Check for role=toolResult messages (OpenClaw JSONL format)
+      if (message && typeof message === 'object') {
+        const msg = message as any
+        if (msg.role === 'toolResult') {
+          return [{ toolCallId: msg.toolCallId || '', name: msg.name, content: msg.content ?? msg.output ?? '' }]
+        }
+      }
       return []
     }
     return message
-      .filter((b: any) => b.type === 'tool_result')
-      .map((b: any) => ({ toolCallId: b.tool_use_id || b.toolCallId || '', content: b.content ?? b.output ?? '' }))
+      .filter((b: any) => b.type === 'tool_result' || b.type === 'toolResult')
+      .map((b: any) => ({
+        toolCallId: b.tool_use_id || b.toolCallId || '',
+        name: b.name,
+        content: b.content ?? b.output ?? ''
+      }))
   }
 
   /** Extract thinking blocks from ContentBlock array */
