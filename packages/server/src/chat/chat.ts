@@ -223,6 +223,18 @@ export function createChatModule(
     // Enqueue the message — server owns the queue
     messageQueue.enqueue(threadKey, text)
     broadcastQueueUpdate(threadKey)
+
+    // Broadcast the user message to all connected clients on this thread
+    // so other tabs/devices see it in real-time without refresh
+    if (wsHandler) {
+      wsHandler.broadcastToChannel('chat', {
+        type: 'chat.user-message',
+        threadKey,
+        text,
+        timestamp: new Date().toISOString()
+      })
+    }
+
     tryProcessQueue(threadKey)
   }
 
