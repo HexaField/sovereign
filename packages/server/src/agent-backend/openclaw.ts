@@ -207,6 +207,50 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   // Track accumulated streaming text per session to compute true deltas
   const lastStreamLengths = new Map<string, number>()
 
+  // Track seen tool call IDs to emit only new ones
+  const seenToolCallIds = new Map<string, Set<string>>()
+  const seenToolResultIds = new Map<string, Set<string>>()
+
+  /** Extract tool_use blocks from ContentBlock array */
+  function extractToolCalls(message: unknown): Array<{ id: string; name: string; input: any }> {
+    if (!Array.isArray(message)) {
+      if (message && typeof message === 'object' && 'content' in (message as any)) {
+        return extractToolCalls((message as any).content)
+      }
+      return []
+    }
+    return message
+      .filter((b: any) => b.type === 'tool_use' || b.type === 'tool_call')
+      .map((b: any) => ({ id: b.id || b.toolCallId || '', name: b.name || '', input: b.input ?? b.arguments ?? {} }))
+  }
+
+  /** Extract tool_result blocks from ContentBlock array */
+  function extractToolResults(message: unknown): Array<{ toolCallId: string; content: any }> {
+    if (!Array.isArray(message)) {
+      if (message && typeof message === 'object' && 'content' in (message as any)) {
+        return extractToolResults((message as any).content)
+      }
+      return []
+    }
+    return message
+      .filter((b: any) => b.type === 'tool_result')
+      .map((b: any) => ({ toolCallId: b.tool_use_id || b.toolCallId || '', content: b.content ?? b.output ?? '' }))
+  }
+
+  /** Extract thinking blocks from ContentBlock array */
+  function extractThinkingBlocks(message: unknown): string[] {
+    if (!Array.isArray(message)) {
+      if (message && typeof message === 'object' && 'content' in (message as any)) {
+        return extractThinkingBlocks((message as any).content)
+      }
+      return []
+    }
+    return message
+      .filter((b: any) => b.type === 'thinking')
+      .map((b: any) => b.thinking || b.text || b.content || '')
+      .filter(Boolean)
+  }
+
   function handleChatEvent(sessionKey: string, ev: any) {
     if (ev.state === 'delta') {
       // Gateway delta contains full accumulated text — compute the true delta
@@ -222,13 +266,86 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         lastStreamLengths.set(sessionKey, cleaned.length)
         emitter.emit('chat.stream', { sessionKey, text: delta })
       }
+
+      // Extract tool calls from content blocks (incremental — only emit new ones)
+      const toolCalls = extractToolCalls(ev.message)
+      if (!seenToolCallIds.has(sessionKey)) seenToolCallIds.set(sessionKey, new Set())
+      const seen = seenToolCallIds.get(sessionKey)!
+      for (const tc of toolCalls) {
+        if (tc.id && !seen.has(tc.id)) {
+          seen.add(tc.id)
+          // Flush thinking before tool call
+          const accum = thinkingAccum.get(sessionKey)
+          if (accum) {
+            emitter.emit('chat.work', {
+              sessionKey,
+              work: { type: 'thinking', output: accum, timestamp: Date.now() } as WorkItem
+            })
+            thinkingAccum.delete(sessionKey)
+          }
+          const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input)
+          emitter.emit('chat.work', {
+            sessionKey,
+            work: {
+              type: 'tool_call',
+              name: tc.name,
+              input: inputStr,
+              toolCallId: tc.id,
+              timestamp: Date.now()
+            } as WorkItem
+          })
+        }
+      }
+
+      // Extract tool results from content blocks
+      const toolResults = extractToolResults(ev.message)
+      if (!seenToolResultIds.has(sessionKey)) seenToolResultIds.set(sessionKey, new Set())
+      const seenResults = seenToolResultIds.get(sessionKey)!
+      for (const tr of toolResults) {
+        if (tr.toolCallId && !seenResults.has(tr.toolCallId)) {
+          seenResults.add(tr.toolCallId)
+          const outputStr = typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content)
+          // Find the tool name from matching call
+          const matchedCall = toolCalls.find((tc) => tc.id === tr.toolCallId)
+          emitter.emit('chat.work', {
+            sessionKey,
+            work: {
+              type: 'tool_result',
+              name: matchedCall?.name,
+              output: outputStr,
+              toolCallId: tr.toolCallId,
+              timestamp: Date.now()
+            } as WorkItem
+          })
+        }
+      }
+
+      // Extract thinking blocks
+      const thinkingBlocks = extractThinkingBlocks(ev.message)
+      for (const tb of thinkingBlocks) {
+        const prev = thinkingAccum.get(sessionKey) ?? ''
+        if (tb.length > prev.length) {
+          thinkingAccum.set(sessionKey, tb)
+        }
+      }
     } else if (ev.state === 'final') {
       lastStreamLengths.delete(sessionKey)
+      seenToolCallIds.delete(sessionKey)
+      seenToolResultIds.delete(sessionKey)
+
+      // Flush any remaining thinking
+      const accum = thinkingAccum.get(sessionKey)
+      if (accum) {
+        emitter.emit('chat.work', {
+          sessionKey,
+          work: { type: 'thinking', output: accum, timestamp: Date.now() } as WorkItem
+        })
+        thinkingAccum.delete(sessionKey)
+      }
+
       // Completed turn
       const text = extractText(ev.message)
       const cleaned = text ? stripThinkingBlocks(text) : ''
-      // Always emit the final turn — even with empty content.
-      // The client has accumulated workItems during streaming that need to be preserved.
       const turn: ParsedTurn = {
         role: 'assistant',
         content: cleaned.replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '').trim(),
@@ -284,8 +401,8 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
           })
           thinkingAccum.delete(sessionKey)
         }
-        const rawInput = data.input
-        const rawOutput = data.output
+        const rawInput = data.input ?? data.arguments ?? data.params
+        const rawOutput = data.output ?? data.result ?? data.content
         const work: WorkItem = {
           type: phase === 'result' ? 'tool_result' : 'tool_call',
           name: data.name,
