@@ -9,13 +9,21 @@ function openFileInWorkspace(filePath: string): void {
   window.dispatchEvent(new CustomEvent('sovereign:open-file', { detail: { path: filePath } }))
 }
 
+function openFileInNewTab(filePath: string): void {
+  // Build workspace URL with the file path encoded
+  const url = new URL(window.location.href)
+  url.searchParams.set('view', 'workspace')
+  url.searchParams.set('file', filePath)
+  window.open(url.toString(), '_blank')
+}
+
 // Also handle middle-click (auxclick) for file chips
 document.addEventListener('auxclick', (e) => {
   if (e.button !== 1) return
   const chip = (e.target as HTMLElement).closest('.file-chip') as HTMLElement | null
   if (!chip?.dataset.filePath) return
   e.preventDefault()
-  openFileInWorkspace(chip.dataset.filePath!)
+  openFileInNewTab(chip.dataset.filePath!)
 })
 
 // Global click handler for file-chip elements
@@ -56,9 +64,9 @@ document.addEventListener('click', (e) => {
   e.stopPropagation()
   const filePath = chip.dataset.filePath!
 
-  // Ctrl/Cmd+click opens file in workspace
+  // Ctrl/Cmd+click opens file in new tab
   if (e.metaKey || e.ctrlKey) {
-    openFileInWorkspace(filePath)
+    openFileInNewTab(filePath)
     return
   }
 
