@@ -366,7 +366,8 @@ export function MessageBubble(props: MessageBubbleProps) {
             background: role() === 'user' ? 'var(--c-user-bubble)' : 'var(--c-bg-raised)',
             color: role() === 'user' ? 'var(--c-user-bubble-text)' : 'var(--c-text)',
             border: role() === 'assistant' ? '1px solid var(--c-border)' : 'none',
-            ...(pending() ? { opacity: '0.5', 'font-style': 'italic' } : {})
+            ...(pending() ? { opacity: '0.5', 'font-style': 'italic' } : {}),
+            ...(props.turn.streaming ? { opacity: '0.7' } : {})
           }}
         >
           <Show
