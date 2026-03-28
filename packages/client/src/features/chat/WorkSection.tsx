@@ -419,9 +419,6 @@ function ToolPairRow(props: { pair: ToolPair }) {
         onClick={() => hasDetails() && setExpanded(!expanded())}
       >
         <span class="text-[11px]">{toolIcon(name())}</span>
-        <span class="font-mono text-[11px] font-medium" style={{ color: 'var(--c-text)' }}>
-          {name()}
-        </span>
         <ToolCallSummary name={name()} input={callInput()} />
         <Show when={result()}>
           <span
