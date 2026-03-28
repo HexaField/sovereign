@@ -164,7 +164,9 @@ export function DashboardView() {
             <For each={orgs()}>
               {(org) => (
                 <div>
-                  <WorkspaceCard org={org} />
+                  <h3 class="mb-1 text-xs font-semibold" style={{ color: 'var(--c-text-muted)' }}>
+                    {org.orgName}
+                  </h3>
                   <ThreadPreviews orgId={org.orgId} orgName={org.orgName} />
                 </div>
               )}
