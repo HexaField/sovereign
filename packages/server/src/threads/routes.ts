@@ -166,75 +166,34 @@ export function createThreadRoutes(
     const entries: PreviewEntry[] = []
 
     try {
+      // Use cached getHistory from the backend (mtime-based cache, sub-ms on hit)
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      const { getSessionFilePath, readRecentMessages } = await import('../agent-backend/session-reader.js')
-      const filePath = getSessionFilePath(sessionKey)
-      if (filePath) {
-        const { messages: raw } = readRecentMessages(filePath, limit * 10)
-        // Walk backwards, collect up to `limit` meaningful entries
-        for (let i = raw.length - 1; i >= 0 && entries.length < limit; i--) {
-          const msg = raw[i]
-          if (!msg) continue
-          const role = msg.role
-          const content = msg.content
-
-          if (role === 'user') {
-            let text = typeof content === 'string' ? content : ''
-            if (Array.isArray(content)) {
-              text = content
-                .filter((b: any) => b.type === 'text')
-                .map((b: any) => b.text ?? '')
-                .join(' ')
+      if (opts?.backend) {
+        const { turns } = await opts.backend.getHistory(sessionKey)
+        // Extract preview entries from the last few turns
+        for (let i = turns.length - 1; i >= 0 && entries.length < limit; i--) {
+          const turn = turns[i] as any
+          if (turn.role === 'user' && turn.content) {
+            const text = turn.content.slice(0, 120)
+            if (text && text !== 'NO_REPLY' && text !== 'HEARTBEAT_OK') {
+              entries.push({ type: 'user', text })
             }
-            text = text
-              .replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
-              .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
-              .trim()
-            if (!text || text === 'NO_REPLY' || text === 'HEARTBEAT_OK') continue
-            if (
-              /^\(System\)/i.test(text) ||
-              /^OpenClaw runtime context/i.test(text) ||
-              /^Write any lasting notes/i.test(text) ||
-              /^Heartbeat prompt:/i.test(text) ||
-              /^\[Subagent (?:Context|Task)\]/i.test(text)
-            )
-              continue
-            entries.unshift({ type: 'user', text: text.length > 150 ? text.slice(0, 150) + '…' : text })
-          } else if (role === 'assistant') {
-            if (!content) continue
-            if (Array.isArray(content)) {
-              // Process blocks in order — collect text, thinking, tool_use
-              for (const block of content) {
-                if (entries.length >= limit) break
-                if (block.type === 'thinking' && block.thinking) {
-                  const t = (block.thinking as string).trim()
-                  if (t) entries.unshift({ type: 'thinking', text: t.length > 100 ? t.slice(0, 100) + '…' : t })
-                } else if (block.type === 'tool_use' || block.type === 'toolCall') {
-                  const name = block.name || block.toolName || 'tool'
-                  entries.unshift({ type: 'tool_call', text: name })
-                } else if (block.type === 'text' && block.text) {
-                  let t = (block.text as string)
-                    .replace(/<antThinking>[\s\S]*?<\/antThinking>/g, '')
-                    .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
-                    .trim()
-                  if (t && t !== 'NO_REPLY' && t !== 'HEARTBEAT_OK') {
-                    entries.unshift({ type: 'assistant', text: t.length > 150 ? t.slice(0, 150) + '…' : t })
-                  }
+          } else if (turn.role === 'assistant') {
+            // Add work items as tool_call/thinking entries
+            if (turn.workItems) {
+              for (const w of turn.workItems.slice(-3)) {
+                if (w.type === 'tool_call') {
+                  entries.push({ type: 'tool_call', text: w.name || 'tool' })
+                } else if (w.type === 'thinking' && w.output) {
+                  entries.push({ type: 'thinking', text: w.output.slice(0, 80) })
                 }
               }
-            } else if (typeof content === 'string') {
-              let text = content
-                .replace(/<antThinking>[\s\S]*?<\/antThinking>/g, '')
-                .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
-                .trim()
-              if (text && text !== 'NO_REPLY' && text !== 'HEARTBEAT_OK') {
-                entries.unshift({ type: 'assistant', text: text.length > 150 ? text.slice(0, 150) + '…' : text })
-              }
             }
-          } else if (role === 'tool') {
-            // Tool result — just record the tool name
-            const name = msg.name || msg.tool_use_id || 'tool'
-            entries.unshift({ type: 'tool_result', text: name })
+            if (turn.content) {
+              entries.push({ type: 'assistant', text: turn.content.slice(0, 120) })
+            }
+          } else if (turn.role === 'system' && turn.content) {
+            entries.push({ type: 'assistant', text: turn.content.slice(0, 80) })
           }
         }
       }
