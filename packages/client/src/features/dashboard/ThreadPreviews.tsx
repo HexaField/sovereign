@@ -1,5 +1,5 @@
-// Thread chat previews — horizontal scroll row below each workspace card
-import { createSignal, onMount, For, Show } from 'solid-js'
+// Thread card previews — shows last few messages with typed styling and activity indicators
+import { createSignal, onMount, For, Show, Switch, Match } from 'solid-js'
 import { setActiveWorkspace } from '../workspace/store'
 import { setActiveView } from '../nav/store'
 import { switchThread } from '../threads/store'
@@ -12,15 +12,83 @@ interface ThreadInfo {
   agentStatus: string
 }
 
-interface ThreadPreview {
+interface PreviewEntry {
+  type: 'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result'
+  text: string
+}
+
+interface ThreadCard {
   key: string
   label: string
-  lastMessage: string | null
+  messages: PreviewEntry[]
   agentStatus: string
+  lastActivity: number | null
+}
+
+const TOOL_ICONS: Record<string, string> = {
+  exec: '⚙',
+  read: '📄',
+  edit: '✏️',
+  write: '📝',
+  browser: '🌐',
+  web_fetch: '🌐',
+  image_generate: '🖼',
+  tts: '🔊',
+  ollama_web_search: '🔍'
+}
+
+function toolIcon(name: string): string {
+  // Match by prefix for namespaced tools like ad4m_*
+  if (name.startsWith('ad4m_')) return '🔗'
+  return TOOL_ICONS[name] || '⚙'
+}
+
+function formatRelativeTime(ts: number | null): string {
+  if (!ts) return ''
+  const diff = Date.now() - ts
+  if (diff < 60_000) return 'just now'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+  return `${Math.floor(diff / 86_400_000)}d ago`
+}
+
+function MessageLine(props: { entry: PreviewEntry }) {
+  return (
+    <Switch>
+      <Match when={props.entry.type === 'user'}>
+        <div class="truncate text-[11px] leading-[16px]" style={{ color: 'var(--c-text)' }}>
+          {props.entry.text}
+        </div>
+      </Match>
+      <Match when={props.entry.type === 'assistant'}>
+        <div class="truncate text-[11px] leading-[16px]" style={{ color: 'var(--c-text)', opacity: '0.75' }}>
+          {props.entry.text}
+        </div>
+      </Match>
+      <Match when={props.entry.type === 'thinking'}>
+        <div
+          class="truncate text-[11px] leading-[16px] italic"
+          style={{ color: 'var(--c-text-muted)', opacity: '0.6' }}
+        >
+          {props.entry.text}
+        </div>
+      </Match>
+      <Match when={props.entry.type === 'tool_call'}>
+        <div class="truncate text-[11px] leading-[16px]" style={{ color: 'var(--c-text-muted)' }}>
+          {toolIcon(props.entry.text)} {props.entry.text}
+        </div>
+      </Match>
+      <Match when={props.entry.type === 'tool_result'}>
+        <div class="truncate text-[11px] leading-[16px]" style={{ color: 'var(--c-text-muted)', opacity: '0.6' }}>
+          ✓ {props.entry.text}
+        </div>
+      </Match>
+    </Switch>
+  )
 }
 
 export default function ThreadPreviews(props: { orgId: string; orgName: string }) {
-  const [previews, setPreviews] = createSignal<ThreadPreview[]>([])
+  const [cards, setCards] = createSignal<ThreadCard[]>([])
   const [loading, setLoading] = createSignal(true)
 
   onMount(async () => {
@@ -28,22 +96,29 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
       const res = await fetch(`/api/threads?orgId=${encodeURIComponent(props.orgId)}`)
       if (!res.ok) return
       const data = await res.json()
-      const threads: ThreadInfo[] = (data.threads ?? []).slice(0, 3)
+      const threads: ThreadInfo[] = (data.threads ?? []).slice(0, 6)
 
       const results = await Promise.all(
         threads.map(async (t) => {
+          let messages: PreviewEntry[] = []
+          let agentStatus = t.agentStatus ?? 'idle'
           try {
-            const pRes = await fetch(`/api/threads/${encodeURIComponent(t.key)}/preview`)
+            const pRes = await fetch(`/api/threads/${encodeURIComponent(t.key)}/preview-messages?limit=5`)
             if (pRes.ok) {
               const p = await pRes.json()
-              return { key: t.key, label: t.label || t.key, lastMessage: p.lastMessage, agentStatus: p.agentStatus }
+              messages = p.messages ?? []
+              agentStatus = p.agentStatus ?? agentStatus
             }
-          } catch { /* ignore */ }
-          return { key: t.key, label: t.label || t.key, lastMessage: null, agentStatus: t.agentStatus ?? 'idle' }
+          } catch {
+            /* ignore */
+          }
+          return { key: t.key, label: t.label || t.key, messages, agentStatus, lastActivity: t.lastActivity }
         })
       )
-      setPreviews(results)
-    } catch { /* ignore */ } finally {
+      setCards(results)
+    } catch {
+      /* ignore */
+    } finally {
       setLoading(false)
     }
   })
@@ -61,7 +136,9 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
         setActiveView('workspace')
         switchThread(thread.key)
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   const handleClick = (threadKey: string) => {
@@ -73,69 +150,78 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
   const isActive = (status: string) => status === 'busy' || status === 'streaming' || status === 'thinking'
 
   return (
-    <Show when={!loading() && (previews().length > 0 || true)}>
-      <div
-        class="mt-1 flex gap-2 overflow-x-auto pb-1"
-        style={{ 'scroll-snap-type': 'x mandatory' }}
-      >
-        {/* New thread button */}
-        <button
-          class="flex h-16 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg border transition-colors hover:brightness-125"
-          style={{
-            background: 'var(--c-bg-raised)',
-            'border-color': 'var(--c-border)',
-            color: 'var(--c-text)',
-            'scroll-snap-align': 'start'
-          }}
-          onClick={handleCreate}
-          title="New thread"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-          </svg>
-        </button>
-
-        <For each={previews()}>
-          {(p) => (
+    <Show when={!loading()}>
+      <style>{`
+        @keyframes status-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
+        .status-dot-active {
+          animation: status-pulse 1.5s ease-in-out infinite;
+        }
+      `}</style>
+      <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <For each={cards()}>
+          {(card) => (
             <button
-              class="flex h-16 shrink-0 cursor-pointer flex-col justify-center rounded-lg border px-2.5 py-1.5 text-left transition-colors hover:brightness-110"
+              class="flex cursor-pointer flex-col rounded-lg border p-2.5 text-left transition-colors hover:brightness-110"
               style={{
                 background: 'var(--c-bg-raised)',
                 'border-color': 'var(--c-border)',
-                'min-width': '200px',
-                'max-width': '220px',
-                'scroll-snap-align': 'start'
+                'min-height': '120px'
               }}
-              onClick={() => handleClick(p.key)}
+              onClick={() => handleClick(card.key)}
             >
-              <div class="flex w-full items-center gap-1.5">
-                <Show when={isActive(p.agentStatus)}>
-                  <span class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-green-500" />
-                </Show>
+              {/* Header: name + status dot + time */}
+              <div class="mb-1.5 flex w-full items-center gap-1.5">
                 <span
-                  class="truncate text-xs font-medium"
-                  style={{ color: 'var(--c-text-heading)' }}
-                >
-                  {p.label}
+                  class={`inline-block h-2 w-2 shrink-0 rounded-full ${isActive(card.agentStatus) ? "status-dot-active bg-green-500" : ''}`}
+                  style={!isActive(card.agentStatus) ? { background: 'var(--c-text-muted)', opacity: '0.4' } : {}}
+                />
+                <span class="flex-1 truncate text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                  {card.label}
+                </span>
+                <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                  {formatRelativeTime(card.lastActivity)}
                 </span>
               </div>
-              <div class="mt-0.5 w-full truncate text-[11px] opacity-60" style={{ color: 'var(--c-text)' }}>
-                {isActive(p.agentStatus)
-                  ? (
-                    <span>
-                      {p.lastMessage ? (p.lastMessage.length > 80 ? p.lastMessage.slice(0, 80) : p.lastMessage) : ''}
-                      <span class="inline-block animate-pulse">...</span>
-                    </span>
-                  )
-                  : (p.lastMessage
-                    ? (p.lastMessage.length > 80 ? p.lastMessage.slice(0, 80) + '...' : p.lastMessage)
-                    : 'No messages yet'
-                  )
-                }
+
+              {/* Message preview lines */}
+              <div class="flex flex-1 flex-col gap-0.5 overflow-hidden">
+                <Show
+                  when={card.messages.length > 0}
+                  fallback={
+                    <div class="text-[11px]" style={{ color: 'var(--c-text-muted)', opacity: '0.5' }}>
+                      No messages yet
+                    </div>
+                  }
+                >
+                  <For each={card.messages}>{(entry) => <MessageLine entry={entry} />}</For>
+                </Show>
               </div>
             </button>
           )}
         </For>
+
+        {/* New thread button */}
+        <button
+          class="flex cursor-pointer items-center justify-center rounded-lg border transition-colors hover:brightness-125"
+          style={{
+            background: 'var(--c-bg-raised)',
+            'border-color': 'var(--c-border)',
+            color: 'var(--c-text-muted)',
+            'min-height': '120px'
+          }}
+          onClick={handleCreate}
+          title="New thread"
+        >
+          <div class="flex flex-col items-center gap-1">
+            <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+              <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+            <span class="text-[11px]">New thread</span>
+          </div>
+        </button>
       </div>
     </Show>
   )
