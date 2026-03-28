@@ -361,7 +361,7 @@ function WorkspaceHeaderContent() {
   }
 
   return (
-    <div class="flex items-center gap-1.5 overflow-hidden text-sm">
+    <div class="flex min-w-0 items-center gap-1.5 text-sm">
       <div class="relative">
         <button
           class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-semibold transition-colors"
