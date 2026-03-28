@@ -851,10 +851,10 @@ export function Header() {
 
       {/* Hamburger menu */}
       <div class="relative">
-        {/* Menu button — hidden (stub) */}
-        <div class="hidden">
+        {/* Menu button */}
+        <div>
           <button
-            class="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
+            class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
             style={{
               'border-color': menuOpen() ? 'var(--c-accent)' : 'var(--c-border)',
               color: menuOpen() ? 'var(--c-accent)' : 'var(--c-text-muted)'
