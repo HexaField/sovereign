@@ -309,10 +309,7 @@ export function WorkSection(props: { work: WorkItem[] }) {
           {hasErrors() ? '!' : '✓'}
         </span>
         <span class="flex items-center gap-1 overflow-hidden text-ellipsis whitespace-nowrap">
-          {preview().icon} {preview().text || stepLabel()}
-        </span>
-        <span class="shrink-0 rounded-md px-1.5 py-px text-[10px]" style={{ background: 'var(--c-step-badge-bg)' }}>
-          {stepLabel()}
+          {preview().icon} {stepLabel()}
         </span>
       </div>
 
