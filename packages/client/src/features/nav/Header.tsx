@@ -28,13 +28,31 @@ import {
   setViewMode as setPlanningViewMode,
   type PlanningViewMode
 } from '../planning/store.js'
-import { activeWorkspace, chatExpanded, toggleChatExpanded, setChatExpanded, setActiveWorkspace } from '../workspace/store.js'
+import {
+  activeWorkspace,
+  chatExpanded,
+  toggleChatExpanded,
+  setChatExpanded,
+  setActiveWorkspace
+} from '../workspace/store.js'
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
 import { agentStatus } from '../chat/store.js'
 import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 import { lazy } from 'solid-js'
 const ThreadSettingsModal = lazy(() => import('../chat/ThreadSettingsModal.js'))
+
+function relativeTime(ts: number): string {
+  if (!ts) return ''
+  const diff = Date.now() - ts
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return `${days}d ago`
+}
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -233,20 +251,20 @@ function SubagentTree(props: {
                   color: isSelected() ? 'var(--c-accent)' : 'var(--c-text-muted)',
                   background: isSelected() ? 'var(--c-hover-bg)' : 'transparent'
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-hover-bg)' }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = isSelected() ? 'var(--c-hover-bg)' : 'transparent' }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--c-hover-bg)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = isSelected() ? 'var(--c-hover-bg)' : 'transparent'
+                }}
                 onClick={() => props.onSelect(sa.sessionKey)}
                 title={sa.task || sa.label}
               >
                 <span
                   class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
                   style={{
-                    background: isActive()
-                      ? 'var(--c-warning, #f59e0b)'
-                      : 'var(--c-text-muted)',
-                    animation: isActive()
-                      ? 'pulse-dot 2s ease-in-out infinite'
-                      : 'none'
+                    background: isActive() ? 'var(--c-warning, #f59e0b)' : 'var(--c-text-muted)',
+                    animation: isActive() ? 'pulse-dot 2s ease-in-out infinite' : 'none'
                   }}
                 />
                 <Show when={isSelected()}>
@@ -254,10 +272,7 @@ function SubagentTree(props: {
                 </Show>
                 <span class="min-w-0 flex-1 truncate">{sa.label}</span>
                 <Show when={isActive()}>
-                  <span
-                    class="shrink-0 text-[10px]"
-                    style={{ color: 'var(--c-warning, #f59e0b)' }}
-                  >
+                  <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-warning, #f59e0b)' }}>
                     {sa.status}
                   </span>
                 </Show>
@@ -289,19 +304,26 @@ function WorkspaceHeaderContent() {
   const [wsPickerOpen, setWsPickerOpen] = createSignal(false)
   const [orgList, setOrgList] = createSignal<OrgListItem[]>([])
   const [showAddDialog, setShowAddDialog] = createSignal(false)
-  const [activeSubagents, setActiveSubagents] = createSignal<Record<string, Array<{
-    sessionKey: string
-    label: string
-    status: string
-    task: string
-  }>>>({})
+  const [activeSubagents, setActiveSubagents] = createSignal<
+    Record<
+      string,
+      Array<{
+        sessionKey: string
+        label: string
+        status: string
+        task: string
+      }>
+    >
+  >({})
 
   const fetchActiveSubagents = async () => {
     try {
       const res = await fetch('/api/threads/active-subagents')
       const data = await res.json()
       setActiveSubagents(data.subagents || {})
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
@@ -339,7 +361,7 @@ function WorkspaceHeaderContent() {
   }
 
   return (
-    <div class="flex items-center gap-1.5 text-sm">
+    <div class="flex items-center gap-1.5 overflow-hidden text-sm">
       <div class="relative">
         <button
           class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-semibold transition-colors"
@@ -429,10 +451,16 @@ function WorkspaceHeaderContent() {
         />
       </Show>
       <span style={{ color: 'var(--c-text-muted)' }}>/</span>
-      <div class="relative flex items-center">
+      <div class="relative flex min-w-0 items-center">
         <button
           class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-medium transition-colors"
-          style={{ color: 'var(--c-accent)', 'max-width': '140px', overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
+          style={{
+            color: 'var(--c-accent)',
+            'max-width': '140px',
+            overflow: 'hidden',
+            'text-overflow': 'ellipsis',
+            'white-space': 'nowrap'
+          }}
           onClick={() => {
             fetchOrgs()
             fetchActiveSubagents()
@@ -445,14 +473,22 @@ function WorkspaceHeaderContent() {
           title="Switch thread"
         >
           <span class="overflow-hidden text-ellipsis whitespace-nowrap">{activeThreadLabel()}</span>
-          <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>▾</span>
+          <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+            ▾
+          </span>
         </button>
         <button
           class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
           style={{ color: 'var(--c-text-muted)', 'border-color': 'var(--c-border)' }}
           onClick={() => toggleChatExpanded()}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-hover-bg)'; e.currentTarget.style.color = 'var(--c-accent)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--c-text-muted)' }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'var(--c-hover-bg)'
+            e.currentTarget.style.color = 'var(--c-accent)'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent'
+            e.currentTarget.style.color = 'var(--c-text-muted)'
+          }}
           title={chatExpanded() ? 'Minimize chat' : 'Maximize chat'}
         >
           <Show when={chatExpanded()} fallback={<ExpandIcon class="h-3.5 w-3.5" />}>
@@ -465,89 +501,98 @@ function WorkspaceHeaderContent() {
             class="absolute top-full left-0 z-[200] mt-1 min-w-[200px] overflow-hidden rounded-lg shadow-lg"
             style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
           >
-            <For each={[...threads().filter((t) => t.key)].sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}>
+            <For
+              each={threads()
+                .filter((t) => t.key)
+                .sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}
+            >
               {(t) => (
                 <>
-                <div
-                  class="group relative flex w-full items-center text-left text-sm transition-colors"
-                  style={{
-                    color: t.key === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
-                    background: t.key === threadKey() ? 'var(--c-hover-bg)' : undefined
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.background = t.key === threadKey() ? 'var(--c-hover-bg)' : '')
-                  }
-                >
-                  <button
-                    class="flex flex-1 items-center gap-2 px-3 py-2"
-                    onClick={() => {
-                      switchThread(t.key)
-                      setThreadPickerOpen(false)
+                  <div
+                    class="group relative flex w-full items-center text-left text-sm transition-colors"
+                    style={{
+                      color: t.key === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
+                      background: t.key === threadKey() ? 'var(--c-hover-bg)' : undefined
                     }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = t.key === threadKey() ? 'var(--c-hover-bg)' : '')
+                    }
                   >
-                    <Show when={t.key === threadKey()}>
-                      <span class="text-xs">●</span>
-                    </Show>
-                    <span class="truncate">{t.label ?? t.key}</span>
-                  </button>
-                  {/* Move to workspace button */}
-                  <div class="relative">
                     <button
-                      class="px-2 py-2 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
-                      style={{ color: 'var(--c-accent)' }}
-                      title="Move to workspace"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setMoveThreadKey(moveThreadKey() === t.key ? null : t.key)
+                      class="flex flex-1 items-center gap-2 px-3 py-2"
+                      onClick={() => {
+                        switchThread(t.key)
+                        setThreadPickerOpen(false)
                       }}
                     >
-                      ⇄
+                      <Show when={t.key === threadKey()}>
+                        <span class="text-xs">●</span>
+                      </Show>
+                      <span class="truncate">{t.label ?? t.key}</span>
+                      <Show when={t.lastActivity}>
+                        <span class="ml-auto shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                          {relativeTime(t.lastActivity)}
+                        </span>
+                      </Show>
                     </button>
-                    <Show when={moveThreadKey() === t.key}>
-                      <div
-                        class="absolute top-0 left-full z-[210] ml-1 min-w-[150px] overflow-hidden rounded-lg shadow-lg"
-                        style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
+                    {/* Move to workspace button */}
+                    <div class="relative">
+                      <button
+                        class="px-2 py-2 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
+                        style={{ color: 'var(--c-accent)' }}
+                        title="Move to workspace"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setMoveThreadKey(moveThreadKey() === t.key ? null : t.key)
+                        }}
                       >
+                        ⇄
+                      </button>
+                      <Show when={moveThreadKey() === t.key}>
                         <div
-                          class="px-3 py-1.5 text-[10px] font-semibold tracking-wide uppercase"
-                          style={{ color: 'var(--c-text-muted)' }}
+                          class="absolute top-0 left-full z-[210] ml-1 min-w-[150px] overflow-hidden rounded-lg shadow-lg"
+                          style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
                         >
-                          Move to…
+                          <div
+                            class="px-3 py-1.5 text-[10px] font-semibold tracking-wide uppercase"
+                            style={{ color: 'var(--c-text-muted)' }}
+                          >
+                            Move to…
+                          </div>
+                          <For each={orgList().filter((o) => o.id !== t.orgId)}>
+                            {(org) => (
+                              <button
+                                class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+                                style={{ color: 'var(--c-text)' }}
+                                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                                onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                                onClick={() => {
+                                  moveThread(t.key, org.id)
+                                  setMoveThreadKey(null)
+                                  setThreadPickerOpen(false)
+                                }}
+                              >
+                                {org.name}
+                              </button>
+                            )}
+                          </For>
                         </div>
-                        <For each={orgList().filter((o) => o.id !== t.orgId)}>
-                          {(org) => (
-                            <button
-                              class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
-                              style={{ color: 'var(--c-text)' }}
-                              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                              onMouseLeave={(e) => (e.currentTarget.style.background = '')}
-                              onClick={() => {
-                                moveThread(t.key, org.id)
-                                setMoveThreadKey(null)
-                                setThreadPickerOpen(false)
-                              }}
-                            >
-                              {org.name}
-                            </button>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
+                      </Show>
+                    </div>
                   </div>
-                </div>
-                <Show when={(activeSubagents()[t.key] || []).length > 0}>
-                  <SubagentTree
-                    subagents={activeSubagents()[t.key]}
-                    allSubagents={activeSubagents()}
-                    depth={1}
-                    activeKey={threadKey()}
-                    onSelect={(key) => {
-                      switchThread(key)
-                      setThreadPickerOpen(false)
-                    }}
-                  />
-                </Show>
+                  <Show when={(activeSubagents()[t.key] || []).length > 0}>
+                    <SubagentTree
+                      subagents={activeSubagents()[t.key]}
+                      allSubagents={activeSubagents()}
+                      depth={1}
+                      activeKey={threadKey()}
+                      onSelect={(key) => {
+                        switchThread(key)
+                        setThreadPickerOpen(false)
+                      }}
+                    />
+                  </Show>
                 </>
               )}
             </For>
@@ -745,7 +790,9 @@ export function Header() {
       style={{ 'border-bottom': '1px solid var(--c-border)', background: 'var(--c-bg-raised)' }}
     >
       {/* Left: Agent icon — always navigates to dashboard */}
-      <button class="shrink-0 cursor-pointer text-xl" onClick={() => setActiveView('dashboard')} title="Dashboard">{agentIcon()}</button>
+      <button class="shrink-0 cursor-pointer text-xl" onClick={() => setActiveView('dashboard')} title="Dashboard">
+        {agentIcon()}
+      </button>
 
       {/* Center: View-specific content */}
       <div class="min-w-0 flex-1 px-2">
