@@ -86,6 +86,9 @@ let streamingRawText = ''
 // Offset into cleanStreamText after the last tool call — show only text after this point
 let streamTextOffset = 0
 
+// SSE connection
+let eventSource: EventSource | null = null
+
 export function startRetryCountdown(seconds: number): void {
   clearRetryCountdown()
   setRetrySeconds(Math.ceil(seconds))
@@ -145,9 +148,6 @@ function resetState(): void {
 }
 
 export function sendMessage(text: string, _attachments?: File[]): void {
-  // Send to server — the message will appear in chat when the server
-  // processes it and sends back history via chat.session.info / chat.turn.
-  // The queue UI shows it as pending in the meantime.
   ws?.send({ type: 'chat.send', text, threadKey: currentThreadKey?.() ?? 'main' } as any)
 }
 
@@ -172,6 +172,180 @@ export function abortChat(): void {
   }, 1500)
 }
 
+// ── SSE connection management ────────────────────────────────
+
+function connectSSE(threadKey: string): void {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+  if (!threadKey) return
+
+  const url = `/api/threads/${encodeURIComponent(threadKey)}/events`
+  eventSource = new EventSource(url)
+
+  // ── history: initial + reconnect history load ──
+  eventSource.addEventListener('history', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    setTurns(data.turns ?? [])
+    setHasOlderMessages(data.hasMore ?? false)
+    setLoadingOlder(false)
+    clearLiveState()
+  })
+
+  // ── status: agent status changes ──
+  eventSource.addEventListener('status', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    if (Date.now() < suppressLifecycleUntil && data.status !== 'idle') return
+    setAgentStatus(data.status)
+    if (data.status === 'working' || data.status === 'thinking') {
+      turnReceivedForCurrentRun = false
+      if (!agentWorkingStartTime()) startDurationTimer()
+    } else {
+      stopDurationTimer()
+      if (data.status === 'idle') {
+        clearLiveState()
+        // If chat.turn already arrived, we're done. Otherwise SSE will re-send history on reconnect.
+        if (!turnReceivedForCurrentRun) {
+          // Request history via WS as fallback
+          ws?.send({ type: 'chat.history', threadKey } as any)
+        }
+      }
+    }
+  })
+
+  // ── stream: text streaming deltas ──
+  eventSource.addEventListener('stream', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    const isSubagent = threadKey.startsWith('subagent:')
+
+    if (data.replay) {
+      streamingRawText = data.text
+    } else {
+      streamingRawText += data.text
+    }
+
+    const cleaned = cleanStreamText(streamingRawText)
+    const visible = cleaned.substring(streamTextOffset).trim()
+    const isSentinel = /^(NO_REPLY|HEARTBEAT_OK|NO_?|HEART)/.test(visible) && visible.length < 15
+
+    if (visible && !isSubagent && !isSentinel) {
+      setStreamingText(visible)
+      setStreamingHtml(renderMarkdown(visible))
+    } else if (isSubagent && cleaned) {
+      setAgentStatus('working')
+    }
+  })
+
+  // ── work: tool calls, tool results, thinking blocks ──
+  eventSource.addEventListener('work', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    const work = data.work as WorkItem
+
+    if (work.type === 'tool_call') {
+      const cleaned = cleanStreamText(streamingRawText)
+      streamTextOffset = cleaned.length
+      setStreamingText('')
+      setStreamingHtml('')
+    }
+
+    if (work.type === 'thinking') {
+      setLiveWork((prev) => {
+        const items = [...prev]
+        const lastThinkIdx = items.findLastIndex((w) => w.type === 'thinking')
+        if (lastThinkIdx >= 0) {
+          items[lastThinkIdx] = work
+          return items
+        }
+        return [...prev, work]
+      })
+    } else {
+      setLiveWork((prev) => [...prev, work])
+    }
+
+    setLiveThinkingText(work.type === 'thinking' ? work.output || work.input || '' : '')
+  })
+
+  // ── turn: completed turn ──
+  eventSource.addEventListener('turn', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    const turn = data.turn as ParsedTurn
+    turnReceivedForCurrentRun = true
+
+    const liveWorkItems = liveWork()
+    const merged: ParsedTurn = {
+      ...turn,
+      workItems: turn.workItems?.length > 0 ? turn.workItems : liveWorkItems
+    }
+
+    setTurns((prev) => [...prev, merged])
+    clearLiveState()
+  })
+
+  // ── compacting ──
+  eventSource.addEventListener('compacting', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    setCompacting(data.active)
+  })
+
+  // ── error ──
+  eventSource.addEventListener('error', (e) => {
+    // SSE spec: EventSource fires 'error' on connection loss — it auto-reconnects
+    // Only handle our custom error events (they have data)
+    const me = e as MessageEvent
+    if (me.data) {
+      try {
+        const data = JSON.parse(me.data)
+        if (data.retryAfterMs) {
+          startRetryCountdown(data.retryAfterMs / 1000)
+        }
+      } catch {
+        // Native SSE error (connection lost) — auto-reconnects
+      }
+    }
+  })
+
+  // ── backend-status ──
+  // Backend status is also delivered via WS for the connection indicator.
+  // SSE delivers it too for completeness but the connection store handles WS.
+
+  // ── queue ──
+  eventSource.addEventListener('queue', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    setMessageQueue(data.queue ?? [])
+  })
+
+  // ── user-message: sync user messages across tabs ──
+  eventSource.addEventListener('user-message', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    const text = data.text as string
+    if (!text) return
+    setTurns((prev) => {
+      const last = prev.filter((t) => t.role === 'user').pop()
+      if (last && last.content === text && Math.abs((last.timestamp || 0) - (data.timestamp || Date.now())) < 5000) {
+        return prev
+      }
+      return [
+        ...prev,
+        {
+          role: 'user' as const,
+          content: text,
+          timestamp: data.timestamp || Date.now(),
+          workItems: [],
+          thinkingBlocks: []
+        }
+      ]
+    })
+  })
+}
+
+function disconnectSSE(): void {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+}
+
 let chatInitialized = false
 export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): (() => void) | void {
   ws = wsStore ?? null
@@ -180,10 +354,11 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   if (chatInitialized) return
   chatInitialized = true
 
+  // Subscribe to WS for sending messages + features that still use WS
   ws.subscribe(['chat'])
 
   if (_threadKey()) {
-    ws.send({ type: 'chat.history', threadKey: _threadKey() } as any)
+    connectSSE(_threadKey())
     loadDraft(_threadKey())
   }
 
@@ -197,180 +372,31 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       resetState()
       loadDraft(key)
       if (key) {
-        ws?.send({ type: 'chat.history', threadKey: key } as any)
+        connectSSE(key)
         ws?.send({ type: 'chat.session.switch', threadKey: key } as any)
+      } else {
+        disconnectSSE()
       }
     }
   })
 
   clearLiveState()
 
-  // ── chat.stream: update live streaming text (NOT turns[]) ──
-  unsubs.push(
-    ws.on('chat.stream', (msg: any) => {
-      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+  // ── WS listeners we still need ──
 
-      const isSubagent = _threadKey().startsWith('subagent:')
-
-      if (msg.replay) {
-        streamingRawText = msg.text
-      } else {
-        streamingRawText += msg.text
-      }
-
-      const cleaned = cleanStreamText(streamingRawText)
-      const visible = cleaned.substring(streamTextOffset).trim()
-      const isSentinel = /^(NO_REPLY|HEARTBEAT_OK|NO_?|HEART)/.test(visible) && visible.length < 15
-
-      if (visible && !isSubagent && !isSentinel) {
-        setStreamingText(visible)
-        setStreamingHtml(renderMarkdown(visible))
-      } else if (isSubagent && cleaned) {
-        setAgentStatus('working')
-      }
-    })
-  )
-
-  // ── chat.turn: final turn from server — update history, clear live state ──
-  unsubs.push(
-    ws.on('chat.turn', (msg: any) => {
-      if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      const turn = msg.turn as ParsedTurn
-      turnReceivedForCurrentRun = true
-
-      // Merge any live work items into the final turn if it has none
-      const liveWorkItems = liveWork()
-      const merged: ParsedTurn = {
-        ...turn,
-        workItems: turn.workItems?.length > 0 ? turn.workItems : liveWorkItems
-      }
-
-      setTurns((prev) => [...prev, merged])
-      clearLiveState()
-    })
-  )
-
-  // ── chat.status: track agent status, deterministic turn completion ──
-  unsubs.push(
-    ws.on('chat.status', (msg: any) => {
-      if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      if (Date.now() < suppressLifecycleUntil && msg.status !== 'idle') return
-      setAgentStatus(msg.status)
-      if (msg.status === 'working' || msg.status === 'thinking') {
-        turnReceivedForCurrentRun = false
-        if (!agentWorkingStartTime()) startDurationTimer()
-      } else {
-        stopDurationTimer()
-        if (msg.status === 'idle') {
-          clearLiveState()
-          // If chat.turn already arrived, we're done. Otherwise reload history as fallback.
-          if (!turnReceivedForCurrentRun) {
-            const threadKey = currentThreadKey?.() ?? 'main'
-            ws?.send({ type: 'chat.history', threadKey } as any)
-          }
-        }
-      }
-    })
-  )
-
-  // ── chat.work: update live work items only (NOT turns[]) ──
-  unsubs.push(
-    ws.on('chat.work', (msg: any) => {
-      if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      const work = msg.work as WorkItem
-
-      if (work.type === 'tool_call') {
-        // Advance text offset so streaming bubble only shows text after this tool call
-        const cleaned = cleanStreamText(streamingRawText)
-        streamTextOffset = cleaned.length
-        setStreamingText('')
-        setStreamingHtml('')
-      }
-
-      if (work.type === 'thinking') {
-        // Replace the last thinking item (accumulated text)
-        setLiveWork((prev) => {
-          const items = [...prev]
-          const lastThinkIdx = items.findLastIndex((w) => w.type === 'thinking')
-          if (lastThinkIdx >= 0) {
-            items[lastThinkIdx] = work
-            return items
-          }
-          return [...prev, work]
-        })
-      } else {
-        setLiveWork((prev) => [...prev, work])
-      }
-
-      setLiveThinkingText(work.type === 'thinking' ? work.output || work.input || '' : '')
-    })
-  )
-
-  unsubs.push(
-    ws.on('chat.compacting', (msg: any) => {
-      setCompacting(msg.active)
-    })
-  )
-
-  unsubs.push(
-    ws.on('chat.error', (msg: any) => {
-      if (msg.retryAfterMs) {
-        startRetryCountdown(msg.retryAfterMs / 1000)
-      }
-    })
-  )
-
-  // ── chat.session.info: full history replace ──
-  let _hasOlderMessages = false
+  // chat.session.info from WS (for full history load response)
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = msg.history ?? []
-      _hasOlderMessages = msg.hasMore ?? false
-      setHasOlderMessages(_hasOlderMessages)
+      setHasOlderMessages(msg.hasMore ?? false)
       setLoadingOlder(false)
       setTurns(history)
       clearLiveState()
     })
   )
 
-  // Queue updates
-  unsubs.push(
-    ws.on('chat.queue.update' as any, (msg: any) => {
-      if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      setMessageQueue(msg.queue ?? [])
-    })
-  )
-
-  // ── chat.user-message: sync user messages across tabs/devices ──
-  unsubs.push(
-    ws.on('chat.user-message' as any, (msg: any) => {
-      if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      // Add the user turn if it's not already in the list
-      // (the sending tab may have already added it optimistically — but we removed that)
-      const text = msg.text as string
-      if (!text) return
-      setTurns((prev) => {
-        // Deduplicate: skip if the last user turn has the same text within 5 seconds
-        const last = prev.filter((t) => t.role === 'user').pop()
-        if (last && last.content === text && Math.abs((last.timestamp || 0) - (msg.timestamp || Date.now())) < 5000) {
-          return prev
-        }
-        return [
-          ...prev,
-          {
-            role: 'user' as const,
-            content: text,
-            timestamp: msg.timestamp || Date.now(),
-            workItems: [],
-            thinkingBlocks: []
-          }
-        ]
-      })
-    })
-  )
-
-  // Thread event routing
+  // Thread event routing (still via WS)
   unsubs.push(
     ws.on('thread.event.routed' as any, (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
@@ -388,23 +414,14 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     })
   )
 
-  // Reconnect — re-fetch history
-  unsubs.push(
-    ws.on('ws.reconnected' as any, () => {
-      const key = _threadKey()
-      if (key) {
-        ws?.send({ type: 'chat.history', threadKey: key } as any)
-      }
-    })
-  )
-
-  // Visibility change — re-fetch if idle
+  // Visibility change — SSE auto-reconnects, but if we want fresh data on visibility:
   const onVisibility = () => {
     if (document.visibilityState === 'visible') {
       const key = _threadKey()
-      const status = agentStatus()
-      if (key && ws?.connected() && status !== 'working' && status !== 'thinking') {
-        ws.send({ type: 'chat.history', threadKey: key } as any)
+      // SSE auto-reconnects and sends fresh history, but if it's already connected
+      // and we just want a refresh while idle, we can re-connect
+      if (key && (!eventSource || eventSource.readyState === EventSource.CLOSED)) {
+        connectSSE(key)
       }
     }
   }
@@ -413,6 +430,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   return () => {
     unsubs.forEach((u) => u())
+    disconnectSSE()
     ws?.unsubscribe(['chat'])
     chatInitialized = false
   }

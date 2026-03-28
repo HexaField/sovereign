@@ -2,6 +2,7 @@
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { EventEmitter } from 'node:events'
 import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents, QueuedMessage } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
 import type { ThreadManager } from '../threads/types.js'
@@ -9,6 +10,9 @@ import { deriveSessionKey } from './derive-session-key.js'
 import { createMessageQueue } from './message-queue.js'
 import { getSessionFilePath } from '../agent-backend/session-reader.js'
 import type { WorkItem } from '@sovereign/core'
+
+/** Chat-level event emitter — all chat events (from backend + JSONL polling) flow through here */
+export type ChatEventHandler = (data: Record<string, unknown>) => void
 
 export interface ChatModule {
   status(): ModuleStatus
@@ -23,6 +27,12 @@ export interface ChatModule {
   getThreadKeyForSession(sessionKey: string): string | undefined
   getQueue(threadKey: string): QueuedMessage[]
   loadMapping(): void
+  /** Chat-level event emitter for SSE subscriptions. Events have threadKey resolved. */
+  chatEvents: EventEmitter
+  /** Get cached live state for a thread (for SSE replay on connect) */
+  getLiveState(threadKey: string): { status?: string; work?: any[]; streamText?: string }
+  /** Resolve a threadKey to a sessionKey, creating mapping if needed */
+  resolveSessionKey(threadKey: string): string
 }
 
 export function createChatModule(
@@ -33,6 +43,10 @@ export function createChatModule(
 ): ChatModule {
   const dataDir = options?.dataDir ?? '.'
   const wsHandler = options?.wsHandler
+
+  // Chat-level event emitter — SSE endpoint subscribes to this
+  const chatEvents = new EventEmitter()
+  chatEvents.setMaxListeners(100) // support many SSE connections
 
   // Bidirectional mapping: threadKey <-> sessionKey
   const threadToSession = new Map<string, string>()
@@ -71,13 +85,11 @@ export function createChatModule(
   const messageQueue = createMessageQueue(dataDir)
 
   function broadcastQueueUpdate(threadKey: string): void {
+    const queueData = { threadKey, queue: messageQueue.getQueue(threadKey) }
     if (wsHandler) {
-      wsHandler.broadcastToChannel('chat', {
-        type: 'chat.queue.update',
-        threadKey,
-        queue: messageQueue.getQueue(threadKey)
-      })
+      wsHandler.broadcastToChannel('chat', { type: 'chat.queue.update', ...queueData })
     }
+    chatEvents.emit('chat.queue.update', queueData)
   }
 
   function tryProcessQueue(threadKey: string): void {
@@ -198,6 +210,11 @@ export function createChatModule(
         })
       }
 
+      // Emit on chat-level emitter for SSE subscribers
+      if (threadKey) {
+        chatEvents.emit(wsType, { ...data, threadKey })
+      }
+
       // Emit bus event for chat.turn
       if (eventName === 'chat.turn' && threadKey) {
         bus.emit({
@@ -275,6 +292,7 @@ export function createChatModule(
                 if (wsHandler) {
                   wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
                 }
+                chatEvents.emit('chat.work', { threadKey, work })
                 const items = currentWork.get(threadKey) ?? []
                 items.push(work)
                 currentWork.set(threadKey, items)
@@ -298,6 +316,7 @@ export function createChatModule(
                 if (wsHandler) {
                   wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
                 }
+                chatEvents.emit('chat.work', { threadKey, work })
                 const items = currentWork.get(threadKey) ?? []
                 items.push(work)
                 currentWork.set(threadKey, items)
@@ -333,6 +352,7 @@ export function createChatModule(
         ...data
       })
     }
+    chatEvents.emit('backend.status', data)
   })
 
   // deriveSessionKey is imported at module level from ./derive-session-key.js
@@ -353,6 +373,7 @@ export function createChatModule(
         timestamp: new Date().toISOString()
       })
     }
+    chatEvents.emit('chat.user-message', { threadKey, text, timestamp: new Date().toISOString() })
 
     tryProcessQueue(threadKey)
   }
@@ -479,6 +500,20 @@ export function createChatModule(
     getSessionKeyForThread: (tk: string) => threadToSession.get(tk),
     getThreadKeyForSession: (sk: string) => sessionToThread.get(sk),
     getQueue: (threadKey: string) => messageQueue.getQueue(threadKey),
-    loadMapping
+    loadMapping,
+    chatEvents,
+    getLiveState: (threadKey: string) => ({
+      status: currentStatus.get(threadKey),
+      work: currentWork.get(threadKey),
+      streamText: currentStreamText.get(threadKey)
+    }),
+    resolveSessionKey: (threadKey: string) => {
+      let sk = threadToSession.get(threadKey)
+      if (!sk) {
+        sk = deriveSessionKey(threadKey)
+        setMapping(threadKey, sk)
+      }
+      return sk
+    }
   }
 }
