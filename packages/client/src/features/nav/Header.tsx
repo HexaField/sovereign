@@ -401,8 +401,9 @@ function WorkspaceHeaderContent() {
           >
             <For each={orgList()}>
               {(org) => (
-                <button
-                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors"
+                <a
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm no-underline transition-colors"
+                  href={`?view=workspace&workspace=${org.id}`}
                   style={{
                     color: org.id === ws()?.orgId ? 'var(--c-accent)' : 'var(--c-text)',
                     background: org.id === ws()?.orgId ? 'var(--c-hover-bg)' : undefined
@@ -411,7 +412,9 @@ function WorkspaceHeaderContent() {
                   onMouseLeave={(e) =>
                     (e.currentTarget.style.background = org.id === ws()?.orgId ? 'var(--c-hover-bg)' : '')
                   }
-                  onClick={() => {
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey) return // let browser open new tab
+                    e.preventDefault()
                     setActiveWorkspace(org.id, org.name)
                     setWsPickerOpen(false)
                   }}
@@ -420,7 +423,7 @@ function WorkspaceHeaderContent() {
                     <span class="text-xs">●</span>
                   </Show>
                   <span>{org.name}</span>
-                </button>
+                </a>
               )}
             </For>
             <div style={{ 'border-top': '1px solid var(--c-border)' }}>
@@ -521,9 +524,13 @@ function WorkspaceHeaderContent() {
                       (e.currentTarget.style.background = t.key === threadKey() ? 'var(--c-hover-bg)' : '')
                     }
                   >
-                    <button
-                      class="flex flex-1 items-center gap-2 px-3 py-2"
-                      onClick={() => {
+                    <a
+                      class="flex flex-1 items-center gap-2 px-3 py-2 no-underline"
+                      href={`?view=workspace&workspace=${ws()?.orgId ?? '_global'}#thread=${t.key}`}
+                      style={{ color: 'inherit' }}
+                      onClick={(e) => {
+                        if (e.metaKey || e.ctrlKey) return // let browser open new tab
+                        e.preventDefault()
                         switchThread(t.key)
                         setThreadPickerOpen(false)
                       }}
@@ -537,7 +544,7 @@ function WorkspaceHeaderContent() {
                           {relativeTime(t.lastActivity)}
                         </span>
                       </Show>
-                    </button>
+                    </a>
                     {/* Move to workspace button */}
                     <div class="relative">
                       <button
