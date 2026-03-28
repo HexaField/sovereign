@@ -1,29 +1,23 @@
 @import 'tailwindcss';
 
-/* ── Lock viewport — prevent body scroll but allow pull-to-refresh ── */
+/* ── Lock viewport — prevent bounce, allow pull-to-refresh ── */
 html {
   height: 100%;
-  overflow: hidden;
 }
 
 body {
   height: 100%;
-  overflow: hidden;
   margin: 0;
+  /* overscroll-behavior: contain allows pull-to-refresh at top
+     but prevents elastic bounce at bottom */
+  overscroll-behavior-y: contain;
 }
 
 #root {
   height: 100dvh;
   max-height: 100dvh;
   overflow: hidden;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
   box-sizing: border-box;
-  /* Allow pull-to-refresh but prevent bottom overscroll */
-  overscroll-behavior-y: contain;
 }
 
 /* PWA standalone: account for safe area insets */
