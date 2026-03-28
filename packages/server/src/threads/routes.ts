@@ -153,51 +153,97 @@ export function createThreadRoutes(
     })
   })
 
-  // ── Thread preview messages (last N user/assistant messages as text) ──
+  // ── Thread preview messages (last N typed entries for rich card rendering) ──
+  // Returns an array of { type, text } entries where type is one of:
+  //   'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result'
   router.get('/api/threads/:key/preview-messages', async (req, res) => {
     const threadKey = req.params.key
     const thread = threadManager.get(threadKey)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
 
     const limit = Math.min(parseInt(req.query.limit as string) || 5, 20)
-    const messages: Array<{ role: string; content: string }> = []
+    type PreviewEntry = { type: string; text: string }
+    const entries: PreviewEntry[] = []
 
     try {
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
       const { getSessionFilePath, readRecentMessages } = await import('../agent-backend/session-reader.js')
       const filePath = getSessionFilePath(sessionKey)
       if (filePath) {
-        // Read more raw messages than needed since many will be tool calls
         const { messages: raw } = readRecentMessages(filePath, limit * 10)
-        for (let i = raw.length - 1; i >= 0 && messages.length < limit; i--) {
-          const role = raw[i]?.role
-          if (role !== 'assistant' && role !== 'user') continue
-          const content = raw[i].content
-          let text = ''
-          if (typeof content === 'string') {
-            text = content
-          } else if (Array.isArray(content)) {
-            // Include text blocks (skip toolCall blocks)
-            text = content
-              .filter((b: any) => b.type === 'text')
-              .map((b: any) => b.text ?? '')
-              .join(' ')
+        // Walk backwards, collect up to `limit` meaningful entries
+        for (let i = raw.length - 1; i >= 0 && entries.length < limit; i--) {
+          const msg = raw[i]
+          if (!msg) continue
+          const role = msg.role
+          const content = msg.content
+
+          if (role === 'user') {
+            let text = typeof content === 'string' ? content : ''
+            if (Array.isArray(content)) {
+              text = content
+                .filter((b: any) => b.type === 'text')
+                .map((b: any) => b.text ?? '')
+                .join(' ')
+            }
+            text = text
+              .replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
+              .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+              .trim()
+            if (!text || text === 'NO_REPLY' || text === 'HEARTBEAT_OK') continue
+            if (
+              /^\(System\)/i.test(text) ||
+              /^OpenClaw runtime context/i.test(text) ||
+              /^Write any lasting notes/i.test(text) ||
+              /^Heartbeat prompt:/i.test(text) ||
+              /^\[Subagent (?:Context|Task)\]/i.test(text)
+            )
+              continue
+            entries.unshift({ type: 'user', text: text.length > 150 ? text.slice(0, 150) + '…' : text })
+          } else if (role === 'assistant') {
+            if (!content) continue
+            if (Array.isArray(content)) {
+              // Process blocks in order — collect text, thinking, tool_use
+              for (const block of content) {
+                if (entries.length >= limit) break
+                if (block.type === 'thinking' && block.thinking) {
+                  const t = (block.thinking as string).trim()
+                  if (t) entries.unshift({ type: 'thinking', text: t.length > 100 ? t.slice(0, 100) + '…' : t })
+                } else if (block.type === 'tool_use' || block.type === 'toolCall') {
+                  const name = block.name || block.toolName || 'tool'
+                  entries.unshift({ type: 'tool_call', text: name })
+                } else if (block.type === 'text' && block.text) {
+                  let t = (block.text as string)
+                    .replace(/<antThinking>[\s\S]*?<\/antThinking>/g, '')
+                    .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+                    .trim()
+                  if (t && t !== 'NO_REPLY' && t !== 'HEARTBEAT_OK') {
+                    entries.unshift({ type: 'assistant', text: t.length > 150 ? t.slice(0, 150) + '…' : t })
+                  }
+                }
+              }
+            } else if (typeof content === 'string') {
+              let text = content
+                .replace(/<antThinking>[\s\S]*?<\/antThinking>/g, '')
+                .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
+                .trim()
+              if (text && text !== 'NO_REPLY' && text !== 'HEARTBEAT_OK') {
+                entries.unshift({ type: 'assistant', text: text.length > 150 ? text.slice(0, 150) + '…' : text })
+              }
+            }
+          } else if (role === 'tool') {
+            // Tool result — just record the tool name
+            const name = msg.name || msg.tool_use_id || 'tool'
+            entries.unshift({ type: 'tool_result', text: name })
           }
-          text = text
-            .replace(/<antThinking>[\s\S]*?<\/antThinking>/g, '')
-            .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
-            .replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
-            .trim()
-          if (!text || text === 'NO_REPLY' || text === 'HEARTBEAT_OK') continue
-          // Skip system-injected user messages
-          if (role === 'user' && (/^\(System\)/i.test(text) || /^OpenClaw runtime context/i.test(text) || /^Write any lasting notes/i.test(text) || /^Heartbeat prompt:/i.test(text))) continue
-          messages.unshift({ role, content: text.length > 200 ? text.slice(0, 200) + '...' : text })
         }
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     res.json({
-      messages,
+      messages: entries.slice(-limit),
       agentStatus: thread.agentStatus ?? 'idle'
     })
   })
@@ -212,7 +258,10 @@ export function createThreadRoutes(
 
     try {
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      const sessionsPath = (await import('node:path')).join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+      const sessionsPath = (await import('node:path')).join(
+        process.env.HOME || '',
+        '.openclaw/agents/main/sessions/sessions.json'
+      )
       const fs = await import('node:fs')
       const raw = fs.readFileSync(sessionsPath, 'utf-8')
       const sessions = JSON.parse(raw)
@@ -232,9 +281,14 @@ export function createThreadRoutes(
       })
     } catch {
       res.json({
-        model: null, modelProvider: null, contextTokens: null,
-        totalTokens: 0, inputTokens: 0, outputTokens: 0,
-        compactionCount: 0, thinkingLevel: null,
+        model: null,
+        modelProvider: null,
+        contextTokens: null,
+        totalTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        compactionCount: 0,
+        thinkingLevel: null,
         agentStatus: thread.agentStatus ?? 'idle',
         sessionKey: null
       })
