@@ -506,9 +506,6 @@ const ChatPanel: Component = () => {
                 'min-height': '0'
               }}
             >
-              <div style={{ position: 'absolute', top: '8px', right: '8px', 'z-index': '50' }}>
-                <ChatSettingsButton />
-              </div>
               <ChatView
                 messages={messages()}
                 streamingHtml={streamingHtml()}
@@ -565,9 +562,6 @@ const ExpandedChatView: Component = () => {
         <div
           style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
         >
-          <div style={{ position: 'absolute', top: '8px', right: '8px', 'z-index': '50' }}>
-            <ChatSettingsButton />
-          </div>
           <ChatView
             messages={messages()}
             streamingHtml={streamingHtml()}
@@ -619,9 +613,6 @@ const MobileChatPanel: Component = () => {
         }
       >
         <div class="relative flex-1" style={{ 'min-height': '0' }}>
-          <div style={{ position: 'absolute', top: '8px', right: '8px', 'z-index': '50' }}>
-            <ChatSettingsButton />
-          </div>
           <ChatView
             messages={messages()}
             streamingHtml={streamingHtml()}

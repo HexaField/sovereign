@@ -37,6 +37,7 @@ import {
 } from '../workspace/store.js'
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
 import { agentStatus } from '../chat/store.js'
+import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 import { lazy } from 'solid-js'
@@ -477,6 +478,7 @@ function WorkspaceHeaderContent() {
             ▾
           </span>
         </button>
+        <ChatSettingsButton />
         <button
           class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
           style={{ color: 'var(--c-text-muted)' }}
