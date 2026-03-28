@@ -264,6 +264,11 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
 
   function handleChatEvent(sessionKey: string, ev: any) {
     if (ev.state === 'delta') {
+      // Ensure agent is marked as working when we receive deltas
+      if (state.agentStatus !== 'working') {
+        state.agentStatus = 'working'
+        emitter.emit('chat.status', { sessionKey, status: 'working' })
+      }
       // Gateway delta contains full accumulated text — compute the true delta
       const text = extractText(ev.message)
       const cleaned = text
@@ -474,6 +479,11 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       }
       case 'assistant': {
         // Text streaming — handled by handleChatEvent via chat events
+        // Also ensure agent is marked as working (in case we missed lifecycle.start)
+        if (state.agentStatus !== 'working') {
+          state.agentStatus = 'working'
+          emitter.emit('chat.status', { sessionKey, status: 'working' })
+        }
         break
       }
     }
