@@ -40,6 +40,19 @@ export default function App() {
     autoSelectProject()
     cleanups.push(initNavStore())
 
+    // Set actual viewport height as CSS variable (handles Android nav bar)
+    const updateVh = () => {
+      const vh = window.visualViewport?.height ?? window.innerHeight
+      document.documentElement.style.setProperty('--app-height', `${vh}px`)
+    }
+    updateVh()
+    window.visualViewport?.addEventListener('resize', updateVh)
+    window.addEventListener('resize', updateVh)
+    cleanups.push(() => {
+      window.visualViewport?.removeEventListener('resize', updateVh)
+      window.removeEventListener('resize', updateVh)
+    })
+
     const cleanupConnection = initConnectionStore(wsStore)
     cleanups.push(cleanupConnection)
 
@@ -76,8 +89,9 @@ export default function App() {
 
   return (
     <div
-      class="flex h-dvh flex-col overflow-hidden"
+      class="flex flex-col overflow-hidden"
       style={{
+        height: 'var(--app-height, 100dvh)',
         background: 'var(--c-bg)',
         color: 'var(--c-text)',
         'font-family': 'var(--c-font)'
