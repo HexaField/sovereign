@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { registerChatWs } from './ws.js'
 import type { ChatModule } from './chat.js'
 import type { WsHandler } from '../ws/handler.js'
@@ -34,7 +35,10 @@ function createMockChatModule(): ChatModule {
     getSessionKeyForThread: vi.fn(() => undefined),
     getThreadKeyForSession: vi.fn(() => undefined),
     getQueue: vi.fn(() => []),
-    loadMapping: vi.fn()
+    loadMapping: vi.fn(),
+    chatEvents: new EventEmitter(),
+    getLiveState: vi.fn(() => ({})),
+    resolveSessionKey: vi.fn((tk: string) => `session-${tk}`)
   }
 }
 
