@@ -3,6 +3,7 @@ import type { Accessor } from 'solid-js'
 import type { ParsedTurn, WorkItem, AgentStatus, QueuedMessage } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
 import { renderMarkdown, stripThinkingBlocks } from '../../lib/markdown.js'
+import { setBackendStatus, type ConnectionStatus } from '../connection/store.js'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
 export const [agentStatus, setAgentStatus] = createSignal<AgentStatus>('idle')
@@ -306,8 +307,10 @@ function connectSSE(threadKey: string): void {
   })
 
   // ── backend-status ──
-  // Backend status is also delivered via WS for the connection indicator.
-  // SSE delivers it too for completeness but the connection store handles WS.
+  eventSource.addEventListener('backend-status', (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    setBackendStatus(data.status as ConnectionStatus)
+  })
 
   // ── queue ──
   eventSource.addEventListener('queue', (e) => {
