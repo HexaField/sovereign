@@ -478,8 +478,8 @@ function WorkspaceHeaderContent() {
           </span>
         </button>
         <button
-          class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
-          style={{ color: 'var(--c-text-muted)', 'border-color': 'var(--c-border)' }}
+          class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
+          style={{ color: 'var(--c-text-muted)' }}
           onClick={() => toggleChatExpanded()}
           onMouseEnter={(e) => {
             e.currentTarget.style.background = 'var(--c-hover-bg)'
@@ -813,8 +813,8 @@ export function Header() {
         </Show>
       </div>
 
-      {/* Right: Context budget */}
-      <button
+      {/* Right: Context budget — hidden (stub) */}
+      {/* <button
         class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
         style={{
           'border-color': showContextBudget() ? 'var(--c-accent)' : 'var(--c-border)',
@@ -836,7 +836,7 @@ export function Header() {
           <circle cx="12" cy="12" r="10" />
           <path d="M12 6v6l4 2" />
         </svg>
-      </button>
+      </button> */}
 
       <Show when={showContextBudget()}>
         <ContextBudgetModal onClose={() => setShowContextBudget(false)} />
@@ -851,83 +851,86 @@ export function Header() {
 
       {/* Hamburger menu */}
       <div class="relative">
-        <button
-          class="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
-          style={{
-            'border-color': menuOpen() ? 'var(--c-accent)' : 'var(--c-border)',
-            color: menuOpen() ? 'var(--c-accent)' : 'var(--c-text-muted)'
-          }}
-          onClick={() => setMenuOpen(!menuOpen())}
-          title="Menu"
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
+        {/* Menu button — hidden (stub) */}
+        <div class="hidden">
+          <button
+            class="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent transition-all"
+            style={{
+              'border-color': menuOpen() ? 'var(--c-accent)' : 'var(--c-border)',
+              color: menuOpen() ? 'var(--c-accent)' : 'var(--c-text-muted)'
+            }}
+            onClick={() => setMenuOpen(!menuOpen())}
+            title="Menu"
           >
-            <line x1="4" y1="6" x2="20" y2="6" />
-            <line x1="4" y1="12" x2="20" y2="12" />
-            <line x1="4" y1="18" x2="20" y2="18" />
-          </svg>
-          <Show when={totalBadge() > 0}>
-            <span
-              class="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
-              style={{ background: '#ef4444' }}
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
             >
-              {totalBadge() > 9 ? '9+' : totalBadge()}
-            </span>
-          </Show>
-        </button>
+              <line x1="4" y1="6" x2="20" y2="6" />
+              <line x1="4" y1="12" x2="20" y2="12" />
+              <line x1="4" y1="18" x2="20" y2="18" />
+            </svg>
+            <Show when={totalBadge() > 0}>
+              <span
+                class="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+                style={{ background: '#ef4444' }}
+              >
+                {totalBadge() > 9 ? '9+' : totalBadge()}
+              </span>
+            </Show>
+          </button>
 
-        <Show when={menuOpen()}>
-          <div class="fixed inset-0 z-[199]" onClick={() => setMenuOpen(false)} />
-          <div
-            class="absolute top-full right-0 z-[200] mt-1 w-52 overflow-hidden rounded-lg shadow-lg"
-            style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
-          >
-            {topLevelViews.map((item) => (
-              <button
-                class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
-                style={{
-                  color: activeView() === item.view ? 'var(--c-accent)' : 'var(--c-text)',
-                  background: activeView() === item.view ? 'var(--c-hover-bg)' : undefined
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = activeView() === item.view ? 'var(--c-hover-bg)' : '')
-                }
-                onClick={() => selectView(item.view)}
-              >
-                <span class="flex w-5 items-center justify-center">{item.icon()}</span>
-                <span class="flex-1">{item.label}</span>
-                <span class="hidden text-[10px] sm:inline" style={{ color: 'var(--c-text-muted)' }}>
-                  {item.shortcut}
-                </span>
-              </button>
-            ))}
-            <div style={{ 'border-top': '1px solid var(--c-border)' }}>
-              <button
-                class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
-                style={{ color: 'var(--c-text)' }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                onMouseLeave={(e) => (e.currentTarget.style.background = '')}
-                onClick={() => {
-                  setMenuOpen(false)
-                  setSettingsOpen(true)
-                }}
-              >
-                <span class="flex w-5 items-center justify-center">
-                  <SettingsIcon class="h-4 w-4" />
-                </span>
-                <span class="flex-1">Settings</span>
-              </button>
+          <Show when={menuOpen()}>
+            <div class="fixed inset-0 z-[199]" onClick={() => setMenuOpen(false)} />
+            <div
+              class="absolute top-full right-0 z-[200] mt-1 w-52 overflow-hidden rounded-lg shadow-lg"
+              style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
+            >
+              {topLevelViews.map((item) => (
+                <button
+                  class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
+                  style={{
+                    color: activeView() === item.view ? 'var(--c-accent)' : 'var(--c-text)',
+                    background: activeView() === item.view ? 'var(--c-hover-bg)' : undefined
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = activeView() === item.view ? 'var(--c-hover-bg)' : '')
+                  }
+                  onClick={() => selectView(item.view)}
+                >
+                  <span class="flex w-5 items-center justify-center">{item.icon()}</span>
+                  <span class="flex-1">{item.label}</span>
+                  <span class="hidden text-[10px] sm:inline" style={{ color: 'var(--c-text-muted)' }}>
+                    {item.shortcut}
+                  </span>
+                </button>
+              ))}
+              <div style={{ 'border-top': '1px solid var(--c-border)' }}>
+                <button
+                  class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
+                  style={{ color: 'var(--c-text)' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setSettingsOpen(true)
+                  }}
+                >
+                  <span class="flex w-5 items-center justify-center">
+                    <SettingsIcon class="h-4 w-4" />
+                  </span>
+                  <span class="flex-1">Settings</span>
+                </button>
+              </div>
             </div>
-          </div>
-        </Show>
+          </Show>
+        </div>
       </div>
     </div>
   )
