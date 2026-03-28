@@ -655,8 +655,8 @@ function WorkspaceHeaderContent() {
         </Show>
       </div>
 
-      {/* Unread notifications badge */}
-      <Show when={unreadNotificationCount() > 0}>
+      {/* Unread notifications badge — hidden until notification system is active */}
+      {/* <Show when={unreadNotificationCount() > 0}>
         <span
           class="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
           style={{ background: '#ef4444' }}
@@ -664,7 +664,7 @@ function WorkspaceHeaderContent() {
         >
           {unreadNotificationCount() > 99 ? '99+' : unreadNotificationCount()}
         </span>
-      </Show>
+      </Show> */}
     </div>
   )
 }
