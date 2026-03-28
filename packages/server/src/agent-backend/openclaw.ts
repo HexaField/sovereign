@@ -6,7 +6,7 @@ import { stripThinkingBlocks } from './thinking.js'
 import { parseTurns } from './parse-turns.js'
 import { getSessionFilePath, readRecentMessages } from './session-reader.js'
 import WebSocket from 'ws'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { generateKeyPairSync, sign, createPrivateKey, createHash } from 'node:crypto'
 
@@ -16,6 +16,9 @@ const REQUEST_TIMEOUT = 30000
 
 function createEventEmitter() {
   const listeners = new Map<string, Set<(data: any) => void>>()
+
+  // ── History cache: keyed by sessionKey, invalidated by file mtime+size ──
+  const historyCache = new Map<string, { turns: ParsedTurn[]; hasMore: boolean; mtime: number; size: number }>()
 
   return {
     on<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void) {
@@ -779,10 +782,17 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     },
 
     async getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }> {
-      // Fast path: read session JSONL file directly (sub-millisecond)
       const filePath = getSessionFilePath(sessionKey)
       if (filePath) {
         try {
+          const stat = statSync(filePath)
+          const cached = historyCache.get(sessionKey)
+
+          // Return cached if file hasn't changed
+          if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
+            return { turns: cached.turns, hasMore: cached.hasMore }
+          }
+
           const t0 = Date.now()
           const { messages, hasMore } = readRecentMessages(filePath, 2000)
           if (messages.length > 0) {
@@ -792,6 +802,15 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
               console.log(
                 `[session-reader] ${sessionKey}: ${elapsed}ms, ${messages.length} raw → ${turns.length} turns`
               )
+
+            // Cache the result
+            historyCache.set(sessionKey, {
+              turns,
+              hasMore,
+              mtime: stat.mtimeMs,
+              size: stat.size
+            })
+
             return { turns, hasMore }
           }
         } catch {
