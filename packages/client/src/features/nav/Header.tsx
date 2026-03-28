@@ -403,7 +403,7 @@ function WorkspaceHeaderContent() {
               {(org) => (
                 <a
                   class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm no-underline transition-colors"
-                  href={`?view=workspace&workspace=${org.id}`}
+                  href={`?view=workspace${org.id !== '_global' ? `&workspace=${org.id}` : ''}`}
                   style={{
                     color: org.id === ws()?.orgId ? 'var(--c-accent)' : 'var(--c-text)',
                     background: org.id === ws()?.orgId ? 'var(--c-hover-bg)' : undefined
@@ -526,7 +526,7 @@ function WorkspaceHeaderContent() {
                   >
                     <a
                       class="flex flex-1 items-center gap-2 px-3 py-2 no-underline"
-                      href={`?view=workspace&workspace=${ws()?.orgId ?? '_global'}#thread=${t.key}`}
+                      href={`?view=workspace${ws()?.orgId && ws()?.orgId !== '_global' ? `&workspace=${ws()?.orgId}` : ''}#thread=${t.key}`}
                       style={{ color: 'inherit' }}
                       onClick={(e) => {
                         if (e.metaKey || e.ctrlKey) return // let browser open new tab
