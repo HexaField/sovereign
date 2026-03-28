@@ -275,6 +275,31 @@ export function createChatModule(
             if (!Array.isArray(content)) continue
 
             for (const block of content) {
+              // Extract thinking/reasoning text from assistant messages with tool calls
+              if (block.type === 'text' && block.text && msg.role === 'assistant') {
+                // Only emit as thinking if this message also has tool calls
+                // (pure text messages are streaming content, not thinking)
+                const hasToolCalls = content.some((b: any) => b.type === 'toolCall' || b.type === 'tool_use')
+                if (hasToolCalls && block.text.trim()) {
+                  const thinkKey = `think:${block.text.slice(0, 50)}`
+                  if (!seen.has(thinkKey)) {
+                    seen.add(thinkKey)
+                    const work: WorkItem = {
+                      type: 'thinking',
+                      output: block.text.trim(),
+                      timestamp: Date.now()
+                    }
+                    if (wsHandler) {
+                      wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
+                    }
+                    chatEvents.emit('chat.work', { threadKey, work })
+                    const items = currentWork.get(threadKey) ?? []
+                    items.push(work)
+                    currentWork.set(threadKey, items)
+                  }
+                }
+              }
+
               if (block.type === 'toolCall' || block.type === 'tool_use') {
                 const id = block.id || ''
                 if (id && seen.has(id)) continue
