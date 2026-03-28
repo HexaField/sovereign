@@ -618,20 +618,25 @@ const MobileChatPanel: Component = () => {
           />
         }
       >
-        <ChatView
-          messages={messages()}
-          streamingHtml={streamingHtml()}
-          agentStatus={agentStatus()}
-          liveWork={liveWork()}
-          liveThinkingText={liveThinkingText()}
-          compacting={compacting()}
-          isRetryCountdownActive={isRetryCountdownActive()}
-          retryCountdownSeconds={retryCountdownSeconds()}
-          onSend={sendMessage}
-          onAbort={abortChat}
-          threadKey={threadKey()}
-          onViewSubagent={pushSubagent}
-        />
+        <div class="relative flex-1" style={{ 'min-height': '0' }}>
+          <div style={{ position: 'absolute', top: '8px', right: '8px', 'z-index': '50' }}>
+            <ChatSettingsButton />
+          </div>
+          <ChatView
+            messages={messages()}
+            streamingHtml={streamingHtml()}
+            agentStatus={agentStatus()}
+            liveWork={liveWork()}
+            liveThinkingText={liveThinkingText()}
+            compacting={compacting()}
+            isRetryCountdownActive={isRetryCountdownActive()}
+            retryCountdownSeconds={retryCountdownSeconds()}
+            onSend={sendMessage}
+            onAbort={abortChat}
+            threadKey={threadKey()}
+            onViewSubagent={pushSubagent}
+          />
+        </div>
 
         <QueueIndicator />
         <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
