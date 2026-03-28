@@ -76,7 +76,6 @@ export function DashboardView() {
   const [diskPct, setDiskPct] = createSignal<number | null>(null)
 
   onMount(async () => {
-
     // Fetch dashboard summary (aggregated per-org data)
     try {
       const res = await fetch('/api/dashboard/summary')
@@ -98,7 +97,9 @@ export function DashboardView() {
         }))
         setOrgs(summaries)
       }
-    } catch { /* fetch failed */ }
+    } catch {
+      /* fetch failed */
+    }
 
     // Fetch health for disk usage
     try {
@@ -110,15 +111,20 @@ export function DashboardView() {
           setDiskPct(Math.round((disk.used / disk.total) * 100))
         }
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   })
 
   onCleanup(() => {})
 
   return (
-    <div class="h-full overflow-y-auto" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
+    <div class="h-full overflow-y-auto overscroll-none" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
       {/* §2.6 System Status Strip */}
-      <div class="flex items-center gap-3 px-3 py-1.5 text-[11px] opacity-70" style={{ 'border-bottom': '1px solid var(--c-border)' }}>
+      <div
+        class="flex items-center gap-3 px-3 py-1.5 text-[11px] opacity-70"
+        style={{ 'border-bottom': '1px solid var(--c-border)' }}
+      >
         <span class="flex items-center gap-1">
           <span class={`inline-block h-1.5 w-1.5 rounded-full ${getConnectionDotColor(connectionState())}`} />
           {connectionState()}
@@ -153,9 +159,7 @@ export function DashboardView() {
         </div>
 
         {/* Workspace Cards */}
-        <Show when={orgs().length > 0} fallback={
-          <p class="mb-3 text-xs opacity-40">No workspaces configured</p>
-        }>
+        <Show when={orgs().length > 0} fallback={<p class="mb-3 text-xs opacity-40">No workspaces configured</p>}>
           <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
             <For each={orgs()}>
               {(org) => (
