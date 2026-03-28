@@ -1,13 +1,15 @@
 @import 'tailwindcss';
 
-/* ── Lock viewport — prevent all body/html scroll on mobile ── */
-html,
+/* ── Lock viewport — prevent body scroll but allow pull-to-refresh ── */
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   height: 100%;
   overflow: hidden;
-  position: fixed;
-  width: 100%;
-  overscroll-behavior: none;
+  margin: 0;
 }
 
 #root {
@@ -20,6 +22,8 @@ body {
   right: 0;
   bottom: 0;
   box-sizing: border-box;
+  /* Allow pull-to-refresh but prevent bottom overscroll */
+  overscroll-behavior-y: contain;
 }
 
 /* PWA standalone: account for safe area insets */
