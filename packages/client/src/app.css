@@ -19,6 +19,7 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
+  box-sizing: border-box;
 }
 
 /* PWA standalone: account for safe area insets */
@@ -28,6 +29,13 @@ body {
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
     }
+  }
+}
+
+/* Non-standalone (browser): also account for bottom safe area */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  #root {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 }
 
