@@ -160,11 +160,11 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
           animation: status-pulse 1.5s ease-in-out infinite;
         }
       `}</style>
-      <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        <For each={cards()}>
+      <div class="mt-2 flex gap-2 overflow-x-auto pb-1 md:grid md:grid-cols-2 md:overflow-x-visible lg:grid-cols-3">
+        <For each={cards().slice(0, 3)}>
           {(card) => (
             <button
-              class="flex cursor-pointer flex-col rounded-lg border p-2.5 text-left transition-colors hover:brightness-110"
+              class="flex w-[260px] shrink-0 cursor-pointer flex-col rounded-lg border p-2.5 text-left transition-colors hover:brightness-110 md:w-auto md:shrink"
               style={{
                 background: 'var(--c-bg-raised)',
                 'border-color': 'var(--c-border)',
