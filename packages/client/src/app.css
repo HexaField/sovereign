@@ -8,9 +8,7 @@ html {
 body {
   height: 100%;
   margin: 0;
-  overflow: hidden;
-  /* overscroll-behavior: contain allows pull-to-refresh at top
-     but prevents elastic bounce at bottom */
+  /* contain prevents bottom bounce, doesn't block pull-to-refresh */
   overscroll-behavior-y: contain;
 }
 
