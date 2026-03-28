@@ -120,6 +120,169 @@ interface OrgListItem {
   name: string
 }
 
+interface BrowseEntry {
+  name: string
+  isDirectory: boolean
+}
+
+interface BrowseResult {
+  path: string
+  parent: string | null
+  entries: BrowseEntry[]
+}
+
+function FolderBrowser(props: { path: string; onSelect: (path: string) => void }) {
+  const [currentPath, setCurrentPath] = createSignal(props.path || '')
+  const [entries, setEntries] = createSignal<BrowseEntry[]>([])
+  const [parentPath, setParentPath] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
+  const [browseError, setBrowseError] = createSignal('')
+  const [showHidden, setShowHidden] = createSignal(false)
+
+  const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
+
+  const browse = async (dirPath?: string) => {
+    setLoading(true)
+    setBrowseError('')
+    try {
+      const params = dirPath ? `?path=${encodeURIComponent(dirPath)}` : ''
+      const res = await fetch(`${BASE}api/files/browse${params}`)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Failed to browse' }))
+        setBrowseError(data.error || 'Failed to browse directory')
+        return
+      }
+      const data: BrowseResult = await res.json()
+      setCurrentPath(data.path)
+      setParentPath(data.parent)
+      setEntries(data.entries)
+      props.onSelect(data.path)
+    } catch (e: any) {
+      setBrowseError(e.message || 'Network error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Load initial directory
+  browse(props.path || undefined)
+
+  const filteredEntries = () => {
+    const all = entries()
+    return showHidden() ? all : all.filter((e) => !e.name.startsWith('.'))
+  }
+
+  // Build breadcrumb segments from current path
+  const breadcrumbs = () => {
+    const p = currentPath()
+    if (!p) return []
+    const parts = p.split('/').filter(Boolean)
+    const segments: Array<{ label: string; path: string }> = [{ label: '/', path: '/' }]
+    let acc = ''
+    for (const part of parts) {
+      acc += '/' + part
+      segments.push({ label: part, path: acc })
+    }
+    return segments
+  }
+
+  return (
+    <div>
+      {/* Breadcrumbs */}
+      <div
+        class="mb-2 flex flex-wrap items-center gap-0.5 rounded-lg px-2 py-1.5 text-xs"
+        style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
+      >
+        <For each={breadcrumbs()}>
+          {(seg, i) => (
+            <>
+              <Show when={i() > 0}>
+                <span style={{ color: 'var(--c-text-muted)' }}>/</span>
+              </Show>
+              <button
+                class="rounded px-1 py-0.5 transition-colors hover:underline"
+                style={{ color: 'var(--c-accent)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                onClick={() => browse(seg.path)}
+              >
+                {seg.label}
+              </button>
+            </>
+          )}
+        </For>
+      </div>
+
+      {/* Directory listing */}
+      <div
+        class="overflow-y-auto rounded-lg"
+        style={{
+          background: 'var(--c-bg)',
+          border: '1px solid var(--c-border)',
+          'max-height': '300px',
+          'min-height': '120px'
+        }}
+      >
+        <Show when={loading()}>
+          <div class="flex items-center justify-center py-8 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+            Loading…
+          </div>
+        </Show>
+        <Show when={browseError()}>
+          <div class="px-3 py-4 text-xs" style={{ color: 'var(--c-danger, #ef4444)' }}>
+            {browseError()}
+          </div>
+        </Show>
+        <Show when={!loading() && !browseError()}>
+          {/* Parent directory entry */}
+          <Show when={parentPath()}>
+            <button
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors"
+              style={{ color: 'var(--c-text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              onClick={() => browse(parentPath()!)}
+            >
+              <span>📁</span>
+              <span>..</span>
+            </button>
+          </Show>
+          <For each={filteredEntries()}>
+            {(entry) => (
+              <button
+                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors"
+                style={{ color: 'var(--c-text)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                onClick={() => browse(currentPath() + '/' + entry.name)}
+              >
+                <span>📁</span>
+                <span>{entry.name}</span>
+              </button>
+            )}
+          </For>
+          <Show when={filteredEntries().length === 0 && !parentPath()}>
+            <div class="px-3 py-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              Empty directory
+            </div>
+          </Show>
+        </Show>
+      </div>
+
+      {/* Show hidden toggle */}
+      <div class="mt-2 flex items-center gap-2">
+        <label class="flex cursor-pointer items-center gap-1.5 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+          <input
+            type="checkbox"
+            checked={showHidden()}
+            onChange={(e) => setShowHidden(e.currentTarget.checked)}
+            class="accent-[var(--c-accent)]"
+          />
+          Show hidden folders
+        </label>
+      </div>
+    </div>
+  )
+}
+
 function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgListItem) => void }) {
   const [name, setName] = createSignal('')
   const [wsPath, setWsPath] = createSignal('')
@@ -159,7 +322,7 @@ function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgLi
     <>
       <div class="fixed inset-0 z-[300] bg-black/50" onClick={() => props.onClose()} />
       <div
-        class="fixed top-1/2 left-1/2 z-[301] w-[400px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl p-5 shadow-2xl"
+        class="fixed top-1/2 left-1/2 z-[301] w-[480px] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 rounded-xl p-5 shadow-2xl"
         style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
       >
         <h2 class="mb-4 text-base font-semibold" style={{ color: 'var(--c-text-heading)' }}>
@@ -181,16 +344,24 @@ function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgLi
           </div>
           <div>
             <label class="mb-1 block text-xs font-medium" style={{ color: 'var(--c-text-muted)' }}>
-              Path
+              Folder
             </label>
-            <input
-              type="text"
-              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-              style={{ background: 'var(--c-bg)', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }}
-              placeholder="/home/user/projects"
-              value={wsPath()}
-              onInput={(e) => setWsPath(e.currentTarget.value)}
-            />
+            <FolderBrowser path="" onSelect={(p) => setWsPath(p)} />
+            <div class="mt-2">
+              <input
+                type="text"
+                class="w-full rounded-lg border px-3 py-2 text-xs outline-none"
+                style={{
+                  background: 'var(--c-bg)',
+                  color: 'var(--c-text)',
+                  'border-color': 'var(--c-border)',
+                  'font-family': 'monospace'
+                }}
+                placeholder="/path/to/folder"
+                value={wsPath()}
+                onInput={(e) => setWsPath(e.currentTarget.value)}
+              />
+            </div>
           </div>
           <Show when={error()}>
             <p class="text-xs" style={{ color: 'var(--c-danger, #ef4444)' }}>
@@ -213,7 +384,7 @@ function AddWorkspaceDialog(props: { onClose: () => void; onCreated: (org: OrgLi
               disabled={submitting()}
               onClick={handleSubmit}
             >
-              {submitting() ? 'Creating…' : 'Create'}
+              {submitting() ? 'Creating…' : 'Select & Create'}
             </button>
           </div>
         </div>

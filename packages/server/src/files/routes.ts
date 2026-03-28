@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises'
 import * as nodePath from 'node:path'
+import * as os from 'node:os'
 import { Router, type RequestHandler } from 'express'
 import type { FileService } from './files.js'
 import { PathTraversalError, validatePath } from './files.js'
@@ -17,6 +18,31 @@ export function createFileRouter(
   if (authMiddleware) {
     router.use(authMiddleware)
   }
+
+  // GET /api/files/browse?path=... — browse directories for folder picker
+  router.get('/browse', (async (req, res) => {
+    try {
+      const requestedPath = (req.query.path as string) || os.homedir()
+      const resolved = nodePath.resolve(requestedPath)
+      const parent = nodePath.dirname(resolved)
+
+      const dirEntries = await fs.readdir(resolved, { withFileTypes: true })
+      const entries = dirEntries
+        .filter((e) => e.isDirectory())
+        .map((e) => ({ name: e.name, isDirectory: true }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+
+      res.json({ path: resolved, parent: parent !== resolved ? parent : null, entries })
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        res.status(404).json({ error: 'Directory not found' })
+      } else if (err.code === 'EACCES') {
+        res.status(403).json({ error: 'Permission denied' })
+      } else {
+        res.status(500).json({ error: err.message })
+      }
+    }
+  }) as RequestHandler)
 
   // Resolve project param: if it looks like a UUID, try to resolve to path; otherwise use as-is
   const resolveProjectPath = (project: string): string => {
