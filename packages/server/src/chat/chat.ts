@@ -265,6 +265,7 @@ export function createChatModule(
         const lines = newText.split('\n').filter(Boolean)
         const seen = pollSeenToolIds.get(threadKey)!
 
+        let latestThinking: { text: string; timestamp: number } | null = null
         for (const line of lines) {
           try {
             const entry = JSON.parse(line)
@@ -276,27 +277,12 @@ export function createChatModule(
 
             for (const block of content) {
               // Extract thinking/reasoning text from assistant messages with tool calls
+              // Only emit as thinking if this message also has tool calls
               if (block.type === 'text' && block.text && msg.role === 'assistant') {
-                // Only emit as thinking if this message also has tool calls
-                // (pure text messages are streaming content, not thinking)
                 const hasToolCalls = content.some((b: any) => b.type === 'toolCall' || b.type === 'tool_use')
                 if (hasToolCalls && block.text.trim()) {
-                  const thinkKey = `think:${block.text.slice(0, 50)}`
-                  if (!seen.has(thinkKey)) {
-                    seen.add(thinkKey)
-                    const work: WorkItem = {
-                      type: 'thinking',
-                      output: block.text.trim(),
-                      timestamp: Date.now()
-                    }
-                    if (wsHandler) {
-                      wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
-                    }
-                    chatEvents.emit('chat.work', { threadKey, work })
-                    const items = currentWork.get(threadKey) ?? []
-                    items.push(work)
-                    currentWork.set(threadKey, items)
-                  }
+                  // Track latest thinking per poll cycle - will emit after processing all lines
+                  latestThinking = { text: block.text.trim(), timestamp: Date.now() }
                 }
               }
 
@@ -350,6 +336,22 @@ export function createChatModule(
           } catch {
             /* skip malformed lines */
           }
+        }
+
+        // Emit latest thinking from this poll cycle (single event, not per-message)
+        if (latestThinking) {
+          const work: WorkItem = {
+            type: 'thinking',
+            output: latestThinking.text,
+            timestamp: latestThinking.timestamp
+          }
+          if (wsHandler) {
+            wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
+          }
+          chatEvents.emit('chat.work', { threadKey, work })
+          const items = currentWork.get(threadKey) ?? []
+          items.push(work)
+          currentWork.set(threadKey, items)
         }
       } catch {
         /* file read error — ignore */
