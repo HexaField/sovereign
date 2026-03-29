@@ -17,9 +17,6 @@ const REQUEST_TIMEOUT = 30000
 function createEventEmitter() {
   const listeners = new Map<string, Set<(data: any) => void>>()
 
-  // ── History cache: keyed by sessionKey, invalidated by file mtime+size ──
-  const historyCache = new Map<string, { turns: ParsedTurn[]; hasMore: boolean; mtime: number; size: number }>()
-
   return {
     on<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void) {
       if (!listeners.has(event)) listeners.set(event, new Set())
@@ -117,6 +114,9 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
 
   // Pending RPC requests awaiting response
   const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+
+  // ── History cache: keyed by sessionKey, invalidated by file mtime+size ──
+  const historyCache = new Map<string, { turns: ParsedTurn[]; hasMore: boolean; mtime: number; size: number }>()
   let msgId = 0
 
   function getKeyPath(): string {
@@ -813,7 +813,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
 
             return { turns, hasMore }
           }
-        } catch {
+        } catch (err) {
           /* fall through to RPC */
         }
       }
