@@ -67,27 +67,27 @@ const ICON_MAP: Record<string, () => JSX.Element> = {
 }
 
 const TOOL_ICONS: Record<string, string> = {
-  read: 'read',
-  write: 'write',
-  edit: 'edit',
-  exec: 'exec',
-  process: 'process',
-  browser: 'browser',
-  web_search: 'search',
-  web_fetch: 'fetch',
-  cron: 'cron',
-  gateway: 'gateway',
-  memory_search: 'memory',
-  memory_get: 'memory',
-  nodes: 'nodes',
-  tts: 'tts',
-  sessions_spawn: 'spawn',
-  sessions_send: 'send',
-  sessions_list: 'list',
-  sessions_history: 'history',
-  session_status: 'status',
-  subagents: 'agents',
-  agents_list: 'agents'
+  read: '📖',
+  write: '✏️',
+  edit: '✂️',
+  exec: '▶',
+  process: '⚙',
+  browser: '🌐',
+  web_search: '🔍',
+  web_fetch: '🌐',
+  cron: '⏰',
+  gateway: '🔌',
+  memory_search: '🧠',
+  memory_get: '🧠',
+  nodes: '📱',
+  tts: '🔊',
+  sessions_spawn: '🧪',
+  sessions_send: '💬',
+  sessions_list: '📋',
+  sessions_history: '📜',
+  session_status: '📊',
+  subagents: '🧵',
+  agents_list: '📋'
 }
 
 function resolveIcon(key: string): JSX.Element {
@@ -96,7 +96,7 @@ function resolveIcon(key: string): JSX.Element {
 }
 
 function toolIcon(name: string): string {
-  return TOOL_ICONS[name] || 'tool'
+  return TOOL_ICONS[name] || '⚙'
 }
 
 function toolIconElement(name: string): JSX.Element {
@@ -106,27 +106,27 @@ function toolIconElement(name: string): JSX.Element {
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export function getToolIcon(name: string): string {
   const icons: Record<string, string> = {
-    read: 'read',
-    write: 'write',
-    edit: 'edit',
-    exec: 'exec',
-    process: 'process',
-    browser: 'browser',
-    web_search: 'search',
-    web_fetch: 'fetch',
+    read: '📖',
+    write: '✏️',
+    edit: '✂️',
+    exec: '▶',
+    process: '⚙',
+    browser: '🌐',
+    web_search: '🔍',
+    web_fetch: '🌐',
     memory_search: 'search',
     memory_get: 'list',
-    cron: 'cron',
-    gateway: 'gateway',
-    tts: 'tts',
-    sessions_spawn: 'spawn',
-    sessions_send: 'send',
-    sessions_list: 'list',
-    sessions_history: 'history',
-    session_status: 'status',
-    subagents: 'agents',
-    agents_list: 'agents',
-    nodes: 'nodes'
+    cron: '⏰',
+    gateway: '🔌',
+    tts: '🔊',
+    sessions_spawn: '🧪',
+    sessions_send: '💬',
+    sessions_list: '📋',
+    sessions_history: '📜',
+    session_status: '📊',
+    subagents: '🧵',
+    agents_list: '📋',
+    nodes: '📱'
   }
   return icons[name] || 'tool'
 }
