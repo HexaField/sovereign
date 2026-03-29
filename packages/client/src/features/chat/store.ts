@@ -253,9 +253,10 @@ function connectSSE(threadKey: string): void {
     if (work.type === 'thinking') {
       setLiveWork((prev) => {
         const items = [...prev]
-        const lastThinkIdx = items.findLastIndex((w) => w.type === 'thinking')
-        if (lastThinkIdx >= 0) {
-          items[lastThinkIdx] = work
+        // If the last item is already a thinking item, replace it (accumulating text)
+        // Otherwise append (thinking after tool calls should be a new entry)
+        if (items.length > 0 && items[items.length - 1].type === 'thinking') {
+          items[items.length - 1] = work
           return items
         }
         return [...prev, work]
