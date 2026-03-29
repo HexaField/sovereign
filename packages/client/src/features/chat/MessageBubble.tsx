@@ -239,11 +239,13 @@ export function MessageBubble(props: MessageBubbleProps) {
     const isSubagentContext = content().startsWith('[Subagent Context]') || content().startsWith('[Subagent Task]')
     const isRuntimeContext = /^OpenClaw runtime context \(internal\):/i.test(content())
     const isTaskCompletion = isRuntimeContext && /\[Internal task completion event\]/i.test(content())
-    const icon = isMemorySave ? (
-      <WriteIcon class="inline h-4 w-4" />
-    ) : isHeartbeat ? (
-      <HeartIcon class="inline h-4 w-4" />
-    ) : isTaskCompletion ? (
+
+    // Hide internal-only messages entirely
+    if (isRuntimeContext || isSubagentContext || isMemorySave || isHeartbeat) {
+      return null
+    }
+
+    const icon = isTaskCompletion ? (
       <BotIcon class="inline h-4 w-4" />
     ) : isRuntimeContext ? (
       <SystemIcon class="inline h-4 w-4" />

@@ -61,6 +61,7 @@ function extractSubagentSpawns(workItems: WorkItem[]): Array<{ sessionKey: strin
 
 /** Check if two timestamps fall on different days */
 export function needsDateSeparator(ts1: number, ts2: number): boolean {
+  if (!ts1 || !ts2) return false
   const d1 = new Date(ts1)
   const d2 = new Date(ts2)
   return d1.toDateString() !== d2.toDateString()
