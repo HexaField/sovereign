@@ -100,7 +100,7 @@ function toolIcon(name: string): string {
 }
 
 function toolIconElement(name: string): JSX.Element {
-  return resolveIcon(toolIcon(name))
+  return (<span class="text-[11px]">{toolIcon(name)}</span>) as JSX.Element
 }
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
@@ -419,6 +419,9 @@ function ToolPairRow(props: { pair: ToolPair }) {
         onClick={() => hasDetails() && setExpanded(!expanded())}
       >
         <span class="text-[11px]">{toolIcon(name())}</span>
+        <span class="font-mono text-[11px] font-medium" style={{ color: 'var(--c-text)' }}>
+          {name()}
+        </span>
         <ToolCallSummary name={name()} input={callInput()} />
         <Show when={result()}>
           <span
