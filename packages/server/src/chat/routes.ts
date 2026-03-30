@@ -1,14 +1,69 @@
 // Chat Module — REST + SSE endpoints
 
 import { Router } from 'express'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { ChatModule } from './chat.js'
 import type { AgentBackend } from '@sovereign/core'
 
-export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend): Router {
+/** Simple file-backed draft store for chat input drafts (syncs across devices). */
+function createChatDraftStore(dataDir: string) {
+  const filePath = path.join(dataDir, 'chat-drafts.json')
+  let cache: Record<string, string> = {}
+
+  // Load from disk
+  try {
+    if (fs.existsSync(filePath)) {
+      cache = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    }
+  } catch {
+    cache = {}
+  }
+
+  function save(): void {
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(filePath, JSON.stringify(cache), 'utf-8')
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return {
+    get(threadKey: string): string {
+      return cache[threadKey] ?? ''
+    },
+    set(threadKey: string, text: string): void {
+      if (text) {
+        cache[threadKey] = text
+      } else {
+        delete cache[threadKey]
+      }
+      save()
+    }
+  }
+}
+
+export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, dataDir?: string): Router {
   const router = Router()
+  const draftStore = createChatDraftStore(dataDir || process.env.SOVEREIGN_DATA_DIR || '.data')
 
   router.get('/api/chat/status', (_req, res) => {
     res.json({ status: backend.status() })
+  })
+
+  // ── Chat draft sync endpoints ──────────────────────────────────────
+  router.get('/api/chat/draft', (req, res) => {
+    const thread = req.query.thread as string
+    if (!thread) return res.status(400).json({ error: 'thread query param required' })
+    res.json({ text: draftStore.get(thread) })
+  })
+
+  router.put('/api/chat/draft', (req, res) => {
+    const { threadKey, text } = req.body ?? {}
+    if (!threadKey) return res.status(400).json({ error: 'threadKey required' })
+    draftStore.set(threadKey, text ?? '')
+    res.json({ ok: true })
   })
 
   router.post('/api/chat/send', async (req, res) => {
