@@ -4,7 +4,15 @@ import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
 import { SubagentCard } from './SubagentCard.js'
-import { hasOlderMessages, loadingOlder, loadOlderMessages, streamingText, streamingHtml, liveWork } from './store.js'
+import {
+  hasOlderMessages,
+  loadingOlder,
+  loadOlderMessages,
+  streamingText,
+  streamingHtml,
+  liveWork,
+  liveThinkingText
+} from './store.js'
 import { ChatIcon } from '../../ui/icons.js'
 import { renderMarkdown } from '../../lib/markdown.js'
 
@@ -185,6 +193,16 @@ export function ChatView(props: ChatViewProps) {
         {/* ── Live streaming section (independent of history turns) ── */}
         <Show when={liveWork().length > 0}>
           <WorkSection work={liveWork()} />
+        </Show>
+
+        {/* Live thinking indicator — shows below work items when agent is active */}
+        <Show when={props.agentStatus !== 'idle' && (liveWork().length > 0 || props.liveThinkingText)}>
+          <div class="flex items-start gap-2 px-2 py-1.5" style={{ color: 'var(--c-text-muted)' }}>
+            <span class="thinking-dots mt-0.5 text-xs">⋯</span>
+            <span class="text-xs leading-relaxed italic" style={{ opacity: '0.7' }}>
+              {liveThinkingText() || 'Thinking…'}
+            </span>
+          </div>
         </Show>
 
         <Show when={streamingHtml()}>
