@@ -27,27 +27,63 @@ function draftKey(threadKey: string): string {
   return `sovereign:draft:${threadKey}`
 }
 
+// ── Debounced server draft save ──────────────────────────────────────
+let draftSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function debounceSaveDraftToServer(threadKey: string, text: string): void {
+  if (draftSaveTimer) clearTimeout(draftSaveTimer)
+  draftSaveTimer = setTimeout(() => {
+    fetch('/api/chat/draft', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadKey, text })
+    }).catch(() => {
+      /* ignore */
+    })
+  }, 300)
+}
+
 export function setInputValue(v: string): void {
   _setInputValue(v)
   if (currentThreadKey) {
     const tk = currentThreadKey()
     if (tk) {
+      // Write-through to localStorage for instant local response
       try {
         localStorage.setItem(draftKey(tk), v)
       } catch {
         /* ignore */
       }
+      // Debounce-save to server for cross-device sync
+      debounceSaveDraftToServer(tk, v)
     }
   }
 }
 
 function loadDraft(threadKey: string): void {
+  // Load from localStorage immediately for instant display
   try {
     const saved = localStorage.getItem(draftKey(threadKey))
     _setInputValue(saved ?? '')
   } catch {
     _setInputValue('')
   }
+  // Then fetch from server and override if different
+  fetch(`/api/chat/draft?thread=${encodeURIComponent(threadKey)}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (data && typeof data.text === 'string') {
+        _setInputValue(data.text)
+        try {
+          localStorage.setItem(draftKey(threadKey), data.text)
+        } catch {
+          /* */
+        }
+      }
+    })
+    .catch(() => {
+      /* ignore, keep localStorage value */
+    })
 }
 
 let durationTimer: ReturnType<typeof setInterval> | null = null
