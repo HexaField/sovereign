@@ -1,4 +1,14 @@
-import { Component, createResource, createSignal, createMemo, Show, For, onCleanup, createEffect } from 'solid-js'
+import {
+  Component,
+  createResource,
+  createSignal,
+  createMemo,
+  Show,
+  For,
+  onMount,
+  onCleanup,
+  createEffect
+} from 'solid-js'
 import { closePlanningView, openIssueDetail } from '../store.js'
 import { draftsStore } from '../../drafts/index.js'
 
@@ -342,12 +352,16 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
   }
 
   // Touch support for mobile pan/zoom
+  // NOTE: Must attach via ref with { passive: false } because SolidJS event delegation
+  // uses passive listeners for touch events, making preventDefault() a no-op.
   let touchDragStart = { x: 0, y: 0 }
   let lastPinchDist = 0
+  let svgRef!: SVGSVGElement
 
   const pinchDistance = (t1: Touch, t2: Touch) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
 
   const handleTouchStart = (e: TouchEvent) => {
+    e.preventDefault()
     if (e.touches.length === 1) {
       setDragging(true)
       touchDragStart = { x: e.touches[0].clientX - pan().x, y: e.touches[0].clientY - pan().y }
@@ -375,6 +389,22 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
     setDragging(false)
     lastPinchDist = 0
   }
+
+  // Attach touch handlers with passive: false after SVG mounts
+  const attachTouchHandlers = (el: SVGSVGElement) => {
+    svgRef = el
+    el.addEventListener('touchstart', handleTouchStart, { passive: false })
+    el.addEventListener('touchmove', handleTouchMove, { passive: false })
+    el.addEventListener('touchend', handleTouchEnd, { passive: false })
+  }
+
+  onCleanup(() => {
+    if (svgRef) {
+      svgRef.removeEventListener('touchstart', handleTouchStart)
+      svgRef.removeEventListener('touchmove', handleTouchMove)
+      svgRef.removeEventListener('touchend', handleTouchEnd)
+    }
+  })
 
   return (
     <div class="flex h-full flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
@@ -437,6 +467,7 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
           </Show>
           <Show when={data() && !data.loading}>
             <svg
+              ref={attachTouchHandlers}
               class="h-full w-full cursor-grab"
               classList={{ 'cursor-grabbing': dragging() }}
               style={{ 'touch-action': 'none' }}
@@ -445,9 +476,6 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={() => setDragging(false)}
-              onTouchStart={handleTouchStart}
-              onTouchMove={handleTouchMove}
-              onTouchEnd={handleTouchEnd}
             >
               <defs>
                 <marker id="dag-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
