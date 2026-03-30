@@ -379,7 +379,7 @@ for (const { label } of defaultThreads) {
 
 const chatModule = createChatModule(bus, backend, threadManager, { dataDir, wsHandler })
 registerChatWs(wsHandler, chatModule)
-app.use(createChatRoutes(chatModule, backend))
+app.use(createChatRoutes(chatModule, backend, dataDir))
 
 // Bulk active subagents grouped by parent thread
 app.get('/api/threads/active-subagents', async (_req, res) => {

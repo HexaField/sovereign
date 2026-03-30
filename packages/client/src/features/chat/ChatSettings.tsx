@@ -1,6 +1,7 @@
 // Chat Settings — floating popover for thread info (model, context, cron jobs)
 import { createSignal, onMount, onCleanup, Show, For } from 'solid-js'
 import { threadKey } from '../threads/store.js'
+import { agentStatus, abortChat } from './store.js'
 
 interface ThreadInfo {
   model: string | null
@@ -101,16 +102,17 @@ export function ChatSettingsButton() {
 
   return (
     <div ref={containerRef} style={{ position: 'relative', 'z-index': '50' }}>
-      {/* Gear button */}
+      {/* Gear button — compact for header */}
       <button
         onClick={toggle}
-        class="flex cursor-pointer items-center justify-center rounded-full border-none transition-colors"
+        class="flex cursor-pointer items-center justify-center rounded border-none transition-colors"
         style={{
-          width: '28px',
-          height: '28px',
+          width: '24px',
+          height: '24px',
           background: open() ? 'var(--c-bg-tertiary, var(--c-hover-bg))' : 'transparent',
           color: 'var(--c-text-muted)',
-          'font-size': '14px'
+          'font-size': '13px',
+          padding: '0'
         }}
         onMouseEnter={(e) => {
           if (!open()) e.currentTarget.style.background = 'var(--c-bg-tertiary, var(--c-hover-bg))'
@@ -296,6 +298,33 @@ export function ChatSettingsButton() {
                     )}
                   </For>
                 </div>
+              </div>
+            </Show>
+
+            {/* Stop / Abort button — shown when agent is working */}
+            <Show when={agentStatus() !== 'idle'}>
+              <div
+                style={{
+                  'margin-top': '10px',
+                  'padding-top': '10px',
+                  'border-top': '1px solid var(--c-border)'
+                }}
+              >
+                <button
+                  class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border-none px-3 py-2 text-sm font-medium text-white transition-colors"
+                  style={{ background: 'var(--c-danger, #ef4444)' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+                  onClick={() => {
+                    abortChat()
+                    setOpen(false)
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                  Stop
+                </button>
               </div>
             </Show>
 
