@@ -342,6 +342,10 @@ body {
   vertical-align: middle;
 }
 
+.thinking-dots {
+  animation: pulse-dots 1.5s ease-in-out infinite;
+}
+
 /* ── Message markdown styles ───────────────────────────────────────────── */
 
 .msg-assistant code {

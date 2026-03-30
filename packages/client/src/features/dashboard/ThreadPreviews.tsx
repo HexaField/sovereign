@@ -170,7 +170,17 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
                 'border-color': 'var(--c-border)',
                 'min-height': '120px'
               }}
-              onClick={() => handleClick(card.key)}
+              onClick={(e: MouseEvent) => {
+                if (e.metaKey || e.ctrlKey) {
+                  // Cmd/Ctrl+click: open in new tab
+                  const url = new URL(window.location.href)
+                  url.hash = `thread=${card.key}`
+                  url.searchParams.set('view', 'workspace')
+                  window.open(url.toString(), '_blank')
+                } else {
+                  handleClick(card.key)
+                }
+              }}
             >
               {/* Header: name + status dot + time */}
               <div class="mb-1.5 flex w-full items-center gap-1.5">
