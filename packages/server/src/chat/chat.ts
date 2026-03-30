@@ -84,6 +84,32 @@ export function createChatModule(
   // Message queue
   const messageQueue = createMessageQueue(dataDir)
 
+  // Track when status last changed — for stuck-status recovery
+  const statusChangedAt = new Map<string, number>()
+  const STUCK_STATUS_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
+  // Periodic check: if any thread has been "working" for too long, reset to idle
+  setInterval(() => {
+    const now = Date.now()
+    for (const [threadKey, changedAt] of statusChangedAt) {
+      const status = currentStatus.get(threadKey)
+      if (status && status !== 'idle' && now - changedAt > STUCK_STATUS_TIMEOUT_MS) {
+        console.log(
+          `[chat] stuck status recovery: ${threadKey} was '${status}' for ${Math.round((now - changedAt) / 1000)}s, resetting to idle`
+        )
+        currentStatus.set(threadKey, 'idle')
+        statusChangedAt.set(threadKey, now)
+        stopJsonlPoll(threadKey)
+        tryProcessQueue(threadKey)
+        // Broadcast the status change to clients
+        if (wsHandler) {
+          wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadKey, status: 'idle' })
+        }
+        chatEvents.emit('chat.status', { threadKey, status: 'idle' })
+      }
+    }
+  }, 30_000) // Check every 30s
+
   function broadcastQueueUpdate(threadKey: string): void {
     const queueData = { threadKey, queue: messageQueue.getQueue(threadKey) }
     if (wsHandler) {
@@ -168,6 +194,7 @@ export function createChatModule(
       if (threadKey) {
         if (eventName === 'chat.status') {
           currentStatus.set(threadKey, data.status as string)
+          statusChangedAt.set(threadKey, Date.now())
           if (data.status === 'idle') {
             stopJsonlPoll(threadKey)
             tryProcessQueue(threadKey)
@@ -186,6 +213,7 @@ export function createChatModule(
         } else if (eventName === 'chat.turn') {
           // Turn complete — clear cached state and invalidate history cache
           currentStatus.delete(threadKey)
+          statusChangedAt.delete(threadKey)
           currentWork.delete(threadKey)
           currentStreamText.delete(threadKey)
           // cache removed
