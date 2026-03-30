@@ -1175,6 +1175,70 @@ const GlobalPlanningView: Component = () => {
     setZoom(newZoom)
   }
 
+  // ── Touch support for mobile pan/zoom ──
+  let touchStartX = 0
+  let touchStartY = 0
+  let touchStartPanX = 0
+  let touchStartPanY = 0
+  let lastPinchDist = 0
+  let isTouchPanning = false
+
+  function pinchDist(t1: Touch, t2: Touch) {
+    return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+  }
+
+  function handleTouchStart(e: TouchEvent) {
+    e.preventDefault()
+    if (e.touches.length === 1) {
+      isTouchPanning = true
+      touchStartX = e.touches[0].clientX
+      touchStartY = e.touches[0].clientY
+      touchStartPanX = panX()
+      touchStartPanY = panY()
+    } else if (e.touches.length === 2) {
+      isTouchPanning = false
+      lastPinchDist = pinchDist(e.touches[0], e.touches[1])
+    }
+  }
+
+  function handleTouchMove(e: TouchEvent) {
+    e.preventDefault()
+    if (e.touches.length === 1 && isTouchPanning) {
+      const dx = e.touches[0].clientX - touchStartX
+      const dy = e.touches[0].clientY - touchStartY
+      setPanX(touchStartPanX + dx)
+      setPanY(touchStartPanY + dy)
+    } else if (e.touches.length === 2) {
+      const dist = pinchDist(e.touches[0], e.touches[1])
+      if (lastPinchDist > 0) {
+        const scale = dist / lastPinchDist
+        setZoom((z) => Math.max(0.2, Math.min(3, z * scale)))
+      }
+      lastPinchDist = dist
+    }
+  }
+
+  function handleTouchEnd() {
+    isTouchPanning = false
+    lastPinchDist = 0
+  }
+
+  // Attach touch listeners with { passive: false } to allow preventDefault
+  function attachTouchToSvg(el: SVGSVGElement) {
+    svgRef = el
+    el.addEventListener('touchstart', handleTouchStart, { passive: false })
+    el.addEventListener('touchmove', handleTouchMove, { passive: false })
+    el.addEventListener('touchend', handleTouchEnd, { passive: false })
+  }
+
+  onCleanup(() => {
+    if (svgRef) {
+      svgRef.removeEventListener('touchstart', handleTouchStart)
+      svgRef.removeEventListener('touchmove', handleTouchMove)
+      svgRef.removeEventListener('touchend', handleTouchEnd)
+    }
+  })
+
   function resetZoom() {
     // Fit all content in view
     const l = layout()
@@ -1328,15 +1392,16 @@ const GlobalPlanningView: Component = () => {
   return (
     <div
       class="relative flex h-full w-full flex-col overflow-hidden"
-      style={{ background: 'var(--c-bg)', 'min-height': '100vh' }}
+      style={{ background: 'var(--c-bg)' }}
       data-testid="planning-view"
     >
       {/* Toolbar */}
       <div
-        class="flex shrink-0 items-center gap-2 px-4 py-2"
+        class="flex shrink-0 flex-wrap items-center gap-1.5 overflow-x-auto px-2 py-1.5"
         style={{
           background: 'var(--c-bg-raised, #1e1e2e)',
-          'border-bottom': '1px solid var(--c-border, #45475a)'
+          'border-bottom': '1px solid var(--c-border, #45475a)',
+          '-webkit-overflow-scrolling': 'touch'
         }}
         data-testid="planning-toolbar"
       >
@@ -1492,9 +1557,9 @@ const GlobalPlanningView: Component = () => {
               </div>
 
               <svg
-                ref={svgRef}
+                ref={attachTouchToSvg}
                 class="h-full w-full"
-                style={{ cursor: isPanning() ? 'grabbing' : 'grab' }}
+                style={{ cursor: isPanning() ? 'grabbing' : 'grab', 'touch-action': 'none' }}
                 data-testid="dag-svg"
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
