@@ -1,5 +1,6 @@
 // Chat Settings — floating popover for thread info (model, context, cron jobs)
-import { createSignal, onMount, onCleanup, Show, For } from 'solid-js'
+import { createSignal, createEffect, onMount, onCleanup, Show, For } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import { threadKey } from '../threads/store.js'
 import { agentStatus, abortChat } from './store.js'
 
@@ -57,6 +58,7 @@ export function ChatSettingsButton() {
   const [crons, setCrons] = createSignal<CronJob[]>([])
   const [loading, setLoading] = createSignal(false)
   let containerRef!: HTMLDivElement
+  let dropdownRef!: HTMLDivElement
 
   const fetchData = async () => {
     const key = threadKey()
@@ -86,7 +88,11 @@ export function ChatSettingsButton() {
 
   // Close on click outside
   const handleClickOutside = (e: MouseEvent) => {
-    if (containerRef && !containerRef.contains(e.target as Node)) {
+    if (
+      containerRef &&
+      !containerRef.contains(e.target as Node) &&
+      (!dropdownRef || !dropdownRef.contains(e.target as Node))
+    ) {
       setOpen(false)
     }
   }
@@ -99,6 +105,28 @@ export function ChatSettingsButton() {
     if (!i || !i.contextTokens) return 0
     return Math.min(100, Math.round((i.totalTokens / i.contextTokens) * 100))
   }
+
+  // Position dropdown relative to the gear button, clamped to viewport
+  createEffect(() => {
+    if (!open()) return
+    // Double rAF to ensure Portal has mounted the DOM element
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (!dropdownRef || !containerRef) return
+        const btn = containerRef.querySelector('button')
+        if (!btn) return
+        const r = btn.getBoundingClientRect()
+        const dropW = 280
+        let left = r.right - dropW
+        if (left < 8) left = 8
+        if (left + dropW > window.innerWidth - 8) left = window.innerWidth - dropW - 8
+        let top = r.bottom + 4
+        if (top + dropdownRef.offsetHeight > window.innerHeight - 8) top = r.top - dropdownRef.offsetHeight - 4
+        dropdownRef.style.left = `${left}px`
+        dropdownRef.style.top = `${top}px`
+      })
+    )
+  })
 
   return (
     <div ref={containerRef} style={{ position: 'relative', 'z-index': '50' }}>
@@ -127,215 +155,219 @@ export function ChatSettingsButton() {
 
       {/* Dropdown */}
       <Show when={open()}>
-        <div
-          class="rounded-xl shadow-2xl"
-          style={{
-            position: 'absolute',
-            top: '34px',
-            right: '0',
-            width: '280px',
-            background: 'var(--c-bg-raised)',
-            border: '1px solid var(--c-border)',
-            'max-height': '400px',
-            'overflow-y': 'auto'
-          }}
-        >
-          <div style={{ padding: '12px' }}>
-            <Show when={loading()}>
-              <div class="text-center text-xs" style={{ color: 'var(--c-text-muted)', padding: '8px 0' }}>
-                Loading…
-              </div>
-            </Show>
+        <Portal>
+          <div
+            ref={dropdownRef}
+            class="rounded-xl shadow-2xl"
+            style={{
+              position: 'fixed',
+              'z-index': '999',
+              width: '280px',
+              background: 'var(--c-bg-raised)',
+              border: '1px solid var(--c-border)',
+              'max-height': '70vh',
+              'overflow-y': 'auto',
+              left: '-9999px',
+              top: '-9999px'
+            }}
+          >
+            <div style={{ padding: '12px' }}>
+              <Show when={loading()}>
+                <div class="text-center text-xs" style={{ color: 'var(--c-text-muted)', padding: '8px 0' }}>
+                  Loading…
+                </div>
+              </Show>
 
-            <Show when={!loading() && info()}>
-              {(i) => (
-                <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-                  {/* Model */}
-                  <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
-                    <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                      Model
-                    </span>
-                    <span
-                      class="text-xs font-medium"
-                      style={{
-                        color: 'var(--c-text)',
-                        background: 'var(--c-bg)',
-                        padding: '1px 8px',
-                        'border-radius': '9999px',
-                        border: '1px solid var(--c-border)'
-                      }}
-                    >
-                      {i().model ?? 'Unknown'}
-                    </span>
-                  </div>
-
-                  {/* Context usage */}
-                  <div>
-                    <div
-                      style={{
-                        display: 'flex',
-                        'align-items': 'center',
-                        'justify-content': 'space-between',
-                        'margin-bottom': '4px'
-                      }}
-                    >
+              <Show when={!loading() && info()}>
+                {(i) => (
+                  <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
+                    {/* Model */}
+                    <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
                       <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                        Context
+                        Model
                       </span>
-                      <span class="text-xs" style={{ color: 'var(--c-text)' }}>
-                        {formatTokens(i().totalTokens)} / {i().contextTokens ? formatTokens(i().contextTokens) : '?'}{' '}
-                        <span style={{ color: 'var(--c-text-muted)' }}>({usagePct()}%)</span>
-                      </span>
-                    </div>
-                    <div
-                      style={{
-                        height: '6px',
-                        width: '100%',
-                        'border-radius': '9999px',
-                        background: 'var(--c-bg)',
-                        overflow: 'hidden'
-                      }}
-                    >
-                      <div
+                      <span
+                        class="text-xs font-medium"
                         style={{
-                          height: '100%',
+                          color: 'var(--c-text)',
+                          background: 'var(--c-bg)',
+                          padding: '1px 8px',
                           'border-radius': '9999px',
-                          width: `${usagePct()}%`,
-                          background: usagePct() > 80 ? 'var(--c-error, #ef4444)' : 'var(--c-accent)',
-                          transition: 'width 0.3s ease'
+                          border: '1px solid var(--c-border)'
                         }}
-                      />
+                      >
+                        {i().model ?? 'Unknown'}
+                      </span>
                     </div>
-                  </div>
 
-                  {/* Token breakdown */}
-                  <div style={{ display: 'flex', gap: '12px' }}>
+                    {/* Context usage */}
                     <div>
-                      <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
-                        In
-                      </div>
-                      <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
-                        {formatTokens(i().inputTokens)}
-                      </div>
-                    </div>
-                    <div>
-                      <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
-                        Out
-                      </div>
-                      <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
-                        {formatTokens(i().outputTokens)}
-                      </div>
-                    </div>
-                    <div>
-                      <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
-                        Compactions
-                      </div>
-                      <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
-                        {i().compactionCount}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </Show>
-
-            {/* Cron Jobs */}
-            <Show when={crons().length > 0}>
-              <div
-                style={{
-                  'margin-top': '10px',
-                  'padding-top': '10px',
-                  'border-top': '1px solid var(--c-border)'
-                }}
-              >
-                <div class="text-xs font-medium" style={{ color: 'var(--c-text-heading)', 'margin-bottom': '6px' }}>
-                  Cron Jobs ({crons().length})
-                </div>
-                <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>
-                  <For each={crons()}>
-                    {(job) => (
                       <div
-                        class="text-xs"
                         style={{
                           display: 'flex',
                           'align-items': 'center',
-                          gap: '6px',
-                          padding: '4px 6px',
-                          'border-radius': '6px',
-                          background: 'var(--c-bg)',
-                          color: 'var(--c-text)'
+                          'justify-content': 'space-between',
+                          'margin-bottom': '4px'
                         }}
                       >
-                        <span
+                        <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                          Context
+                        </span>
+                        <span class="text-xs" style={{ color: 'var(--c-text)' }}>
+                          {formatTokens(i().totalTokens)} / {i().contextTokens ? formatTokens(i().contextTokens) : '?'}{' '}
+                          <span style={{ color: 'var(--c-text-muted)' }}>({usagePct()}%)</span>
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          height: '6px',
+                          width: '100%',
+                          'border-radius': '9999px',
+                          background: 'var(--c-bg)',
+                          overflow: 'hidden'
+                        }}
+                      >
+                        <div
                           style={{
-                            width: '6px',
-                            height: '6px',
-                            'border-radius': '50%',
-                            background: job.enabled ? 'var(--c-success, #22c55e)' : 'var(--c-text-muted)',
-                            'flex-shrink': '0'
+                            height: '100%',
+                            'border-radius': '9999px',
+                            width: `${usagePct()}%`,
+                            background: usagePct() > 80 ? 'var(--c-error, #ef4444)' : 'var(--c-accent)',
+                            transition: 'width 0.3s ease'
                           }}
                         />
-                        <span
-                          style={{
-                            flex: '1',
-                            'min-width': '0',
-                            overflow: 'hidden',
-                            'text-overflow': 'ellipsis',
-                            'white-space': 'nowrap'
-                          }}
-                        >
-                          {job.name || job.id}
-                        </span>
-                        <span style={{ color: 'var(--c-text-muted)', 'flex-shrink': '0', 'font-size': '10px' }}>
-                          {formatSchedule(job.schedule)}
-                        </span>
-                        <Show when={job.state?.nextRunAtMs}>
-                          <span style={{ color: 'var(--c-text-muted)', 'flex-shrink': '0', 'font-size': '10px' }}>
-                            {formatNextRun(job.state?.nextRunAtMs)}
-                          </span>
-                        </Show>
                       </div>
-                    )}
-                  </For>
-                </div>
-              </div>
-            </Show>
+                    </div>
 
-            {/* Stop / Abort button — shown when agent is working */}
-            <Show when={agentStatus() !== 'idle'}>
-              <div
-                style={{
-                  'margin-top': '10px',
-                  'padding-top': '10px',
-                  'border-top': '1px solid var(--c-border)'
-                }}
-              >
-                <button
-                  class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border-none px-3 py-2 text-sm font-medium text-white transition-colors"
-                  style={{ background: 'var(--c-danger, #ef4444)' }}
-                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
-                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-                  onClick={() => {
-                    abortChat()
-                    setOpen(false)
+                    {/* Token breakdown */}
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <div>
+                        <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
+                          In
+                        </div>
+                        <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                          {formatTokens(i().inputTokens)}
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
+                          Out
+                        </div>
+                        <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                          {formatTokens(i().outputTokens)}
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
+                          Compactions
+                        </div>
+                        <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                          {i().compactionCount}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </Show>
+
+              {/* Cron Jobs */}
+              <Show when={crons().length > 0}>
+                <div
+                  style={{
+                    'margin-top': '10px',
+                    'padding-top': '10px',
+                    'border-top': '1px solid var(--c-border)'
                   }}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="6" y="6" width="12" height="12" rx="2" />
-                  </svg>
-                  Stop
-                </button>
-              </div>
-            </Show>
+                  <div class="text-xs font-medium" style={{ color: 'var(--c-text-heading)', 'margin-bottom': '6px' }}>
+                    Cron Jobs ({crons().length})
+                  </div>
+                  <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>
+                    <For each={crons()}>
+                      {(job) => (
+                        <div
+                          class="text-xs"
+                          style={{
+                            display: 'flex',
+                            'align-items': 'center',
+                            gap: '6px',
+                            padding: '4px 6px',
+                            'border-radius': '6px',
+                            background: 'var(--c-bg)',
+                            color: 'var(--c-text)'
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: '6px',
+                              height: '6px',
+                              'border-radius': '50%',
+                              background: job.enabled ? 'var(--c-success, #22c55e)' : 'var(--c-text-muted)',
+                              'flex-shrink': '0'
+                            }}
+                          />
+                          <span
+                            style={{
+                              flex: '1',
+                              'min-width': '0',
+                              overflow: 'hidden',
+                              'text-overflow': 'ellipsis',
+                              'white-space': 'nowrap'
+                            }}
+                          >
+                            {job.name || job.id}
+                          </span>
+                          <span style={{ color: 'var(--c-text-muted)', 'flex-shrink': '0', 'font-size': '10px' }}>
+                            {formatSchedule(job.schedule)}
+                          </span>
+                          <Show when={job.state?.nextRunAtMs}>
+                            <span style={{ color: 'var(--c-text-muted)', 'flex-shrink': '0', 'font-size': '10px' }}>
+                              {formatNextRun(job.state?.nextRunAtMs)}
+                            </span>
+                          </Show>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </Show>
 
-            {/* No data state */}
-            <Show when={!loading() && !info()}>
-              <div class="text-center text-xs" style={{ color: 'var(--c-text-muted)', padding: '8px 0' }}>
-                No session info available
-              </div>
-            </Show>
+              {/* Stop / Abort button — shown when agent is working */}
+              <Show when={agentStatus() !== 'idle'}>
+                <div
+                  style={{
+                    'margin-top': '10px',
+                    'padding-top': '10px',
+                    'border-top': '1px solid var(--c-border)'
+                  }}
+                >
+                  <button
+                    class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border-none px-3 py-2 text-sm font-medium text-white transition-colors"
+                    style={{ background: 'var(--c-danger, #ef4444)' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+                    onClick={() => {
+                      abortChat()
+                      setOpen(false)
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="6" width="12" height="12" rx="2" />
+                    </svg>
+                    Stop
+                  </button>
+                </div>
+              </Show>
+
+              {/* No data state */}
+              <Show when={!loading() && !info()}>
+                <div class="text-center text-xs" style={{ color: 'var(--c-text-muted)', padding: '8px 0' }}>
+                  No session info available
+                </div>
+              </Show>
+            </div>
           </div>
-        </div>
+        </Portal>
       </Show>
     </div>
   )
