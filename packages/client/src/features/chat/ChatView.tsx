@@ -192,7 +192,7 @@ export function ChatView(props: ChatViewProps) {
 
         {/* ── Live streaming section (independent of history turns) ── */}
         <Show when={liveWork().length > 0}>
-          <WorkSection work={liveWork()} />
+          <WorkSection work={liveWork().filter((w) => w.type !== 'thinking')} />
         </Show>
 
         {/* Live thinking — always show latest thought below tool calls when agent is active */}
