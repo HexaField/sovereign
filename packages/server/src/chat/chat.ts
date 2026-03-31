@@ -209,6 +209,11 @@ export function createChatModule(
           const items = currentWork.get(threadKey) ?? []
           items.push(data.work)
           currentWork.set(threadKey, items)
+          // Clear accumulated stream text when a tool call arrives —
+          // the text before the tool call was captured as a thinking item
+          if ((data.work as any)?.type === 'tool_call') {
+            currentStreamText.delete(threadKey)
+          }
         } else if (eventName === 'chat.stream') {
           const prev = currentStreamText.get(threadKey) ?? ''
           currentStreamText.set(threadKey, prev + (data.text as string))
