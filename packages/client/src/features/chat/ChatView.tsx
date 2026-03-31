@@ -198,13 +198,13 @@ export function ChatView(props: ChatViewProps) {
         {/* Live thinking — always show latest thought below tool calls when agent is active */}
         <Show when={props.agentStatus !== 'idle' && liveWork().length > 0}>
           <div class="flex items-start gap-2 px-2 py-1.5" style={{ color: 'var(--c-text-muted)' }}>
-            <span class="thinking-dots mt-0.5 text-xs">⋯</span>
             <span
               class="text-xs leading-relaxed italic"
               style={{ opacity: '0.7', 'max-width': '90%', 'word-break': 'break-word' }}
             >
-              {liveThinkingText() || 'Thinking…'}
+              {liveThinkingText() || 'Thinking'}
             </span>
+            <span class="thinking-dots mt-0.5 text-xs">⋯</span>
           </div>
         </Show>
 
