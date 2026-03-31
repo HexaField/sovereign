@@ -285,7 +285,7 @@ export function createThreadRoutes(
   })
 
   // Session tree — returns thread hierarchy for the ThreadDrawer
-  router.get('/api/sessions/tree', (_req, res) => {
+  router.get('/api/sessions/tree', async (_req, res) => {
     const threads = threadManager.list()
     const now = Date.now()
 
@@ -312,6 +312,9 @@ export function createThreadRoutes(
       children: []
     }
 
+    // Build a map of thread nodes for nesting subagents
+    const threadNodes = new Map<string, SessionNode>()
+
     for (const t of threads) {
       const kind = t.key.startsWith('cron:')
         ? ('cron' as const)
@@ -329,13 +332,71 @@ export function createThreadRoutes(
         children: []
       }
       mainNode.children.push(node)
+      // Track full session key for parent matching
+      const fullSessionKey = t.key.startsWith('agent:') ? t.key : `agent:main:thread:${t.key}`
+      threadNodes.set(fullSessionKey, node)
+    }
+
+    // Read sessions.json to find subagent→parent relationships
+    try {
+      const fs = await import('node:fs')
+      const path = await import('node:path')
+      const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+      if (fs.existsSync(sessionsPath)) {
+        const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
+        for (const [sk, meta] of Object.entries(sessions)) {
+          if (!sk.includes(':subagent:')) continue
+          const m = meta as Record<string, unknown>
+          const spawnedBy = m.spawnedBy as string | undefined
+          if (!spawnedBy) continue
+
+          // Find the parent thread node
+          const parentNode = threadNodes.get(spawnedBy)
+          if (!parentNode) continue
+
+          // Check if this subagent is already in the tree (from threadManager)
+          const shortKey = sk.replace(/^agent:main:/, '')
+          const alreadyInTree = mainNode.children.some((c) => c.key === shortKey || c.fullKey === sk)
+          if (alreadyInTree) {
+            // Move it from mainNode.children to parentNode.children
+            const idx = mainNode.children.findIndex((c) => c.key === shortKey || c.fullKey === sk)
+            if (idx >= 0) {
+              const [moved] = mainNode.children.splice(idx, 1)
+              moved.parentKey = parentNode.key
+              parentNode.children.push(moved)
+            }
+            continue
+          }
+
+          // Create a new subagent node under the parent
+          const updatedAt = (m.updatedAt as number) || (m.startedAt as number) || now
+          const label = (m.label as string) || shortKey
+          const subNode: SessionNode = {
+            key: shortKey,
+            fullKey: sk,
+            kind: 'subagent',
+            label,
+            parentKey: parentNode.key,
+            updatedAt,
+            totalTokens: 0,
+            children: []
+          }
+          parentNode.children.push(subNode)
+        }
+      }
+    } catch {
+      /* sessions.json read failed — continue with flat tree */
     }
 
     // Sort children by updatedAt descending
     mainNode.children.sort((a, b) => b.updatedAt - a.updatedAt)
+    for (const child of mainNode.children) {
+      if (child.children.length > 0) {
+        child.children.sort((a, b) => b.updatedAt - a.updatedAt)
+      }
+    }
 
     // Prune stale subagents: remove subagent children older than 24h
-    // relative to main node's most recent activity
     const DAY_MS = 24 * 60 * 60 * 1000
     const parentLatest = mainNode.children.length > 0 ? mainNode.children[0].updatedAt : now
     mainNode.children = mainNode.children.filter((child) => {
@@ -345,6 +406,18 @@ export function createThreadRoutes(
       }
       return true
     })
+    // Also prune stale subagents nested under threads
+    for (const child of mainNode.children) {
+      if (child.children.length > 0) {
+        child.children = child.children.filter((sub) => {
+          if (sub.kind === 'subagent') {
+            const subAge = now - sub.updatedAt
+            return subAge < DAY_MS
+          }
+          return true
+        })
+      }
+    }
 
     res.json({ tree: [mainNode] })
   })
