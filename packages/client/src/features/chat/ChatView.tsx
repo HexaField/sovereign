@@ -119,7 +119,8 @@ export function ChatView(props: ChatViewProps) {
     // Also track live state for scrolling
     liveWork().length
     streamingText()
-    requestAnimationFrame(scrollToBottom)
+    // Double-RAF to ensure DOM has rendered (especially for large history loads)
+    requestAnimationFrame(() => requestAnimationFrame(scrollToBottom))
   })
 
   return (
