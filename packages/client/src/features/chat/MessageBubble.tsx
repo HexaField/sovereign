@@ -230,6 +230,7 @@ export function MessageBubble(props: MessageBubbleProps) {
 
   if (role() === 'system') {
     const [expanded, setExpanded] = createSignal(false)
+    const isErrorTurn = /^Error:\s/i.test(content())
     const isEvent = /event|routing|processed\/|GRAPH|NOTIFY|AGENT|VOID/i.test(content())
     const isReconciliation = /reconcil|graph.*task/i.test(content())
     const isSubagent = /subagent task .* completed/i.test(content())
@@ -243,6 +244,33 @@ export function MessageBubble(props: MessageBubbleProps) {
     // Hide internal-only messages entirely
     if (isRuntimeContext || isSubagentContext || isMemorySave || isHeartbeat) {
       return null
+    }
+
+    // Error turns — render prominently with red styling
+    if (isErrorTurn) {
+      return (
+        <div class="my-2 flex w-full justify-center">
+          <div
+            class="max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-relaxed break-words select-text"
+            style={{
+              background: 'color-mix(in srgb, #ef4444 15%, var(--c-bg-raised))',
+              color: '#ef4444',
+              border: '1px solid color-mix(in srgb, #ef4444 40%, var(--c-border))'
+            }}
+          >
+            <div class="mb-1 flex items-center gap-1.5 text-[11px] font-medium" style={{ color: '#ef4444' }}>
+              <AlertIcon class="inline h-4 w-4" />
+              <span>Agent Error</span>
+              <Show when={timestamp()}>
+                <span style={{ opacity: 0.5, 'font-weight': 'normal', 'margin-left': '4px' }}>
+                  {new Date(timestamp()!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </Show>
+            </div>
+            <span>{content().replace(/^Error:\s*/i, '')}</span>
+          </div>
+        </div>
+      )
     }
 
     const icon = isTaskCompletion ? (
