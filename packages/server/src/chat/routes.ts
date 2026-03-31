@@ -131,7 +131,17 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     if (live.status && live.status !== 'idle') {
       send('status', { status: live.status, threadKey })
       if (live.work?.length) {
-        for (const item of live.work) {
+        // Only replay the latest thinking item (not all accumulated ones)
+        let lastThinkingIdx = -1
+        for (let i = live.work.length - 1; i >= 0; i--) {
+          if (live.work[i].type === 'thinking') {
+            if (lastThinkingIdx === -1) lastThinkingIdx = i
+          }
+        }
+        for (let i = 0; i < live.work.length; i++) {
+          const item = live.work[i]
+          // Skip all thinking items except the latest
+          if (item.type === 'thinking' && i !== lastThinkingIdx) continue
           send('work', { work: item, threadKey })
         }
       }
