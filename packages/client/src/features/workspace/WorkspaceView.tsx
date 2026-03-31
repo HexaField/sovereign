@@ -1,4 +1,16 @@
-import { createSignal, createEffect, onCleanup, Show, Switch, Match, lazy, For, onMount, Suspense } from 'solid-js'
+import {
+  createSignal,
+  createEffect,
+  onCleanup,
+  Show,
+  Switch,
+  Match,
+  lazy,
+  For,
+  onMount,
+  Suspense,
+  createMemo
+} from 'solid-js'
 import type { Component } from 'solid-js'
 import {
   FilesIcon,
@@ -458,11 +470,12 @@ const ChatPanel: Component = () => {
   })
 
   // Build messages from turns
-  const messages = (): ChatMessage[] =>
+  const messages = createMemo((): ChatMessage[] =>
     turns().map((t) => ({
       turn: t,
       pending: t.pending
     }))
+  )
 
   return (
     <>
@@ -539,11 +552,12 @@ const ExpandedChatView: Component = () => {
     onCleanup(() => cleanup?.())
   })
 
-  const messages = (): ChatMessage[] =>
+  const messages = createMemo((): ChatMessage[] =>
     turns().map((t) => ({
       turn: t,
       pending: t.pending
     }))
+  )
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
@@ -592,11 +606,12 @@ const MobileChatPanel: Component = () => {
     onCleanup(() => cleanup?.())
   })
 
-  const messages = (): ChatMessage[] =>
+  const messages = createMemo((): ChatMessage[] =>
     turns().map((t) => ({
       turn: t,
       pending: t.pending
     }))
+  )
 
   return (
     <div class="flex h-full flex-col">
