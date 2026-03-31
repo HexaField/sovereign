@@ -128,8 +128,22 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
 
     // Replay cached live state for in-progress work
     const live = chatModule.getLiveState(threadKey)
-    if (live.status && live.status !== 'idle') {
-      send('status', { status: live.status, threadKey })
+    let activeStatus = live.status
+    if (!activeStatus || activeStatus === 'idle') {
+      // Local cache has no status — check the gateway directly for the real agent status
+      try {
+        const sessions = await backend.listGatewaySessions()
+        const sessionKey = chatModule.resolveSessionKey(threadKey)
+        const match = sessions.find((s: any) => s.key === sessionKey)
+        if (match && match.agentStatus && match.agentStatus !== 'idle') {
+          activeStatus = match.agentStatus
+        }
+      } catch {
+        // ignore — best-effort
+      }
+    }
+    if (activeStatus && activeStatus !== 'idle') {
+      send('status', { status: activeStatus, threadKey })
       if (live.work?.length) {
         // Only replay the latest thinking item (not all accumulated ones)
         let lastThinkingIdx = -1
@@ -149,7 +163,7 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
         send('stream', { text: live.streamText, threadKey, replay: true })
       }
       // Ensure the JSONL poll is running for this thread
-      chatModule.ensurePolling(threadKey)
+      chatModule.ensurePolling(threadKey, activeStatus)
     }
 
     // Subscribe to chat-level events (includes backend events + JSONL-polled work)
