@@ -195,18 +195,15 @@ export function ChatView(props: ChatViewProps) {
           <WorkSection work={liveWork()} />
         </Show>
 
-        {/* Live thinking indicator — only when agent is active and no thought bubble is already rendered */}
-        <Show
-          when={
-            props.agentStatus !== 'idle' &&
-            (liveWork().length > 0 || props.liveThinkingText) &&
-            !liveWork().some((w) => w.type === 'thinking')
-          }
-        >
+        {/* Live thinking — always show latest thought below tool calls when agent is active */}
+        <Show when={props.agentStatus !== 'idle' && liveWork().length > 0}>
           <div class="flex items-start gap-2 px-2 py-1.5" style={{ color: 'var(--c-text-muted)' }}>
             <span class="thinking-dots mt-0.5 text-xs">⋯</span>
-            <span class="text-xs leading-relaxed italic" style={{ opacity: '0.7' }}>
-              Thinking…
+            <span
+              class="text-xs leading-relaxed italic"
+              style={{ opacity: '0.7', 'max-width': '90%', 'word-break': 'break-word' }}
+            >
+              {liveThinkingText() || 'Thinking…'}
             </span>
           </div>
         </Show>

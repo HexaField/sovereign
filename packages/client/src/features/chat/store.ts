@@ -301,7 +301,9 @@ function connectSSE(threadKey: string): void {
       setLiveWork((prev) => [...prev, work])
     }
 
-    setLiveThinkingText(work.type === 'thinking' ? work.output || work.input || '' : '')
+    if (work.type === 'thinking') {
+      setLiveThinkingText(work.output || work.input || '')
+    }
   })
 
   // ── turn: completed turn ──
