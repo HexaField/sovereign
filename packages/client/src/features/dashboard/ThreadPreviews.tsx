@@ -148,6 +148,7 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
   }
 
   const isActive = (status: string) => status === 'busy' || status === 'streaming' || status === 'thinking'
+  const isFailed = (status: string) => status === 'failed' || status === 'error'
 
   return (
     <Show when={!loading()}>
@@ -185,7 +186,7 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
               {/* Header: name + status dot + time */}
               <div class="mb-1.5 flex w-full items-center gap-1.5">
                 <span
-                  class={`inline-block h-2 w-2 shrink-0 rounded-full ${isActive(card.agentStatus) ? "status-dot-active bg-green-500" : ''}`}
+                  class={`inline-block h-2 w-2 shrink-0 rounded-full ${isActive(card.agentStatus) ? "status-dot-active bg-green-500" : isFailed(card.agentStatus) ? 'bg-red-500' : ''}`}
                   style={!isActive(card.agentStatus) ? { background: 'var(--c-text-muted)', opacity: '0.4' } : {}}
                 />
                 <span class="flex-1 truncate text-xs font-medium" style={{ color: 'var(--c-text)' }}>
