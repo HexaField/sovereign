@@ -252,6 +252,18 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
           turns.push(lastUserTurn)
           lastUserTurn = null
         }
+
+        // Check for error turns (e.g. 429 rate limit) — show error as a system turn
+        if (m.stopReason === 'error' && m.errorMessage) {
+          turns.push({
+            role: 'system',
+            content: `Error: ${m.errorMessage}`,
+            timestamp: m.timestamp ?? 0,
+            workItems: [],
+            thinkingBlocks: []
+          })
+        }
+
         currentWork = []
         currentThinking = []
       }

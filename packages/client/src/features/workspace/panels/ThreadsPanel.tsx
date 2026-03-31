@@ -43,7 +43,8 @@ export function groupThreads(threads: ThreadItem[]): {
 function statusDot(status: string | undefined) {
   if (status === 'working' || status === 'thinking')
     return <span class="h-2 w-2 shrink-0 animate-pulse rounded-full" style={{ background: '#f59e0b' }} />
-  if (status === 'error') return <span class="h-2 w-2 shrink-0 rounded-full" style={{ background: '#ef4444' }} />
+  if (status === 'error' || status === 'failed')
+    return <span class="h-2 w-2 shrink-0 rounded-full" style={{ background: '#ef4444' }} />
   return <span class="h-2 w-2 shrink-0 rounded-full" style={{ background: '#22c55e' }} />
 }
 
