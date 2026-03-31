@@ -138,6 +138,8 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       if (live.streamText) {
         send('stream', { text: live.streamText, threadKey, replay: true })
       }
+      // Ensure the JSONL poll is running for this thread
+      chatModule.ensurePolling(threadKey)
     }
 
     // Subscribe to chat-level events (includes backend events + JSONL-polled work)
