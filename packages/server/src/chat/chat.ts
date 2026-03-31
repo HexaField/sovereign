@@ -32,7 +32,7 @@ export interface ChatModule {
   /** Get cached live state for a thread (for SSE replay on connect) */
   getLiveState(threadKey: string): { status?: string; work?: any[]; streamText?: string }
   /** Ensure the JSONL poll is running for a thread — call when SSE connects */
-  ensurePolling(threadKey: string): void
+  ensurePolling(threadKey: string, forceStatus?: string): void
   /** Resolve a threadKey to a sessionKey, creating mapping if needed */
   resolveSessionKey(threadKey: string): string
 }
@@ -570,9 +570,13 @@ export function createChatModule(
       streamText: currentStreamText.get(threadKey)
     }),
     /** Ensure the JSONL poll is running for a thread — call when SSE connects */
-    ensurePolling: (threadKey: string) => {
-      const status = currentStatus.get(threadKey)
+    ensurePolling: (threadKey: string, forceStatus?: string) => {
+      const status = forceStatus ?? currentStatus.get(threadKey)
       if (status && status !== 'idle' && !pollTimers.has(threadKey)) {
+        // Also update cached status so the SSE replay works
+        if (forceStatus && !currentStatus.has(threadKey)) {
+          currentStatus.set(threadKey, forceStatus)
+        }
         const sessionKey = threadToSession.get(threadKey) ?? deriveSessionKey(threadKey)
         startJsonlPoll(threadKey, sessionKey)
       }
