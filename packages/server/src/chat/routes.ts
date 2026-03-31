@@ -89,7 +89,19 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     }
   })
 
-  // ── SSE endpoint for per-thread event streaming ──────────────────
+  // ── HTTP endpoint for thread history (fast, independent of SSE) ──
+  router.get('/api/threads/:threadKey/history', async (req, res) => {
+    const threadKey = req.params.threadKey
+    const sessionKey = chatModule.resolveSessionKey(threadKey)
+    try {
+      const result = await backend.getHistory(sessionKey)
+      res.json({ turns: result.turns, hasMore: result.hasMore })
+    } catch {
+      res.json({ turns: [], hasMore: false })
+    }
+  })
+
+  // ── SSE endpoint for per-thread live event streaming ──────────────────
   router.get('/api/threads/:threadKey/events', async (req, res) => {
     const threadKey = req.params.threadKey
     const emitter = chatModule.chatEvents
@@ -111,36 +123,26 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       }
     }
 
-    // Send initial history
-    const sessionKey = chatModule.resolveSessionKey(threadKey)
-    try {
-      const result = await backend.getHistory(sessionKey)
-      send('history', { turns: result.turns, hasMore: result.hasMore })
-    } catch {
-      send('history', { turns: [], hasMore: false })
-    }
-
-    // Send current backend connection status
+    // Send lightweight initial state immediately (no blocking I/O)
     send('backend-status', { status: backend.status() })
-
-    // Send current queue state
     send('queue', { threadKey, queue: chatModule.getQueue(threadKey) })
 
     // Replay cached live state for in-progress work
     const live = chatModule.getLiveState(threadKey)
     let activeStatus = live.status
     if (!activeStatus || activeStatus === 'idle') {
-      // Local cache has no status — check the gateway directly for the real agent status
-      try {
-        const sessions = await backend.listGatewaySessions()
-        const sessionKey = chatModule.resolveSessionKey(threadKey)
-        const match = sessions.find((s: any) => s.key === sessionKey)
-        if (match && match.agentStatus && match.agentStatus !== 'idle') {
-          activeStatus = match.agentStatus
-        }
-      } catch {
-        // ignore — best-effort
-      }
+      // Check gateway for real agent status — fire-and-forget, don't block SSE
+      backend
+        .listGatewaySessions()
+        .then((sessions) => {
+          const sessionKey = chatModule.resolveSessionKey(threadKey)
+          const match = sessions.find((s: any) => s.key === sessionKey)
+          if (match && match.agentStatus && match.agentStatus !== 'idle') {
+            send('status', { status: match.agentStatus, threadKey })
+            chatModule.ensurePolling(threadKey, match.agentStatus)
+          }
+        })
+        .catch(() => {})
     }
     if (activeStatus && activeStatus !== 'idle') {
       send('status', { status: activeStatus, threadKey })
