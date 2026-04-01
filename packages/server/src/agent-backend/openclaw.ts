@@ -116,7 +116,9 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 
   // ── History cache: keyed by sessionKey, invalidated by file mtime+size ──
+  // Capped to 50 entries to prevent unbounded growth
   const historyCache = new Map<string, { turns: ParsedTurn[]; hasMore: boolean; mtime: number; size: number }>()
+  const HISTORY_CACHE_MAX = 50
   let msgId = 0
 
   function getKeyPath(): string {
@@ -810,6 +812,11 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
               mtime: stat.mtimeMs,
               size: stat.size
             })
+            // Evict oldest entries if cache is too large
+            if (historyCache.size > HISTORY_CACHE_MAX) {
+              const firstKey = historyCache.keys().next().value
+              if (firstKey) historyCache.delete(firstKey)
+            }
 
             return { turns, hasMore }
           }
