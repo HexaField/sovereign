@@ -345,4 +345,66 @@ describe('§2.4 Chat Module (Server)', () => {
     expect(chatModule.getSessionKeyForThread('unknown-thread')).toBeTruthy()
     expect(chatModule.getSessionKeyForThread('unknown-thread')).toMatch(/^agent:main:thread:unknown-thread$/)
   })
+
+  it('MUST track and untrack SSE clients correctly', () => {
+    chatModule.trackSSEClient('thread-1')
+    chatModule.trackSSEClient('thread-1')
+    chatModule.trackSSEClient('thread-2')
+    chatModule.untrackSSEClient('thread-1')
+    // Still one client on thread-1
+    chatModule.untrackSSEClient('thread-1')
+    // Zero clients on thread-1
+    chatModule.untrackSSEClient('thread-1')
+    // Should not go negative — just stays at 0
+    chatModule.untrackSSEClient('thread-2')
+  })
+
+  it('MUST cap accumulated work items at 200 to prevent unbounded growth', () => {
+    // Set up a thread mapping
+    const sessionKey = chatModule.resolveSessionKey('thread-cap')
+
+    // Simulate 250 work events
+    const statusHandlers = backend._handlers.get('chat.work') ?? []
+    for (let i = 0; i < 250; i++) {
+      for (const handler of statusHandlers) {
+        handler({ sessionKey, work: { type: 'tool_call', name: `tool-${i}`, timestamp: Date.now() } })
+      }
+    }
+
+    const live = chatModule.getLiveState('thread-cap')
+    expect(live.work).toBeTruthy()
+    expect(live.work!.length).toBeLessThanOrEqual(200)
+  })
+
+  it('MUST clear live state on chat.turn event', () => {
+    const sessionKey = chatModule.resolveSessionKey('thread-clear')
+
+    // Simulate status + work + stream events
+    const statusHandlers = backend._handlers.get('chat.status') ?? []
+    for (const h of statusHandlers) h({ sessionKey, status: 'working' })
+
+    const workHandlers = backend._handlers.get('chat.work') ?? []
+    for (const h of workHandlers) h({ sessionKey, work: { type: 'tool_call', name: 'test', timestamp: Date.now() } })
+
+    const streamHandlers = backend._handlers.get('chat.stream') ?? []
+    for (const h of streamHandlers) h({ sessionKey, text: 'hello' })
+
+    let live = chatModule.getLiveState('thread-clear')
+    expect(live.status).toBe('working')
+    expect(live.work?.length).toBeGreaterThan(0)
+    expect(live.streamText).toBeTruthy()
+
+    // Now emit turn event — should clear all live state
+    const turnHandlers = backend._handlers.get('chat.turn') ?? []
+    for (const h of turnHandlers)
+      h({
+        sessionKey,
+        turn: { role: 'assistant', content: 'done', workItems: [], thinkingBlocks: [], timestamp: Date.now() }
+      })
+
+    live = chatModule.getLiveState('thread-clear')
+    expect(live.status).toBeUndefined()
+    expect(live.work).toBeUndefined()
+    expect(live.streamText).toBeUndefined()
+  })
 })

@@ -211,6 +211,8 @@ export function createChatModule(
         } else if (eventName === 'chat.work') {
           const items = currentWork.get(threadKey) ?? []
           items.push(data.work)
+          // Cap accumulated work items to prevent unbounded growth during long agent runs
+          if (items.length > 200) items.splice(0, items.length - 200)
           currentWork.set(threadKey, items)
           // Clear accumulated stream text when a tool call arrives —
           // the text before the tool call was captured as a thinking item
