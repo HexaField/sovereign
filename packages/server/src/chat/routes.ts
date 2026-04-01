@@ -90,11 +90,25 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
   })
 
   // ── HTTP endpoint for thread history (fast, independent of SSE) ──
+  // Cache for history responses (short TTL to avoid re-parsing 3MB JSONL on every request)
+  const historyResponseCache = new Map<string, { data: any; timestamp: number }>()
+  const HISTORY_CACHE_TTL = 5000 // 5s — fresh enough for human perception, avoids constant re-parse
+
   router.get('/api/threads/:threadKey/history', async (req, res) => {
     const threadKey = req.params.threadKey
     const sessionKey = chatModule.resolveSessionKey(threadKey)
+
+    // Check response cache first
+    const cached = historyResponseCache.get(threadKey)
+    if (cached && Date.now() - cached.timestamp < HISTORY_CACHE_TTL) {
+      return res.json(cached.data)
+    }
+
     try {
       const result = await backend.getHistory(sessionKey)
+      const data = { turns: result.turns, hasMore: result.hasMore }
+      historyResponseCache.set(threadKey, { data, timestamp: Date.now() })
+      res.json(data)
       res.json({ turns: result.turns, hasMore: result.hasMore })
     } catch {
       res.json({ turns: [], hasMore: false })
@@ -193,7 +207,10 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       if (forThread(data)) send('work', data)
     })
     addHandler('chat.turn', (data) => {
-      if (forThread(data)) send('turn', data)
+      if (forThread(data)) {
+        historyResponseCache.delete(threadKey) // invalidate cache on new turn
+        send('turn', data)
+      }
     })
     addHandler('chat.compacting', (data) => {
       if (forThread(data)) send('compacting', data)
