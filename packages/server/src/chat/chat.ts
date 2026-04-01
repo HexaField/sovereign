@@ -113,6 +113,13 @@ export function createChatModule(
         chatEvents.emit('chat.status', { threadKey, status: 'idle' })
       }
     }
+    // Also check for stalled queues — messages stuck because status is 'done'/'failed'/etc.
+    for (const [tk] of messageQueue.getAllQueues()) {
+      const q = messageQueue.getQueue(tk)
+      if (q.length > 0 && q[0].status === 'queued') {
+        tryProcessQueue(tk)
+      }
+    }
   }, 30_000) // Check every 30s
 
   function broadcastQueueUpdate(threadKey: string): void {
@@ -125,8 +132,9 @@ export function createChatModule(
 
   function tryProcessQueue(threadKey: string): void {
     const status = currentStatus.get(threadKey)
-    // Only process if agent is idle (or no status yet = idle)
-    if (status && status !== 'idle') return
+    // Only process if agent is not actively working
+    const busy = status === 'working' || status === 'thinking'
+    if (busy) return
     if (backend.status() !== 'connected') return
     const next = messageQueue.peek(threadKey)
     if (!next) return
