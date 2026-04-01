@@ -125,6 +125,20 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
         turns.push(lastUserTurn)
       }
 
+      // Flush accumulated work items as an assistant turn (handles sessions_yield / subagent spawns
+      // where the agent has tool calls but no final text response)
+      if (currentWork.length > 0) {
+        turns.push({
+          role: 'assistant',
+          content: '',
+          timestamp: currentWork[currentWork.length - 1].timestamp ?? 0,
+          workItems: currentWork,
+          thinkingBlocks: currentThinking
+        })
+        currentWork = []
+        currentThinking = []
+      }
+
       const text = extractText(m.content) ?? ''
       const stripped = stripTimestamp(text)
       const cleaned = stripDirectives(stripped)
@@ -286,6 +300,17 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
   // Push any remaining user turn
   if (lastUserTurn) {
     turns.push(lastUserTurn)
+  }
+
+  // Flush any remaining work items (e.g., agent yielded or spawned subagent as last action)
+  if (currentWork.length > 0) {
+    turns.push({
+      role: 'assistant',
+      content: '',
+      timestamp: currentWork[currentWork.length - 1].timestamp ?? 0,
+      workItems: currentWork,
+      thinkingBlocks: currentThinking
+    })
   }
 
   // Filter out noisy internal/system turns
