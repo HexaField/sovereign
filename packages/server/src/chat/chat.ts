@@ -391,7 +391,7 @@ export function createChatModule(
       } catch {
         /* file read error — ignore */
       }
-    }, 500) // Poll every 500ms for snappy tool call display
+    }, 2000) // Poll every 2s — balanced between responsiveness and CPU load
 
     pollTimers.set(threadKey, timer)
   }
