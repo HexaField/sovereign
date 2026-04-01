@@ -33,6 +33,9 @@ export interface ChatModule {
   getLiveState(threadKey: string): { status?: string; work?: any[]; streamText?: string }
   /** Ensure the JSONL poll is running for a thread — call when SSE connects */
   ensurePolling(threadKey: string, forceStatus?: string): void
+  /** Track SSE client connect/disconnect for a thread */
+  trackSSEClient(threadKey: string): void
+  untrackSSEClient(threadKey: string): void
   /** Resolve a threadKey to a sessionKey, creating mapping if needed */
   resolveSessionKey(threadKey: string): string
 }
@@ -268,7 +271,7 @@ export function createChatModule(
   const pollTimers = new Map<string, ReturnType<typeof setInterval>>()
   const pollFilePositions = new Map<string, number>() // track file read position
   const pollSeenToolIds = new Map<string, Set<string>>()
-
+  const sseClientCount = new Map<string, number>() // track active SSE clients per thread
   function startJsonlPoll(threadKey: string, sessionKey: string): void {
     if (pollTimers.has(threadKey)) return // already polling
 
@@ -572,13 +575,25 @@ export function createChatModule(
     /** Ensure the JSONL poll is running for a thread — call when SSE connects */
     ensurePolling: (threadKey: string, forceStatus?: string) => {
       const status = forceStatus ?? currentStatus.get(threadKey)
-      if (status && status !== 'idle' && !pollTimers.has(threadKey)) {
+      if (status && status !== 'idle' && !pollTimers.has(threadKey) && (sseClientCount.get(threadKey) ?? 0) > 0) {
         // Also update cached status so the SSE replay works
         if (forceStatus && !currentStatus.has(threadKey)) {
           currentStatus.set(threadKey, forceStatus)
         }
         const sessionKey = threadToSession.get(threadKey) ?? deriveSessionKey(threadKey)
         startJsonlPoll(threadKey, sessionKey)
+      }
+    },
+    /** Track SSE client connect/disconnect for a thread */
+    trackSSEClient: (threadKey: string) => {
+      sseClientCount.set(threadKey, (sseClientCount.get(threadKey) ?? 0) + 1)
+    },
+    untrackSSEClient: (threadKey: string) => {
+      const count = (sseClientCount.get(threadKey) ?? 1) - 1
+      sseClientCount.set(threadKey, Math.max(0, count))
+      // Stop polling when no SSE clients are listening
+      if (count <= 0) {
+        stopJsonlPoll(threadKey)
       }
     },
     resolveSessionKey: (threadKey: string) => {
