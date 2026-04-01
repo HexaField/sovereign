@@ -123,6 +123,9 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       }
     }
 
+    // Track this SSE client
+    chatModule.trackSSEClient(threadKey)
+
     // Send lightweight initial state immediately (no blocking I/O)
     send('backend-status', { status: backend.status() })
     send('queue', { threadKey, queue: chatModule.getQueue(threadKey) })
@@ -220,6 +223,7 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     // Cleanup on disconnect
     req.on('close', () => {
       clearInterval(pingTimer)
+      chatModule.untrackSSEClient(threadKey)
       for (const { event, handler } of handlers) {
         emitter.off(event, handler)
       }
