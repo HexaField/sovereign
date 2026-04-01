@@ -101,14 +101,19 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     // Check response cache first
     const cached = historyResponseCache.get(threadKey)
     if (cached && Date.now() - cached.timestamp < HISTORY_CACHE_TTL) {
-      return res.json(cached.data)
+      const json = JSON.stringify(cached.data)
+      res.setHeader('Content-Type', 'application/json')
+      return res.send(json)
     }
 
     try {
       const result = await backend.getHistory(sessionKey)
       const data = { turns: result.turns, hasMore: result.hasMore }
       historyResponseCache.set(threadKey, { data, timestamp: Date.now() })
-      res.json(data)
+      // Use res.send to avoid Content-Length mismatch with large payloads
+      const json = JSON.stringify(data)
+      res.setHeader('Content-Type', 'application/json')
+      res.send(json)
       res.json({ turns: result.turns, hasMore: result.hasMore })
     } catch {
       res.json({ turns: [], hasMore: false })
