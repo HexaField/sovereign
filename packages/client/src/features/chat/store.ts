@@ -219,13 +219,24 @@ function connectSSE(threadKey: string): void {
   if (!threadKey) return
 
   // Fetch history via HTTP GET immediately (fast, parallel with SSE)
-  fetch(`/api/threads/${encodeURIComponent(threadKey)}/history`)
-    .then((r) => r.json())
-    .then((data) => {
-      setTurns(data.turns ?? [])
-      setHasOlderMessages(data.hasMore ?? false)
-    })
-    .catch(() => {})
+  const fetchHistory = (attempt = 0) => {
+    fetch(`/api/threads/${encodeURIComponent(threadKey)}/history`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((data) => {
+        if (data.turns?.length) {
+          setTurns(data.turns)
+          setHasOlderMessages(data.hasMore ?? false)
+        }
+      })
+      .catch(() => {
+        // Retry up to 3 times with backoff (handles ERR_CONTENT_LENGTH_MISMATCH)
+        if (attempt < 3) setTimeout(() => fetchHistory(attempt + 1), 1000 * (attempt + 1))
+      })
+  }
+  fetchHistory()
 
   const url = `/api/threads/${encodeURIComponent(threadKey)}/events`
   eventSource = new EventSource(url)
