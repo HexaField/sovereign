@@ -94,6 +94,17 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
   const historyResponseCache = new Map<string, { data: any; timestamp: number }>()
   const HISTORY_CACHE_TTL = 5000 // 5s — fresh enough for human perception, avoids constant re-parse
 
+  // Periodic cleanup of stale cache entries (prevent unbounded growth)
+  setInterval(() => {
+    const now = Date.now()
+    for (const [key, entry] of historyResponseCache) {
+      if (now - entry.timestamp > HISTORY_CACHE_TTL * 6) {
+        // 30s expiry
+        historyResponseCache.delete(key)
+      }
+    }
+  }, 30_000)
+
   router.get('/api/threads/:threadKey/history', async (req, res) => {
     const threadKey = req.params.threadKey
     const sessionKey = chatModule.resolveSessionKey(threadKey)
@@ -114,7 +125,6 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       const json = JSON.stringify(data)
       res.setHeader('Content-Type', 'application/json')
       res.send(json)
-      res.json({ turns: result.turns, hasMore: result.hasMore })
     } catch {
       res.json({ turns: [], hasMore: false })
     }
