@@ -59,9 +59,9 @@ export function mergeWithLocal(sessions: ParsedSession[], localThreads: any[]): 
   })
 }
 
-/** Read gateway sessions.json and return a map of shortKey → lastActivity */
-export async function getGatewayActivityMap(): Promise<Map<string, number>> {
-  const map = new Map<string, number>()
+/** Read gateway sessions.json and return a map of shortKey → {lastActivity, status} */
+export async function getGatewayActivityMap(): Promise<Map<string, { lastActivity: number; status?: string }>> {
+  const map = new Map<string, { lastActivity: number; status?: string }>()
   try {
     const { readFile } = await import('fs/promises')
     const { join } = await import('path')
@@ -71,9 +71,12 @@ export async function getGatewayActivityMap(): Promise<Map<string, number>> {
     for (const [fullKey, meta] of Object.entries(data)) {
       const parsed = parseSessionEntry(fullKey, meta)
       if ((parsed.kind === 'main' || parsed.kind === 'thread') && parsed.lastActivity) {
-        map.set(parsed.shortKey, parsed.lastActivity)
+        const status = meta?.status
+        map.set(parsed.shortKey, { lastActivity: parsed.lastActivity, status })
       }
     }
-  } catch { /* ignore read errors */ }
+  } catch {
+    /* ignore read errors */
+  }
   return map
 }
