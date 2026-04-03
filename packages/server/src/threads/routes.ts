@@ -25,11 +25,16 @@ export function createThreadRoutes(
     if (req.query.active) filter.active = req.query.active === 'true'
     const threads = threadManager.list(Object.keys(filter).length > 0 ? (filter as never) : undefined)
 
-    // Merge lastActivity from gateway (source of truth)
+    // Merge lastActivity + agentStatus from gateway (source of truth)
     const activityMap = await getGatewayActivityMap()
     const merged = threads.map((t) => {
-      const gwActivity = activityMap.get(t.key)
-      return gwActivity ? { ...t, lastActivity: gwActivity } : t
+      const gw = activityMap.get(t.key)
+      if (!gw) return t
+      // Map gateway status to display status
+      let agentStatus = t.agentStatus
+      if (gw.status === 'running') agentStatus = 'working' as any
+      else if (gw.status === 'failed') agentStatus = 'failed' as any
+      return { ...t, lastActivity: gw.lastActivity, agentStatus }
     })
     merged.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
 
