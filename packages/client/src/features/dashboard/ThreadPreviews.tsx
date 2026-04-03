@@ -1,5 +1,5 @@
-// Thread card previews — shows last few messages with typed styling and activity indicators
-import { createSignal, onMount, For, Show, Switch, Match } from 'solid-js'
+// Thread card previews — shows latest threads per workspace with lazy message loading
+import { createSignal, onMount, For, Show } from 'solid-js'
 import { setActiveWorkspace } from '../workspace/store'
 import { setActiveView } from '../nav/store'
 import { switchThread } from '../threads/store'
@@ -17,32 +17,6 @@ interface PreviewEntry {
   text: string
 }
 
-interface ThreadCard {
-  key: string
-  label: string
-  messages: PreviewEntry[]
-  agentStatus: string
-  lastActivity: number | null
-}
-
-const TOOL_ICONS: Record<string, string> = {
-  exec: '⚙',
-  read: '📄',
-  edit: '✏️',
-  write: '📝',
-  browser: '🌐',
-  web_fetch: '🌐',
-  image_generate: '🖼',
-  tts: '🔊',
-  ollama_web_search: '🔍'
-}
-
-function toolIcon(name: string): string {
-  // Match by prefix for namespaced tools like ad4m_*
-  if (name.startsWith('ad4m_')) return '🔗'
-  return TOOL_ICONS[name] || '⚙'
-}
-
 function formatRelativeTime(ts: number | null): string {
   if (!ts) return ''
   const diff = Date.now() - ts
@@ -52,70 +26,67 @@ function formatRelativeTime(ts: number | null): string {
   return `${Math.floor(diff / 86_400_000)}d ago`
 }
 
-function MessageLine(props: { entry: PreviewEntry }) {
+function isActive(status: string): boolean {
+  return status === 'working' || status === 'thinking' || status === 'busy' || status === 'streaming'
+}
+
+function isFailed(status: string): boolean {
+  return status === 'failed' || status === 'error'
+}
+
+function StatusDot(props: { status: string }) {
   return (
-    <Switch>
-      <Match when={props.entry.type === 'user'}>
-        <div class="truncate text-[11px] leading-[16px]" style={{ color: 'var(--c-text)' }}>
-          {props.entry.text}
-        </div>
-      </Match>
-      <Match when={props.entry.type === 'assistant'}>
-        <div class="truncate text-[11px] leading-[16px]" style={{ color: 'var(--c-text)', opacity: '0.75' }}>
-          {props.entry.text}
-        </div>
-      </Match>
-      <Match when={props.entry.type === 'thinking'}>
-        <div
-          class="truncate text-[11px] leading-[16px] italic"
-          style={{ color: 'var(--c-text-muted)', opacity: '0.6' }}
-        >
-          {props.entry.text}
-        </div>
-      </Match>
-      <Match when={props.entry.type === 'tool_call'}>
-        <div class="truncate text-[11px] leading-[16px]" style={{ color: 'var(--c-text-muted)' }}>
-          {toolIcon(props.entry.text)} {props.entry.text}
-        </div>
-      </Match>
-      <Match when={props.entry.type === 'tool_result'}>
-        <div class="truncate text-[11px] leading-[16px]" style={{ color: 'var(--c-text-muted)', opacity: '0.6' }}>
-          ✓ {props.entry.text}
-        </div>
-      </Match>
-    </Switch>
+    <span
+      class="inline-block h-2 w-2 shrink-0 rounded-full"
+      classList={{
+        'status-dot-active': isActive(props.status)
+      }}
+      style={{
+        background: isActive(props.status) ? '#22c55e' : isFailed(props.status) ? '#ef4444' : 'var(--c-text-muted)',
+        opacity: isActive(props.status) || isFailed(props.status) ? '1' : '0.4'
+      }}
+    />
   )
 }
 
 export default function ThreadPreviews(props: { orgId: string; orgName: string }) {
-  const [cards, setCards] = createSignal<ThreadCard[]>([])
+  const [threads, setThreads] = createSignal<ThreadInfo[]>([])
+  const [lastMessages, setLastMessages] = createSignal<Map<string, PreviewEntry>>(new Map())
   const [loading, setLoading] = createSignal(true)
 
   onMount(async () => {
+    // Step 1: Load thread metadata (fast — just titles, timestamps, status)
     try {
-      const res = await fetch(`/api/threads?orgId=${encodeURIComponent(props.orgId)}`)
+      const res = await fetch(`/api/threads?orgId=${encodeURIComponent(props.orgId)}&limit=3`)
       if (!res.ok) return
       const data = await res.json()
-      const threads: ThreadInfo[] = (data.threads ?? []).slice(0, 6)
+      const list: ThreadInfo[] = (data.threads ?? []).slice(0, 3)
+      setThreads(list)
+      setLoading(false)
 
-      const results = await Promise.all(
-        threads.map(async (t) => {
-          let messages: PreviewEntry[] = []
-          let agentStatus = t.agentStatus ?? 'idle'
-          try {
-            const pRes = await fetch(`/api/threads/${encodeURIComponent(t.key)}/preview-messages?limit=5`)
-            if (pRes.ok) {
-              const p = await pRes.json()
-              messages = p.messages ?? []
-              agentStatus = p.agentStatus ?? agentStatus
+      // Step 2: Lazy-load last message for each thread (non-blocking, one at a time)
+      for (const t of list) {
+        try {
+          const pRes = await fetch(`/api/threads/${encodeURIComponent(t.key)}/preview-messages?limit=1`)
+          if (pRes.ok) {
+            const p = await pRes.json()
+            const msgs: PreviewEntry[] = p.messages ?? []
+            if (msgs.length > 0) {
+              setLastMessages((prev) => {
+                const next = new Map(prev)
+                next.set(t.key, msgs[msgs.length - 1])
+                return next
+              })
             }
-          } catch {
-            /* ignore */
+            // Update agent status from preview if available
+            if (p.agentStatus && p.agentStatus !== t.agentStatus) {
+              setThreads((prev) => prev.map((th) => (th.key === t.key ? { ...th, agentStatus: p.agentStatus } : th)))
+            }
           }
-          return { key: t.key, label: t.label || t.key, messages, agentStatus, lastActivity: t.lastActivity }
-        })
-      )
-      setCards(results)
+        } catch {
+          /* ignore — card still shows with title + time */
+        }
+      }
     } catch {
       /* ignore */
     } finally {
@@ -147,9 +118,6 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
     switchThread(threadKey)
   }
 
-  const isActive = (status: string) => status === 'busy' || status === 'streaming' || status === 'thinking'
-  const isFailed = (status: string) => status === 'failed' || status === 'error'
-
   return (
     <Show when={!loading()}>
       <style>{`
@@ -162,56 +130,66 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
         }
       `}</style>
       <div class="mt-2 flex gap-2 overflow-x-auto pb-1 md:grid md:grid-cols-2 md:overflow-x-visible lg:grid-cols-3">
-        <For each={cards().slice(0, 3)}>
-          {(card) => (
-            <button
-              class="flex w-[260px] shrink-0 cursor-pointer flex-col rounded-lg border p-2.5 text-left transition-colors hover:brightness-110 md:w-auto md:shrink"
-              style={{
-                background: 'var(--c-bg-raised)',
-                'border-color': 'var(--c-border)',
-                'min-height': '120px'
-              }}
-              onClick={(e: MouseEvent) => {
-                if (e.metaKey || e.ctrlKey) {
-                  // Cmd/Ctrl+click: open in new tab
-                  const url = new URL(window.location.href)
-                  url.hash = `thread=${card.key}`
-                  url.searchParams.set('view', 'workspace')
-                  window.open(url.toString(), '_blank')
-                } else {
-                  handleClick(card.key)
-                }
-              }}
-            >
-              {/* Header: name + status dot + time */}
-              <div class="mb-1.5 flex w-full items-center gap-1.5">
-                <span
-                  class={`inline-block h-2 w-2 shrink-0 rounded-full ${isActive(card.agentStatus) ? "status-dot-active bg-green-500" : isFailed(card.agentStatus) ? 'bg-red-500' : ''}`}
-                  style={!isActive(card.agentStatus) ? { background: 'var(--c-text-muted)', opacity: '0.4' } : {}}
-                />
-                <span class="flex-1 truncate text-xs font-medium" style={{ color: 'var(--c-text)' }}>
-                  {card.label}
-                </span>
-                <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                  {formatRelativeTime(card.lastActivity)}
-                </span>
-              </div>
-
-              {/* Message preview lines */}
-              <div class="flex flex-1 flex-col gap-0.5 overflow-hidden">
-                <Show
-                  when={card.messages.length > 0}
-                  fallback={
-                    <div class="text-[11px]" style={{ color: 'var(--c-text-muted)', opacity: '0.5' }}>
-                      No messages yet
-                    </div>
+        <For each={threads()}>
+          {(thread) => {
+            const lastMsg = () => lastMessages().get(thread.key)
+            return (
+              <button
+                class="flex w-[260px] shrink-0 cursor-pointer flex-col rounded-lg border p-2.5 text-left transition-colors hover:brightness-110 md:w-auto md:shrink"
+                style={{
+                  background: 'var(--c-bg-raised)',
+                  'border-color': 'var(--c-border)',
+                  'min-height': '80px'
+                }}
+                onClick={(e: MouseEvent) => {
+                  if (e.metaKey || e.ctrlKey) {
+                    const url = new URL(window.location.href)
+                    url.hash = `thread=${thread.key}`
+                    url.searchParams.set('view', 'workspace')
+                    window.open(url.toString(), '_blank')
+                  } else {
+                    handleClick(thread.key)
                   }
-                >
-                  <For each={card.messages}>{(entry) => <MessageLine entry={entry} />}</For>
-                </Show>
-              </div>
-            </button>
-          )}
+                }}
+              >
+                {/* Header: status dot + name + time */}
+                <div class="mb-1 flex w-full items-center gap-1.5">
+                  <StatusDot status={thread.agentStatus} />
+                  <span class="flex-1 truncate text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                    {thread.label || thread.key}
+                  </span>
+                  <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                    {formatRelativeTime(thread.lastActivity)}
+                  </span>
+                </div>
+
+                {/* Last message preview */}
+                <div class="flex-1 overflow-hidden">
+                  <Show
+                    when={lastMsg()}
+                    fallback={
+                      <div class="text-[11px]" style={{ color: 'var(--c-text-muted)', opacity: '0.4' }}>
+                        {loading() ? '…' : ''}
+                      </div>
+                    }
+                  >
+                    {(msg) => (
+                      <div
+                        class="truncate text-[11px] leading-[16px]"
+                        style={{
+                          color: msg().type === 'user' ? 'var(--c-text)' : 'var(--c-text-muted)',
+                          opacity: msg().type === 'user' ? '1' : '0.7',
+                          'font-style': msg().type === 'thinking' ? 'italic' : 'normal'
+                        }}
+                      >
+                        {msg().text}
+                      </div>
+                    )}
+                  </Show>
+                </div>
+              </button>
+            )
+          }}
         </For>
 
         {/* New thread button */}
@@ -221,7 +199,7 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
             background: 'var(--c-bg-raised)',
             'border-color': 'var(--c-border)',
             color: 'var(--c-text-muted)',
-            'min-height': '120px'
+            'min-height': '80px'
           }}
           onClick={handleCreate}
           title="New thread"
