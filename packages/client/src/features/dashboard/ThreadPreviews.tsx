@@ -35,16 +35,18 @@ function isFailed(status: string): boolean {
 }
 
 function StatusDot(props: { status: string }) {
+  const color = () => {
+    if (isActive(props.status)) return '#22c55e'
+    if (isFailed(props.status)) return '#ef4444'
+    return 'gray'
+  }
   return (
     <span
       class="inline-block h-2 w-2 shrink-0 rounded-full"
       classList={{
         'status-dot-active': isActive(props.status)
       }}
-      style={{
-        background: isActive(props.status) ? '#22c55e' : isFailed(props.status) ? '#ef4444' : 'var(--c-text-muted)',
-        opacity: isActive(props.status) || isFailed(props.status) ? '1' : '0.4'
-      }}
+      style={{ background: color(), opacity: isActive(props.status) || isFailed(props.status) ? '1' : '0.4' }}
     />
   )
 }
