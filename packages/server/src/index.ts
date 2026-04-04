@@ -384,14 +384,13 @@ app.use(createChatRoutes(chatModule, backend, dataDir))
 // Bulk active subagents grouped by parent thread
 app.get('/api/threads/active-subagents', async (_req, res) => {
   try {
-    const allSessions = await backend.listGatewaySessions()
     const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
     let sessionsData: Record<string, any> = {}
     try {
       const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
       sessionsData = JSON.parse(raw)
     } catch {
-      /* ignore */
+      return res.json({ subagents: {} })
     }
 
     const result: Record<
@@ -404,13 +403,14 @@ app.get('/api/threads/active-subagents', async (_req, res) => {
       }>
     > = {}
 
-    for (const s of allSessions) {
-      if (!s.key.includes(':subagent:')) continue
-      const meta = sessionsData[s.key]
+    const now = Date.now()
+    for (const [key, meta] of Object.entries(sessionsData)) {
+      if (!key.includes(':subagent:')) continue
       if (!meta?.spawnedBy) continue
 
-      const isActive = s.agentStatus === 'working' || s.agentStatus === 'thinking'
-      const isRecent = s.lastActivity && Date.now() - s.lastActivity < 30 * 60 * 1000
+      const status = meta.status || 'done'
+      const isActive = status === 'running' || status === 'working' || status === 'thinking'
+      const isRecent = meta.updatedAt && now - meta.updatedAt < 30 * 60 * 1000
       if (!isActive && !isRecent) continue
 
       let threadKey = 'main'
@@ -421,10 +421,10 @@ app.get('/api/threads/active-subagents', async (_req, res) => {
 
       if (!result[threadKey]) result[threadKey] = []
       result[threadKey].push({
-        sessionKey: s.key,
-        label: meta.label || s.label || s.key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
-        status: s.agentStatus || 'idle',
-        task: meta.task || meta.label || s.label || ''
+        sessionKey: key,
+        label: meta.label || key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
+        status: status === 'running' ? 'working' : status,
+        task: meta.task || meta.label || ''
       })
     }
 
