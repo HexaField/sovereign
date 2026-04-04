@@ -28,6 +28,8 @@ function readThreadFromHash(): string {
 
 export function fetchThreadsForOrg(orgId?: string): void {
   const id = orgId ?? activeOrgIdForThreads()
+  // Clear stale threads immediately so the UI doesn't show the previous workspace's threads
+  setThreads([])
   const url = id ? `/api/threads?orgId=${encodeURIComponent(id)}` : '/api/threads'
   fetch(url)
     .then((r) => r.json())

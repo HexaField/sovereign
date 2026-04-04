@@ -59,13 +59,34 @@ export function mergeWithLocal(sessions: ParsedSession[], localThreads: any[]): 
   })
 }
 
+// Cache the gateway activity map — 60MB sessions.json is too expensive to read on every request
+let cachedMap: Map<string, { lastActivity: number; status?: string }> | null = null
+let cachedMapTime = 0
+const CACHE_TTL = 10_000 // 10s — fresh enough for UI, avoids re-parsing 60MB
+
 /** Read gateway sessions.json and return a map of shortKey → {lastActivity, status} */
 export async function getGatewayActivityMap(): Promise<Map<string, { lastActivity: number; status?: string }>> {
+  const now = Date.now()
+  if (cachedMap && now - cachedMapTime < CACHE_TTL) return cachedMap
+
   const map = new Map<string, { lastActivity: number; status?: string }>()
   try {
     const { readFile } = await import('fs/promises')
     const { join } = await import('path')
+    const { statSync } = await import('fs')
     const sessionsPath = join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+
+    // Quick mtime check — skip re-parse if file hasn't changed
+    try {
+      const stat = statSync(sessionsPath)
+      if (cachedMap && stat.mtimeMs <= cachedMapTime) {
+        cachedMapTime = now
+        return cachedMap
+      }
+    } catch {
+      /* ignore */
+    }
+
     const raw = await readFile(sessionsPath, 'utf-8')
     const data = JSON.parse(raw) as Record<string, any>
     for (const [fullKey, meta] of Object.entries(data)) {
@@ -75,8 +96,10 @@ export async function getGatewayActivityMap(): Promise<Map<string, { lastActivit
         map.set(parsed.shortKey, { lastActivity: parsed.lastActivity, status })
       }
     }
+    cachedMap = map
+    cachedMapTime = now
   } catch {
     /* ignore read errors */
   }
-  return map
+  return cachedMap ?? map
 }
