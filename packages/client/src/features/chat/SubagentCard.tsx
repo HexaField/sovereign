@@ -130,7 +130,7 @@ export function SubagentCard(props: SubagentCardProps) {
 
   return (
     <div
-      class="my-2 max-w-[85%] self-start overflow-hidden rounded-xl"
+      class="my-2 max-w-[85%] self-start rounded-xl"
       style={{
         background: 'var(--c-bg-raised)',
         border: '1px solid color-mix(in srgb, var(--c-accent) 30%, var(--c-border))'
