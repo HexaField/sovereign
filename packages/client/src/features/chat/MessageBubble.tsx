@@ -229,8 +229,12 @@ export function MessageBubble(props: MessageBubbleProps) {
   // ── System message rendering ─────────────────────
 
   if (role() === 'system') {
+    // Hide empty system turns (render as thin blue lines otherwise)
+    if (!content()?.trim()) return null
+
     const [expanded, setExpanded] = createSignal(false)
     const isErrorTurn = /^Error:\s/i.test(content())
+    const isCron = /^Cron:|^\[CronResult\]|^Scheduled Result|cron job|cron schedule/i.test(content())
     const isEvent = /event|routing|processed\/|GRAPH|NOTIFY|AGENT|VOID/i.test(content())
     const isReconciliation = /reconcil|graph.*task/i.test(content())
     const isSubagent = /subagent task .* completed/i.test(content())
@@ -283,6 +287,8 @@ export function MessageBubble(props: MessageBubbleProps) {
       <BotIcon class="inline h-4 w-4" />
     ) : isExecFailed ? (
       <AlertIcon class="inline h-4 w-4" />
+    ) : isCron ? (
+      <ClockIcon class="inline h-4 w-4" />
     ) : isEvent ? (
       <SignalIcon class="inline h-4 w-4" />
     ) : isReconciliation ? (
@@ -311,11 +317,13 @@ export function MessageBubble(props: MessageBubbleProps) {
                   })()
                 : isExecFailed
                   ? 'Exec Notification'
-                  : isEvent
-                    ? 'Event Routing'
-                    : isReconciliation
-                      ? 'Graph Reconciliation'
-                      : 'Scheduled Result'
+                  : isCron
+                    ? 'Cron Result'
+                    : isEvent
+                      ? 'Event Routing'
+                      : isReconciliation
+                        ? 'Graph Reconciliation'
+                        : 'Scheduled Result'
     return (
       <div class="my-1 flex w-full justify-center">
         <div
