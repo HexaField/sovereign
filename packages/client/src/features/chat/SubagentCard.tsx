@@ -34,7 +34,7 @@ export function SubagentCard(props: SubagentCardProps) {
       const res = await fetch(`/api/threads/${encodeURIComponent(props.sessionKey)}/history`)
       if (res.ok) {
         const data = await res.json()
-        const turns: ParsedTurn[] = data.history ?? []
+        const turns: ParsedTurn[] = data.turns ?? data.history ?? []
         setHistory(turns)
 
         // Derive status from history
@@ -122,36 +122,7 @@ export function SubagentCard(props: SubagentCardProps) {
     return last?.content?.slice(0, 120) || ''
   }
 
-  // Fetch once on mount (collapsed) for status preview
-  createEffect(() => {
-    if (!expanded() && history().length === 0) {
-      const doFetch = async () => {
-        try {
-          const res = await fetch(`/api/threads/${encodeURIComponent(props.sessionKey)}/history`)
-          if (res.ok) {
-            const data = await res.json()
-            const turns: ParsedTurn[] = data.history ?? []
-            setHistory(turns)
-            const lastTurn = turns[turns.length - 1]
-            const isComplete =
-              lastTurn?.role === 'assistant' && lastTurn?.content && !lastTurn?.pending && !lastTurn?.streaming
-            setStatus(
-              lastTurn?.streaming || lastTurn?.pending
-                ? 'working'
-                : isComplete
-                  ? 'completed'
-                  : turns.length > 0
-                    ? 'working'
-                    : 'idle'
-            )
-          }
-        } catch {
-          /* ignore */
-        }
-      }
-      doFetch()
-    }
-  })
+  // Status preview fetch removed — only fetch when expanded to avoid N requests on mount
 
   const openInThread = () => {
     switchThread(props.sessionKey)
