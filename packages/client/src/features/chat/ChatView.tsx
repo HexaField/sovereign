@@ -197,20 +197,31 @@ export function ChatView(props: ChatViewProps) {
         </Show>
 
         {/* Live activity indicator — shows what the agent is currently doing */}
-        <Show when={props.agentStatus !== 'idle' && props.agentStatus !== 'done' && props.agentStatus !== 'failed'}>
+        <Show when={liveWork().length > 0 || props.agentStatus === 'working' || props.agentStatus === 'thinking'}>
           {(() => {
             const lastItem = () => {
               const items = liveWork()
-              if (items.length === 0) return null
-              return items[items.length - 1]
+              // Find the last meaningful item (tool_call or thinking, skip tool_result)
+              for (let i = items.length - 1; i >= 0; i--) {
+                if (items[i].type === 'tool_call' || items[i].type === 'thinking') return items[i]
+              }
+              return null
             }
             const label = () => {
               const item = lastItem()
               if (!item) return liveThinkingText() || 'Thinking'
               if (item.type === 'thinking') return item.output || item.input || 'Thinking'
-              if (item.type === 'tool_call')
-                return `${item.name || 'tool'}${item.input ? ` — ${(typeof item.input === 'string' ? item.input : '').slice(0, 60)}` : ''}`
-              if (item.type === 'tool_result') return `✓ ${item.name || 'tool'}`
+              if (item.type === 'tool_call') {
+                const name = item.name || 'tool'
+                if (name === 'exec' && item.input) {
+                  try {
+                    const inp = typeof item.input === 'string' ? JSON.parse(item.input) : item.input
+                    const cmd = inp?.command || ''
+                    if (cmd) return name + ' — ' + cmd.slice(0, 60)
+                  } catch {}
+                }
+                return name
+              }
               return liveThinkingText() || 'Thinking'
             }
             return (
