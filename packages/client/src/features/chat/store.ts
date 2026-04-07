@@ -219,6 +219,7 @@ function connectSSE(threadKey: string): void {
   if (!threadKey) return
 
   // Fetch history via HTTP GET immediately (fast, parallel with SSE)
+  let historyLoaded = false
   const fetchHistory = (attempt = 0) => {
     fetch(`/api/threads/${encodeURIComponent(threadKey)}/history`)
       .then((r) => {
@@ -229,10 +230,11 @@ function connectSSE(threadKey: string): void {
         if (data.turns?.length) {
           setTurns(data.turns)
           setHasOlderMessages(data.hasMore ?? false)
-          // If the last turn has work items, clear live state to prevent duplicates
-          // (history already includes the in-progress work from JSONL)
-          const last = data.turns[data.turns.length - 1]
-          if (last?.workItems?.length > 0) {
+          // Only clear live state on the first history load to prevent duplicates
+          // between history work items and live SSE work items.
+          // After that, live state is managed by SSE events only.
+          if (!historyLoaded) {
+            historyLoaded = true
             clearLiveState()
           }
         }
