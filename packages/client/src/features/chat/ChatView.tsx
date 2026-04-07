@@ -196,17 +196,42 @@ export function ChatView(props: ChatViewProps) {
           <WorkSection work={liveWork()} />
         </Show>
 
-        {/* Live thinking indicator — only when agent is working with no work items yet */}
-        <Show when={props.agentStatus !== 'idle' && liveWork().length === 0}>
-          <div class="flex items-start gap-2 px-2 py-1.5" style={{ color: 'var(--c-text-muted)' }}>
-            <span
-              class="text-xs leading-relaxed italic"
-              style={{ opacity: '0.7', 'max-width': '90%', 'word-break': 'break-word' }}
-            >
-              {liveThinkingText() || 'Thinking'}
-            </span>
-            <span class="thinking-dots mt-0.5 text-xs">⋯</span>
-          </div>
+        {/* Live activity indicator — shows what the agent is currently doing */}
+        <Show when={props.agentStatus !== 'idle' && props.agentStatus !== 'done' && props.agentStatus !== 'failed'}>
+          {(() => {
+            const lastItem = () => {
+              const items = liveWork()
+              if (items.length === 0) return null
+              return items[items.length - 1]
+            }
+            const label = () => {
+              const item = lastItem()
+              if (!item) return liveThinkingText() || 'Thinking'
+              if (item.type === 'thinking') return item.output || item.input || 'Thinking'
+              if (item.type === 'tool_call')
+                return `${item.name || 'tool'}${item.input ? ` — ${(typeof item.input === 'string' ? item.input : '').slice(0, 60)}` : ''}`
+              if (item.type === 'tool_result') return `✓ ${item.name || 'tool'}`
+              return liveThinkingText() || 'Thinking'
+            }
+            return (
+              <div class="flex items-start gap-2 px-2 py-1.5" style={{ color: 'var(--c-text-muted)' }}>
+                <span
+                  class="text-xs leading-relaxed italic"
+                  style={{
+                    opacity: '0.7',
+                    'max-width': '90%',
+                    'word-break': 'break-word',
+                    overflow: 'hidden',
+                    'text-overflow': 'ellipsis',
+                    'white-space': 'nowrap'
+                  }}
+                >
+                  {label()}
+                </span>
+                <span class="thinking-dots mt-0.5 text-xs">⋯</span>
+              </div>
+            )
+          })()}
         </Show>
 
         <Show when={streamingHtml()}>
