@@ -193,11 +193,11 @@ export function ChatView(props: ChatViewProps) {
 
         {/* ── Live streaming section (independent of history turns) ── */}
         <Show when={liveWork().length > 0}>
-          <WorkSection work={liveWork().filter((w) => w.type !== 'thinking')} />
+          <WorkSection work={liveWork()} />
         </Show>
 
-        {/* Live thinking — always show latest thought below tool calls when agent is active */}
-        <Show when={props.agentStatus !== 'idle' && liveWork().length > 0}>
+        {/* Live thinking indicator — only when agent is working with no work items yet */}
+        <Show when={props.agentStatus !== 'idle' && liveWork().length === 0}>
           <div class="flex items-start gap-2 px-2 py-1.5" style={{ color: 'var(--c-text-muted)' }}>
             <span
               class="text-xs leading-relaxed italic"
