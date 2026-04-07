@@ -229,6 +229,12 @@ function connectSSE(threadKey: string): void {
         if (data.turns?.length) {
           setTurns(data.turns)
           setHasOlderMessages(data.hasMore ?? false)
+          // If the last turn has work items, clear live state to prevent duplicates
+          // (history already includes the in-progress work from JSONL)
+          const last = data.turns[data.turns.length - 1]
+          if (last?.workItems?.length > 0) {
+            clearLiveState()
+          }
         }
       })
       .catch(() => {
