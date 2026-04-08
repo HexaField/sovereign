@@ -126,7 +126,12 @@ export function ChatView(props: ChatViewProps) {
   return (
     <div class="flex min-h-0 flex-1 flex-col" style={{ background: 'var(--c-bg)' }}>
       {/* Message list */}
-      <div ref={scrollRef} class="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
+      <div
+        ref={scrollRef}
+        class="flex flex-1 flex-col gap-4 overflow-y-auto p-5"
+        tabindex="0"
+        style={{ outline: 'none' }}
+      >
         {/* Load older messages */}
         {hasOlderMessages() && (
           <div class="flex items-center justify-center">
