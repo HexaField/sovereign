@@ -27,7 +27,51 @@ export function getSessionFilePath(sessionKey: string): string | null {
   }
 }
 
-/** Read last N message entries from a JSONL file efficiently by reading from end of file */
+/** Find ALL session JSONL files for a thread topic (including older/compacted sessions) */
+export function getAllSessionFiles(sessionKey: string): string[] {
+  try {
+    // Extract topic from session key: agent:main:thread:companion-intelligence → companion-intelligence
+    let topic = sessionKey
+    if (topic.includes(':thread:')) topic = topic.split(':thread:')[1]
+    else if (topic.includes(':')) topic = topic.split(':').pop() || topic
+    const topicSuffix = `-topic-${topic}.jsonl`
+
+    const files = fs.readdirSync(SESSIONS_DIR)
+    const matching = files
+      .filter((f) => f.endsWith(topicSuffix))
+      .map((f) => ({
+        path: path.join(SESSIONS_DIR, f),
+        mtime: fs.statSync(path.join(SESSIONS_DIR, f)).mtimeMs
+      }))
+      .sort((a, b) => a.mtime - b.mtime) // oldest first
+
+    return matching.map((f) => f.path)
+  } catch {
+    return []
+  }
+}
+
+/** Read messages from an older session file (for "load more" across session boundaries) */
+export function readAllMessages(filePath: string): any[] {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8')
+    const messages: any[] = []
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const entry = JSON.parse(line)
+        if (entry.type === 'message' && entry.message) {
+          messages.push(entry.message)
+        }
+      } catch {
+        /* skip */
+      }
+    }
+    return messages
+  } catch {
+    return []
+  }
+}
 export function readRecentMessages(filePath: string, limit: number = 80): { messages: any[]; hasMore: boolean } {
   const CHUNK = 256 * 1024 // 256KB chunks
   const stat = fs.statSync(filePath)
