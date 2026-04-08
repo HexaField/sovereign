@@ -4,7 +4,7 @@ import type { AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedT
 import type { OpenClawConfig, DeviceIdentity, InternalState } from './types.js'
 import { stripThinkingBlocks } from './thinking.js'
 import { parseTurns } from './parse-turns.js'
-import { getSessionFilePath, readRecentMessages } from './session-reader.js'
+import { getSessionFilePath, readRecentMessages, getAllSessionFiles, readAllMessages } from './session-reader.js'
 import WebSocket from 'ws'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -805,10 +805,20 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
                 `[session-reader] ${sessionKey}: ${elapsed}ms, ${messages.length} raw → ${turns.length} turns`
               )
 
+            // Check for older session files (compacted/previous sessions for same thread)
+            let effectiveHasMore = hasMore
+            if (!hasMore) {
+              const allFiles = getAllSessionFiles(sessionKey)
+              if (allFiles.length > 1 && allFiles[allFiles.length - 1] === filePath) {
+                // There are older session files — more history exists
+                effectiveHasMore = true
+              }
+            }
+
             // Cache the result
             historyCache.set(sessionKey, {
               turns,
-              hasMore,
+              hasMore: effectiveHasMore,
               mtime: stat.mtimeMs,
               size: stat.size
             })
@@ -818,7 +828,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
               if (firstKey) historyCache.delete(firstKey)
             }
 
-            return { turns, hasMore }
+            return { turns, hasMore: effectiveHasMore }
           }
         } catch (err) {
           /* fall through to RPC */
@@ -834,18 +844,33 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     },
 
     async getFullHistory(sessionKey: string): Promise<ParsedTurn[]> {
-      // Read ALL messages from file (no limit)
-      const filePath = getSessionFilePath(sessionKey)
-      if (filePath) {
+      // Read ALL messages from current + older session files
+      const allFiles = getAllSessionFiles(sessionKey)
+      const currentFile = getSessionFilePath(sessionKey)
+
+      let allMessages: any[] = []
+
+      // Read older session files first (chronological order)
+      for (const f of allFiles) {
+        if (f === currentFile) continue // skip current, read it separately with full limit
+        allMessages.push(...readAllMessages(f))
+      }
+
+      // Read current session file
+      if (currentFile) {
         try {
-          const { messages } = readRecentMessages(filePath, 100000)
-          if (messages.length > 0) {
-            return parseTurns(messages)
-          }
+          const { messages } = readRecentMessages(currentFile, 100000)
+          allMessages.push(...messages)
         } catch {
-          /* fall through to RPC */
+          /* ignore */
         }
       }
+
+      if (allMessages.length > 0) {
+        return parseTurns(allMessages)
+      }
+
+      // Fallback: gateway RPC
       const result = (await request('chat.history', { sessionKey, limit: 10000 })) as {
         messages?: any[]
       }
