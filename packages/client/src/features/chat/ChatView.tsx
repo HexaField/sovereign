@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, Show } from 'solid-js'
 import type { WorkItem, AgentStatus } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
@@ -15,6 +15,51 @@ import {
 } from './store.js'
 import { ChatIcon } from '../../ui/icons.js'
 import { renderMarkdown } from '../../lib/markdown.js'
+
+/** Collapsible card showing the task/prompt a subagent was spawned with */
+function TaskPromptCard(props: { content: string; timestamp: number }) {
+  const [expanded, setExpanded] = createSignal(false)
+  return (
+    <div
+      class="my-2 w-full rounded-xl"
+      style={{
+        background: 'var(--c-bg-raised)',
+        border: '1px solid color-mix(in srgb, var(--c-accent) 30%, var(--c-border))'
+      }}
+    >
+      <button
+        class="flex w-full cursor-pointer items-center gap-2 border-none bg-transparent px-4 py-2.5 text-left transition-colors"
+        style={{ color: 'var(--c-text)' }}
+        onClick={() => setExpanded(!expanded())}
+        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+      >
+        <span class="text-xs" style={{ color: 'var(--c-accent)' }}>
+          📋
+        </span>
+        <span class="flex-1 text-xs font-medium" style={{ color: 'var(--c-accent)' }}>
+          Task Prompt
+        </span>
+        <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+          {new Date(props.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+        <span
+          class="text-[10px] transition-transform"
+          style={{ color: 'var(--c-text-muted)', transform: expanded() ? 'rotate(90deg)' : 'rotate(0deg)' }}
+        >
+          ▶
+        </span>
+      </button>
+      <Show when={expanded()}>
+        <div
+          class="msg-assistant border-t px-4 py-3 text-sm leading-relaxed"
+          style={{ 'border-color': 'var(--c-border)', 'max-height': '500px', 'overflow-y': 'auto' }}
+          innerHTML={renderMarkdown(props.content)}
+        />
+      </Show>
+    </div>
+  )
+}
 
 export interface ChatViewProps {
   messages: ChatMessage[]
@@ -162,6 +207,18 @@ export function ChatView(props: ChatViewProps) {
             const showSeparator = () =>
               i() === 0 || needsDateSeparator(props.messages[i() - 1]?.turn.timestamp, msg.turn.timestamp)
 
+            // First user message in a subagent thread = the spawn task/prompt
+            const isSubagentTask = () => i() === 0 && msg.turn.role === 'user' && props.threadKey.includes(':subagent:')
+
+            const taskContent = () => {
+              if (!isSubagentTask()) return ''
+              // Strip the [Subagent Context] header to show just the task
+              let text = msg.turn.content || ''
+              const taskIdx = text.indexOf('\n\n')
+              if (taskIdx > 0 && text.startsWith('[')) text = text.slice(taskIdx + 2)
+              return text
+            }
+
             return (
               <>
                 {/* Date separator */}
@@ -178,9 +235,14 @@ export function ChatView(props: ChatViewProps) {
                 {/* Work section between user and assistant turns */}
                 {(msg.turn.workItems?.length ?? 0) > 0 && <WorkSection work={msg.turn.workItems} />}
 
-                {/* Message bubble — skip for assistant turns with empty content */}
-                {(msg.turn.content?.trim() || msg.turn.role !== 'assistant') && (
-                  <MessageBubble turn={msg.turn} pending={msg.pending} />
+                {/* Subagent task prompt — show as a special collapsible card */}
+                {isSubagentTask() ? (
+                  <TaskPromptCard content={taskContent()} timestamp={msg.turn.timestamp} />
+                ) : (
+                  /* Message bubble — skip for assistant turns with empty content */
+                  (msg.turn.content?.trim() || msg.turn.role !== 'assistant') && (
+                    <MessageBubble turn={msg.turn} pending={msg.pending} />
+                  )
                 )}
 
                 {/* Subagent cards for sessions_spawn tool calls */}
