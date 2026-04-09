@@ -184,8 +184,28 @@ function resetState(): void {
   setLoadingOlder(false)
 }
 
-export function sendMessage(text: string, _attachments?: File[]): void {
-  ws?.send({ type: 'chat.send', text, threadKey: currentThreadKey?.() ?? 'main' } as any)
+export async function sendMessage(text: string, attachments?: File[]): Promise<void> {
+  const threadKey = currentThreadKey?.() ?? 'main'
+
+  if (attachments?.length) {
+    // Use HTTP POST with base64 attachments
+    const base64Files = await Promise.all(
+      attachments.map(async (f) => {
+        const buf = await f.arrayBuffer()
+        const bytes = new Uint8Array(buf)
+        let binary = ''
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+        return btoa(binary)
+      })
+    )
+    await fetch('/api/chat/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadKey, message: text, attachments: base64Files })
+    })
+  } else {
+    ws?.send({ type: 'chat.send', text, threadKey } as any)
+  }
 }
 
 export function loadOlderMessages(): void {
