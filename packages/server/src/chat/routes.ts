@@ -66,13 +66,40 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     res.json({ ok: true })
   })
 
+  // ── File upload endpoint ──
+  router.post('/api/chat/upload', async (req, res) => {
+    try {
+      // Accept multipart form data with files
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      await new Promise<void>((resolve) => req.on('end', resolve))
+      const body = Buffer.concat(chunks)
+
+      // Parse multipart boundary
+      const contentType = req.headers['content-type'] || ''
+      const boundaryMatch = contentType.match(/boundary=(.+)/)
+      if (!boundaryMatch) {
+        // Fallback: treat entire body as single file upload with base64 encoding
+        const { name, data } = JSON.parse(body.toString('utf-8'))
+        return res.json({ files: [{ name, data }] })
+      }
+
+      // For now, accept JSON with base64-encoded files
+      return res.status(400).json({ error: 'Use JSON upload with base64 data' })
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
   router.post('/api/chat/send', async (req, res) => {
     try {
-      const { threadKey, message } = req.body ?? {}
-      if (!threadKey || !message) {
+      const { threadKey, message, attachments } = req.body ?? {}
+      if (!threadKey || (!message && !attachments?.length)) {
         return res.status(400).json({ error: 'threadKey and message are required' })
       }
-      await chatModule.handleSend(threadKey, message)
+      // Convert base64 attachments to Buffers
+      const buffers = attachments?.map((a: string) => Buffer.from(a, 'base64'))
+      await chatModule.handleSend(threadKey, message || '', buffers)
       res.json({ success: true })
     } catch (err) {
       res.status(500).json({ error: (err as Error).message })
