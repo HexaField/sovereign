@@ -144,11 +144,28 @@ function saveScratchpadEntries(sk: string, entries: ScratchpadEntry[]): void {
   }
 }
 
-// ── File upload stub ─────────────────────────────────────────────────
+// ── File upload ─────────────────────────────────────────────────
 
-async function uploadFiles(_files: FileList | File[]): Promise<{ name: string; path: string; size: number }[]> {
-  // Stub — returns empty until server route exists
-  return []
+async function uploadFiles(files: FileList | File[]): Promise<{ name: string; path: string; size: number }[]> {
+  const results: { name: string; path: string; size: number }[] = []
+  for (const file of Array.from(files)) {
+    results.push({ name: file.name, path: URL.createObjectURL(file), size: file.size })
+  }
+  return results
+}
+
+/** Convert a File to base64 string */
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result as string
+      // Strip the data:...;base64, prefix
+      resolve(result.split(',')[1] || result)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 }
 
 // ── Component ────────────────────────────────────────────────────────
@@ -170,7 +187,7 @@ export function InputArea(props: InputAreaProps) {
   const [markdownPreview, setMarkdownPreview] = createSignal(false)
 
   // File attachment state
-  const [attachedFiles, setAttachedFiles] = createSignal<{ name: string; path: string; size: number }[]>([])
+  const [attachedFiles, setAttachedFiles] = createSignal<{ name: string; path: string; size: number; file: File }[]>([])
   const [isDragging, setIsDragging] = createSignal(false)
   const [uploading, setUploading] = createSignal(false)
   let dragCounter = 0
@@ -256,7 +273,13 @@ export function InputArea(props: InputAreaProps) {
   const handleUploadFiles = async (files: FileList | File[]) => {
     setUploading(true)
     try {
-      const uploaded = await uploadFiles(files)
+      const fileArray = Array.from(files)
+      const uploaded = fileArray.map((f) => ({
+        name: f.name,
+        path: URL.createObjectURL(f),
+        size: f.size,
+        file: f
+      }))
       if (uploaded.length) {
         setAttachedFiles((prev) => [...prev, ...uploaded])
       }
@@ -302,12 +325,15 @@ export function InputArea(props: InputAreaProps) {
     const files = attachedFiles()
     if (!text && !files.length) return
 
-    // Build message with file context
+    // Build message with file context for display
     let msg = text
     if (files.length) {
-      const fileLines = files.map((f) => `[file] ${f.name} → ${f.path}`).join('\n')
-      msg = files.length && text ? `${text}\n\n[Attached files]\n${fileLines}` : `[Attached files]\n${fileLines}`
+      const fileLines = files.map((f) => `📎 ${f.name} (${(f.size / 1024).toFixed(1)}KB)`).join('\n')
+      msg = files.length && text ? `${text}\n\n${fileLines}` : fileLines
     }
+
+    // Extract raw File objects for upload
+    const rawFiles = files.map((f) => f.file)
 
     pushMsgHistory(threadKey(), text || '[files]')
     historyIndex = -1
@@ -320,7 +346,7 @@ export function InputArea(props: InputAreaProps) {
     }
 
     if (props.onSend) {
-      props.onSend(msg)
+      props.onSend(msg, rawFiles.length ? rawFiles : undefined)
     } else {
       sendMessage(msg)
     }
@@ -730,7 +756,16 @@ export function InputArea(props: InputAreaProps) {
             title={markdownPreview() ? 'Hide preview' : 'Preview markdown'}
             onMouseDown={(e) => e.preventDefault()}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
               <circle cx="12" cy="12" r="3" />
             </svg>
