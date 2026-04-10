@@ -50,7 +50,11 @@ export function createMessageQueue(dataDir: string): MessageQueue {
     const items = queues.get(threadKey) ?? []
     const filePath = path.join(queueDir, `${encodeURIComponent(threadKey)}.json`)
     if (items.length === 0) {
-      try { fs.unlinkSync(filePath) } catch { /* ignore */ }
+      try {
+        fs.unlinkSync(filePath)
+      } catch {
+        /* ignore */
+      }
       queues.delete(threadKey)
       return
     }
@@ -69,6 +73,16 @@ export function createMessageQueue(dataDir: string): MessageQueue {
 
   return {
     enqueue(threadKey: string, text: string): QueuedMessage {
+      const items = queues.get(threadKey) ?? []
+
+      // Deduplicate: skip if the last queued/sending message has identical text
+      if (items.length > 0) {
+        const last = items[items.length - 1]
+        if (last.text === text && (last.status === 'queued' || last.status === 'sending')) {
+          return last
+        }
+      }
+
       const msg: QueuedMessage = {
         id: crypto.randomUUID(),
         threadKey,
@@ -76,7 +90,6 @@ export function createMessageQueue(dataDir: string): MessageQueue {
         timestamp: Date.now(),
         status: 'queued'
       }
-      const items = queues.get(threadKey) ?? []
       items.push(msg)
       queues.set(threadKey, items)
       persist(threadKey)
