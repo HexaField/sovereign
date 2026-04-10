@@ -184,8 +184,19 @@ function resetState(): void {
   setLoadingOlder(false)
 }
 
+let lastSentText = ''
+let lastSentTime = 0
+
 export async function sendMessage(text: string, attachments?: File[]): Promise<void> {
   const threadKey = currentThreadKey?.() ?? 'main'
+
+  // Client-side dedup: skip if same text sent within 2 seconds
+  const now = Date.now()
+  if (text === lastSentText && now - lastSentTime < 2000 && !attachments?.length) {
+    return
+  }
+  lastSentText = text
+  lastSentTime = now
 
   if (attachments?.length) {
     // Use HTTP POST with base64 attachments
