@@ -1,5 +1,5 @@
 // Thread card previews — shows latest threads per workspace with lazy message loading
-import { createSignal, onMount, For, Show } from 'solid-js'
+import { createSignal, onMount, onCleanup, For, Show } from 'solid-js'
 import { setActiveWorkspace } from '../workspace/store'
 import { setActiveView } from '../nav/store'
 import { switchThread } from '../threads/store'
@@ -56,8 +56,7 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
   const [lastMessages, setLastMessages] = createSignal<Map<string, PreviewEntry>>(new Map())
   const [loading, setLoading] = createSignal(true)
 
-  onMount(async () => {
-    // Step 1: Load thread metadata (fast — just titles, timestamps, status)
+  const fetchThreads = async () => {
     try {
       const res = await fetch(`/api/threads?orgId=${encodeURIComponent(props.orgId)}&limit=3`)
       if (!res.ok) return
@@ -66,7 +65,7 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
       setThreads(list)
       setLoading(false)
 
-      // Step 2: Lazy-load last message for each thread (non-blocking, one at a time)
+      // Lazy-load last message for each thread
       for (const t of list) {
         try {
           const pRes = await fetch(`/api/threads/${encodeURIComponent(t.key)}/preview-messages?limit=1`)
@@ -94,6 +93,21 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
     } finally {
       setLoading(false)
     }
+  }
+
+  // Initial fetch + auto-refresh every 30s
+  onMount(() => {
+    fetchThreads()
+    const timer = setInterval(fetchThreads, 30_000)
+    // Also refresh on visibility change (switching back to dashboard)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fetchThreads()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    onCleanup(() => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    })
   })
 
   const handleCreate = async () => {
