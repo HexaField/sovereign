@@ -9,7 +9,7 @@ import type { QueuedMessage } from '@sovereign/core'
 export type { QueuedMessage }
 
 export interface MessageQueue {
-  enqueue(threadKey: string, text: string): QueuedMessage
+  enqueue(threadKey: string, text: string): QueuedMessage & { deduplicated?: boolean }
   dequeue(threadKey: string): QueuedMessage | undefined
   cancel(id: string): boolean
   peek(threadKey: string): QueuedMessage | undefined
@@ -72,14 +72,13 @@ export function createMessageQueue(dataDir: string): MessageQueue {
   }
 
   return {
-    enqueue(threadKey: string, text: string): QueuedMessage {
+    enqueue(threadKey: string, text: string): QueuedMessage & { deduplicated?: boolean } {
       const items = queues.get(threadKey) ?? []
 
-      // Deduplicate: skip if the last queued/sending message has identical text
-      if (items.length > 0) {
-        const last = items[items.length - 1]
-        if (last.text === text && (last.status === 'queued' || last.status === 'sending')) {
-          return last
+      // Deduplicate: skip if ANY queued/sending message has identical text
+      for (const item of items) {
+        if (item.text === text && (item.status === 'queued' || item.status === 'sending')) {
+          return { ...item, deduplicated: true }
         }
       }
 

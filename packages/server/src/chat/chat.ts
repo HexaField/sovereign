@@ -435,20 +435,21 @@ export function createChatModule(
   async function handleSend(threadKey: string, text: string, _attachments?: Buffer[]): Promise<void> {
     if (!threadKey) return // No thread — don't send
     // Enqueue the message — server owns the queue
-    messageQueue.enqueue(threadKey, text)
+    const enqueued = messageQueue.enqueue(threadKey, text) as any
     broadcastQueueUpdate(threadKey)
 
-    // Broadcast the user message to all connected clients on this thread
-    // so other tabs/devices see it in real-time without refresh
-    if (wsHandler) {
-      wsHandler.broadcastToChannel('chat', {
-        type: 'chat.user-message',
-        threadKey,
-        text,
-        timestamp: new Date().toISOString()
-      })
+    // Only broadcast user-message to clients if this is a NEW message (not deduped)
+    if (!enqueued.deduplicated) {
+      if (wsHandler) {
+        wsHandler.broadcastToChannel('chat', {
+          type: 'chat.user-message',
+          threadKey,
+          text,
+          timestamp: new Date().toISOString()
+        })
+      }
+      chatEvents.emit('chat.user-message', { threadKey, text, timestamp: new Date().toISOString() })
     }
-    chatEvents.emit('chat.user-message', { threadKey, text, timestamp: new Date().toISOString() })
 
     tryProcessQueue(threadKey)
   }
