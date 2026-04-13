@@ -191,17 +191,20 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     let activeStatus = live.status
     if (!activeStatus || activeStatus === 'idle') {
       // Check gateway for real agent status — fire-and-forget, don't block SSE
-      backend
-        .listGatewaySessions()
-        .then((sessions) => {
-          const sessionKey = chatModule.resolveSessionKey(threadKey)
-          const match = sessions.find((s: any) => s.key === sessionKey)
-          if (match && match.agentStatus && match.agentStatus !== 'idle') {
-            send('status', { status: match.agentStatus, threadKey })
-            chatModule.ensurePolling(threadKey, match.agentStatus)
-          }
-        })
-        .catch(() => {})
+      const backendAny = backend as any
+      if (typeof backendAny.listGatewaySessions === 'function') {
+        backendAny
+          .listGatewaySessions()
+          .then((sessions: any[]) => {
+            const sessionKey = chatModule.resolveSessionKey(threadKey)
+            const match = sessions.find((s: any) => s.key === sessionKey)
+            if (match && match.agentStatus && match.agentStatus !== 'idle') {
+              send('status', { status: match.agentStatus, threadKey })
+              chatModule.ensurePolling(threadKey, match.agentStatus)
+            }
+          })
+          .catch(() => {})
+      }
     }
     if (activeStatus && activeStatus !== 'idle') {
       send('status', { status: activeStatus, threadKey })
