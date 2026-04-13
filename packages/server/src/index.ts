@@ -557,7 +557,11 @@ app.get('/api/threads/:key/crons', async (req, res) => {
         : threadKey.startsWith('agent:')
           ? threadKey
           : `agent:main:thread:${threadKey}`)
-    const jobs = await backend.listCronJobs()
+    // Race against a 5s timeout so a slow gateway doesn't block the UI
+    const jobs = await Promise.race([
+      backend.listCronJobs(),
+      new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
+    ]).catch(() => [] as any[])
     // Filter for crons targeting this thread's session
     const filtered = jobs.filter((j: any) => {
       if (j.sessionTarget === sessionKey) return true
