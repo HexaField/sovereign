@@ -338,6 +338,16 @@ export function createChatModule(
                 const id = block.id || ''
                 if (id && seen.has(id)) continue
                 seen.add(id)
+
+                // sessions_yield signals agent has yielded (waiting for subagent) — don't show as work item
+                if (block.name === 'sessions_yield') {
+                  if (wsHandler) {
+                    wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadKey, status: 'idle' })
+                  }
+                  chatEvents.emit('chat.status', { threadKey, status: 'idle' })
+                  continue
+                }
+
                 const input = block.arguments ?? block.input ?? {}
                 const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
                 const work: WorkItem = {
