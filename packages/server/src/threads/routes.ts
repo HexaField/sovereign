@@ -6,6 +6,37 @@ import type { ForwardHandler } from './forward.js'
 import { getGatewayActivityMap } from './parse-gateway-sessions.js'
 import type { ChatModule } from '../chat/chat.js'
 import { deriveSessionKey } from '../chat/derive-session-key.js'
+import { execFileSync, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { existsSync } from 'node:fs'
+
+const execFileAsync = promisify(execFile)
+
+/** Resolve the openclaw binary path once at startup. */
+function resolveOpenclawBin(): string {
+  // 1. Explicit env override
+  if (process.env.OPENCLAW_BIN && existsSync(process.env.OPENCLAW_BIN)) {
+    return process.env.OPENCLAW_BIN
+  }
+  // 2. Try `which` (works if PATH is correct)
+  try {
+    const resolved = execFileSync('which', ['openclaw'], { encoding: 'utf-8' }).trim()
+    if (resolved) return resolved
+  } catch {
+    /* not on PATH */
+  }
+  // 3. NVM-based fallback
+  const home = process.env.HOME || ''
+  const nvmBin = `${home}/.nvm/versions/node/${process.version}/bin/openclaw`
+  if (existsSync(nvmBin)) return nvmBin
+  // 4. Common global paths
+  for (const p of ['/usr/local/bin/openclaw', '/usr/bin/openclaw']) {
+    if (existsSync(p)) return p
+  }
+  return 'openclaw'
+}
+
+const openclawBin = resolveOpenclawBin()
 
 // Default model to reset GPT sessions to
 const DEFAULT_MODEL = 'github-copilot/claude-opus-4.6'
@@ -323,19 +354,21 @@ export function createThreadRoutes(
     if (modelsCache && Date.now() - modelsCache.ts < MODELS_CACHE_TTL) {
       return { models: modelsCache.models, defaultModel: modelsCache.defaultModel }
     }
-    const { execFile } = await import('node:child_process')
-    const { promisify } = await import('node:util')
-    const execFileAsync = promisify(execFile)
 
-    const [modelsResult, defaultResult] = await Promise.all([
-      execFileAsync('openclaw', ['config', 'get', 'agents.defaults.models'], { timeout: 5000 }).catch(() => null),
-      execFileAsync('openclaw', ['config', 'get', 'agents.defaults.model.primary'], { timeout: 5000 }).catch(() => null)
-    ])
-
-    const models = modelsResult ? Object.keys(JSON.parse(modelsResult.stdout.trim())) : []
-    const defaultModel = defaultResult ? JSON.parse(defaultResult.stdout.trim()) : null
-    modelsCache = { models, defaultModel, ts: Date.now() }
-    return { models, defaultModel }
+    // Read directly from config file — avoids PATH resolution issues with openclaw CLI
+    try {
+      const fs = await import('node:fs')
+      const nodePath = await import('node:path')
+      const configPath = nodePath.join(process.env.HOME || '', '.openclaw/openclaw.json')
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      const modelsObj = config?.agents?.defaults?.models ?? {}
+      const models = Object.keys(modelsObj)
+      const defaultModel = config?.agents?.defaults?.model?.primary ?? null
+      modelsCache = { models, defaultModel, ts: Date.now() }
+      return { models, defaultModel }
+    } catch {
+      return { models: [], defaultModel: null }
+    }
   }
 
   router.get('/api/models', async (_req, res) => {

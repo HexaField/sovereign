@@ -506,7 +506,6 @@ export function createChatModule(
     }
 
     const elapsed = Date.now() - t0
-    if (elapsed > 50) console.log(`[chat] history fetch ${threadKey}: ${elapsed}ms, ${history.length} turns`)
     if (wsHandler) {
       wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore })
 
