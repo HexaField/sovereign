@@ -204,45 +204,59 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
 
     if (role === 'assistant') {
       const blocks = Array.isArray(m.content) ? m.content : []
-      const textParts: string[] = []
       const toolCalls: any[] = []
+      let allTextParts: string[] = []
 
       if (typeof m.content === 'string') {
-        textParts.push(m.content)
+        allTextParts.push(m.content)
       } else {
         for (const block of blocks) {
-          if (block.type === 'text' && block.text) {
-            textParts.push(block.text)
-          } else if (block.type === 'toolCall') {
+          if (block.type === 'toolCall') {
             toolCalls.push(block)
           }
         }
       }
 
-      const rawText = textParts.join('\n').trim()
-      const cleanedText = stripDirectives(stripThinkingBlocks(rawText)).trim()
-
       if (toolCalls.length > 0) {
-        // This is a mid-turn assistant message with tool calls
-        if (cleanedText) {
-          currentThinking.push(cleanedText)
-          currentWork.push({
-            type: 'thinking',
-            output: cleanedText,
-            timestamp: m.timestamp ?? 0
-          })
-        }
-        for (const tc of toolCalls) {
-          currentWork.push({
-            type: 'tool_call',
-            name: tc.name ?? 'tool',
-            input: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments ?? {}),
-            toolCallId: tc.id,
-            timestamp: m.timestamp ?? 0
-          })
+        // Process blocks in order: emit thinking entries for text blocks, then tool calls
+        // This preserves the interleaving of thinking text and tool calls
+        if (typeof m.content === 'string') {
+          const cleaned = stripDirectives(stripThinkingBlocks(m.content)).trim()
+          if (cleaned) {
+            currentThinking.push(cleaned)
+            currentWork.push({ type: 'thinking', output: cleaned, timestamp: m.timestamp ?? 0 })
+          }
+        } else {
+          for (const block of blocks) {
+            if (block.type === 'text' && block.text) {
+              const cleaned = stripDirectives(stripThinkingBlocks(block.text)).trim()
+              if (cleaned) {
+                currentThinking.push(cleaned)
+                currentWork.push({ type: 'thinking', output: cleaned, timestamp: m.timestamp ?? 0 })
+              }
+            } else if (block.type === 'toolCall') {
+              currentWork.push({
+                type: 'tool_call',
+                name: block.name ?? 'tool',
+                input: typeof block.arguments === 'string' ? block.arguments : JSON.stringify(block.arguments ?? {}),
+                toolCallId: block.id,
+                timestamp: m.timestamp ?? 0
+              })
+            }
+          }
         }
         continue
       }
+
+      // No tool calls — collect all text parts for final response
+      if (!Array.isArray(m.content) || typeof m.content === 'string') {
+        // already in allTextParts
+      } else {
+        allTextParts = blocks.filter((b: any) => b.type === 'text' && b.text).map((b: any) => b.text)
+      }
+
+      const rawText = allTextParts.join('\n').trim()
+      const cleanedText = stripDirectives(stripThinkingBlocks(rawText)).trim()
 
       // Final assistant response (no tool calls)
       if (cleanedText && cleanedText !== 'NO_REPLY' && cleanedText !== 'HEARTBEAT_OK') {
