@@ -352,10 +352,29 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
     return true
   })
 
-  // Deduplicate consecutive identical messages
-  return filtered.filter((t, i) => {
+  // Deduplicate consecutive identical messages (non-user roles)
+  const afterConsecutive = filtered.filter((t, i) => {
     if (i === 0) return true
+    if (t.role === 'user') return true // user dedup handled by content-hash window below
     const prev = filtered[i - 1]
     return t.content !== prev.content || t.role !== prev.role
+  })
+
+  // Content-hash dedup window for user messages:
+  // Collapse identical user messages within DEDUP_WINDOW_S seconds,
+  // even if separated by system/assistant turns.
+  const DEDUP_WINDOW_MS = 10_000
+  const seenUser = new Map<string, number>() // content -> timestamp
+  return afterConsecutive.filter((t) => {
+    if (t.role !== 'user') return true
+    const content = t.content.trim()
+    if (!content) return true
+    const prevTs = seenUser.get(content)
+    const ts = t.timestamp || 0
+    if (prevTs !== undefined && Math.abs(ts - prevTs) < DEDUP_WINDOW_MS) {
+      return false
+    }
+    seenUser.set(content, ts)
+    return true
   })
 }
