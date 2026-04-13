@@ -115,3 +115,58 @@ describe('parseTurns — thinking blocks', () => {
     expect(thinkingItems).toHaveLength(0)
   })
 })
+
+describe('parseTurns — user message dedup', () => {
+  it('should collapse consecutive identical user messages', () => {
+    const messages = [
+      { role: 'user', content: 'hello', timestamp: 1000 },
+      { role: 'user', content: 'hello', timestamp: 1001 }
+    ]
+    const turns = parseTurns(messages)
+    const userTurns = turns.filter((t) => t.role === 'user')
+    expect(userTurns).toHaveLength(1)
+    expect(userTurns[0].content).toBe('hello')
+  })
+
+  it('should collapse identical user messages separated by a system turn within the dedup window', () => {
+    const messages = [
+      { role: 'user', content: 'hello', timestamp: 1000 },
+      { role: 'system', content: 'some system event' },
+      { role: 'user', content: 'hello', timestamp: 5000 }
+    ]
+    const turns = parseTurns(messages)
+    const userTurns = turns.filter((t) => t.role === 'user')
+    expect(userTurns).toHaveLength(1)
+  })
+
+  it('should keep identical user messages outside the dedup window', () => {
+    const messages = [
+      { role: 'user', content: 'hello', timestamp: 1000 },
+      { role: 'user', content: 'hello', timestamp: 20000 }
+    ]
+    const turns = parseTurns(messages)
+    const userTurns = turns.filter((t) => t.role === 'user')
+    expect(userTurns).toHaveLength(2)
+  })
+
+  it('should keep different user messages within the dedup window', () => {
+    const messages = [
+      { role: 'user', content: 'hello', timestamp: 1000 },
+      { role: 'user', content: 'world', timestamp: 2000 }
+    ]
+    const turns = parseTurns(messages)
+    const userTurns = turns.filter((t) => t.role === 'user')
+    expect(userTurns).toHaveLength(2)
+  })
+
+  it('should collapse three identical user messages within the window', () => {
+    const messages = [
+      { role: 'user', content: 'test', timestamp: 1000 },
+      { role: 'user', content: 'test', timestamp: 2000 },
+      { role: 'user', content: 'test', timestamp: 3000 }
+    ]
+    const turns = parseTurns(messages)
+    const userTurns = turns.filter((t) => t.role === 'user')
+    expect(userTurns).toHaveLength(1)
+  })
+})
