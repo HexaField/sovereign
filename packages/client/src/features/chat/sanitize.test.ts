@@ -51,6 +51,21 @@ describe('sanitizeContent', () => {
     it('leaves clean user messages untouched', () => {
       expect(sanitizeContent('user', 'Just a normal message')).toBe('Just a normal message')
     })
+
+    it('strips leading System: block before Sender envelope', () => {
+      const input = `System: [2026-04-14 07:50:02 GMT+10] Exec completed (neat-wil, code 0) :: output\nSender (untrusted metadata):\n\`\`\`json\n{\n  "label": "openclaw-control-ui",\n  "id": "openclaw-control-ui"\n}\n\`\`\`\n\n[Mon 2026-04-13 14:08 GMT+10] Hello there`
+      expect(sanitizeContent('user', input)).toBe('Hello there')
+    })
+
+    it('strips System: prefixed lines in user message body', () => {
+      const input = `Sender (untrusted metadata):\n\`\`\`json\n{\n  "label": "test",\n  "id": "test"\n}\n\`\`\`\n\nActual message\nSystem: [2026-04-14 07:50:02 GMT+10] Some event\nMore content`
+      expect(sanitizeContent('user', input)).toBe('Actual message\n\nMore content')
+    })
+
+    it('strips multiple leading System: lines', () => {
+      const input = `System: [2026-04-14 07:50:02 GMT+10] Event one\nSystem: [2026-04-14 07:50:03 GMT+10] Event two\nSender (untrusted metadata):\n\`\`\`json\n{\n  "id": "test"\n}\n\`\`\`\n\nHello`
+      expect(sanitizeContent('user', input)).toBe('Hello')
+    })
   })
 
   describe('system messages', () => {

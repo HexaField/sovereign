@@ -18,15 +18,24 @@ function stripToolCallSummaries(text: string): string {
   return text.replace(/^▶\s*[✓!▶\s]+[\w_]+(?:\s*\(\d+\))?(?:,\s*[\w_]+(?:\s*\(\d+\))?)*\s*$/gm, '').trim()
 }
 
+/** Strip System: prefixed lines (e.g. System: [timestamp] Event info) */
+function stripSystemPrefixedLines(text: string): string {
+  return text.replace(/^System:\s.*$/gm, '').trim()
+}
+
 /** Strip Sender (untrusted metadata) envelope + optional timestamp prefix from user messages */
 function stripSenderEnvelope(text: string): string {
+  // Strip any leading System: block(s) before the Sender envelope
+  let result = text.replace(/^(?:System:\s.*\n)+/, '')
   // Strip the envelope header block
-  let result = text.replace(/^Sender \(untrusted metadata\):\s*```json\s*\{[\s\S]*?\}\s*```\s*/, '')
+  result = result.replace(/^Sender \(untrusted metadata\):\s*```json\s*\{[\s\S]*?\}\s*```\s*/, '')
   // Strip leading timestamp like [Mon 2026-04-13 14:08 GMT+10]
   result = result.replace(
     /^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?:\s+GMT[+-]\d+)?\]\s*/,
     ''
   )
+  // Strip any remaining System: lines in the body
+  result = stripSystemPrefixedLines(result)
   return result.trim()
 }
 
