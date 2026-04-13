@@ -235,6 +235,9 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
                 currentWork.push({ type: 'thinking', output: cleaned, timestamp: m.timestamp ?? 0 })
               }
             } else if (block.type === 'toolCall') {
+              if (block.name === 'sessions_yield') {
+                continue
+              }
               currentWork.push({
                 type: 'tool_call',
                 name: block.name ?? 'tool',
