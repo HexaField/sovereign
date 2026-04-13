@@ -511,18 +511,23 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   clearLiveState()
 
-  // ── WS listeners we still need ──
+  // ── WS listeners (fallback — only active when SSE is not connected) ──
 
-  // chat.error from WS (retry countdown)
+  // Helper: true when SSE is connected and receiving events for this thread
+  const sseActive = () => eventSource !== null && eventSource.readyState !== EventSource.CLOSED
+
+  // chat.error from WS (retry countdown) — always active, SSE also handles it
   unsubs.push(
     ws.on('chat.error', (msg: any) => {
+      if (sseActive()) return // SSE has its own error handler
       if (msg.retryAfterMs) {
         startRetryCountdown(msg.retryAfterMs / 1000)
       }
     })
   )
 
-  // chat.session.info from WS (for full history load response)
+  // chat.session.info from WS (for full history load response) — always active
+  // This is only sent via WS (sendTo), not SSE, so no duplication risk
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
@@ -537,6 +542,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // chat.turn from WS (fallback when SSE isn't available, e.g. tests)
   unsubs.push(
     ws.on('chat.turn', (msg: any) => {
+      if (sseActive()) return // SSE handles turn events — skip to avoid duplicates
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
       if (!turn) return
@@ -547,6 +553,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // chat.stream from WS (fallback)
   unsubs.push(
     ws.on('chat.stream', (msg: any) => {
+      if (sseActive()) return
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const text = msg.text as string
       if (text === undefined) return
@@ -567,6 +574,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // chat.status from WS (fallback)
   unsubs.push(
     ws.on('chat.status', (msg: any) => {
+      if (sseActive()) return
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       if (msg.status) setAgentStatus(msg.status)
     })
@@ -575,6 +583,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // chat.work from WS (fallback)
   unsubs.push(
     ws.on('chat.work', (msg: any) => {
+      if (sseActive()) return
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const work = msg.work as WorkItem
       if (!work) return
@@ -586,6 +595,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // chat.compacting from WS (fallback)
   unsubs.push(
     ws.on('chat.compacting', (msg: any) => {
+      if (sseActive()) return
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       if (typeof msg.active === 'boolean') setCompacting(msg.active)
     })
