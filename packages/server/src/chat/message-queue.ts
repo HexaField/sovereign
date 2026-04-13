@@ -26,6 +26,18 @@ export function createMessageQueue(dataDir: string): MessageQueue {
 
   const queues = new Map<string, QueuedMessage[]>()
 
+  // Track recently sent messages to prevent re-enqueue of identical text after removal
+  // Key: `${threadKey}\0${text}`, Value: timestamp when sent
+  const recentlySent = new Map<string, number>()
+  const DEDUP_WINDOW_MS = 5_000 // 5 seconds
+
+  function cleanRecentlySent(): void {
+    const cutoff = Date.now() - DEDUP_WINDOW_MS
+    for (const [key, ts] of recentlySent) {
+      if (ts < cutoff) recentlySent.delete(key)
+    }
+  }
+
   // Load from disk on startup
   try {
     const files = fs.readdirSync(queueDir)
@@ -79,6 +91,20 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       for (const item of items) {
         if (item.text === text && (item.status === 'queued' || item.status === 'sending')) {
           return { ...item, deduplicated: true }
+        }
+      }
+
+      // Deduplicate: skip if same text was recently sent (prevents re-enqueue after removeSent)
+      cleanRecentlySent()
+      const dedupKey = `${threadKey}\0${text}`
+      if (recentlySent.has(dedupKey)) {
+        return {
+          id: 'dedup-recent',
+          threadKey,
+          text,
+          timestamp: Date.now(),
+          status: 'sending' as const,
+          deduplicated: true
         }
       }
 
@@ -144,6 +170,9 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       const found = findById(id)
       if (!found) return
       const items = queues.get(found.threadKey)!
+      const msg = items[found.index]
+      // Record in recently-sent cache to prevent immediate re-enqueue of same text
+      recentlySent.set(`${found.threadKey}\0${msg.text}`, Date.now())
       items.splice(found.index, 1)
       persist(found.threadKey)
     },

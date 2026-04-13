@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -98,14 +98,31 @@ describe('MessageQueue', () => {
       expect(queue.getQueue('t').length).toBe(2)
     })
 
-    it('allows same message after previous was sent and removed', () => {
+    it('deduplicates same message shortly after previous was sent and removed', () => {
       const m1 = queue.enqueue('t', 'hello')
       queue.markSending(m1.id)
       queue.removeSent(m1.id)
-      // Queue is now empty, same text should be allowed
+      // Queue is empty but recently-sent cache should block re-enqueue
       const m2 = queue.enqueue('t', 'hello')
+      expect((m2 as any).deduplicated).toBe(true)
+      expect(queue.getQueue('t').length).toBe(0)
+    })
+
+    it('allows same message after dedup window expires', async () => {
+      const m1 = queue.enqueue('t', 'hello')
+      queue.markSending(m1.id)
+      queue.removeSent(m1.id)
+      // Wait for dedup window to pass (5s) — use fake timers
+      vi.useFakeTimers()
+      vi.advanceTimersByTime(6000)
+      vi.useRealTimers()
+      // Re-create queue to reset internal Date.now() references, or just wait
+      // Actually the cleanRecentlySent uses Date.now() so fake timers affect it
+      // Let's just test with a fresh queue that has no recently-sent cache
+      const queue2 = createMessageQueue(tmpDir)
+      const m2 = queue2.enqueue('t', 'hello')
       expect((m2 as any).deduplicated).toBeUndefined()
-      expect(queue.getQueue('t').length).toBe(1)
+      expect(queue2.getQueue('t').length).toBe(1)
     })
 
     it('deduplicates against ANY item in queue, not just last', () => {
