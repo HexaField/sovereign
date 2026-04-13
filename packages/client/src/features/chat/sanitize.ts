@@ -42,18 +42,19 @@ export function isCompactionMessage(content: string): boolean {
 export function sanitizeContent(role: string, content: string): string {
   if (!content) return content
 
+  // Common: strip internal context blocks and exec notifications from all roles
+  let result = stripInternalContext(content)
+  result = stripExecNotifications(result)
+
   if (role === 'assistant') {
-    let result = stripInternalContext(content)
-    result = stripExecNotifications(result)
     result = stripToolCallSummaries(result)
-    // Collapse multiple blank lines
-    result = result.replace(/\n{3,}/g, '\n\n').trim()
-    return result
   }
 
   if (role === 'user') {
-    return stripSenderEnvelope(content)
+    result = stripSenderEnvelope(result)
   }
 
-  return content
+  // Collapse multiple blank lines
+  result = result.replace(/\n{3,}/g, '\n\n').trim()
+  return result
 }
