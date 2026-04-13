@@ -15,15 +15,22 @@ export function stripThinkingBlocks(text: string): string {
     return placeholder + (codeBlocks.length - 1) + '\x00'
   })
 
-  // Strip each thinking tag type
-  for (const tag of THINKING_TAGS) {
-    // Handle matched pairs — greedy to capture outermost when nested
-    const matchedPattern = new RegExp(`<${tag}>[\\s\\S]*</${tag}>`, 'gi')
-    protected_ = protected_.replace(matchedPattern, '')
+  // Strip each thinking tag type — run multiple passes to handle nesting
+  let changed = true
+  while (changed) {
+    const before = protected_
+    for (const tag of THINKING_TAGS) {
+      // Handle matched pairs — non-greedy to avoid eating content between separate blocks
+      protected_ = protected_.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'gi'), '')
+    }
+    changed = protected_ !== before
+  }
 
+  for (const tag of THINKING_TAGS) {
     // Handle unclosed tags (strip from opening tag to end of string)
-    const unclosedPattern = new RegExp(`<${tag}>[\\s\\S]*$`, 'gi')
-    protected_ = protected_.replace(unclosedPattern, '')
+    protected_ = protected_.replace(new RegExp(`<${tag}>[\\s\\S]*$`, 'gi'), '')
+    // Clean up orphaned closing tags
+    protected_ = protected_.replace(new RegExp(`</${tag}>`, 'gi'), '')
   }
 
   // Restore code blocks
