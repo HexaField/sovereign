@@ -38,7 +38,10 @@ function createMockChatModule(): ChatModule {
     loadMapping: vi.fn(),
     chatEvents: new EventEmitter(),
     getLiveState: vi.fn(() => ({})),
-    resolveSessionKey: vi.fn((tk: string) => `session-${tk}`)
+    resolveSessionKey: vi.fn((tk: string) => `session-${tk}`),
+    ensurePolling: vi.fn(),
+    trackSSEClient: vi.fn(),
+    untrackSSEClient: vi.fn()
   }
 }
 

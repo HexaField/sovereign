@@ -1,7 +1,7 @@
 // Tests for chat streaming, turn completion, and work item handling
 // Run: cd packages/server && npx vitest run src/chat/streaming.test.ts
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import type { WorkItem, ParsedTurn } from '@sovereign/core'
 
 // ── Test: thinking accumulation ────────────────────────────────────────
@@ -129,7 +129,13 @@ describe('thinking work item replacement', () => {
 
     // Replace logic
     const items = [...workItems]
-    const lastThinkIdx = items.findLastIndex((w) => w.type === 'thinking')
+    let lastThinkIdx = -1
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'thinking') {
+        lastThinkIdx = i
+        break
+      }
+    }
     if (lastThinkIdx >= 0) {
       items[lastThinkIdx] = newThinking
     } else {
@@ -146,7 +152,13 @@ describe('thinking work item replacement', () => {
     const newThinking: WorkItem = { type: 'thinking', output: 'New thought', timestamp: 2 }
 
     const items = [...workItems]
-    const lastThinkIdx = items.findLastIndex((w) => w.type === 'thinking')
+    let lastThinkIdx = -1
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'thinking') {
+        lastThinkIdx = i
+        break
+      }
+    }
     if (lastThinkIdx >= 0) {
       items[lastThinkIdx] = newThinking
     } else {
