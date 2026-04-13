@@ -28,14 +28,37 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
   const [info, setInfo] = createSignal<SessionInfo | null>(null)
   const [loading, setLoading] = createSignal(true)
   const [actionFeedback, setActionFeedback] = createSignal('')
+  const [availableModels, setAvailableModels] = createSignal<string[]>([])
+  const [defaultModel, setDefaultModel] = createSignal<string | null>(null)
+  const [selectedModel, setSelectedModel] = createSignal<string>('')
+  const [modelSaving, setModelSaving] = createSignal(false)
 
   onMount(async () => {
     const key = threadKey()
-    if (!key) { setLoading(false); return }
+    if (!key) {
+      setLoading(false)
+      return
+    }
     try {
-      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/session-info`)
-      if (res.ok) setInfo(await res.json())
-    } catch { /* ignore */ }
+      const [infoRes, modelsRes] = await Promise.all([
+        fetch(`/api/threads/${encodeURIComponent(key)}/session-info`),
+        fetch('/api/models')
+      ])
+      if (infoRes.ok) {
+        const data = await infoRes.json()
+        setInfo(data)
+        // Build current model string from provider + model
+        const current = data.modelProvider && data.model ? `${data.modelProvider}/${data.model}` : (data.model ?? '')
+        setSelectedModel(current)
+      }
+      if (modelsRes.ok) {
+        const data = await modelsRes.json()
+        setAvailableModels(data.models ?? [])
+        setDefaultModel(data.defaultModel ?? null)
+      }
+    } catch {
+      /* ignore */
+    }
     setLoading(false)
   })
 
@@ -50,12 +73,37 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
       })
       setActionFeedback('Lock cleared')
       setTimeout(() => setActionFeedback(''), 2000)
-    } catch { setActionFeedback('Failed') }
+    } catch {
+      setActionFeedback('Failed')
+    }
   }
 
   const handleStop = async () => {
     abortChat()
     setActionFeedback('Stop sent')
+    setTimeout(() => setActionFeedback(''), 2000)
+  }
+
+  const handleModelSwitch = async (model: string) => {
+    const key = threadKey()
+    if (!key || !model) return
+    setModelSaving(true)
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/model`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model })
+      })
+      if (res.ok) {
+        setSelectedModel(model)
+        setActionFeedback('Model updated')
+      } else {
+        setActionFeedback('Failed to update model')
+      }
+    } catch {
+      setActionFeedback('Failed')
+    }
+    setModelSaving(false)
     setTimeout(() => setActionFeedback(''), 2000)
   }
 
@@ -76,7 +124,9 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
       >
         {/* Header */}
         <div class="flex items-center justify-between border-b px-4 py-3" style={{ 'border-color': 'var(--c-border)' }}>
-          <span class="text-sm font-semibold" style={{ color: 'var(--c-text-heading)' }}>Thread Settings</span>
+          <span class="text-sm font-semibold" style={{ color: 'var(--c-text-heading)' }}>
+            Thread Settings
+          </span>
           <button
             class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border-none bg-transparent"
             style={{ color: 'var(--c-text-muted)' }}
@@ -88,33 +138,80 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
 
         <div class="space-y-4 p-4">
           {/* Session Info */}
-          <Show when={!loading() && info()} fallback={
-            <Show when={loading()}>
-              <div class="text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>Loading...</div>
-            </Show>
-          }>
+          <Show
+            when={!loading() && info()}
+            fallback={
+              <Show when={loading()}>
+                <div class="text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </div>
+              </Show>
+            }
+          >
             {(i) => (
               <div class="space-y-3">
-                {/* Model */}
+                {/* Model Selector */}
                 <div class="flex items-center justify-between">
-                  <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>Model</span>
-                  <span class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
-                    {i().model ?? 'Unknown'}
+                  <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                    Model
                   </span>
+                  <Show
+                    when={availableModels().length > 0}
+                    fallback={
+                      <span class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                        {selectedModel() || i().model || 'Unknown'}
+                      </span>
+                    }
+                  >
+                    <select
+                      class="rounded-md px-2 py-1 text-xs font-medium"
+                      style={{
+                        background: 'var(--c-bg)',
+                        border: '1px solid var(--c-border)',
+                        color: 'var(--c-text)',
+                        'max-width': '200px',
+                        cursor: 'pointer',
+                        opacity: modelSaving() ? '0.5' : '1'
+                      }}
+                      value={selectedModel()}
+                      disabled={modelSaving()}
+                      onChange={(e) => handleModelSwitch(e.currentTarget.value)}
+                    >
+                      <For each={availableModels()}>
+                        {(m) => (
+                          <option value={m} selected={m === selectedModel()}>
+                            {m.includes('/') ? m.split('/').pop() : m}
+                            {m === defaultModel() ? ' (default)' : ''}
+                          </option>
+                        )}
+                      </For>
+                      <Show when={selectedModel() && !availableModels().includes(selectedModel())}>
+                        <option value={selectedModel()} selected>
+                          {selectedModel().includes('/') ? selectedModel().split('/').pop() : selectedModel()} (current)
+                        </option>
+                      </Show>
+                    </select>
+                  </Show>
                 </div>
 
                 {/* Provider */}
                 <Show when={i().modelProvider}>
                   <div class="flex items-center justify-between">
-                    <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>Provider</span>
-                    <span class="text-xs" style={{ color: 'var(--c-text)' }}>{i().modelProvider}</span>
+                    <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                      Provider
+                    </span>
+                    <span class="text-xs" style={{ color: 'var(--c-text)' }}>
+                      {i().modelProvider}
+                    </span>
                   </div>
                 </Show>
 
                 {/* Context Usage Bar */}
                 <div>
                   <div class="mb-1 flex items-center justify-between">
-                    <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>Context Usage</span>
+                    <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                      Context Usage
+                    </span>
                     <span class="text-xs" style={{ color: 'var(--c-text)' }}>
                       {formatTokens(i().totalTokens)} / {i().contextTokens ? formatTokens(i().contextTokens) : '?'}
                     </span>
@@ -133,22 +230,36 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
                 {/* Token breakdown */}
                 <div class="flex gap-4">
                   <div>
-                    <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>Input</div>
-                    <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>{formatTokens(i().inputTokens)}</div>
+                    <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
+                      Input
+                    </div>
+                    <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                      {formatTokens(i().inputTokens)}
+                    </div>
                   </div>
                   <div>
-                    <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>Output</div>
-                    <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>{formatTokens(i().outputTokens)}</div>
+                    <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
+                      Output
+                    </div>
+                    <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                      {formatTokens(i().outputTokens)}
+                    </div>
                   </div>
                   <div>
-                    <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>Compactions</div>
-                    <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>{i().compactionCount}</div>
+                    <div class="text-[10px] uppercase" style={{ color: 'var(--c-text-muted)' }}>
+                      Compactions
+                    </div>
+                    <div class="text-xs font-medium" style={{ color: 'var(--c-text)' }}>
+                      {i().compactionCount}
+                    </div>
                   </div>
                 </div>
 
                 {/* Status */}
                 <div class="flex items-center justify-between">
-                  <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>Status</span>
+                  <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                    Status
+                  </span>
                   <span
                     class="rounded-full px-2 py-0.5 text-[10px] font-medium"
                     style={{
@@ -180,7 +291,11 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
                       <Show when={item.status === 'queued'}>
                         <button
                           class="shrink-0 cursor-pointer rounded px-1 py-0.5 text-[10px]"
-                          style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)', color: 'var(--c-text-muted)' }}
+                          style={{
+                            background: 'var(--c-bg)',
+                            border: '1px solid var(--c-border)',
+                            color: 'var(--c-text-muted)'
+                          }}
                           onClick={() => cancelMessage(item.id)}
                         >
                           x
@@ -201,8 +316,12 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
             <button
               class="flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
               style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)', color: 'var(--c-text)' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-hover-bg)' }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--c-bg)' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--c-hover-bg)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'var(--c-bg)'
+              }}
               onClick={handleStop}
             >
               Stop Agent
@@ -210,8 +329,12 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
             <button
               class="flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
               style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)', color: 'var(--c-text)' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--c-hover-bg)' }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--c-bg)' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--c-hover-bg)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'var(--c-bg)'
+              }}
               onClick={handleClearLock}
             >
               Clear Lock
@@ -220,7 +343,9 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
 
           {/* Feedback */}
           <Show when={actionFeedback()}>
-            <div class="text-center text-xs" style={{ color: 'var(--c-accent)' }}>{actionFeedback()}</div>
+            <div class="text-center text-xs" style={{ color: 'var(--c-accent)' }}>
+              {actionFeedback()}
+            </div>
           </Show>
         </div>
       </div>

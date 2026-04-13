@@ -7,6 +7,42 @@ import { getGatewayActivityMap } from './parse-gateway-sessions.js'
 import type { ChatModule } from '../chat/chat.js'
 import { deriveSessionKey } from '../chat/derive-session-key.js'
 
+// Default model to reset GPT sessions to
+const DEFAULT_MODEL = 'github-copilot/claude-opus-4.6'
+
+/** Reset any sessions currently using GPT models back to the default model */
+export async function resetGptSessionsToDefault(): Promise<{ updated: string[] }> {
+  const updated: string[] = []
+  try {
+    const fs = await import('node:fs')
+    const nodePath = await import('node:path')
+    const sessionsPath = nodePath.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+    if (!fs.existsSync(sessionsPath)) return { updated }
+    const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
+    const slashIdx = DEFAULT_MODEL.indexOf('/')
+    const defaultProvider = DEFAULT_MODEL.slice(0, slashIdx)
+    const defaultModelName = DEFAULT_MODEL.slice(slashIdx + 1)
+
+    for (const [key, meta] of Object.entries(sessions)) {
+      const m = meta as Record<string, unknown>
+      const model = (m.model as string) ?? ''
+      if (/gpt/i.test(model)) {
+        m.model = defaultModelName
+        m.modelProvider = defaultProvider
+        updated.push(key)
+      }
+    }
+    if (updated.length > 0) {
+      const tmpPath = sessionsPath + '.tmp'
+      fs.writeFileSync(tmpPath, JSON.stringify(sessions, null, 2))
+      fs.renameSync(tmpPath, sessionsPath)
+    }
+  } catch {
+    /* ignore */
+  }
+  return { updated }
+}
+
 interface AgentBackendLike {
   getHistory(sessionKey: string): Promise<{ turns: Array<{ role: string; content: string }>; hasMore: boolean }>
 }
@@ -279,14 +315,102 @@ export function createThreadRoutes(
     res.json({ success: true, thread })
   })
 
-  router.post('/api/threads/switch-model', (req, res) => {
+  // ── Available models ────────────────────────────────────────────────
+  router.get('/api/models', async (_req, res) => {
+    try {
+      const { execSync } = await import('node:child_process')
+      const raw = execSync('openclaw config get agents.defaults.models', {
+        encoding: 'utf-8',
+        timeout: 5000
+      }).trim()
+      const models = Object.keys(JSON.parse(raw))
+
+      // Also get the default model
+      let defaultModel: string | null = null
+      try {
+        const defaultRaw = execSync('openclaw config get agents.defaults.model.primary', {
+          encoding: 'utf-8',
+          timeout: 5000
+        }).trim()
+        defaultModel = JSON.parse(defaultRaw)
+      } catch {
+        /* ignore */
+      }
+
+      res.json({ models, defaultModel })
+    } catch {
+      res.json({ models: [], defaultModel: null })
+    }
+  })
+
+  // ── Reset GPT sessions to default ────────────────────────────────────
+  router.post('/api/models/reset-gpt', async (_req, res) => {
+    const result = await resetGptSessionsToDefault()
+    res.json(result)
+  })
+
+  // ── Switch thread model ──────────────────────────────────────────────
+  router.patch('/api/threads/:key/model', async (req, res) => {
+    const threadKey = req.params.key
+    const { model } = req.body ?? {}
+    if (!model) return res.status(400).json({ error: 'model required' })
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    try {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      const fs = await import('node:fs')
+      const nodePath = await import('node:path')
+      const sessionsPath = nodePath.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+      const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
+      if (sessions[sessionKey]) {
+        // Parse provider/model from "provider/model" format
+        const slashIdx = model.indexOf('/')
+        if (slashIdx > 0) {
+          sessions[sessionKey].modelProvider = model.slice(0, slashIdx)
+          sessions[sessionKey].model = model.slice(slashIdx + 1)
+        } else {
+          sessions[sessionKey].model = model
+        }
+        const tmpPath = sessionsPath + '.tmp'
+        fs.writeFileSync(tmpPath, JSON.stringify(sessions, null, 2))
+        fs.renameSync(tmpPath, sessionsPath)
+      }
+      res.json({ success: true, model, thread })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to update model', detail: (err as Error).message })
+    }
+  })
+
+  router.post('/api/threads/switch-model', async (req, res) => {
     const { sessionKey, model } = req.body ?? {}
     if (!sessionKey) return res.status(400).json({ error: 'sessionKey required' })
     if (!model) return res.status(400).json({ error: 'model required' })
     const thread = threadManager.get(sessionKey)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
-    // Model switching is acknowledged — the actual model change is handled by the agent runtime
-    res.json({ success: true, model, thread })
+
+    try {
+      const fs = await import('node:fs')
+      const nodePath = await import('node:path')
+      const sessionsPath = nodePath.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+      const derivedKey = opts?.chatModule?.getSessionKeyForThread(sessionKey) ?? deriveSessionKey(sessionKey)
+      const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
+      if (sessions[derivedKey]) {
+        const slashIdx = model.indexOf('/')
+        if (slashIdx > 0) {
+          sessions[derivedKey].modelProvider = model.slice(0, slashIdx)
+          sessions[derivedKey].model = model.slice(slashIdx + 1)
+        } else {
+          sessions[derivedKey].model = model
+        }
+        const tmpPath = sessionsPath + '.tmp'
+        fs.writeFileSync(tmpPath, JSON.stringify(sessions, null, 2))
+        fs.renameSync(tmpPath, sessionsPath)
+      }
+      res.json({ success: true, model, thread })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to update model', detail: (err as Error).message })
+    }
   })
 
   // Session tree — returns thread hierarchy for the ThreadDrawer
