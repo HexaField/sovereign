@@ -126,6 +126,10 @@ let streamTextOffset = 0
 // SSE connection
 let eventSource: EventSource | null = null
 
+// Content-hash dedup window for user-message SSE events
+const recentUserMessages = new Map<string, number>() // content -> timestamp
+const USER_MSG_DEDUP_WINDOW_MS = 10_000
+
 export function startRetryCountdown(seconds: number): void {
   clearRetryCountdown()
   setRetrySeconds(Math.ceil(seconds))
@@ -421,9 +425,28 @@ function connectSSE(threadKey: string): void {
     const data = JSON.parse((e as MessageEvent).data)
     const text = data.text as string
     if (!text) return
+
+    // Content-hash dedup: skip if we've seen identical text within the window
+    const now = Date.now()
+    const trimmed = text.trim()
+    const prevTs = recentUserMessages.get(trimmed)
+    if (prevTs !== undefined && now - prevTs < USER_MSG_DEDUP_WINDOW_MS) {
+      return
+    }
+    recentUserMessages.set(trimmed, now)
+    // Prune old entries
+    for (const [k, ts] of recentUserMessages) {
+      if (now - ts > USER_MSG_DEDUP_WINDOW_MS) recentUserMessages.delete(k)
+    }
+
     setTurns((prev) => {
+      // Also check against existing turns (belt-and-suspenders)
       const last = prev.filter((t) => t.role === 'user').pop()
-      if (last && last.content === text && Math.abs((last.timestamp || 0) - (data.timestamp || Date.now())) < 5000) {
+      if (
+        last &&
+        last.content === trimmed &&
+        Math.abs((last.timestamp || 0) - (data.timestamp || now)) < USER_MSG_DEDUP_WINDOW_MS
+      ) {
         return prev
       }
       return [
