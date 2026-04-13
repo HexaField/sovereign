@@ -89,6 +89,10 @@ export function createChatModule(
   // Message queue
   const messageQueue = createMessageQueue(dataDir)
 
+  // Deduplicate rapid duplicate user sends (same text within window)
+  const recentUserSends = new Map<string, { text: string; ts: number }>()
+  const USER_DEDUP_WINDOW_MS = 4000
+
   // Track when status last changed — for stuck-status recovery
   const statusChangedAt = new Map<string, number>()
   const STUCK_STATUS_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
@@ -444,6 +448,15 @@ export function createChatModule(
 
   async function handleSend(threadKey: string, text: string, _attachments?: Buffer[]): Promise<void> {
     if (!threadKey) return // No thread — don't send
+
+    // Server-side rapid dedup (pre-queue) to prevent duplicate inbound sends
+    const last = recentUserSends.get(threadKey)
+    const now = Date.now()
+    if (last && last.text === text && now - last.ts < USER_DEDUP_WINDOW_MS) {
+      return
+    }
+    recentUserSends.set(threadKey, { text, ts: now })
+
     // Enqueue the message — server owns the queue
     const enqueued = messageQueue.enqueue(threadKey, text) as any
     broadcastQueueUpdate(threadKey)

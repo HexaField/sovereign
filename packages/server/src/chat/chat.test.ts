@@ -148,6 +148,21 @@ describe('§2.4 Chat Module (Server)', () => {
     expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'hello')
   })
 
+  it('MUST deduplicate rapid identical user sends (server-side)', async () => {
+    const { threadKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleSend(threadKey, 'duplicate')
+    await chatModule.handleSend(threadKey, 'duplicate')
+
+    // Only one backend send (second is deduped)
+    expect(backend.sendMessage).toHaveBeenCalledTimes(1)
+
+    // Only one broadcast user-message
+    const calls = (wsHandler.broadcastToChannel as any).mock.calls.filter(
+      (c: any[]) => c[1]?.type === 'chat.user-message'
+    )
+    expect(calls.length).toBe(1)
+  })
+
   it('MUST proxy chat.abort to backend.abort(sessionKey)', async () => {
     const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
     await chatModule.handleAbort(threadKey)
