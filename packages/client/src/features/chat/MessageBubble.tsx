@@ -3,6 +3,7 @@ import type { ParsedTurn, ForwardedMessage } from '@sovereign/core'
 import { renderMarkdown, escapeHtml } from '../../lib/markdown.js'
 import { messageToMarkdown, downloadText, exportMessagePdf, turnsToMarkdown, exportThreadPdf } from './export.js'
 import { turns } from './store.js'
+import { sanitizeContent, isCompactionMessage } from './sanitize.js'
 import {
   WriteIcon,
   HeartIcon,
@@ -137,7 +138,8 @@ export function MessageBubble(props: MessageBubbleProps) {
   let menuRef!: HTMLDivElement
 
   const role = () => props.turn.role
-  const content = () => props.turn.content
+  const rawContent = () => props.turn.content
+  const content = () => sanitizeContent(role(), rawContent())
   const timestamp = () => props.turn.timestamp
   const pending = () => props.pending ?? props.turn.pending
 
@@ -361,6 +363,29 @@ export function MessageBubble(props: MessageBubbleProps) {
       </div>
     )
   }
+
+  // ── Compaction messages ───────────────────────────
+
+  if (isCompactionMessage(rawContent())) {
+    return (
+      <div class="my-1 flex w-full justify-center">
+        <div
+          class="rounded-full px-3 py-1 text-xs"
+          style={{
+            background: 'var(--c-bg-raised)',
+            color: 'var(--c-text-muted)',
+            border: '1px solid var(--c-border)'
+          }}
+        >
+          {rawContent()}
+        </div>
+      </div>
+    )
+  }
+
+  // ── Empty after sanitization ──────────────────────
+
+  if (!content()?.trim()) return null
 
   // ── User / Assistant rendering ─────────────────────
 
