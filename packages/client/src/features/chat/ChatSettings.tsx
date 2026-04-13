@@ -65,19 +65,29 @@ export function ChatSettingsButton() {
     if (!key) return
     setLoading(true)
     try {
-      const [infoRes, cronsRes] = await Promise.all([
-        fetch(`/api/threads/${encodeURIComponent(key)}/session-info`),
-        fetch(`/api/threads/${encodeURIComponent(key)}/crons`)
-      ])
+      // Fetch session info first — don't let crons block the menu
+      const infoRes = await fetch(`/api/threads/${encodeURIComponent(key)}/session-info`)
       if (infoRes.ok) setInfo(await infoRes.json())
+    } catch {
+      /* ignore */
+    }
+    setLoading(false)
+
+    // Fetch crons independently with a short timeout so a slow/down gateway doesn't block UI
+    const key2 = threadKey()
+    if (!key2) return
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5000)
+      const cronsRes = await fetch(`/api/threads/${encodeURIComponent(key2)}/crons`, { signal: controller.signal })
+      clearTimeout(timeout)
       if (cronsRes.ok) {
         const data = await cronsRes.json()
         setCrons(data.crons ?? [])
       }
     } catch {
-      /* ignore */
+      /* crons unavailable — UI still works */
     }
-    setLoading(false)
   }
 
   const toggle = () => {
