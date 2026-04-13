@@ -315,29 +315,33 @@ export function createThreadRoutes(
     res.json({ success: true, thread })
   })
 
-  // ── Available models ────────────────────────────────────────────────
+  // ── Available models (cached, async) ─────────────────────────────────
+  let modelsCache: { models: string[]; defaultModel: string | null; ts: number } | null = null
+  const MODELS_CACHE_TTL = 30_000 // 30 seconds
+
+  async function fetchModels(): Promise<{ models: string[]; defaultModel: string | null }> {
+    if (modelsCache && Date.now() - modelsCache.ts < MODELS_CACHE_TTL) {
+      return { models: modelsCache.models, defaultModel: modelsCache.defaultModel }
+    }
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const execFileAsync = promisify(execFile)
+
+    const [modelsResult, defaultResult] = await Promise.all([
+      execFileAsync('openclaw', ['config', 'get', 'agents.defaults.models'], { timeout: 5000 }).catch(() => null),
+      execFileAsync('openclaw', ['config', 'get', 'agents.defaults.model.primary'], { timeout: 5000 }).catch(() => null)
+    ])
+
+    const models = modelsResult ? Object.keys(JSON.parse(modelsResult.stdout.trim())) : []
+    const defaultModel = defaultResult ? JSON.parse(defaultResult.stdout.trim()) : null
+    modelsCache = { models, defaultModel, ts: Date.now() }
+    return { models, defaultModel }
+  }
+
   router.get('/api/models', async (_req, res) => {
     try {
-      const { execSync } = await import('node:child_process')
-      const raw = execSync('openclaw config get agents.defaults.models', {
-        encoding: 'utf-8',
-        timeout: 5000
-      }).trim()
-      const models = Object.keys(JSON.parse(raw))
-
-      // Also get the default model
-      let defaultModel: string | null = null
-      try {
-        const defaultRaw = execSync('openclaw config get agents.defaults.model.primary', {
-          encoding: 'utf-8',
-          timeout: 5000
-        }).trim()
-        defaultModel = JSON.parse(defaultRaw)
-      } catch {
-        /* ignore */
-      }
-
-      res.json({ models, defaultModel })
+      const result = await fetchModels()
+      res.json(result)
     } catch {
       res.json({ models: [], defaultModel: null })
     }
