@@ -57,6 +57,11 @@ export function ChatSettingsButton() {
   const [info, setInfo] = createSignal<ThreadInfo | null>(null)
   const [crons, setCrons] = createSignal<CronJob[]>([])
   const [loading, setLoading] = createSignal(false)
+  const [availableModels, setAvailableModels] = createSignal<string[]>([])
+  const [defaultModel, setDefaultModel] = createSignal<string | null>(null)
+  const [selectedModel, setSelectedModel] = createSignal<string>('')
+  const [modelSaving, setModelSaving] = createSignal(false)
+  const [actionFeedback, setActionFeedback] = createSignal('')
   let containerRef!: HTMLDivElement
   let dropdownRef!: HTMLDivElement
 
@@ -65,9 +70,22 @@ export function ChatSettingsButton() {
     if (!key) return
     setLoading(true)
     try {
-      // Fetch session info first — don't let crons block the menu
-      const infoRes = await fetch(`/api/threads/${encodeURIComponent(key)}/session-info`)
-      if (infoRes.ok) setInfo(await infoRes.json())
+      // Fetch session info + models in parallel — don't let crons block the menu
+      const [infoRes, modelsRes] = await Promise.all([
+        fetch(`/api/threads/${encodeURIComponent(key)}/session-info`),
+        fetch('/api/models')
+      ])
+      if (infoRes.ok) {
+        const data = await infoRes.json()
+        setInfo(data)
+        const current = data.modelProvider && data.model ? `${data.modelProvider}/${data.model}` : (data.model ?? '')
+        setSelectedModel(current)
+      }
+      if (modelsRes.ok) {
+        const data = await modelsRes.json()
+        setAvailableModels(data.models ?? [])
+        setDefaultModel(data.defaultModel ?? null)
+      }
     } catch {
       /* ignore */
     }
@@ -88,6 +106,29 @@ export function ChatSettingsButton() {
     } catch {
       /* crons unavailable — UI still works */
     }
+  }
+
+  const handleModelSwitch = async (model: string) => {
+    const key = threadKey()
+    if (!key || !model) return
+    setModelSaving(true)
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/model`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model })
+      })
+      if (res.ok) {
+        setSelectedModel(model)
+        setActionFeedback('Model updated')
+      } else {
+        setActionFeedback('Failed to update model')
+      }
+    } catch {
+      setActionFeedback('Failed')
+    }
+    setModelSaving(false)
+    setTimeout(() => setActionFeedback(''), 2000)
   }
 
   const toggle = () => {
@@ -191,24 +232,68 @@ export function ChatSettingsButton() {
               <Show when={!loading() && info()}>
                 {(i) => (
                   <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-                    {/* Model */}
+                    {/* Model Selector */}
                     <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
                       <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
                         Model
                       </span>
-                      <span
-                        class="text-xs font-medium"
-                        style={{
-                          color: 'var(--c-text)',
-                          background: 'var(--c-bg)',
-                          padding: '1px 8px',
-                          'border-radius': '9999px',
-                          border: '1px solid var(--c-border)'
-                        }}
+                      <Show
+                        when={availableModels().length > 0}
+                        fallback={
+                          <span
+                            class="text-xs font-medium"
+                            style={{
+                              color: 'var(--c-text)',
+                              background: 'var(--c-bg)',
+                              padding: '1px 8px',
+                              'border-radius': '9999px',
+                              border: '1px solid var(--c-border)'
+                            }}
+                          >
+                            {selectedModel() || i().model || 'Unknown'}
+                          </span>
+                        }
                       >
-                        {i().model ?? 'Unknown'}
-                      </span>
+                        <select
+                          class="rounded-md text-xs font-medium"
+                          style={{
+                            background: 'var(--c-bg)',
+                            border: '1px solid var(--c-border)',
+                            color: 'var(--c-text)',
+                            'max-width': '170px',
+                            padding: '2px 6px',
+                            cursor: 'pointer',
+                            opacity: modelSaving() ? '0.5' : '1',
+                            'border-radius': '9999px'
+                          }}
+                          value={selectedModel()}
+                          disabled={modelSaving()}
+                          onChange={(e) => handleModelSwitch(e.currentTarget.value)}
+                        >
+                          <For each={availableModels()}>
+                            {(m) => (
+                              <option value={m} selected={m === selectedModel()}>
+                                {m.includes('/') ? m.split('/').pop() : m}
+                                {m === defaultModel() ? ' (default)' : ''}
+                              </option>
+                            )}
+                          </For>
+                          <Show when={selectedModel() && !availableModels().includes(selectedModel())}>
+                            <option value={selectedModel()} selected>
+                              {selectedModel().includes('/') ? selectedModel().split('/').pop() : selectedModel()}{' '}
+                              (current)
+                            </option>
+                          </Show>
+                        </select>
+                      </Show>
                     </div>
+
+                    {/* Feedback */}
+                    <Show when={actionFeedback()}>
+                      <div class="text-center text-xs" style={{ color: 'var(--c-accent)' }}>
+                        {actionFeedback()}
+                      </div>
+                    </Show>
 
                     {/* Context usage */}
                     <div>
