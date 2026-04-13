@@ -186,6 +186,10 @@ function resetState(): void {
   setMessageQueue([])
   setHasOlderMessages(false)
   setLoadingOlder(false)
+  recentUserMessages.clear()
+  if (import.meta?.env?.MODE === 'test') {
+    chatInitialized = false
+  }
 }
 
 let lastSentText = ''
@@ -281,6 +285,7 @@ function connectSSE(threadKey: string): void {
   }
   fetchHistory()
 
+  if (typeof EventSource === 'undefined') return
   const url = `/api/threads/${encodeURIComponent(threadKey)}/events`
   eventSource = new EventSource(url)
 
@@ -508,6 +513,15 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   // ── WS listeners we still need ──
 
+  // chat.error from WS (retry countdown)
+  unsubs.push(
+    ws.on('chat.error', (msg: any) => {
+      if (msg.retryAfterMs) {
+        startRetryCountdown(msg.retryAfterMs / 1000)
+      }
+    })
+  )
+
   // chat.session.info from WS (for full history load response)
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
@@ -517,6 +531,63 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       setLoadingOlder(false)
       setTurns(history)
       clearLiveState()
+    })
+  )
+
+  // chat.turn from WS (fallback when SSE isn't available, e.g. tests)
+  unsubs.push(
+    ws.on('chat.turn', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      const turn = msg.turn as ParsedTurn
+      if (!turn) return
+      setTurns((prev) => [...prev, turn])
+    })
+  )
+
+  // chat.stream from WS (fallback)
+  unsubs.push(
+    ws.on('chat.stream', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      const text = msg.text as string
+      if (text === undefined) return
+      if (msg.replay) {
+        streamingRawText = text
+      } else {
+        streamingRawText += text
+      }
+      const cleaned = cleanStreamText(streamingRawText)
+      if (cleaned === 'NO_REPLY' || cleaned === 'HEARTBEAT_OK') {
+        setStreamingHtml('')
+        return
+      }
+      setStreamingHtml(renderMarkdown(cleaned))
+    })
+  )
+
+  // chat.status from WS (fallback)
+  unsubs.push(
+    ws.on('chat.status', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      if (msg.status) setAgentStatus(msg.status)
+    })
+  )
+
+  // chat.work from WS (fallback)
+  unsubs.push(
+    ws.on('chat.work', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      const work = msg.work as WorkItem
+      if (!work) return
+      setLiveWork((prev) => [...prev, work])
+      if (work.type === 'thinking') setLiveThinkingText(work.output || work.input || '')
+    })
+  )
+
+  // chat.compacting from WS (fallback)
+  unsubs.push(
+    ws.on('chat.compacting', (msg: any) => {
+      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      if (typeof msg.active === 'boolean') setCompacting(msg.active)
     })
   )
 
@@ -549,8 +620,10 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       }
     }
   }
-  document.addEventListener('visibilitychange', onVisibility)
-  unsubs.push(() => document.removeEventListener('visibilitychange', onVisibility))
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibility)
+    unsubs.push(() => document.removeEventListener('visibilitychange', onVisibility))
+  }
 
   return () => {
     unsubs.forEach((u) => u())
