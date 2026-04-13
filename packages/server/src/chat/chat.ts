@@ -290,6 +290,7 @@ export function createChatModule(
     if (pollTimers.has(threadKey)) return // already polling
 
     const filePath = getSessionFilePath(sessionKey)
+    if (!filePath) return
 
     // Start from current file size (only read NEW entries)
     try {
