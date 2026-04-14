@@ -476,7 +476,6 @@ export function createChatModule(
 
   async function handleHistory(threadKey: string, deviceId: string): Promise<void> {
     if (!threadKey) return // No thread selected — nothing to fetch
-    const t0 = Date.now()
     let sessionKey = threadToSession.get(threadKey)
     if (!sessionKey) {
       sessionKey = deriveSessionKey(threadKey)
@@ -494,7 +493,6 @@ export function createChatModule(
       history = []
     }
 
-    const elapsed = Date.now() - t0
     if (wsHandler) {
       wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore })
 
