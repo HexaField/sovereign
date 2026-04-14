@@ -20,6 +20,12 @@ function fakeGitRepo(base: string, name: string = 'repo'): string {
   return p
 }
 
+function fakeGitRepoWithConfig(base: string, name: string, config: string): string {
+  const p = fakeGitRepo(base, name)
+  fs.writeFileSync(path.join(p, '.git', 'config'), config)
+  return p
+}
+
 let dataDir: string
 let tempBase: string
 let bus: ReturnType<typeof createEventBus>
@@ -126,6 +132,18 @@ describe('Org Manager', () => {
     const project = manager.addProject(org.id, { name: 'proj', repoPath: repo })
     const updated = manager.updateProject(org.id, project.id, { name: 'renamed' })
     expect(updated.name).toBe('renamed')
+  })
+
+  it('derives project preferred remote from canonical org provider when remotes are discovered', () => {
+    const org = manager.createOrg({ name: 'Test', path: tempBase, provider: 'radicle' })
+    const repo = fakeGitRepoWithConfig(
+      tempBase,
+      'repo-with-remotes',
+      `[remote "origin"]\n  url = git@github.com:secondary/repo.git\n[remote "rad"]\n  url = rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5\n`
+    )
+
+    const project = manager.addProject(org.id, { name: 'proj', repoPath: repo })
+    expect(project.remote).toBe('rad')
   })
 
   it('removes a project from an org', () => {

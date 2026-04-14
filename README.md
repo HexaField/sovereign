@@ -16,7 +16,7 @@ Sovereign is built on a handful of non-negotiable ideas:
 
 ### Orgs & Projects
 
-Multi-org workspace with shared context across projects. Each org contains git repositories as first-class projects with branches, worktrees, and cross-project synchronisation. A global workspace spans all orgs for personal notes, memory, and coordination.
+Multi-org workspace with shared context across projects. Each org is the canonical workspace membrane and contains git repositories as first-class projects with branches, worktrees, and cross-project synchronisation. Projects can expose multiple remotes (for example Radicle as canonical plus secondary GitHub remotes) without forcing a 1:1 mapping between workspace orgs and GitHub orgs. A global workspace spans all orgs for personal notes, memory, and coordination.
 
 ### Code
 

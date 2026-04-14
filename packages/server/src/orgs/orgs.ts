@@ -5,6 +5,7 @@ import type { EventBus } from '@sovereign/core'
 import type { Org, Project } from './types.js'
 import { createOrgStore, type OrgStore, type OrgStoreData } from './store.js'
 import { detectMonorepo } from './monorepo.js'
+import { getProjectPreferredRemote } from '../remotes/discovery.js'
 
 export interface OrgManager {
   createOrg(data: { id?: string; name: string; path: string; provider?: 'radicle' | 'github' }): Org
@@ -109,11 +110,13 @@ export function createOrgManager(bus: EventBus, dataDir: string): OrgManager {
     if (existing) throw new Error(`repoPath already belongs to org ${existing.orgId}`)
 
     const mono = detectMonorepo(data.repoPath)
+    const org = getOrg(orgId)
     const project: Project = {
       id: id(),
       orgId,
       name: data.name,
       repoPath: data.repoPath,
+      remote: getProjectPreferredRemote(org, undefined, data.repoPath),
       defaultBranch: 'main',
       monorepo: mono || undefined,
       createdAt: now(),
