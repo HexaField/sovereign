@@ -231,9 +231,38 @@ export function createThreadRoutes(
       const sessions = JSON.parse(raw)
       const meta = sessions[sessionKey] ?? {}
 
+      // Guard: if session model is not in configured models, rewrite to default
+      const sessionModel =
+        meta.modelProvider && meta.model ? `${meta.modelProvider}/${meta.model}` : (meta.model ?? null)
+      const { models: configuredModels, defaultModel } = await fetchModels()
+      let effectiveModel = sessionModel
+      if (sessionModel && configuredModels.length > 0 && !configuredModels.includes(sessionModel) && defaultModel) {
+        effectiveModel = defaultModel
+        // Rewrite session to default (atomic)
+        try {
+          const slashIdx = defaultModel.indexOf('/')
+          if (slashIdx > 0) {
+            meta.modelProvider = defaultModel.slice(0, slashIdx)
+            meta.model = defaultModel.slice(slashIdx + 1)
+          } else {
+            meta.model = defaultModel
+          }
+          const tmpPath = sessionsPath + '.tmp'
+          fs.writeFileSync(tmpPath, JSON.stringify(sessions, null, 2))
+          fs.renameSync(tmpPath, sessionsPath)
+        } catch {
+          /* best-effort rewrite */
+        }
+      }
+      const effectiveSlash = effectiveModel?.indexOf('/') ?? -1
+      const effectiveProvider =
+        effectiveSlash > 0 ? effectiveModel!.slice(0, effectiveSlash) : (meta.modelProvider ?? null)
+      const effectiveModelName =
+        effectiveSlash > 0 ? effectiveModel!.slice(effectiveSlash + 1) : (effectiveModel ?? null)
+
       res.json({
-        model: meta.model ?? null,
-        modelProvider: meta.modelProvider ?? null,
+        model: effectiveModelName,
+        modelProvider: effectiveProvider,
         contextTokens: meta.contextTokens ?? null,
         totalTokens: meta.totalTokens ?? 0,
         inputTokens: meta.inputTokens ?? 0,
