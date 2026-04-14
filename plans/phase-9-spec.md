@@ -1,8 +1,8 @@
 # Phase 9: Workspace Consolidation & Org Standardisation — Specification
 
-**Status:** Draft
-**Revision:** 1
-**Date:** 2026-03-30
+**Status:** Draft (in progress) **Revision:** 2 **Date:** 2026-04-14
+
+**Update (2026-04-14):** This spec now includes five missing usability/system items to complete Phase 9 in practice (workspace/thread alignment, chat-session scoping, sessions.json dependency removal, recordings panel wiring, voice route wiring). No repo moves or config changes are performed by this document.
 
 This phase standardises all repository locations, Sovereign org data, OpenClaw membrane context files, and memory references across all three machines. It prepares the data foundation that the Agent Core (Phase 10) depends on — clean org boundaries, valid paths, and consistent context.
 
@@ -19,6 +19,7 @@ Repositories, workspace references, and org data are inconsistent across machine
 - **Field Ubuntu 24**: Only `~/ci-workspace/` with CI-related repos
 
 Sovereign org data (`orgs.json`) has stale paths:
+
 - Companion org points to `~/Desktop/companionintelligence` — repos are now at `~/workspaces/companionintelligence/`
 - Companion project names are stale (`CI-OS-Hub-repo` should be `CI-Hub`)
 - Missing orgs for repos that already exist at `~/workspaces/` (hexafield, atlasresearch, connectionengine)
@@ -29,6 +30,7 @@ OpenClaw context files (`membranes/*/context.md`, `MEMORY.md`, `TOOLS.md`) refer
 ### §1.2 — Why This Matters for Phase 10 (Agent Core)
 
 The Agent Core requires:
+
 - **Memory indexing** (10.1) crawls per-org directories — stale paths = failed ingestion
 - **Session store** (10.2) uses thread identity `{orgId}/{projectId}/{entityType}:{ref}` — broken org data breaks routing
 - **System prompt assembly** (10.4) includes org context files — stale context = hallucinated paths
@@ -53,7 +55,7 @@ Worktrees are the right primitive for code parallelism. Runtime parallelism (run
 The canonical repo root on all machines is `~/workspaces/<org>/<repo>`. Each Sovereign org maps to a directory under this root, and each OpenClaw membrane maps to a Sovereign org.
 
 | Sovereign Org | Org Path | OpenClaw Membrane(s) | Provider | Notes |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Global | `~/.openclaw/workspace` | `membranes/openclaw/`, `membranes/philosophy/` | — | The agent's home. Philosophy stays here (notes only, no repos). |
 | Companion | `~/workspaces/companionintelligence` | `membranes/companion/` | github | CI-Hub, CI-Portal, CI-Server, CI-Marketplace |
 | Coasys | `~/workspaces/coasys` | `membranes/adam/` | github | AD4M, Flux, WE, and related repos |
@@ -64,6 +66,7 @@ The canonical repo root on all machines is `~/workspaces/<org>/<repo>`. Each Sov
 ### §2.2 — Membrane Consolidation
 
 The following OpenClaw membranes are consolidated into Atlas Research:
+
 - `membranes/dweb/` → Atlas Research (holons, regen-map, ARG, folk, community-archive)
 - `membranes/metamyth/` → Atlas Research (concept stage, no repos)
 - `membranes/harmony/` → Atlas Research (sovereign Discord clone)
@@ -77,6 +80,7 @@ These membranes' `context.md` files MUST be updated to reference Atlas Research 
 The OpenClaw workspace convention (`MEMORY.md`, `memory/*.md`, `membranes/*/context.md`, `SOUL.md`, `AGENTS.md`) MUST be maintained. Sovereign reads these files for context. Changes to membrane structure must not break OpenClaw's ability to load workspace files.
 
 Specifically:
+
 - `membranes/` directory structure is preserved — membrane directories are NOT renamed or deleted
 - `context.md` files within each membrane are updated with correct paths and org references
 - `MEMORY.md` is updated to remove stale references and add correct ones
@@ -91,33 +95,29 @@ Specifically:
 
 **Active repos to move from `~/Desktop/` to `~/workspaces/`:**
 
-| Repo | Current | Target | Org |
-|---|---|---|---|
-| harmony | `~/Desktop/harmony` | `~/workspaces/atlasresearch/harmony` | Atlas Research |
+| Repo    | Current             | Target                               | Org            |
+| ------- | ------------------- | ------------------------------------ | -------------- |
 | harvest | `~/Desktop/harvest` | `~/workspaces/atlasresearch/harvest` | Atlas Research |
-| holons-game | `~/Desktop/holons-game` | `~/workspaces/atlasresearch/holons-game` | Atlas Research |
-| regen-map | `~/Desktop/regen-map` | `~/workspaces/atlasresearch/regen-map` | Atlas Research |
-| arg-app | `~/Desktop/arg-app` | `~/workspaces/atlasresearch/arg-app` | Atlas Research |
-| arg-website | `~/Desktop/arg-website` | `~/workspaces/atlasresearch/arg-website` | Atlas Research |
-| openclaw | `~/Desktop/openclaw` | `~/workspaces/hexafield/openclaw` | Hexafield |
 
-**Stale worktree clones to evaluate:**
+**Decision:** All other Desktop repos are stale/retired and explicitly out of scope for Phase 9. They remain on Desktop. **Stale worktree clones to evaluate:**
 
 | Clone | Location | Parent Repo | Action |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | ad4m-rest-refactor | `~/workspaces/coasys/ad4m-rest-refactor` | `coasys/ad4m` | Remove if branch merged, else convert to worktree |
 | ad4m-sfu | `~/workspaces/coasys/ad4m-sfu` | `coasys/ad4m` | Remove if branch merged, else convert to worktree |
 | flux-sfu | `~/workspaces/coasys/flux-sfu` | `coasys/flux` | Remove if branch merged, else convert to worktree |
 
-**Desktop repos to leave in place** (dormant/archived, not worth moving):
+**Desktop repos to leave in place** (stale/retired, out of scope):
+
 - All non-active repos (90+) remain on `~/Desktop/`. These are not registered in Sovereign and don't need clean paths. If any become active later, they get moved at that time.
+- Specific retired repos: harmony, holons-game, regen-map, arg-app, arg-website, openclaw.
 
 ### §3.2 — Josh Ubuntu 22 (Secondary)
 
 Standardise to `~/workspaces/<org>/<repo>`:
 
 | Current | Target | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `~/ci-workspace/CI-OS-Hub` | `~/workspaces/companionintelligence/CI-Hub` | Primary CI test copy |
 | `~/ci-workspace/CI-App-Store` | Remove or `~/workspaces/companionintelligence/CI-Marketplace` | May not be needed |
 | `~/workspaces/coasys/ad4m-sfu` | Keep | Already correct |
@@ -130,7 +130,7 @@ Desktop repos on Ubuntu are all dormant (old IR Engine, Holochain experiments, e
 Standardise to `~/workspaces/<org>/<repo>`:
 
 | Current | Target | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `~/ci-workspace/CI-OS-Hub` | `~/workspaces/companionintelligence/CI-Hub` | Rename to match canonical name |
 | `~/ci-workspace/CI-App-Store` | `~/workspaces/companionintelligence/CI-Marketplace` | Rename |
 | `~/ci-workspace/CI-Marketplace` | `~/workspaces/companionintelligence/CI-Marketplace` | Already correct name, move path |
@@ -144,9 +144,11 @@ Standardise to `~/workspaces/<org>/<repo>`:
 The Sovereign org store (`{dataDir}/orgs/orgs.json`) MUST be updated:
 
 **Fix existing orgs:**
+
 - Companion: path `~/Desktop/companionintelligence` → `~/workspaces/companionintelligence`
 
 **Add new orgs:**
+
 - Hexafield: path `~/workspaces/hexafield`, provider `github`
 - Atlas Research: path `~/workspaces/atlasresearch`, provider `github`
 - Connection Engine: path `~/workspaces/connectionengine`, provider `github`
@@ -154,6 +156,7 @@ The Sovereign org store (`{dataDir}/orgs/orgs.json`) MUST be updated:
 ### §4.2 — Project Corrections
 
 **Companion org projects:**
+
 - `CI-OS-Hub-repo` → rename to `CI-Hub`, update repoPath to `~/workspaces/companionintelligence/CI-Hub`
 - `CI-Cloud` → update repoPath to `~/workspaces/companionintelligence/CI-Cloud` (project name stays as CI-Cloud, maps to CI-Portal product name)
 - `CI-Server` → update repoPath to `~/workspaces/companionintelligence/CI-Server`
@@ -161,12 +164,15 @@ The Sovereign org store (`{dataDir}/orgs/orgs.json`) MUST be updated:
 - Add `CI-Marketplace` project
 
 **Coasys org projects:**
+
 - Add missing: `ad4m-sfu`, `flux-sfu`, `agenda`, `template-monorepo` (if they are standalone repos, not worktrees)
 
 **Hexafield org projects:**
+
 - Add: `sovereign`, `ad4m-web`, `stateproof`, `openclaw` (after move)
 
 **Atlas Research projects:**
+
 - Add after repo moves: `harmony`, `harvest`, `holons-game`, `regen-map`, `arg-app`, `arg-website`
 
 ---
@@ -176,6 +182,7 @@ The Sovereign org store (`{dataDir}/orgs/orgs.json`) MUST be updated:
 ### §5.1 — MEMORY.md
 
 Remove or update:
+
 - `~/repos/adam/ad4m-rest-refactor` and `~/repos/adam/flux-rest-migration` references — these no longer exist
 - `~/Desktop/companionintelligence/CI-OS-Hub-repo` → `~/workspaces/companionintelligence/CI-Hub`
 - `~/Desktop/companionintelligence/CI-Cloud` → `~/workspaces/companionintelligence/CI-Cloud`
@@ -185,6 +192,7 @@ Remove or update:
 ### §5.2 — membranes/adam/context.md
 
 Update all project paths from `~/Desktop/` to `~/workspaces/coasys/`:
+
 - `~/Desktop/ad4m` → `~/workspaces/coasys/ad4m`
 - `~/Desktop/flux` → `~/workspaces/coasys/flux`
 - `~/Desktop/we` → `~/workspaces/coasys/we`
@@ -195,6 +203,7 @@ Update all project paths from `~/Desktop/` to `~/workspaces/coasys/`:
 ### §5.3 — membranes/companion/context.md
 
 Update all project paths:
+
 - `~/Desktop/companionintelligence/CI-OS-Hub-repo` → `~/workspaces/companionintelligence/CI-Hub`
 - `~/Desktop/companionintelligence/CI-Cloud` → `~/workspaces/companionintelligence/CI-Cloud`
 - `~/Desktop/companionintelligence/CI-App-Store-repo` → `~/workspaces/companionintelligence/CI-Marketplace`
@@ -203,20 +212,22 @@ Update all project paths:
 
 ### §5.4 — membranes/dweb/context.md
 
-Add note that this membrane is consolidated into Atlas Research. Update paths for repos that move:
-- `~/Desktop/holons-game` → `~/workspaces/atlasresearch/holons-game`
-- `~/Desktop/regen-map` → `~/workspaces/atlasresearch/regen-map`
+Add note that this membrane is consolidated into Atlas Research. Desktop repos remain stale/retired (no moves):
+
+- Keep `~/Desktop/holons-game` and `~/Desktop/regen-map` marked as stale
 - Other repos: note as paused/archived with current Desktop locations
 
 ### §5.5 — membranes/harmony/context.md
 
-Add note that this membrane is consolidated into Atlas Research. Update:
-- `~/Desktop/harmony` → `~/workspaces/atlasresearch/harmony`
+Add note that this membrane is consolidated into Atlas Research. Desktop repo remains stale/retired (no move):
+
+- Keep `~/Desktop/harmony` marked as stale
 
 ### §5.6 — membranes/openclaw/context.md
 
-Update:
-- `~/Desktop/openclaw` → `~/workspaces/hexafield/openclaw` (after move)
+Desktop repo remains stale/retired (no move):
+
+- Keep `~/Desktop/openclaw` marked as active on Desktop (out of Phase 9 scope)
 
 ### §5.7 — New: membranes/atlas/context.md
 
@@ -227,7 +238,7 @@ Create or update with Atlas Research overview, listing all absorbed projects and
 ## §6 — Execution Order
 
 1. **Create target directories** on Mac (`~/workspaces/atlasresearch/`, etc.)
-2. **Move active repos** from `~/Desktop/` to `~/workspaces/` (§3.1)
+2. **Move active repos** from `~/Desktop/` to `~/workspaces/` (§3.1) — _harvest only; other Desktop repos are out of scope_
 3. **Evaluate stale clones** — check if branches are merged, remove or convert (§3.1)
 4. **Update Sovereign orgs.json** via API or direct file edit (§4)
 5. **Update all context files** (§5)
@@ -235,6 +246,104 @@ Create or update with Atlas Research overview, listing all absorbed projects and
 7. **Update Ubuntu machines** via SSH (§3.2, §3.3)
 8. **Commit workspace changes** to the OpenClaw workspace repo
 9. **Verify OpenClaw** — restart gateway, confirm memory search and context loading work
+
+---
+
+## §6.5 — Phase 9 Additions (Usability + System Gaps)
+
+These items were flagged as missing from Phase 9 but necessary to “get the current phases across the line” before replacing OpenClaw. Each item includes a specification and user flow.
+
+### §6.5.1 — Workspace ↔ Thread Alignment (Scope Threads to Workspace)
+
+**Problem:** Workspaces (orgs/projects) are scoped, but threads are effectively global. Switching workspace does not alter the active thread list, which breaks context isolation and makes workspace navigation feel inconsistent.
+
+**Spec:**
+
+- Each thread MUST have a `workspaceId` (orgId) association.
+- Global threads (e.g. `main`) MUST belong to the Global workspace by default.
+- Switching workspace MUST filter the thread list to that workspace’s threads.
+- The thread drawer MUST show a workspace filter with “All” and the current workspace’s threads.
+- The dashboard’s thread previews MUST be scoped to the active workspace unless explicitly set to “All.”
+
+**User Flow:**
+
+1. User switches workspace to “Companion.”
+2. Thread drawer filters to Companion threads only.
+3. A “All” toggle shows cross-workspace threads when needed.
+4. Creating a thread inside Companion auto-tags it to Companion.
+
+### §6.5.2 — Chat Session Scoping (Chat Panel Follows Workspace + Thread)
+
+**Problem:** Chat panel currently retains session state across workspace switches; this makes the workspace switch feel cosmetic and risks sending messages to the wrong context.
+
+**Spec:**
+
+- The active chat session MUST be derived from `(workspaceId, threadKey)`.
+- Switching workspace MUST either:
+  - auto-switch to that workspace’s “main” thread, or
+  - prompt user to choose a thread in that workspace.
+- The chat panel MUST show the current workspace + thread in its header.
+- The URL (`?workspace=` + `#thread=`) MUST stay in sync with the chat panel’s session.
+
+**User Flow:**
+
+1. User switches workspace to “Coasys.”
+2. The chat panel automatically switches to “Coasys / main.”
+3. Chat header shows `Coasys • main`.
+4. User selects another thread; chat panel updates and URL syncs.
+
+### §6.5.3 — Remove `sessions.json` Dependency (Single Source of Truth)
+
+**Problem:** Thread/subagent views parse `~/.openclaw/agents/main/sessions/sessions.json` directly. This is brittle, slow (60MB), and tightly coupled to OpenClaw internals.
+
+**Spec:**
+
+- Sovereign MUST maintain its own lightweight session index (JSONL or SQLite).
+- The index MUST be updated via OpenClaw gateway events, not by reading `sessions.json`.
+- Existing endpoints `/api/threads/gateway-sessions`, `/api/threads/:key/subagents`, `/api/threads/active-subagents` MUST be refactored to use the local index.
+- If the gateway is unavailable, the index MUST provide a cached fallback, and indicate “stale.”
+
+**User Flow:**
+
+1. Subagent spawns → gateway event received → local index updated immediately.
+2. Thread drawer shows the new subagent without parsing `sessions.json`.
+3. When gateway is disconnected, thread drawer still shows the last known subagent list with a “stale” badge.
+
+### §6.5.4 — Recordings Panel Wiring (Phase 8 Client Completion)
+
+**Problem:** The workspace Recordings panel is a shell and does not connect to the recordings service. Phase 8 server-side is complete, but UI is inert.
+
+**Spec:**
+
+- Recordings panel MUST query `/api/recordings` and render items with duration + transcript preview.
+- “Record” button MUST trigger a recording workflow (start/stop) or open the recording modal.
+- Selecting a recording MUST open the recording detail view or the meeting entity view.
+- Recordings MUST be scoped to workspace (org) and optionally thread.
+
+**User Flow:**
+
+1. User opens Recordings panel in the workspace sidebar.
+2. Panel lists recent recordings with timestamps and transcript snippets.
+3. User clicks “Record” → recording begins, UI shows live timer.
+4. User stops recording → item appears in list, click opens detail view.
+
+### §6.5.5 — Voice Routes Wiring (Phase 8 Server Completion)
+
+**Problem:** `/api/voice/transcribe` and `/api/voice/tts` return 501 despite the module being implemented. This blocks voice UX and breaks Phase 8 completeness.
+
+**Spec:**
+
+- Voice routes MUST proxy to `voiceModule.transcribe()` and `voiceModule.synthesize()`.
+- Error states MUST be explicit (`503` when no provider URL configured, `504` on timeouts).
+- The routes MUST return duration metadata to support UI timing.
+- Device-scoped TTS MUST include deviceId in requests and responses.
+
+**User Flow:**
+
+1. User taps mic → audio blob sent to `/api/voice/transcribe`.
+2. Response returns `{ text, durationMs }`, input box populated.
+3. User receives agent response → TTS request made to `/api/voice/tts`.
+4. Audio plays only on the initiating device.
 
 ---
 

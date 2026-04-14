@@ -1,7 +1,6 @@
-// Thread settings modal — shows queue, session info, actions
+// Thread settings modal — shows session info, actions
 import { createSignal, onMount, Show, For } from 'solid-js'
-import type { QueuedMessage } from '@sovereign/core'
-import { messageQueue, cancelMessage, abortChat } from '../chat/store.js'
+import { abortChat } from '../chat/store.js'
 import { threadKey } from '../threads/store.js'
 import { CloseIcon } from '../../ui/icons.js'
 
@@ -272,43 +271,6 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
                 </div>
               </div>
             )}
-          </Show>
-
-          {/* Queue */}
-          <Show when={messageQueue().length > 0}>
-            <div>
-              <div class="mb-1 text-xs font-medium" style={{ color: 'var(--c-text-heading)' }}>
-                Queue ({messageQueue().length})
-              </div>
-              <div class="max-h-24 space-y-1 overflow-y-auto">
-                <For each={messageQueue()}>
-                  {(item: QueuedMessage) => (
-                    <div
-                      class="flex items-center gap-2 rounded-md px-2 py-1 text-xs"
-                      style={{ border: '1px dashed var(--c-border)', color: 'var(--c-text-muted)' }}
-                    >
-                      <span class="min-w-0 flex-1 truncate">{item.text}</span>
-                      <Show when={item.status === 'queued'}>
-                        <button
-                          class="shrink-0 cursor-pointer rounded px-1 py-0.5 text-[10px]"
-                          style={{
-                            background: 'var(--c-bg)',
-                            border: '1px solid var(--c-border)',
-                            color: 'var(--c-text-muted)'
-                          }}
-                          onClick={() => cancelMessage(item.id)}
-                        >
-                          x
-                        </button>
-                      </Show>
-                      <Show when={item.status === 'sending'}>
-                        <span class="shrink-0 text-[10px]">sending...</span>
-                      </Show>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </div>
           </Show>
 
           {/* Actions */}
