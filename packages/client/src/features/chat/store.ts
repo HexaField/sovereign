@@ -206,6 +206,18 @@ export async function sendMessage(text: string, attachments?: File[]): Promise<v
   lastSentText = text
   lastSentTime = now
 
+  // Optimistic: add user turn immediately (single source of truth before history replaces it)
+  setTurns((prev) => [
+    ...prev,
+    {
+      role: 'user' as const,
+      content: text,
+      timestamp: Date.now(),
+      workItems: [],
+      thinkingBlocks: []
+    }
+  ])
+
   if (attachments?.length) {
     // Use HTTP POST with base64 attachments
     const base64Files = await Promise.all(
@@ -386,7 +398,15 @@ function connectSSE(threadKey: string): void {
       workItems: turn.workItems?.length > 0 ? turn.workItems : liveWorkItems
     }
 
-    setTurns((prev) => [...prev, merged])
+    setTurns((prev) => {
+      // Guard against duplicate turn content (e.g. optimistic user turn + authoritative turn)
+      const last = prev[prev.length - 1]
+      if (last && last.role === merged.role && last.content === merged.content) {
+        // Replace last turn with the authoritative one (has workItems etc.)
+        return [...prev.slice(0, -1), merged]
+      }
+      return [...prev, merged]
+    })
     clearLiveState()
   })
 
@@ -425,47 +445,8 @@ function connectSSE(threadKey: string): void {
     setMessageQueue(data.queue ?? [])
   })
 
-  // ── user-message: sync user messages across tabs ──
-  eventSource.addEventListener('user-message', (e) => {
-    const data = JSON.parse((e as MessageEvent).data)
-    const text = data.text as string
-    if (!text) return
-
-    // Content-hash dedup: skip if we've seen identical text within the window
-    const now = Date.now()
-    const trimmed = text.trim()
-    const prevTs = recentUserMessages.get(trimmed)
-    if (prevTs !== undefined && now - prevTs < USER_MSG_DEDUP_WINDOW_MS) {
-      return
-    }
-    recentUserMessages.set(trimmed, now)
-    // Prune old entries
-    for (const [k, ts] of recentUserMessages) {
-      if (now - ts > USER_MSG_DEDUP_WINDOW_MS) recentUserMessages.delete(k)
-    }
-
-    setTurns((prev) => {
-      // Also check against existing turns (belt-and-suspenders)
-      const last = prev.filter((t) => t.role === 'user').pop()
-      if (
-        last &&
-        last.content === trimmed &&
-        Math.abs((last.timestamp || 0) - (data.timestamp || now)) < USER_MSG_DEDUP_WINDOW_MS
-      ) {
-        return prev
-      }
-      return [
-        ...prev,
-        {
-          role: 'user' as const,
-          content: text,
-          timestamp: data.timestamp || Date.now(),
-          workItems: [],
-          thinkingBlocks: []
-        }
-      ]
-    })
-  })
+  // user-message SSE event removed — user turns are added optimistically in sendMessage()
+  // and history fetches are the authoritative source of truth
 }
 
 function disconnectSSE(): void {

@@ -14,7 +14,6 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
       'chat.error',
       'chat.session.info',
       'chat.queue.update',
-      'chat.user-message',
       'backend.status'
     ],
     clientMessages: [

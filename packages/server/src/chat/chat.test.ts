@@ -156,11 +156,7 @@ describe('§2.4 Chat Module (Server)', () => {
     // Only one backend send (second is deduped)
     expect(backend.sendMessage).toHaveBeenCalledTimes(1)
 
-    // Only one broadcast user-message
-    const calls = (wsHandler.broadcastToChannel as any).mock.calls.filter(
-      (c: any[]) => c[1]?.type === 'chat.user-message'
-    )
-    expect(calls.length).toBe(1)
+    // user-message broadcast no longer emitted (removed — single source of truth)
   })
 
   it('MUST proxy chat.abort to backend.abort(sessionKey)', async () => {
