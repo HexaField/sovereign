@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
 import { createOpenClawBackend } from './openclaw.js'
 import type { OpenClawConfig } from './types.js'
 import type { AgentBackend, BackendConnectionStatus } from '@sovereign/core'
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -795,6 +795,32 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     expect(connectParams.auth.token).toBe('my-secret-token')
   })
 
+  it('§6.2 — MUST prefer configured gatewayToken over a persisted device token during connect', async () => {
+    wss.removeAllListeners('connection')
+    let connectParams: any = null
+    const tokenPath = join(dataDir, 'agent-backend', 'device-token.json')
+    mkdirSync(join(dataDir, 'agent-backend'), { recursive: true })
+
+    backend = createOpenClawBackend(getConfig())
+    const deviceId = (backend as any).getDeviceInfo().deviceId
+    writeFileSync(tokenPath, JSON.stringify({ deviceId, token: 'stale-device-token' }))
+
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'n' } }))
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req' && msg.method === 'connect') {
+          connectParams = msg.params
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+        }
+      })
+    })
+
+    backend = createOpenClawBackend(getConfig({ gatewayToken: 'configured-token' }))
+    await backend.connect()
+    expect(connectParams.auth.token).toBe('configured-token')
+  })
+
   it('§6.2 — MUST persist device token returned from connect handshake', async () => {
     wss.removeAllListeners('connection')
     installHandshake(wss, { deviceToken: 'new-device-token-xyz' })
@@ -819,5 +845,67 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
       // Expected — connect rejected
     }
     expect(statuses.some((s) => s.errorType === 'auth_rejected')).toBe(true)
+  })
+
+  it('§6.2 — MUST NOT send non-connect RPC requests before handshake completion', async () => {
+    wss.removeAllListeners('connection')
+    const methods: string[] = []
+    let serverWs: WsWebSocket | null = null
+
+    wss.on('connection', (ws) => {
+      serverWs = ws
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req') {
+          methods.push(msg.method)
+          if (msg.method === 'connect') {
+            ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
+          }
+          if (msg.method === 'session.create') {
+            ws.send(JSON.stringify({ type: 'res', id: msg.id, result: { sessionKey: 'queued-session' } }))
+          }
+        }
+      })
+    })
+
+    backend = createOpenClawBackend(getConfig())
+    const connectPromise = backend.connect()
+
+    await waitForConnection(wss)
+    const queuedRpc = backend.createSession('queued-before-ready')
+    await waitFor(50)
+    expect(methods).toEqual([])
+
+    serverWs!.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'delayed-nonce' } }))
+    await connectPromise
+    await expect(queuedRpc).resolves.toBe('queued-session')
+
+    expect(methods[0]).toBe('connect')
+    expect(methods[1]).toBe('session.create')
+  })
+
+  it('§6.2 — MUST reject queued RPC requests if handshake fails before readiness', async () => {
+    wss.removeAllListeners('connection')
+    let serverWs: WsWebSocket | null = null
+
+    wss.on('connection', (ws) => {
+      serverWs = ws
+      ws.on('message', (data: any) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.type === 'req' && msg.method === 'connect') {
+          ws.send(JSON.stringify({ type: 'res', id: msg.id, error: { message: 'pairing required' } }))
+        }
+      })
+    })
+
+    backend = createOpenClawBackend(getConfig())
+    const connectPromise = backend.connect()
+    await waitForConnection(wss)
+    const queuedRpc = backend.createSession('queued-before-ready')
+
+    serverWs!.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'n' } }))
+
+    await expect(connectPromise).rejects.toThrow(/pairing required/)
+    await expect(queuedRpc).rejects.toThrow(/pairing required|Connection closed|Backend disconnected|Not connected/)
   })
 })
