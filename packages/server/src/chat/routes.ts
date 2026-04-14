@@ -263,9 +263,7 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     addHandler('chat.error', (data) => {
       if (forThread(data)) send('error', data)
     })
-    addHandler('chat.user-message', (data) => {
-      if (forThread(data)) send('user-message', data)
-    })
+    // chat.user-message handler removed — user turns come from history (single source of truth)
     addHandler('chat.queue.update', (data) => {
       if (forThread(data)) send('queue', data)
     })
