@@ -16,6 +16,7 @@ const makeOrg = (overrides: Partial<OrgSummary> = {}): OrgSummary => ({
   branchesAhead: 0,
   branchesBehind: 0,
   activeThreads: 0,
+  threadCount: 0,
   unreadThreads: 0,
   errorThreads: 0,
   notificationCount: 0,

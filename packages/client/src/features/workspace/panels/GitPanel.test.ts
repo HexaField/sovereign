@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   writable: true
 })
 
-import { buildGitStatusUrl, type GitStatusData } from './GitPanel.js'
+import type { GitStatusData } from './GitPanel.js'
 import { activeWorkspace, setActiveProject, _setActiveWorkspace } from '../store.js'
 
 beforeEach(() => {
@@ -26,7 +26,11 @@ beforeEach(() => {
 describe('GitPanel', () => {
   describe('§3.3.2 — Git Tab', () => {
     it('§3.3.2 — shows git status for active project from GET /api/git/status', () => {
-      expect(buildGitStatusUrl('proj-1')).toBe('/api/git/status?project=proj-1')
+      const orgId = encodeURIComponent('org-1')
+      const projectId = encodeURIComponent('proj-1')
+      expect(`/api/git/status?orgId=${orgId}&projectId=${projectId}`).toBe(
+        '/api/git/status?orgId=org-1&projectId=proj-1'
+      )
     })
 
     it('§3.3.2 — subscribes to git WS channel scoped to project', () => {
@@ -46,8 +50,8 @@ describe('GitPanel', () => {
         branch: 'dev',
         ahead: 0,
         behind: 1,
-        staged: ['a.ts'],
-        unstaged: ['b.ts'],
+        staged: [{ path: 'a.ts', status: 'modified' }],
+        unstaged: [{ path: 'b.ts', status: 'modified' }],
         untracked: ['c.ts']
       }
       expect(status.staged).toHaveLength(1)

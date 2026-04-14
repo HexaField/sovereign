@@ -357,8 +357,8 @@ app.use(createDraftRouter(bus, draftStore, { issueTracker, getRemotes }))
 // ============================================================
 
 const backend = createOpenClawBackend({
-  gatewayUrl: process.env.OPENCLAW_GATEWAY_URL ?? 'ws://localhost:3456/ws',
-  gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN ?? '',
+  gatewayUrl: process.env.OPENCLAW_GATEWAY_URL?.trim() || 'ws://localhost:3456/ws',
+  gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || '',
   dataDir,
   onConfigChange: (_cb) => {}
 })

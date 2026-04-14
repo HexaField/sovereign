@@ -1,6 +1,6 @@
 // Thread Quick Switch — Cmd+K / Ctrl+K modal with fuzzy search
 
-import { createSignal, For, Show, onMount, onCleanup } from 'solid-js'
+import { createSignal, For, Show, onMount } from 'solid-js'
 import { threads, switchThread, type ThreadInfo } from '../threads/store.js'
 
 export const [quickSwitchOpen, setQuickSwitchOpen] = createSignal(false)
@@ -63,7 +63,9 @@ export function QuickSwitchModal() {
       <div
         class="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]"
         style={{ background: 'rgba(0,0,0,0.5)', 'backdrop-filter': 'blur(2px)' }}
-        onClick={(e) => { if (e.target === e.currentTarget) setQuickSwitchOpen(false) }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setQuickSwitchOpen(false)
+        }}
       >
         <div
           class="w-full max-w-md overflow-hidden rounded-xl shadow-2xl"
@@ -77,14 +79,22 @@ export function QuickSwitchModal() {
               style={{ color: 'var(--c-text)' }}
               placeholder="Search threads…"
               value={query()}
-              onInput={(e) => { setQuery(e.currentTarget.value); setSelectedIdx(0) }}
+              onInput={(e) => {
+                setQuery(e.currentTarget.value)
+                setSelectedIdx(0)
+              }}
               onKeyDown={handleKeyDown}
             />
           </div>
           <div class="max-h-64 overflow-y-auto">
-            <For each={filtered()} fallback={
-              <div class="p-3 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>No threads found</div>
-            }>
+            <For
+              each={filtered()}
+              fallback={
+                <div class="p-3 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  No threads found
+                </div>
+              }
+            >
               {(thread, idx) => (
                 <button
                   class="flex w-full cursor-pointer flex-col px-3 py-2 text-left transition-colors"
@@ -98,7 +108,9 @@ export function QuickSwitchModal() {
                 >
                   <span class="text-sm font-medium">{thread.label || thread.key}</span>
                   <Show when={thread.orgId}>
-                    <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>{thread.orgId}</span>
+                    <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                      {thread.orgId}
+                    </span>
                   </Show>
                 </button>
               )}

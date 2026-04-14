@@ -212,7 +212,10 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
                       Context Usage
                     </span>
                     <span class="text-xs" style={{ color: 'var(--c-text)' }}>
-                      {formatTokens(i().totalTokens)} / {i().contextTokens ? formatTokens(i().contextTokens) : '?'}
+                      {(() => {
+                        const contextTokens = i().contextTokens
+                        return `${formatTokens(i().totalTokens)} / ${contextTokens != null ? formatTokens(contextTokens) : '?'}`
+                      })()}
                     </span>
                   </div>
                   <div class="h-2 w-full overflow-hidden rounded-full" style={{ background: 'var(--c-bg)' }}>

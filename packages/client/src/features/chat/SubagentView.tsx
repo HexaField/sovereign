@@ -2,7 +2,6 @@ import { createSignal, createEffect, onCleanup, For, Show } from 'solid-js'
 import type { ParsedTurn } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { ChatView } from './ChatView.js'
-import { ChevronDownIcon } from '../../ui/icons.js'
 
 export interface SubagentNavEntry {
   sessionKey: string
@@ -48,7 +47,7 @@ export function SubagentView(props: SubagentViewProps) {
 
   createEffect(() => {
     // Re-fetch when nav stack changes
-    const _entry = currentEntry()
+    currentEntry()
     setLoading(true)
     setTurns([])
     fetchHistory()
@@ -60,7 +59,10 @@ export function SubagentView(props: SubagentViewProps) {
       const last = t[t.length - 1]
       const isComplete = last?.role === 'assistant' && last?.content && !last?.workItems?.length
       if (isComplete) {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+        if (pollTimer) {
+          clearInterval(pollTimer)
+          pollTimer = null
+        }
         return
       }
       fetchHistory()
@@ -68,7 +70,10 @@ export function SubagentView(props: SubagentViewProps) {
   })
 
   onCleanup(() => {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
   })
 
   const messages = (): ChatMessage[] =>
@@ -79,9 +84,7 @@ export function SubagentView(props: SubagentViewProps) {
 
   // Build breadcrumb trail
   const breadcrumbs = (): Array<{ label: string; depth: number }> => {
-    const crumbs: Array<{ label: string; depth: number }> = [
-      { label: props.parentLabel, depth: -1 }
-    ]
+    const crumbs: Array<{ label: string; depth: number }> = [{ label: props.parentLabel, depth: -1 }]
     for (let i = 0; i < props.navStack.length; i++) {
       const entry = props.navStack[i]
       const label = entry.label.length > 30 ? entry.label.slice(0, 30) + '…' : entry.label
@@ -111,7 +114,9 @@ export function SubagentView(props: SubagentViewProps) {
           {(crumb, i) => (
             <>
               <Show when={i() > 0}>
-                <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>›</span>
+                <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                  ›
+                </span>
               </Show>
               <button
                 class="shrink-0 truncate rounded px-1.5 py-0.5 text-[11px] transition-colors"
@@ -140,7 +145,9 @@ export function SubagentView(props: SubagentViewProps) {
       {/* Loading state */}
       <Show when={loading() && turns().length === 0}>
         <div class="flex flex-1 items-center justify-center">
-          <span class="text-sm" style={{ color: 'var(--c-text-muted)' }}>Loading subagent history…</span>
+          <span class="text-sm" style={{ color: 'var(--c-text-muted)' }}>
+            Loading subagent history…
+          </span>
         </div>
       </Show>
 

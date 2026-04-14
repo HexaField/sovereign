@@ -1,6 +1,6 @@
 import { createMemo, createSignal, Show, For, onCleanup } from 'solid-js'
 import { ContextBudgetModal } from '../system/ContextBudgetModal.js'
-import { agentName, agentIcon } from '../../lib/identity.js'
+import { agentIcon } from '../../lib/identity.js'
 import { connectionStatus } from '../connection/store.js'
 import {
   DashboardIcon,
@@ -28,20 +28,11 @@ import {
   setViewMode as setPlanningViewMode,
   type PlanningViewMode
 } from '../planning/store.js'
-import {
-  activeWorkspace,
-  chatExpanded,
-  toggleChatExpanded,
-  setChatExpanded,
-  setActiveWorkspace
-} from '../workspace/store.js'
+import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from '../workspace/store.js'
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
-import { agentStatus } from '../chat/store.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
-import { unreadNotificationCount, startNotificationPolling } from '../notifications/store.js'
+import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
-import { lazy } from 'solid-js'
-const ThreadSettingsModal = lazy(() => import('../chat/ThreadSettingsModal.js'))
 
 function relativeTime(ts: number): string {
   if (!ts) return ''
@@ -83,7 +74,8 @@ const SYSTEM_TAB_IDS: SystemTabId[] = [
   'devices',
   'jobs',
   'events',
-  'threads'
+  'threads',
+  'flow'
 ]
 const SYSTEM_TAB_LABELS: Record<SystemTabId, string> = {
   overview: 'Overview',
@@ -94,7 +86,8 @@ const SYSTEM_TAB_LABELS: Record<SystemTabId, string> = {
   devices: 'Devices',
   jobs: 'Jobs',
   events: 'Events',
-  threads: 'Threads'
+  threads: 'Threads',
+  flow: 'Flow'
 }
 
 // ── Planning mode icons ──────────────────────────────────────────────

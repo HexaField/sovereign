@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { MeetingCard, statusBadgeClass, statusBadgeText, formatCardDate, formatCardDuration } from './MeetingCard.js'
-import type { MeetingCardProps } from './MeetingCard.js'
 
 describe('§8.9.1 Meeting Card', () => {
   it('§8.9.1 MUST display title, date, duration, participant count', () => {
