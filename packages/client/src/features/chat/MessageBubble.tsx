@@ -2,7 +2,7 @@ import { Show, createSignal, createMemo, createEffect, onCleanup, type JSX } fro
 import type { ParsedTurn, ForwardedMessage } from '@sovereign/core'
 import { renderMarkdown, escapeHtml } from '../../lib/markdown.js'
 import { messageToMarkdown, downloadText, exportMessagePdf, turnsToMarkdown, exportThreadPdf } from './export.js'
-import { turns } from './store.js'
+import { turns, retrySend, cancelFailedMessage } from './store.js'
 import { sanitizeContent, isCompactionMessage } from './sanitize.js'
 import {
   WriteIcon,
@@ -142,6 +142,7 @@ export function MessageBubble(props: MessageBubbleProps) {
   const content = () => sanitizeContent(role(), rawContent())
   const timestamp = () => props.turn.timestamp
   const pending = () => props.pending ?? props.turn.pending
+  const sendFailed = () => props.turn.sendFailed === true
 
   const showMenu = (x: number, y: number) => {
     setMenuPos({ x, y })
@@ -430,7 +431,8 @@ export function MessageBubble(props: MessageBubbleProps) {
             color: role() === 'user' ? 'var(--c-user-bubble-text)' : 'var(--c-text)',
             border: role() === 'assistant' ? '1px solid var(--c-border)' : 'none',
             ...(pending() ? { opacity: '0.5', 'font-style': 'italic' } : {}),
-            ...(props.turn.streaming ? { opacity: '0.7' } : {})
+            ...(props.turn.streaming ? { opacity: '0.7' } : {}),
+            ...(sendFailed() ? { opacity: '0.6', border: '1px solid #ef4444' } : {})
           }}
         >
           <Show
@@ -458,7 +460,31 @@ export function MessageBubble(props: MessageBubbleProps) {
             </Show>
           </button>
         </div>
-        <Show when={pending()}>
+        <Show when={sendFailed()}>
+          <div
+            class="mt-1 flex items-center gap-2"
+            style={{ 'justify-content': role() === 'user' ? 'flex-end' : 'flex-start' }}
+          >
+            <span class="text-xs" style={{ color: '#ef4444' }}>
+              Failed to send
+            </span>
+            <button
+              class="cursor-pointer rounded px-2 py-0.5 text-xs font-medium transition-colors"
+              style={{ background: 'var(--c-accent)', color: 'var(--c-bg)', border: 'none' }}
+              onClick={() => retrySend(props.turn)}
+            >
+              Retry
+            </button>
+            <button
+              class="cursor-pointer rounded px-2 py-0.5 text-xs transition-colors"
+              style={{ background: 'transparent', color: 'var(--c-text-muted)', border: '1px solid var(--c-border)' }}
+              onClick={() => cancelFailedMessage(props.turn)}
+            >
+              Cancel
+            </button>
+          </div>
+        </Show>
+        <Show when={pending() && !sendFailed()}>
           <div class="mt-1 text-right text-xs" style={{ color: 'var(--c-text-muted)', opacity: '0.6' }}>
             Queued
           </div>

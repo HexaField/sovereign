@@ -3,11 +3,10 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { EventEmitter } from 'node:events'
-import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents, QueuedMessage } from '@sovereign/core'
+import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents } from '@sovereign/core'
 import type { WsHandler } from '../ws/handler.js'
 import type { ThreadManager } from '../threads/types.js'
 import { deriveSessionKey } from './derive-session-key.js'
-import { createMessageQueue } from './message-queue.js'
 import { getSessionFilePath } from '../agent-backend/session-reader.js'
 import type { WorkItem } from '@sovereign/core'
 
@@ -22,10 +21,8 @@ export interface ChatModule {
   handleFullHistory(threadKey: string, deviceId: string): Promise<void>
   handleSessionSwitch(threadKey: string): Promise<void>
   handleSessionCreate(label?: string): Promise<{ threadKey: string; sessionKey: string }>
-  handleCancel(id: string): boolean
   getSessionKeyForThread(threadKey: string): string | undefined
   getThreadKeyForSession(sessionKey: string): string | undefined
-  getQueue(threadKey: string): QueuedMessage[]
   loadMapping(): void
   /** Chat-level event emitter for SSE subscriptions. Events have threadKey resolved. */
   chatEvents: EventEmitter
@@ -86,9 +83,6 @@ export function createChatModule(
   // Load on creation
   loadMapping()
 
-  // Message queue
-  const messageQueue = createMessageQueue(dataDir)
-
   // Deduplicate rapid duplicate user sends (same text within window)
   const recentUserSends = new Map<string, { text: string; ts: number }>()
   const USER_DEDUP_WINDOW_MS = 4000
@@ -109,7 +103,6 @@ export function createChatModule(
         currentStatus.set(threadKey, 'idle')
         statusChangedAt.set(threadKey, now)
         stopJsonlPoll(threadKey)
-        tryProcessQueue(threadKey)
         // Broadcast the status change to clients
         if (wsHandler) {
           wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadKey, status: 'idle' })
@@ -117,67 +110,7 @@ export function createChatModule(
         chatEvents.emit('chat.status', { threadKey, status: 'idle' })
       }
     }
-    // Also check for stalled queues — messages stuck because status is 'done'/'failed'/etc.
-    for (const [tk] of messageQueue.getAllQueues()) {
-      const q = messageQueue.getQueue(tk)
-      if (q.length > 0 && q[0].status === 'queued') {
-        tryProcessQueue(tk)
-      }
-    }
   }, 30_000) // Check every 30s
-
-  function broadcastQueueUpdate(threadKey: string): void {
-    const queueData = { threadKey, queue: messageQueue.getQueue(threadKey) }
-    if (wsHandler) {
-      wsHandler.broadcastToChannel('chat', { type: 'chat.queue.update', ...queueData })
-    }
-    chatEvents.emit('chat.queue.update', queueData)
-  }
-
-  function tryProcessQueue(threadKey: string): void {
-    const status = currentStatus.get(threadKey)
-    // Only process if agent is not actively working
-    const busy = status === 'working' || status === 'thinking'
-    if (busy) return
-    if (backend.status() !== 'connected') return
-    const next = messageQueue.peek(threadKey)
-    if (!next) return
-    // If the head item is still being sent (removeSent hasn't run yet),
-    // schedule a retry — the idle event fired before the send promise resolved
-    if (next.status === 'sending') {
-      setTimeout(() => tryProcessQueue(threadKey), 200)
-      return
-    }
-    messageQueue.markSending(next.id)
-    broadcastQueueUpdate(threadKey)
-
-    let sessionKey = threadToSession.get(threadKey)
-    if (!sessionKey) {
-      sessionKey = deriveSessionKey(threadKey)
-      setMapping(threadKey, sessionKey)
-    }
-    backend
-      .sendMessage(sessionKey, next.text)
-      .then(() => {
-        messageQueue.removeSent(next.id)
-        broadcastQueueUpdate(threadKey)
-        // cache removed
-        // After removing the sent item, try to process the next one.
-        // tryProcessQueue checks currentStatus so it won't send while agent is busy.
-        // This handles the case where idle fired while this item was still 'sending'.
-        tryProcessQueue(threadKey)
-      })
-      .catch(() => {
-        messageQueue.markQueued(next.id)
-        broadcastQueueUpdate(threadKey)
-      })
-    bus.emit({
-      type: 'chat.message.sent',
-      timestamp: new Date().toISOString(),
-      source: 'chat',
-      payload: { threadKey, text: next.text, timestamp: Date.now() }
-    })
-  }
 
   function setMapping(threadKey: string, sessionKey: string): void {
     if (!threadKey || !sessionKey) return // Never store empty mappings
@@ -214,7 +147,6 @@ export function createChatModule(
           statusChangedAt.set(threadKey, Date.now())
           if (data.status === 'idle') {
             stopJsonlPoll(threadKey)
-            tryProcessQueue(threadKey)
           } else if (data.status === 'working' || data.status === 'thinking') {
             // Start polling JSONL for tool calls since gateway WS doesn't stream them
             const sessionKey2 = threadToSession.get(threadKey) ?? deriveSessionKey(threadKey)
@@ -241,13 +173,6 @@ export function createChatModule(
           currentWork.delete(threadKey)
           currentStreamText.delete(threadKey)
           // cache removed
-        }
-      }
-
-      // Fallback: if idle event has no thread mapping, try all queues with pending items
-      if (!threadKey && eventName === 'chat.status' && data.status === 'idle') {
-        for (const [tk] of messageQueue.getAllQueues()) {
-          tryProcessQueue(tk)
         }
       }
 
@@ -458,13 +383,33 @@ export function createChatModule(
     }
     recentUserSends.set(threadKey, { text, ts: now })
 
-    // Enqueue the message — server owns the queue
-    messageQueue.enqueue(threadKey, text)
-    broadcastQueueUpdate(threadKey)
+    let sessionKey = threadToSession.get(threadKey)
+    if (!sessionKey) {
+      sessionKey = deriveSessionKey(threadKey)
+      setMapping(threadKey, sessionKey)
+    }
 
-    // user-message broadcast removed — user turns come from history (single source of truth)
+    // Direct send — no queue. Immediate error notification on failure.
+    try {
+      await backend.sendMessage(sessionKey, text)
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      console.error(`[chat] send failed for ${threadKey}: ${errorMsg}`)
+      // Notify clients immediately so they can see the error
+      const errorData = { threadKey, error: errorMsg, retryAfterMs: 5000 }
+      if (wsHandler) {
+        wsHandler.broadcastToChannel('chat', { type: 'chat.error', ...errorData })
+      }
+      chatEvents.emit('chat.error', errorData)
+      return
+    }
 
-    tryProcessQueue(threadKey)
+    bus.emit({
+      type: 'chat.message.sent',
+      timestamp: new Date().toISOString(),
+      source: 'chat',
+      payload: { threadKey, text, timestamp: Date.now() }
+    })
   }
 
   async function handleAbort(threadKey: string): Promise<void> {
@@ -514,13 +459,6 @@ export function createChatModule(
           wsHandler.sendTo(deviceId, { type: 'chat.stream', threadKey, text, replay: true })
         }
       }
-
-      // Send current queue state
-      wsHandler.sendTo(deviceId, {
-        type: 'chat.queue.update',
-        threadKey,
-        queue: messageQueue.getQueue(threadKey)
-      })
     }
   }
 
@@ -551,22 +489,6 @@ export function createChatModule(
     }
   }
 
-  function handleCancel(id: string): boolean {
-    // Find the threadKey before cancelling (item will be removed)
-    let targetThreadKey: string | undefined
-    for (const [threadKey, items] of messageQueue.getAllQueues()) {
-      if (items.some((m) => m.id === id)) {
-        targetThreadKey = threadKey
-        break
-      }
-    }
-    const cancelled = messageQueue.cancel(id)
-    if (cancelled && targetThreadKey) {
-      broadcastQueueUpdate(targetThreadKey)
-    }
-    return cancelled
-  }
-
   async function handleSessionCreate(label?: string): Promise<{ threadKey: string; sessionKey: string }> {
     const thread = threadManager.create({ label })
     const sessionKey = deriveSessionKey(thread.key)
@@ -582,10 +504,8 @@ export function createChatModule(
     handleFullHistory,
     handleSessionSwitch,
     handleSessionCreate,
-    handleCancel,
     getSessionKeyForThread: (tk: string) => threadToSession.get(tk),
     getThreadKeyForSession: (sk: string) => sessionToThread.get(sk),
-    getQueue: (threadKey: string) => messageQueue.getQueue(threadKey),
     loadMapping,
     chatEvents,
     getLiveState: (threadKey: string) => ({

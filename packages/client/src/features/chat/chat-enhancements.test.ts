@@ -8,7 +8,9 @@ const mockLocalStorage = {
   setItem: (key: string, value: string) => storage.set(key, value),
   removeItem: (key: string) => storage.delete(key),
   clear: () => storage.clear(),
-  get length() { return storage.size },
+  get length() {
+    return storage.size
+  },
   key: (i: number) => [...storage.keys()][i] ?? null
 }
 if (typeof globalThis.localStorage === 'undefined') {
@@ -56,24 +58,8 @@ describe('§P.3 Chat System Enhancements', () => {
     })
   })
 
-  // §P.3.3 Server-Side Message Queue (replaced client-side pending turns)
-  describe('§P.3.3 Server-Side Message Queue', () => {
-    it('§P.3.3 SHOULD export messageQueue signal', async () => {
-      const store = await import('./store.js')
-      expect(typeof store.messageQueue).toBe('function')
-      expect(store.messageQueue()).toEqual([])
-    })
-
-    it('§P.3.3 SHOULD export cancelMessage function', async () => {
-      const store = await import('./store.js')
-      expect(typeof store.cancelMessage).toBe('function')
-    })
-
-    it('§P.3.3 SHOULD export setMessageQueue for queue updates', async () => {
-      const store = await import('./store.js')
-      expect(typeof store.setMessageQueue).toBe('function')
-    })
-  })
+  // §P.3.3 Server-Side Message Queue — REMOVED (direct send with immediate error)
+  // Queue functionality has been replaced by direct send to agent backend.
 
   // §P.3.5 Streaming HTML
   describe('§P.3.5 Streaming HTML', () => {

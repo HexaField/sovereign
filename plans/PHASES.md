@@ -36,9 +36,17 @@ Voice as a first-class workspace modality. Meeting model with diarization (speak
 
 ## Phase 9: Workspace Consolidation & Org Standardisation
 
-Standardise all repository locations, Sovereign org data, OpenClaw membrane context files, and memory references across all three machines (Mac, Josh Ubuntu, Field Ubuntu). Canonical repo root: `~/workspaces/<org>/<repo>`. Consolidate dweb, metamyth, and harmony membranes into Atlas Research workspace. Fix stale paths in Sovereign orgs.json, OpenClaw context files, and MEMORY.md. Evaluate and clean up stale worktree clones. Maintain full backwards compatibility with OpenClaw workspace conventions.
+Standardise all repository locations, Sovereign org data, OpenClaw membrane context files, and memory references across all three machines (Mac, Josh Ubuntu, Field Ubuntu). Canonical repo root: `~/workspaces/<org>/<repo>`. Consolidate dweb, metamyth, and harmony membranes into Atlas Research workspace. Fix stale paths in Sovereign orgs.json, OpenClaw context files, and MEMORY.md. Evaluate and clean up stale worktree clones. Maintain full backwards compatibility with OpenClaw workspace conventions. **Desktop repos are treated as stale/retired and explicitly out of scope for moves.**
 
 Also documents worktree limitations: worktrees handle code-level parallelism (multiple branches) but NOT runtime-level parallelism (Docker volumes, databases, container names). Phase 10's worktree-agent binding must account for this.
+
+**Phase 9 additions (completion gaps):**
+
+- Workspace ↔ thread alignment (threads scoped to workspace)
+- Chat session scoping (chat panel follows workspace + thread)
+- Remove `sessions.json` dependency (local session index as source of truth)
+- Wire Recordings panel to recordings service (Phase 8 client completion)
+- Wire Voice routes to module (Phase 8 server completion)
 
 **Spec:** `plans/phase-9-spec.md`
 

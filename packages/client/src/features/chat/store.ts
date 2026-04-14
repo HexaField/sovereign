@@ -1,6 +1,6 @@
 import { createSignal, createEffect } from 'solid-js'
 import type { Accessor } from 'solid-js'
-import type { ParsedTurn, WorkItem, AgentStatus, QueuedMessage } from '@sovereign/core'
+import type { ParsedTurn, WorkItem, AgentStatus } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
 import { renderMarkdown, stripThinkingBlocks } from '../../lib/markdown.js'
 import { setBackendStatus, type ConnectionStatus } from '../connection/store.js'
@@ -13,7 +13,6 @@ export const [agentDurationText, setAgentDurationText] = createSignal('')
 export const [isRetryCountdownActive, setRetryActive] = createSignal(false)
 export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
 export const [inputValue, _setInputValue] = createSignal('')
-export const [messageQueue, setMessageQueue] = createSignal<QueuedMessage[]>([])
 export const [hasOlderMessages, setHasOlderMessages] = createSignal(false)
 export const [loadingOlder, setLoadingOlder] = createSignal(false)
 
@@ -22,6 +21,20 @@ export const [streamingText, setStreamingText] = createSignal('')
 export const [streamingHtml, setStreamingHtml] = createSignal('')
 export const [liveWork, setLiveWork] = createSignal<WorkItem[]>([])
 export const [liveThinkingText, setLiveThinkingText] = createSignal('')
+
+// §R.5 Offline pending queue
+export interface PendingMessage {
+  id: string
+  text: string
+  threadKey: string
+  timestamp: number
+  retries: number
+  status: 'pending' | 'sending' | 'failed'
+}
+export const [pendingQueue, setPendingQueue] = createSignal<PendingMessage[]>([])
+
+// §R.8 Connection loss banner
+export const [connectionLost, setConnectionLost] = createSignal(false)
 
 function draftKey(threadKey: string): string {
   return `sovereign:draft:${threadKey}`
@@ -125,10 +138,17 @@ let streamTextOffset = 0
 
 // SSE connection
 let eventSource: EventSource | null = null
+// SSE sequence tracking for gap detection
+let lastSSESeq = 0
 
 // Content-hash dedup window for user-message SSE events
 const recentUserMessages = new Map<string, number>() // content -> timestamp
 const USER_MSG_DEDUP_WINDOW_MS = 10_000
+
+// §R.4 Send timeout guard — pending ack map
+const SEND_TIMEOUT_MS = 15_000
+const MAX_SEND_RETRIES = 3
+const pendingAcks = new Map<string, { timer: ReturnType<typeof setTimeout>; msg: PendingMessage }>()
 
 export function startRetryCountdown(seconds: number): void {
   clearRetryCountdown()
@@ -183,10 +203,16 @@ function resetState(): void {
   clearRetryCountdown()
   stopDurationTimer()
   suppressLifecycleUntil = 0
-  setMessageQueue([])
   setHasOlderMessages(false)
   setLoadingOlder(false)
   recentUserMessages.clear()
+  // Clear pending queue and ack timers
+  for (const [, entry] of pendingAcks) clearTimeout(entry.timer)
+  pendingAcks.clear()
+  setPendingQueue([])
+  setConnectionLost(false)
+  lastSSESeq = 0
+  resetSendState()
   if (import.meta?.env?.MODE === 'test') {
     chatInitialized = false
   }
@@ -194,6 +220,103 @@ function resetState(): void {
 
 let lastSentText = ''
 let lastSentTime = 0
+let ackCounter = 0
+
+function resetSendState(): void {
+  lastSentText = ''
+  lastSentTime = 0
+  ackCounter = 0
+}
+
+/** §R.6 Exponential backoff delay for send retries */
+function retryBackoffMs(retries: number): number {
+  return Math.min(1000 * Math.pow(2, retries), 30_000) * (0.5 + Math.random() * 0.5)
+}
+
+/** §R.5 Flush pending queue — attempt to send next pending message */
+function flushPendingQueue(): void {
+  const queue = pendingQueue()
+  const next = queue.find((m) => m.status === 'pending')
+  if (!next) return
+  if (!ws?.connected()) return
+  doSend(next)
+}
+
+/** Internal: send a pending message with ack tracking */
+function doSend(pending: PendingMessage): void {
+  const ackId = `ack-${++ackCounter}-${Date.now()}`
+
+  setPendingQueue((q) => q.map((m) => (m.id === pending.id ? { ...m, status: 'sending' as const } : m)))
+
+  // Set up timeout guard
+  const timer = setTimeout(() => {
+    pendingAcks.delete(ackId)
+    if (pending.retries < MAX_SEND_RETRIES) {
+      // §R.6 Retry with backoff
+      const delay = retryBackoffMs(pending.retries)
+      setPendingQueue((q) =>
+        q.map((m) => (m.id === pending.id ? { ...m, status: 'pending' as const, retries: m.retries + 1 } : m))
+      )
+      setTimeout(() => flushPendingQueue(), delay)
+    } else {
+      // Mark as failed after max retries
+      setPendingQueue((q) => q.map((m) => (m.id === pending.id ? { ...m, status: 'failed' as const } : m)))
+      // Mark the corresponding optimistic turn as failed
+      setTurns((prev) => {
+        const updated = [...prev]
+        for (let i = updated.length - 1; i >= 0; i--) {
+          if (updated[i].role === 'user' && updated[i].content === pending.text && !updated[i].sendFailed) {
+            updated[i] = { ...updated[i], sendFailed: true }
+            break
+          }
+        }
+        return updated
+      })
+    }
+  }, SEND_TIMEOUT_MS)
+
+  pendingAcks.set(ackId, { timer, msg: pending })
+
+  try {
+    ws?.send({ type: 'chat.send', text: pending.text, threadKey: pending.threadKey, ackId } as any)
+  } catch {
+    clearTimeout(timer)
+    pendingAcks.delete(ackId)
+    setPendingQueue((q) => q.map((m) => (m.id === pending.id ? { ...m, status: 'failed' as const } : m)))
+  }
+}
+
+/** Handle ack from server — message accepted */
+export function handleAck(ackId: string): void {
+  const entry = pendingAcks.get(ackId)
+  if (!entry) return
+  clearTimeout(entry.timer)
+  pendingAcks.delete(ackId)
+  // Remove from pending queue
+  setPendingQueue((q) => q.filter((m) => m.id !== entry.msg.id))
+  // Send next queued message
+  flushPendingQueue()
+}
+
+/** Handle nack from server — message rejected */
+export function handleNack(ackId: string, error?: string): void {
+  const entry = pendingAcks.get(ackId)
+  if (!entry) return
+  clearTimeout(entry.timer)
+  pendingAcks.delete(ackId)
+  // Mark the send as failed
+  setPendingQueue((q) => q.map((m) => (m.id === entry.msg.id ? { ...m, status: 'failed' as const } : m)))
+  setTurns((prev) => {
+    const updated = [...prev]
+    for (let i = updated.length - 1; i >= 0; i--) {
+      if (updated[i].role === 'user' && updated[i].content === entry.msg.text && !updated[i].sendFailed) {
+        updated[i] = { ...updated[i], sendFailed: true }
+        break
+      }
+    }
+    return updated
+  })
+}
 
 export async function sendMessage(text: string, attachments?: File[]): Promise<void> {
   const threadKey = currentThreadKey?.() ?? 'main'
@@ -214,29 +337,72 @@ export async function sendMessage(text: string, attachments?: File[]): Promise<v
       content: text,
       timestamp: Date.now(),
       workItems: [],
-      thinkingBlocks: []
+      thinkingBlocks: [],
+      pending: true
     }
   ])
 
-  if (attachments?.length) {
-    // Use HTTP POST with base64 attachments
-    const base64Files = await Promise.all(
-      attachments.map(async (f) => {
-        const buf = await f.arrayBuffer()
-        const bytes = new Uint8Array(buf)
-        let binary = ''
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-        return btoa(binary)
+  try {
+    if (attachments?.length) {
+      // Use HTTP POST with base64 attachments
+      const base64Files = await Promise.all(
+        attachments.map(async (f) => {
+          const buf = await f.arrayBuffer()
+          const bytes = new Uint8Array(buf)
+          let binary = ''
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+          return btoa(binary)
+        })
+      )
+      const res = await fetch('/api/chat/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadKey, message: text, attachments: base64Files })
       })
-    )
-    await fetch('/api/chat/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threadKey, message: text, attachments: base64Files })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // Mark optimistic turn as confirmed
+      setTurns((prev) => prev.map((t) => (t.pending && t.content === text ? { ...t, pending: false } : t)))
+    } else {
+      // §R.5 Add to pending queue and send with ack tracking
+      const pending: PendingMessage = {
+        id: `pm-${++ackCounter}-${Date.now()}`,
+        text,
+        threadKey,
+        timestamp: Date.now(),
+        retries: 0,
+        status: ws?.connected() ? 'pending' : 'pending'
+      }
+      setPendingQueue((q) => [...q, pending])
+
+      if (ws?.connected()) {
+        doSend(pending)
+      }
+      // If offline, message stays in queue and flushPendingQueue runs on reconnect
+    }
+  } catch {
+    // Mark the optimistic turn as failed
+    setTurns((prev) => {
+      const updated = [...prev]
+      for (let i = updated.length - 1; i >= 0; i--) {
+        if (updated[i].role === 'user' && updated[i].content === text && !updated[i].sendFailed) {
+          updated[i] = { ...updated[i], sendFailed: true, pending: false }
+          break
+        }
+      }
+      return updated
     })
-  } else {
-    ws?.send({ type: 'chat.send', text, threadKey } as any)
   }
+}
+
+export function retrySend(turn: ParsedTurn): void {
+  // Remove the failed turn and re-send
+  const text = turn.content
+  setTurns((prev) => prev.filter((t) => t !== turn))
+  sendMessage(text)
+}
+
+export function cancelFailedMessage(turn: ParsedTurn): void {
+  setTurns((prev) => prev.filter((t) => t !== turn))
 }
 
 export function loadOlderMessages(): void {
@@ -244,10 +410,6 @@ export function loadOlderMessages(): void {
   setLoadingOlder(true)
   const threadKey = currentThreadKey?.() ?? 'main'
   ws.send({ type: 'chat.history.full', threadKey } as any)
-}
-
-export function cancelMessage(id: string): void {
-  ws?.send({ type: 'chat.cancel', id } as any)
 }
 
 export function abortChat(): void {
@@ -271,19 +433,23 @@ function connectSSE(threadKey: string): void {
 
   // Fetch history via HTTP GET immediately (fast, parallel with SSE)
   let historyLoaded = false
+  let historyETag: string | null = null // §R.7 ETag for cache validation
   const fetchHistory = (attempt = 0) => {
-    fetch(`/api/threads/${encodeURIComponent(threadKey)}/history`)
+    const headers: Record<string, string> = {}
+    if (historyETag) headers['If-None-Match'] = historyETag
+    fetch(`/api/threads/${encodeURIComponent(threadKey)}/history`, { headers })
       .then((r) => {
+        if (r.status === 304) return null // §R.7 Not modified — cache is valid
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const etag = r.headers.get('ETag')
+        if (etag) historyETag = etag
         return r.json()
       })
       .then((data) => {
+        if (!data) return // 304 response
         if (data.turns?.length) {
           setTurns(data.turns)
           setHasOlderMessages(data.hasMore ?? false)
-          // Only clear live state on the first history load to prevent duplicates
-          // between history work items and live SSE work items.
-          // After that, live state is managed by SSE events only.
           if (!historyLoaded) {
             historyLoaded = true
             clearLiveState()
@@ -300,6 +466,32 @@ function connectSSE(threadKey: string): void {
   if (typeof EventSource === 'undefined') return
   const url = `/api/threads/${encodeURIComponent(threadKey)}/events`
   eventSource = new EventSource(url)
+  lastSSESeq = 0
+
+  // §R.3 SSE sequence gap detection
+  function checkSeq(e: Event): boolean {
+    const me = e as MessageEvent
+    if (me.lastEventId) {
+      const seq = parseInt(me.lastEventId, 10)
+      if (!isNaN(seq)) {
+        if (lastSSESeq > 0 && seq > lastSSESeq + 1) {
+          // Gap detected — reconnect to get fresh state
+          console.warn(`[chat] SSE gap: expected ${lastSSESeq + 1}, got ${seq}. Reconnecting...`)
+          lastSSESeq = seq
+          // Fetch fresh history to reconcile
+          fetchHistory()
+          return false
+        }
+        lastSSESeq = seq
+      }
+    }
+    return true
+  }
+
+  // §R.8 Track SSE open/error for connection loss banner
+  eventSource.onopen = () => {
+    setConnectionLost(false)
+  }
 
   // ── history: reconnect / full history reload via SSE (fallback) ──
   eventSource.addEventListener('history', (e) => {
@@ -312,6 +504,7 @@ function connectSSE(threadKey: string): void {
 
   // ── status: agent status changes ──
   eventSource.addEventListener('status', (e) => {
+    if (!checkSeq(e)) return
     const data = JSON.parse((e as MessageEvent).data)
     if (Date.now() < suppressLifecycleUntil && data.status !== 'idle') return
     setAgentStatus(data.status)
@@ -333,6 +526,7 @@ function connectSSE(threadKey: string): void {
 
   // ── stream: text streaming deltas ──
   eventSource.addEventListener('stream', (e) => {
+    if (!checkSeq(e)) return
     const data = JSON.parse((e as MessageEvent).data)
     const isSubagent = threadKey.startsWith('subagent:')
 
@@ -356,6 +550,7 @@ function connectSSE(threadKey: string): void {
 
   // ── work: tool calls, tool results, thinking blocks ──
   eventSource.addEventListener('work', (e) => {
+    if (!checkSeq(e)) return
     const data = JSON.parse((e as MessageEvent).data)
     const work = data.work as WorkItem
 
@@ -388,6 +583,7 @@ function connectSSE(threadKey: string): void {
 
   // ── turn: completed turn ──
   eventSource.addEventListener('turn', (e) => {
+    if (!checkSeq(e)) return
     const data = JSON.parse((e as MessageEvent).data)
     const turn = data.turn as ParsedTurn
     turnReceivedForCurrentRun = true
@@ -398,12 +594,22 @@ function connectSSE(threadKey: string): void {
       workItems: turn.workItems?.length > 0 ? turn.workItems : liveWorkItems
     }
 
+    // §R.2 Optimistic reconciliation — match server turn against pending optimistic turns
     setTurns((prev) => {
       // Guard against duplicate turn content (e.g. optimistic user turn + authoritative turn)
       const last = prev[prev.length - 1]
       if (last && last.role === merged.role && last.content === merged.content) {
-        // Replace last turn with the authoritative one (has workItems etc.)
-        return [...prev.slice(0, -1), merged]
+        // Replace last turn with the authoritative one (has workItems etc.) and clear pending flag
+        return [...prev.slice(0, -1), { ...merged, pending: false, sendFailed: false }]
+      }
+      // Check for pending user turn that matches this turn (may not be last)
+      if (merged.role === 'user') {
+        const pendingIdx = prev.findIndex((t) => t.role === 'user' && t.pending && t.content === merged.content)
+        if (pendingIdx >= 0) {
+          const updated = [...prev]
+          updated[pendingIdx] = { ...merged, pending: false, sendFailed: false }
+          return updated
+        }
       }
       return [...prev, merged]
     })
@@ -419,6 +625,12 @@ function connectSSE(threadKey: string): void {
   // ── error ──
   eventSource.addEventListener('error', (e) => {
     // SSE spec: EventSource fires 'error' on connection loss — it auto-reconnects
+    // §R.8 Connection loss banner
+    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+      setConnectionLost(true)
+    } else if (eventSource && eventSource.readyState === EventSource.CONNECTING) {
+      setConnectionLost(true)
+    }
     // Only handle our custom error events (they have data)
     const me = e as MessageEvent
     if (me.data) {
@@ -437,12 +649,6 @@ function connectSSE(threadKey: string): void {
   eventSource.addEventListener('backend-status', (e) => {
     const data = JSON.parse((e as MessageEvent).data)
     setBackendStatus(data.status as ConnectionStatus)
-  })
-
-  // ── queue ──
-  eventSource.addEventListener('queue', (e) => {
-    const data = JSON.parse((e as MessageEvent).data)
-    setMessageQueue(data.queue ?? [])
   })
 
   // user-message SSE event removed — user turns are added optimistically in sendMessage()
@@ -491,6 +697,26 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   })
 
   clearLiveState()
+
+  // §R.1 WS ack/nack handlers
+  unsubs.push(
+    ws.on('ack', (msg: any) => {
+      handleAck(msg.ackId)
+    })
+  )
+  unsubs.push(
+    ws.on('nack', (msg: any) => {
+      handleNack(msg.ackId, msg.error)
+    })
+  )
+
+  // §R.5 Flush pending queue on WS reconnect
+  unsubs.push(
+    ws.on('ws.reconnected', () => {
+      setConnectionLost(false)
+      flushPendingQueue()
+    })
+  )
 
   // ── WS listeners (fallback — only active when SSE is not connected) ──
 

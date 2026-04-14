@@ -126,9 +126,11 @@ describe('§3.2 Chat Store', () => {
     expect(retryCountdownSeconds()).toBe(0)
   })
 
-  it('sendMessage MUST send chat.send via WS without creating optimistic turn', () => {
+  it('sendMessage MUST send chat.send via WS and add optimistic user turn', () => {
     sendMessage('hello')
-    expect(turns().length).toBe(0) // No optimistic turn — server owns the queue
+    expect(turns().length).toBe(1) // Optimistic turn added immediately
+    expect(turns()[0].role).toBe('user')
+    expect(turns()[0].content).toBe('hello')
     expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.send', text: 'hello' }))
   })
 

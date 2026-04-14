@@ -13,7 +13,6 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
       'chat.compacting',
       'chat.error',
       'chat.session.info',
-      'chat.queue.update',
       'backend.status'
     ],
     clientMessages: [
@@ -22,16 +21,29 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
       'chat.history',
       'chat.history.full',
       'chat.session.switch',
-      'chat.session.create',
-      'chat.cancel'
+      'chat.session.create'
     ],
     onMessage: (type: string, payload: unknown, deviceId: string) => {
       const msg = payload as Record<string, unknown>
       const threadKey = msg.threadKey as string
 
+      const ackId = msg.ackId as string | undefined
+
       switch (type) {
         case 'chat.send':
-          chatModule.handleSend(threadKey, msg.text as string, msg.attachments as Buffer[] | undefined)
+          chatModule
+            .handleSend(threadKey, msg.text as string, msg.attachments as Buffer[] | undefined)
+            .then(() => {
+              if (ackId && wsHandler.sendTo) {
+                wsHandler.sendTo(deviceId, { type: 'ack', ackId, status: 'accepted' } as any)
+              }
+            })
+            .catch((err: unknown) => {
+              if (ackId && wsHandler.sendTo) {
+                const errMsg = err instanceof Error ? err.message : String(err)
+                wsHandler.sendTo(deviceId, { type: 'nack', ackId, error: errMsg } as any)
+              }
+            })
           break
         case 'chat.abort':
           chatModule.handleAbort(threadKey)
@@ -47,9 +59,6 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
           break
         case 'chat.session.create':
           chatModule.handleSessionCreate(msg.label as string | undefined)
-          break
-        case 'chat.cancel':
-          chatModule.handleCancel(msg.id as string)
           break
       }
     }
