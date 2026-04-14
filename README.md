@@ -50,6 +50,8 @@ Real-time architecture view showing every module, its subscriptions, and event f
 
 Connects to an AI agent runtime (currently OpenClaw) via authenticated WebSocket with challenge-response device identity. Entity events trigger autonomous agent work; notification events surface for user response. Designed for full backend independence — a native agent core (session store, tool runtime, LLM router, multi-agent orchestration) replaces the external bridge.
 
+For the repo-specific cutover plan, see [`specs/openclaw-to-zeroclaw-migration.md`](specs/openclaw-to-zeroclaw-migration.md).
+
 ## Architecture
 
 TypeScript monorepo. SolidJS client, Express server, shared core library. Modules export `init(bus)` and `status()` — nothing else. The event bus is the only integration surface.
