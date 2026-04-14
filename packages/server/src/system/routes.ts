@@ -1,6 +1,8 @@
 // System REST endpoints: GET /api/system/architecture, GET /api/system/health, GET /api/system/logs
 
 import { Router } from 'express'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { SystemModule } from './system.js'
 import type { LogsChannel } from './ws.js'
 import { readPersistedLogs } from './ws.js'
@@ -16,12 +18,17 @@ export interface DeviceInfoProvider {
   }
 }
 
+export interface GatewayRestartService {
+  restart(): Promise<{ message: string; command: string }>
+}
+
 export interface SystemRoutesOptions {
   system: SystemModule
   logsChannel: LogsChannel
   dataDir: string
   healthHistory?: HealthHistory
   deviceInfoProvider?: DeviceInfoProvider
+  gatewayRestart?: GatewayRestartService
 }
 
 async function fetchContextBudgetFromGateway(): Promise<Record<string, unknown> | null> {
@@ -41,6 +48,25 @@ async function fetchContextBudgetFromGateway(): Promise<Record<string, unknown> 
     // Gateway unavailable — return null for mock fallback
   }
   return null
+}
+
+const execFileAsync = promisify(execFile)
+
+export function createGatewayRestartService(): GatewayRestartService {
+  return {
+    async restart() {
+      const command = 'openclaw gateway restart'
+      const { stdout, stderr } = await execFileAsync('openclaw', ['gateway', 'restart'], {
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024
+      })
+      const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+      return {
+        command,
+        message: output || 'OpenClaw gateway restart completed'
+      }
+    }
+  }
 }
 
 function mockContextBudget(): Record<string, unknown> {
@@ -73,6 +99,9 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   const dataDir = 'dataDir' in opts ? (opts as SystemRoutesOptions).dataDir : null
   const healthHistory = 'healthHistory' in opts ? (opts as SystemRoutesOptions).healthHistory : null
   const deviceInfoProvider = 'deviceInfoProvider' in opts ? (opts as SystemRoutesOptions).deviceInfoProvider : null
+  const gatewayRestart =
+    'gatewayRestart' in opts ? (opts as SystemRoutesOptions).gatewayRestart : createGatewayRestartService()
+  let restartInFlight: Promise<{ message: string; command: string }> | null = null
 
   router.get('/api/system/identity', (_req, res) => {
     res.json({
@@ -152,6 +181,30 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
         }
       ]
     })
+  })
+
+  router.post('/api/system/gateway/restart', async (_req, res) => {
+    if (!gatewayRestart) {
+      res.status(500).json({ error: 'Gateway restart service unavailable' })
+      return
+    }
+
+    if (restartInFlight) {
+      res.status(409).json({ error: 'Gateway restart already in progress' })
+      return
+    }
+
+    restartInFlight = gatewayRestart.restart()
+    try {
+      const result = await restartInFlight
+      res.status(202).json({ status: 'accepted', ...result })
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim() ? error.message : 'Failed to restart OpenClaw gateway'
+      res.status(500).json({ error: message })
+    } finally {
+      restartInFlight = null
+    }
   })
 
   // Watchdog endpoint
