@@ -1,7 +1,7 @@
 import type { EventBus } from '@sovereign/core'
 import type { TerminalSession } from './types.js'
-import * as pty from 'node-pty'
 import { randomUUID } from 'crypto'
+import { createRequire } from 'module'
 
 export interface TerminalManagerOptions {
   validateCwd: (path: string) => boolean
@@ -26,9 +26,21 @@ export interface TerminalManager {
   dispose(): void
 }
 
+type PtyModule = typeof import('node-pty')
+
+const require = createRequire(import.meta.url)
+let ptyModule: PtyModule | null = null
+
+function getPty(): PtyModule {
+  if (!ptyModule) {
+    ptyModule = require('node-pty') as PtyModule
+  }
+  return ptyModule
+}
+
 interface InternalSession {
   meta: TerminalSession
-  pty: pty.IPty
+  pty: import('node-pty').IPty
   gracePeriodTimer?: ReturnType<typeof setTimeout>
 }
 
@@ -43,7 +55,7 @@ export function createTerminalManager(bus: EventBus, opts: TerminalManagerOption
       }
       const resolvedShell = shell ?? process.env.SHELL ?? '/bin/bash'
       const id = randomUUID()
-      const proc = pty.spawn(resolvedShell, [], { name: 'xterm-256color', cols, rows, cwd })
+      const proc = getPty().spawn(resolvedShell, [], { name: 'xterm-256color', cols, rows, cwd })
       const meta: TerminalSession = {
         id,
         pid: proc.pid,
@@ -61,7 +73,7 @@ export function createTerminalManager(bus: EventBus, opts: TerminalManagerOption
     attach(sessionId: string): AttachHandle {
       const s = sessions.get(sessionId)
       if (!s) throw new Error(`session not found: ${sessionId}`)
-      let disposable: pty.IDisposable | undefined
+      let disposable: import('node-pty').IDisposable | undefined
       return {
         onData(cb: (data: string) => void) {
           disposable = s.pty.onData(cb)
