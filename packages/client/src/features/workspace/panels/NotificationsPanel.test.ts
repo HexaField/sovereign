@@ -1,3 +1,4 @@
+import type { JSX } from 'solid-js'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // Mock wsStore
@@ -27,6 +28,8 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 
 import { formatRelativeTime, type NotificationItem } from './NotificationsPanel.js'
+
+const testIcon = {} as JSX.Element
 import { _setActiveWorkspace } from '../store.js'
 
 beforeEach(() => {
@@ -37,7 +40,14 @@ beforeEach(() => {
 describe('NotificationsPanel', () => {
   describe('§3.3.5 — Notifications Tab', () => {
     it('§3.3.5 — shows workspace-scoped notifications', () => {
-      const notif: NotificationItem = { id: '1', icon: '🔔', summary: 'PR merged', timestamp: Date.now(), read: false }
+      const notif: NotificationItem = {
+        id: '1',
+        icon: testIcon,
+        summary: 'PR merged',
+        timestamp: Date.now(),
+        read: false,
+        priority: 'info'
+      }
       expect(notif.summary).toBe('PR merged')
     })
 
@@ -48,10 +58,11 @@ describe('NotificationsPanel', () => {
     it('§3.3.5 — each notification shows icon, summary, relative timestamp, read/unread indicator', () => {
       const notif: NotificationItem = {
         id: '2',
-        icon: '⚠️',
+        icon: testIcon,
         summary: 'Build failed',
         timestamp: Date.now() - 120_000,
-        read: false
+        read: false,
+        priority: 'warning'
       }
       expect(notif.icon).toBe('⚠️')
       expect(notif.read).toBe(false)
@@ -61,10 +72,11 @@ describe('NotificationsPanel', () => {
     it('§3.3.5 — clicking navigates to relevant entity tab', () => {
       const notif: NotificationItem = {
         id: '3',
-        icon: '📄',
+        icon: testIcon,
         summary: 'New issue',
         timestamp: Date.now(),
         read: true,
+        priority: 'info',
         entityRef: 'issue-5'
       }
       expect(notif.entityRef).toBe('issue-5')

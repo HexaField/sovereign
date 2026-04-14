@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { MeetingDetail, MEETING_TABS, formatDetailDate } from './MeetingDetail.js'
-import type { MeetingTab, MeetingDetailProps } from './MeetingDetail.js'
 
 describe('§8.9.2 Meeting Detail View', () => {
   it('§8.9.2 MUST show header with editable title, date, duration, participants', () => {

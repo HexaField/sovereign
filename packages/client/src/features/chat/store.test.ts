@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createSignal, createRoot } from 'solid-js'
+import { createSignal } from 'solid-js'
 
 const store: Record<string, string> = {}
 const localStorageMock = {

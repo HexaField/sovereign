@@ -11,11 +11,11 @@ interface ViewItem {
 }
 
 const VIEW_ITEMS: ViewItem[] = [
-  { key: 'dashboard', icon: () => <DashboardIcon size={16} />, label: 'Dashboard', shortcut: '⌘1' },
-  { key: 'workspace', icon: () => <WorkspaceIcon size={16} />, label: 'Workspace', shortcut: '⌘2' },
-  { key: 'canvas', icon: () => <CanvasIcon size={16} />, label: 'Canvas', shortcut: '⌘3' },
-  { key: 'planning', icon: () => <PlanningIcon size={16} />, label: 'Planning', shortcut: '⌘4' },
-  { key: 'system', icon: () => <SystemIcon size={16} />, label: 'System', shortcut: '⌘5' }
+  { key: 'dashboard', icon: () => <DashboardIcon class="h-4 w-4" />, label: 'Dashboard', shortcut: '⌘1' },
+  { key: 'workspace', icon: () => <WorkspaceIcon class="h-4 w-4" />, label: 'Workspace', shortcut: '⌘2' },
+  { key: 'canvas', icon: () => <CanvasIcon class="h-4 w-4" />, label: 'Canvas', shortcut: '⌘3' },
+  { key: 'planning', icon: () => <PlanningIcon class="h-4 w-4" />, label: 'Planning', shortcut: '⌘4' },
+  { key: 'system', icon: () => <SystemIcon class="h-4 w-4" />, label: 'System', shortcut: '⌘5' }
 ]
 
 export default function ViewMenu() {

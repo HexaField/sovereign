@@ -1,4 +1,4 @@
-import { Show, For, createSignal, createEffect, on, onMount } from 'solid-js'
+import { Show, For, createSignal, createEffect, on } from 'solid-js'
 import type { Component } from 'solid-js'
 import { activeWorkspace, openPlanningDAG, openIssueDetail } from '../store.js'
 import { draftsStore } from '../../drafts/index.js'
@@ -225,7 +225,7 @@ const PlanningPanel: Component = () => {
           setCompletion(null)
           setIssues([])
           setProjects([])
-          setEnabledProjectIds(new Set())
+          setEnabledProjectIds(new Set<string>())
           setError(null)
           setSyncResult(null)
         }
@@ -366,7 +366,6 @@ const PlanningPanel: Component = () => {
 
           <Show when={!loading() && !error() && hasData()}>
             {(() => {
-              const c = () => completion()!
               const cats = categorizedIssues
               // Compute filtered stats reactively
               const filteredStats = () => {
@@ -379,14 +378,29 @@ const PlanningPanel: Component = () => {
                 let blockedCount = 0
                 let inProgressCount = 0
                 for (const issue of fi) {
-                  if (issue.state === 'closed') { closed++; continue }
-                  const key = refKey({ orgId: issue.orgId, projectId: issue.projectId, remote: issue.remote, issueId: issue.id })
+                  if (issue.state === 'closed') {
+                    closed++
+                    continue
+                  }
+                  const key = refKey({
+                    orgId: issue.orgId,
+                    projectId: issue.projectId,
+                    remote: issue.remote,
+                    issueId: issue.id
+                  })
                   if (bSet.has(key)) blockedCount++
                   else if (rSet.has(key)) readyCount++
                   else inProgressCount++
                 }
                 const percentage = total > 0 ? Math.round((closed / total) * 100) : 0
-                return { total, closed, percentage, ready: readyCount, blocked: blockedCount, inProgress: inProgressCount }
+                return {
+                  total,
+                  closed,
+                  percentage,
+                  ready: readyCount,
+                  blocked: blockedCount,
+                  inProgress: inProgressCount
+                }
               }
               const fs = filteredStats
               return (

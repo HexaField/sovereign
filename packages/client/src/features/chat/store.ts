@@ -143,7 +143,6 @@ let lastSSESeq = 0
 
 // Content-hash dedup window for user-message SSE events
 const recentUserMessages = new Map<string, number>() // content -> timestamp
-const USER_MSG_DEDUP_WINDOW_MS = 10_000
 
 // §R.4 Send timeout guard — pending ack map
 const SEND_TIMEOUT_MS = 15_000
@@ -336,6 +335,7 @@ export function handleAck(ackId: string): void {
 export function handleNack(ackId: string, error?: string): void {
   const entry = pendingAcks.get(ackId)
   if (!entry) return
+  void error
   clearTimeout(entry.timer)
   pendingAcks.delete(ackId)
   // Mark the send as failed
@@ -702,7 +702,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   let prevThreadKey = _threadKey()
   const unsubs: Array<() => void> = []
 
-  const trackEffect = createEffect(() => {
+  createEffect(() => {
     const key = _threadKey()
     if (key !== prevThreadKey) {
       prevThreadKey = key

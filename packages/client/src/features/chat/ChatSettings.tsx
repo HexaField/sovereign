@@ -309,7 +309,10 @@ export function ChatSettingsButton() {
                           Context
                         </span>
                         <span class="text-xs" style={{ color: 'var(--c-text)' }}>
-                          {formatTokens(i().totalTokens)} / {i().contextTokens ? formatTokens(i().contextTokens) : '?'}{' '}
+                          {(() => {
+                            const contextTokens = i().contextTokens
+                            return `${formatTokens(i().totalTokens)} / ${contextTokens != null ? formatTokens(contextTokens) : '?'} `
+                          })()}
                           <span style={{ color: 'var(--c-text-muted)' }}>({usagePct()}%)</span>
                         </span>
                       </div>

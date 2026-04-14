@@ -39,7 +39,7 @@ describe('PlanningDAGView', () => {
         }
       ]
     }
-    const result = layoutGraph(graph, new Map(), new Set(), new Set())
+    const result = layoutGraph(graph)
     expect(result.positions.size).toBe(2)
     const pos1 = result.positions.get('o:p:r:1')!
     const pos2 = result.positions.get('o:p:r:2')!
