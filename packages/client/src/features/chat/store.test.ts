@@ -32,6 +32,7 @@ import {
   setAgentStatus,
   inputValue,
   setInputValue,
+  mergeLiveWorkItems,
   _resetState
 } from './store.js'
 import type { ParsedTurn, WorkItem } from '@sovereign/core'
@@ -56,6 +57,32 @@ function createMockWs() {
     }
   }
 }
+
+describe('mergeLiveWorkItems', () => {
+  it('replaces the last thinking item when the new text extends the same live block', () => {
+    const previous: WorkItem[] = [{ type: 'thinking', output: 'Analysis A', timestamp: 1 }]
+    const next: WorkItem = { type: 'thinking', output: 'Analysis A with more detail', timestamp: 2 }
+
+    expect(mergeLiveWorkItems(previous, next)).toEqual([next])
+  })
+
+  it('appends a new thinking item when the next text is a distinct reasoning step', () => {
+    const previous: WorkItem[] = [{ type: 'thinking', output: 'Analysis A', timestamp: 1 }]
+    const next: WorkItem = { type: 'thinking', output: 'Analysis B', timestamp: 2 }
+
+    expect(mergeLiveWorkItems(previous, next)).toEqual([...previous, next])
+  })
+
+  it('appends thinking after a tool call instead of replacing the earlier thought', () => {
+    const previous: WorkItem[] = [
+      { type: 'thinking', output: 'Analysis A', timestamp: 1 },
+      { type: 'tool_call', name: 'read', input: '{"path":"a.ts"}', timestamp: 2 }
+    ]
+    const next: WorkItem = { type: 'thinking', output: 'Analysis B', timestamp: 3 }
+
+    expect(mergeLiveWorkItems(previous, next)).toEqual([...previous, next])
+  })
+})
 
 describe('§3.2 Chat Store', () => {
   let ws: ReturnType<typeof createMockWs>
@@ -213,6 +240,28 @@ describe('§3.2 Chat Store', () => {
     ws._emit('chat.work', { type: 'chat.work', work })
     expect(liveWork().length).toBe(1)
     expect(liveWork()[0].name).toBe('read')
+  })
+
+  it('preserves distinct consecutive thinking work items in the watched thread', () => {
+    ws._emit('chat.work', { type: 'chat.work', work: { type: 'thinking', output: 'Analysis A', timestamp: 1 } })
+    ws._emit('chat.work', { type: 'chat.work', work: { type: 'thinking', output: 'Analysis B', timestamp: 2 } })
+
+    expect(liveWork().filter((item) => item.type === 'thinking')).toEqual([
+      { type: 'thinking', output: 'Analysis A', timestamp: 1 },
+      { type: 'thinking', output: 'Analysis B', timestamp: 2 }
+    ])
+  })
+
+  it('replaces an in-progress thinking work item when the new text extends it', () => {
+    ws._emit('chat.work', { type: 'chat.work', work: { type: 'thinking', output: 'Analysis A', timestamp: 1 } })
+    ws._emit('chat.work', {
+      type: 'chat.work',
+      work: { type: 'thinking', output: 'Analysis A with more detail', timestamp: 2 }
+    })
+
+    expect(liveWork().filter((item) => item.type === 'thinking')).toEqual([
+      { type: 'thinking', output: 'Analysis A with more detail', timestamp: 2 }
+    ])
   })
 
   it('MUST subscribe to chat WS channel for chat.compacting messages', () => {

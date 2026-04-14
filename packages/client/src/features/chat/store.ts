@@ -192,6 +192,40 @@ function cleanStreamText(raw: string): string {
     .trim()
 }
 
+function getThinkingText(item: WorkItem | undefined): string {
+  return (item?.output || item?.input || '').trim()
+}
+
+function shouldReplaceThinkingItem(previous: WorkItem | undefined, next: WorkItem): boolean {
+  if (!previous || previous.type !== 'thinking' || next.type !== 'thinking') return false
+
+  const previousText = getThinkingText(previous)
+  const nextText = getThinkingText(next)
+  if (!previousText || !nextText) return false
+
+  return nextText.startsWith(previousText)
+}
+
+export function mergeLiveWorkItems(previousItems: WorkItem[], nextItem: WorkItem): WorkItem[] {
+  if (nextItem.type !== 'thinking') {
+    return [...previousItems, nextItem]
+  }
+
+  if (previousItems.length === 0) {
+    return [nextItem]
+  }
+
+  const items = [...previousItems]
+  const lastItem = items[items.length - 1]
+  if (shouldReplaceThinkingItem(lastItem, nextItem)) {
+    items[items.length - 1] = nextItem
+    return items
+  }
+
+  items.push(nextItem)
+  return items
+}
+
 // ─────────────────────────────────────────────────────────────
 
 function resetState(): void {
@@ -561,20 +595,7 @@ function connectSSE(threadKey: string): void {
       setStreamingHtml('')
     }
 
-    if (work.type === 'thinking') {
-      setLiveWork((prev) => {
-        const items = [...prev]
-        // If the last item is already a thinking item, replace it (accumulating text)
-        // Otherwise append (thinking after tool calls should be a new entry)
-        if (items.length > 0 && items[items.length - 1].type === 'thinking') {
-          items[items.length - 1] = work
-          return items
-        }
-        return [...prev, work]
-      })
-    } else {
-      setLiveWork((prev) => [...prev, work])
-    }
+    setLiveWork((prev) => mergeLiveWorkItems(prev, work))
 
     if (work.type === 'thinking') {
       setLiveThinkingText(work.output || work.input || '')
@@ -794,7 +815,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const work = msg.work as WorkItem
       if (!work) return
-      setLiveWork((prev) => [...prev, work])
+      setLiveWork((prev) => mergeLiveWorkItems(prev, work))
       if (work.type === 'thinking') setLiveThinkingText(work.output || work.input || '')
     })
   )
