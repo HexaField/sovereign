@@ -3,6 +3,7 @@
 import { Router } from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import type { ChatModule } from './chat.js'
 import type { AgentBackend } from '@sovereign/core'
 
@@ -140,7 +141,12 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     const cached = historyResponseCache.get(threadKey)
     if (cached && Date.now() - cached.timestamp < HISTORY_CACHE_TTL) {
       const json = JSON.stringify(cached.data)
+      const etag = `"${crypto.createHash('md5').update(json).digest('hex')}"`
+      if (req.headers['if-none-match'] === etag) {
+        return res.status(304).end()
+      }
       res.setHeader('Content-Type', 'application/json')
+      res.setHeader('ETag', etag)
       return res.send(json)
     }
 
@@ -148,9 +154,13 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       const result = await backend.getHistory(sessionKey)
       const data = { turns: result.turns, hasMore: result.hasMore }
       historyResponseCache.set(threadKey, { data, timestamp: Date.now() })
-      // Use res.send to avoid Content-Length mismatch with large payloads
       const json = JSON.stringify(data)
+      const etag = `"${crypto.createHash('md5').update(json).digest('hex')}"`
+      if (req.headers['if-none-match'] === etag) {
+        return res.status(304).end()
+      }
       res.setHeader('Content-Type', 'application/json')
+      res.setHeader('ETag', etag)
       res.send(json)
     } catch {
       res.json({ turns: [], hasMore: false })
@@ -170,10 +180,14 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       'X-Accel-Buffering': 'no'
     })
 
-    // Helper to write SSE event
+    // SSE sequence counter for this connection
+    let seq = 0
+
+    // Helper to write SSE event with sequence ID
     function send(event: string, data: unknown): void {
       try {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+        seq++
+        res.write(`id: ${seq}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
       } catch {
         // Connection may be closed
       }
@@ -184,7 +198,6 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
 
     // Send lightweight initial state immediately (no blocking I/O)
     send('backend-status', { status: backend.status() })
-    send('queue', { threadKey, queue: chatModule.getQueue(threadKey) })
 
     // Replay cached live state for in-progress work
     const live = chatModule.getLiveState(threadKey)
@@ -264,9 +277,6 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       if (forThread(data)) send('error', data)
     })
     // chat.user-message handler removed — user turns come from history (single source of truth)
-    addHandler('chat.queue.update', (data) => {
-      if (forThread(data)) send('queue', data)
-    })
     addHandler('backend.status', (data) => {
       send('backend-status', data)
     })
