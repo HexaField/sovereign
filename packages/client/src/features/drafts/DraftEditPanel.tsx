@@ -1,6 +1,6 @@
 import { Component, Show, For, createSignal, createEffect, on, onMount } from 'solid-js'
 import { draftsStore } from './index.js'
-import type { Draft, DraftDep } from './store.js'
+import type { Draft } from './store.js'
 
 const DraftEditPanel: Component = () => {
   const selectedId = () => draftsStore.selectedDraftId()

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createDraftsStore } from './store.js'
-import type { Draft, UpdateDraft, DraftDep } from './store.js'
+import type { Draft, DraftDep } from './store.js'
 
 // Mock fetch globally
 const mockFetch = vi.fn()

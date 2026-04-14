@@ -1,18 +1,11 @@
 import { createSignal, onMount, onCleanup, For, Show } from 'solid-js'
-import { getEventIcon, getEventDescription, formatEventTime, MAX_FEED_EVENTS } from './dashboard-helpers.js'
-import type { ActivityEvent, EventType } from './dashboard-helpers.js'
+import { getEventIcon, formatEventTime, MAX_FEED_EVENTS } from './dashboard-helpers.js'
+import type { EventType } from './dashboard-helpers.js'
 
 /** Whitelist of event type prefixes/patterns worth showing */
-const ALLOWED_EVENT_PREFIXES = [
-  'git.',
-  'issue.', 'review.',
-  'scheduler.job.',
-  'meeting.',
-  'recording.',
-  'worktree.',
-]
+const ALLOWED_EVENT_PREFIXES = ['git.', 'issue.', 'review.', 'scheduler.job.', 'meeting.', 'recording.', 'worktree.']
 
-function isEventAllowed(eventType: string, payload?: any): boolean {
+function isEventAllowed(eventType: string): boolean {
   // Always filter out architecture spam
   if (eventType === 'system.architecture.updated') return false
   // Filter all log.entry events — too noisy for dashboard activity feed
@@ -29,13 +22,13 @@ const EVENT_LABEL_MAP: Record<string, string> = {
   'system.architecture.updated': 'Architecture updated',
   'ws.connected': 'Client connected',
   'ws.disconnected': 'Client disconnected',
-  'config.changed': 'Config updated',
+  'config.changed': 'Config updated'
 }
 
 const EVENT_PREFIX_MAP: [string, string][] = [
   ['notification.', 'Notification'],
   ['scheduler.job.', 'Job executed'],
-  ['git.', 'Git activity'],
+  ['git.', 'Git activity']
 ]
 
 function humanizeEventName(raw: string): string {
@@ -51,9 +44,7 @@ function humanizeEventName(raw: string): string {
   }
 
   // Default: capitalize and clean up
-  return cleaned
-    .replace(/\./g, ' ')
-    .replace(/^\w/, (c) => c.toUpperCase())
+  return cleaned.replace(/\./g, ' ').replace(/^\w/, (c) => c.toUpperCase())
 }
 
 export interface ActivityFeedEntry {
@@ -92,7 +83,7 @@ export function ActivityFeed() {
       if (res.ok) {
         const data = await res.json()
         const events: ActivityFeedEntry[] = (data.entries ?? data.events ?? [])
-          .filter((e: any) => isEventAllowed(e.event?.type ?? e.type ?? '', e.event?.payload ?? e.payload))
+          .filter((e: any) => isEventAllowed(e.event?.type ?? e.type ?? ''))
           .slice(0, MAX_FEED_EVENTS)
           .map((e: any) => ({
             id: String(e.id ?? e.capturedAt ?? Date.now()),
@@ -104,7 +95,9 @@ export function ActivityFeed() {
           store.addEntry(evt)
         }
       }
-    } catch { /* no server events endpoint */ }
+    } catch {
+      /* no server events endpoint */
+    }
 
     // Subscribe to WS for live updates
     try {
@@ -112,7 +105,7 @@ export function ActivityFeed() {
       if (wsStore) {
         wsUnsub = wsStore.on('system.event', (msg: any) => {
           const eventType = msg.eventType ?? msg.description ?? ''
-          if (!isEventAllowed(eventType, msg.payload)) return
+          if (!isEventAllowed(eventType)) return
           store.addEntry({
             id: String(msg.id ?? Date.now()),
             type: (msg.eventType?.split('.')[0] ?? 'system') as EventType,
@@ -121,7 +114,9 @@ export function ActivityFeed() {
           })
         })
       }
-    } catch { /* no ws store */ }
+    } catch {
+      /* no ws store */
+    }
   })
 
   onCleanup(() => {
@@ -141,7 +136,7 @@ export function ActivityFeed() {
           </p>
         }
       >
-        <div ref={containerRef} class="max-h-64 overflow-y-auto space-y-1">
+        <div ref={containerRef} class="max-h-64 space-y-1 overflow-y-auto">
           <For each={store.entries()}>
             {(entry) => (
               <div class="flex items-start gap-2 py-1 text-xs" style={{ color: 'var(--c-text-secondary)' }}>

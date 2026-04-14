@@ -10,7 +10,6 @@ import {
   toggleActionItem,
   renameSpeaker,
   pendingCount,
-  totalHoursThisWeek,
   openActionItems,
   recentMeetings,
   meetings

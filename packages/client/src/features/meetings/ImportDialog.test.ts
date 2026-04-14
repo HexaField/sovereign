@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { ImportDialog, createImportForm, validateImportForm } from './ImportDialog.js'
-import type { ImportFormData } from './ImportDialog.js'
 
 describe('§8.9.1 Import Dialog', () => {
   it('§8.9.1 MUST allow uploading external meeting files', () => {

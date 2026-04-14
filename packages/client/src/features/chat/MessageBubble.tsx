@@ -6,7 +6,6 @@ import { turns, retrySend, cancelFailedMessage } from './store.js'
 import { sanitizeContent, isCompactionMessage } from './sanitize.js'
 import {
   WriteIcon,
-  HeartIcon,
   BotIcon,
   SystemIcon,
   SplitIcon,
@@ -19,8 +18,7 @@ import {
   ListIcon,
   ExternalLinkIcon,
   CloseIcon,
-  ChevronDownIcon,
-  PinIcon
+  ChevronDownIcon
 } from '../../ui/icons.js'
 
 // ── Icons ────────────────────────────────────────────────────────────

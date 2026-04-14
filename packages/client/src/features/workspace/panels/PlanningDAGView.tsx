@@ -1,14 +1,4 @@
-import {
-  Component,
-  createResource,
-  createSignal,
-  createMemo,
-  Show,
-  For,
-  onMount,
-  onCleanup,
-  createEffect
-} from 'solid-js'
+import { Component, createResource, createSignal, createMemo, Show, For, onCleanup } from 'solid-js'
 import { closePlanningView, openIssueDetail } from '../store.js'
 import { draftsStore } from '../../drafts/index.js'
 
@@ -71,12 +61,7 @@ const NODE_HEIGHT = 60
 const H_GAP = 80
 const V_GAP = 30
 
-export function layoutGraph(
-  graph: GraphData,
-  issueMap: Map<string, IssueInfo>,
-  blockedSet: Set<string>,
-  readySet: Set<string>
-): {
+export function layoutGraph(graph: GraphData): {
   positions: Map<string, { x: number; y: number }>
   width: number
   height: number
@@ -215,7 +200,7 @@ const PlanningDAGView: Component<PlanningDAGViewProps> = (props) => {
     return { nodes, edges }
   })
 
-  const layout = createMemo(() => layoutGraph(filteredGraph(), issueMap(), blockedSet(), readySet()))
+  const layout = createMemo(() => layoutGraph(filteredGraph()))
 
   const selectedNode = createMemo(() => {
     const key = selectedNodeKey()

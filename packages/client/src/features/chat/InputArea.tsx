@@ -6,7 +6,6 @@ import {
   inputValue,
   setInputValue,
   agentStatus as storeAgentStatus,
-  turns,
   sendMessage,
   abortChat,
   compacting,
@@ -142,30 +141,6 @@ function saveScratchpadEntries(sk: string, entries: ScratchpadEntry[]): void {
   } else {
     localStorage.setItem(scratchpadStorageKey(sk), JSON.stringify(entries))
   }
-}
-
-// ── File upload ─────────────────────────────────────────────────
-
-async function uploadFiles(files: FileList | File[]): Promise<{ name: string; path: string; size: number }[]> {
-  const results: { name: string; path: string; size: number }[] = []
-  for (const file of Array.from(files)) {
-    results.push({ name: file.name, path: URL.createObjectURL(file), size: file.size })
-  }
-  return results
-}
-
-/** Convert a File to base64 string */
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result as string
-      // Strip the data:...;base64, prefix
-      resolve(result.split(',')[1] || result)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
 }
 
 // ── Component ────────────────────────────────────────────────────────
@@ -492,7 +467,6 @@ export function InputArea(props: InputAreaProps) {
   }
 
   const currentAgentStatus = () => props.agentStatus ?? storeAgentStatus()
-  const statusText = () => getStatusText(currentAgentStatus())
   const busy = () => isAgentBusy(currentAgentStatus())
 
   const isBusyOrStreaming = () => busy()

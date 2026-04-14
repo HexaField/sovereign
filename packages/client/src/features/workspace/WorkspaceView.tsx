@@ -15,14 +15,12 @@ import type { Component } from 'solid-js'
 import {
   FilesIcon,
   GitIcon,
-  ThreadsIcon,
   PlanningIcon,
   NotificationsIcon,
   TerminalIcon,
   RecordingIcon,
   MeetingsIcon,
   LogsIcon,
-  ExpandIcon,
   CloseIcon
 } from '../../ui/icons.js'
 import {
@@ -32,8 +30,6 @@ import {
   toggleChatExpanded,
   chatPanelWidth,
   setChatPanelWidth,
-  activeThreadKey,
-  setActiveThreadKey,
   sidebarCollapsed,
   setSidebarCollapsed,
   sidebarWidth,
@@ -53,7 +49,6 @@ import {
   setActiveMobileTab,
   swipeMobileTab,
   MOBILE_TAB_ORDER,
-  isMobileWidth,
   openFileTabs,
   activeFileTabId,
   setActiveFileTabId,
@@ -66,7 +61,6 @@ import {
 // Chat imports
 import { ChatView } from '../chat/ChatView.js'
 import { InputArea } from '../chat/InputArea.js'
-import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { SubagentView } from '../chat/SubagentView.js'
 import type { SubagentNavEntry } from '../chat/SubagentView.js'
 import {
@@ -82,7 +76,7 @@ import {
   abortChat,
   initChatStore
 } from '../chat/store.js'
-import { threadKey, switchThread, threads, createThread } from '../threads/store.js'
+import { threadKey } from '../threads/store.js'
 import { wsStore } from '../../ws/index.js'
 import { draftsStore } from '../drafts/index.js'
 import type { ChatMessage } from '../chat/types.js'
@@ -116,7 +110,6 @@ function isViewingSubagent(): boolean {
 // Lazy-loaded sidebar panels
 const FileExplorerPanel = lazy(() => import('./panels/FileExplorerPanel.js'))
 const GitPanel = lazy(() => import('./panels/GitPanel.js'))
-const ThreadsPanel = lazy(() => import('./panels/ThreadsPanel.js'))
 const PlanningPanel = lazy(() => import('./panels/PlanningPanel.js'))
 const NotificationsPanel = lazy(() => import('./panels/NotificationsPanel.js'))
 const TerminalPanel = lazy(() => import('./panels/TerminalPanel.js'))
@@ -134,7 +127,6 @@ const DraftEditPanel = lazy(() => import('../../features/drafts/DraftEditPanel.j
 const SIDEBAR_ICON_MAP: Record<string, Component<{ class?: string }>> = {
   files: FilesIcon,
   git: GitIcon,
-  threads: ThreadsIcon,
   planning: PlanningIcon,
   notifications: NotificationsIcon,
   terminal: TerminalIcon,
@@ -186,9 +178,6 @@ const SidebarContent: Component = () => {
           <Match when={activeSidebarTab() === 'git'}>
             <GitPanel />
           </Match>
-          <Match when={activeSidebarTab() === 'threads'}>
-            <ThreadsPanel />
-          </Match>
           <Match when={activeSidebarTab() === 'planning'}>
             <PlanningPanel />
           </Match>
@@ -219,6 +208,11 @@ const MainContentArea: Component = () => {
   const activeId = activeFileTabId
   const view = mainContentView
   const ws = activeWorkspace
+  const activeTab = createMemo(() => {
+    const id = activeId()
+    if (!id) return null
+    return tabs().find((tab) => tab.id === id) ?? null
+  })
 
   return (
     <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
@@ -305,7 +299,7 @@ const MainContentArea: Component = () => {
           {/* Content */}
           <div class="flex-1 overflow-auto">
             <Show
-              when={activeId() && tabs().find((t) => t.id === activeId())}
+              when={activeTab()}
               fallback={
                 <div class="flex h-full items-center justify-center">
                   <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
@@ -314,17 +308,24 @@ const MainContentArea: Component = () => {
                 </div>
               }
             >
-              {(tab) => (
-                <Suspense
-                  fallback={
-                    <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                      Loading file...
-                    </p>
-                  }
-                >
-                  <FileViewerTab path={tab().path} projectId={tab().projectId} onClose={() => closeFileTab(tab().id)} />
-                </Suspense>
-              )}
+              {(tab) => {
+                const currentTab = tab()
+                return (
+                  <Suspense
+                    fallback={
+                      <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                        Loading file...
+                      </p>
+                    }
+                  >
+                    <FileViewerTab
+                      path={currentTab.path}
+                      projectId={currentTab.projectId}
+                      onClose={() => closeFileTab(currentTab.id)}
+                    />
+                  </Suspense>
+                )
+              }}
             </Show>
           </div>
         </Match>
@@ -649,6 +650,11 @@ const MobileChatPanel: Component = () => {
 // §7.3 — Mobile Workspace with swipeable tab strip
 const MobileWorkspace: Component = () => {
   const [dropdownOpen, setDropdownOpen] = createSignal(false)
+  const activeTab = createMemo(() => {
+    const id = activeFileTabId()
+    if (!id) return null
+    return openFileTabs().find((tab) => tab.id === id) ?? null
+  })
   let touchStartX = 0
   let touchStartY = 0
   let isHorizontalSwipe = false
@@ -734,7 +740,7 @@ const MobileWorkspace: Component = () => {
           </Match>
           <Match when={activeMobileTab() === 'file-viewer'}>
             <Show
-              when={activeFileTabId() && openFileTabs().find((t) => t.id === activeFileTabId())}
+              when={activeTab()}
               fallback={
                 <div class="flex h-full items-center justify-center">
                   <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
@@ -743,17 +749,24 @@ const MobileWorkspace: Component = () => {
                 </div>
               }
             >
-              {(tab) => (
-                <Suspense
-                  fallback={
-                    <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                      Loading file...
-                    </p>
-                  }
-                >
-                  <FileViewerTab path={tab().path} projectId={tab().projectId} onClose={() => closeFileTab(tab().id)} />
-                </Suspense>
-              )}
+              {(tab) => {
+                const currentTab = tab()
+                return (
+                  <Suspense
+                    fallback={
+                      <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                        Loading file...
+                      </p>
+                    }
+                  >
+                    <FileViewerTab
+                      path={currentTab.path}
+                      projectId={currentTab.projectId}
+                      onClose={() => closeFileTab(currentTab.id)}
+                    />
+                  </Suspense>
+                )
+              }}
             </Show>
           </Match>
           <Match when={activeMobileTab() === 'git'}>

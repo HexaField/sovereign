@@ -29,13 +29,6 @@ export function formatRelativeTime(ts: number): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
-const PRIORITY_ICON: Record<NotificationPriority, string> = {
-  info: 'ℹ️',
-  warning: '⚠️',
-  error: '❌',
-  critical: '🔴'
-}
-
 const PRIORITY_ORDER: Record<NotificationPriority, number> = {
   critical: 0,
   error: 1,

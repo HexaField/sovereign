@@ -221,7 +221,7 @@ export const ContextBudgetModal: Component<{ onClose: () => void }> = (props) =>
         {/* Header */}
         <div class="flex items-center gap-3 border-b px-5 py-3" style={{ 'border-color': 'var(--c-border)' }}>
           <span class="text-lg">
-            <BrainIcon size={20} />
+            <BrainIcon class="h-5 w-5" />
           </span>
           <span class="text-sm font-semibold">LLM Context Budget</span>
           <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>

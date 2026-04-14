@@ -51,7 +51,6 @@ export function formatJobCount(count: number): string {
 
 // ── §2.1 DashboardView Component ──
 
-import WorkspaceCard from './WorkspaceCard'
 import type { OrgSummary } from './WorkspaceCard'
 import GlobalChat from './GlobalChat'
 import VoiceWidget from './VoiceWidget'

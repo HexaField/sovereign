@@ -1,7 +1,5 @@
 // §R Chat Reliability Tests — comprehensive tests for all 8 improvements
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createSignal } from 'solid-js'
-
 const store: Record<string, string> = {}
 const localStorageMock = {
   getItem: (key: string) => store[key] ?? null,
@@ -17,7 +15,6 @@ Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, wri
 
 import {
   turns,
-  agentStatus,
   sendMessage,
   initChatStore,
   _resetState,
@@ -25,9 +22,7 @@ import {
   connectionLost,
   setConnectionLost,
   handleAck,
-  handleNack,
-  setPendingQueue,
-  setTurns
+  handleNack
 } from './store.js'
 import type { ParsedTurn } from '@sovereign/core'
 
@@ -147,7 +142,7 @@ describe('§R Chat Reliability Improvements', () => {
       // After all retries exhaust, eventually fails
       vi.advanceTimersByTime(120_000) // well past all retries
 
-      const failed = pendingQueue().find((m) => m.status === 'failed')
+      pendingQueue().find((m) => m.status === 'failed')
       // Either failed or retried and still pending
       expect(pendingQueue().length).toBeGreaterThanOrEqual(1)
     })
@@ -193,8 +188,6 @@ describe('§R Chat Reliability Improvements', () => {
   describe('§R.6 Retry backoff', () => {
     it('retries with increasing delay after timeout', async () => {
       await sendMessage('retry test')
-      const initialSendCount = ws.send.mock.calls.length
-
       // First timeout → retry
       vi.advanceTimersByTime(16_000)
       // Should have retried (status changed to pending then back to sending)
