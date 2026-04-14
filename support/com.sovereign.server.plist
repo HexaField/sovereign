@@ -6,20 +6,19 @@
     <string>com.sovereign.server</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/node</string>
-        <string>packages/server/dist/index.js</string>
+        <string>LAUNCH_SCRIPT_PLACEHOLDER</string>
     </array>
     <key>WorkingDirectory</key>
     <string>REPO_DIR_PLACEHOLDER</string>
     <key>KeepAlive</key>
     <true/>
-    <key>StandardOutPath</key>
-    <string>LOG_PATH_PLACEHOLDER</string>
-    <key>StandardErrorPath</key>
-    <string>LOG_PATH_PLACEHOLDER</string>
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
     <key>ThrottleInterval</key>
     <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>STDOUT_LOG_PLACEHOLDER</string>
+    <key>StandardErrorPath</key>
+    <string>STDERR_LOG_PLACEHOLDER</string>
 </dict>
 </plist>

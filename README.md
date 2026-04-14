@@ -71,12 +71,15 @@ pnpm dev          # Hot-reloading development (client + server)
 ### Production
 
 ```bash
-bin/sovereign build    # Build core → client → server
-bin/sovereign start    # Start background daemon
-bin/sovereign status   # Check health
-bin/sovereign logs     # Tail logs
-bin/sovereign stop     # Graceful shutdown
+bin/sovereign build           # Guarded check/build, reload only after success
+bin/sovereign start           # Install/start launchd service (macOS) and verify health
+bin/sovereign restart         # Restart service and wait for /health
+bin/sovereign status          # Show launchd state, logs, and HTTP health
+bin/sovereign logs stderr     # Tail stderr log (or stdout/all)
+bin/sovereign stop            # Graceful shutdown
 ```
+
+On macOS, Sovereign now runs under a single launchd-managed service with `KeepAlive` crash recovery. `bin/sovereign build` snapshots the last known-good build artifacts, runs checks/builds first, and only then reloads the service. If startup fails after reload, it automatically restores the previous build and brings the old version back up.
 
 ### Environment
 
