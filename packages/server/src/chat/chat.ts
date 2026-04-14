@@ -459,21 +459,10 @@ export function createChatModule(
     recentUserSends.set(threadKey, { text, ts: now })
 
     // Enqueue the message — server owns the queue
-    const enqueued = messageQueue.enqueue(threadKey, text) as any
+    messageQueue.enqueue(threadKey, text)
     broadcastQueueUpdate(threadKey)
 
-    // Only broadcast user-message to clients if this is a NEW message (not deduped)
-    if (!enqueued.deduplicated) {
-      if (wsHandler) {
-        wsHandler.broadcastToChannel('chat', {
-          type: 'chat.user-message',
-          threadKey,
-          text,
-          timestamp: new Date().toISOString()
-        })
-      }
-      chatEvents.emit('chat.user-message', { threadKey, text, timestamp: new Date().toISOString() })
-    }
+    // user-message broadcast removed — user turns come from history (single source of truth)
 
     tryProcessQueue(threadKey)
   }
