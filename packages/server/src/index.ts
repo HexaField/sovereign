@@ -75,7 +75,7 @@ import { createThreadManager } from './threads/threads.js'
 import { createChatModule } from './chat/chat.js'
 import { createChatRoutes } from './chat/routes.js'
 import { registerChatWs } from './chat/ws.js'
-import { createThreadRoutes } from './threads/routes.js'
+import { createThreadRoutes, resetGptSessionsToDefault } from './threads/routes.js'
 import { registerThreadsWs } from './threads/ws.js'
 import { createForwardHandler } from './threads/forward.js'
 import { createVoiceModule } from './voice/voice.js'
@@ -579,12 +579,12 @@ app.get('/api/threads/:key/crons', async (req, res) => {
 
 app.use(createThreadRoutes(threadManager, forwardHandler, { chatModule, backend: backend as any }))
 
-// GPT session reset on startup disabled — model should persist across boots
-// resetGptSessionsToDefault()
-//   .then(({ updated }) => {
-//     if (updated.length > 0) console.log(`[threads] Reset ${updated.length} GPT session(s) to default model`)
-//   })
-//   .catch(() => {})
+// Reset any sessions that fell back to GPT models back to the default (Opus)
+resetGptSessionsToDefault()
+  .then(({ updated }) => {
+    if (updated.length > 0) console.log(`[threads] Reset ${updated.length} GPT session(s) to default model`)
+  })
+  .catch(() => {})
 registerThreadsWs(wsHandler as any, threadManager, bus)
 
 const voiceModule = createVoiceModule(bus, {
