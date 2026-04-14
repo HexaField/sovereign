@@ -10,16 +10,7 @@ import {
   setSearchQuery,
   type PlanningViewMode
 } from './store'
-import {
-  LinkIcon,
-  KanbanIcon,
-  ListIcon,
-  TreeIcon,
-  SearchIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  CloseIcon
-} from '../../ui/icons.js'
+import { LinkIcon, KanbanIcon, ListIcon, TreeIcon, SearchIcon, CheckIcon, ChevronDownIcon } from '../../ui/icons.js'
 import { setActiveView } from '../nav/store.js'
 import { setActiveWorkspace, openIssueDetail } from '../workspace/store.js'
 
@@ -622,8 +613,8 @@ const GlobalPlanningView: Component = () => {
   const [nodes, setNodes] = createSignal<PlanningNode[]>([])
   const [edges, setEdges] = createSignal<PlanningEdge[]>([])
   const [orgs, setOrgs] = createSignal<Array<{ id: string; name: string }>>([])
-  const [projectNames, setProjectNames] = createSignal<Map<string, string>>(new Map())
-  const [criticalPathIds, setCriticalPathIds] = createSignal<Set<string>>(new Set())
+  const [, setProjectNames] = createSignal<Map<string, string>>(new Map())
+  const [, setCriticalPathIds] = createSignal<Set<string>>(new Set())
   const [showCreateDialog, setShowCreateDialog] = createSignal(false)
   const [showAssignDialog, setShowAssignDialog] = createSignal(false)
 
@@ -656,11 +647,6 @@ const GlobalPlanningView: Component = () => {
   const [createTitle, setCreateTitle] = createSignal('')
   const [createBody, setCreateBody] = createSignal('')
   const [createSubmitting, setCreateSubmitting] = createSignal(false)
-
-  // Expose pan/zoom for legacy test compat
-  const svgZoom = zoom
-  const svgPanX = panX
-  const svgPanY = panY
 
   let svgRef: SVGSVGElement | undefined
 
@@ -967,13 +953,6 @@ const GlobalPlanningView: Component = () => {
     const id = selectedNodeId()
     if (!id) return null
     return nodes().find((n) => n.id === id) ?? null
-  })
-
-  // Node title map for dependency display
-  const nodeTitleMap = createMemo(() => {
-    const map = new Map<string, string>()
-    for (const n of nodes()) map.set(n.id, n.title)
-    return map
   })
 
   // Upstream dependencies (nodes this one depends on)

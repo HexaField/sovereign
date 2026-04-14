@@ -68,8 +68,8 @@ describe('WorkspaceView', () => {
     it('§3.1 — only one sidebar tab visible at a time', () => {
       setActiveSidebarTab('git')
       expect(activeSidebarTab()).toBe('git')
-      setActiveSidebarTab('threads')
-      expect(activeSidebarTab()).toBe('threads')
+      setActiveSidebarTab('planning')
+      expect(activeSidebarTab()).toBe('planning')
       // Only one value at a time
     })
 
@@ -226,7 +226,7 @@ describe('WorkspaceView', () => {
 
     it('§7.3 — swiping left/right switches between tabs', () => {
       // Swipe gesture handling is a UI concern — tabs switch via setActiveSidebarTab
-      const tabs: SidebarTab[] = ['files', 'git', 'threads']
+      const tabs: SidebarTab[] = ['files', 'git', 'planning']
       tabs.forEach((t) => {
         setActiveSidebarTab(t)
         expect(activeSidebarTab()).toBe(t)

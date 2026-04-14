@@ -27,6 +27,10 @@ interface PreviewMessage {
   content: string
 }
 
+export function getLastMessages<T>(messages: T[], limit: number = GLOBAL_CHAT_MESSAGE_LIMIT): T[] {
+  return messages.slice(-limit)
+}
+
 export default function GlobalChat() {
   const [messages, setMessages] = createSignal<PreviewMessage[]>([])
   const [status, setStatus] = createSignal('idle')
@@ -39,7 +43,9 @@ export default function GlobalChat() {
         setMessages(data.messages ?? [])
         setStatus(data.agentStatus ?? 'idle')
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   })
 
   return (
@@ -64,7 +70,7 @@ export default function GlobalChat() {
         </span>
       </button>
       <div class="max-h-48 flex-1 space-y-2 overflow-y-auto p-3">
-        {messages().map((msg) => (
+        {getLastMessages(messages()).map((msg) => (
           <div class="text-xs" style={{ color: 'var(--c-text)' }}>
             <span class="font-medium opacity-80">{formatRole(msg.role)}: </span>
             <span class="opacity-70">{truncateMessage(msg.content)}</span>

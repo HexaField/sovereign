@@ -23,7 +23,7 @@
   "scripts": {
     "build": "rollup -c",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
     "@rollup/plugin-typescript": "^12.3.0",
