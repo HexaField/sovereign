@@ -1,238 +1,460 @@
 #!/usr/bin/env bash
 #
-# Sovereign daemon — production server with auto-restart on rebuild.
+# Sovereign service CLI — guarded builds, launchd lifecycle, health checks, and logs.
 #
 # Usage:
-#   sovereign start     Start the production daemon
-#   sovereign stop      Stop the daemon
-#   sovereign restart   Restart the daemon
-#   sovereign status    Show daemon status
-#   sovereign build     Build client + server, restart if running
-#   sovereign logs      Tail the daemon log
-#   sovereign run       Run in foreground (no daemon)
+#   sovereign install            Install/update the launchd plist
+#   sovereign start              Start the service
+#   sovereign stop               Stop the service
+#   sovereign restart            Restart the service and verify health
+#   sovereign reload             Alias for restart
+#   sovereign status             Show launchd + health status
+#   sovereign build              Run guarded check/build; reload if running
+#   sovereign health             Query HTTP health endpoint
+#   sovereign logs [stdout|stderr|all]
+#   sovereign run                Run in foreground (no daemon)
 #
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER_ENTRY="$REPO_DIR/packages/server/dist/index.js"
+PLIST_LABEL="com.sovereign.server"
+LAUNCH_DOMAIN="gui/$(id -u)"
+LAUNCH_TARGET="$LAUNCH_DOMAIN/$PLIST_LABEL"
+PLIST_DEST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+PLIST_TEMPLATE="$REPO_DIR/support/com.sovereign.server.plist"
+LAUNCH_SCRIPT="$REPO_DIR/bin/sovereign-launchd.sh"
+TMP_ROOT="${TMPDIR:-/tmp}"
 
-# Read data dir from .env.local or .env (same precedence as dotenv)
 _read_env_var() {
   local var="$1"
   local val=""
+  if [ -f "$REPO_DIR/.env" ]; then
+    val=$(grep -E "^${var}=" "$REPO_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  fi
   if [ -f "$REPO_DIR/.env.local" ]; then
-    val=$(grep "^${var}=" "$REPO_DIR/.env.local" 2>/dev/null | head -1 | cut -d= -f2-)
+    local override
+    override=$(grep -E "^${var}=" "$REPO_DIR/.env.local" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+    if [ -n "$override" ]; then
+      val="$override"
+    fi
   fi
-  if [ -z "$val" ] && [ -f "$REPO_DIR/.env" ]; then
-    val=$(grep "^${var}=" "$REPO_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)
-  fi
-  echo "$val"
+  printf '%s' "$val"
 }
 
 DATA_DIR="${SOVEREIGN_DATA_DIR:-$(_read_env_var SOVEREIGN_DATA_DIR)}"
 DATA_DIR="${DATA_DIR:-$REPO_DIR/packages/server/.data}"
+LOG_DIR="$DATA_DIR/logs"
+STDOUT_LOG="$LOG_DIR/sovereign.stdout.log"
+STDERR_LOG="$LOG_DIR/sovereign.stderr.log"
 PID_FILE="$DATA_DIR/sovereign.pid"
-LOG_FILE="$DATA_DIR/sovereign.log"
-PLIST_LABEL="com.sovereign.server"
-PLIST_DEST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-PLIST_TEMPLATE="$REPO_DIR/support/com.sovereign.server.plist"
+HOST_VALUE="${HOST:-$(_read_env_var HOST)}"
+HOST_VALUE="${HOST_VALUE:-127.0.0.1}"
+PORT_VALUE="${PORT:-$(_read_env_var PORT)}"
+PORT_VALUE="${PORT_VALUE:-5801}"
+TLS_VALUE="${SOVEREIGN_TLS:-$(_read_env_var SOVEREIGN_TLS)}"
+TLS_VALUE="${TLS_VALUE:-false}"
+HEALTH_SCHEME="http"
+if [ "$TLS_VALUE" = "true" ]; then
+  HEALTH_SCHEME="https"
+fi
+HEALTH_URL="${HEALTH_SCHEME}://127.0.0.1:${PORT_VALUE}/health"
 
-mkdir -p "$DATA_DIR"
+mkdir -p "$DATA_DIR" "$LOG_DIR"
+
+_note() { printf '==> %s\n' "$*"; }
+_warn() { printf 'WARN: %s\n' "$*" >&2; }
+_die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 _is_macos() {
   [[ "$(uname -s)" == "Darwin" ]]
 }
 
-_node_path() {
-  command -v node 2>/dev/null || echo "/usr/local/bin/node"
+_launchctl_print() {
+  launchctl print "$LAUNCH_TARGET" 2>/dev/null
+}
+
+_is_launchd_loaded() {
+  launchctl list | awk '{print $3}' | grep -Fxq "$PLIST_LABEL"
+}
+
+_is_running() {
+  if _is_macos; then
+    _is_launchd_loaded
+  else
+    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+  fi
+}
+
+_service_pid() {
+  if _is_macos; then
+    _launchctl_print | awk '/pid = / { print $3; exit }'
+  elif [ -f "$PID_FILE" ]; then
+    cat "$PID_FILE"
+  fi
+}
+
+_healthcheck() {
+  local out
+  if out=$(curl --silent --show-error --fail --max-time 2 --insecure "$HEALTH_URL" 2>/dev/null); then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  return 1
+}
+
+_wait_for_health() {
+  local timeout_secs="${1:-20}"
+  local attempt=1
+  local max_attempts=$((timeout_secs * 2))
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if _healthcheck >/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+    attempt=$((attempt + 1))
+  done
+  return 1
 }
 
 _install_plist() {
   mkdir -p "$(dirname "$PLIST_DEST")"
   sed -e "s|REPO_DIR_PLACEHOLDER|${REPO_DIR}|g" \
-      -e "s|LOG_PATH_PLACEHOLDER|${LOG_FILE}|g" \
-      -e "s|/usr/local/bin/node|$(_node_path)|g" \
+      -e "s|LAUNCH_SCRIPT_PLACEHOLDER|${LAUNCH_SCRIPT}|g" \
+      -e "s|STDOUT_LOG_PLACEHOLDER|${STDOUT_LOG}|g" \
+      -e "s|STDERR_LOG_PLACEHOLDER|${STDERR_LOG}|g" \
       "$PLIST_TEMPLATE" > "$PLIST_DEST"
 }
 
-_is_running() {
-  if _is_macos && [ -f "$PLIST_DEST" ]; then
-    launchctl list "$PLIST_LABEL" &>/dev/null
-    return $?
-  fi
-  [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+_bootstrap_service() {
+  launchctl bootstrap "$LAUNCH_DOMAIN" "$PLIST_DEST"
 }
 
-_start_server() {
-  if _is_running; then
-    echo "Already running"
-    return 1
+_bootout_service() {
+  if _is_launchd_loaded; then
+    launchctl bootout "$LAUNCH_TARGET" >/dev/null 2>&1 || launchctl bootout "$LAUNCH_DOMAIN" "$PLIST_DEST" >/dev/null 2>&1 || true
   fi
+}
 
-  if [ ! -f "$SERVER_ENTRY" ]; then
-    echo "Server not built. Run: sovereign build"
-    return 1
-  fi
+_kickstart_service() {
+  launchctl kickstart -k "$LAUNCH_TARGET"
+}
 
-  if _is_macos; then
-    echo "Starting Sovereign via launchd..."
-    _install_plist
-    launchctl load "$PLIST_DEST"
-    sleep 1
-    if launchctl list "$PLIST_LABEL" &>/dev/null; then
-      echo "Sovereign running (launchd: $PLIST_LABEL)"
-      echo "Logs: $LOG_FILE"
-    else
-      echo "Failed to start. Check logs: $LOG_FILE"
-      tail -20 "$LOG_FILE"
-      return 1
+_start_launchd_service() {
+  [ -f "$SERVER_ENTRY" ] || _die "Server not built. Run: sovereign build"
+  _install_plist
+  if _is_launchd_loaded; then
+    _note "Service already loaded; verifying health"
+    if ! _wait_for_health 5; then
+      _warn "Loaded service is not healthy; kickstarting it"
+      _kickstart_service
     fi
   else
-    echo "Starting Sovereign..."
-    cd "$REPO_DIR" && nohup node "$SERVER_ENTRY" >> "$LOG_FILE" 2>&1 &
-    local pid=$!
-    echo "$pid" > "$PID_FILE"
-    disown "$pid" 2>/dev/null || true
-    sleep 1
-    if kill -0 "$pid" 2>/dev/null; then
-      echo "Sovereign running (pid $pid)"
-      echo "Logs: $LOG_FILE"
-    else
-      echo "Failed to start. Check logs: $LOG_FILE"
-      rm -f "$PID_FILE"
-      tail -20 "$LOG_FILE"
-      return 1
-    fi
+    _note "Starting Sovereign via launchd"
+    _bootstrap_service
+  fi
+  if _wait_for_health 20; then
+    _note "Sovereign healthy at $HEALTH_URL"
+  else
+    tail -n 40 "$STDERR_LOG" 2>/dev/null || true
+    _warn "Service failed health verification after start"
+    return 1
   fi
 }
 
-_stop_server() {
-  if _is_macos && [ -f "$PLIST_DEST" ]; then
-    if launchctl list "$PLIST_LABEL" &>/dev/null; then
-      echo "Stopping Sovereign (launchd)..."
-      launchctl unload "$PLIST_DEST"
-      echo "Stopped"
-    else
-      echo "Not running"
-    fi
-    return 0
+_stop_launchd_service() {
+  if _is_launchd_loaded; then
+    _note "Stopping Sovereign launchd service"
+    _bootout_service
+  else
+    _note "Service not loaded"
   fi
+}
 
+_restart_launchd_service() {
+  [ -f "$SERVER_ENTRY" ] || _die "Server not built. Run: sovereign build"
+  _install_plist
+  if _is_launchd_loaded; then
+    _note "Restarting Sovereign via launchd kickstart"
+    _kickstart_service
+  else
+    _note "Service not loaded; bootstrapping"
+    _bootstrap_service
+  fi
+  if _wait_for_health 20; then
+    _note "Sovereign healthy at $HEALTH_URL"
+  else
+    tail -n 60 "$STDERR_LOG" 2>/dev/null || true
+    _warn "Service failed health verification after restart"
+    return 1
+  fi
+}
+
+_start_non_macos() {
+  if _is_running; then
+    _die "Already running"
+  fi
+  [ -f "$SERVER_ENTRY" ] || _die "Server not built. Run: sovereign build"
+  _note "Starting Sovereign"
+  cd "$REPO_DIR"
+  nohup node "$SERVER_ENTRY" >>"$STDOUT_LOG" 2>>"$STDERR_LOG" &
+  local pid=$!
+  echo "$pid" > "$PID_FILE"
+  disown "$pid" 2>/dev/null || true
+  if _wait_for_health 20; then
+    _note "Sovereign healthy at $HEALTH_URL"
+  else
+    _warn "Service failed health verification after start"
+    return 1
+  fi
+}
+
+_stop_non_macos() {
   if ! _is_running; then
-    echo "Not running"
+    _note "Not running"
     rm -f "$PID_FILE"
     return 0
   fi
-
   local pid
   pid=$(cat "$PID_FILE")
-  echo "Stopping Sovereign (pid $pid)..."
+  _note "Stopping Sovereign (pid $pid)"
   kill "$pid" 2>/dev/null || true
-  
-  # Wait for graceful shutdown (up to 5s)
   local i=0
   while kill -0 "$pid" 2>/dev/null && [ $i -lt 50 ]; do
     sleep 0.1
     i=$((i + 1))
   done
-  
   if kill -0 "$pid" 2>/dev/null; then
-    echo "Force killing..."
     kill -9 "$pid" 2>/dev/null || true
   fi
-  
   rm -f "$PID_FILE"
-  echo "Stopped"
 }
 
-_build() {
-  echo "Building core..."
+_backup_artifacts() {
+  BACKUP_DIR=$(mktemp -d "$TMP_ROOT/sovereign-build-backup.XXXXXX")
+  local pkg
+  for pkg in core client server; do
+    local src="$REPO_DIR/packages/$pkg/dist"
+    local dest="$BACKUP_DIR/$pkg"
+    mkdir -p "$dest"
+    if [ -d "$src" ]; then
+      cp -R "$src" "$dest/dist"
+      touch "$dest/.had_dist"
+    fi
+  done
+}
+
+_restore_artifacts() {
+  [ -n "${BACKUP_DIR:-}" ] || return 0
+  local pkg
+  for pkg in core client server; do
+    local src="$REPO_DIR/packages/$pkg/dist"
+    local snapshot="$BACKUP_DIR/$pkg/dist"
+    rm -rf "$src"
+    if [ -f "$BACKUP_DIR/$pkg/.had_dist" ] && [ -d "$snapshot" ]; then
+      mkdir -p "$(dirname "$src")"
+      cp -R "$snapshot" "$src"
+    fi
+  done
+}
+
+_cleanup_backup() {
+  if [ -n "${BACKUP_DIR:-}" ] && [ -d "$BACKUP_DIR" ]; then
+    rm -rf "$BACKUP_DIR"
+  fi
+}
+
+_run_checks() {
+  _note "Running type checks + lint"
+  (cd "$REPO_DIR" && pnpm check)
+}
+
+_run_builds() {
+  _note "Building core"
   (cd "$REPO_DIR" && pnpm --filter @sovereign/core build)
-  
-  echo "Building client..."
+  _note "Building client"
   (cd "$REPO_DIR" && pnpm --filter @sovereign/client build)
-  
-  echo "Building server..."
+  _note "Building server"
   (cd "$REPO_DIR" && pnpm --filter @sovereign/server build)
-  
-  echo "Build complete"
+}
+
+_guarded_build() {
+  local was_running=0
+  if _is_running; then
+    was_running=1
+  fi
+
+  _run_checks
+  _backup_artifacts
+
+  local build_ok=0
+  if _run_builds; then
+    build_ok=1
+  else
+    _warn "Build failed; restoring previous build artifacts"
+    _restore_artifacts
+    _cleanup_backup
+    _die "Guarded build failed before reload; running service left untouched"
+  fi
+
+  if [ "$build_ok" -eq 1 ] && [ "$was_running" -eq 1 ]; then
+    _note "Reloading running service"
+    if _is_macos; then
+      if _restart_launchd_service; then
+        _cleanup_backup
+        return 0
+      fi
+    else
+      _stop_non_macos
+      if _start_non_macos; then
+        _cleanup_backup
+        return 0
+      fi
+    fi
+
+    _warn "Reload failed health verification; restoring previous build artifacts"
+    _restore_artifacts
+    if _is_macos; then
+      _restart_launchd_service || _die "Rollback failed; inspect $STDERR_LOG"
+    else
+      _stop_non_macos || true
+      _start_non_macos || _die "Rollback failed; inspect $STDERR_LOG"
+    fi
+    _cleanup_backup
+    _die "Reload failed; rolled back to last known-good build"
+  fi
+
+  _cleanup_backup
+  if [ "$was_running" -eq 1 ]; then
+    _note "Build + reload complete"
+  else
+    _note "Build complete; service was not running"
+  fi
+}
+
+_show_status() {
+  echo "Label: $PLIST_LABEL"
+  echo "Repo: $REPO_DIR"
+  echo "Data: $DATA_DIR"
+  echo "Plist: $PLIST_DEST"
+  echo "Stdout: $STDOUT_LOG"
+  echo "Stderr: $STDERR_LOG"
+  echo "Health: $HEALTH_URL"
+
+  if _is_running; then
+    local pid
+    pid=$(_service_pid || true)
+    echo "State: running"
+    if [ -n "$pid" ]; then
+      echo "PID: $pid"
+    fi
+  else
+    echo "State: stopped"
+  fi
+
+  if _healthcheck >/tmp/sovereign-health.$$ 2>/dev/null; then
+    echo "HTTP: healthy"
+    cat /tmp/sovereign-health.$$
+    rm -f /tmp/sovereign-health.$$
+  else
+    rm -f /tmp/sovereign-health.$$ 2>/dev/null || true
+    echo "HTTP: unavailable"
+  fi
+}
+
+_tail_logs() {
+  local mode="${1:-all}"
+  case "$mode" in
+    stdout)
+      touch "$STDOUT_LOG"
+      tail -f "$STDOUT_LOG"
+      ;;
+    stderr)
+      touch "$STDERR_LOG"
+      tail -f "$STDERR_LOG"
+      ;;
+    all)
+      touch "$STDOUT_LOG" "$STDERR_LOG"
+      tail -f "$STDOUT_LOG" "$STDERR_LOG"
+      ;;
+    *)
+      _die "Unknown logs mode: $mode (use stdout|stderr|all)"
+      ;;
+  esac
 }
 
 case "${1:-help}" in
+  install)
+    _is_macos || _die "install is only needed on macOS"
+    _install_plist
+    _note "Installed plist at $PLIST_DEST"
+    ;;
   start)
-    _start_server
+    if _is_macos; then
+      _start_launchd_service
+    else
+      _start_non_macos
+    fi
     ;;
-  
   stop)
-    _stop_server
+    if _is_macos; then
+      _stop_launchd_service
+    else
+      _stop_non_macos
+    fi
     ;;
-  
-  restart)
-    _stop_server
-    _start_server
+  restart|reload)
+    if _is_macos; then
+      _restart_launchd_service
+    else
+      _stop_non_macos
+      _start_non_macos
+    fi
     ;;
-  
   status)
-    if _is_running; then
-      if _is_macos && [ -f "$PLIST_DEST" ]; then
-        echo "Running (launchd: $PLIST_LABEL)"
-      else
-        local_pid=$(cat "$PID_FILE")
-        echo "Running (pid $local_pid)"
-        if command -v ps &>/dev/null; then
-          ps -o etime= -p "$local_pid" 2>/dev/null | xargs echo "Uptime:"
-        fi
-      fi
-      echo "Data: $DATA_DIR"
-      echo "Logs: $LOG_FILE"
-    else
-      echo "Not running"
-    fi
+    _show_status
     ;;
-  
   build)
-    _build
-    if _is_running; then
-      echo "Restarting daemon..."
-      _stop_server
-      _start_server
-    else
-      echo "Daemon not running. Start with: sovereign start"
+    _guarded_build
+    ;;
+  health)
+    if _healthcheck; then
+      exit 0
     fi
-    ;;
-  
-  logs)
-    if [ -f "$LOG_FILE" ]; then
-      tail -f "$LOG_FILE"
-    else
-      echo "No log file yet"
-    fi
-    ;;
-  
-  run)
-    echo "Running in foreground (Ctrl+C to stop)..."
-    cd "$REPO_DIR" && exec node "$SERVER_ENTRY"
-    ;;
-  
-  help|--help|-h)
-    echo "Usage: sovereign <command>"
-    echo ""
-    echo "Commands:"
-    echo "  start     Start the production daemon"
-    echo "  stop      Stop the daemon"
-    echo "  restart   Restart the daemon"
-    echo "  status    Show daemon status"
-    echo "  build     Build all packages, restart if running"
-    echo "  logs      Tail the daemon log"
-    echo "  run       Run in foreground (no daemon)"
-    echo ""
-    echo "Environment:"
-    echo "  SOVEREIGN_DATA_DIR  Data directory (default: $REPO_DIR/packages/server/.data)"
-    ;;
-  
-  *)
-    echo "Unknown command: $1"
-    echo "Run 'sovereign help' for usage"
     exit 1
+    ;;
+  logs)
+    _tail_logs "${2:-all}"
+    ;;
+  run)
+    _note "Running in foreground"
+    cd "$REPO_DIR"
+    exec node "$SERVER_ENTRY"
+    ;;
+  help|--help|-h)
+    cat <<EOF
+Usage: sovereign <command>
+
+Commands:
+  install            Install/update the launchd plist (macOS)
+  start              Start the background service
+  stop               Stop the background service
+  restart            Restart the service and verify health
+  reload             Alias for restart
+  status             Show launchd + HTTP health state
+  build              Guarded check/build; reload only after success
+  health             Print /health response
+  logs [mode]        Tail logs (stdout|stderr|all)
+  run                Run in foreground (no daemon)
+
+Environment (from shell or .env/.env.local):
+  SOVEREIGN_DATA_DIR  Data directory (default: $REPO_DIR/packages/server/.data)
+  HOST                Bind address (default: 127.0.0.1)
+  PORT                Server port (default: 5801)
+  SOVEREIGN_TLS       true for HTTPS health checks (default: false)
+EOF
+    ;;
+  *)
+    _die "Unknown command: $1"
     ;;
 esac
