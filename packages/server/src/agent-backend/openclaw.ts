@@ -112,6 +112,26 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
 
   let currentConfig = { ...config }
 
+  type ReadinessGate = {
+    ready: boolean
+    promise: Promise<void>
+    resolve: () => void
+    reject: (error: Error) => void
+  }
+
+  function createReadinessGate(): ReadinessGate {
+    let resolve!: () => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    promise.catch(() => {})
+    return { ready: false, promise, resolve, reject }
+  }
+
+  let handshakeReady = createReadinessGate()
+
   // Pending RPC requests awaiting response
   const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 
@@ -142,8 +162,12 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   }
 
   /** Send a JSON-RPC style request to the gateway and return a promise for the response. */
-  function request(method: string, params: Record<string, unknown>): Promise<unknown> {
-    return new Promise((resolve, reject) => {
+  async function request(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (method !== 'connect' && !handshakeReady.ready) {
+      await handshakeReady.promise
+    }
+
+    return await new Promise((resolve, reject) => {
       if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return reject(new Error('Not connected'))
       }
@@ -511,6 +535,8 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   }
 
   function connectWs(): Promise<void> {
+    handshakeReady = createReadinessGate()
+
     return new Promise<void>((resolve, reject) => {
       if (state.destroyed) return reject(new Error('Backend destroyed'))
 
@@ -547,7 +573,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
               const id = getIdentity()
               const deviceId = deriveDeviceId(id.publicKey)
               const pubKeyB64 = publicKeyBase64Url(id.publicKey)
-              const storedToken = getDeviceToken(deviceId) || currentConfig.gatewayToken || ''
+              const storedToken = currentConfig.gatewayToken || getDeviceToken(deviceId) || ''
               const signedAt = Date.now()
               const payload = [
                 'v2',
@@ -574,12 +600,15 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
                     saveDeviceToken(deviceId, auth.deviceToken)
                   }
 
+                  handshakeReady.ready = true
+                  handshakeReady.resolve()
                   setStatus('connected')
                   resolve()
                 },
                 reject: (err) => {
                   if (settled) return
                   settled = true
+                  handshakeReady.reject(err)
                   const isPairing = err.message?.includes('pairing')
                   setStatus('error', err.message, isPairing ? 'auth_rejected' : 'server_down')
                   reject(err)
@@ -618,6 +647,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
             } catch (err) {
               if (!settled) {
                 settled = true
+                handshakeReady.reject(err as Error)
                 reject(err as Error)
               }
             }
@@ -638,8 +668,10 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
           pending.clear()
           if (!settled) {
             settled = true
+            const closeError = new Error('Connection closed before handshake')
+            handshakeReady.reject(closeError)
             setStatus('disconnected', 'Connection closed before handshake', 'server_down')
-            reject(new Error('Connection closed before handshake'))
+            reject(closeError)
           } else {
             setStatus('disconnected', 'Connection lost')
           }
@@ -649,12 +681,14 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         ws.on('error', (err: Error) => {
           if (!settled) {
             settled = true
+            handshakeReady.reject(err)
             const errorType = err.message?.includes('certificate') ? 'cert_error' : 'server_down'
             setStatus('disconnected', err.message, errorType)
             reject(err)
           }
         })
       } catch (err) {
+        handshakeReady.reject(err as Error)
         setStatus('disconnected')
         reject(err as Error)
       }
@@ -706,6 +740,10 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   }
 
   function cleanup() {
+    if (!handshakeReady.ready) {
+      handshakeReady.reject(new Error('Backend disconnected'))
+      handshakeReady = createReadinessGate()
+    }
     if (state.retryTimer) {
       clearTimeout(state.retryTimer)
       state.retryTimer = null
