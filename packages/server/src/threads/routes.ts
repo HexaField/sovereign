@@ -7,42 +7,6 @@ import { getGatewayActivityMap } from './parse-gateway-sessions.js'
 import type { ChatModule } from '../chat/chat.js'
 import { deriveSessionKey } from '../chat/derive-session-key.js'
 
-// Default model to reset GPT sessions to
-const DEFAULT_MODEL = 'github-copilot/claude-opus-4.6'
-
-/** Reset any sessions currently using GPT models back to the default model */
-export async function resetGptSessionsToDefault(): Promise<{ updated: string[] }> {
-  const updated: string[] = []
-  try {
-    const fs = await import('node:fs')
-    const nodePath = await import('node:path')
-    const sessionsPath = nodePath.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
-    if (!fs.existsSync(sessionsPath)) return { updated }
-    const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
-    const slashIdx = DEFAULT_MODEL.indexOf('/')
-    const defaultProvider = DEFAULT_MODEL.slice(0, slashIdx)
-    const defaultModelName = DEFAULT_MODEL.slice(slashIdx + 1)
-
-    for (const [key, meta] of Object.entries(sessions)) {
-      const m = meta as Record<string, unknown>
-      const model = (m.model as string) ?? ''
-      if (/gpt/i.test(model)) {
-        m.model = defaultModelName
-        m.modelProvider = defaultProvider
-        updated.push(key)
-      }
-    }
-    if (updated.length > 0) {
-      const tmpPath = sessionsPath + '.tmp'
-      fs.writeFileSync(tmpPath, JSON.stringify(sessions, null, 2))
-      fs.renameSync(tmpPath, sessionsPath)
-    }
-  } catch {
-    /* ignore */
-  }
-  return { updated }
-}
-
 interface AgentBackendLike {
   getHistory(sessionKey: string): Promise<{ turns: Array<{ role: string; content: string }>; hasMore: boolean }>
 }
@@ -347,12 +311,6 @@ export function createThreadRoutes(
     } catch {
       res.json({ models: [], defaultModel: null })
     }
-  })
-
-  // ── Reset GPT sessions to default ────────────────────────────────────
-  router.post('/api/models/reset-gpt', async (_req, res) => {
-    const result = await resetGptSessionsToDefault()
-    res.json(result)
   })
 
   // ── Switch thread model ──────────────────────────────────────────────

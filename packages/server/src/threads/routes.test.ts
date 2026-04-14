@@ -6,7 +6,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { createEventBus } from '@sovereign/core'
 import { createThreadManager } from './threads.js'
-import { createThreadRoutes, resetGptSessionsToDefault } from './routes.js'
+import { createThreadRoutes } from './routes.js'
 import type { ThreadManager } from './types.js'
 
 function makeTmpDir(): string {
@@ -97,69 +97,8 @@ describe('Thread Routes — Model Switching', () => {
     expect(res.status).toBe(404)
   })
 
-  it('POST /api/models/reset-gpt resets GPT sessions', async () => {
-    fs.writeFileSync(
-      sessionsPath,
-      JSON.stringify({
-        'agent:main:thread:a': { model: 'gpt-4o', modelProvider: 'github-copilot' },
-        'agent:main:thread:b': { model: 'gpt-5-mini', modelProvider: 'github-copilot' },
-        'agent:main:thread:c': { model: 'claude-opus-4.6', modelProvider: 'github-copilot' }
-      })
-    )
-
+  it('POST /api/models/reset-gpt is removed (endpoint no longer exists)', async () => {
     const res = await request(app).post('/api/models/reset-gpt')
-    expect(res.status).toBe(200)
-    expect(res.body.updated).toHaveLength(2)
-    expect(res.body.updated).toContain('agent:main:thread:a')
-    expect(res.body.updated).toContain('agent:main:thread:b')
-
-    // Verify file
-    const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
-    expect(sessions['agent:main:thread:a'].model).toBe('claude-opus-4.6')
-    expect(sessions['agent:main:thread:b'].model).toBe('claude-opus-4.6')
-    expect(sessions['agent:main:thread:c'].model).toBe('claude-opus-4.6') // unchanged
-  })
-})
-
-describe('resetGptSessionsToDefault', () => {
-  let dataDir: string
-  let sessionsPath: string
-
-  beforeEach(() => {
-    dataDir = makeTmpDir()
-    const sessionsDir = path.join(dataDir, '.openclaw/agents/main/sessions')
-    fs.mkdirSync(sessionsDir, { recursive: true })
-    sessionsPath = path.join(sessionsDir, 'sessions.json')
-    vi.stubEnv('HOME', dataDir)
-  })
-
-  afterEach(() => {
-    vi.unstubAllEnvs()
-  })
-
-  it('resets GPT model sessions to claude-opus-4.6', async () => {
-    fs.writeFileSync(
-      sessionsPath,
-      JSON.stringify({
-        'session-1': { model: 'gpt-5.2-codex', modelProvider: 'github-copilot' },
-        'session-2': { model: 'claude-opus-4.6', modelProvider: 'github-copilot' },
-        'session-3': { model: 'gpt-4o', modelProvider: 'openai' }
-      })
-    )
-
-    const result = await resetGptSessionsToDefault()
-    expect(result.updated).toHaveLength(2)
-
-    const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
-    expect(sessions['session-1'].model).toBe('claude-opus-4.6')
-    expect(sessions['session-1'].modelProvider).toBe('github-copilot')
-    expect(sessions['session-2'].model).toBe('claude-opus-4.6') // unchanged
-    expect(sessions['session-3'].model).toBe('claude-opus-4.6')
-    expect(sessions['session-3'].modelProvider).toBe('github-copilot')
-  })
-
-  it('handles missing sessions.json gracefully', async () => {
-    const result = await resetGptSessionsToDefault()
-    expect(result.updated).toHaveLength(0)
+    expect(res.status).toBe(404)
   })
 })
