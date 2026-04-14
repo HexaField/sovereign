@@ -795,11 +795,9 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
             return { turns: cached.turns, hasMore: cached.hasMore }
           }
 
-          const t0 = Date.now()
           const { messages, hasMore } = readRecentMessages(filePath, 2000)
           if (messages.length > 0) {
             const turns = parseTurns(messages)
-            const elapsed = Date.now() - t0
 
             // Check for older session files (compacted/previous sessions for same thread)
             let effectiveHasMore = hasMore

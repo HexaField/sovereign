@@ -6,37 +6,6 @@ import type { ForwardHandler } from './forward.js'
 import { getGatewayActivityMap } from './parse-gateway-sessions.js'
 import type { ChatModule } from '../chat/chat.js'
 import { deriveSessionKey } from '../chat/derive-session-key.js'
-import { execFileSync, execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { existsSync } from 'node:fs'
-
-const execFileAsync = promisify(execFile)
-
-/** Resolve the openclaw binary path once at startup. */
-function resolveOpenclawBin(): string {
-  // 1. Explicit env override
-  if (process.env.OPENCLAW_BIN && existsSync(process.env.OPENCLAW_BIN)) {
-    return process.env.OPENCLAW_BIN
-  }
-  // 2. Try `which` (works if PATH is correct)
-  try {
-    const resolved = execFileSync('which', ['openclaw'], { encoding: 'utf-8' }).trim()
-    if (resolved) return resolved
-  } catch {
-    /* not on PATH */
-  }
-  // 3. NVM-based fallback
-  const home = process.env.HOME || ''
-  const nvmBin = `${home}/.nvm/versions/node/${process.version}/bin/openclaw`
-  if (existsSync(nvmBin)) return nvmBin
-  // 4. Common global paths
-  for (const p of ['/usr/local/bin/openclaw', '/usr/bin/openclaw']) {
-    if (existsSync(p)) return p
-  }
-  return 'openclaw'
-}
-
-const openclawBin = resolveOpenclawBin()
 
 // Default model to reset GPT sessions to
 const DEFAULT_MODEL = 'github-copilot/claude-opus-4.6'
