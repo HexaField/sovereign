@@ -29,6 +29,69 @@ afterEach(() => {
 
 describe('System Module', () => {
   describe('§9.2 — System Endpoints', () => {
+    it('POST /api/system/gateway/restart returns 202 when the gateway restart succeeds', async () => {
+      const app = express()
+      const gatewayRestart = {
+        restart: async () => ({ message: 'gateway restarted', command: 'openclaw gateway restart' })
+      }
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, gatewayRestart }))
+
+      const res = await request(app).post('/api/system/gateway/restart')
+
+      expect(res.status).toBe(202)
+      expect(res.body).toEqual({
+        status: 'accepted',
+        message: 'gateway restarted',
+        command: 'openclaw gateway restart'
+      })
+    })
+
+    it('POST /api/system/gateway/restart returns 409 while a restart is already in progress', async () => {
+      const app = express()
+      let resolveRestart!: (value: { message: string; command: string }) => void
+      let notifyStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        notifyStarted = resolve
+      })
+      const restartPromise = new Promise<{ message: string; command: string }>((resolve) => {
+        resolveRestart = resolve
+      })
+      const gatewayRestart = {
+        restart: () => {
+          notifyStarted()
+          return restartPromise
+        }
+      }
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, gatewayRestart }))
+
+      const firstPromise = request(app)
+        .post('/api/system/gateway/restart')
+        .then((res) => res)
+      await started
+      const second = await request(app).post('/api/system/gateway/restart')
+      resolveRestart({ message: 'gateway restarted', command: 'openclaw gateway restart' })
+      const firstRes = await firstPromise
+
+      expect(second.status).toBe(409)
+      expect(second.body.error).toContain('already in progress')
+      expect(firstRes.status).toBe(202)
+    })
+
+    it('POST /api/system/gateway/restart returns 500 when the gateway restart fails', async () => {
+      const app = express()
+      const gatewayRestart = {
+        restart: async () => {
+          throw new Error('openclaw CLI unavailable')
+        }
+      }
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, gatewayRestart }))
+
+      const res = await request(app).post('/api/system/gateway/restart')
+
+      expect(res.status).toBe(500)
+      expect(res.body).toEqual({ error: 'openclaw CLI unavailable' })
+    })
+
     it('§9.2 — GET /api/system/architecture returns module graph with modules array', async () => {
       const app = express()
       app.use(createSystemRoutes(system))

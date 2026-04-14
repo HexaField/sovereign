@@ -1,5 +1,5 @@
 // §6.6 Devices Tab — Device identity, gateway connection, and pairing
-import { createSignal, onMount, Show, For, type Component } from 'solid-js'
+import { createSignal, onMount, onCleanup, Show, For, type Component } from 'solid-js'
 
 export interface DeviceInfo {
   deviceId: string
@@ -22,6 +22,56 @@ export interface DevicesData {
   pendingRequests?: PairingRequest[]
 }
 
+export async function fetchDevices(): Promise<DevicesData> {
+  const res = await fetch('/api/system/devices')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function requestGatewayRestart(): Promise<{ status: string; message?: string; command?: string }> {
+  const res = await fetch('/api/system/gateway/restart', {
+    method: 'POST',
+    headers: { Accept: 'application/json' }
+  })
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string
+    status?: string
+    message?: string
+    command?: string
+  }
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`)
+  return {
+    status: body.status || 'accepted',
+    message: body.message,
+    command: body.command
+  }
+}
+
+export async function waitForGatewayReconnect(options?: {
+  pollMs?: number
+  timeoutMs?: number
+  fetchDevicesFn?: typeof fetchDevices
+}): Promise<'connected' | 'timeout'> {
+  const pollMs = options?.pollMs ?? 1000
+  const timeoutMs = options?.timeoutMs ?? 20_000
+  const fetchDevicesFn = options?.fetchDevicesFn ?? fetchDevices
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    try {
+      const data = await fetchDevicesFn()
+      if (data.devices.some((device) => device.isCurrent && device.connectionStatus === 'connected')) {
+        return 'connected'
+      }
+    } catch {
+      // Ignore transient fetch failures while the gateway is bouncing.
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
+
+  return 'timeout'
+}
+
 function statusColor(status: string): string {
   if (status === 'connected') return 'bg-green-500'
   if (status === 'connecting') return 'bg-amber-500'
@@ -35,23 +85,72 @@ function statusLabel(status: string): string {
 const DevicesTab: Component = () => {
   const [data, setData] = createSignal<DevicesData | null>(null)
   const [error, setError] = createSignal<string | null>(null)
+  const [restartState, setRestartState] = createSignal<'idle' | 'restarting' | 'recovering'>('idle')
+  const [restartMessage, setRestartMessage] = createSignal<string | null>(null)
+  let disposed = false
 
   const load = async () => {
     try {
-      const res = await fetch('/api/system/devices')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setData(await res.json())
+      setData(await fetchDevices())
       setError(null)
     } catch (e: any) {
       setError(e.message ?? 'Failed to load')
     }
   }
 
+  const handleRestartGateway = async () => {
+    if (restartState() !== 'idle') return
+
+    setRestartState('restarting')
+    setRestartMessage('Restarting OpenClaw gateway…')
+
+    try {
+      const result = await requestGatewayRestart()
+      if (disposed) return
+      await load()
+      setRestartState('recovering')
+      setRestartMessage(result.message || 'Gateway restart requested. Waiting for reconnect…')
+      const reconnectResult = await waitForGatewayReconnect()
+      if (disposed) return
+      await load()
+      if (reconnectResult === 'connected') {
+        setRestartMessage('OpenClaw gateway restarted and reconnected.')
+      } else {
+        setRestartMessage(
+          'Gateway restart completed, but reconnect was not observed yet. Check the device status above.'
+        )
+      }
+    } catch (e: any) {
+      if (disposed) return
+      setRestartMessage(e?.message ?? 'Failed to restart OpenClaw gateway')
+    } finally {
+      if (!disposed) setRestartState('idle')
+    }
+  }
+
   onMount(load)
+  onCleanup(() => {
+    disposed = true
+  })
 
   return (
     <div class="space-y-6">
       {error() && <div class="rounded border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">{error()}</div>}
+
+      {restartMessage() && (
+        <div
+          class="rounded border p-3 text-sm"
+          style={{
+            'border-color': restartMessage()?.toLowerCase().includes('failed')
+              ? 'rgb(239 68 68 / 0.3)'
+              : 'var(--c-border)',
+            background: restartState() === 'idle' ? 'var(--c-bg-raised)' : 'rgb(59 130 246 / 0.08)',
+            color: restartMessage()?.toLowerCase().includes('failed') ? 'rgb(248 113 113)' : 'var(--c-text)'
+          }}
+        >
+          {restartMessage()}
+        </div>
+      )}
 
       {!data() && !error() && <div class="text-sm opacity-60">Loading devices…</div>}
 
@@ -59,7 +158,21 @@ const DevicesTab: Component = () => {
         {(d) => (
           <>
             <div>
-              <h3 class="mb-3 text-sm font-semibold opacity-80">Devices ({d().devices.length})</h3>
+              <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <h3 class="text-sm font-semibold opacity-80">Devices ({d().devices.length})</h3>
+                <button
+                  class="cursor-pointer rounded border px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{ 'border-color': 'var(--c-border)', background: 'transparent', color: 'var(--c-accent)' }}
+                  disabled={restartState() !== 'idle'}
+                  onClick={() => void handleRestartGateway()}
+                >
+                  {restartState() === 'restarting'
+                    ? 'Restarting Gateway…'
+                    : restartState() === 'recovering'
+                      ? 'Waiting for Reconnect…'
+                      : 'Restart OpenClaw Gateway'}
+                </button>
+              </div>
               <div class="space-y-2">
                 <For each={d().devices}>
                   {(device) => (
