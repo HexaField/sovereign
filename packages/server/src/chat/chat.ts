@@ -404,12 +404,14 @@ export function createChatModule(
       return
     }
 
+    const sentAt = Date.now()
     bus.emit({
       type: 'chat.message.sent',
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(sentAt).toISOString(),
       source: 'chat',
-      payload: { threadKey, text, timestamp: Date.now() }
+      payload: { threadKey, text, timestamp: sentAt }
     })
+    chatEvents.emit('chat.message.sent', { threadKey, text, timestamp: sentAt })
   }
 
   async function handleAbort(threadKey: string): Promise<void> {
