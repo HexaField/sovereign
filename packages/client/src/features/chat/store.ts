@@ -261,6 +261,43 @@ function resetSendState(): void {
   ackCounter = 0
 }
 
+function hasUnresolvedOptimisticUserTurns(items: ParsedTurn[] = turns()): boolean {
+  return items.some((turn) => turn.role === 'user' && turn.pending && !turn.sendFailed)
+}
+
+function requestAuthoritativeHistory(threadKey: string): void {
+  ws?.send({ type: 'chat.history', threadKey } as any)
+}
+
+function clearPendingAckEntries(text: string): void {
+  for (const [ackId, entry] of Array.from(pendingAcks.entries())) {
+    if (entry.msg.text === text) {
+      clearTimeout(entry.timer)
+      pendingAcks.delete(ackId)
+    }
+  }
+}
+
+function markLatestOptimisticTurn(text: string, patch: Partial<ParsedTurn>): void {
+  setTurns((prev) => {
+    const updated = [...prev]
+    for (let i = updated.length - 1; i >= 0; i--) {
+      if (updated[i].role === 'user' && updated[i].content === text) {
+        updated[i] = { ...updated[i], ...patch }
+        break
+      }
+    }
+    return updated
+  })
+}
+
+export function removePendingMessage(turn: ParsedTurn): void {
+  clearPendingAckEntries(turn.content)
+  setPendingQueue((queue) => queue.filter((message) => message.text !== turn.content))
+  setTurns((prev) => prev.filter((candidate) => candidate !== turn))
+  flushPendingQueue()
+}
+
 /** §R.6 Exponential backoff delay for send retries */
 function retryBackoffMs(retries: number): number {
   return Math.min(1000 * Math.pow(2, retries), 30_000) * (0.5 + Math.random() * 0.5)
@@ -299,7 +336,7 @@ function doSend(pending: PendingMessage): void {
         const updated = [...prev]
         for (let i = updated.length - 1; i >= 0; i--) {
           if (updated[i].role === 'user' && updated[i].content === pending.text && !updated[i].sendFailed) {
-            updated[i] = { ...updated[i], sendFailed: true }
+            updated[i] = { ...updated[i], sendFailed: true, pending: false }
             break
           }
         }
@@ -316,6 +353,7 @@ function doSend(pending: PendingMessage): void {
     clearTimeout(timer)
     pendingAcks.delete(ackId)
     setPendingQueue((q) => q.map((m) => (m.id === pending.id ? { ...m, status: 'failed' as const } : m)))
+    markLatestOptimisticTurn(pending.text, { sendFailed: true, pending: false })
   }
 }
 
@@ -327,6 +365,8 @@ export function handleAck(ackId: string): void {
   pendingAcks.delete(ackId)
   // Remove from pending queue
   setPendingQueue((q) => q.filter((m) => m.id !== entry.msg.id))
+  // Reconcile against the authoritative history as soon as the backend accepts the send.
+  requestAuthoritativeHistory(entry.msg.threadKey)
   // Send next queued message
   flushPendingQueue()
 }
@@ -340,16 +380,7 @@ export function handleNack(ackId: string, error?: string): void {
   pendingAcks.delete(ackId)
   // Mark the send as failed
   setPendingQueue((q) => q.map((m) => (m.id === entry.msg.id ? { ...m, status: 'failed' as const } : m)))
-  setTurns((prev) => {
-    const updated = [...prev]
-    for (let i = updated.length - 1; i >= 0; i--) {
-      if (updated[i].role === 'user' && updated[i].content === entry.msg.text && !updated[i].sendFailed) {
-        updated[i] = { ...updated[i], sendFailed: true }
-        break
-      }
-    }
-    return updated
-  })
+  markLatestOptimisticTurn(entry.msg.text, { sendFailed: true, pending: false })
 }
 
 export async function sendMessage(text: string, attachments?: File[]): Promise<void> {
@@ -429,14 +460,13 @@ export async function sendMessage(text: string, attachments?: File[]): Promise<v
 }
 
 export function retrySend(turn: ParsedTurn): void {
-  // Remove the failed turn and re-send
   const text = turn.content
-  setTurns((prev) => prev.filter((t) => t !== turn))
+  removePendingMessage(turn)
   sendMessage(text)
 }
 
 export function cancelFailedMessage(turn: ParsedTurn): void {
-  setTurns((prev) => prev.filter((t) => t !== turn))
+  removePendingMessage(turn)
 }
 
 export function loadOlderMessages(): void {
@@ -549,10 +579,9 @@ function connectSSE(threadKey: string): void {
       stopDurationTimer()
       if (data.status === 'idle') {
         clearLiveState()
-        // If chat.turn already arrived, we're done. Otherwise SSE will re-send history on reconnect.
-        if (!turnReceivedForCurrentRun) {
-          // Request history via WS as fallback
-          ws?.send({ type: 'chat.history', threadKey } as any)
+        // Reconcile optimistic user turns from authoritative history whenever a run settles.
+        if (!turnReceivedForCurrentRun || hasUnresolvedOptimisticUserTurns()) {
+          requestAuthoritativeHistory(threadKey)
         }
       }
     }
@@ -635,6 +664,9 @@ function connectSSE(threadKey: string): void {
       return [...prev, merged]
     })
     clearLiveState()
+    if (merged.role !== 'user' && hasUnresolvedOptimisticUserTurns()) {
+      requestAuthoritativeHistory(threadKey)
+    }
   })
 
   // ── compacting ──
@@ -774,7 +806,27 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const turn = msg.turn as ParsedTurn
       if (!turn) return
-      setTurns((prev) => [...prev, turn])
+      turnReceivedForCurrentRun = true
+      setTurns((prev) => {
+        const last = prev[prev.length - 1]
+        if (last && last.role === turn.role && last.content === turn.content) {
+          return [...prev.slice(0, -1), { ...turn, pending: false, sendFailed: false }]
+        }
+        if (turn.role === 'user') {
+          const pendingIdx = prev.findIndex(
+            (candidate) => candidate.role === 'user' && candidate.pending && candidate.content === turn.content
+          )
+          if (pendingIdx >= 0) {
+            const updated = [...prev]
+            updated[pendingIdx] = { ...turn, pending: false, sendFailed: false }
+            return updated
+          }
+        }
+        return [...prev, turn]
+      })
+      if (turn.role !== 'user' && hasUnresolvedOptimisticUserTurns()) {
+        requestAuthoritativeHistory(_threadKey())
+      }
     })
   )
 
@@ -804,7 +856,18 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     ws.on('chat.status', (msg: any) => {
       if (sseActive()) return
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      if (msg.status) setAgentStatus(msg.status)
+      if (msg.status) {
+        setAgentStatus(msg.status)
+        if (msg.status === 'working' || msg.status === 'thinking') {
+          turnReceivedForCurrentRun = false
+        }
+        if (msg.status === 'idle') {
+          clearLiveState()
+          if (!turnReceivedForCurrentRun || hasUnresolvedOptimisticUserTurns()) {
+            requestAuthoritativeHistory(_threadKey())
+          }
+        }
+      }
     })
   )
 

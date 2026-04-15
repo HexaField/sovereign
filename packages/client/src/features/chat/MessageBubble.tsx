@@ -2,7 +2,7 @@ import { Show, createSignal, createMemo, createEffect, onCleanup, type JSX } fro
 import type { ParsedTurn, ForwardedMessage } from '@sovereign/core'
 import { renderMarkdown, escapeHtml } from '../../lib/markdown.js'
 import { messageToMarkdown, downloadText, exportMessagePdf, turnsToMarkdown, exportThreadPdf } from './export.js'
-import { turns, retrySend, cancelFailedMessage } from './store.js'
+import { turns, retrySend, cancelFailedMessage, removePendingMessage } from './store.js'
 import { sanitizeContent, isCompactionMessage } from './sanitize.js'
 import {
   WriteIcon,
@@ -478,13 +478,13 @@ export function MessageBubble(props: MessageBubbleProps) {
               style={{ background: 'transparent', color: 'var(--c-text-muted)', border: '1px solid var(--c-border)' }}
               onClick={() => cancelFailedMessage(props.turn)}
             >
-              Cancel
+              Remove
             </button>
           </div>
         </Show>
         <Show when={pending() && !sendFailed()}>
           <div class="mt-1 text-right text-xs" style={{ color: 'var(--c-text-muted)', opacity: '0.6' }}>
-            Queued
+            Pending…
           </div>
         </Show>
       </div>
@@ -511,9 +511,9 @@ export function MessageBubble(props: MessageBubbleProps) {
           <Show when={pending()}>
             <ContextMenuItem
               icon={<CloseIcon class="h-3.5 w-3.5" />}
-              label="Remove from queue"
+              label="Remove pending message"
               onClick={() => {
-                // removePendingTurn not wired yet
+                removePendingMessage(props.turn)
                 hideMenu()
               }}
               danger

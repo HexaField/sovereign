@@ -73,24 +73,27 @@ describe('§R Chat Reliability Improvements', () => {
       )
     })
 
-    it('ack removes message from pending queue', async () => {
+    it('ack removes message from pending queue and requests authoritative history', async () => {
       await sendMessage('hello')
       expect(ws.send.mock.calls.length).toBeGreaterThan(0)
       const sentMsg = ws.send.mock.calls.find((c: any[]) => c[0]?.type === 'chat.send')?.[0]
       expect(sentMsg).toBeTruthy()
       expect(sentMsg.ackId).toBeTruthy()
       expect(pendingQueue().length).toBe(1)
+      ws.send.mockClear()
       handleAck(sentMsg.ackId)
       expect(pendingQueue().length).toBe(0)
+      expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.history', threadKey: 'main' }))
     })
 
-    it('nack marks optimistic turn as failed', async () => {
+    it('nack marks optimistic turn as failed and clears pending state', async () => {
       await sendMessage('hello')
       const sentMsg = ws.send.mock.calls.find((c: any[]) => c[0]?.type === 'chat.send')?.[0]
       expect(sentMsg).toBeTruthy()
       handleNack(sentMsg.ackId, 'backend error')
       const userTurn = turns().find((t) => t.role === 'user' && t.content === 'hello')
       expect(userTurn?.sendFailed).toBe(true)
+      expect(userTurn?.pending).toBe(false)
     })
 
     it('ack handler subscribes via WS on init', () => {
@@ -142,9 +145,9 @@ describe('§R Chat Reliability Improvements', () => {
       // After all retries exhaust, eventually fails
       vi.advanceTimersByTime(120_000) // well past all retries
 
-      pendingQueue().find((m) => m.status === 'failed')
-      // Either failed or retried and still pending
-      expect(pendingQueue().length).toBeGreaterThanOrEqual(1)
+      const failedTurn = turns().find((t) => t.role === 'user' && t.content === 'timeout test')
+      expect(failedTurn?.sendFailed).toBe(true)
+      expect(failedTurn?.pending).toBe(false)
     })
 
     it('successful ack before timeout prevents failure', async () => {
