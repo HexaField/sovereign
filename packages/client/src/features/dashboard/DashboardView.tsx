@@ -75,6 +75,7 @@ interface HealthData {
 export function DashboardView() {
   const [orgs, setOrgs] = createSignal<OrgSummary[]>([])
   const [diskPct, setDiskPct] = createSignal<number | null>(null)
+  const [showThreadsView, setShowThreadsView] = createSignal(false)
 
   onMount(async () => {
     // Fetch dashboard summary (aggregated per-org data)
@@ -157,46 +158,58 @@ export function DashboardView() {
           >
             <span>📋</span> Planning
           </button>
+
+          <button
+            class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
+            style={{ color: 'var(--c-text-muted)' }}
+            onClick={() => setShowThreadsView(!showThreadsView())}
+            title={showThreadsView() ? 'Show dashboard' : 'Show recent threads'}
+            data-testid="toggle-threads-view"
+          >
+            {showThreadsView() ? <CollapseIcon class="h-4 w-4" /> : <ExpandIcon class="h-4 w-4" />}
+          </button>
         </div>
 
-        {/* Workspace Cards */}
-        <Show when={orgs().length > 0} fallback={<p class="mb-3 text-xs opacity-40">No workspaces configured</p>}>
-          <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-            <For each={orgs()}>
-              {(org) => (
-                <div>
-                  <h3 class="mb-1 text-xs font-semibold" style={{ color: 'var(--c-text-muted)' }}>
-                    {org.orgName}
-                  </h3>
-                  <ThreadPreviews orgId={org.orgId} orgName={org.orgName} />
-                </div>
-              )}
-            </For>
+        <Show when={!showThreadsView()} fallback={<DashboardThreadsView />}>
+          {/* Workspace Cards */}
+          <Show when={orgs().length > 0} fallback={<p class="mb-3 text-xs opacity-40">No workspaces configured</p>}>
+            <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+              <For each={orgs()}>
+                {(org) => (
+                  <div>
+                    <h3 class="mb-1 text-xs font-semibold" style={{ color: 'var(--c-text-muted)' }}>
+                      {org.orgName}
+                    </h3>
+                    <ThreadPreviews orgId={org.orgId} orgName={org.orgName} />
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+
+          {/* Activity + Chat — responsive grid */}
+          <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+            {/* Mobile: chat first, then activity */}
+            <div class="max-h-[40vh] overflow-y-auto md:hidden">
+              <GlobalChat />
+            </div>
+            <div class="md:col-span-2">
+              <ActivityFeed />
+            </div>
+            <div class="hidden md:block">
+              <GlobalChat />
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <NotificationFeed />
+          </div>
+
+          {/* Desktop voice widget */}
+          <div class="hidden max-w-xs md:block">
+            <VoiceWidget />
           </div>
         </Show>
-
-        {/* Activity + Chat — responsive grid */}
-        <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-          {/* Mobile: chat first, then activity */}
-          <div class="max-h-[40vh] overflow-y-auto md:hidden">
-            <GlobalChat />
-          </div>
-          <div class="md:col-span-2">
-            <ActivityFeed />
-          </div>
-          <div class="hidden md:block">
-            <GlobalChat />
-          </div>
-        </div>
-
-        <div class="mb-3">
-          <NotificationFeed />
-        </div>
-
-        {/* Desktop voice widget */}
-        <div class="hidden max-w-xs md:block">
-          <VoiceWidget />
-        </div>
       </div>
 
       {/* Mobile: Voice FAB */}
