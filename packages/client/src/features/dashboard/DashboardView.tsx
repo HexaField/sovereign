@@ -57,8 +57,10 @@ import VoiceWidget from './VoiceWidget'
 import NotificationFeed from './NotificationFeed'
 import { ActivityFeed } from './ActivityFeed'
 import ThreadPreviews from './ThreadPreviews'
+import DashboardThreadsView from './DashboardThreadsView'
 import { createSignal, onMount, onCleanup, Show, For } from 'solid-js'
 import { setActiveView } from '../nav/store'
+import { ExpandIcon, CollapseIcon } from '../../ui/icons'
 
 export const [connectionState, setConnectionState] = createSignal<ConnectionState>('connected')
 export const [agentBackendStatus, setAgentBackendStatus] = createSignal('online')
