@@ -75,7 +75,8 @@ interface HealthData {
 export function DashboardView() {
   const [orgs, setOrgs] = createSignal<OrgSummary[]>([])
   const [diskPct, setDiskPct] = createSignal<number | null>(null)
-  const [showThreadsView, setShowThreadsView] = createSignal(false)
+  // DEMO: default to true so the expanded thread view is visible for screenshots
+  const [showThreadsView, setShowThreadsView] = createSignal(true)
 
   onMount(async () => {
     // Fetch dashboard summary (aggregated per-org data)
