@@ -235,6 +235,22 @@ describe('§3.2 Chat Store', () => {
     expect(agentStatus()).toBe('working')
   })
 
+  it('requests authoritative history on idle when unresolved optimistic user turns remain', async () => {
+    await sendMessage('hello')
+    ws.send.mockClear()
+    const assistantTurn: ParsedTurn = {
+      role: 'assistant',
+      content: 'reply',
+      timestamp: 2,
+      workItems: [],
+      thinkingBlocks: []
+    }
+    ws._emit('chat.turn', { type: 'chat.turn', turn: assistantTurn })
+    ws.send.mockClear()
+    ws._emit('chat.status', { type: 'chat.status', status: 'idle' })
+    expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.history', threadKey: 'main' }))
+  })
+
   it('MUST subscribe to chat WS channel for chat.work messages', () => {
     const work: WorkItem = { type: 'tool_call', name: 'read', timestamp: 1 }
     ws._emit('chat.work', { type: 'chat.work', work })

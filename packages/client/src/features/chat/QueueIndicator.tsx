@@ -1,4 +1,4 @@
-// Queue indicator — shows pending/failed messages waiting to be sent
+// Pending indicator — shows local pending/failed sends when mounted
 
 import { For, Show } from 'solid-js'
 import { pendingQueue, retrySend, cancelFailedMessage, turns } from './store.js'
@@ -26,7 +26,7 @@ export function QueueIndicator() {
             >
               <span class="min-w-0 flex-1 truncate">{item.text}</span>
               <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                {item.status === 'sending' ? 'sending…' : `queued (retry ${item.retries})`}
+                {item.status === 'sending' ? 'sending…' : `pending… (retry ${item.retries})`}
               </span>
             </div>
           )}

@@ -270,6 +270,11 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
         send('turn', data)
       }
     })
+    addHandler('chat.message.sent', (data) => {
+      if (forThread(data)) {
+        historyResponseCache.delete(threadKey) // invalidate cache when a send is accepted
+      }
+    })
     addHandler('chat.compacting', (data) => {
       if (forThread(data)) send('compacting', data)
     })
