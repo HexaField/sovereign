@@ -27,7 +27,7 @@ export function createThreadRoutes(
 
     // Merge lastActivity + agentStatus from gateway (source of truth)
     const activityMap = await getGatewayActivityMap()
-    const merged = threads.map((t) => {
+    let merged = threads.map((t) => {
       const gw = activityMap.get(t.key)
       if (!gw) return t
       // Map gateway status to display status
@@ -37,6 +37,12 @@ export function createThreadRoutes(
       return { ...t, lastActivity: gw.lastActivity, agentStatus }
     })
     merged.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
+
+    // Optional: respect limit query parameter (return only the N most recent threads)
+    const limit = req.query.limit ? Number(req.query.limit) : undefined
+    if (limit && Number.isFinite(limit) && limit > 0) {
+      merged = merged.slice(0, Math.max(0, Math.floor(limit)))
+    }
 
     res.json({ threads: merged })
   })
