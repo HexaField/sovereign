@@ -23,6 +23,13 @@ function stripTimestamp(text: string): string {
   return text.replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
 }
 
+/** Strip OpenClaw internal context wrapper markers */
+function stripInternalContextWrapper(text: string): string {
+  return text
+    .replace(/^<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\s*/, '')
+    .replace(/\s*<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\s*$/, '')
+}
+
 /** Strip directive tags */
 function stripDirectives(text: string): string {
   return text.replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '').trim()
@@ -63,13 +70,14 @@ function isSystemInjected(text: string): boolean {
     /^Heartbeat prompt:/i.test(stripped) ||
     stripped === 'HEARTBEAT_OK' ||
     /^OpenClaw runtime context \(internal\):/i.test(stripped) ||
+    stripped.startsWith('<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>') ||
     /^Exec (?:completed|failed)\s*\(/i.test(stripped)
   )
 }
 
 /** Normalize system-injected message text for rendering. */
 function normalizeSystemText(text: string): string {
-  const stripped = stripTimestamp(text)
+  const stripped = stripInternalContextWrapper(stripTimestamp(text))
   const isTaskCompletion =
     /^OpenClaw runtime context \(internal\):/i.test(stripped) && /\[Internal task completion event\]/i.test(stripped)
   const isSubagentResult = stripped.startsWith('[System Message]') && /subagent task .* completed/i.test(stripped)
