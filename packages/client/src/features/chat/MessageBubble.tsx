@@ -246,8 +246,8 @@ export function MessageBubble(props: MessageBubbleProps) {
     const isRuntimeContext = /^OpenClaw runtime context \(internal\):/i.test(content())
     const isTaskCompletion = isRuntimeContext && /\[Internal task completion event\]/i.test(content())
 
-    // Hide internal-only messages entirely
-    if (isRuntimeContext || isSubagentContext || isMemorySave || isHeartbeat) {
+    // Hide internal-only messages entirely (but keep task completion events visible)
+    if ((isRuntimeContext && !isTaskCompletion) || isSubagentContext || isMemorySave || isHeartbeat) {
       return null
     }
 

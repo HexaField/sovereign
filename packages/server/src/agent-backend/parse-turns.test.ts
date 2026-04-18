@@ -170,3 +170,65 @@ describe('parseTurns — user message dedup', () => {
     expect(userTurns).toHaveLength(1)
   })
 })
+
+describe('parseTurns — subagent completion events', () => {
+  it('should preserve task completion events as system turns', () => {
+    const messages = [
+      { role: 'user', content: 'do something', timestamp: 1000 },
+      {
+        role: 'assistant',
+        content: 'Working on it',
+        timestamp: 1001
+      },
+      {
+        role: 'user',
+        content:
+          'OpenClaw runtime context (internal): [Internal task completion event]\ntask: investigate-bug\nstatus: completed',
+        timestamp: 2000
+      }
+    ]
+    const turns = parseTurns(messages)
+    const systemTurns = turns.filter((t) => t.role === 'system')
+    expect(systemTurns.length).toBeGreaterThanOrEqual(1)
+    const completion = systemTurns.find((t) => /task completion event/i.test(t.content))
+    expect(completion).toBeDefined()
+    expect(completion!.content).toContain('task:')
+  })
+
+  it('should preserve subagent result messages as system turns', () => {
+    const messages = [
+      {
+        role: 'user',
+        content:
+          '[System Message] [sessionId: agent:main:subagent:abc123] subagent task "fix-bug" completed successfully',
+        timestamp: 3000
+      }
+    ]
+    const turns = parseTurns(messages)
+    const systemTurns = turns.filter((t) => t.role === 'system')
+    expect(systemTurns.length).toBeGreaterThanOrEqual(1)
+    const result = systemTurns.find((t) => /subagent task.*completed/i.test(t.content))
+    expect(result).toBeDefined()
+    expect(result!.content).toContain('fix-bug')
+  })
+
+  it('should not filter out task completion events in the final filter pass', () => {
+    const messages = [
+      {
+        role: 'user',
+        content:
+          'OpenClaw runtime context (internal): [Internal task completion event]\ntask: deploy-fix\nstatus: completed',
+        timestamp: 5000
+      },
+      {
+        role: 'assistant',
+        content: 'Acknowledged the result.',
+        timestamp: 5001
+      }
+    ]
+    const turns = parseTurns(messages)
+    // Ensure the task completion system turn survived filtering
+    const completionTurns = turns.filter((t) => t.role === 'system' && /task completion event/i.test(t.content))
+    expect(completionTurns).toHaveLength(1)
+  })
+})
