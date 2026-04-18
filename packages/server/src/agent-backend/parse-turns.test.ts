@@ -232,3 +232,54 @@ describe('parseTurns — subagent completion events', () => {
     expect(completionTurns).toHaveLength(1)
   })
 })
+
+describe('parseTurns — wrapped internal completion events', () => {
+  it('should parse wrapped internal completion events as system turns', () => {
+    const messages = [
+      {
+        role: 'user',
+        content:
+          '<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nOpenClaw runtime context (internal): [Internal task completion event]\ntask: investigate-bug\nstatus: completed\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>',
+        timestamp: 4000
+      }
+    ]
+    const turns = parseTurns(messages)
+    const systemTurns = turns.filter((t) => t.role === 'system')
+    expect(systemTurns).toHaveLength(1)
+    const completion = systemTurns[0]
+    expect(completion.content).toContain('task completion event')
+    expect(completion.content).toContain('task:')
+    // Wrapper markers must not appear in parsed content
+    expect(completion.content).not.toContain('<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>')
+    expect(completion.content).not.toContain('<<<END_OPENCLAW_INTERNAL_CONTEXT>>>')
+  })
+
+  it('should not produce a user turn from a wrapped completion event', () => {
+    const messages = [
+      {
+        role: 'user',
+        content:
+          '<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nOpenClaw runtime context (internal): [Internal task completion event]\ntask: deploy-fix\nstatus: completed\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>',
+        timestamp: 6000
+      }
+    ]
+    const turns = parseTurns(messages)
+    const userTurns = turns.filter((t) => t.role === 'user')
+    expect(userTurns).toHaveLength(0)
+  })
+
+  it('should extract a real user message after a wrapped completion event', () => {
+    const messages = [
+      {
+        role: 'user',
+        content:
+          '<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nOpenClaw runtime context (internal): [Internal task completion event]\ntask: scan\nstatus: completed\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nSender (untrusted metadata): ```json\n{"name":"alice"}\n```\nPlease review the results',
+        timestamp: 7000
+      }
+    ]
+    const turns = parseTurns(messages)
+    const userTurns = turns.filter((t) => t.role === 'user')
+    expect(userTurns).toHaveLength(1)
+    expect(userTurns[0].content).toContain('review the results')
+  })
+})
