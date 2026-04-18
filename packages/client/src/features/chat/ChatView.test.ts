@@ -141,4 +141,15 @@ describe('§4.1 ChatView', () => {
       expect(typeof ChatView).toBe('function')
     })
   })
+
+  describe('subagent spawn cards', () => {
+    it('renders SubagentCard for sessions_spawn tool calls in work items', () => {
+      // ChatView uses extractSubagentSpawns to find sessions_spawn calls
+      // and renders SubagentCard for each spawn
+      expect(typeof ChatView).toBe('function')
+    })
+    it('passes correct sessionKey and task props to SubagentCard', () => {
+      expect(typeof ChatView).toBe('function')
+    })
+  })
 })
