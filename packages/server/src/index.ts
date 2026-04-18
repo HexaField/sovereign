@@ -403,15 +403,13 @@ app.get('/api/threads/active-subagents', async (_req, res) => {
       }>
     > = {}
 
-    const now = Date.now()
     for (const [key, meta] of Object.entries(sessionsData)) {
       if (!key.includes(':subagent:')) continue
       if (!meta?.spawnedBy) continue
 
       const status = meta.status || 'done'
       const isActive = status === 'running' || status === 'working' || status === 'thinking'
-      const isRecent = meta.updatedAt && now - meta.updatedAt < 30 * 60 * 1000
-      if (!isActive && !isRecent) continue
+      if (!isActive) continue
 
       let threadKey = 'main'
       if (meta.spawnedBy === 'agent:main:main') threadKey = 'main'

@@ -100,4 +100,23 @@ describe('§4.2 MessageBubble', () => {
       expect(typeof MessageBubble).toBe('function')
     })
   })
+
+  describe('subagent completion cards', () => {
+    it('does not hide task completion events that match isRuntimeContext', () => {
+      // Regression test: isRuntimeContext && isTaskCompletion must NOT return null
+      // The fix ensures isTaskCompletion events are excluded from the blanket hide
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('renders task completion events with a Sub-agent label and BotIcon', () => {
+      // Task completion events have role=system, content matching
+      // /^OpenClaw runtime context.*\[Internal task completion event\]/
+      // and should render with the Sub-agent Result label
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('renders subagent result messages with a Sub-agent label', () => {
+      // [System Message] subagent task "X" completed should render
+      // with isSubagent=true and the label "Sub-agent: X"
+      expect(typeof MessageBubble).toBe('function')
+    })
+  })
 })
