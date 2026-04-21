@@ -1,8 +1,31 @@
 import { Router } from 'express'
+import { exec as cpExec } from 'child_process'
 import type { TerminalManager } from './terminal.js'
 
 export function createTerminalRoutes(manager: TerminalManager): Router {
   const router = Router()
+
+  // One-shot command execution (for recipes / quick scripts)
+  router.post('/exec', (req, res) => {
+    const { command, cwd } = req.body ?? {}
+    if (!command || typeof command !== 'string') {
+      res.status(400).json({ error: 'command is required' })
+      return
+    }
+    const opts: { cwd?: string; timeout: number; maxBuffer: number } = {
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024 // 1 MB
+    }
+    if (cwd && typeof cwd === 'string') opts.cwd = cwd
+    cpExec(command, opts, (err, stdout, stderr) => {
+      const exitCode = err && typeof (err as any).code === 'number' ? (err as any).code : err ? 1 : 0
+      res.json({
+        stdout: stdout ?? '',
+        stderr: stderr ?? (err ? err.message : ''),
+        exitCode
+      })
+    })
+  })
 
   router.get('/sessions', (_req, res) => {
     res.json(manager.list())
