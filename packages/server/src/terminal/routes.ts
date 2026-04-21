@@ -103,7 +103,11 @@ export function createTerminalRoutes(manager: TerminalManager): Router {
     })
 
     // Client disconnect — kill child
-    req.on('close', () => {
+    // Use res.on('close'), NOT req.on('close').
+    // req 'close' fires when the request body is fully consumed (immediately
+    // after JSON parsing), which would kill the child before it produces output.
+    // res 'close' fires when the SSE response connection actually closes.
+    res.on('close', () => {
       clearTimeout(timeout)
       if (!child.killed) {
         child.kill('SIGTERM')
