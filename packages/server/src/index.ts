@@ -563,13 +563,149 @@ app.get('/api/threads/:key/crons', async (req, res) => {
     // Filter for crons targeting this thread's session
     const filtered = jobs.filter((j: any) => {
       if (j.sessionTarget === sessionKey) return true
+      if (j.sessionKey === sessionKey) return true
       if (j.payload?.sessionTarget === sessionKey) return true
+      // Also match session:agent:... format against agent:... format
+      if (j.sessionTarget === `session:${sessionKey}`) return true
       // Check if payload text/message mentions the thread key
       const text = j.payload?.message || j.payload?.text || ''
       if (text.includes(threadKey)) return true
       return false
     })
     res.json({ crons: filtered })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── Cron Management Endpoints ──
+
+// Helper: derive threadKey from sessionTarget or sessionKey
+function deriveThreadKey(sessionTarget?: string, sessionKey?: string): string | null {
+  for (const val of [sessionTarget, sessionKey]) {
+    if (!val) continue
+    // session:agent:main:thread:<key>
+    const sessionMatch = val.match(/^session:agent:main:thread:(.+)$/)
+    if (sessionMatch) return sessionMatch[1]
+    // agent:main:thread:<key>
+    const agentMatch = val.match(/^agent:main:thread:(.+)$/)
+    if (agentMatch) return agentMatch[1]
+  }
+  return null
+}
+
+// Helper: detect issues with a cron job
+function detectCronIssues(job: any): string[] {
+  const issues: string[] = []
+  // missing-channel
+  if (!job.delivery?.channel) {
+    issues.push('missing-channel')
+  }
+  // wrong-session-target — targets "isolated" or "main" AND has no sessionKey routing to a thread
+  const target = job.sessionTarget || ''
+  const threadKey = deriveThreadKey(job.sessionTarget, job.sessionKey)
+  if ((target === 'isolated' || target === 'main') && !threadKey) {
+    issues.push('wrong-session-target')
+  }
+  // system-event-on-thread — using systemEvent payload but targeting a thread session
+  if (threadKey && job.payload?.kind === 'systemEvent') {
+    issues.push('system-event-on-thread')
+  }
+  // disabled-after-error
+  if (job.enabled === false && job.state?.lastStatus === 'error') {
+    issues.push('disabled-after-error')
+  }
+  return issues
+}
+
+// GET /api/crons — list ALL cron jobs with issue detection + threadKey derivation
+app.get('/api/crons', async (_req, res) => {
+  try {
+    const jobs = await Promise.race([
+      backend.listCronJobs(),
+      new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
+    ]).catch(() => [] as any[])
+    const annotated = jobs.map((j: any) => ({
+      ...j,
+      threadKey: deriveThreadKey(j.sessionTarget, j.sessionKey),
+      issues: detectCronIssues(j)
+    }))
+    res.json({ crons: annotated })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// PATCH /api/crons/:id — update a cron job
+app.patch('/api/crons/:id', async (req, res) => {
+  try {
+    const result = await backend.updateCronJob(req.params.id, req.body)
+    res.json({ ok: true, cron: result })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// DELETE /api/crons/:id — remove a cron job
+app.delete('/api/crons/:id', async (req, res) => {
+  try {
+    await backend.removeCronJob(req.params.id)
+    res.json({ ok: true })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST /api/crons/:id/fix-thread — one-click fix to pin cron to a thread
+app.post('/api/crons/:id/fix-thread', async (req, res) => {
+  try {
+    const { threadKey } = req.body
+    if (!threadKey) {
+      return res.status(400).json({ error: 'threadKey is required' })
+    }
+    // Build the fix patch
+    const patch: Record<string, unknown> = {
+      sessionTarget: `session:agent:main:thread:${threadKey}`,
+      delivery: {
+        mode: 'announce',
+        channel: 'webchat'
+      }
+    }
+    // If payload.kind is systemEvent, convert to agentTurn
+    // We need to get current job data first
+    const jobs = await backend.listCronJobs()
+    const job = jobs.find((j: any) => j.id === req.params.id)
+    if (!job) {
+      return res.status(404).json({ error: 'Cron job not found' })
+    }
+    const payload = { ...job.payload }
+    if (payload.kind === 'systemEvent') {
+      payload.kind = 'agentTurn'
+      // Move text to message if needed
+      if (payload.text && !payload.message) {
+        payload.message = payload.text
+        delete payload.text
+      }
+    }
+    patch.payload = payload
+    const result = await backend.updateCronJob(req.params.id, patch)
+    res.json({ ok: true, cron: result })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST /api/crons/:id/toggle — enable/disable toggle
+app.post('/api/crons/:id/toggle', async (req, res) => {
+  try {
+    // Get current state
+    const jobs = await backend.listCronJobs()
+    const job = jobs.find((j: any) => j.id === req.params.id)
+    if (!job) {
+      return res.status(404).json({ error: 'Cron job not found' })
+    }
+    const result = await backend.updateCronJob(req.params.id, { enabled: !job.enabled })
+    res.json({ ok: true, cron: result })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
   }

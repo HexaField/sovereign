@@ -3,6 +3,7 @@ import { createSignal, createEffect, onMount, onCleanup, Show, For } from 'solid
 import { Portal } from 'solid-js/web'
 import { threadKey } from '../threads/store.js'
 import { agentStatus, abortChat } from './store.js'
+import { CronManagerModal } from '../crons/CronManagerModal.js'
 
 interface ThreadInfo {
   model: string | null
@@ -62,6 +63,7 @@ export function ChatSettingsButton() {
   const [selectedModel, setSelectedModel] = createSignal<string>('')
   const [modelSaving, setModelSaving] = createSignal(false)
   const [actionFeedback, setActionFeedback] = createSignal('')
+  const [cronManagerOpen, setCronManagerOpen] = createSignal(false)
   let containerRef!: HTMLDivElement
   let dropdownRef!: HTMLDivElement
 
@@ -427,6 +429,59 @@ export function ChatSettingsButton() {
                       )}
                     </For>
                   </div>
+                  <button
+                    class="cursor-pointer text-xs"
+                    style={{
+                      'margin-top': '6px',
+                      padding: '4px 10px',
+                      'border-radius': '6px',
+                      border: '1px solid var(--c-border)',
+                      background: 'transparent',
+                      color: 'var(--c-accent)',
+                      cursor: 'pointer',
+                      'font-weight': '500',
+                      width: '100%',
+                      'text-align': 'center'
+                    }}
+                    onClick={() => {
+                      setCronManagerOpen(true)
+                      setOpen(false)
+                    }}
+                  >
+                    Manage Crons
+                  </button>
+                </div>
+              </Show>
+
+              {/* Manage Crons — always visible even when no per-thread crons */}
+              <Show when={crons().length === 0 && !loading()}>
+                <div
+                  style={{
+                    'margin-top': '10px',
+                    'padding-top': '10px',
+                    'border-top': '1px solid var(--c-border)'
+                  }}
+                >
+                  <button
+                    class="cursor-pointer text-xs"
+                    style={{
+                      padding: '4px 10px',
+                      'border-radius': '6px',
+                      border: '1px solid var(--c-border)',
+                      background: 'transparent',
+                      color: 'var(--c-accent)',
+                      cursor: 'pointer',
+                      'font-weight': '500',
+                      width: '100%',
+                      'text-align': 'center'
+                    }}
+                    onClick={() => {
+                      setCronManagerOpen(true)
+                      setOpen(false)
+                    }}
+                  >
+                    Manage Crons
+                  </button>
                 </div>
               </Show>
 
@@ -466,6 +521,11 @@ export function ChatSettingsButton() {
             </div>
           </div>
         </Portal>
+      </Show>
+
+      {/* Cron Manager Modal */}
+      <Show when={cronManagerOpen()}>
+        <CronManagerModal threadKey={threadKey() || 'main'} onClose={() => setCronManagerOpen(false)} />
       </Show>
     </div>
   )
