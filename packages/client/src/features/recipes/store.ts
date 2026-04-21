@@ -129,3 +129,146 @@ export async function executeRecipe(recipe: Recipe): Promise<ExecResult> {
   }
   return res.json()
 }
+
+// ── SSE parsing helpers (exported for tests) ─────────────────────────
+
+export interface SSEEvent {
+  event: string
+  data: string
+}
+
+/**
+ * Parse raw SSE text into events. Returns parsed events and any
+ * remaining incomplete text that should be prepended to the next chunk.
+ */
+export function parseSSEEvents(raw: string): { events: SSEEvent[]; remainder: string } {
+  const events: SSEEvent[] = []
+  const blocks = raw.split('\n\n')
+  // Last element may be an incomplete block
+  const remainder = blocks.pop() ?? ''
+
+  for (const block of blocks) {
+    if (!block.trim()) continue
+    let eventType = 'message'
+    let data = ''
+    const lines = block.split('\n')
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        eventType = line.slice(7)
+      } else if (line.startsWith('data: ')) {
+        data = line.slice(6)
+      } else if (line.startsWith('event:')) {
+        eventType = line.slice(6)
+      } else if (line.startsWith('data:')) {
+        data = line.slice(5)
+      }
+    }
+    if (eventType || data) {
+      events.push({ event: eventType, data })
+    }
+  }
+
+  return { events, remainder }
+}
+
+// ── Streaming execution ──────────────────────────────────────────────
+
+export interface StreamingExecution {
+  pid: () => number | null
+  abort: () => void
+  done: Promise<void>
+}
+
+export function executeRecipeStreaming(
+  recipe: Recipe,
+  callbacks: {
+    onStarted?: (pid: number) => void
+    onStdout?: (text: string) => void
+    onStderr?: (text: string) => void
+    onExit?: (exitCode: number) => void
+    onError?: (message: string) => void
+  }
+): StreamingExecution {
+  const command = substituteParams(recipe.script, recipe.params)
+  const controller = new AbortController()
+  let currentPid: number | null = null
+
+  const done = (async () => {
+    try {
+      const res = await fetch(`${BASE}api/terminal/exec/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+        signal: controller.signal
+      })
+
+      if (!res.ok || !res.body) {
+        callbacks.onError?.('Failed to start streaming execution')
+        return
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      for (;;) {
+        const { done: streamDone, value } = await reader.read()
+        if (streamDone) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const { events, remainder } = parseSSEEvents(buffer)
+        buffer = remainder
+
+        for (const ev of events) {
+          switch (ev.event) {
+            case 'started': {
+              const parsed = JSON.parse(ev.data)
+              currentPid = parsed.pid
+              callbacks.onStarted?.(parsed.pid)
+              break
+            }
+            case 'stdout':
+              callbacks.onStdout?.(JSON.parse(ev.data))
+              break
+            case 'stderr':
+              callbacks.onStderr?.(JSON.parse(ev.data))
+              break
+            case 'exit': {
+              const parsed = JSON.parse(ev.data)
+              callbacks.onExit?.(parsed.exitCode)
+              break
+            }
+            case 'error': {
+              const parsed = JSON.parse(ev.data)
+              callbacks.onError?.(parsed.message)
+              break
+            }
+          }
+        }
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== 'AbortError') {
+        callbacks.onError?.(err.message || 'Streaming failed')
+      }
+    }
+  })()
+
+  const abort = () => {
+    if (currentPid !== null) {
+      fetch(`${BASE}api/terminal/exec/kill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pid: currentPid })
+      }).catch(() => {
+        /* best effort */
+      })
+    }
+    controller.abort()
+  }
+
+  return {
+    pid: () => currentPid,
+    abort,
+    done
+  }
+}

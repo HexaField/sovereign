@@ -7,9 +7,9 @@ import {
   addRecipe,
   removeRecipe,
   updateRecipe,
-  executeRecipe,
+  executeRecipeStreaming,
   type Recipe,
-  type ExecResult
+  type StreamingExecution
 } from './store.js'
 
 // ── Recipe Button (sits in header) ───────────────────────────────────
@@ -160,20 +160,62 @@ export function RecipeButton() {
 function RecipeItem(props: { recipe: Recipe }) {
   const [expanded, setExpanded] = createSignal(false)
   const [running, setRunning] = createSignal(false)
-  const [result, setResult] = createSignal<ExecResult | null>(null)
+  const [logLines, setLogLines] = createSignal<{ type: 'stdout' | 'stderr'; text: string }[]>([])
+  const [exitCode, setExitCode] = createSignal<number | null>(null)
+  let executionRef: StreamingExecution | null = null
+  let logContainerRef: HTMLDivElement | undefined
 
-  const run = async () => {
+  // Auto-scroll log to bottom
+  const scrollToBottom = () => {
+    requestAnimationFrame(() => {
+      if (logContainerRef) {
+        logContainerRef.scrollTop = logContainerRef.scrollHeight
+      }
+    })
+  }
+
+  const run = () => {
     setRunning(true)
-    setResult(null)
-    try {
-      const res = await executeRecipe(props.recipe)
-      setResult(res)
-    } catch (err: any) {
-      setResult({ stdout: '', stderr: err.message || 'Failed', exitCode: 1 })
-    } finally {
-      setRunning(false)
+    setLogLines([])
+    setExitCode(null)
+    setExpanded(true)
+
+    executionRef = executeRecipeStreaming(props.recipe, {
+      onStdout: (text) => {
+        setLogLines((prev) => [...prev, { type: 'stdout', text }])
+        scrollToBottom()
+      },
+      onStderr: (text) => {
+        setLogLines((prev) => [...prev, { type: 'stderr', text }])
+        scrollToBottom()
+      },
+      onExit: (code) => {
+        setExitCode(code)
+        setRunning(false)
+        executionRef = null
+      },
+      onError: (message) => {
+        setLogLines((prev) => [...prev, { type: 'stderr', text: message }])
+        setRunning(false)
+        executionRef = null
+        scrollToBottom()
+      }
+    })
+  }
+
+  const stop = () => {
+    if (executionRef) {
+      executionRef.abort()
+      executionRef = null
     }
   }
+
+  onCleanup(() => {
+    // Kill running process when component unmounts
+    if (executionRef) {
+      executionRef.abort()
+    }
+  })
 
   return (
     <div
@@ -204,15 +246,13 @@ function RecipeItem(props: { recipe: Recipe }) {
           class="shrink-0 rounded px-2 py-0.5 text-xs font-medium transition-colors"
           style={{
             color: '#fff',
-            background: running() ? 'var(--c-text-muted)' : 'var(--c-accent)',
+            background: running() ? 'var(--c-danger, #ef4444)' : 'var(--c-accent)',
             border: 'none',
-            cursor: running() ? 'default' : 'pointer',
-            opacity: running() ? '0.7' : '1'
+            cursor: 'pointer'
           }}
-          disabled={running()}
-          onClick={run}
+          onClick={() => (running() ? stop() : run())}
         >
-          {running() ? '…' : '▶'}
+          {running() ? '■' : '▶'}
         </button>
 
         <button
@@ -333,47 +373,67 @@ function RecipeItem(props: { recipe: Recipe }) {
             + Add Param
           </button>
 
-          {/* Run button (expanded) */}
+          {/* Run / Stop button (expanded) */}
           <button
             class="flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-white transition-colors"
             style={{
-              background: running() ? 'var(--c-text-muted)' : 'var(--c-accent)',
+              background: running() ? 'var(--c-danger, #ef4444)' : 'var(--c-accent)',
               border: 'none',
-              cursor: running() ? 'default' : 'pointer'
+              cursor: 'pointer'
             }}
-            disabled={running()}
-            onClick={run}
+            onClick={() => (running() ? stop() : run())}
           >
-            {running() ? 'Running…' : '▶ Run'}
+            {running() ? (
+              <>
+                <span>■</span> Stop
+              </>
+            ) : (
+              <>
+                <span>▶</span> Run
+              </>
+            )}
           </button>
 
-          {/* Result */}
-          <Show when={result()}>
-            {(r) => (
-              <div
-                class="overflow-auto rounded text-[11px]"
-                style={{
-                  background: r().exitCode === 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
-                  border: `1px solid ${r().exitCode === 0 ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`,
-                  padding: '6px 8px',
-                  'max-height': '150px',
-                  'font-family': 'monospace',
-                  'white-space': 'pre-wrap',
-                  'word-break': 'break-all',
-                  color: 'var(--c-text)'
-                }}
-              >
-                <Show when={r().stdout}>
-                  <div>{r().stdout}</div>
-                </Show>
-                <Show when={r().stderr}>
-                  <div style={{ color: 'var(--c-danger, #ef4444)' }}>{r().stderr}</div>
-                </Show>
+          {/* Streaming log area */}
+          <Show when={logLines().length > 0 || exitCode() !== null}>
+            <div
+              ref={logContainerRef}
+              class="overflow-auto rounded text-[11px]"
+              style={{
+                background: 'var(--c-bg)',
+                border: '1px solid var(--c-border)',
+                padding: '6px 8px',
+                'max-height': '200px',
+                'font-family': 'monospace',
+                'white-space': 'pre-wrap',
+                'word-break': 'break-all',
+                color: 'var(--c-text)'
+              }}
+            >
+              <For each={logLines()}>
+                {(line) => (
+                  <div style={{ color: line.type === 'stderr' ? 'var(--c-danger, #ef4444)' : 'inherit' }}>
+                    {line.text}
+                  </div>
+                )}
+              </For>
+              <Show when={running()}>
                 <div class="mt-1 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                  exit {r().exitCode}
+                  <span style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>●</span> Running…
                 </div>
-              </div>
-            )}
+              </Show>
+              <Show when={exitCode() !== null}>
+                <div
+                  class="mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium"
+                  style={{
+                    background: exitCode() === 0 ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                    color: exitCode() === 0 ? 'rgb(34,197,94)' : 'var(--c-danger, #ef4444)'
+                  }}
+                >
+                  exit {exitCode()}
+                </div>
+              </Show>
+            </div>
           </Show>
         </div>
       </Show>

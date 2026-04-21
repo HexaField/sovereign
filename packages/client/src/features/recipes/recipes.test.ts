@@ -6,6 +6,7 @@ import {
   substituteParams,
   createEmptyRecipe,
   generateId,
+  parseSSEEvents,
   type Recipe,
   type RecipeParam
 } from './store.js'
@@ -157,6 +158,66 @@ describe('Pinned Recipes — store', () => {
     it('returns unique values', () => {
       const ids = new Set(Array.from({ length: 100 }, () => generateId()))
       expect(ids.size).toBe(100)
+    })
+  })
+
+  describe('parseSSEEvents', () => {
+    it('parses a single complete event', () => {
+      const raw = 'event: stdout\ndata: "hello"\n\n'
+      const { events, remainder } = parseSSEEvents(raw)
+      expect(events).toEqual([{ event: 'stdout', data: '"hello"' }])
+      expect(remainder).toBe('')
+    })
+
+    it('parses multiple events', () => {
+      const raw =
+        'event: started\ndata: {"pid":123}\n\nevent: stdout\ndata: "line1"\n\nevent: exit\ndata: {"exitCode":0}\n\n'
+      const { events, remainder } = parseSSEEvents(raw)
+      expect(events).toHaveLength(3)
+      expect(events[0]).toEqual({ event: 'started', data: '{"pid":123}' })
+      expect(events[1]).toEqual({ event: 'stdout', data: '"line1"' })
+      expect(events[2]).toEqual({ event: 'exit', data: '{"exitCode":0}' })
+      expect(remainder).toBe('')
+    })
+
+    it('returns remainder for incomplete events', () => {
+      const raw = 'event: stdout\ndata: "hello"\n\nevent: stderr\ndata: "par'
+      const { events, remainder } = parseSSEEvents(raw)
+      expect(events).toHaveLength(1)
+      expect(events[0]).toEqual({ event: 'stdout', data: '"hello"' })
+      expect(remainder).toBe('event: stderr\ndata: "par')
+    })
+
+    it('returns empty events for empty input', () => {
+      const { events, remainder } = parseSSEEvents('')
+      expect(events).toEqual([])
+      expect(remainder).toBe('')
+    })
+
+    it('returns all as remainder when no complete event', () => {
+      const raw = 'event: stdout\ndata: partial'
+      const { events, remainder } = parseSSEEvents(raw)
+      expect(events).toEqual([])
+      expect(remainder).toBe('event: stdout\ndata: partial')
+    })
+
+    it('handles event without space after colon', () => {
+      const raw = 'event:stdout\ndata:"test"\n\n'
+      const { events } = parseSSEEvents(raw)
+      expect(events).toHaveLength(1)
+      expect(events[0]).toEqual({ event: 'stdout', data: '"test"' })
+    })
+
+    it('concatenates remainder with next chunk', () => {
+      const chunk1 = 'event: stdout\ndata: "first"\n\nevent: std'
+      const { events: e1, remainder: r1 } = parseSSEEvents(chunk1)
+      expect(e1).toHaveLength(1)
+
+      const chunk2 = r1 + 'err\ndata: "second"\n\n'
+      const { events: e2, remainder: r2 } = parseSSEEvents(chunk2)
+      expect(e2).toHaveLength(1)
+      expect(e2[0]).toEqual({ event: 'stderr', data: '"second"' })
+      expect(r2).toBe('')
     })
   })
 })
