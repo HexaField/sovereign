@@ -31,6 +31,7 @@ import {
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from '../workspace/store.js'
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
+import { RecipeButton } from '../recipes/RecipePanel.js'
 import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 
@@ -646,6 +647,7 @@ function WorkspaceHeaderContent() {
           </span>
         </button>
         <ChatSettingsButton />
+        <RecipeButton />
         <button
           class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
           style={{ color: 'var(--c-text-muted)' }}
