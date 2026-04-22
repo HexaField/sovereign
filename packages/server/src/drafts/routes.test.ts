@@ -271,6 +271,24 @@ describe('Draft REST API', () => {
       expect(callArgs[2].title).toBe('My Issue')
     })
 
+    it('4.1 MUST publish to the canonical remote when Radicle is ordered first', async () => {
+      const issueTracker = createMockIssueTracker()
+      const getRemotes = vi.fn().mockReturnValue([
+        { name: 'rad', provider: 'radicle' },
+        { name: 'origin', provider: 'github' }
+      ])
+      const { app, store } = createApp(dataDir, { issueTracker, getRemotes })
+      const draft = store.create({ title: 'My Radicle Issue' })
+
+      await request(app).post(`/api/drafts/${draft.id}/publish`).send({ orgId: 'org1', projectId: 'proj1' })
+
+      expect(issueTracker.create).toHaveBeenCalledWith(
+        'org1',
+        'proj1',
+        expect.objectContaining({ remote: 'rad', title: 'My Radicle Issue' })
+      )
+    })
+
     it('4.1 MUST set draft status to published and set publishedAs', async () => {
       const { app, store } = createApp(dataDir)
       const draft = store.create({ title: 'Test' })
