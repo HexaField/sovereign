@@ -15,6 +15,7 @@ import { wsStore } from './ws/index.js'
 import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
 import { initThreadStore, threadKey } from './features/threads/store.js'
 import { initChatStore } from './features/chat/store.js'
+import { initCronResultsStore } from './features/crons/CronResultsBanner.js'
 
 // Global keyboard shortcuts
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
@@ -62,6 +63,10 @@ export default function App() {
     // Init chat store at app level so dashboard GlobalChat has data on fresh load
     const cleanupChat = initChatStore(threadKey, wsStore)
     if (cleanupChat) cleanups.push(cleanupChat)
+
+    // Init cron results store for real-time cron run monitoring
+    const cleanupCronResults = initCronResultsStore(wsStore)
+    cleanups.push(cleanupCronResults)
 
     // Listen for sovereign:open-file events from file chips
     const handleOpenFile = (e: Event) => {

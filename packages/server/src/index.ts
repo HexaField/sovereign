@@ -25,6 +25,7 @@ import { createWsHandler } from './ws/handler.js'
 import { createScheduler } from './scheduler/scheduler.js'
 import { registerSchedulerChannel } from './scheduler/ws.js'
 import { createSchedulerRoutes } from './scheduler/routes.js'
+import { createCronMonitor } from './scheduler/cron-monitor.js'
 import { registerNotificationsChannel } from './notifications/ws.js'
 
 // --- Phase 2: Orgs, Projects & Code ---
@@ -615,6 +616,10 @@ function detectCronIssues(job: any): string[] {
   if (job.enabled === false && job.state?.lastStatus === 'error') {
     issues.push('disabled-after-error')
   }
+  // no-delivery-channels — webchat is the only channel and no real messaging channels exist
+  if (job.delivery?.channel === 'webchat' && job.delivery?.mode === 'announce') {
+    issues.push('no-delivery-channels')
+  }
   return issues
 }
 
@@ -706,6 +711,91 @@ app.post('/api/crons/:id/toggle', async (req, res) => {
     }
     const result = await backend.updateCronJob(req.params.id, { enabled: !job.enabled })
     res.json({ ok: true, cron: result })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// DELETE /api/crons/cleanup — bulk remove disabled+errored+past crons
+app.delete('/api/crons/cleanup', async (_req, res) => {
+  try {
+    const jobs = await backend.listCronJobs()
+    const toRemove = jobs.filter((j: any) => {
+      // Remove disabled jobs that errored
+      if (j.enabled === false && j.state?.lastStatus === 'error') return true
+      // Remove disabled jobs marked for deletion
+      if (j.enabled === false && j.deleteAfterRun === true) return true
+      // Remove past oneshot jobs
+      if (j.schedule?.kind === 'oneshot' && j.schedule?.at) {
+        const atMs = new Date(j.schedule.at).getTime()
+        if (!isNaN(atMs) && atMs < Date.now()) return true
+      }
+      return false
+    })
+    let removed = 0
+    for (const job of toRemove) {
+      try {
+        await backend.removeCronJob(job.id)
+        removed++
+      } catch {
+        // Continue removing others
+      }
+    }
+    res.json({ ok: true, removed, total: toRemove.length })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// GET /api/crons/channel-status — check if any delivery channels are configured
+app.get('/api/crons/channel-status', async (_req, res) => {
+  try {
+    // Check if any real messaging channels exist by listing cron jobs
+    // and checking if "webchat" is the only channel in use
+    const jobs = await Promise.race([
+      backend.listCronJobs(),
+      new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+    ]).catch(() => [] as any[])
+    const channels = new Set<string>()
+    for (const j of jobs) {
+      if (j.delivery?.channel) channels.add(j.delivery.channel)
+    }
+    // "webchat" is a virtual channel — it only works when WS is connected
+    // Real channels: telegram, discord, signal, etc.
+    const realChannels = [...channels].filter((c) => c !== 'webchat')
+    const hasRealChannels = realChannels.length > 0
+    res.json({
+      hasRealChannels,
+      channels: [...channels],
+      realChannels,
+      warning: hasRealChannels
+        ? null
+        : 'No messaging channels configured. Cron delivery via "webchat" only works during active browser sessions. Configure Telegram, Discord, or another channel for reliable delivery.'
+    })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// GET /api/crons/runs — get cron run history, optionally filtered by thread
+app.get('/api/crons/runs', async (req, res) => {
+  try {
+    const threadKeyFilter = req.query.threadKey as string | undefined
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100)
+    const entries = await backend.getCronRuns()
+
+    if (!threadKeyFilter) {
+      return res.json({ entries: entries.slice(0, limit) })
+    }
+
+    // Filter by thread — need to map jobId to threadKey
+    const jobs = await backend.listCronJobs()
+    const jobThreadMap = new Map<string, string | null>()
+    for (const job of jobs) {
+      jobThreadMap.set(job.id, deriveThreadKey(job.sessionTarget, job.sessionKey))
+    }
+    const filtered = entries.filter((e: any) => jobThreadMap.get(e.jobId) === threadKeyFilter)
+    res.json({ entries: filtered.slice(0, limit) })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
   }
@@ -1059,6 +1149,20 @@ backend.connect().catch((err) => {
 })
 
 // ============================================================
+// Cron Monitor — polls for cron run results and broadcasts to clients
+// ============================================================
+
+const cronMonitor = createCronMonitor({
+  getCronRuns: (jobId) => backend.getCronRuns(jobId),
+  listCronJobs: () => backend.listCronJobs(),
+  wsHandler,
+  pollIntervalMs: 30_000
+})
+
+// Start after a short delay to let backend connect first
+setTimeout(() => cronMonitor.start(), 5000)
+
+// ============================================================
 // Graceful shutdown
 // ============================================================
 
@@ -1066,6 +1170,7 @@ function shutdown() {
   fileWatcher.stop()
   scheduler.destroy()
   terminalManager.dispose()
+  cronMonitor.stop()
   backend.disconnect().catch(() => {})
   statusAggregator.destroy()
   systemModule.dispose()
