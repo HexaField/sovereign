@@ -4,6 +4,7 @@ import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
 import { SubagentCard } from './SubagentCard.js'
+import { CronResultsBanner } from '../crons/CronResultsBanner.js'
 import {
   hasOlderMessages,
   loadingOlder,
@@ -190,6 +191,9 @@ export function ChatView(props: ChatViewProps) {
             </button>
           </div>
         )}
+
+        {/* Cron Results Banner */}
+        <CronResultsBanner />
 
         {/* Empty state */}
         {isEmptyState(props.messages) && (

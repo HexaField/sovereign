@@ -96,6 +96,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     }>
   >
   listCronJobs(): Promise<any[]>
+  getCronRuns(jobId?: string): Promise<any[]>
   updateCronJob(id: string, patch: Record<string, unknown>): Promise<any>
   removeCronJob(id: string): Promise<void>
 } {
@@ -969,6 +970,20 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
 
     async removeCronJob(id: string): Promise<void> {
       await request('cron.remove', { jobId: id })
+    },
+
+    async getCronRuns(jobId?: string): Promise<any[]> {
+      try {
+        const result = (await request('cron.runs', {
+          scope: jobId ? 'job' : 'all',
+          id: jobId,
+          limit: 20
+        })) as { entries?: any[] }
+        return result?.entries ?? []
+      } catch (err: any) {
+        console.error('[gateway] cron.runs failed:', err.message)
+        return []
+      }
     }
   }
 
