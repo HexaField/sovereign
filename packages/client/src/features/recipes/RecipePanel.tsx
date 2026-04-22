@@ -1,5 +1,5 @@
 // Pinned Recipes dropdown panel
-import { createSignal, Show, For, onMount, onCleanup, createEffect } from 'solid-js'
+import { createSignal, Show, For, Index, onMount, onCleanup, createEffect } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import {
   recipes,
@@ -7,6 +7,7 @@ import {
   addRecipe,
   removeRecipe,
   updateRecipe,
+  reorderRecipe,
   executeRecipeStreaming,
   type Recipe,
   type StreamingExecution
@@ -131,7 +132,7 @@ export function RecipeButton() {
                   </div>
                 }
               >
-                <For each={recipes()}>{(recipe) => <RecipeItem recipe={recipe} />}</For>
+                <Index each={recipes()}>{(recipe, i) => <RecipeItem recipe={recipe()} index={i} />}</Index>
               </Show>
             </div>
 
@@ -157,7 +158,11 @@ export function RecipeButton() {
 
 // ── Single recipe row ────────────────────────────────────────────────
 
-function RecipeItem(props: { recipe: Recipe }) {
+// ── Drag state (shared across all RecipeItem instances) ──────────────
+const [dragIndex, setDragIndex] = createSignal<number | null>(null)
+const [dropTarget, setDropTarget] = createSignal<number | null>(null)
+
+function RecipeItem(props: { recipe: Recipe; index: number }) {
   const [expanded, setExpanded] = createSignal(false)
   const [running, setRunning] = createSignal(false)
   const [logLines, setLogLines] = createSignal<{ type: 'stdout' | 'stderr'; text: string }[]>([])
@@ -221,12 +226,57 @@ function RecipeItem(props: { recipe: Recipe }) {
     <div
       class="mb-1 rounded-lg"
       style={{
-        background: 'var(--c-bg)',
-        border: '1px solid var(--c-border)'
+        background: dropTarget() === props.index && dragIndex() !== props.index ? 'var(--c-hover-bg)' : 'var(--c-bg)',
+        border:
+          dropTarget() === props.index && dragIndex() !== props.index
+            ? '1px solid var(--c-accent)'
+            : '1px solid var(--c-border)',
+        opacity: dragIndex() === props.index ? '0.5' : '1',
+        transition: 'border-color 0.15s, background 0.15s, opacity 0.15s'
+      }}
+      onDragOver={(e) => {
+        e.preventDefault()
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+        setDropTarget(props.index)
+      }}
+      onDragLeave={() => {
+        if (dropTarget() === props.index) setDropTarget(null)
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        const from = dragIndex()
+        if (from !== null && from !== props.index) {
+          reorderRecipe(from, props.index)
+        }
+        setDragIndex(null)
+        setDropTarget(null)
       }}
     >
       {/* Collapsed row */}
       <div class="flex items-center gap-2" style={{ padding: '6px 8px' }}>
+        {/* Drag handle */}
+        <span
+          draggable="true"
+          onDragStart={(e) => {
+            setDragIndex(props.index)
+            if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+          }}
+          onDragEnd={() => {
+            setDragIndex(null)
+            setDropTarget(null)
+          }}
+          style={{
+            cursor: 'grab',
+            color: 'var(--c-text-muted)',
+            'font-size': '11px',
+            'user-select': 'none',
+            'line-height': '1',
+            padding: '2px 0'
+          }}
+          title="Drag to reorder"
+        >
+          ⠿
+        </span>
         <button
           class="min-w-0 flex-1 truncate text-left text-xs font-medium transition-colors"
           style={{
@@ -307,14 +357,14 @@ function RecipeItem(props: { recipe: Recipe }) {
           {/* Params */}
           <Show when={props.recipe.params.length > 0}>
             <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>
-              <For each={props.recipe.params}>
+              <Index each={props.recipe.params}>
                 {(param, i) => (
                   <div class="flex items-center gap-2">
                     <label
                       class="shrink-0 text-[10px] font-medium"
                       style={{ color: 'var(--c-text-muted)', width: '60px' }}
                     >
-                      {param.label || param.key}
+                      {param().label || param().key}
                     </label>
                     <input
                       class="flex-1 rounded border px-2 py-0.5 text-xs outline-none"
@@ -323,10 +373,10 @@ function RecipeItem(props: { recipe: Recipe }) {
                         'border-color': 'var(--c-border)',
                         color: 'var(--c-text)'
                       }}
-                      value={param.value}
+                      value={param().value}
                       onInput={(e) => {
                         const updated = [...props.recipe.params]
-                        updated[i()] = { ...updated[i()], value: e.currentTarget.value }
+                        updated[i] = { ...updated[i], value: e.currentTarget.value }
                         updateRecipe(props.recipe.id, { params: updated })
                       }}
                     />
@@ -339,7 +389,7 @@ function RecipeItem(props: { recipe: Recipe }) {
                         cursor: 'pointer'
                       }}
                       onClick={() => {
-                        const updated = props.recipe.params.filter((_: unknown, idx: number) => idx !== i())
+                        const updated = props.recipe.params.filter((_: unknown, idx: number) => idx !== i)
                         updateRecipe(props.recipe.id, { params: updated })
                       }}
                       title="Remove param"
@@ -348,7 +398,7 @@ function RecipeItem(props: { recipe: Recipe }) {
                     </button>
                   </div>
                 )}
-              </For>
+              </Index>
             </div>
           </Show>
 
