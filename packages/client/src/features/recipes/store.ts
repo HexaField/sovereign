@@ -105,6 +105,15 @@ export function updateRecipe(id: string, patch: Partial<Omit<Recipe, 'id' | 'cre
   persist(recipes().map((r) => (r.id === id ? { ...r, ...patch } : r)))
 }
 
+export function reorderRecipe(fromIndex: number, toIndex: number): void {
+  const current = [...recipes()]
+  if (fromIndex < 0 || fromIndex >= current.length || toIndex < 0 || toIndex >= current.length) return
+  if (fromIndex === toIndex) return
+  const [item] = current.splice(fromIndex, 1)
+  current.splice(toIndex, 0, item)
+  persist(current)
+}
+
 // ── Execution ────────────────────────────────────────────────────────
 
 export interface ExecResult {
