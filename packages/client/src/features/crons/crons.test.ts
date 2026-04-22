@@ -114,6 +114,43 @@ describe('detectCronIssues', () => {
     expect(issues).toContain('wrong-session-target')
     expect(issues).toContain('disabled-after-error')
   })
+
+  it('detects no-delivery-channels when webchat announce with no real channels', () => {
+    const job = {
+      ...baseJob,
+      delivery: { mode: 'announce', channel: 'webchat' }
+    }
+    const issues = detectCronIssues(job, { hasRealChannels: false })
+    expect(issues).toContain('no-delivery-channels')
+  })
+
+  it('does NOT flag no-delivery-channels when real channels exist', () => {
+    const job = {
+      ...baseJob,
+      delivery: { mode: 'announce', channel: 'webchat' }
+    }
+    const issues = detectCronIssues(job, { hasRealChannels: true })
+    expect(issues).not.toContain('no-delivery-channels')
+  })
+
+  it('does NOT flag no-delivery-channels when no channelInfo provided', () => {
+    const job = {
+      ...baseJob,
+      delivery: { mode: 'announce', channel: 'webchat' }
+    }
+    // Without channelInfo, we can't know — so don't flag
+    const issues = detectCronIssues(job)
+    expect(issues).not.toContain('no-delivery-channels')
+  })
+
+  it('does NOT flag no-delivery-channels when delivery mode is not announce', () => {
+    const job = {
+      ...baseJob,
+      delivery: { mode: 'none', channel: 'webchat' }
+    }
+    const issues = detectCronIssues(job, { hasRealChannels: false })
+    expect(issues).not.toContain('no-delivery-channels')
+  })
 })
 
 describe('buildFixToThreadPatch', () => {

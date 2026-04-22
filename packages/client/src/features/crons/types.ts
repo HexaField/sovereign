@@ -14,20 +14,27 @@ export interface CronJob {
   issues: CronIssue[]
 }
 
-export type CronIssue = 'missing-channel' | 'wrong-session-target' | 'system-event-on-thread' | 'disabled-after-error'
+export type CronIssue =
+  | 'missing-channel'
+  | 'wrong-session-target'
+  | 'system-event-on-thread'
+  | 'disabled-after-error'
+  | 'no-delivery-channels'
 
 export const ISSUE_LABELS: Record<CronIssue, string> = {
   'missing-channel': 'No Channel',
   'wrong-session-target': 'Wrong Target',
   'system-event-on-thread': 'System Event',
-  'disabled-after-error': 'Error-Disabled'
+  'disabled-after-error': 'Error-Disabled',
+  'no-delivery-channels': 'No Delivery Channels'
 }
 
 export const ISSUE_COLORS: Record<CronIssue, string> = {
   'missing-channel': '#ef4444',
   'wrong-session-target': '#ef4444',
   'system-event-on-thread': '#f97316',
-  'disabled-after-error': '#f97316'
+  'disabled-after-error': '#f97316',
+  'no-delivery-channels': '#f97316'
 }
 
 /** Derive threadKey from a sessionTarget or sessionKey string */
@@ -43,7 +50,10 @@ export function deriveThreadKey(sessionTarget?: string, sessionKey?: string): st
 }
 
 /** Detect issues with a cron job (client-side mirror of server logic) */
-export function detectCronIssues(job: Omit<CronJob, 'issues' | 'threadKey'>): CronIssue[] {
+export function detectCronIssues(
+  job: Omit<CronJob, 'issues' | 'threadKey'>,
+  channelInfo?: { hasRealChannels: boolean }
+): CronIssue[] {
   const issues: CronIssue[] = []
   if (!job.delivery?.channel) {
     issues.push('missing-channel')
@@ -58,6 +68,16 @@ export function detectCronIssues(job: Omit<CronJob, 'issues' | 'threadKey'>): Cr
   }
   if (job.enabled === false && job.state?.lastStatus === 'error') {
     issues.push('disabled-after-error')
+  }
+  // If delivery.channel is 'webchat' and no real channels are configured,
+  // this cron will always fail delivery
+  if (
+    channelInfo &&
+    !channelInfo.hasRealChannels &&
+    job.delivery?.channel === 'webchat' &&
+    job.delivery?.mode === 'announce'
+  ) {
+    issues.push('no-delivery-channels')
   }
   return issues
 }

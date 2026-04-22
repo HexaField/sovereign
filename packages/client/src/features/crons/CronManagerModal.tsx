@@ -3,6 +3,7 @@ import { createSignal, Show, For, onMount, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import type { CronJob, CronIssue } from './types.js'
 import { ISSUE_LABELS, ISSUE_COLORS } from './types.js'
+import { ChannelWarningBanner } from './CronResultsBanner.js'
 
 type Tab = 'thread' | 'issues' | 'all'
 
@@ -37,6 +38,9 @@ export function CronManagerModal(props: { threadKey: string; onClose: () => void
   const [tab, setTab] = createSignal<Tab>('thread')
   const [actionLoading, setActionLoading] = createSignal<string | null>(null)
   const [confirmDelete, setConfirmDelete] = createSignal<string | null>(null)
+  const [cleanupCount, setCleanupCount] = createSignal(0)
+  const [cleanupLoading, setCleanupLoading] = createSignal(false)
+  const [cleanupResult, setCleanupResult] = createSignal<string | null>(null)
   let backdropRef!: HTMLDivElement
 
   const fetchCrons = async () => {
@@ -49,7 +53,19 @@ export function CronManagerModal(props: { threadKey: string; onClose: () => void
       clearTimeout(timeout)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      setCrons(data.crons ?? [])
+      const jobs = data.crons ?? []
+      setCrons(jobs)
+      // Count cleanup candidates
+      const candidates = jobs.filter((j: CronJob) => {
+        if (j.enabled === false && j.state?.lastStatus === 'error') return true
+        if (j.enabled === false && (j as any).deleteAfterRun === true) return true
+        if (j.schedule?.kind === 'oneshot' && (j.schedule as any).at) {
+          const atMs = new Date((j.schedule as any).at).getTime()
+          if (!isNaN(atMs) && atMs < Date.now()) return true
+        }
+        return false
+      })
+      setCleanupCount(candidates.length)
     } catch (err: any) {
       setError(err.name === 'AbortError' ? 'Gateway timeout' : err.message)
     }
@@ -110,6 +126,22 @@ export function CronManagerModal(props: { threadKey: string; onClose: () => void
       /* ignore */
     }
     setActionLoading(null)
+  }
+
+  const handleCleanup = async () => {
+    setCleanupLoading(true)
+    setCleanupResult(null)
+    try {
+      const res = await fetch('/api/crons/cleanup', { method: 'DELETE' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setCleanupResult(`Removed ${data.removed} cron${data.removed !== 1 ? 's' : ''}`)
+      await fetchCrons()
+      setTimeout(() => setCleanupResult(null), 3000)
+    } catch (err: any) {
+      setCleanupResult(`Cleanup failed: ${err.message}`)
+    }
+    setCleanupLoading(false)
   }
 
   const IssueBadge = (props: { issue: CronIssue }) => (
@@ -457,6 +489,44 @@ export function CronManagerModal(props: { threadKey: string; onClose: () => void
               {totalIssueCount()} with issues
             </span>
             <span>{allCrons().length} total</span>
+          </div>
+
+          {/* Channel Warning + Cleanup */}
+          <div style={{ padding: '8px 16px 0 16px' }}>
+            <ChannelWarningBanner />
+            <Show when={cleanupCount() > 0}>
+              <div
+                style={{
+                  display: 'flex',
+                  'align-items': 'center',
+                  gap: '8px',
+                  'margin-bottom': '8px'
+                }}
+              >
+                <button
+                  onClick={handleCleanup}
+                  disabled={cleanupLoading()}
+                  style={{
+                    'font-size': '11px',
+                    padding: '4px 10px',
+                    'border-radius': '6px',
+                    border: '1px solid var(--c-border)',
+                    background: 'transparent',
+                    color: 'var(--c-error, #ef4444)',
+                    cursor: cleanupLoading() ? 'wait' : 'pointer',
+                    'font-weight': '500',
+                    opacity: cleanupLoading() ? '0.6' : '1'
+                  }}
+                >
+                  {cleanupLoading()
+                    ? 'Cleaning…'
+                    : `Clean up ${cleanupCount()} dead cron${cleanupCount() !== 1 ? 's' : ''}`}
+                </button>
+                <Show when={cleanupResult()}>
+                  <span style={{ 'font-size': '11px', color: 'var(--c-text-muted)' }}>{cleanupResult()}</span>
+                </Show>
+              </div>
+            </Show>
           </div>
 
           {/* Tabs */}
