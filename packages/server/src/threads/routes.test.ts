@@ -215,4 +215,32 @@ describe('Thread Routes — Model Switching', () => {
     const res = await request(app).post('/api/models/reset-gpt')
     expect(res.status).toBe(404)
   })
+
+  it('GET /api/threads respects limit query parameter', async () => {
+    // Create 8 threads with deterministic lastActivity via addEvent
+    const createdKeys: string[] = []
+    const base = 1000000
+    for (let i = 1; i <= 8; i++) {
+      const th = tm.create({ label: `t-${i}` })
+      createdKeys.push(th.key)
+      const binding = { orgId: 'o', projectId: 'p', entityType: 'issue', entityRef: `r-${i}` }
+      tm.addEvent(th.key, { threadKey: th.key, event: {}, entityBinding: binding as any, timestamp: base + i })
+    }
+
+    const res = await request(app).get('/api/threads?limit=6')
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.body.threads)).toBe(true)
+    expect(res.body.threads.length).toBe(6)
+
+    // Ensure returned threads are ordered descending by lastActivity
+    const lastActs = res.body.threads.map((t: any) => t.lastActivity)
+    for (let j = 1; j < lastActs.length; j++) {
+      expect(lastActs[j - 1]).toBeGreaterThanOrEqual(lastActs[j])
+    }
+
+    // Ensure returned threads are among those created
+    for (const t of res.body.threads) {
+      expect(createdKeys).toContain(t.key)
+    }
+  })
 })

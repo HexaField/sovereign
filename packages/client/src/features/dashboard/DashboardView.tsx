@@ -57,8 +57,10 @@ import VoiceWidget from './VoiceWidget'
 import NotificationFeed from './NotificationFeed'
 import { ActivityFeed } from './ActivityFeed'
 import ThreadPreviews from './ThreadPreviews'
+import RecentThreads from './RecentThreads'
 import { createSignal, onMount, onCleanup, Show, For } from 'solid-js'
 import { setActiveView } from '../nav/store'
+import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 
 export const [connectionState, setConnectionState] = createSignal<ConnectionState>('connected')
 export const [agentBackendStatus, setAgentBackendStatus] = createSignal('online')
@@ -73,6 +75,7 @@ interface HealthData {
 export function DashboardView() {
   const [orgs, setOrgs] = createSignal<OrgSummary[]>([])
   const [diskPct, setDiskPct] = createSignal<number | null>(null)
+  const [threadsFocused, setThreadsFocused] = createSignal(false)
 
   onMount(async () => {
     // Fetch dashboard summary (aggregated per-org data)
@@ -155,21 +158,43 @@ export function DashboardView() {
           >
             <span>📋</span> Planning
           </button>
+
+          {/* Toggle to switch to thread-focused view */}
+          <button
+            class="flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors hover:brightness-110"
+            style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
+            onClick={() => setThreadsFocused(!threadsFocused())}
+            aria-pressed={threadsFocused()}
+            title={threadsFocused() ? 'Collapse threads' : 'Expand threads'}
+          >
+            <Show when={!threadsFocused()} fallback={<CollapseIcon class="h-3 w-3" />}>
+              <ExpandIcon class="h-3 w-3" />
+            </Show>
+            <span>{threadsFocused() ? 'Collapse' : 'Threads'}</span>
+          </button>
         </div>
 
         {/* Workspace Cards */}
-        <Show when={orgs().length > 0} fallback={<p class="mb-3 text-xs opacity-40">No workspaces configured</p>}>
-          <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-            <For each={orgs()}>
-              {(org) => (
-                <div>
-                  <h3 class="mb-1 text-xs font-semibold" style={{ color: 'var(--c-text-muted)' }}>
-                    {org.orgName}
-                  </h3>
-                  <ThreadPreviews orgId={org.orgId} orgName={org.orgName} />
-                </div>
-              )}
-            </For>
+        <Show when={!threadsFocused()}>
+          <Show when={orgs().length > 0} fallback={<p class="mb-3 text-xs opacity-40">No workspaces configured</p>}>
+            <div class="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+              <For each={orgs()}>
+                {(org) => (
+                  <div>
+                    <h3 class="mb-1 text-xs font-semibold" style={{ color: 'var(--c-text-muted)' }}>
+                      {org.orgName}
+                    </h3>
+                    <ThreadPreviews orgId={org.orgId} orgName={org.orgName} />
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+        </Show>
+
+        <Show when={threadsFocused()}>
+          <div class="mb-3">
+            <RecentThreads />
           </div>
         </Show>
 
