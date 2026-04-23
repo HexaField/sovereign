@@ -680,6 +680,7 @@ app.post('/api/crons/:id/fix-thread', async (req, res) => {
     const patch: Record<string, unknown> = {
       sessionTarget: 'main',
       sessionKey: `agent:main:thread:${threadKey}`,
+      wakeMode: 'next-heartbeat',
       payload: {
         kind: 'systemEvent',
         text: message
