@@ -558,7 +558,7 @@ app.get('/api/threads/:key/crons', async (req, res) => {
           : `agent:main:thread:${threadKey}`)
     // Race against a 5s timeout so a slow gateway doesn't block the UI
     const jobs = await Promise.race([
-      backend.listCronJobs(),
+      backend.listCronJobs(true),
       new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
     ]).catch(() => [] as any[])
     // Filter for crons targeting this thread's session
@@ -627,7 +627,7 @@ function detectCronIssues(job: any): string[] {
 app.get('/api/crons', async (_req, res) => {
   try {
     const jobs = await Promise.race([
-      backend.listCronJobs(),
+      backend.listCronJobs(true),
       new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
     ]).catch(() => [] as any[])
     const annotated = jobs.map((j: any) => ({
@@ -668,31 +668,25 @@ app.post('/api/crons/:id/fix-thread', async (req, res) => {
     if (!threadKey) {
       return res.status(400).json({ error: 'threadKey is required' })
     }
-    // Build the fix patch
-    const patch: Record<string, unknown> = {
-      sessionTarget: `session:agent:main:thread:${threadKey}`,
-      delivery: {
-        mode: 'announce',
-        channel: 'webchat'
-      }
-    }
-    // If payload.kind is systemEvent, convert to agentTurn
-    // We need to get current job data first
-    const jobs = await backend.listCronJobs()
+    // Get current job data
+    const jobs = await backend.listCronJobs(true)
     const job = jobs.find((j: any) => j.id === req.params.id)
     if (!job) {
       return res.status(404).json({ error: 'Cron job not found' })
     }
-    const payload = { ...job.payload }
-    if (payload.kind === 'systemEvent') {
-      payload.kind = 'agentTurn'
-      // Move text to message if needed
-      if (payload.text && !payload.message) {
-        payload.message = payload.text
-        delete payload.text
-      }
+    // Convert to the WORKING pattern: systemEvent on main session
+    // The main session already has the webchat channel — no delivery config needed
+    const message = job.payload?.message || job.payload?.text || 'Cron job executed'
+    const patch: Record<string, unknown> = {
+      sessionTarget: 'main',
+      sessionKey: `agent:main:thread:${threadKey}`,
+      payload: {
+        kind: 'systemEvent',
+        text: message
+      },
+      delivery: { mode: 'none' },
+      enabled: true
     }
-    patch.payload = payload
     const result = await backend.updateCronJob(req.params.id, patch)
     res.json({ ok: true, cron: result })
   } catch (err: any) {
@@ -704,7 +698,7 @@ app.post('/api/crons/:id/fix-thread', async (req, res) => {
 app.post('/api/crons/:id/toggle', async (req, res) => {
   try {
     // Get current state
-    const jobs = await backend.listCronJobs()
+    const jobs = await backend.listCronJobs(true)
     const job = jobs.find((j: any) => j.id === req.params.id)
     if (!job) {
       return res.status(404).json({ error: 'Cron job not found' })
@@ -719,7 +713,7 @@ app.post('/api/crons/:id/toggle', async (req, res) => {
 // DELETE /api/crons/cleanup — bulk remove disabled+errored+past crons
 app.delete('/api/crons/cleanup', async (_req, res) => {
   try {
-    const jobs = await backend.listCronJobs()
+    const jobs = await backend.listCronJobs(true)
     const toRemove = jobs.filter((j: any) => {
       // Remove disabled jobs that errored
       if (j.enabled === false && j.state?.lastStatus === 'error') return true
@@ -753,7 +747,7 @@ app.get('/api/crons/channel-status', async (_req, res) => {
     // Check if any real messaging channels exist by listing cron jobs
     // and checking if "webchat" is the only channel in use
     const jobs = await Promise.race([
-      backend.listCronJobs(),
+      backend.listCronJobs(true),
       new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
     ]).catch(() => [] as any[])
     const channels = new Set<string>()
@@ -789,7 +783,7 @@ app.get('/api/crons/runs', async (req, res) => {
     }
 
     // Filter by thread — need to map jobId to threadKey
-    const jobs = await backend.listCronJobs()
+    const jobs = await backend.listCronJobs(true)
     const jobThreadMap = new Map<string, string | null>()
     for (const job of jobs) {
       jobThreadMap.set(job.id, deriveThreadKey(job.sessionTarget, job.sessionKey))
@@ -1154,9 +1148,11 @@ backend.connect().catch((err) => {
 
 const cronMonitor = createCronMonitor({
   getCronRuns: (jobId) => backend.getCronRuns(jobId),
-  listCronJobs: () => backend.listCronJobs(),
+  listCronJobs: (includeDisabled) => backend.listCronJobs(includeDisabled),
+  updateCronJob: (id, patch) => backend.updateCronJob(id, patch),
   wsHandler,
-  pollIntervalMs: 30_000
+  pollIntervalMs: 30_000,
+  autoFixIntervalMs: 15_000
 })
 
 // Start after a short delay to let backend connect first
