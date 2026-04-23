@@ -95,7 +95,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       agentStatus?: string
     }>
   >
-  listCronJobs(): Promise<any[]>
+  listCronJobs(includeDisabled?: boolean): Promise<any[]>
   getCronRuns(jobId?: string): Promise<any[]>
   updateCronJob(id: string, patch: Record<string, unknown>): Promise<any>
   removeCronJob(id: string): Promise<void>
@@ -953,9 +953,9 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       }
     },
 
-    async listCronJobs(): Promise<any[]> {
+    async listCronJobs(includeDisabled = false): Promise<any[]> {
       try {
-        const result = (await request('cron.list', {})) as { jobs?: any[] }
+        const result = (await request('cron.list', { includeDisabled })) as { jobs?: any[] }
         return result?.jobs ?? []
       } catch (err: any) {
         console.error('[gateway] cron.list failed:', err.message)
