@@ -100,6 +100,9 @@ function buildFixPatch(job: any): Record<string, unknown> {
     sessionTarget: 'main',
     // Point sessionKey to the thread so it injects into the right session
     sessionKey,
+    // next-heartbeat is required — wakeMode: "now" causes the gateway to
+    // disable one-shot jobs before they execute
+    wakeMode: 'next-heartbeat',
     payload: {
       kind: 'systemEvent',
       text: message
