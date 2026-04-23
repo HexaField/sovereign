@@ -675,16 +675,10 @@ app.post('/api/crons/:id/fix-thread', async (req, res) => {
       return res.status(404).json({ error: 'Cron job not found' })
     }
     // Convert to the WORKING pattern: systemEvent on main session
-    // The main session already has the webchat channel — no delivery config needed
-    const message = job.payload?.message || job.payload?.text || 'Cron job executed'
+    // Fix: just remove broken delivery config, keep agentTurn + thread target
     const patch: Record<string, unknown> = {
-      sessionTarget: 'main',
+      sessionTarget: `session:agent:main:thread:${threadKey}`,
       sessionKey: `agent:main:thread:${threadKey}`,
-      wakeMode: 'next-heartbeat',
-      payload: {
-        kind: 'systemEvent',
-        text: message
-      },
       delivery: { mode: 'none' },
       enabled: true
     }
@@ -1151,6 +1145,7 @@ const cronMonitor = createCronMonitor({
   getCronRuns: (jobId) => backend.getCronRuns(jobId),
   listCronJobs: (includeDisabled) => backend.listCronJobs(includeDisabled),
   updateCronJob: (id, patch) => backend.updateCronJob(id, patch),
+  sendMessage: (sessionKey, text) => backend.sendMessage(sessionKey, text),
   wsHandler,
   pollIntervalMs: 30_000,
   autoFixIntervalMs: 15_000
