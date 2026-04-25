@@ -380,14 +380,6 @@ export async function autoSelectProject(): Promise<void> {
 
   if (ws.activeProjectId) return // already selected
 
-  try {
-    const res = await fetch(`/api/orgs/${encodeURIComponent(ws.orgId)}/projects`)
-    if (!res.ok) return
-    const projects: Array<{ id: string; name: string }> = await res.json()
-    if (projects.length > 0) {
-      setActiveProject(projects[0].id, projects[0].name)
-    }
-  } catch {
-    /* ignore */
-  }
+  // Don't auto-select a project — let the file explorer show the org root.
+  // The user can explicitly select a project from the workspace header.
 }
