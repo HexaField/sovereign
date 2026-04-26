@@ -13,15 +13,13 @@ import {
 } from 'solid-js'
 import type { Component } from 'solid-js'
 import {
-  FilesIcon,
   GitIcon,
   PlanningIcon,
   NotificationsIcon,
   TerminalIcon,
   RecordingIcon,
   MeetingsIcon,
-  LogsIcon,
-  CloseIcon
+  LogsIcon
 } from '../../ui/icons.js'
 import {
   activeSidebarTab,
@@ -49,10 +47,6 @@ import {
   setActiveMobileTab,
   swipeMobileTab,
   MOBILE_TAB_ORDER,
-  openFileTabs,
-  activeFileTabId,
-  setActiveFileTabId,
-  closeFileTab,
   mainContentView,
   issueDetailParams,
   activeWorkspace
@@ -108,7 +102,6 @@ function isViewingSubagent(): boolean {
 }
 
 // Lazy-loaded sidebar panels
-const FileExplorerPanel = lazy(() => import('./panels/FileExplorerPanel.js'))
 const GitPanel = lazy(() => import('./panels/GitPanel.js'))
 const PlanningPanel = lazy(() => import('./panels/PlanningPanel.js'))
 const NotificationsPanel = lazy(() => import('./panels/NotificationsPanel.js'))
@@ -118,14 +111,13 @@ const MeetingsPanel = lazy(() =>
   import('../../features/meetings/MeetingsPanel.js').then((m) => ({ default: m.MeetingsPanel }))
 )
 const LogsPanel = lazy(() => import('./panels/LogsPanel.js'))
-const FileViewerTab = lazy(() => import('./tabs/FileViewerTab.js'))
+const FilePanel = lazy(() => import('./panels/FilePanel.js'))
 const PlanningDAGView = lazy(() => import('./panels/PlanningDAGView.js'))
 const IssueDetailView = lazy(() => import('./panels/IssueDetailView.js'))
 const DraftEditPanel = lazy(() => import('../../features/drafts/DraftEditPanel.js'))
 
 // Icon component lookup
 const SIDEBAR_ICON_MAP: Record<string, Component<{ class?: string }>> = {
-  files: FilesIcon,
   git: GitIcon,
   planning: PlanningIcon,
   notifications: NotificationsIcon,
@@ -172,9 +164,6 @@ const SidebarContent: Component = () => {
         }
       >
         <Switch>
-          <Match when={activeSidebarTab() === 'files'}>
-            <FileExplorerPanel />
-          </Match>
           <Match when={activeSidebarTab() === 'git'}>
             <GitPanel />
           </Match>
@@ -204,15 +193,8 @@ const SidebarContent: Component = () => {
 
 // §3.6 — Main Content Area with file tabs and planning views
 const MainContentArea: Component = () => {
-  const tabs = openFileTabs
-  const activeId = activeFileTabId
   const view = mainContentView
   const ws = activeWorkspace
-  const activeTab = createMemo(() => {
-    const id = activeId()
-    if (!id) return null
-    return tabs().find((tab) => tab.id === id) ?? null
-  })
 
   return (
     <div class="flex flex-1 flex-col overflow-hidden" style={{ background: 'var(--c-bg)' }}>
@@ -254,80 +236,15 @@ const MainContentArea: Component = () => {
           </Suspense>
         </Match>
         <Match when={view() === 'files'}>
-          {/* Tab bar */}
-          <Show when={tabs().length > 0}>
-            <div
-              class="scrollbar-none flex shrink-0 overflow-x-auto border-b"
-              style={{ 'border-color': 'var(--c-border)', background: 'var(--c-bg-raised)' }}
-            >
-              <For each={tabs()}>
-                {(tab) => (
-                  <div
-                    class="group flex shrink-0 cursor-pointer items-center gap-1.5 border-r px-3 py-1.5 text-xs"
-                    style={{
-                      'border-color': 'var(--c-border)',
-                      background: activeId() === tab.id ? 'var(--c-bg)' : 'transparent',
-                      color: activeId() === tab.id ? 'var(--c-text)' : 'var(--c-text-muted)',
-                      'border-bottom': activeId() === tab.id ? '2px solid var(--c-accent)' : '2px solid transparent'
-                    }}
-                    onClick={() => setActiveFileTabId(tab.id)}
-                  >
-                    <span class="max-w-[200px] truncate" title={tab.path}>
-                      <span style={{ color: 'var(--c-text-muted)', 'font-size': '0.65rem' }}>
-                        {tab.path.split('/').slice(0, -1).join('/')
-                          ? tab.path.split('/').slice(0, -1).join('/') + '/'
-                          : ''}
-                      </span>
-                      {tab.label}
-                    </span>
-                    <button
-                      class="ml-1 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
-                      style={{ color: 'var(--c-text-muted)' }}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        closeFileTab(tab.id)
-                      }}
-                    >
-                      <CloseIcon class="h-3 w-3" />
-                    </button>
-                  </div>
-                )}
-              </For>
-            </div>
-          </Show>
-
-          {/* Content */}
-          <div class="flex-1 overflow-auto">
-            <Show
-              when={activeTab()}
-              fallback={
-                <div class="flex h-full items-center justify-center">
-                  <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
-                    Select a file to get started
-                  </p>
-                </div>
-              }
-            >
-              {(tab) => {
-                const currentTab = tab()
-                return (
-                  <Suspense
-                    fallback={
-                      <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                        Loading file...
-                      </p>
-                    }
-                  >
-                    <FileViewerTab
-                      path={currentTab.path}
-                      projectId={currentTab.projectId}
-                      onClose={() => closeFileTab(currentTab.id)}
-                    />
-                  </Suspense>
-                )
-              }}
-            </Show>
-          </div>
+          <Suspense
+            fallback={
+              <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                Loading...
+              </p>
+            }
+          >
+            <FilePanel />
+          </Suspense>
         </Match>
       </Switch>
     </div>
@@ -650,11 +567,6 @@ const MobileChatPanel: Component = () => {
 // §7.3 — Mobile Workspace with swipeable tab strip
 const MobileWorkspace: Component = () => {
   const [dropdownOpen, setDropdownOpen] = createSignal(false)
-  const activeTab = createMemo(() => {
-    const id = activeFileTabId()
-    if (!id) return null
-    return openFileTabs().find((tab) => tab.id === id) ?? null
-  })
   let touchStartX = 0
   let touchStartY = 0
   let isHorizontalSwipe = false
@@ -736,38 +648,15 @@ const MobileWorkspace: Component = () => {
       <div class="flex-1 overflow-auto">
         <Switch>
           <Match when={activeMobileTab() === 'files'}>
-            <FileExplorerPanel />
-          </Match>
-          <Match when={activeMobileTab() === 'file-viewer'}>
-            <Show
-              when={activeTab()}
+            <Suspense
               fallback={
-                <div class="flex h-full items-center justify-center">
-                  <p class="text-sm" style={{ color: 'var(--c-text-muted)', opacity: 0.5 }}>
-                    Select a file from the Files tab
-                  </p>
-                </div>
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
               }
             >
-              {(tab) => {
-                const currentTab = tab()
-                return (
-                  <Suspense
-                    fallback={
-                      <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                        Loading file...
-                      </p>
-                    }
-                  >
-                    <FileViewerTab
-                      path={currentTab.path}
-                      projectId={currentTab.projectId}
-                      onClose={() => closeFileTab(currentTab.id)}
-                    />
-                  </Suspense>
-                )
-              }}
-            </Show>
+              <FilePanel />
+            </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'git'}>
             <GitPanel />
