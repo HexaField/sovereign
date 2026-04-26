@@ -1,4 +1,4 @@
-import { createSignal, createEffect, on, For, Show } from 'solid-js'
+import { createSignal, createEffect, on, For, Show, onCleanup } from 'solid-js'
 import type { Component } from 'solid-js'
 import { activeWorkspace } from '../store.js'
 
@@ -29,9 +29,14 @@ export function filterLogs(entries: LogEntry[], level: LogLevel | null, module: 
 
 const LogsPanel: Component = () => {
   const [levelFilter, setLevelFilter] = createSignal<LogLevel | null>(null)
+  const [moduleFilter, setModuleFilter] = createSignal<string | null>(null)
   const [logs, setLogs] = createSignal<LogEntry[]>([])
   const [loading, setLoading] = createSignal(false)
+  const [autoScroll, setAutoScroll] = createSignal(true)
   const ws = () => activeWorkspace()
+
+  let scrollContainer: HTMLDivElement | undefined
+  let pollInterval: ReturnType<typeof setInterval> | undefined
 
   async function fetchLogs(orgId: string) {
     setLoading(true)
@@ -50,17 +55,64 @@ const LogsPanel: Component = () => {
     }
   }
 
+  function startPolling(orgId: string) {
+    stopPolling()
+    pollInterval = setInterval(() => {
+      fetchLogs(orgId)
+    }, 5000)
+  }
+
+  function stopPolling() {
+    if (pollInterval != null) {
+      clearInterval(pollInterval)
+      pollInterval = undefined
+    }
+  }
+
   createEffect(
     on(
       () => ws()?.orgId,
       (orgId) => {
-        if (orgId) fetchLogs(orgId)
-        else setLogs([])
+        stopPolling()
+        if (orgId) {
+          fetchLogs(orgId)
+          startPolling(orgId)
+        } else {
+          setLogs([])
+        }
       }
     )
   )
 
-  const filtered = () => filterLogs(logs(), levelFilter(), null)
+  onCleanup(() => stopPolling())
+
+  // Auto-scroll when new logs arrive
+  createEffect(
+    on(
+      () => filtered().length,
+      () => {
+        if (autoScroll() && scrollContainer) {
+          // Use queueMicrotask to scroll after DOM update
+          queueMicrotask(() => {
+            if (scrollContainer) {
+              scrollContainer.scrollTop = scrollContainer.scrollHeight
+            }
+          })
+        }
+      }
+    )
+  )
+
+  const filtered = () => filterLogs(logs(), levelFilter(), moduleFilter())
+
+  // Extract unique modules for the filter dropdown
+  const modules = () => {
+    const set = new Set<string>()
+    for (const entry of logs()) {
+      if (entry.module) set.add(entry.module)
+    }
+    return Array.from(set).sort()
+  }
 
   const levelColor = (level: LogLevel): string => {
     switch (level) {
@@ -80,6 +132,10 @@ const LogsPanel: Component = () => {
     return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   }
 
+  function clearLogs() {
+    setLogs([])
+  }
+
   return (
     <div class="flex h-full flex-col">
       <div class="flex items-center gap-2 border-b px-3 py-2" style={{ 'border-color': 'var(--c-border)' }}>
@@ -97,8 +153,41 @@ const LogsPanel: Component = () => {
           <option value="warn">Warn</option>
           <option value="error">Error</option>
         </select>
+        <select
+          class="rounded border px-1 py-0.5 text-xs"
+          style={{ background: 'var(--c-bg)', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }}
+          onChange={(e) => setModuleFilter(e.currentTarget.value || null)}
+        >
+          <option value="">All modules</option>
+          <For each={modules()}>{(mod) => <option value={mod}>{mod}</option>}</For>
+        </select>
+
+        <div class="flex-1" />
+
+        {/* Auto-scroll toggle */}
+        <button
+          class="rounded px-1.5 py-0.5 text-[10px]"
+          style={{
+            background: autoScroll() ? 'var(--c-accent)' : 'var(--c-bg-secondary)',
+            color: autoScroll() ? 'var(--c-text-on-accent, #fff)' : 'var(--c-text-muted)'
+          }}
+          onClick={() => setAutoScroll((v) => !v)}
+          title={autoScroll() ? 'Auto-scroll ON' : 'Auto-scroll OFF'}
+        >
+          ↓ Auto
+        </button>
+
+        {/* Clear button */}
+        <button
+          class="rounded px-1.5 py-0.5 text-[10px]"
+          style={{ color: 'var(--c-text-muted)' }}
+          onClick={clearLogs}
+          title="Clear logs"
+        >
+          Clear
+        </button>
       </div>
-      <div class="flex-1 overflow-auto p-2 font-mono text-xs">
+      <div ref={scrollContainer} class="flex-1 overflow-auto p-2 font-mono text-xs">
         <Show when={loading()}>
           <p style={{ color: 'var(--c-text-muted)' }}>Loading...</p>
         </Show>
