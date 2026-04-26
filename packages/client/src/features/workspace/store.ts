@@ -21,7 +21,6 @@ export type SidebarTab =
   | 'logs'
 
 export const SIDEBAR_TABS: { key: SidebarTab; label: string; iconKey: string }[] = [
-  { key: 'files', label: 'Files', iconKey: 'files' },
   { key: 'git', label: 'Git', iconKey: 'git' },
   { key: 'planning', label: 'Planning', iconKey: 'planning' },
   { key: 'notifications', label: 'Notifications', iconKey: 'notifications' },
@@ -64,7 +63,7 @@ function currentOrgId(): string {
 }
 
 // §3.3 — Active sidebar tab
-export const [activeSidebarTab, _setActiveSidebarTab] = createSignal<SidebarTab>('files')
+export const [activeSidebarTab, _setActiveSidebarTab] = createSignal<SidebarTab>('git')
 
 export function setActiveSidebarTab(tab: SidebarTab): void {
   _setActiveSidebarTab(tab)
@@ -74,7 +73,6 @@ export function setActiveSidebarTab(tab: SidebarTab): void {
 // §7.3 — Mobile workspace tab types
 export type MobileTab =
   | 'files'
-  | 'file-viewer'
   | 'chat'
   | 'git'
   | 'threads'
@@ -88,7 +86,6 @@ export type MobileTab =
 
 export const MOBILE_TAB_ORDER: { key: MobileTab; label: string }[] = [
   { key: 'files', label: 'Files' },
-  { key: 'file-viewer', label: 'File Viewer' },
   { key: 'git', label: 'Git' },
   { key: 'planning', label: 'Planning' },
   { key: 'notifications', label: 'Notifications' },

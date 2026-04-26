@@ -162,19 +162,9 @@ describe('Workspace Store', () => {
   })
 
   describe('§7.3 — Mobile Tab Store', () => {
-    it('has 9 mobile tabs in correct order', () => {
+    it('has 8 mobile tabs in correct order', () => {
       const keys = MOBILE_TAB_ORDER.map((t) => t.key)
-      expect(keys).toEqual([
-        'files',
-        'file-viewer',
-        'git',
-        'planning',
-        'notifications',
-        'terminal',
-        'recordings',
-        'meetings',
-        'logs'
-      ])
+      expect(keys).toEqual(['files', 'git', 'planning', 'notifications', 'terminal', 'recordings', 'meetings', 'logs'])
     })
 
     it('setActiveMobileTab persists to localStorage', () => {
@@ -186,14 +176,14 @@ describe('Workspace Store', () => {
     it('swipeMobileTab left advances to next tab', () => {
       _setActiveMobileTab('files')
       const result = swipeMobileTab('left')
-      expect(result).toBe('file-viewer')
-      expect(activeMobileTab()).toBe('file-viewer')
+      expect(result).toBe('git')
+      expect(activeMobileTab()).toBe('git')
     })
 
     it('swipeMobileTab right goes to previous tab', () => {
       _setActiveMobileTab('git')
       const result = swipeMobileTab('right')
-      expect(result).toBe('file-viewer')
+      expect(result).toBe('files')
     })
 
     it('swipeMobileTab clamps at boundaries', () => {
