@@ -66,10 +66,11 @@ export function filteredMeetings(): Meeting[] {
 }
 
 // ── Actions ──────────────────────────────────────────────────────────
-export async function fetchMeetings(): Promise<void> {
+export async function fetchMeetings(orgId?: string): Promise<void> {
   setLoading(true)
   try {
-    const res = await fetch('/api/meetings')
+    const url = orgId ? `/api/orgs/${encodeURIComponent(orgId)}/meetings` : '/api/meetings'
+    const res = await fetch(url)
     const data = await res.json()
     setMeetings(data.meetings ?? data ?? [])
   } catch {
