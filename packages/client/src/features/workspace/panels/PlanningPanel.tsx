@@ -594,7 +594,7 @@ const DraftsSection: Component<{
     <div>
       <button
         class="flex w-full items-center gap-2 rounded px-1 py-1 text-xs font-medium"
-        style={{ color: '#d97706' }}
+        style={{ color: 'var(--c-warning, #d97706)' }}
         onClick={props.onToggle}
       >
         <svg
@@ -652,13 +652,13 @@ const DraftsSection: Component<{
               <button
                 class="flex w-full flex-col gap-0.5 rounded px-2 py-1.5 text-left transition-colors hover:opacity-80"
                 style={{
-                  background: '#fef3c7',
-                  border: '1px dashed #d97706',
+                  background: 'var(--c-bg-secondary)',
+                  border: '1px dashed var(--c-warning, #d97706)',
                   opacity: draftsStore.selectedDraftId() === draft.id ? '1' : '0.85'
                 }}
                 onClick={() => draftsStore.selectDraft(draft.id)}
               >
-                <span class="text-xs font-medium" style={{ color: '#78350f' }}>
+                <span class="text-xs font-medium" style={{ color: 'var(--c-text-heading)' }}>
                   {draft.title || 'Untitled draft'}
                 </span>
                 <div class="flex flex-wrap items-center gap-1">
@@ -666,13 +666,13 @@ const DraftsSection: Component<{
                     {(label) => (
                       <span
                         class="rounded-full px-1.5 py-0 text-[10px]"
-                        style={{ background: '#fde68a', color: '#92400e' }}
+                        style={{ background: 'var(--c-bg-tertiary)', color: 'var(--c-text-muted)' }}
                       >
                         {label}
                       </span>
                     )}
                   </For>
-                  <span class="text-[10px]" style={{ color: '#92400e' }}>
+                  <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
                     {draft.orgId ? 'Assigned' : 'Unassigned'}
                   </span>
                 </div>
