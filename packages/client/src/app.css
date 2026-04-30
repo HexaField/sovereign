@@ -348,6 +348,12 @@ body {
 
 /* ── Message markdown styles ───────────────────────────────────────────── */
 
+.msg-assistant {
+  overflow: hidden;
+  min-width: 0;
+  position: relative;
+}
+
 .msg-assistant code {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   font-size: 0.88em;
@@ -355,6 +361,8 @@ body {
   padding: 2px 5px;
   border-radius: 4px;
   color: var(--c-code-text);
+  overflow-wrap: break-word;
+  word-break: break-all;
 }
 
 .inline-code-wrap {
