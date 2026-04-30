@@ -1,7 +1,6 @@
 import { createSignal, createEffect, Show, For } from 'solid-js'
 import type { AgentStatus } from '@sovereign/core'
 import { AttachIcon, CloseIcon, LoaderIcon } from '../../ui/icons.js'
-import { renderMarkdown } from '../../lib/markdown.js'
 import {
   inputValue,
   setInputValue,
@@ -159,7 +158,6 @@ export function InputArea(props: InputAreaProps) {
   const [scratchpad, setScratchpad] = createSignal<ScratchpadEntry[]>(loadScratchpadEntries(threadKey()))
   const [scratchpadOpen, setScratchpadOpen] = createSignal(false)
   const [editingId, setEditingId] = createSignal<number | null>(null)
-  const [markdownPreview, setMarkdownPreview] = createSignal(false)
 
   // File attachment state
   const [attachedFiles, setAttachedFiles] = createSignal<{ name: string; path: string; size: number; file: File }[]>([])
@@ -171,8 +169,40 @@ export function InputArea(props: InputAreaProps) {
   let editRef: HTMLTextAreaElement | undefined
 
   // Message history navigation state
-  let historyIndex = -1
+  const [historyIndex, setHistoryIndex] = createSignal(-1)
   let draftText = ''
+
+  const navigateHistory = (direction: 'up' | 'down') => {
+    const history = loadMsgHistory(threadKey())
+    if (history.length === 0) return
+    if (direction === 'up') {
+      if (historyIndex() === -1) {
+        draftText = inputValue()
+        setHistoryIndex(history.length - 1)
+      } else if (historyIndex() > 0) {
+        setHistoryIndex(historyIndex() - 1)
+      } else {
+        return
+      }
+      setInputValue(history[historyIndex()])
+    } else {
+      if (historyIndex() === -1) return
+      if (historyIndex() < history.length - 1) {
+        setHistoryIndex(historyIndex() + 1)
+        setInputValue(history[historyIndex()])
+      } else {
+        setHistoryIndex(-1)
+        setInputValue(draftText)
+      }
+    }
+    autoResize()
+    setTimeout(() => {
+      if (textareaRef) {
+        const len = textareaRef.value.length
+        textareaRef.setSelectionRange(len, len)
+      }
+    }, 0)
+  }
 
   // Reload scratchpad when thread changes
   createEffect(() => {
@@ -311,7 +341,7 @@ export function InputArea(props: InputAreaProps) {
     const rawFiles = files.map((f) => f.file)
 
     pushMsgHistory(threadKey(), text || '[files]')
-    historyIndex = -1
+    setHistoryIndex(-1)
     draftText = ''
     setInputValue('')
     setAttachedFiles([])
@@ -346,36 +376,10 @@ export function InputArea(props: InputAreaProps) {
 
       if (e.key === 'ArrowUp' && (cursorAtStart || !inputValue())) {
         e.preventDefault()
-        if (historyIndex === -1) {
-          draftText = inputValue()
-          historyIndex = history.length - 1
-        } else if (historyIndex > 0) {
-          historyIndex--
-        } else {
-          return
-        }
-        setInputValue(history[historyIndex])
-        autoResize()
-        setTimeout(() => {
-          if (textareaRef) textareaRef.setSelectionRange(history[historyIndex].length, history[historyIndex].length)
-        }, 0)
-      } else if (e.key === 'ArrowDown' && historyIndex !== -1 && cursorAtEnd) {
+        navigateHistory('up')
+      } else if (e.key === 'ArrowDown' && historyIndex() !== -1 && cursorAtEnd) {
         e.preventDefault()
-        if (historyIndex < history.length - 1) {
-          historyIndex++
-          setInputValue(history[historyIndex])
-          autoResize()
-          setTimeout(() => {
-            if (textareaRef) textareaRef.setSelectionRange(history[historyIndex].length, history[historyIndex].length)
-          }, 0)
-        } else {
-          historyIndex = -1
-          setInputValue(draftText)
-          autoResize()
-          setTimeout(() => {
-            if (textareaRef) textareaRef.setSelectionRange(draftText.length, draftText.length)
-          }, 0)
-        }
+        navigateHistory('down')
       }
     }
   }
@@ -452,6 +456,8 @@ export function InputArea(props: InputAreaProps) {
       const text = data.text?.trim() ?? ''
       if (text) {
         pushMsgHistory(threadKey(), text)
+        setHistoryIndex(-1)
+        draftText = ''
         sendMessage(text)
       }
     } catch (e) {
@@ -686,77 +692,97 @@ export function InputArea(props: InputAreaProps) {
 
         {/* Text input (hidden when recording) */}
         <Show when={!isRecording()}>
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            placeholder="Message..."
-            value={inputValue()}
-            onInput={(e) => {
-              setInputValue(e.currentTarget.value)
-              autoResize()
-            }}
-            onKeyDown={handleKey}
-            onFocus={() => {
-              setTextFocused(true)
-              if (isMobile && textareaRef) textareaRef.style.height = ''
-            }}
-            onFocusOut={() => {
-              setTextFocused(false)
-              autoResize()
-            }}
-            class="max-h-[120px] flex-1 resize-none rounded-xl px-3.5 py-2.5 font-[inherit] text-sm transition-colors outline-none"
-            style={{
-              background: 'var(--c-bg)',
-              border: '1px solid var(--c-border)',
-              color: 'var(--c-text)',
-              'min-height': `${INPUT_MIN_HEIGHT}px`
-            }}
-            classList={{
-              'max-sm:max-h-none max-sm:h-full': textFocused()
-            }}
-            disabled={props.disabled}
-          />
-        </Show>
-
-        {/* Markdown preview toggle */}
-        <Show when={inputValue().trim()}>
-          <button
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors"
-            style={{
-              color: markdownPreview() ? 'var(--c-accent)' : 'var(--c-text-muted)',
-              background: markdownPreview() ? 'var(--c-accent-bg, rgba(99,102,241,0.1))' : 'transparent'
-            }}
-            onClick={() => setMarkdownPreview(!markdownPreview())}
-            title={markdownPreview() ? 'Hide preview' : 'Preview markdown'}
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </button>
-        </Show>
-
-        {/* Markdown rendered preview */}
-        <Show when={markdownPreview() && inputValue().trim()}>
-          <div
-            class="max-h-32 overflow-y-auto rounded-lg border px-3 py-2 text-sm"
-            style={{
-              background: 'var(--c-bg)',
-              'border-color': 'var(--c-border)',
-              color: 'var(--c-text)'
-            }}
-            innerHTML={renderMarkdown(inputValue())}
-          />
+          <div class="flex flex-1 items-end gap-1">
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              placeholder="Message..."
+              value={inputValue()}
+              onInput={(e) => {
+                setInputValue(e.currentTarget.value)
+                autoResize()
+              }}
+              onKeyDown={handleKey}
+              onFocus={() => {
+                setTextFocused(true)
+                if (isMobile && textareaRef) textareaRef.style.height = ''
+              }}
+              onFocusOut={() => {
+                setTextFocused(false)
+                autoResize()
+              }}
+              class="max-h-[120px] flex-1 resize-none rounded-xl px-3.5 py-2.5 font-[inherit] text-sm transition-colors outline-none"
+              style={{
+                background: 'var(--c-bg)',
+                border: '1px solid var(--c-border)',
+                color: 'var(--c-text)',
+                'min-height': `${INPUT_MIN_HEIGHT}px`
+              }}
+              classList={{
+                'max-sm:max-h-none max-sm:h-full': textFocused()
+              }}
+              disabled={props.disabled}
+            />
+            {/* History navigation arrows (mobile) */}
+            <div class="flex flex-col gap-0.5 md:hidden">
+              <button
+                class="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded transition-colors"
+                style={{
+                  color:
+                    historyIndex() === -1 && loadMsgHistory(threadKey()).length > 0
+                      ? 'var(--c-text-muted)'
+                      : historyIndex() > 0
+                        ? 'var(--c-text)'
+                        : 'var(--c-text-muted)',
+                  opacity:
+                    loadMsgHistory(threadKey()).length === 0
+                      ? '0.25'
+                      : historyIndex() > 0 || historyIndex() === -1
+                        ? '1'
+                        : '0.4'
+                }}
+                onClick={() => navigateHistory('up')}
+                title="Previous message"
+                disabled={loadMsgHistory(threadKey()).length === 0}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="18 15 12 9 6 15" />
+                </svg>
+              </button>
+              <button
+                class="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded transition-colors"
+                style={{
+                  color: historyIndex() !== -1 ? 'var(--c-text)' : 'var(--c-text-muted)',
+                  opacity: historyIndex() === -1 ? '0.25' : '1'
+                }}
+                onClick={() => navigateHistory('down')}
+                title="Next message"
+                disabled={historyIndex() === -1}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+            </div>
+          </div>
         </Show>
 
         {/* Recording bar */}
