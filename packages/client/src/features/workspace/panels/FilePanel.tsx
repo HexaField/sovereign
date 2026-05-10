@@ -7,7 +7,13 @@
  */
 import { Component, Show, For, createSignal, createEffect, onCleanup, onMount } from 'solid-js'
 import { marked } from 'marked'
-import { activeWorkspace } from '../store.js'
+import {
+  activeWorkspace,
+  lastOpenFilePath,
+  setLastOpenFilePath,
+  mobileFileShowTree,
+  setMobileFileShowTree
+} from '../store.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -305,7 +311,7 @@ const FilePanel: Component = () => {
   const [orgPath, setOrgPath] = createSignal<string | null>(null)
   const [treeData, setTreeData] = createSignal<FileNode[]>([])
   const [expandedDirs, setExpandedDirs] = createSignal<Set<string>>(new Set())
-  const [activeFilePath, setActiveFilePath] = createSignal<string | null>(null)
+  const [activeFilePath, setActiveFilePath] = createSignal<string | null>(lastOpenFilePath())
   const [fileData, setFileData] = createSignal<FileData | null>(null)
   const [mode, setMode] = createSignal<FileMode>('view')
   const [dirty, setDirty] = createSignal(false)
@@ -315,7 +321,6 @@ const FilePanel: Component = () => {
   const [renderedHtml, setRenderedHtml] = createSignal('')
   const [editorContent, setEditorContent] = createSignal('')
   const [drawerOpen, setDrawerOpen] = createSignal(false)
-  const [mobileShowTree, setMobileShowTree] = createSignal(true)
   const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; node: FileNode | null } | null>(null)
 
   let editorContainer: HTMLDivElement | undefined
@@ -401,10 +406,11 @@ const FilePanel: Component = () => {
     setLoading(true)
     setError(null)
     setActiveFilePath(filePath)
+    setLastOpenFilePath(filePath)
     setMode('view')
     setDirty(false)
 
-    if (isMobile()) setMobileShowTree(false)
+    if (isMobile()) setMobileFileShowTree(false)
     setDrawerOpen(false)
 
     try {
@@ -533,8 +539,25 @@ const FilePanel: Component = () => {
     setTreeData(nodes)
   }
 
+  // ── Restore persisted file on mount ──
   onMount(() => {
     document.addEventListener('click', closeCtxMenu)
+    const stored = lastOpenFilePath()
+    if (stored && !mobileFileShowTree()) {
+      const path = orgPath()
+      if (path) {
+        openFile(stored)
+      }
+    }
+  })
+
+  // Auto-load persisted file when orgPath resolves (it's async)
+  createEffect(() => {
+    const path = orgPath()
+    const stored = lastOpenFilePath()
+    if (path && stored && !fileData() && !loading()) {
+      openFile(stored)
+    }
   })
   onCleanup(() => {
     if (monacoEditor) monacoEditor.dispose()
@@ -596,13 +619,14 @@ const FilePanel: Component = () => {
       </Show>
 
       {/* Mobile back button */}
-      <Show when={isMobile() && !mobileShowTree()}>
+      <Show when={isMobile() && !mobileFileShowTree()}>
         <button
           class="rounded px-1.5 py-0.5 text-[11px] transition-colors"
           style={{ color: 'var(--c-text-muted)', background: 'transparent' }}
           onClick={() => {
-            setMobileShowTree(true)
+            setMobileFileShowTree(true)
             setActiveFilePath(null)
+            setLastOpenFilePath(null)
             setFileData(null)
           }}
           title="Back to files"
@@ -624,6 +648,31 @@ const FilePanel: Component = () => {
         </div>
 
         <div class="ml-auto flex items-center gap-1.5">
+          {/* Download button */}
+          <button
+            class="cursor-pointer rounded px-2 py-1 text-[10px] transition-colors hover:brightness-125"
+            style={{
+              color: 'var(--c-text-muted)',
+              border: '1px solid var(--c-border)',
+              background: 'transparent'
+            }}
+            onClick={() => {
+              const path = orgPath()
+              const fp = activeFilePath()
+              if (!path || !fp) return
+              const url = `/api/files/raw?project=${encodeURIComponent(path)}&path=${encodeURIComponent(fp)}&download=1`
+              const a = document.createElement('a')
+              a.href = url
+              a.download = fileName(fp)
+              document.body.appendChild(a)
+              a.click()
+              document.body.removeChild(a)
+            }}
+            title="Download file"
+          >
+            ⬇
+          </button>
+
           {/* View / Edit toggle */}
           <div class="flex overflow-hidden rounded" style={{ border: '1px solid var(--c-border)' }}>
             <button
@@ -820,12 +869,12 @@ const FilePanel: Component = () => {
   // ── Mobile Layout ──
   const MobileLayout: Component = () => (
     <div class="flex h-full flex-col overflow-hidden" onKeyDown={handleKeyDown}>
-      <Show when={!mobileShowTree()}>
+      <Show when={!mobileFileShowTree()}>
         <Toolbar />
       </Show>
 
       <Show
-        when={mobileShowTree()}
+        when={mobileFileShowTree()}
         fallback={
           <div class="flex-1 overflow-hidden">
             <Show when={error()}>
