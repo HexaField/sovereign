@@ -137,6 +137,20 @@ export function isMobileWidth(): boolean {
   return window.innerWidth < 768
 }
 
+// §7.4 — Mobile file panel persistence
+export const [lastOpenFilePath, _setLastOpenFilePath] = createSignal<string | null>(null)
+export const [mobileFileShowTree, _setMobileFileShowTree] = createSignal(true)
+
+export function setLastOpenFilePath(v: string | null): void {
+  _setLastOpenFilePath(v)
+  writeStorage(wsKey(currentOrgId(), 'lastOpenFilePath'), v)
+}
+
+export function setMobileFileShowTree(v: boolean): void {
+  _setMobileFileShowTree(v)
+  writeStorage(wsKey(currentOrgId(), 'mobileFileShowTree'), v)
+}
+
 // §3.2 — Expand chat mode
 export const [chatExpanded, _setChatExpanded] = createSignal(false)
 
@@ -323,6 +337,8 @@ function restoreWorkspacePanelState(orgId: string): void {
   if (SIDEBAR_TABS.some((t) => t.key === tab)) {
     _setActiveSidebarTab(tab as SidebarTab)
   }
+  _setLastOpenFilePath(readStorage<string | null>(wsKey(orgId, 'lastOpenFilePath'), null))
+  _setMobileFileShowTree(readStorage(wsKey(orgId, 'mobileFileShowTree'), true))
 }
 
 export function setActiveProject(projectId: string, projectName?: string): void {
