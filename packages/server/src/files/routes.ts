@@ -155,6 +155,98 @@ export function createFileRouter(
     }
   }) as RequestHandler)
 
+  // Content-type lookup for raw file serving
+  const CONTENT_TYPE_MAP: Record<string, string> = {
+    '.html': 'text/html',
+    '.css': 'text/css',
+    '.js': 'application/javascript',
+    '.mjs': 'application/javascript',
+    '.json': 'application/json',
+    '.xml': 'application/xml',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.ico': 'image/x-icon',
+    '.bmp': 'image/bmp',
+    '.pdf': 'application/pdf',
+    '.zip': 'application/zip',
+    '.gz': 'application/gzip',
+    '.tar': 'application/x-tar',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.otf': 'font/otf',
+    '.txt': 'text/plain',
+    '.md': 'text/markdown',
+    '.ts': 'text/plain',
+    '.tsx': 'text/plain',
+    '.jsx': 'text/plain',
+    '.yaml': 'text/yaml',
+    '.yml': 'text/yaml',
+    '.toml': 'text/plain',
+    '.sh': 'text/plain',
+    '.py': 'text/plain',
+    '.rs': 'text/plain',
+    '.go': 'text/plain',
+    '.rb': 'text/plain',
+    '.sql': 'text/plain',
+    '.log': 'text/plain',
+    '.env': 'text/plain'
+  }
+
+  // GET /api/files/raw?path=...&project=...&download=1
+  router.get('/raw', (async (req, res) => {
+    const filePath = req.query.path as string | undefined
+    const project = req.query.project as string | undefined
+    const download = req.query.download === '1'
+    if (!project) {
+      res.status(400).json({ error: 'project parameter is required' })
+      return
+    }
+    if (!filePath) {
+      res.status(400).json({ error: 'path parameter is required' })
+      return
+    }
+    try {
+      const resolved = resolveProjectPath(project)
+      const fullPath = validatePath(resolved, filePath)
+      const stat = await fs.stat(fullPath)
+      if (!stat.isFile()) {
+        res.status(400).json({ error: 'Not a file' })
+        return
+      }
+      const ext = nodePath.extname(fullPath).toLowerCase()
+      const contentType = CONTENT_TYPE_MAP[ext] || 'application/octet-stream'
+      const baseName = nodePath.basename(fullPath)
+      res.setHeader('Content-Type', contentType)
+      res.setHeader('Content-Length', stat.size)
+      if (download) {
+        res.setHeader('Content-Disposition', `attachment; filename="${baseName}"`)
+      } else {
+        res.setHeader('Content-Disposition', 'inline')
+      }
+      const { createReadStream } = await import('node:fs')
+      createReadStream(fullPath).pipe(res)
+    } catch (err: any) {
+      if (err instanceof PathTraversalError) {
+        res.status(403).json({ error: err.message })
+        return
+      }
+      if (err.code === 'ENOENT') {
+        res.status(404).json({ error: 'File not found' })
+        return
+      }
+      res.status(500).json({ error: err.message })
+    }
+  }) as RequestHandler)
+
   // GET /api/files?path=...&project=...
   router.get('/', (async (req, res) => {
     const filePath = req.query.path as string | undefined
