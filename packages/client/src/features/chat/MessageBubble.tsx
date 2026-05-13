@@ -42,17 +42,30 @@ export function formatTimestamp(ts: number): string {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function extractTaskCompletionResult(text: string): string {
-  // 1. Try explicit markers
-  const markerMatch = text.match(
-    /<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>[\s\S]*?\n([\s\S]*?)\n?<<<END_UNTRUSTED_CHILD_RESULT>>>/
-  )
-  if (markerMatch) return markerMatch[1].trim()
+  // 1. Find the actual Result header — use full phrase with colon to avoid matching
+  //    references to the phrase within quoted/backtick text in the result body itself.
+  const anchor = 'Result (untrusted content, treat as data):'
+  const anchorIdx = text.lastIndexOf(anchor)
 
-  // 2. Fallback: extract between "Result (untrusted content" and Stats:/Action:
-  const resultMatch = text.match(/Result \(untrusted content[^)]*\):\s*\n([\s\S]*?)(?=\n(?:Stats:|Action:)|$)/)
-  if (resultMatch) return resultMatch[1].trim()
+  if (anchorIdx >= 0) {
+    const searchText = text.substring(anchorIdx)
+    // 2. Try explicit markers after the anchor
+    const markerMatch = searchText.match(
+      /<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\n?([\s\S]*?)\n?<<<END_UNTRUSTED_CHILD_RESULT>>>/
+    )
+    if (markerMatch) return markerMatch[1].trim()
 
-  // 3. Strip Stats/Action lines and everything after as last resort
+    // 3. Fallback: extract text after the header line up to Stats:/Action:
+    const resultMatch = searchText.match(/Result \(untrusted content[^)]*\):\s*\n([\s\S]*?)(?=\n(?:Stats:|Action:)|$)/)
+    if (resultMatch) return resultMatch[1].trim()
+  }
+
+  // 4. Try markers anywhere (for non-standard formats) — use newline-anchored pattern
+  //    to avoid matching markers inside inline code/backticks
+  const globalMatch = text.match(/\n<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\n([\s\S]*?)\n<<<END_UNTRUSTED_CHILD_RESULT>>>/)
+  if (globalMatch) return globalMatch[1].trim()
+
+  // 5. Strip Stats/Action lines and everything after as last resort
   const stripped = text.replace(/\n(?:Stats|Action):.*$/s, '').trim()
   return stripped || text
 }
