@@ -39,6 +39,24 @@ export function formatTimestamp(ts: number): string {
   return `${date} at ${time}`
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function extractTaskCompletionResult(text: string): string {
+  // 1. Try explicit markers
+  const markerMatch = text.match(
+    /<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>[\s\S]*?\n([\s\S]*?)\n?<<<END_UNTRUSTED_CHILD_RESULT>>>/
+  )
+  if (markerMatch) return markerMatch[1].trim()
+
+  // 2. Fallback: extract between "Result (untrusted content" and Stats:/Action:
+  const resultMatch = text.match(/Result \(untrusted content[^)]*\):\s*\n([\s\S]*?)(?=\n(?:Stats:|Action:)|$)/)
+  if (resultMatch) return resultMatch[1].trim()
+
+  // 3. Strip Stats/Action lines and everything after as last resort
+  const stripped = text.replace(/\n(?:Stats|Action):.*$/s, '').trim()
+  return stripped || text
+}
+
 // ── MarkdownContent (internal) ───────────────────────────────────────
 
 function MarkdownContentInternal(props: { text: string }) {
@@ -325,6 +343,10 @@ export function MessageBubble(props: MessageBubbleProps) {
                       : isReconciliation
                         ? 'Graph Reconciliation'
                         : 'Scheduled Result'
+    const displayContent = () => {
+      if (isTaskCompletion) return extractTaskCompletionResult(content())
+      return content()
+    }
     return (
       <div class="my-1 flex w-full justify-center">
         <div
@@ -336,28 +358,26 @@ export function MessageBubble(props: MessageBubbleProps) {
           }}
           onClick={() => setExpanded((v) => !v)}
         >
-          <div class="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-accent)' }}>
+          {/* Header — always visible */}
+          <div class="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-accent)' }}>
             <span>{icon}</span>
-            <span>{label}</span>
+            <span class="min-w-0 flex-1 truncate">{label}</span>
             <Show when={timestamp()}>
-              <span style={{ opacity: 0.5, 'font-weight': 'normal', 'margin-left': '4px' }}>
+              <span style={{ opacity: 0.5, 'font-weight': 'normal' }}>
                 {new Date(timestamp()!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             </Show>
-            <span style={{ 'margin-left': 'auto', 'font-size': '10px', opacity: 0.6 }}>
+            <span style={{ 'font-size': '10px', opacity: 0.6 }}>
               <ChevronDownIcon class={`inline h-3 w-3 transition-transform ${expanded() ? 'rotate-180' : ''}`} />
             </span>
           </div>
-          <div
-            style={{
-              overflow: 'hidden',
-              display: '-webkit-box',
-              '-webkit-box-orient': 'vertical',
-              ...(expanded() ? {} : { '-webkit-line-clamp': '2' })
-            }}
-          >
-            <MarkdownContentInternal text={content()} />
-          </div>
+
+          {/* Body — only shown when expanded */}
+          <Show when={expanded()}>
+            <div class="mt-2 border-t pt-2" style={{ 'border-color': 'var(--c-border)' }}>
+              <MarkdownContentInternal text={displayContent()} />
+            </div>
+          </Show>
         </div>
       </div>
     )
