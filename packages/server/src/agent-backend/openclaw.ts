@@ -352,7 +352,7 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       for (const tr of toolResults) {
         if (tr.toolCallId && !seenResults.has(tr.toolCallId)) {
           seenResults.add(tr.toolCallId)
-          const outputStr = typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content)
+          const outputStr = contentToOutputStr(tr.content)
           // Find the tool name from matching call
           const matchedCall = toolCalls.find((tc) => tc.id === tr.toolCallId)
           emitter.emit('chat.work', {
@@ -519,6 +519,25 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
     }
+  }
+
+  /** Convert content (string, array of blocks) to display string, preserving images as HTML */
+  function contentToOutputStr(content: unknown): string {
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) {
+      const parts: string[] = []
+      for (const b of content as any[]) {
+        if (b.type === 'text' && b.text) parts.push(b.text)
+        else if (b.type === 'image' && b.data) {
+          const mime = b.mimeType || (b.data.startsWith('/9j/') ? 'image/jpeg' : 'image/png')
+          parts.push(
+            `<img src="data:${mime};base64,${b.data}" class="tool-screenshot" style="max-width:100%;height:auto;border-radius:4px;display:block;margin:4px 0;" />`
+          )
+        }
+      }
+      return parts.join('\n')
+    }
+    return content ? JSON.stringify(content) : ''
   }
 
   /** Extract text content from a gateway ChatMessage (ContentBlock[] or string). */
