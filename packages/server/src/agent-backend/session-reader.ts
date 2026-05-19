@@ -5,6 +5,21 @@ import path from 'node:path'
 
 const SESSIONS_DIR = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions')
 const SESSIONS_JSON = path.join(SESSIONS_DIR, 'sessions.json')
+const CLAUDE_PROJECTS_DIR = path.join(process.env.HOME || '', '.claude/projects')
+
+/** Search ~/.claude/projects for a claude-cli session JSONL file by ID */
+function findCliSessionFile(claudeCliSessionId: string): string | null {
+  try {
+    const projects = fs.readdirSync(CLAUDE_PROJECTS_DIR)
+    for (const project of projects) {
+      const candidate = path.join(CLAUDE_PROJECTS_DIR, project, `${claudeCliSessionId}.jsonl`)
+      if (fs.existsSync(candidate)) return candidate
+    }
+  } catch {
+    // .claude/projects may not exist
+  }
+  return null
+}
 
 /** Read sessions.json and find the session file path for a given session key */
 export function getSessionFilePath(sessionKey: string): string | null {
@@ -12,6 +27,19 @@ export function getSessionFilePath(sessionKey: string): string | null {
     const data = JSON.parse(fs.readFileSync(SESSIONS_JSON, 'utf-8'))
     const meta = data[sessionKey]
     if (!meta?.sessionId) return null
+
+    // If session uses claude-cli, prefer the live CLI JSONL when it's newer
+    const claudeCliSessionId = meta.claudeCliSessionId
+    if (claudeCliSessionId) {
+      const cliFile = findCliSessionFile(claudeCliSessionId)
+      if (cliFile) {
+        const ocFile = meta.sessionFile && fs.existsSync(meta.sessionFile) ? meta.sessionFile : null
+        if (!ocFile) return cliFile
+        const cliMtime = fs.statSync(cliFile).mtimeMs
+        const ocMtime = fs.statSync(ocFile).mtimeMs
+        if (cliMtime >= ocMtime) return cliFile
+      }
+    }
 
     // Check sessionFile field first (exact path)
     if (meta.sessionFile && fs.existsSync(meta.sessionFile)) {
@@ -51,6 +79,25 @@ export function getAllSessionFiles(sessionKey: string): string[] {
   }
 }
 
+/** Normalize a JSONL entry to a message object, handling both OpenClaw and claude-cli formats */
+function normalizeEntry(entry: any): any | null {
+  if (entry.type === 'message' && entry.message) {
+    // OpenClaw format: {type:"message", message:{role, content, timestamp, ...}}
+    return entry.message
+  }
+  if ((entry.type === 'user' || entry.type === 'assistant') && entry.message) {
+    // Claude CLI format: {type:"user"|"assistant", message:{role, content}, timestamp:"ISO", ...}
+    const msg = { ...entry.message }
+    if (!msg.timestamp && entry.timestamp) {
+      msg.timestamp = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : entry.timestamp
+    } else if (typeof msg.timestamp === 'string') {
+      msg.timestamp = Date.parse(msg.timestamp)
+    }
+    return msg
+  }
+  return null
+}
+
 /** Read messages from an older session file (for "load more" across session boundaries) */
 export function readAllMessages(filePath: string): any[] {
   try {
@@ -60,9 +107,8 @@ export function readAllMessages(filePath: string): any[] {
       if (!line.trim()) continue
       try {
         const entry = JSON.parse(line)
-        if (entry.type === 'message' && entry.message) {
-          messages.push(entry.message)
-        }
+        const msg = normalizeEntry(entry)
+        if (msg) messages.push(msg)
       } catch {
         /* skip */
       }
@@ -90,8 +136,8 @@ export function readRecentMessages(filePath: string, limit: number = 80): { mess
       pos = readStart
 
       // Count message lines seen so far — break early if we have enough
-      // Over-count by checking for "type":"message" substring as a fast heuristic
-      const roughCount = (accumulated.match(/"type"\s*:\s*"message"/g) || []).length
+      // Over-count by checking for "type":"message"|"user"|"assistant" as a fast heuristic
+      const roughCount = (accumulated.match(/"type"\s*:\s*"(?:message|user|assistant)"/g) || []).length
       if (roughCount > limit * 2) break
     }
   } finally {
@@ -104,9 +150,8 @@ export function readRecentMessages(filePath: string, limit: number = 80): { mess
     if (!line.trim()) continue
     try {
       const entry = JSON.parse(line)
-      if (entry.type === 'message' && entry.message) {
-        allMessages.push(entry.message)
-      }
+      const msg = normalizeEntry(entry)
+      if (msg) allMessages.push(msg)
     } catch {
       /* skip malformed lines */
     }
