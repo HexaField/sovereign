@@ -250,7 +250,7 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
         allTextParts.push(m.content)
       } else {
         for (const block of blocks) {
-          if (block.type === 'toolCall') {
+          if (block.type === 'toolCall' || block.type === 'tool_use') {
             toolCalls.push(block)
           }
         }
@@ -281,6 +281,18 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
                 type: 'tool_call',
                 name: block.name ?? 'tool',
                 input: typeof block.arguments === 'string' ? block.arguments : JSON.stringify(block.arguments ?? {}),
+                toolCallId: block.id,
+                timestamp: m.timestamp ?? 0
+              })
+            } else if (block.type === 'tool_use') {
+              // Claude CLI raw Anthropic API format
+              if (block.name === 'sessions_yield') {
+                continue
+              }
+              currentWork.push({
+                type: 'tool_call',
+                name: block.name ?? 'tool',
+                input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input ?? {}),
                 toolCallId: block.id,
                 timestamp: m.timestamp ?? 0
               })
