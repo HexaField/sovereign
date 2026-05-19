@@ -724,6 +724,8 @@ function BrowserDetail(props: { input: Record<string, unknown>; result?: string 
   const action = () => str(props.input.action)
   const resultHtml = createMemo(() => {
     if (!props.result) return ''
+    // If result contains img tags (from image blocks), render as HTML directly without truncation
+    if (props.result.includes('<img ')) return props.result
     return renderMarkdown(props.result.slice(0, 2000))
   })
 

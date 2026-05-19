@@ -18,6 +18,37 @@ function extractText(msg: unknown): string | null {
   return null
 }
 
+/** Convert base64 to detected MIME type */
+function detectImageMime(base64: string): string {
+  if (base64.startsWith('/9j/')) return 'image/jpeg'
+  if (base64.startsWith('iVBOR')) return 'image/png'
+  if (base64.startsWith('R0lGO')) return 'image/gif'
+  if (base64.startsWith('UklGR')) return 'image/webp'
+  return 'image/jpeg'
+}
+
+/** Extract content including image blocks as HTML img tags — for tool result output */
+function extractContentOutput(msg: unknown): string | null {
+  if (!msg) return null
+  if (typeof msg === 'string') return msg
+  if (Array.isArray(msg)) {
+    const parts: string[] = []
+    for (const b of msg as any[]) {
+      if (b.type === 'text' && b.text) {
+        parts.push(b.text)
+      } else if (b.type === 'image' && b.data) {
+        const mime = b.mimeType || detectImageMime(b.data)
+        parts.push(
+          `<img src="data:${mime};base64,${b.data}" class="tool-screenshot" style="max-width:100%;height:auto;border-radius:4px;display:block;margin:4px 0;" />`
+        )
+      }
+    }
+    return parts.length > 0 ? parts.join('\n') : null
+  }
+  if (typeof msg === 'object' && 'content' in (msg as any)) return extractContentOutput((msg as any).content)
+  return null
+}
+
 /** Strip gateway-injected timestamp prefix */
 function stripTimestamp(text: string): string {
   return text.replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
@@ -203,7 +234,7 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
       currentWork.push({
         type: 'tool_result',
         name: m.toolName ?? 'tool',
-        output: extractText(m.content) ?? undefined,
+        output: extractContentOutput(m.content) ?? undefined,
         toolCallId: m.toolCallId,
         timestamp: m.timestamp ?? 0
       })
