@@ -97,12 +97,12 @@ describe('Thread Routes — Model Switching', () => {
     expect(res.status).toBe(404)
   })
 
-  describe('session-info model drift guard', () => {
-    it('rewrites unconfigured model to default', async () => {
+  describe('session-info is read-only', () => {
+    it('does NOT mutate sessions.json even when stored model is not in configured list', async () => {
       const thread = tm.create({ label: 'drift-test' })
       const sessionKey = `agent:main:thread:${thread.key}`
 
-      // Write session with a drifted model
+      // Write session with a model that is not in the configured list
       fs.writeFileSync(
         sessionsPath,
         JSON.stringify({
@@ -113,6 +113,7 @@ describe('Thread Routes — Model Switching', () => {
           }
         })
       )
+      const beforeRaw = fs.readFileSync(sessionsPath, 'utf-8')
 
       // Write config with a different default
       const configDir = path.join(dataDir, '.openclaw')
@@ -130,13 +131,13 @@ describe('Thread Routes — Model Switching', () => {
 
       const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.key)}/session-info`)
       expect(res.status).toBe(200)
-      expect(res.body.model).toBe('claude-opus-4.6')
-      expect(res.body.modelProvider).toBe('github-copilot')
+      // Response reports the stored values verbatim — no rewrite-to-default
+      expect(res.body.model).toBe('gpt-5.2-codex')
+      expect(res.body.modelProvider).toBe('openai')
 
-      // Verify sessions.json was rewritten
-      const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
-      expect(sessions[sessionKey].model).toBe('claude-opus-4.6')
-      expect(sessions[sessionKey].modelProvider).toBe('github-copilot')
+      // sessions.json is unchanged byte-for-byte (OpenClaw owns this file)
+      const afterRaw = fs.readFileSync(sessionsPath, 'utf-8')
+      expect(afterRaw).toBe(beforeRaw)
     })
 
     it('preserves configured model without rewriting', async () => {
