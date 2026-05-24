@@ -23,6 +23,12 @@ export interface ThreadSessionRecord {
   label?: string
   /** For subagent sessions: key of the parent session. */
   parentSessionKey?: string
+  /** Org binding (drives per-org CLAUDE.md layering + per-org tool policy). */
+  orgId?: string
+  /** Per-session cwd override; falls back to the backend's default cwd. */
+  cwd?: string
+  /** Backend-specific model id last selected for this session. */
+  model?: string
 }
 
 export interface SessionsRegistry {
@@ -119,6 +125,9 @@ export function createSessionsRegistry(dataDir: string, options: Options = {}): 
         backendSessionFile: input.backendSessionFile,
         label: input.label,
         parentSessionKey: input.parentSessionKey,
+        orgId: input.orgId ?? existing?.orgId,
+        cwd: input.cwd ?? existing?.cwd,
+        model: input.model ?? existing?.model,
         createdAt: existing?.createdAt ?? input.createdAt ?? now,
         updatedAt: now
       }
