@@ -1,10 +1,34 @@
 // Agent Backend — OpenClaw Gateway Implementation
 
-import type { AgentBackend, AgentBackendEvents, BackendConnectionStatus, ParsedTurn, WorkItem } from '@sovereign/core'
+import type {
+  AgentBackend,
+  AgentBackendKind,
+  BackendCapabilities,
+  BackendConnectionStatus,
+  ContextBudget,
+  DeviceInfo,
+  ParsedTurn,
+  SessionKind,
+  SessionMeta,
+  SessionSummary,
+  SpawnSubagentOptions,
+  SubagentSummary,
+  WorkItem
+} from '@sovereign/core'
 import type { OpenClawConfig, DeviceIdentity, InternalState } from './types.js'
-import { stripThinkingBlocks } from './thinking.js'
+import { stripThinkingBlocks } from '../shared/thinking.js'
+import { createBackendEmitter } from '../shared/event-emitter.js'
 import { parseTurns } from './parse-turns.js'
-import { getSessionFilePath, readRecentMessages, getAllSessionFiles, readAllMessages } from './session-reader.js'
+import {
+  defaultOpenClawPaths,
+  type OpenClawPaths,
+  getSessionFilePath as openClawGetSessionFile,
+  getAllSessionFiles as openClawGetAllSessionFiles,
+  readRecentMessages as openClawReadRecent,
+  readAllMessages as openClawReadAll
+} from './session-reader.js'
+import { restartOpenClawGateway } from './restart-service.js'
+import { createOpenClawCronBridge, type OpenClawCronBridge } from './cron-bridge.js'
 import WebSocket from 'ws'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -14,22 +38,7 @@ const DEFAULT_INITIAL_DELAY = 1000
 const DEFAULT_MAX_DELAY = 30000
 const REQUEST_TIMEOUT = 30000
 
-function createEventEmitter() {
-  const listeners = new Map<string, Set<(data: any) => void>>()
-
-  return {
-    on<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void) {
-      if (!listeners.has(event)) listeners.set(event, new Set())
-      listeners.get(event)!.add(handler)
-    },
-    off<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void) {
-      listeners.get(event)?.delete(handler)
-    },
-    emit<K extends keyof AgentBackendEvents>(event: K, data: AgentBackendEvents[K]) {
-      listeners.get(event)?.forEach((fn) => fn(data))
-    }
-  }
-}
+const KIND: AgentBackendKind = 'openclaw'
 
 function loadOrCreateIdentity(keyPath: string): DeviceIdentity {
   if (existsSync(keyPath)) {
@@ -78,29 +87,28 @@ function calcReconnectDelay(attempt: number, config: OpenClawConfig): number {
   return delay
 }
 
-export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
-  getDeviceInfo(): {
-    deviceId: string
-    publicKey: string
-    connectionStatus: string
-    gatewayUrl: string
-    reconnectAttempt: number
-  }
+function classifySessionKey(key: string): SessionKind {
+  if (key === 'agent:main:main' || key.endsWith(':main')) return 'main'
+  if (key.includes(':thread:')) return 'thread'
+  if (key.includes(':cron:')) return 'cron'
+  if (key.includes(':subagent:')) return 'subagent'
+  if (key.includes(':event-agent:')) return 'event-agent'
+  return 'unknown'
+}
+
+export interface OpenClawBackend extends AgentBackend {
+  /** OpenClaw-only: gateway sessions list (used internally and by chat SSE for status fallback). */
   listGatewaySessions(): Promise<
-    Array<{
-      key: string
-      label?: string
-      kind?: string
-      lastActivity?: number
-      agentStatus?: string
-    }>
+    Array<{ key: string; label?: string; kind?: string; lastActivity?: number; agentStatus?: string }>
   >
-  listCronJobs(includeDisabled?: boolean): Promise<any[]>
-  getCronRuns(jobId?: string): Promise<any[]>
-  updateCronJob(id: string, patch: Record<string, unknown>): Promise<any>
-  removeCronJob(id: string): Promise<void>
-} {
-  const emitter = createEventEmitter()
+  /** Bridge that wraps gateway cron RPC for use by Sovereign's CronService. */
+  cronBridge: OpenClawCronBridge
+  /** OpenClaw filesystem path resolver — exposed so the OpenClaw-aware routes can use it. */
+  paths: OpenClawPaths
+}
+
+export function createOpenClawBackend(config: OpenClawConfig): OpenClawBackend {
+  const emitter = createBackendEmitter(KIND)
 
   const state: InternalState = {
     connectionStatus: 'disconnected',
@@ -114,6 +122,14 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
   }
 
   let currentConfig = { ...config }
+  const paths: OpenClawPaths = {
+    ...defaultOpenClawPaths(),
+    ...(currentConfig.sessionsJsonPath
+      ? { sessionsJsonPath: currentConfig.sessionsJsonPath, sessionsDir: dirname(currentConfig.sessionsJsonPath) }
+      : {}),
+    ...(currentConfig.sessionsDir ? { sessionsDir: currentConfig.sessionsDir } : {}),
+    ...(currentConfig.openClawConfigPath ? { openClawConfigPath: currentConfig.openClawConfigPath } : {})
+  }
 
   type ReadinessGate = {
     ready: boolean
@@ -135,11 +151,8 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
 
   let handshakeReady = createReadinessGate()
 
-  // Pending RPC requests awaiting response
   const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 
-  // ── History cache: keyed by sessionKey, invalidated by file mtime+size ──
-  // Capped to 50 entries to prevent unbounded growth
   const historyCache = new Map<string, { turns: ParsedTurn[]; hasMore: boolean; mtime: number; size: number }>()
   const HISTORY_CACHE_MAX = 50
   let msgId = 0
@@ -164,7 +177,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     emitter.emit('backend.status', { status, reason, errorType })
   }
 
-  /** Send a JSON-RPC style request to the gateway and return a promise for the response. */
   async function request(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (method !== 'connect' && !handshakeReady.ready) {
       await handshakeReady.promise
@@ -194,7 +206,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       return
     }
 
-    // Handle RPC responses — match to pending requests
     if (msg.type === 'res') {
       const p = pending.get(msg.id)
       if (p) {
@@ -208,7 +219,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       return
     }
 
-    // Handle events from the gateway
     if (msg.type === 'event') {
       handleEvent(msg.event, msg.payload)
       return
@@ -230,20 +240,15 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'health': {
-        // Health check event — no action needed
         break
       }
     }
   }
 
-  // Track accumulated streaming text per session to compute true deltas
   const lastStreamLengths = new Map<string, number>()
-
-  // Track seen tool call IDs to emit only new ones
   const seenToolCallIds = new Map<string, Set<string>>()
   const seenToolResultIds = new Map<string, Set<string>>()
 
-  /** Extract tool_use/toolCall blocks from ContentBlock array */
   function extractToolCalls(message: unknown): Array<{ id: string; name: string; input: any }> {
     if (!Array.isArray(message)) {
       if (message && typeof message === 'object' && 'content' in (message as any)) {
@@ -256,13 +261,11 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       .map((b: any) => ({ id: b.id || b.toolCallId || '', name: b.name || '', input: b.input ?? b.arguments ?? {} }))
   }
 
-  /** Extract tool_result/toolResult blocks from ContentBlock array */
   function extractToolResults(message: unknown): Array<{ toolCallId: string; name?: string; content: any }> {
     if (!Array.isArray(message)) {
       if (message && typeof message === 'object' && 'content' in (message as any)) {
         return extractToolResults((message as any).content)
       }
-      // Check for role=toolResult messages (OpenClaw JSONL format)
       if (message && typeof message === 'object') {
         const msg = message as any
         if (msg.role === 'toolResult') {
@@ -280,7 +283,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       }))
   }
 
-  /** Extract thinking blocks from ContentBlock array */
   function extractThinkingBlocks(message: unknown): string[] {
     if (!Array.isArray(message)) {
       if (message && typeof message === 'object' && 'content' in (message as any)) {
@@ -296,12 +298,10 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
 
   function handleChatEvent(sessionKey: string, ev: any) {
     if (ev.state === 'delta') {
-      // Ensure agent is marked as working when we receive deltas
       if (state.agentStatus !== 'working') {
         state.agentStatus = 'working'
         emitter.emit('chat.status', { sessionKey, status: 'working' })
       }
-      // Gateway delta contains full accumulated text — compute the true delta
       const text = extractText(ev.message)
       const cleaned = text
         ? stripThinkingBlocks(text)
@@ -315,14 +315,12 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         emitter.emit('chat.stream', { sessionKey, text: delta })
       }
 
-      // Extract tool calls from content blocks (incremental — only emit new ones)
       const toolCalls = extractToolCalls(ev.message)
       if (!seenToolCallIds.has(sessionKey)) seenToolCallIds.set(sessionKey, new Set())
       const seen = seenToolCallIds.get(sessionKey)!
       for (const tc of toolCalls) {
         if (tc.id && !seen.has(tc.id)) {
           seen.add(tc.id)
-          // Flush thinking before tool call
           const accum = thinkingAccum.get(sessionKey)
           if (accum) {
             emitter.emit('chat.work', {
@@ -345,7 +343,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         }
       }
 
-      // Extract tool results from content blocks
       const toolResults = extractToolResults(ev.message)
       if (!seenToolResultIds.has(sessionKey)) seenToolResultIds.set(sessionKey, new Set())
       const seenResults = seenToolResultIds.get(sessionKey)!
@@ -353,7 +350,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         if (tr.toolCallId && !seenResults.has(tr.toolCallId)) {
           seenResults.add(tr.toolCallId)
           const outputStr = contentToOutputStr(tr.content)
-          // Find the tool name from matching call
           const matchedCall = toolCalls.find((tc) => tc.id === tr.toolCallId)
           emitter.emit('chat.work', {
             sessionKey,
@@ -368,7 +364,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         }
       }
 
-      // Extract thinking blocks
       const thinkingBlocks = extractThinkingBlocks(ev.message)
       for (const tb of thinkingBlocks) {
         const prev = thinkingAccum.get(sessionKey) ?? ''
@@ -381,7 +376,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       seenToolCallIds.delete(sessionKey)
       seenToolResultIds.delete(sessionKey)
 
-      // Flush any remaining thinking
       const accum = thinkingAccum.get(sessionKey)
       if (accum) {
         emitter.emit('chat.work', {
@@ -391,15 +385,12 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         thinkingAccum.delete(sessionKey)
       }
 
-      // Completed turn — read the FULL last turn from JSONL history
-      // This includes tool calls which aren't sent through WS events
-      const filePath = getSessionFilePath(sessionKey)
+      const filePath = openClawGetSessionFile(paths, sessionKey)
       if (filePath) {
         try {
-          const { messages } = readRecentMessages(filePath, 20)
+          const { messages } = openClawReadRecent(filePath, 20)
           if (messages.length > 0) {
             const turns = parseTurns(messages)
-            // Find the last assistant turn — it has the complete data with workItems
             const lastAssistant = [...turns].reverse().find((t) => t.role === 'assistant')
             if (lastAssistant) {
               emitter.emit('chat.turn', { sessionKey, turn: lastAssistant })
@@ -408,11 +399,10 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
             }
           }
         } catch {
-          /* fall through to basic emit */
+          /* fall through */
         }
       }
 
-      // Fallback: emit basic turn from the delta text
       const text = extractText(ev.message)
       const cleaned = text ? stripThinkingBlocks(text) : ''
       const turn: ParsedTurn = {
@@ -427,7 +417,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     }
   }
 
-  // Accumulate thinking deltas per session — emit as single combined block
   const thinkingAccum = new Map<string, string>()
 
   function handleAgentEvent(sessionKey: string, ev: any) {
@@ -438,14 +427,13 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       case 'lifecycle': {
         if (phase === 'start') {
           state.agentStatus = 'working'
-          thinkingAccum.delete(sessionKey) // reset on new turn
+          thinkingAccum.delete(sessionKey)
           emitter.emit('chat.status', { sessionKey, status: 'working' })
         } else if (phase === 'end' || phase === 'error') {
           if (phase === 'error') {
             const reason = data.error || data.reason || data.stopReason || ''
             emitter.emit('chat.error', { sessionKey, error: reason || 'Agent error', retryAfterMs: data.retryAfterMs })
           }
-          // Flush any remaining thinking
           const accum = thinkingAccum.get(sessionKey)
           if (accum) {
             emitter.emit('chat.work', {
@@ -460,7 +448,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'tool': {
-        // Flush accumulated thinking before tool call
         const accum = thinkingAccum.get(sessionKey)
         if (accum) {
           emitter.emit('chat.work', {
@@ -483,15 +470,12 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'thinking': {
-        // Gateway sends cumulative `text` (full thinking so far) and `delta` (new chunk only)
         const fullText = (data.text as string) || (data.content as string) || ''
         const delta = (data.delta as string) || ''
 
         if (fullText) {
-          // Use cumulative text directly — don't concatenate
           thinkingAccum.set(sessionKey, fullText)
         } else if (delta) {
-          // Only delta provided — append to accumulated
           const prev = thinkingAccum.get(sessionKey) ?? ''
           thinkingAccum.set(sessionKey, prev + delta)
         }
@@ -510,8 +494,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         break
       }
       case 'assistant': {
-        // Text streaming — handled by handleChatEvent via chat events
-        // Also ensure agent is marked as working (in case we missed lifecycle.start)
         if (state.agentStatus !== 'working') {
           state.agentStatus = 'working'
           emitter.emit('chat.status', { sessionKey, status: 'working' })
@@ -521,7 +503,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     }
   }
 
-  /** Convert content (string, array of blocks) to display string, preserving images as HTML */
   function contentToOutputStr(content: unknown): string {
     if (typeof content === 'string') return content
     if (Array.isArray(content)) {
@@ -540,7 +521,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     return content ? JSON.stringify(content) : ''
   }
 
-  /** Extract text content from a gateway ChatMessage (ContentBlock[] or string). */
   function extractText(message: unknown): string | null {
     if (!message) return null
     if (typeof message === 'string') return message
@@ -586,7 +566,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
             return
           }
 
-          // Handle connect.challenge event — sign and send connect request
           if (msg.type === 'event' && msg.event === 'connect.challenge') {
             const nonce = msg.payload?.nonce
             if (nonce) connectNonce = nonce
@@ -611,7 +590,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
               const signature = signPayload(id, payload)
 
               const reqId = 'c' + Date.now()
-              // Register this as a pending request so the normal res handler picks it up
               pending.set(reqId, {
                 resolve: (result) => {
                   if (settled) return
@@ -676,16 +654,11 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
             return
           }
 
-          // All other messages go through unified handler (res + event)
           handleMessage(raw)
-
-          // Check if connect settled via the res handler
-          // (The pending map resolve/reject for the connect reqId handles this)
         })
 
         ws.on('close', () => {
           if (state.destroyed) return
-          // Reject all pending requests
           pending.forEach((p) => p.reject(new Error('Connection closed')))
           pending.clear()
           if (!settled) {
@@ -717,7 +690,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     })
   }
 
-  // Device token persistence
   function getDeviceTokenPath(): string {
     return join(currentConfig.dataDir ?? '.data', 'agent-backend', 'device-token.json')
   }
@@ -774,7 +746,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
       clearTimeout(state.reconnectTimer)
       state.reconnectTimer = null
     }
-    // Reject all pending requests
     pending.forEach((p) => p.reject(new Error('Backend disconnected')))
     pending.clear()
     if (state.ws) {
@@ -786,7 +757,6 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     }
   }
 
-  // Hot-reload support
   if (config.onConfigChange) {
     config.onConfigChange((newConfig) => {
       const urlChanged = newConfig.gatewayUrl && newConfig.gatewayUrl !== currentConfig.gatewayUrl
@@ -799,7 +769,226 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     })
   }
 
-  const backend = {
+  // ── Models cache for listAvailableModels ──
+  let modelsCache: { models: string[]; defaultModel: string | null; ts: number } | null = null
+  const MODELS_CACHE_TTL = 30_000
+
+  async function listAvailableModels(): Promise<{ models: string[]; defaultModel: string | null }> {
+    if (modelsCache && Date.now() - modelsCache.ts < MODELS_CACHE_TTL) {
+      return { models: modelsCache.models, defaultModel: modelsCache.defaultModel }
+    }
+    try {
+      const raw = readFileSync(paths.openClawConfigPath, 'utf-8')
+      const config = JSON.parse(raw)
+      const modelsObj = config?.agents?.defaults?.models ?? {}
+      const models = Object.keys(modelsObj)
+      const defaultModel = config?.agents?.defaults?.model?.primary ?? null
+      modelsCache = { models, defaultModel, ts: Date.now() }
+      return { models, defaultModel }
+    } catch {
+      return { models: [], defaultModel: null }
+    }
+  }
+
+  function readSessionsJson(): Record<string, any> {
+    try {
+      return JSON.parse(readFileSync(paths.sessionsJsonPath, 'utf-8'))
+    } catch {
+      return {}
+    }
+  }
+
+  async function listSessions(filter?: { kind?: SessionKind; parentKey?: string }): Promise<SessionSummary[]> {
+    const data = readSessionsJson()
+    const out: SessionSummary[] = []
+    for (const [fullKey, meta] of Object.entries(data) as [string, any][]) {
+      const kind = classifySessionKey(fullKey)
+      if (filter?.kind && filter.kind !== kind) continue
+      const parentKey = meta?.spawnedBy as string | undefined
+      if (filter?.parentKey && parentKey !== filter.parentKey) continue
+      out.push({
+        key: fullKey,
+        backendSessionId: meta?.sessionId,
+        kind,
+        label: meta?.label,
+        lastActivity: meta?.updatedAt ?? meta?.createdAt,
+        agentStatus: meta?.status,
+        parentKey,
+        task: meta?.task
+      })
+    }
+    return out
+  }
+
+  async function listSubagents(parentKey?: string): Promise<SubagentSummary[]> {
+    const data = readSessionsJson()
+    const out: SubagentSummary[] = []
+    for (const [fullKey, meta] of Object.entries(data) as [string, any][]) {
+      if (!fullKey.includes(':subagent:')) continue
+      if (!meta?.spawnedBy) continue
+      if (parentKey && meta.spawnedBy !== parentKey) continue
+      out.push({
+        sessionKey: fullKey,
+        label: meta.label ?? fullKey.split(':subagent:')[1]?.slice(0, 8) ?? 'Subagent',
+        status: meta.status ?? 'idle',
+        lastActivity: meta.updatedAt,
+        task: meta.task ?? meta.label
+      })
+    }
+    out.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
+    return out
+  }
+
+  async function getSessionMeta(sessionKey: string): Promise<SessionMeta | null> {
+    const data = readSessionsJson()
+    const meta = data[sessionKey]
+    if (!meta) return null
+    return {
+      sessionKey,
+      model: meta.model ?? null,
+      modelProvider: meta.modelProvider ?? null,
+      contextTokens: meta.contextTokens ?? null,
+      totalTokens: meta.totalTokens ?? 0,
+      inputTokens: meta.inputTokens ?? 0,
+      outputTokens: meta.outputTokens ?? 0,
+      compactionCount: meta.compactionCount ?? 0,
+      thinkingLevel: meta.thinkingLevel ?? null,
+      task: meta.task ?? null,
+      label: meta.label ?? null,
+      parentKey: meta.spawnedBy ?? null
+    }
+  }
+
+  async function setSessionModel(sessionKey: string, provider: string, model: string): Promise<void> {
+    const data = readSessionsJson()
+    if (!data[sessionKey]) return
+    data[sessionKey].modelProvider = provider
+    data[sessionKey].model = model
+    const tmp = paths.sessionsJsonPath + '.tmp'
+    writeFileSync(tmp, JSON.stringify(data, null, 2))
+    const fs = await import('node:fs')
+    fs.renameSync(tmp, paths.sessionsJsonPath)
+  }
+
+  async function getContextBudget(_sessionKey: string): Promise<ContextBudget | null> {
+    const gatewayUrl = currentConfig.gatewayUrl
+    const token = currentConfig.gatewayToken
+    const httpUrl = gatewayUrl.replace(/^ws/, 'http').replace(/\/ws$/, '/api/context')
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5000)
+      const headers: Record<string, string> = { Accept: 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      const res = await fetch(httpUrl, { headers, signal: controller.signal })
+      clearTimeout(timeout)
+      if (res.ok) {
+        const json = (await res.json()) as any
+        return {
+          source: 'gateway',
+          generatedAt: Date.now(),
+          ...json.report,
+          session: json.session,
+          fileContents: json.fileContents,
+          disabledTools: json.disabledTools,
+          disabledSkills: json.disabledSkills
+        } as ContextBudget
+      }
+    } catch {
+      /* gateway unavailable */
+    }
+    return null
+  }
+
+  function getDeviceInfo(): DeviceInfo {
+    const id = getIdentity()
+    const deviceId = deriveDeviceId(id.publicKey)
+    return {
+      backendKind: KIND,
+      deviceId,
+      publicKey: id.publicKey,
+      connectionStatus: state.connectionStatus,
+      gatewayUrl: currentConfig.gatewayUrl,
+      reconnectAttempt: state.reconnectAttempt
+    }
+  }
+
+  async function spawnSubagent(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string> {
+    const result = (await request('subagent.spawn', {
+      parentSessionKey,
+      task: opts.task,
+      label: opts.label,
+      model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
+      toolAllowlist: opts.toolAllowlist,
+      timeoutMs: opts.timeoutMs
+    }).catch(() => null)) as { sessionKey?: string } | null
+    if (!result?.sessionKey) throw new Error('OpenClaw: subagent spawn not supported via RPC')
+    return result.sessionKey
+  }
+
+  const capabilities = (): BackendCapabilities => ({
+    subagents: 'native',
+    cron: 'backend-managed',
+    steering: false,
+    followUp: false,
+    compaction: 'automatic-only',
+    toolStreaming: true,
+    deviceIdentity: true,
+    multiProvider: true
+  })
+
+  const cronBridge = createOpenClawCronBridge({
+    async list(includeDisabled = false) {
+      try {
+        const result = (await request('cron.list', { includeDisabled })) as { jobs?: any[] }
+        return (result?.jobs ?? []) as any
+      } catch (err: any) {
+        console.error('[openclaw] cron.list failed:', err.message)
+        return []
+      }
+    },
+    async runs(jobId?: string) {
+      try {
+        const result = (await request('cron.runs', {
+          scope: jobId ? 'job' : 'all',
+          id: jobId,
+          limit: 20
+        })) as { entries?: any[] }
+        return (result?.entries ?? []) as any
+      } catch (err: any) {
+        console.error('[openclaw] cron.runs failed:', err.message)
+        return []
+      }
+    },
+    async update(id: string, patch: Record<string, unknown>) {
+      return await request('cron.update', { jobId: id, patch })
+    },
+    async remove(id: string) {
+      await request('cron.remove', { jobId: id })
+    }
+  })
+
+  async function listGatewaySessions() {
+    try {
+      const result = (await request('sessions.list', { limit: 200 })) as { sessions?: any[] }
+      return (result?.sessions ?? []).map((s: any) => ({
+        key: s.key ?? s.sessionKey ?? '',
+        label: s.label,
+        kind: s.kind,
+        lastActivity: s.lastActivity ?? s.updatedAt,
+        agentStatus: s.agentStatus ?? s.status
+      }))
+    } catch (err: any) {
+      console.error('[openclaw] sessions.list failed:', err.message)
+      return []
+    }
+  }
+
+  const backend: OpenClawBackend = {
+    kind: KIND,
+    paths,
+    cronBridge,
+
     async connect() {
       state.destroyed = false
       await connectWs()
@@ -844,39 +1033,34 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
     },
 
     async getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }> {
-      const filePath = getSessionFilePath(sessionKey)
+      const filePath = openClawGetSessionFile(paths, sessionKey)
       if (filePath) {
         try {
           const stat = statSync(filePath)
           const cached = historyCache.get(sessionKey)
 
-          // Return cached if file hasn't changed
           if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
             return { turns: cached.turns, hasMore: cached.hasMore }
           }
 
-          const { messages, hasMore } = readRecentMessages(filePath, 2000)
+          const { messages, hasMore } = openClawReadRecent(filePath, 2000)
           if (messages.length > 0) {
             const turns = parseTurns(messages)
 
-            // Check for older session files (compacted/previous sessions for same thread)
             let effectiveHasMore = hasMore
             if (!hasMore) {
-              const allFiles = getAllSessionFiles(sessionKey)
+              const allFiles = openClawGetAllSessionFiles(paths, sessionKey)
               if (allFiles.length > 1 && allFiles[allFiles.length - 1] === filePath) {
-                // There are older session files — more history exists
                 effectiveHasMore = true
               }
             }
 
-            // Cache the result
             historyCache.set(sessionKey, {
               turns,
               hasMore: effectiveHasMore,
               mtime: stat.mtimeMs,
               size: stat.size
             })
-            // Evict oldest entries if cache is too large
             if (historyCache.size > HISTORY_CACHE_MAX) {
               const firstKey = historyCache.keys().next().value
               if (firstKey) historyCache.delete(firstKey)
@@ -889,31 +1073,25 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         }
       }
 
-      // Fallback: gateway RPC (slow, 200-600ms)
-      const result = (await request('chat.history', { sessionKey, limit: 200 })) as {
-        messages?: any[]
-      }
+      const result = (await request('chat.history', { sessionKey, limit: 200 })) as { messages?: any[] }
       const raw = result?.messages ?? []
       return { turns: parseTurns(raw), hasMore: false }
     },
 
     async getFullHistory(sessionKey: string): Promise<ParsedTurn[]> {
-      // Read ALL messages from current + older session files
-      const allFiles = getAllSessionFiles(sessionKey)
-      const currentFile = getSessionFilePath(sessionKey)
+      const allFiles = openClawGetAllSessionFiles(paths, sessionKey)
+      const currentFile = openClawGetSessionFile(paths, sessionKey)
 
       let allMessages: any[] = []
 
-      // Read older session files first (chronological order)
       for (const f of allFiles) {
-        if (f === currentFile) continue // skip current, read it separately with full limit
-        allMessages.push(...readAllMessages(f))
+        if (f === currentFile) continue
+        allMessages.push(...openClawReadAll(f))
       }
 
-      // Read current session file
       if (currentFile) {
         try {
-          const { messages } = readRecentMessages(currentFile, 100000)
+          const { messages } = openClawReadRecent(currentFile, 100000)
           allMessages.push(...messages)
         } catch {
           /* ignore */
@@ -924,86 +1102,27 @@ export function createOpenClawBackend(config: OpenClawConfig): AgentBackend & {
         return parseTurns(allMessages)
       }
 
-      // Fallback: gateway RPC
-      const result = (await request('chat.history', { sessionKey, limit: 10000 })) as {
-        messages?: any[]
-      }
+      const result = (await request('chat.history', { sessionKey, limit: 10000 })) as { messages?: any[] }
       return parseTurns(result?.messages ?? [])
     },
 
     on: emitter.on,
     off: emitter.off,
 
-    getDeviceInfo() {
-      const id = getIdentity()
-      const deviceId = deriveDeviceId(id.publicKey)
-      return {
-        deviceId,
-        publicKey: id.publicKey,
-        connectionStatus: state.connectionStatus,
-        gatewayUrl: config.gatewayUrl,
-        reconnectAttempt: state.reconnectAttempt
-      }
+    capabilities,
+    listSessions,
+    listSubagents,
+    getSessionMeta,
+    setSessionModel,
+    listAvailableModels,
+    getContextBudget,
+    spawnSubagent,
+    restart: restartOpenClawGateway,
+    getDeviceInfo,
+    getSessionFilePath(sessionKey: string) {
+      return openClawGetSessionFile(paths, sessionKey)
     },
-
-    async listGatewaySessions(): Promise<
-      Array<{
-        key: string
-        label?: string
-        kind?: string
-        lastActivity?: number
-        agentStatus?: string
-      }>
-    > {
-      try {
-        const result = (await request('sessions.list', { limit: 200 })) as {
-          sessions?: any[]
-        }
-        return (result?.sessions ?? []).map((s: any) => ({
-          key: s.key ?? s.sessionKey ?? '',
-          label: s.label,
-          kind: s.kind,
-          lastActivity: s.lastActivity ?? s.updatedAt,
-          agentStatus: s.agentStatus ?? s.status
-        }))
-      } catch (err: any) {
-        console.error('[gateway] sessions.list failed:', err.message)
-        return []
-      }
-    },
-
-    async listCronJobs(includeDisabled = false): Promise<any[]> {
-      try {
-        const result = (await request('cron.list', { includeDisabled })) as { jobs?: any[] }
-        return result?.jobs ?? []
-      } catch (err: any) {
-        console.error('[gateway] cron.list failed:', err.message)
-        return []
-      }
-    },
-
-    async updateCronJob(id: string, patch: Record<string, unknown>): Promise<any> {
-      const result = await request('cron.update', { jobId: id, patch })
-      return result
-    },
-
-    async removeCronJob(id: string): Promise<void> {
-      await request('cron.remove', { jobId: id })
-    },
-
-    async getCronRuns(jobId?: string): Promise<any[]> {
-      try {
-        const result = (await request('cron.runs', {
-          scope: jobId ? 'job' : 'all',
-          id: jobId,
-          limit: 20
-        })) as { entries?: any[] }
-        return result?.entries ?? []
-      } catch (err: any) {
-        console.error('[gateway] cron.runs failed:', err.message)
-        return []
-      }
-    }
+    listGatewaySessions
   }
 
   return backend

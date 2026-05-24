@@ -7,7 +7,6 @@ import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents } from '@
 import type { WsHandler } from '../ws/handler.js'
 import type { ThreadManager } from '../threads/types.js'
 import { deriveSessionKey } from './derive-session-key.js'
-import { getSessionFilePath } from '../agent-backend/session-reader.js'
 import type { WorkItem } from '@sovereign/core'
 
 /** Chat-level event emitter — all chat events (from backend + JSONL polling) flow through here */
@@ -214,7 +213,10 @@ export function createChatModule(
   function startJsonlPoll(threadKey: string, sessionKey: string): void {
     if (pollTimers.has(threadKey)) return // already polling
 
-    const filePath = getSessionFilePath(sessionKey)
+    // Resolve the JSONL file path via the backend. Backends that don't expose
+    // an on-disk session file skip live polling (they're expected to stream
+    // tool calls through the chat.work event).
+    const filePath = backend.getSessionFilePath?.(sessionKey) ?? null
     if (!filePath) return
 
     // Start from current file size (only read NEW entries)
@@ -268,15 +270,6 @@ export function createChatModule(
                 const id = block.id || ''
                 if (id && seen.has(id)) continue
                 seen.add(id)
-
-                // sessions_yield signals agent has yielded (waiting for subagent) — don't show as work item
-                if (block.name === 'sessions_yield') {
-                  if (wsHandler) {
-                    wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadKey, status: 'idle' })
-                  }
-                  chatEvents.emit('chat.status', { threadKey, status: 'idle' })
-                  continue
-                }
 
                 const input = block.arguments ?? block.input ?? {}
                 const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
@@ -358,6 +351,20 @@ export function createChatModule(
     pollFilePositions.delete(threadKey)
     pollSeenToolIds.delete(threadKey)
   }
+
+  // Subagent abstract events: when the backend reports its parent has
+  // spawned a child subagent, the parent is conceptually idle (waiting for
+  // the child). Translate that into a chat.status event for the parent's
+  // thread so the UI clears its "working" indicator.
+  backend.on('subagent.spawned', (data) => {
+    const parentKey = data.parentKey
+    const threadKey = parentKey ? sessionToThread.get(parentKey) : undefined
+    if (!threadKey) return
+    if (wsHandler) {
+      wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadKey, status: 'idle' })
+    }
+    chatEvents.emit('chat.status', { threadKey, status: 'idle' })
+  })
 
   // Also proxy backend.status
   backend.on('backend.status', (data) => {

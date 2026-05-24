@@ -4,7 +4,7 @@ import { sanitizeContent, isCompactionMessage } from './sanitize.js'
 describe('sanitizeContent', () => {
   describe('assistant messages', () => {
     it('strips internal context blocks', () => {
-      const input = `Here is my response.\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nOpenClaw runtime context (internal): stuff\n[Internal task completion event]\nsource: subagent\nsession_key: agent:main:subagent:xxx\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`
+      const input = `Here is my response.\n\n<<<BEGIN_RUNTIME_INTERNAL_CONTEXT>>>\nOpenClaw runtime context (internal): stuff\n[Internal task completion event]\nsource: subagent\nsession_key: agent:main:subagent:xxx\n<<<END_RUNTIME_INTERNAL_CONTEXT>>>`
       expect(sanitizeContent('assistant', input)).toBe('Here is my response.')
     })
 
@@ -14,7 +14,7 @@ describe('sanitizeContent', () => {
     })
 
     it('strips tool call summary lines', () => {
-      const input = `▶ ✓ exec (4), process, sessions_spawn, sessions_yield\n\nHere is the actual response.`
+      const input = `▶ ✓ exec (4), process, spawn_subagent, yield_to_parent\n\nHere is the actual response.`
       expect(sanitizeContent('assistant', input)).toBe('Here is the actual response.')
     })
 
@@ -24,7 +24,7 @@ describe('sanitizeContent', () => {
     })
 
     it('handles all patterns combined', () => {
-      const input = `▶ ✓ exec (4), process\n\nHere is the response.\nSystem (untrusted): [2026-04-13 14:08:02 GMT+10] Exec failed (neat-wil, code 0) :: output\nMore content.\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nstuff\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`
+      const input = `▶ ✓ exec (4), process\n\nHere is the response.\nSystem (untrusted): [2026-04-13 14:08:02 GMT+10] Exec failed (neat-wil, code 0) :: output\nMore content.\n\n<<<BEGIN_RUNTIME_INTERNAL_CONTEXT>>>\nstuff\n<<<END_RUNTIME_INTERNAL_CONTEXT>>>`
       expect(sanitizeContent('assistant', input)).toBe('Here is the response.\n\nMore content.')
     })
 

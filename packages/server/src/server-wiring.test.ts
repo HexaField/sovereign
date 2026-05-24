@@ -17,8 +17,8 @@ function createMockBus(): EventBus {
 
 describe('Server index.ts wiring — Phase 6 modules', () => {
   describe('agent backend initialization', () => {
-    it('creates OpenClaw backend with config from agentBackend.openclaw.gatewayUrl', async () => {
-      const { createOpenClawBackend } = await import('./agent-backend/openclaw.js')
+    it('creates OpenClaw backend with config from the openclaw gateway URL', async () => {
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
       const backend = createOpenClawBackend({
         gatewayUrl: 'ws://localhost:3456/ws',
         dataDir: '/tmp/test-wiring'
@@ -29,32 +29,56 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
     })
 
     it('calls backend.connect() during server startup', async () => {
-      const { createOpenClawBackend } = await import('./agent-backend/openclaw.js')
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
       const backend = createOpenClawBackend({
         gatewayUrl: 'ws://localhost:1/ws',
         dataDir: '/tmp/test-wiring'
       })
-      // Verify connect exists and is callable (actual connection would fail without server)
       expect(typeof backend.connect).toBe('function')
     })
 
     it('emits backend.status events through to connected clients', async () => {
-      const { createOpenClawBackend } = await import('./agent-backend/openclaw.js')
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
       const backend = createOpenClawBackend({
         gatewayUrl: 'ws://localhost:1/ws',
         dataDir: '/tmp/test-wiring'
       })
       const statuses: string[] = []
       backend.on('backend.status', (d) => statuses.push(d.status))
-      // Backend emits status events that can be forwarded to clients
       expect(backend.on).toBeInstanceOf(Function)
+    })
+  })
+
+  describe('routing backend', () => {
+    it('exposes createBackend and createSessionsRegistry from agent-backend/index.ts', async () => {
+      const mod = await import('./agent-backend/index.js')
+      expect(typeof mod.createBackend).toBe('function')
+      expect(typeof mod.createSessionsRegistry).toBe('function')
+    })
+
+    it('routes a session to the OpenClaw backend when only OpenClaw is enabled', async () => {
+      const { createBackend, createSessionsRegistry } = await import('./agent-backend/index.js')
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
+      const tmp = await import('node:fs/promises').then((m) => m.mkdtemp((process.env.TMPDIR ?? '/tmp/') + 'sov-wire-'))
+      const registry = createSessionsRegistry(tmp)
+      const routing = createBackend({
+        enabled: ['openclaw'],
+        default: 'openclaw',
+        registry,
+        factories: {
+          openclaw: () => createOpenClawBackend({ gatewayUrl: 'ws://localhost:1/ws', dataDir: tmp })
+        }
+      })
+      expect(routing.default().kind).toBe('openclaw')
+      expect(routing.forSession('agent:main:thread:x').kind).toBe('openclaw')
+      await routing.disconnectAll()
     })
   })
 
   describe('chat module wiring', () => {
     it('creates chat module with bus, backend, and thread manager', async () => {
       const { createChatModule } = await import('./chat/chat.js')
-      const { createOpenClawBackend } = await import('./agent-backend/openclaw.js')
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
       const { createThreadManager } = await import('./threads/threads.js')
       const bus = createMockBus()
       const backend = createOpenClawBackend({ gatewayUrl: 'ws://localhost:1/ws', dataDir: '/tmp/test-wiring' })
@@ -75,7 +99,7 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
 
     it('includes chat module in status aggregator', async () => {
       const { createChatModule } = await import('./chat/chat.js')
-      const { createOpenClawBackend } = await import('./agent-backend/openclaw.js')
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
       const { createThreadManager } = await import('./threads/threads.js')
       const bus = createMockBus()
       const backend = createOpenClawBackend({ gatewayUrl: 'ws://localhost:1/ws', dataDir: '/tmp/test-wiring' })
@@ -111,7 +135,6 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
       const { createThreadManager } = await import('./threads/threads.js')
       const bus = createMockBus()
       const tm = createThreadManager(bus, '/tmp/test-wiring-threads')
-      // Thread manager doesn't have a status() method directly, but can be wrapped
       const thread = tm.create({ label: 'test' })
       expect(thread.key).toBeTruthy()
     })
@@ -141,8 +164,8 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
   })
 
   describe('config hot-reload', () => {
-    it('updates backend gateway URL when agentBackend.openclaw.gatewayUrl changes', async () => {
-      const { createOpenClawBackend } = await import('./agent-backend/openclaw.js')
+    it('updates backend gateway URL when the openclaw gateway URL config changes', async () => {
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
       let configCb: ((c: any) => void) | null = null
       createOpenClawBackend({
         gatewayUrl: 'ws://localhost:1/ws',
@@ -152,7 +175,6 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
         }
       })
       expect(configCb).toBeInstanceOf(Function)
-      // The callback can be called with a new URL to trigger reconnection
     })
 
     it('updates voice URLs when voice.transcribeUrl or voice.ttsUrl change', async () => {
@@ -160,33 +182,30 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
       const bus = createMockBus()
       const voice = createVoiceModule(bus, { transcribeUrl: 'http://old/t' })
       voice.updateConfig({ transcribeUrl: 'http://new/t' })
-      // Module accepts config updates
-      expect(voice.status().status).toBe('degraded') // no ttsUrl
+      expect(voice.status().status).toBe('degraded')
     })
   })
 
   describe('graceful shutdown', () => {
     it('disconnects agent backend on server shutdown', async () => {
-      const { createOpenClawBackend } = await import('./agent-backend/openclaw.js')
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
       const backend = createOpenClawBackend({
         gatewayUrl: 'ws://localhost:1/ws',
         dataDir: '/tmp/test-wiring'
       })
-      // disconnect() is the shutdown method
       await backend.disconnect()
       expect(backend.status()).toBe('disconnected')
     })
 
     it('cleans up all Phase 6 module resources on shutdown', async () => {
-      const { createOpenClawBackend } = await import('./agent-backend/openclaw.js')
+      const { createOpenClawBackend } = await import('./agent-backend/openclaw/openclaw.js')
       const { createVoiceModule } = await import('./voice/voice.js')
       const bus = createMockBus()
       const b = createOpenClawBackend({ gatewayUrl: 'ws://localhost:1/ws', dataDir: '/tmp/test-wiring' })
       const voice = createVoiceModule(bus, {})
-      // All modules can be cleaned up without error
       await b.disconnect()
       expect(b.status()).toBe('disconnected')
-      expect(voice.status().status).toBe('error') // no URLs configured
+      expect(voice.status().status).toBe('error')
     })
   })
 })

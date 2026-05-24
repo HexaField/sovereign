@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { createEventBus } from '@sovereign/core'
+import type { AgentBackend, SessionMeta } from '@sovereign/core'
 import { createThreadManager } from './threads.js'
 import { createThreadRoutes } from './routes.js'
 import type { ThreadManager } from './types.js'
@@ -18,56 +19,94 @@ const forwardHandler = {
   forward: () => ({ success: true })
 }
 
+/** In-memory stub of the AgentBackend surface needed by thread routes. */
+function createStubBackend(initial: Record<string, SessionMeta> = {}): AgentBackend {
+  const sessionMetas = new Map<string, SessionMeta>(Object.entries(initial))
+  let availableModels: { models: string[]; defaultModel: string | null } = { models: [], defaultModel: null }
+
+  const noop = () => {}
+  const noopAsync = async () => {}
+
+  const backend: AgentBackend = {
+    kind: 'openclaw',
+    connect: noopAsync,
+    disconnect: noopAsync,
+    status: () => 'connected',
+    sendMessage: noopAsync,
+    abort: noopAsync,
+    switchSession: noopAsync,
+    createSession: async () => 'session-key',
+    getHistory: async () => ({ turns: [], hasMore: false }),
+    getFullHistory: async () => [],
+    on: noop as any,
+    off: noop as any,
+    capabilities: () => ({
+      subagents: 'native',
+      cron: 'backend-managed',
+      steering: false,
+      followUp: false,
+      compaction: 'automatic-only',
+      toolStreaming: true,
+      deviceIdentity: true,
+      multiProvider: true
+    }),
+    listSessions: async () => [],
+    listSubagents: async () => [],
+    getSessionMeta: async (sessionKey: string) => sessionMetas.get(sessionKey) ?? null,
+    setSessionModel: async (sessionKey, provider, model) => {
+      const existing = sessionMetas.get(sessionKey)
+      sessionMetas.set(sessionKey, {
+        ...(existing ?? { sessionKey }),
+        modelProvider: provider,
+        model
+      })
+    },
+    listAvailableModels: async () => availableModels,
+    getContextBudget: async () => null
+  }
+  // expose model-setter helper for tests
+  ;(backend as any).__setAvailableModels = (m: { models: string[]; defaultModel: string | null }) => {
+    availableModels = m
+  }
+  ;(backend as any).__getSessions = () => sessionMetas
+  return backend
+}
+
 describe('Thread Routes — Model Switching', () => {
   let app: ReturnType<typeof express>
   let dataDir: string
   let tm: ThreadManager
-  let sessionsDir: string
-  let sessionsPath: string
+  let backend: AgentBackend
 
   beforeEach(() => {
     dataDir = makeTmpDir()
     const bus = createEventBus(dataDir)
     tm = createThreadManager(bus, dataDir)
 
-    // Create a fake sessions.json in a temp HOME
-    sessionsDir = path.join(dataDir, '.openclaw/agents/main/sessions')
-    fs.mkdirSync(sessionsDir, { recursive: true })
-    sessionsPath = path.join(sessionsDir, 'sessions.json')
-
-    // Override HOME for the duration of tests
-    vi.stubEnv('HOME', dataDir)
-
+    backend = createStubBackend()
     app = express()
     app.use(express.json())
-    app.use(createThreadRoutes(tm, forwardHandler as any))
-  })
-
-  afterEach(() => {
-    vi.unstubAllEnvs()
+    app.use(createThreadRoutes(tm, forwardHandler as any, { backend }))
   })
 
   it('GET /api/models returns available models', async () => {
+    ;(backend as any).__setAvailableModels({ models: ['m1', 'm2'], defaultModel: 'm1' })
     const res = await request(app).get('/api/models')
     expect(res.status).toBe(200)
     expect(res.body).toHaveProperty('models')
     expect(res.body).toHaveProperty('defaultModel')
     expect(Array.isArray(res.body.models)).toBe(true)
+    expect(res.body.models).toEqual(['m1', 'm2'])
   })
 
-  it('PATCH /api/threads/:key/model updates session model', async () => {
-    // Create thread + session data
+  it('PATCH /api/threads/:key/model updates session model via backend', async () => {
     const thread = tm.create({ label: 'test-thread' })
     const sessionKey = `agent:main:thread:${thread.key}`
-    fs.writeFileSync(
-      sessionsPath,
-      JSON.stringify({
-        [sessionKey]: {
-          model: 'gpt-4o',
-          modelProvider: 'github-copilot'
-        }
-      })
-    )
+    ;(backend as any).__getSessions().set(sessionKey, {
+      sessionKey,
+      model: 'gpt-4o',
+      modelProvider: 'github-copilot'
+    })
 
     const res = await request(app)
       .patch(`/api/threads/${encodeURIComponent(thread.key)}/model`)
@@ -76,10 +115,9 @@ describe('Thread Routes — Model Switching', () => {
     expect(res.status).toBe(200)
     expect(res.body.success).toBe(true)
 
-    // Verify sessions.json was updated
-    const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
-    expect(sessions[sessionKey].model).toBe('claude-opus-4.6')
-    expect(sessions[sessionKey].modelProvider).toBe('github-copilot')
+    const updated = (backend as any).__getSessions().get(sessionKey) as SessionMeta
+    expect(updated.model).toBe('claude-opus-4.6')
+    expect(updated.modelProvider).toBe('github-copilot')
   })
 
   it('PATCH /api/threads/:key/model returns 400 without model', async () => {
@@ -97,114 +135,26 @@ describe('Thread Routes — Model Switching', () => {
     expect(res.status).toBe(404)
   })
 
-  describe('session-info is read-only', () => {
-    it('does NOT mutate sessions.json even when stored model is not in configured list', async () => {
+  describe('session-info reports backend metadata verbatim', () => {
+    it('returns the stored model and provider without rewriting', async () => {
       const thread = tm.create({ label: 'drift-test' })
       const sessionKey = `agent:main:thread:${thread.key}`
-
-      // Write session with a model that is not in the configured list
-      fs.writeFileSync(
-        sessionsPath,
-        JSON.stringify({
-          [sessionKey]: {
-            model: 'gpt-5.2-codex',
-            modelProvider: 'openai',
-            totalTokens: 100
-          }
-        })
-      )
-      const beforeRaw = fs.readFileSync(sessionsPath, 'utf-8')
-
-      // Write config with a different default
-      const configDir = path.join(dataDir, '.openclaw')
-      fs.writeFileSync(
-        path.join(configDir, 'openclaw.json'),
-        JSON.stringify({
-          agents: {
-            defaults: {
-              model: { primary: 'github-copilot/claude-opus-4.6' },
-              models: { 'github-copilot/claude-opus-4.6': {}, 'anthropic/claude-sonnet-4': {} }
-            }
-          }
-        })
-      )
+      ;(backend as any).__getSessions().set(sessionKey, {
+        sessionKey,
+        model: 'gpt-5.2-codex',
+        modelProvider: 'openai',
+        totalTokens: 100
+      })
 
       const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.key)}/session-info`)
       expect(res.status).toBe(200)
-      // Response reports the stored values verbatim — no rewrite-to-default
       expect(res.body.model).toBe('gpt-5.2-codex')
       expect(res.body.modelProvider).toBe('openai')
-
-      // sessions.json is unchanged byte-for-byte (OpenClaw owns this file)
-      const afterRaw = fs.readFileSync(sessionsPath, 'utf-8')
-      expect(afterRaw).toBe(beforeRaw)
+      expect(res.body.totalTokens).toBe(100)
     })
 
-    it('preserves configured model without rewriting', async () => {
-      const thread = tm.create({ label: 'configured-test' })
-      const sessionKey = `agent:main:thread:${thread.key}`
-
-      fs.writeFileSync(
-        sessionsPath,
-        JSON.stringify({
-          [sessionKey]: {
-            model: 'claude-opus-4.6',
-            modelProvider: 'github-copilot',
-            totalTokens: 200
-          }
-        })
-      )
-
-      const configDir = path.join(dataDir, '.openclaw')
-      fs.writeFileSync(
-        path.join(configDir, 'openclaw.json'),
-        JSON.stringify({
-          agents: {
-            defaults: {
-              model: { primary: 'github-copilot/claude-opus-4.6' },
-              models: { 'github-copilot/claude-opus-4.6': {} }
-            }
-          }
-        })
-      )
-
-      const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.key)}/session-info`)
-      expect(res.status).toBe(200)
-      expect(res.body.model).toBe('claude-opus-4.6')
-      expect(res.body.modelProvider).toBe('github-copilot')
-    })
-
-    it('returns raw model when config is missing (no crash)', async () => {
-      const thread = tm.create({ label: 'no-config-test' })
-      const sessionKey = `agent:main:thread:${thread.key}`
-
-      fs.writeFileSync(
-        sessionsPath,
-        JSON.stringify({
-          [sessionKey]: {
-            model: 'gpt-5.2-codex',
-            modelProvider: 'openai'
-          }
-        })
-      )
-
-      // No openclaw.json exists — fetchModels returns empty
-      const configPath = path.join(dataDir, '.openclaw', 'openclaw.json')
-      if (fs.existsSync(configPath)) fs.unlinkSync(configPath)
-
-      const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.key)}/session-info`)
-      expect(res.status).toBe(200)
-      // With no config, models list is empty so guard doesn't fire
-      expect(res.body.model).toBe('gpt-5.2-codex')
-      expect(res.body.modelProvider).toBe('openai')
-    })
-
-    it('returns null model fields when sessions data is missing', async () => {
+    it('returns null model fields when no session meta is available', async () => {
       const thread = tm.create({ label: 'no-sessions-test' })
-
-      // No sessions.json
-      if (fs.existsSync(sessionsPath)) fs.unlinkSync(sessionsPath)
-
       const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.key)}/session-info`)
       expect(res.status).toBe(200)
       expect(res.body.model).toBeNull()

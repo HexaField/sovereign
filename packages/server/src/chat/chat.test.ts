@@ -42,6 +42,7 @@ function createMockBackend(): AgentBackend & { _handlers: Map<string, Array<(...
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
   return {
     _handlers: handlers,
+    kind: 'openclaw',
     connect: vi.fn(async () => {}),
     disconnect: vi.fn(async () => {}),
     status: vi.fn(() => 'connected' as BackendConnectionStatus),
@@ -55,7 +56,23 @@ function createMockBackend(): AgentBackend & { _handlers: Map<string, Array<(...
       if (!handlers.has(event)) handlers.set(event, [])
       handlers.get(event)!.push(handler as (...args: unknown[]) => void)
     }),
-    off: vi.fn()
+    off: vi.fn(),
+    capabilities: vi.fn(() => ({
+      subagents: 'native' as const,
+      cron: 'backend-managed' as const,
+      steering: false,
+      followUp: false,
+      compaction: 'automatic-only' as const,
+      toolStreaming: true,
+      deviceIdentity: true,
+      multiProvider: true
+    })),
+    listSessions: vi.fn(async () => []),
+    listSubagents: vi.fn(async () => []),
+    getSessionMeta: vi.fn(async () => null),
+    setSessionModel: vi.fn(async () => {}),
+    listAvailableModels: vi.fn(async () => ({ models: [], defaultModel: null })),
+    getContextBudget: vi.fn(async () => null)
   }
 }
 

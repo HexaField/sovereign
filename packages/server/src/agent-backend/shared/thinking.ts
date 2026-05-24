@@ -1,4 +1,4 @@
-// Agent Backend — Thinking Block Stripping
+// Backend-agnostic thinking-block stripping.
 
 const THINKING_TAGS = ['think', 'thinking', 'thought', 'antThinking']
 
@@ -20,7 +20,6 @@ export function stripThinkingBlocks(text: string): string {
   while (changed) {
     const before = protected_
     for (const tag of THINKING_TAGS) {
-      // Handle matched pairs — non-greedy to avoid eating content between separate blocks
       protected_ = protected_.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'gi'), '')
     }
     changed = protected_ !== before
