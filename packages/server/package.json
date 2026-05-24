@@ -30,6 +30,7 @@
     "js-yaml": "^4.1.1",
     "multer": "^2.1.1",
     "node-pty": "^1.1.0",
+    "playwright-core": "1.60.0",
     "smol-toml": "^1.6.0",
     "web-push": "^3.6.7",
     "ws": "^8.19.0",

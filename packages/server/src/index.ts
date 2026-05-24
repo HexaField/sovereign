@@ -103,6 +103,7 @@ import { registerLogsChannel } from './system/ws.js'
 import { createLogger } from './system/logger.js'
 import { createEventStream } from './system/event-stream.js'
 import { createNotifications } from './notifications/notifications.js'
+import { createBrowserService } from './browser/index.js'
 import { createNotificationRoutes } from './notifications/routes.js'
 import { createDashboardRoutes } from './dashboard/routes.js'
 
@@ -440,6 +441,17 @@ const sovereignMcpServer = createSovereignMcpServer({
     },
     async read(orgId, id) {
       return mcpDeps.sovereignMcpDeps!.meetings.read(orgId, id)
+    }
+  },
+  browser: {
+    async open(o) {
+      return mcpDeps.sovereignMcpDeps!.browser.open(o)
+    },
+    async act(sid, action) {
+      return mcpDeps.sovereignMcpDeps!.browser.act(sid, action)
+    },
+    async close(sid) {
+      return mcpDeps.sovereignMcpDeps!.browser.close(sid)
     }
   },
   currentSessionKey() {
@@ -1113,6 +1125,9 @@ eventStream.subscribe((entry) => {
 const notificationsModule = createNotifications(bus, dataDir)
 app.use(createNotificationRoutes(notificationsModule))
 
+// --- Browser module ---
+const browserService = createBrowserService(dataDir)
+
 // Populate the deferred Sovereign-MCP deps now that every module exists.
 mcpDeps.sovereignMcpDeps = {
   cron: {
@@ -1256,6 +1271,17 @@ mcpDeps.sovereignMcpDeps = {
         transcript: m.transcript?.text,
         summary: m.summary?.text
       }
+    }
+  },
+  browser: {
+    async open(o) {
+      return browserService.open(o)
+    },
+    async act(sid, action) {
+      return browserService.act(sid, action)
+    },
+    async close(sid) {
+      return browserService.close(sid)
     }
   },
   currentSessionKey() {
@@ -1487,6 +1513,7 @@ function shutdown() {
   sessionsRegistry.flush()
   workspaceIndex.flush()
   workspaceIndex.dispose()
+  browserService.dispose().catch(() => {})
   statusAggregator.destroy()
   systemModule.dispose()
   eventStream.dispose()
