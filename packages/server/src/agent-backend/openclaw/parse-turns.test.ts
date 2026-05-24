@@ -279,3 +279,98 @@ describe('parseTurns — wrapped internal completion events', () => {
     expect(userTurns[0].content).toContain('review the results')
   })
 })
+
+describe('parseTurns — claude-cli compaction rehydration', () => {
+  function rehydrationMessage(historyBody: string, nextBody: string): string {
+    return `Continue this conversation using the OpenClaw transcript below as prior session history.\nTreat it as authoritative context for this fresh CLI session.\n\n<conversation_history>\n${historyBody}\n</conversation_history>\n\n<next_user_message>\n${nextBody}\n</next_user_message>`
+  }
+
+  const HISTORY_BODY = [
+    'Compaction summary: ## Decisions',
+    'No prior history.',
+    '',
+    '## Recent turns preserved verbatim',
+    '- User: did some thing',
+    '- Assistant: did some other thing',
+    '',
+    'Assistant: ⚙️ Compacted (17 before) • Context 49k/1.0m (5%)'
+  ].join('\n')
+
+  it('splits the rehydration message into a compaction system turn + a user turn', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: rehydrationMessage(HISTORY_BODY, '[Sun 2026-05-24 12:41 GMT+10] Hello, this is a test message'),
+        timestamp: 1000
+      }
+    ]
+    const turns = parseTurns(messages)
+    const systemTurn = turns.find((t) => t.role === 'system')
+    const userTurn = turns.find((t) => t.role === 'user')
+
+    expect(systemTurn).toBeDefined()
+    // System turn starts with the compaction chip line so client `isCompactionMessage` detection still fires.
+    expect(systemTurn!.content.startsWith('⚙️ Compacted (17 before) • Context 49k/1.0m (5%)')).toBe(true)
+    // …and includes the summary body for the collapsible disclosure.
+    expect(systemTurn!.content).toContain('## Recent turns preserved verbatim')
+    expect(systemTurn!.content).toContain('did some thing')
+    // The marker line is NOT duplicated inside the summary body.
+    const summaryBody = systemTurn!.content.split('\n\n').slice(1).join('\n\n')
+    expect(summaryBody).not.toMatch(/Assistant:\s*⚙️\s*Compacted/)
+
+    expect(userTurn).toBeDefined()
+    // Leading timestamp is stripped — user sees the real message body.
+    expect(userTurn!.content).toBe('Hello, this is a test message')
+  })
+
+  it('emits a chip-only system turn when the history body has no summary content', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: rehydrationMessage(
+          'Assistant: ⚙️ Compacted (3 before) • Context 12k/1.0m (1%)',
+          '[Sun 2026-05-24 12:41 GMT+10] hi'
+        ),
+        timestamp: 1000
+      }
+    ]
+    const turns = parseTurns(messages)
+    const systemTurn = turns.find((t) => t.role === 'system')
+    expect(systemTurn).toBeDefined()
+    expect(systemTurn!.content).toBe('⚙️ Compacted (3 before) • Context 12k/1.0m (1%)')
+
+    const userTurn = turns.find((t) => t.role === 'user')
+    expect(userTurn!.content).toBe('hi')
+  })
+
+  it('does not regress Sender (untrusted metadata) — system part is still dropped', () => {
+    const messages = [
+      {
+        role: 'user',
+        content:
+          'Sender (untrusted metadata): ```json\n{"name":"alice"}\n```\n[Mon 2026-04-13 14:08 GMT+10] real message body',
+        timestamp: 1000
+      }
+    ]
+    const turns = parseTurns(messages)
+    // Sender envelope has no system content to preserve — only the user turn appears.
+    expect(turns.filter((t) => t.role === 'system')).toHaveLength(0)
+    const userTurns = turns.filter((t) => t.role === 'user')
+    expect(userTurns).toHaveLength(1)
+    expect(userTurns[0].content).toContain('real message body')
+  })
+
+  it('does not match a regular user message that just happens to mention conversation_history', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: 'Can you summarise the <conversation_history> tag handling for me?',
+        timestamp: 1000
+      }
+    ]
+    const turns = parseTurns(messages)
+    expect(turns).toHaveLength(1)
+    expect(turns[0].role).toBe('user')
+    expect(turns[0].content).toContain('summarise')
+  })
+})

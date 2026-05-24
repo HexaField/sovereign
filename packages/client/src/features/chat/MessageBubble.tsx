@@ -260,6 +260,62 @@ export function MessageBubble(props: MessageBubbleProps) {
 
   // ── System message rendering ─────────────────────
 
+  // ── Compaction messages ───────────────────────────
+  // Check BEFORE the system-typed branch so the `⚙️ Compacted (…)` chip
+  // wins over the generic system-turn renderer (whose "Event Routing"
+  // heuristic would otherwise match summary-body keywords). Applies to
+  // any role — historically these arrived as user/assistant turns; now
+  // the OpenClaw rehydration parser emits them as role='system'.
+  if (isCompactionMessage(rawContent())) {
+    const compactionMarker = (): string => {
+      const text = rawContent().trim()
+      const blankIdx = text.indexOf('\n\n')
+      return blankIdx === -1 ? text : text.slice(0, blankIdx).trim()
+    }
+    const compactionSummary = (): string => {
+      const text = rawContent().trim()
+      const blankIdx = text.indexOf('\n\n')
+      return blankIdx === -1 ? '' : text.slice(blankIdx + 2).trim()
+    }
+    const [summaryOpen, setSummaryOpen] = createSignal(false)
+    const hasSummary = (): boolean => compactionSummary().length > 0
+    return (
+      <div class="my-1 flex w-full flex-col items-center gap-1">
+        <button
+          type="button"
+          class="rounded-full px-3 py-1 text-xs"
+          classList={{ 'cursor-pointer': hasSummary(), 'cursor-default': !hasSummary() }}
+          style={{
+            background: 'var(--c-bg-raised)',
+            color: 'var(--c-text-muted)',
+            border: '1px solid var(--c-border)'
+          }}
+          onClick={() => hasSummary() && setSummaryOpen(!summaryOpen())}
+          aria-expanded={hasSummary() ? summaryOpen() : undefined}
+        >
+          <span>{compactionMarker()}</span>
+          <Show when={hasSummary()}>
+            <span class="ml-2 text-[9px]" classList={{ 'rotate-90': summaryOpen() }}>
+              ▶
+            </span>
+          </Show>
+        </button>
+        <Show when={hasSummary() && summaryOpen()}>
+          <div
+            class="w-full max-w-[85%] rounded-lg px-3 py-2 text-xs"
+            style={{
+              background: 'var(--c-bg-raised)',
+              color: 'var(--c-text-muted)',
+              border: '1px solid var(--c-border)'
+            }}
+          >
+            <MarkdownContentInternal text={compactionSummary()} />
+          </div>
+        </Show>
+      </div>
+    )
+  }
+
   if (role() === 'system') {
     // Hide empty system turns (render as thin blue lines otherwise)
     if (!content()?.trim()) return null
@@ -391,25 +447,6 @@ export function MessageBubble(props: MessageBubbleProps) {
               <MarkdownContentInternal text={displayContent()} />
             </div>
           </Show>
-        </div>
-      </div>
-    )
-  }
-
-  // ── Compaction messages ───────────────────────────
-
-  if (isCompactionMessage(rawContent())) {
-    return (
-      <div class="my-1 flex w-full justify-center">
-        <div
-          class="rounded-full px-3 py-1 text-xs"
-          style={{
-            background: 'var(--c-bg-raised)',
-            color: 'var(--c-text-muted)',
-            border: '1px solid var(--c-border)'
-          }}
-        >
-          {rawContent()}
         </div>
       </div>
     )

@@ -118,13 +118,15 @@ describe('createBackend / RoutingBackend', () => {
       factories: { openclaw: () => oc, pi: () => pi }
     })
     await routing.connectAll()
-    expect(routing.statusAll().openclaw).toBe('connected')
-    expect(routing.statusAll().pi).toBe('connected')
-    expect(routing.statusAll()['claude-code']).toBe('disabled')
+    const connected = routing.statusAll()
+    expect(connected['openclaw' as const]).toBe('connected')
+    expect(connected['pi' as const]).toBe('connected')
+    expect(connected['claude-code']).toBe('disabled')
 
     await routing.disconnectAll()
-    expect(routing.statusAll().openclaw).toBe('disconnected')
-    expect(routing.statusAll().pi).toBe('disconnected')
+    const disconnected = routing.statusAll()
+    expect(disconnected['openclaw' as const]).toBe('disconnected')
+    expect(disconnected['pi' as const]).toBe('disconnected')
   })
 
   it('falls back to OpenClaw for an unmapped agent: key when OpenClaw is enabled', () => {
