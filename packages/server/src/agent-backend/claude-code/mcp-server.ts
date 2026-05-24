@@ -71,6 +71,27 @@ export interface SovereignToolDeps {
       meetingId: string
     ): Promise<{ id: string; title: string; transcript?: string; summary?: string } | null>
   }
+  browser: {
+    open(opts: {
+      url: string
+      headed?: boolean
+      viewport?: { width: number; height: number }
+      sessionId?: string
+    }): Promise<{ sessionId: string; url: string; title: string; summary: string }>
+    act(
+      sessionId: string,
+      action: any
+    ): Promise<{
+      message: string
+      url?: string
+      title?: string
+      text?: string
+      summary?: string
+      imageBase64?: string
+      imageMime?: string
+    }>
+    close(sessionId: string): Promise<void>
+  }
   /** Used by `sovereign.sessions_send` source attribution; optional. */
   currentSessionKey?(): string | undefined
 }
@@ -173,6 +194,83 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
       async (args) => {
         const turns = await deps.sessions.history(args.sessionKey, args.limit ?? 20)
         return okJson({ turns })
+      }
+    ),
+
+    // ── browser ───────────────────────────────────────────────────────────
+    tool(
+      'browser_open',
+      'Open a managed browser session at a URL. Returns a sessionId you pass to browser_act / browser_close. The summary lists interactive elements with `[r1]`, `[r2]` refs you can target in subsequent acts.',
+      {
+        url: z.string().describe('URL to navigate to immediately.'),
+        headed: z.boolean().optional().describe('Show the browser window (default: headless).'),
+        viewport: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).optional(),
+        sessionId: z.string().optional().describe('Reuse an existing browser session id (re-navigates to url).')
+      },
+      async (args) => {
+        const result = await deps.browser.open({
+          url: args.url,
+          headed: args.headed,
+          viewport: args.viewport,
+          sessionId: args.sessionId
+        })
+        return okJson(result)
+      }
+    ),
+    tool(
+      'browser_act',
+      "Act on an open browser session. The `action` is a discriminated union — pick a `kind` and the fields that go with it. Kinds: 'navigate' (url, waitUntil?), 'click' (ref|selector|{x,y}, doubleClick?, button?), 'type' (text, ref|selector, submit?), 'fill' (text, ref|selector), 'press' (key, ref?|selector?), 'hover' (ref|selector), 'scroll' (deltaX?, deltaY?, ref?|selector?), 'wait' (timeMs?|selector?|loadState?), 'snapshot' (mode?: 'aria'|'text'), 'screenshot' (fullPage?, selector?), 'evaluate' (fn: JS string returning JSON-serializable value), 'extract' (selector?), 'close'.",
+      {
+        sessionId: z.string(),
+        action: z
+          .object({
+            kind: z.enum([
+              'navigate',
+              'click',
+              'type',
+              'fill',
+              'press',
+              'hover',
+              'scroll',
+              'wait',
+              'snapshot',
+              'screenshot',
+              'evaluate',
+              'extract',
+              'close'
+            ])
+          })
+          .catchall(z.unknown())
+          .describe('Action object — see the tool description for shape per kind.')
+      },
+      async (args) => {
+        const result = await deps.browser.act(args.sessionId, args.action as any)
+        // Don't dump base64 image into the text payload (huge); summarize and
+        // return both text + image as separate content blocks when present.
+        const summary: Record<string, unknown> = {
+          message: result.message,
+          url: result.url,
+          title: result.title
+        }
+        if (result.text)
+          summary.text = result.text.length > 4000 ? result.text.slice(0, 4000) + '\n…(truncated)' : result.text
+        if (result.summary) summary.summary = result.summary
+        const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [
+          { type: 'text', text: JSON.stringify(summary, null, 2) }
+        ]
+        if (result.imageBase64 && result.imageMime) {
+          content.push({ type: 'image', data: result.imageBase64, mimeType: result.imageMime })
+        }
+        return { content }
+      }
+    ),
+    tool(
+      'browser_close',
+      'Close a managed browser session and release its tab.',
+      { sessionId: z.string() },
+      async (args) => {
+        await deps.browser.close(args.sessionId)
+        return okText(`Closed browser session ${args.sessionId}.`)
       }
     ),
 
