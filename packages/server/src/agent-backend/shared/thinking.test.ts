@@ -19,9 +19,6 @@ describe('§2.3 Thinking Block Stripping', () => {
   })
 
   it('MUST handle nested thinking tags (inner pair stripped, outer orphan cleaned)', () => {
-    // With non-greedy matching, <think>outer <think>inner</think> is stripped first,
-    // then orphaned </think> is cleaned up. "still" between inner close and outer close remains.
-    // This is acceptable — nested thinking tags don't occur in practice.
     expect(stripThinkingBlocks('a <think>outer <think>inner</think> still</think> b')).toBe('a  still b')
   })
 

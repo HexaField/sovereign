@@ -8,6 +8,30 @@ import { createEventBus } from '@sovereign/core'
 import { createSystemModule, type SystemModule } from './system.js'
 import { createSystemRoutes } from './routes.js'
 import { createOrgManager, type OrgManager } from '../orgs/orgs.js'
+import type { RoutingBackend } from '../agent-backend/factory.js'
+import type { AgentBackend } from '@sovereign/core'
+
+/** Build a RoutingBackend stub whose only enabled backend exposes the supplied `restart` impl. */
+function makeRoutingWithRestart(restart: AgentBackend['restart']): RoutingBackend {
+  const fakeBackend: Partial<AgentBackend> = {
+    kind: 'openclaw',
+    restart
+  }
+  return {
+    all: () => [{ kind: 'openclaw', backend: fakeBackend as AgentBackend }],
+    default: () => fakeBackend as AgentBackend,
+    forSession: () => fakeBackend as AgentBackend,
+    forKind: () => fakeBackend as AgentBackend,
+    connectAll: async () => {},
+    disconnectAll: async () => {},
+    statusAll: () => ({ openclaw: 'connected' as const, pi: 'disabled' as const, 'claude-code': 'disabled' as const }),
+    on: () => {},
+    off: () => {},
+    bindThread: ((rec: any) => rec) as any,
+    lookup: () => undefined,
+    registry: {} as any
+  }
+}
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sovereign-system-test-'))
@@ -31,10 +55,11 @@ describe('System Module', () => {
   describe('§9.2 — System Endpoints', () => {
     it('POST /api/system/gateway/restart returns 202 when the gateway restart succeeds', async () => {
       const app = express()
-      const gatewayRestart = {
-        restart: async () => ({ message: 'gateway restarted', command: 'openclaw gateway restart' })
-      }
-      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, gatewayRestart }))
+      const routingBackend = makeRoutingWithRestart(async () => ({
+        message: 'gateway restarted',
+        command: 'openclaw gateway restart'
+      }))
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, routingBackend }))
 
       const res = await request(app).post('/api/system/gateway/restart')
 
@@ -56,13 +81,11 @@ describe('System Module', () => {
       const restartPromise = new Promise<{ message: string; command: string }>((resolve) => {
         resolveRestart = resolve
       })
-      const gatewayRestart = {
-        restart: () => {
-          notifyStarted()
-          return restartPromise
-        }
-      }
-      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, gatewayRestart }))
+      const routingBackend = makeRoutingWithRestart(() => {
+        notifyStarted()
+        return restartPromise
+      })
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, routingBackend }))
 
       const firstPromise = request(app)
         .post('/api/system/gateway/restart')
@@ -79,12 +102,10 @@ describe('System Module', () => {
 
     it('POST /api/system/gateway/restart returns 500 when the gateway restart fails', async () => {
       const app = express()
-      const gatewayRestart = {
-        restart: async () => {
-          throw new Error('openclaw CLI unavailable')
-        }
-      }
-      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, gatewayRestart }))
+      const routingBackend = makeRoutingWithRestart(async () => {
+        throw new Error('openclaw CLI unavailable')
+      })
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, routingBackend }))
 
       const res = await request(app).post('/api/system/gateway/restart')
 

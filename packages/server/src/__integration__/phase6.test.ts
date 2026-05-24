@@ -6,12 +6,12 @@ import http from 'node:http'
 import { WebSocketServer, WebSocket } from 'ws'
 import { createEventBus } from '@sovereign/core'
 import type { EventBus, AgentBackend, AgentBackendEvents, BackendConnectionStatus } from '@sovereign/core'
-import { createOpenClawBackend } from '../agent-backend/openclaw.js'
+import { createOpenClawBackend } from '../agent-backend/openclaw/openclaw.js'
 import { createThreadManager } from '../threads/threads.js'
 import type { EntityBinding, ThreadEvent } from '../threads/types.js'
 import { createVoiceModule } from '../voice/voice.js'
 import { createChatModule } from '../chat/chat.js'
-import type { OpenClawConfig } from '../agent-backend/types.js'
+import type { OpenClawConfig } from '../agent-backend/openclaw/types.js'
 
 // --- Helpers ---
 
@@ -567,7 +567,7 @@ describe('Phase 6 — Integration Tests', () => {
     }
   })
 
-  it('Config hot-reload: change agentBackend.openclaw.gatewayUrl via config API → backend disconnects from old URL → reconnects to new URL → clients receive backend.status transitions', async () => {
+  it('Config hot-reload: change the openclaw gateway URL via config API → backend disconnects from old URL → reconnects to new URL → clients receive backend.status transitions', async () => {
     const gw1 = createMockGateway()
     const gw2 = createMockGateway()
     await gw1.start()

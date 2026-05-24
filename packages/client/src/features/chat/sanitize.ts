@@ -1,11 +1,15 @@
 /**
- * Sanitize message content by stripping OpenClaw internal metadata
- * that shouldn't be rendered in the chat UI.
+ * Sanitize message content by stripping agent-runtime internal metadata that
+ * shouldn't be rendered in the chat UI. The server's per-backend adapter is
+ * the authoritative scrubber; this is a defense-in-depth pass on the client.
  */
 
-/** Strip <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> ... <<<END_OPENCLAW_INTERNAL_CONTEXT>>> blocks */
+/**
+ * Strip `<<<BEGIN_*_INTERNAL_CONTEXT>>> ... <<<END_*_INTERNAL_CONTEXT>>>`
+ * blocks emitted by any backend.
+ */
 function stripInternalContext(text: string): string {
-  return text.replace(/<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/g, '').trim()
+  return text.replace(/<<<BEGIN_[A-Z]+_INTERNAL_CONTEXT>>>[\s\S]*?<<<END_[A-Z]+_INTERNAL_CONTEXT>>>/g, '').trim()
 }
 
 /** Strip System (untrusted): exec notification lines */
@@ -25,16 +29,12 @@ function stripSystemPrefixedLines(text: string): string {
 
 /** Strip Sender (untrusted metadata) envelope + optional timestamp prefix from user messages */
 function stripSenderEnvelope(text: string): string {
-  // Strip any leading System: block(s) before the Sender envelope
   let result = text.replace(/^(?:System:\s.*\n)+/, '')
-  // Strip the envelope header block
   result = result.replace(/^Sender \(untrusted metadata\):\s*```json\s*\{[\s\S]*?\}\s*```\s*/, '')
-  // Strip leading timestamp like [Mon 2026-04-13 14:08 GMT+10]
   result = result.replace(
     /^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?:\s+GMT[+-]\d+)?\]\s*/,
     ''
   )
-  // Strip any remaining System: lines in the body
   result = stripSystemPrefixedLines(result)
   return result.trim()
 }
@@ -51,7 +51,6 @@ export function isCompactionMessage(content: string): boolean {
 export function sanitizeContent(role: string, content: string): string {
   if (!content) return content
 
-  // Common: strip internal context blocks and exec notifications from all roles
   let result = stripInternalContext(content)
   result = stripExecNotifications(result)
 
@@ -63,7 +62,6 @@ export function sanitizeContent(role: string, content: string): string {
     result = stripSenderEnvelope(result)
   }
 
-  // Collapse multiple blank lines
   result = result.replace(/\n{3,}/g, '\n\n').trim()
   return result
 }

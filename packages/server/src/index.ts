@@ -71,7 +71,12 @@ import { createDraftStore } from './drafts/store.js'
 import { createDraftRouter } from './drafts/routes.js'
 
 // --- Phase 6: Chat, Threads, Voice, Recordings, System ---
-import { createOpenClawBackend } from './agent-backend/openclaw.js'
+import { createBackend, createSessionsRegistry } from './agent-backend/index.js'
+import { createOpenClawBackend, type OpenClawBackend } from './agent-backend/openclaw/openclaw.js'
+import { openClawConfigFromEnv } from './agent-backend/openclaw/env-config.js'
+import { getGatewayActivityMap } from './agent-backend/openclaw/parse-gateway-sessions.js'
+import { createCronService } from './scheduler/cron-service.js'
+import type { AgentBackendKind, SubagentSummary, SessionSummary } from '@sovereign/core'
 import { createThreadManager } from './threads/threads.js'
 import { createChatModule } from './chat/chat.js'
 import { createChatRoutes } from './chat/routes.js'
@@ -357,12 +362,33 @@ app.use(createDraftRouter(bus, draftStore, { issueTracker, getRemotes }))
 // Phase 6 — Chat, Threads, Voice, Recordings, System
 // ============================================================
 
-const backend = createOpenClawBackend({
-  gatewayUrl: process.env.OPENCLAW_GATEWAY_URL?.trim() || 'ws://localhost:3456/ws',
-  gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || '',
-  dataDir,
-  onConfigChange: (_cb) => {}
+// Build the multi-backend routing layer. Phase 0: only OpenClaw is wired,
+// but the seam is in place so Pi and Claude Code can drop in alongside it.
+const sessionsRegistry = createSessionsRegistry(dataDir)
+const enabledBackendsEnv = (process.env.SOVEREIGN_ENABLED_BACKENDS?.trim() || 'openclaw')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean) as AgentBackendKind[]
+const defaultBackendKind = (process.env.SOVEREIGN_DEFAULT_BACKEND?.trim() || 'openclaw') as AgentBackendKind
+
+const routingBackend = createBackend({
+  enabled: enabledBackendsEnv,
+  default: defaultBackendKind,
+  registry: sessionsRegistry,
+  factories: {
+    openclaw: () => createOpenClawBackend(openClawConfigFromEnv(dataDir))
+  }
 })
+
+// The OpenClaw adapter is the only backend exposing legacy gateway-only
+// surfaces (sessions.list RPC for the SSE status fallback, the activity-map
+// for the threads index). Modules outside the adapter look these up via the
+// routing layer instead of importing from `agent-backend/openclaw/*`.
+const openClawBackend = routingBackend.forKind('openclaw') as OpenClawBackend | undefined
+
+// Single AgentBackend reference for legacy callers expecting the old shape.
+// Routes that need per-session routing receive `routingBackend` directly.
+const backend = routingBackend.default()
 
 const threadManager = createThreadManager(bus, dataDir)
 
@@ -385,46 +411,36 @@ app.use(createChatRoutes(chatModule, backend, dataDir))
 // Bulk active subagents grouped by parent thread
 app.get('/api/threads/active-subagents', async (_req, res) => {
   try {
-    const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
-    let sessionsData: Record<string, any> = {}
-    try {
-      const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
-      sessionsData = JSON.parse(raw)
-    } catch {
-      return res.json({ subagents: {} })
-    }
+    const result: Record<string, Array<{ sessionKey: string; label: string; status: string; task: string }>> = {}
 
-    const result: Record<
-      string,
-      Array<{
-        sessionKey: string
-        label: string
-        status: string
-        task: string
-      }>
-    > = {}
+    // Aggregate subagents across every enabled backend.
+    for (const inst of routingBackend.all()) {
+      let subagentSessions: SessionSummary[] = []
+      try {
+        subagentSessions = await inst.backend.listSessions({ kind: 'subagent' })
+      } catch {
+        continue
+      }
 
-    for (const [key, meta] of Object.entries(sessionsData)) {
-      if (!key.includes(':subagent:')) continue
-      if (!meta?.spawnedBy) continue
+      for (const s of subagentSessions) {
+        const status = s.agentStatus || 'done'
+        const isActive = status === 'running' || status === 'working' || status === 'thinking'
+        if (!isActive) continue
+        if (!s.parentKey) continue
 
-      const status = meta.status || 'done'
-      const isActive = status === 'running' || status === 'working' || status === 'thinking'
-      if (!isActive) continue
+        let threadKey = 'main'
+        if (s.parentKey === 'agent:main:main') threadKey = 'main'
+        else if (s.parentKey.startsWith('agent:main:thread:')) threadKey = s.parentKey.replace('agent:main:thread:', '')
+        else if (s.parentKey.includes(':subagent:')) threadKey = s.parentKey
 
-      let threadKey = 'main'
-      if (meta.spawnedBy === 'agent:main:main') threadKey = 'main'
-      else if (meta.spawnedBy.startsWith('agent:main:thread:'))
-        threadKey = meta.spawnedBy.replace('agent:main:thread:', '')
-      else if (meta.spawnedBy.includes(':subagent:')) threadKey = meta.spawnedBy
-
-      if (!result[threadKey]) result[threadKey] = []
-      result[threadKey].push({
-        sessionKey: key,
-        label: meta.label || key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
-        status: status === 'running' ? 'working' : status,
-        task: meta.task || meta.label || ''
-      })
+        if (!result[threadKey]) result[threadKey] = []
+        result[threadKey].push({
+          sessionKey: s.key,
+          label: s.label || s.key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
+          status: status === 'running' ? 'working' : status,
+          task: s.task || s.label || ''
+        })
+      }
     }
 
     res.json({ subagents: result })
@@ -433,11 +449,10 @@ app.get('/api/threads/active-subagents', async (_req, res) => {
   }
 })
 
-// Subagent listing — queries gateway sessions for children of a thread
+// Subagent listing — children of a thread, aggregated across enabled backends.
 app.get('/api/threads/:key/subagents', async (req, res) => {
   try {
     const threadKey = req.params.key
-    // Derive the parent gateway session key
     const parentSessionKey =
       threadKey === 'main'
         ? 'agent:main:main'
@@ -445,38 +460,15 @@ app.get('/api/threads/:key/subagents', async (req, res) => {
           ? threadKey
           : `agent:main:thread:${threadKey}`
 
-    const allSessions = await backend.listGatewaySessions()
-
-    // Filter for subagent sessions whose key indicates they're children of this parent
-    // Subagent keys look like: agent:main:subagent:<uuid>
-    // They are children of whichever session spawned them
-    // We also read the sessions.json file for parentKey info
-    const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
-    let sessionsData: Record<string, any> = {}
-    try {
-      const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
-      sessionsData = JSON.parse(raw)
-    } catch {
-      /* ignore */
+    const subagents: SubagentSummary[] = []
+    for (const inst of routingBackend.all()) {
+      try {
+        const list = await inst.backend.listSubagents(parentSessionKey)
+        subagents.push(...list)
+      } catch {
+        /* ignore per-backend errors */
+      }
     }
-
-    const subagents = allSessions
-      .filter((s) => s.key.includes(':subagent:'))
-      .filter((s) => {
-        const meta = sessionsData[s.key]
-        if (meta?.spawnedBy) {
-          return meta.spawnedBy === parentSessionKey
-        }
-        return false // Don't fall back to main — only show known parents
-      })
-      .map((s) => ({
-        sessionKey: s.key,
-        label: s.label || sessionsData[s.key]?.label || s.key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
-        status: s.agentStatus || 'idle',
-        lastActivity: s.lastActivity,
-        task: sessionsData[s.key]?.task || sessionsData[s.key]?.label || s.label || ''
-      }))
-      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
 
     res.json({ subagents })
   } catch (err: any) {
@@ -497,7 +489,7 @@ app.get('/api/threads/:key/history', async (req, res) => {
     if (cached && Date.now() - cached.ts < SUBAGENT_CACHE_TTL) {
       return res.json({ history: cached.data })
     }
-    const { turns: history } = await backend.getHistory(sessionKey)
+    const { turns: history } = await routingBackend.forSession(sessionKey).getHistory(sessionKey)
     subagentHistoryCache.set(sessionKey, { data: history, ts: Date.now() })
     // Evict old entries
     if (subagentHistoryCache.size > 50) {
@@ -514,29 +506,54 @@ app.get('/api/threads/:key/history', async (req, res) => {
 })
 
 const forwardHandler = createForwardHandler(bus, threadManager)
-// Gateway sessions endpoint — returns all sessions from the OpenClaw sessions file
-// merged with local thread registry metadata (orgId, label overrides)
-// MUST be before thread routes so /api/threads/gateway-sessions doesn't match :key
+// Runtime sessions endpoint — aggregates main/thread sessions from every
+// enabled backend and merges with the local thread registry. Replaces the
+// old gateway-sessions endpoint (still served at the legacy path).
 app.get('/api/threads/gateway-sessions', async (_req, res) => {
   try {
-    const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
-    let allSessions: import('./threads/parse-gateway-sessions.js').ParsedSession[] = []
-
-    try {
-      const raw = await fs.promises.readFile(sessionsPath, 'utf-8')
-      const sessionsData = JSON.parse(raw) as Record<string, any>
-      const { parseSessionEntry, filterMainAndThread } = await import('./threads/parse-gateway-sessions.js')
-
-      allSessions = filterMainAndThread(
-        Object.entries(sessionsData).map(([fullKey, meta]) => parseSessionEntry(fullKey, meta))
-      )
-    } catch (e: any) {
-      console.error('Failed to read sessions.json:', e.message)
+    const localThreads = threadManager.list() as any[]
+    const localMap = new Map(localThreads.map((t) => [t.key, t]))
+    for (const t of localThreads) {
+      if (t.key === 'main') localMap.set('agent:main:main', t)
+      else if (!t.key.startsWith('agent:')) localMap.set(`agent:main:thread:${t.key}`, t)
     }
 
-    const { mergeWithLocal } = await import('./threads/parse-gateway-sessions.js')
-    const localThreads = threadManager.list()
-    const merged = mergeWithLocal(allSessions, localThreads as any[])
+    const merged: Array<{
+      key: string
+      shortKey: string
+      kind: string
+      label: string
+      lastActivity?: number
+      orgId?: string
+      localLabel?: string
+      isRegistered: boolean
+    }> = []
+
+    for (const inst of routingBackend.all()) {
+      let sessions: SessionSummary[] = []
+      try {
+        sessions = await inst.backend.listSessions()
+      } catch {
+        continue
+      }
+      for (const s of sessions) {
+        if (s.kind !== 'main' && s.kind !== 'thread') continue
+        let shortKey = s.key
+        if (shortKey.startsWith('agent:main:')) shortKey = shortKey.slice('agent:main:'.length)
+        if (shortKey.startsWith('thread:')) shortKey = shortKey.slice('thread:'.length)
+        const local = localMap.get(s.key) || localMap.get(shortKey)
+        merged.push({
+          key: s.key,
+          shortKey,
+          kind: s.kind,
+          label: s.label || shortKey,
+          lastActivity: s.lastActivity,
+          orgId: local?.orgId,
+          localLabel: local?.label,
+          isRegistered: !!local
+        })
+      }
+    }
 
     res.json({ sessions: merged })
   } catch (err: any) {
@@ -544,6 +561,9 @@ app.get('/api/threads/gateway-sessions', async (_req, res) => {
     res.status(500).json({ error: 'Failed to list sessions' })
   }
 })
+
+// Sovereign-native cron service — routes cron-related endpoints through it.
+const cronService = createCronService(routingBackend)
 
 // Thread cron jobs endpoint
 app.get('/api/threads/:key/crons', async (req, res) => {
@@ -556,9 +576,9 @@ app.get('/api/threads/:key/crons', async (req, res) => {
         : threadKey.startsWith('agent:')
           ? threadKey
           : `agent:main:thread:${threadKey}`)
-    // Race against a 5s timeout so a slow gateway doesn't block the UI
+    // Race against a 5s timeout so a slow backend doesn't block the UI
     const jobs = await Promise.race([
-      backend.listCronJobs(true),
+      cronService.list(true),
       new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
     ]).catch(() => [] as any[])
     // Filter for crons targeting this thread's session
@@ -627,7 +647,7 @@ function detectCronIssues(job: any): string[] {
 app.get('/api/crons', async (_req, res) => {
   try {
     const jobs = await Promise.race([
-      backend.listCronJobs(true),
+      cronService.list(true),
       new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
     ]).catch(() => [] as any[])
     const annotated = jobs.map((j: any) => ({
@@ -644,7 +664,7 @@ app.get('/api/crons', async (_req, res) => {
 // PATCH /api/crons/:id — update a cron job
 app.patch('/api/crons/:id', async (req, res) => {
   try {
-    const result = await backend.updateCronJob(req.params.id, req.body)
+    const result = await cronService.update(req.params.id, req.body)
     res.json({ ok: true, cron: result })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
@@ -654,7 +674,7 @@ app.patch('/api/crons/:id', async (req, res) => {
 // DELETE /api/crons/:id — remove a cron job
 app.delete('/api/crons/:id', async (req, res) => {
   try {
-    await backend.removeCronJob(req.params.id)
+    await cronService.remove(req.params.id)
     res.json({ ok: true })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
@@ -668,21 +688,18 @@ app.post('/api/crons/:id/fix-thread', async (req, res) => {
     if (!threadKey) {
       return res.status(400).json({ error: 'threadKey is required' })
     }
-    // Get current job data
-    const jobs = await backend.listCronJobs(true)
+    const jobs = await cronService.list(true)
     const job = jobs.find((j: any) => j.id === req.params.id)
     if (!job) {
       return res.status(404).json({ error: 'Cron job not found' })
     }
-    // Convert to the WORKING pattern: systemEvent on main session
-    // Fix: just remove broken delivery config, keep agentTurn + thread target
     const patch: Record<string, unknown> = {
       sessionTarget: `session:agent:main:thread:${threadKey}`,
       sessionKey: `agent:main:thread:${threadKey}`,
       delivery: { mode: 'none' },
       enabled: true
     }
-    const result = await backend.updateCronJob(req.params.id, patch)
+    const result = await cronService.update(req.params.id, patch)
     res.json({ ok: true, cron: result })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
@@ -692,13 +709,12 @@ app.post('/api/crons/:id/fix-thread', async (req, res) => {
 // POST /api/crons/:id/toggle — enable/disable toggle
 app.post('/api/crons/:id/toggle', async (req, res) => {
   try {
-    // Get current state
-    const jobs = await backend.listCronJobs(true)
+    const jobs = await cronService.list(true)
     const job = jobs.find((j: any) => j.id === req.params.id)
     if (!job) {
       return res.status(404).json({ error: 'Cron job not found' })
     }
-    const result = await backend.updateCronJob(req.params.id, { enabled: !job.enabled })
+    const result = await cronService.update(req.params.id, { enabled: !job.enabled })
     res.json({ ok: true, cron: result })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
@@ -708,13 +724,10 @@ app.post('/api/crons/:id/toggle', async (req, res) => {
 // DELETE /api/crons/cleanup — bulk remove disabled+errored+past crons
 app.delete('/api/crons/cleanup', async (_req, res) => {
   try {
-    const jobs = await backend.listCronJobs(true)
+    const jobs = await cronService.list(true)
     const toRemove = jobs.filter((j: any) => {
-      // Remove disabled jobs that errored
       if (j.enabled === false && j.state?.lastStatus === 'error') return true
-      // Remove disabled jobs marked for deletion
       if (j.enabled === false && j.deleteAfterRun === true) return true
-      // Remove past oneshot jobs
       if (j.schedule?.kind === 'oneshot' && j.schedule?.at) {
         const atMs = new Date(j.schedule.at).getTime()
         if (!isNaN(atMs) && atMs < Date.now()) return true
@@ -724,10 +737,10 @@ app.delete('/api/crons/cleanup', async (_req, res) => {
     let removed = 0
     for (const job of toRemove) {
       try {
-        await backend.removeCronJob(job.id)
+        await cronService.remove(job.id)
         removed++
       } catch {
-        // Continue removing others
+        /* keep going */
       }
     }
     res.json({ ok: true, removed, total: toRemove.length })
@@ -739,18 +752,14 @@ app.delete('/api/crons/cleanup', async (_req, res) => {
 // GET /api/crons/channel-status — check if any delivery channels are configured
 app.get('/api/crons/channel-status', async (_req, res) => {
   try {
-    // Check if any real messaging channels exist by listing cron jobs
-    // and checking if "webchat" is the only channel in use
     const jobs = await Promise.race([
-      backend.listCronJobs(true),
+      cronService.list(true),
       new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
     ]).catch(() => [] as any[])
     const channels = new Set<string>()
     for (const j of jobs) {
       if (j.delivery?.channel) channels.add(j.delivery.channel)
     }
-    // "webchat" is a virtual channel — it only works when WS is connected
-    // Real channels: telegram, discord, signal, etc.
     const realChannels = [...channels].filter((c) => c !== 'webchat')
     const hasRealChannels = realChannels.length > 0
     res.json({
@@ -771,14 +780,13 @@ app.get('/api/crons/runs', async (req, res) => {
   try {
     const threadKeyFilter = req.query.threadKey as string | undefined
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 100)
-    const entries = await backend.getCronRuns()
+    const entries = await cronService.runs()
 
     if (!threadKeyFilter) {
       return res.json({ entries: entries.slice(0, limit) })
     }
 
-    // Filter by thread — need to map jobId to threadKey
-    const jobs = await backend.listCronJobs(true)
+    const jobs = await cronService.list(true)
     const jobThreadMap = new Map<string, string | null>()
     for (const job of jobs) {
       jobThreadMap.set(job.id, deriveThreadKey(job.sessionTarget, job.sessionKey))
@@ -790,7 +798,15 @@ app.get('/api/crons/runs', async (req, res) => {
   }
 })
 
-app.use(createThreadRoutes(threadManager, forwardHandler, { chatModule, backend: backend as any }))
+app.use(
+  createThreadRoutes(threadManager, forwardHandler, {
+    chatModule,
+    backend: routingBackend,
+    activityProvider: openClawBackend
+      ? { getGatewayActivityMap: () => getGatewayActivityMap(openClawBackend.paths.sessionsJsonPath) }
+      : undefined
+  })
+)
 
 // Model reset on boot removed — users' model choices are now preserved across restarts
 registerThreadsWs(wsHandler as any, threadManager, bus)
@@ -881,9 +897,7 @@ const systemModule = createSystemModule(bus, dataDir, {
 })
 const logsChannel = registerLogsChannel(wsHandler, bus, dataDir)
 const healthHistory = createHealthHistory()
-app.use(
-  createSystemRoutes({ system: systemModule, logsChannel, dataDir, healthHistory, deviceInfoProvider: backend as any })
-)
+app.use(createSystemRoutes({ system: systemModule, logsChannel, dataDir, healthHistory, routingBackend }))
 
 // --- Event Stream ---
 const eventStream = createEventStream(bus)
@@ -1133,8 +1147,8 @@ wss.on('connection', (ws) => {
 // Connect agent backend
 // ============================================================
 
-backend.connect().catch((err) => {
-  console.error('Failed to connect agent backend:', err.message)
+routingBackend.connectAll().catch((err: any) => {
+  console.error('Failed to connect agent backend(s):', err.message)
 })
 
 // ============================================================
@@ -1142,10 +1156,7 @@ backend.connect().catch((err) => {
 // ============================================================
 
 const cronMonitor = createCronMonitor({
-  getCronRuns: (jobId) => backend.getCronRuns(jobId),
-  listCronJobs: (includeDisabled) => backend.listCronJobs(includeDisabled),
-  updateCronJob: (id, patch) => backend.updateCronJob(id, patch),
-  sendMessage: (sessionKey, text) => backend.sendMessage(sessionKey, text),
+  cronService,
   wsHandler,
   pollIntervalMs: 30_000,
   autoFixIntervalMs: 15_000
@@ -1163,7 +1174,8 @@ function shutdown() {
   scheduler.destroy()
   terminalManager.dispose()
   cronMonitor.stop()
-  backend.disconnect().catch(() => {})
+  routingBackend.disconnectAll().catch(() => {})
+  sessionsRegistry.flush()
   statusAggregator.destroy()
   systemModule.dispose()
   eventStream.dispose()
