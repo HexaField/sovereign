@@ -31,6 +31,11 @@ function makeDeps(overrides: Partial<SovereignToolDeps> = {}): SovereignToolDeps
     },
     orgs: { list: vi.fn().mockReturnValue([{ id: '_global', name: 'Global', path: '/tmp' }]) },
     meetings: { list: vi.fn().mockResolvedValue([]), read: vi.fn().mockResolvedValue(null) },
+    browser: {
+      open: vi.fn().mockResolvedValue({ sessionId: 'b-1', url: 'https://x', title: 'X', summary: '' }),
+      act: vi.fn().mockResolvedValue({ message: 'ok' }),
+      close: vi.fn().mockResolvedValue(undefined)
+    },
     currentSessionKey: () => 'agent:main:thread:t1',
     ...overrides
   }
