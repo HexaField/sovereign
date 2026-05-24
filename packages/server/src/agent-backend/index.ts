@@ -4,6 +4,7 @@
 
 export { createBackend } from './factory.js'
 export type { RoutingBackend, MultiBackendConfig, BackendInstance } from './factory.js'
+export { routingAsBackend } from './routing-as-backend.js'
 export { createSessionsRegistry } from './shared/sessions-registry.js'
 export type { SessionsRegistry, ThreadSessionRecord } from './shared/sessions-registry.js'
 
