@@ -129,13 +129,30 @@ describe('createBackend / RoutingBackend', () => {
     expect(disconnected['pi' as const]).toBe('disconnected')
   })
 
-  it('falls back to OpenClaw for an unmapped agent: key when OpenClaw is enabled', () => {
+  it('routes unmapped agent: keys to the configured default, not OpenClaw', () => {
     const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
     const routing = createBackend({
       enabled: ['openclaw', 'pi'],
       default: 'pi',
       registry,
       factories: { openclaw: () => makeStub('openclaw'), pi: () => makeStub('pi') }
+    })
+    // Even though `agent:*` keys used to be OpenClaw-exclusive, the configured
+    // default now wins — otherwise flipping SOVEREIGN_DEFAULT_BACKEND has no
+    // effect on legacy threads that lack registry entries.
+    expect(routing.forSession('agent:main:thread:legacy').kind).toBe('pi')
+  })
+
+  it('keeps routing unmapped agent: keys to OpenClaw when OpenClaw is the default', () => {
+    const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
+    const routing = createBackend({
+      enabled: ['openclaw', 'claude-code' as const],
+      default: 'openclaw',
+      registry,
+      factories: {
+        openclaw: () => makeStub('openclaw'),
+        'claude-code': () => makeStub('claude-code' as const)
+      }
     })
     expect(routing.forSession('agent:main:thread:legacy').kind).toBe('openclaw')
   })
