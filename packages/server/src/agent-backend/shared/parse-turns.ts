@@ -69,8 +69,17 @@ export interface ParseTurnsOptions {
    * Return a system-turn replacement for `text`, or `null` if `text` is not
    * a system-injected (out-of-band) user message. Backends use this to
    * filter their own internal/system markers.
+   *
+   * When `preserveWithEmbeddedUser` is true and `extractEmbeddedUser` also
+   * returns a value, the parser emits BOTH a system turn (with `systemContent`)
+   * AND a user turn (with the embedded text). Used for compaction-style
+   * rehydration messages where the system part is the prior-context summary
+   * and the embedded part is the user's actual next message. When the flag
+   * is omitted/false (the default), the embedded user takes precedence and
+   * the system part is discarded — matching the original behavior used for
+   * envelopes whose system part is throwaway noise.
    */
-  classifySystemInjected?(text: string): { systemContent: string } | null
+  classifySystemInjected?(text: string): { systemContent: string; preserveWithEmbeddedUser?: boolean } | null
 
   /**
    * Given an injected `text`, return the embedded user message that should be
@@ -91,7 +100,7 @@ export interface ParseTurnsOptions {
    */
   shouldKeepTurn?(turn: ParsedTurn): boolean
 
-  /** Names of tool calls that should be hidden from work items (e.g. OpenClaw's `sessions_yield`). */
+  /** Names of tool calls that should be hidden from work items — e.g. yield-to-parent style tools. */
   hiddenToolNames?: Set<string>
 }
 
@@ -142,6 +151,17 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
         const embeddedUser = extractEmbedded(text)
         if (embeddedUser) {
           const userCleaned = stripDirectives(stripTimestamp(embeddedUser))
+          // When the classifier asks to keep the system part (compaction
+          // rehydration etc.), push it before the embedded user turn.
+          if (systemReplacement.preserveWithEmbeddedUser) {
+            turns.push({
+              role: 'system',
+              content: systemReplacement.systemContent,
+              timestamp: m.timestamp ?? 0,
+              workItems: [],
+              thinkingBlocks: []
+            })
+          }
           if (userCleaned) {
             lastUserTurn = {
               role: 'user',
@@ -150,6 +170,8 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
               workItems: [],
               thinkingBlocks: []
             }
+          } else {
+            lastUserTurn = null
           }
         } else {
           turns.push({

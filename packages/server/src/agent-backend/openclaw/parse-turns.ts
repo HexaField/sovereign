@@ -1,9 +1,62 @@
 // OpenClaw-specific turn parser. Wraps the shared parser with OpenClaw's
 // noise-filtering rules: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>`,
-// `[CronResult]`, `Sender (untrusted metadata):`, `HEARTBEAT_OK`, etc.
+// `[CronResult]`, `Sender (untrusted metadata):`, `HEARTBEAT_OK`,
+// claude-cli compaction rehydration, etc.
 
 import type { ParsedTurn } from '@sovereign/core'
 import { parseTurns as parseTurnsGeneric, stripTimestamp, stripDirectives } from '../shared/parse-turns.js'
+
+// ── Compaction rehydration ──────────────────────────────────────────
+//
+// When OpenClaw compacts a claude-cli session, it starts a fresh CLI
+// session and injects ONE synthetic user message containing the prior
+// transcript summary in `<conversation_history>` and the user's actual
+// next message in `<next_user_message>`. We split that into a system
+// "compaction" turn + a user turn so the UI renders correctly.
+
+const REHYDRATION_PREFIX = 'Continue this conversation using the OpenClaw transcript below as prior session history.'
+
+interface RehydrationParts {
+  conversationHistory: string
+  nextUserMessage: string
+  /** The `⚙️ Compacted (X before) • Context Y/Z (W%)` marker line if found. */
+  compactionMarker: string | null
+}
+
+function parseRehydrationMessage(text: string): RehydrationParts | null {
+  if (!text.startsWith(REHYDRATION_PREFIX)) return null
+  const historyMatch = text.match(/<conversation_history>([\s\S]*?)<\/conversation_history>/)
+  const nextMatch = text.match(/<next_user_message>([\s\S]*?)<\/next_user_message>/)
+  if (!historyMatch || !nextMatch) return null
+
+  const historyBody = historyMatch[1].trim()
+  const nextBody = nextMatch[1].trim()
+
+  // Pull the trailing `Assistant: ⚙️ Compacted (...)` line out of the
+  // history body so we can use it as the chip marker.
+  const markerLineMatch = historyBody.match(/(?:^|\n)\s*Assistant:\s*(⚙️\s*Compacted\s*\([^\n]*\))\s*$/)
+  const compactionMarker = markerLineMatch ? markerLineMatch[1].trim() : null
+
+  let summaryBody = historyBody
+  if (markerLineMatch) {
+    summaryBody = historyBody.slice(0, markerLineMatch.index).trim()
+  }
+  // The body typically starts with "Compaction summary:" — keep that
+  // for readability; the client renders it as plain markdown.
+
+  return {
+    conversationHistory: summaryBody,
+    nextUserMessage: nextBody,
+    compactionMarker
+  }
+}
+
+/** Format the compaction system-turn content: chip line + blank line + summary body. */
+function formatCompactionSystemContent(parts: RehydrationParts): string {
+  const chip = parts.compactionMarker ?? '⚙️ Compacted'
+  if (!parts.conversationHistory) return chip
+  return `${chip}\n\n${parts.conversationHistory}`
+}
 
 /** Strip OpenClaw internal context wrapper markers. */
 function stripInternalContextWrapper(text: string): string {
@@ -19,6 +72,12 @@ function stripSenderEnvelope(text: string): string {
 
 /** Extract a real user message embedded after an OpenClaw system prefix. */
 function extractEmbeddedUserMessage(text: string): string | null {
+  // Compaction rehydration — extract the <next_user_message> body.
+  const rehydration = parseRehydrationMessage(text)
+  if (rehydration) {
+    const stripped = stripTimestamp(rehydration.nextUserMessage).trim()
+    return stripped || rehydration.nextUserMessage
+  }
   const senderIdx = text.indexOf('Sender (untrusted metadata):')
   if (senderIdx > 0) {
     const userPart = text.substring(senderIdx)
@@ -32,6 +91,9 @@ function extractEmbeddedUserMessage(text: string): string | null {
 /** Detect OpenClaw-injected system noise (heartbeats, cron results, subagent envelopes, ...). */
 function isSystemInjected(text: string): boolean {
   const stripped = stripTimestamp(text)
+  // Compaction rehydration is handled as a system-injected message whose
+  // embedded user is the real next-message body.
+  if (text.startsWith(REHYDRATION_PREFIX)) return true
   return (
     stripped.startsWith('[CronResult]') ||
     /^\[Scheduled[:\s]/.test(stripped) ||
@@ -111,6 +173,15 @@ const HIDDEN_TOOL_NAMES = new Set(['sessions_yield'])
 export function parseTurns(messages: any[]): ParsedTurn[] {
   return parseTurnsGeneric(messages, {
     classifySystemInjected(text) {
+      // Compaction rehydration: emit BOTH a compaction system turn (with the
+      // ⚙️ marker + summary body) and the embedded next user turn.
+      const rehydration = parseRehydrationMessage(text)
+      if (rehydration) {
+        return {
+          systemContent: formatCompactionSystemContent(rehydration),
+          preserveWithEmbeddedUser: true
+        }
+      }
       if (!isSystemInjected(text)) return null
       return { systemContent: normalizeSystemText(text) }
     },
