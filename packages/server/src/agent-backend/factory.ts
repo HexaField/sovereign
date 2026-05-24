@@ -68,9 +68,15 @@ export function createBackend(config: MultiBackendConfig): RoutingBackend {
 
   /** Resolve a sessionKey to the owning backend.
    *
-   * Strategy: 1) registry lookup; 2) heuristic — OpenClaw keys are
-   * `agent:main:...`, Pi/Claude-Code use canonical keys but their records
-   * must be in the registry; 3) fall back to default.
+   * Strategy:
+   *   1) Registry lookup — explicit bindings always win.
+   *   2) Configured default — `SOVEREIGN_DEFAULT_BACKEND` is the user's
+   *      authoritative choice for unbound `agent:*` keys.
+   *   3) Legacy OpenClaw shortcut — historically `agent:main:*` keys were
+   *      OpenClaw-exclusive and many existing threads have no registry
+   *      record. Only honour this when OpenClaw is enabled AND nothing
+   *      above resolved, so flipping the default to claude-code actually
+   *      reroutes those threads instead of silently sticking on OpenClaw.
    */
   function resolveBackend(sessionKey: string): AgentBackend {
     const record = config.registry.getBySession(sessionKey) ?? config.registry.getByThread(sessionKey)
@@ -78,8 +84,11 @@ export function createBackend(config: MultiBackendConfig): RoutingBackend {
       const inst = instances.get(record.backendKind)
       if (inst) return inst.backend
     }
-    // OpenClaw is the only backend that historically used `agent:main:` keys
-    // without a registry entry — keep parity.
+    // Configured default wins for unbound keys regardless of prefix shape.
+    const def = instances.get(config.default)
+    if (def) return def.backend
+    // Last-resort legacy fallback: an `agent:*` key with no registry record
+    // and no enabled default backend lands on OpenClaw if it's enabled.
     if (sessionKey.startsWith('agent:')) {
       const oc = instances.get('openclaw')
       if (oc) return oc.backend
