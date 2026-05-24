@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import https from 'node:https'
 import http from 'node:http'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 // Prevent unhandled rejections from crashing the server
 process.on('unhandledRejection', (reason) => {
@@ -71,10 +72,17 @@ import { createDraftStore } from './drafts/store.js'
 import { createDraftRouter } from './drafts/routes.js'
 
 // --- Phase 6: Chat, Threads, Voice, Recordings, System ---
-import { createBackend, createSessionsRegistry } from './agent-backend/index.js'
+import { createBackend, createSessionsRegistry, routingAsBackend } from './agent-backend/index.js'
 import { createOpenClawBackend, type OpenClawBackend } from './agent-backend/openclaw/openclaw.js'
 import { openClawConfigFromEnv } from './agent-backend/openclaw/env-config.js'
 import { getGatewayActivityMap } from './agent-backend/openclaw/parse-gateway-sessions.js'
+import {
+  createClaudeCodeBackend,
+  claudeCodeConfigFromEnv,
+  createSovereignMcpServer,
+  createWorkspaceIndex,
+  type ClaudeCodeBackend
+} from './agent-backend/claude-code/index.js'
 import { createCronService } from './scheduler/cron-service.js'
 import type { AgentBackendKind, SubagentSummary, SessionSummary } from '@sovereign/core'
 import { createThreadManager } from './threads/threads.js'
@@ -159,6 +167,7 @@ const wsHandler = createWsHandler(bus)
 // ============================================================
 
 const scheduler = createScheduler(bus, dataDir)
+scheduler.init() // start the 1s tick loop so Sovereign-native crons (and any other schedule kinds) actually fire
 registerSchedulerChannel(wsHandler, bus)
 app.use(createSchedulerRoutes(scheduler))
 registerNotificationsChannel(wsHandler, bus)
@@ -362,8 +371,8 @@ app.use(createDraftRouter(bus, draftStore, { issueTracker, getRemotes }))
 // Phase 6 — Chat, Threads, Voice, Recordings, System
 // ============================================================
 
-// Build the multi-backend routing layer. Phase 0: only OpenClaw is wired,
-// but the seam is in place so Pi and Claude Code can drop in alongside it.
+// Build the multi-backend routing layer. OpenClaw is always available; the
+// Claude Code adapter joins it when `SOVEREIGN_ENABLED_BACKENDS` includes it.
 const sessionsRegistry = createSessionsRegistry(dataDir)
 const enabledBackendsEnv = (process.env.SOVEREIGN_ENABLED_BACKENDS?.trim() || 'openclaw')
   .split(',')
@@ -371,14 +380,153 @@ const enabledBackendsEnv = (process.env.SOVEREIGN_ENABLED_BACKENDS?.trim() || 'o
   .filter(Boolean) as AgentBackendKind[]
 const defaultBackendKind = (process.env.SOVEREIGN_DEFAULT_BACKEND?.trim() || 'openclaw') as AgentBackendKind
 
+// Forward-declarations: the Claude Code backend's MCP server needs to call
+// into cron + sessions + planning modules which are constructed after the
+// backend factory runs. We wire the deps via a mutable container that the
+// MCP server captures by reference.
+const mcpDeps: { sovereignMcpDeps?: import('./agent-backend/claude-code/index.js').SovereignToolDeps } = {}
+const sovereignMcpServer = createSovereignMcpServer({
+  cron: {
+    async createUserMessageCron(o) {
+      return mcpDeps.sovereignMcpDeps!.cron.createUserMessageCron(o)
+    },
+    async list(d) {
+      return mcpDeps.sovereignMcpDeps!.cron.list(d)
+    },
+    async remove(id) {
+      return mcpDeps.sovereignMcpDeps!.cron.remove(id)
+    }
+  },
+  sessions: {
+    async list(f) {
+      return mcpDeps.sovereignMcpDeps!.sessions.list(f)
+    },
+    async send(k, t) {
+      return mcpDeps.sovereignMcpDeps!.sessions.send(k, t)
+    },
+    async history(k, l) {
+      return mcpDeps.sovereignMcpDeps!.sessions.history(k, l)
+    }
+  },
+  agents: {
+    async list(p) {
+      return mcpDeps.sovereignMcpDeps!.agents.list(p)
+    },
+    async spawn(p, o) {
+      return mcpDeps.sovereignMcpDeps!.agents.spawn(p, o)
+    }
+  },
+  notifications: {
+    send(o) {
+      return mcpDeps.sovereignMcpDeps!.notifications.send(o)
+    }
+  },
+  planning: {
+    async createIssue(o) {
+      return mcpDeps.sovereignMcpDeps!.planning.createIssue(o)
+    },
+    async updateIssue(o) {
+      return mcpDeps.sovereignMcpDeps!.planning.updateIssue(o)
+    }
+  },
+  orgs: {
+    list() {
+      return mcpDeps.sovereignMcpDeps!.orgs.list()
+    }
+  },
+  meetings: {
+    async list(orgId, limit) {
+      return mcpDeps.sovereignMcpDeps!.meetings.list(orgId, limit)
+    },
+    async read(orgId, id) {
+      return mcpDeps.sovereignMcpDeps!.meetings.read(orgId, id)
+    }
+  },
+  currentSessionKey() {
+    return mcpDeps.sovereignMcpDeps?.currentSessionKey?.()
+  }
+})
+
+let claudeCodeBackendRef: ClaudeCodeBackend | undefined
+
 const routingBackend = createBackend({
   enabled: enabledBackendsEnv,
   default: defaultBackendKind,
   registry: sessionsRegistry,
   factories: {
-    openclaw: () => createOpenClawBackend(openClawConfigFromEnv(dataDir))
+    openclaw: () => createOpenClawBackend(openClawConfigFromEnv(dataDir)),
+    'claude-code': () => {
+      const cc = createClaudeCodeBackend(claudeCodeConfigFromEnv(dataDir), {
+        sovereignMcpServer,
+        registry: {
+          upsertSession(record) {
+            sessionsRegistry.upsert({
+              threadKey: record.threadKey,
+              sessionKey: record.sessionKey,
+              backendKind: 'claude-code',
+              backendSessionId: record.backendSessionId,
+              backendSessionFile: record.backendSessionFile,
+              label: record.label,
+              parentSessionKey: record.parentSessionKey,
+              orgId: record.orgId,
+              cwd: record.cwd,
+              model: record.model
+            })
+          },
+          lookupSession(sessionKey) {
+            const existing = sessionsRegistry.getBySession(sessionKey)
+            if (!existing || existing.backendKind !== 'claude-code' || !existing.backendSessionId) return null
+            return {
+              backendSessionId: existing.backendSessionId,
+              backendSessionFile: existing.backendSessionFile,
+              label: existing.label,
+              parentSessionKey: existing.parentSessionKey,
+              orgId: existing.orgId,
+              cwd: existing.cwd,
+              model: existing.model
+            }
+          }
+        },
+        toolPolicy: async ({ toolName, orgId }) => {
+          // Per-org tool allowlist policy.
+          //
+          // Org config can declare `agent.toolAllowlist: string[]` and/or
+          // `agent.toolDenylist: string[]` to constrain which built-in tools
+          // this org's agents may invoke. Both are optional; when neither is
+          // set, permit-all.
+          if (!orgId) return { decision: 'allow' }
+          let cfg: Record<string, unknown> | null = null
+          try {
+            cfg = orgManager.getOrgConfig(orgId) as Record<string, unknown>
+          } catch {
+            return { decision: 'allow' }
+          }
+          const agentCfg = (cfg?.agent ?? {}) as Record<string, unknown>
+          const allow = Array.isArray(agentCfg.toolAllowlist) ? (agentCfg.toolAllowlist as string[]) : null
+          const deny = Array.isArray(agentCfg.toolDenylist) ? (agentCfg.toolDenylist as string[]) : null
+          if (deny && deny.includes(toolName)) {
+            return { decision: 'deny', reason: `Tool '${toolName}' is denied by org '${orgId}' policy.` }
+          }
+          if (allow && allow.length > 0 && !allow.includes(toolName)) {
+            return { decision: 'deny', reason: `Tool '${toolName}' is not in org '${orgId}' allowlist.` }
+          }
+          return { decision: 'allow' }
+        }
+      })
+      claudeCodeBackendRef = cc
+      return cc
+    }
   }
 })
+
+// Workspace-folder index in ~/.claude/CLAUDE.md — kept in sync with orgs.
+const workspaceIndex = createWorkspaceIndex({
+  filePath: path.join(process.env.HOME ?? '', '.claude', 'CLAUDE.md')
+})
+function refreshWorkspaceIndex() {
+  const orgs = orgManager.listOrgs()
+  workspaceIndex.setEntries(orgs.map((o: any) => ({ path: o.path, description: o.name, orgId: o.id })))
+}
 
 // The OpenClaw adapter is the only backend exposing legacy gateway-only
 // surfaces (sessions.list RPC for the SSE status fallback, the activity-map
@@ -386,9 +534,11 @@ const routingBackend = createBackend({
 // routing layer instead of importing from `agent-backend/openclaw/*`.
 const openClawBackend = routingBackend.forKind('openclaw') as OpenClawBackend | undefined
 
-// Single AgentBackend reference for legacy callers expecting the old shape.
-// Routes that need per-session routing receive `routingBackend` directly.
-const backend = routingBackend.default()
+// Single AgentBackend reference for callers expecting the old shape.
+// Per-session methods (sendMessage/abort/getHistory/etc.) dispatch through
+// `routing.forSession()` so threads bound to Claude Code route there while
+// OpenClaw threads stay on OpenClaw.
+const backend = routingAsBackend(routingBackend)
 
 const threadManager = createThreadManager(bus, dataDir)
 
@@ -563,7 +713,10 @@ app.get('/api/threads/gateway-sessions', async (_req, res) => {
 })
 
 // Sovereign-native cron service — routes cron-related endpoints through it.
-const cronService = createCronService(routingBackend)
+// Wires `Scheduler` + `bus` so the Sovereign-native cron path (used by the
+// Claude Code adapter + future Pi adapter) fires user-messages into the
+// bound thread via `routing.forSession(threadKey).sendMessage(...)`.
+const cronService = createCronService({ routing: routingBackend, scheduler, bus })
 
 // Thread cron jobs endpoint
 app.get('/api/threads/:key/crons', async (req, res) => {
@@ -959,6 +1112,162 @@ eventStream.subscribe((entry) => {
 // --- Notifications module ---
 const notificationsModule = createNotifications(bus, dataDir)
 app.use(createNotificationRoutes(notificationsModule))
+
+// Populate the deferred Sovereign-MCP deps now that every module exists.
+mcpDeps.sovereignMcpDeps = {
+  cron: {
+    async createUserMessageCron(o) {
+      return cronService.createUserMessageCron(o)
+    },
+    async list(d) {
+      return cronService.list(d)
+    },
+    async remove(id) {
+      return cronService.remove(id)
+    }
+  },
+  sessions: {
+    async list(filter) {
+      const out: Array<{ key: string; label?: string; kind?: string }> = []
+      for (const inst of routingBackend.all()) {
+        if (filter?.backendKind && inst.kind !== filter.backendKind) continue
+        try {
+          const list = await inst.backend.listSessions()
+          for (const s of list) out.push({ key: s.key, label: s.label, kind: s.kind })
+        } catch {
+          /* ignore per-backend errors */
+        }
+      }
+      return out
+    },
+    async send(sessionKey, text) {
+      const key = sessionKey.startsWith('agent:')
+        ? sessionKey
+        : sessionKey === 'main'
+          ? 'agent:main:main'
+          : `agent:main:thread:${sessionKey}`
+      await routingBackend.forSession(key).sendMessage(key, text)
+    },
+    async history(sessionKey, limit) {
+      const key = sessionKey.startsWith('agent:')
+        ? sessionKey
+        : sessionKey === 'main'
+          ? 'agent:main:main'
+          : `agent:main:thread:${sessionKey}`
+      const { turns } = await routingBackend.forSession(key).getHistory(key)
+      return turns.slice(-(limit ?? 20)).map((t: any) => ({ role: t.role, content: t.content }))
+    }
+  },
+  agents: {
+    async list(parentKey) {
+      const out: Array<{ sessionKey: string; label: string; status: string; task?: string }> = []
+      for (const inst of routingBackend.all()) {
+        try {
+          const list = await inst.backend.listSubagents(parentKey)
+          for (const s of list) out.push({ sessionKey: s.sessionKey, label: s.label, status: s.status, task: s.task })
+        } catch {
+          /* ignore */
+        }
+      }
+      return out
+    },
+    async spawn(parentKey, opts) {
+      const backend = routingBackend.forSession(parentKey)
+      if (!backend.spawnSubagent) throw new Error('agents_spawn: backend does not support subagent spawn')
+      const childKey = await backend.spawnSubagent(parentKey, { task: opts.task, label: opts.label })
+      return { sessionKey: childKey }
+    }
+  },
+  notifications: {
+    send(input) {
+      // Append directly to the notifications store + emit on the bus so the
+      // existing notifications WS channel relays it to the UI.
+      const id = randomUUID()
+      const notification = {
+        id,
+        timestamp: new Date().toISOString(),
+        severity: (input.severity as 'info' | 'warning' | 'error' | 'critical') ?? 'info',
+        title: input.title,
+        body: input.body ?? '',
+        source: 'sovereign-agent',
+        read: false,
+        dismissed: false,
+        entityId: input.entityId
+      }
+      notificationsModule._store.append(notification)
+      bus.emit({
+        type: 'notification.created',
+        timestamp: notification.timestamp,
+        source: 'notifications',
+        payload: notification
+      })
+      return { id }
+    }
+  },
+  planning: {
+    async createIssue(o) {
+      const result = await planningService.createIssue(o.orgId, {
+        remote: o.remote,
+        projectId: o.projectId,
+        title: o.title,
+        body: o.body,
+        labels: o.labels,
+        assignees: o.assignees
+      })
+      return {
+        id: result.issue.id,
+        orgId: result.issue.orgId,
+        projectId: result.issue.projectId,
+        title: result.issue.title
+      }
+    },
+    async updateIssue(o) {
+      const updated = await issueTracker.update(o.orgId, o.projectId, o.issueId, {
+        title: o.title,
+        body: o.body,
+        state: o.state,
+        labels: o.labels
+      })
+      return {
+        id: updated.id,
+        orgId: updated.orgId,
+        projectId: updated.projectId,
+        title: updated.title,
+        state: updated.state
+      }
+    }
+  },
+  orgs: {
+    list() {
+      return orgManager.listOrgs().map((o: any) => ({ id: o.id, name: o.name, path: o.path }))
+    }
+  },
+  meetings: {
+    async list(orgId, limit) {
+      const list = await meetingsService.list(orgId, { limit: limit ?? 20 })
+      return list.map((m: any) => ({ id: m.id, title: m.title, createdAt: m.createdAt }))
+    },
+    async read(orgId, id) {
+      const m = await meetingsService.get(orgId, id)
+      if (!m) return null
+      return {
+        id: m.id,
+        title: m.title,
+        transcript: m.transcript?.text,
+        summary: m.summary?.text
+      }
+    }
+  },
+  currentSessionKey() {
+    return claudeCodeBackendRef?.getActiveSessionKey()
+  }
+}
+
+// Workspace folder index — refresh on boot + when org list changes.
+refreshWorkspaceIndex()
+bus.on('org.created', () => refreshWorkspaceIndex())
+bus.on('org.updated', () => refreshWorkspaceIndex())
+bus.on('org.deleted', () => refreshWorkspaceIndex())
 app.use(createDashboardRoutes({ orgManager, threadManager, notifications: notificationsModule, system: systemModule }))
 
 // --- Bus wildcard logging (debug level) ---
@@ -1176,6 +1485,8 @@ function shutdown() {
   cronMonitor.stop()
   routingBackend.disconnectAll().catch(() => {})
   sessionsRegistry.flush()
+  workspaceIndex.flush()
+  workspaceIndex.dispose()
   statusAggregator.destroy()
   systemModule.dispose()
   eventStream.dispose()

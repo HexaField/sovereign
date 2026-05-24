@@ -6,7 +6,7 @@ import type { ForwardHandler } from './forward.js'
 import type { ChatModule } from '../chat/chat.js'
 import { deriveSessionKey } from '../chat/derive-session-key.js'
 import type { RoutingBackend } from '../agent-backend/factory.js'
-import type { AgentBackend, SessionSummary, SubagentSummary } from '@sovereign/core'
+import type { AgentBackend, AgentBackendKind, SessionSummary, SubagentSummary } from '@sovereign/core'
 
 interface OpenClawActivityProvider {
   /**
@@ -92,9 +92,30 @@ export function createThreadRoutes(
     res.json({ thread, events })
   })
 
-  router.post('/api/threads', (req, res) => {
-    const { label, entities, orgId } = req.body ?? {}
+  router.post('/api/threads', async (req, res) => {
+    const { label, entities, orgId, backend: backendKindRaw, cwd } = req.body ?? {}
     const thread = threadManager.create({ label, entities, orgId })
+    const backendKind = backendKindRaw as AgentBackendKind | undefined
+    // Optional: pre-bind the thread to a specific backend (e.g. 'claude-code')
+    // so the routing layer picks the right adapter on the first message.
+    if (backendKind && opts?.backend && 'forKind' in opts.backend) {
+      const routing = opts.backend as RoutingBackend
+      const targetBackend = routing.forKind(backendKind)
+      if (targetBackend) {
+        try {
+          // The adapter's own registry callback persists the binding
+          // (including backendSessionId + backendSessionFile + orgId/cwd).
+          await targetBackend.createSession(label, {
+            threadKey: thread.key,
+            kind: 'thread',
+            ...(typeof cwd === 'string' && cwd ? { cwd } : {}),
+            ...(orgId ? { orgId } : {})
+          } as never)
+        } catch (err: any) {
+          console.error(`[threads] failed to bind thread "${thread.key}" to backend "${backendKind}":`, err.message)
+        }
+      }
+    }
     res.status(201).json({ thread })
   })
 
