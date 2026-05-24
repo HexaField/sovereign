@@ -17,6 +17,20 @@ const SOVEREIGN_CRON_PREFIX_RE = /^\[Cron:[^\]]*\]\s*/
  * shape the shared parser expects. Returns null for entries that shouldn't
  * surface as turns (summary entries, custom-title entries, etc.).
  */
+/** Detect SDK-injected slash-command synthetics that look like user turns
+ *  but are actually internal Claude Code chatter the user never typed. */
+function isSlashCommandSynthetic(text: string): boolean {
+  const t = text.trimStart()
+  return (
+    t.startsWith('<local-command-caveat>') ||
+    t.startsWith('<command-name>') ||
+    t.startsWith('<command-message>') ||
+    t.startsWith('<command-args>') ||
+    t.startsWith('<local-command-stdout>') ||
+    t.startsWith('<local-command-stderr>')
+  )
+}
+
 export function normalizeClaudeCodeEntry(entry: any): any | null {
   if (!entry || typeof entry !== 'object') return null
 
@@ -24,9 +38,19 @@ export function normalizeClaudeCodeEntry(entry: any): any | null {
   const timestamp = typeof tsRaw === 'number' ? tsRaw : typeof tsRaw === 'string' ? Date.parse(tsRaw) || 0 : 0
 
   if (entry.type === 'user' && entry.message) {
+    // SDK flags for entries that exist in the JSONL for resume-correctness but
+    // MUST NOT render as user turns: the post-compaction rehydration message,
+    // any entry tagged transcript-only-visible. Honour both.
+    if (entry.isCompactSummary === true) return null
+    if (entry.isVisibleInTranscriptOnly === true) return null
+    // Slash-command artefacts (`/compact`, future `/something` invocations)
+    // arrive as user turns whose content is a `<command-name>…` envelope.
+    // Pure Claude Code internal chatter — drop.
+    const raw = entry.message.content
+    if (typeof raw === 'string' && isSlashCommandSynthetic(raw)) return null
     return {
       role: 'user',
-      content: entry.message.content,
+      content: raw,
       timestamp
     }
   }
@@ -39,13 +63,22 @@ export function normalizeClaudeCodeEntry(entry: any): any | null {
     }
   }
   if (entry.type === 'system' && (entry.subtype === 'compact_boundary' || entry.subtype === 'compaction')) {
-    const meta = entry.compact_metadata ?? {}
-    const pre = typeof meta.pre_tokens === 'number' ? meta.pre_tokens : null
-    const post = typeof meta.post_tokens === 'number' ? meta.post_tokens : null
+    // The SDK writes compaction metadata under `compactMetadata` (camelCase)
+    // with `preTokens` / `postTokens`. Tolerate `compact_metadata` /
+    // `pre_tokens` / `post_tokens` for forward-compat with older SDK builds.
+    const meta = entry.compactMetadata ?? entry.compact_metadata ?? {}
+    const pre =
+      typeof meta.preTokens === 'number' ? meta.preTokens : typeof meta.pre_tokens === 'number' ? meta.pre_tokens : null
+    const post =
+      typeof meta.postTokens === 'number'
+        ? meta.postTokens
+        : typeof meta.post_tokens === 'number'
+          ? meta.post_tokens
+          : null
     const trigger = meta.trigger ?? 'auto'
     const parts: string[] = ['⚙️ Compacted']
     if (pre != null && post != null) {
-      parts.push(`(${pre} → ${post} tokens, ${trigger})`)
+      parts.push(`(${pre.toLocaleString()} → ${post.toLocaleString()} tokens, ${trigger})`)
     } else if (trigger) {
       parts.push(`(${trigger})`)
     }

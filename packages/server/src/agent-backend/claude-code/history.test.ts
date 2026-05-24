@@ -34,7 +34,7 @@ describe('claude-code/history', () => {
       expect(out).toMatchObject({ role: 'assistant', stopReason: 'end_turn' })
     })
 
-    it('emits ⚙️ Compacted system turn for compact_boundary', () => {
+    it('emits ⚙️ Compacted system turn for compact_boundary (snake_case legacy)', () => {
       const out = normalizeClaudeCodeEntry({
         type: 'system',
         subtype: 'compact_boundary',
@@ -42,7 +42,57 @@ describe('claude-code/history', () => {
       })
       expect(out?.role).toBe('system')
       expect(out?.content).toMatch(/⚙️ Compacted/)
-      expect(out?.content).toMatch(/100000/)
+      expect(out?.content).toMatch(/100,000/)
+      expect(out?.content).toMatch(/auto/)
+    })
+
+    it('emits ⚙️ Compacted with correct trigger from camelCase compactMetadata (SDK shape)', () => {
+      const out = normalizeClaudeCodeEntry({
+        type: 'system',
+        subtype: 'compact_boundary',
+        compactMetadata: { trigger: 'manual', preTokens: 24092, postTokens: 2090, durationMs: 44583 }
+      })
+      expect(out?.role).toBe('system')
+      expect(out?.content).toMatch(/24,092 → 2,090 tokens/)
+      expect(out?.content).toMatch(/manual/)
+    })
+
+    it('drops the SDK rehydration / compact-summary user entry', () => {
+      expect(
+        normalizeClaudeCodeEntry({
+          type: 'user',
+          isCompactSummary: true,
+          message: { role: 'user', content: 'This session is being continued…' }
+        })
+      ).toBeNull()
+    })
+
+    it('drops transcript-only-visible user entries', () => {
+      expect(
+        normalizeClaudeCodeEntry({
+          type: 'user',
+          isVisibleInTranscriptOnly: true,
+          message: { role: 'user', content: 'internal marker' }
+        })
+      ).toBeNull()
+    })
+
+    it('drops slash-command synthetics (`<command-name>/compact</command-name>` etc.)', () => {
+      for (const c of [
+        '<local-command-caveat>Caveat: …</local-command-caveat>',
+        '<command-name>/compact</command-name>\n<command-args></command-args>',
+        '<local-command-stdout>some hook output</local-command-stdout>'
+      ]) {
+        expect(normalizeClaudeCodeEntry({ type: 'user', message: { role: 'user', content: c } })).toBeNull()
+      }
+    })
+
+    it('does NOT drop a legitimate user message that happens to mention slash commands', () => {
+      const out = normalizeClaudeCodeEntry({
+        type: 'user',
+        message: { role: 'user', content: 'How do I use the /compact command?' }
+      })
+      expect(out).toMatchObject({ role: 'user' })
     })
   })
 

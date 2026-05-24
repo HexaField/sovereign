@@ -579,6 +579,15 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         label: existing?.label,
         parentSessionKey: existing?.parentSessionKey
       })
+      // If we just minted a fresh UUID for an unbound thread, persist the
+      // binding immediately so cold restart + history endpoints can find
+      // the session JSONL without needing to call sendMessage first.
+      if (!existing) {
+        const threadKey = sessionKey.startsWith('agent:main:thread:')
+          ? sessionKey.slice('agent:main:thread:'.length)
+          : sessionKey
+        persistRegistry(state, threadKey)
+      }
     }
     getOrStartSession(state)
     activeSessionKey = sessionKey
