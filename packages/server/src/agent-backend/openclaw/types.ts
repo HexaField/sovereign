@@ -1,4 +1,4 @@
-// Agent Backend — Server-side Types
+// OpenClaw Adapter — Types
 
 import type { AgentStatus, BackendConnectionStatus } from '@sovereign/core'
 
@@ -15,6 +15,21 @@ export interface OpenClawConfig {
   reconnect?: ReconnectConfig
   /** Optional config change callback for hot-reload */
   onConfigChange?: (callback: (newConfig: Partial<OpenClawConfig>) => void) => void
+  /**
+   * Filesystem path to the OpenClaw `sessions.json` file. Defaults to
+   * `~/.openclaw/agents/main/sessions/sessions.json`. Tests override this.
+   */
+  sessionsJsonPath?: string
+  /**
+   * Filesystem path to the OpenClaw root config (`~/.openclaw/openclaw.json`).
+   * Used by `listAvailableModels()`.
+   */
+  openClawConfigPath?: string
+  /**
+   * Directory containing OpenClaw session JSONL files. Defaults to
+   * `~/.openclaw/agents/main/sessions`.
+   */
+  sessionsDir?: string
 }
 
 export interface ReconnectConfig {

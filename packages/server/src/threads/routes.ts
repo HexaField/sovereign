@@ -3,20 +3,48 @@
 import { Router } from 'express'
 import type { ThreadManager } from './types.js'
 import type { ForwardHandler } from './forward.js'
-import { getGatewayActivityMap } from './parse-gateway-sessions.js'
 import type { ChatModule } from '../chat/chat.js'
 import { deriveSessionKey } from '../chat/derive-session-key.js'
+import type { RoutingBackend } from '../agent-backend/factory.js'
+import type { AgentBackend, SessionSummary, SubagentSummary } from '@sovereign/core'
 
-interface AgentBackendLike {
-  getHistory(sessionKey: string): Promise<{ turns: Array<{ role: string; content: string }>; hasMore: boolean }>
+interface OpenClawActivityProvider {
+  /**
+   * Returns shortKey → {lastActivity, status} for "main" / "thread" sessions.
+   * Implemented by the OpenClaw adapter; absent for Pi / Claude Code.
+   */
+  getGatewayActivityMap?(): Promise<Map<string, { lastActivity: number; status?: string }>>
 }
 
 export function createThreadRoutes(
   threadManager: ThreadManager,
   forwardHandler: ForwardHandler,
-  opts?: { chatModule?: ChatModule; backend?: AgentBackendLike }
+  opts?: {
+    chatModule?: ChatModule
+    backend?: RoutingBackend | AgentBackend
+    activityProvider?: OpenClawActivityProvider
+  }
 ): Router {
   const router = Router()
+
+  /** Resolve a generic AgentBackend for backwards-compat callers. */
+  function backendForSession(sessionKey: string): AgentBackend | null {
+    const b = opts?.backend
+    if (!b) return null
+    if ('forSession' in b && typeof (b as RoutingBackend).forSession === 'function') {
+      return (b as RoutingBackend).forSession(sessionKey)
+    }
+    return b as AgentBackend
+  }
+
+  function defaultBackend(): AgentBackend | null {
+    const b = opts?.backend
+    if (!b) return null
+    if ('default' in b && typeof (b as RoutingBackend).default === 'function') {
+      return (b as RoutingBackend).default()
+    }
+    return b as AgentBackend
+  }
 
   router.get('/api/threads', async (req, res) => {
     const filter: Record<string, unknown> = {}
@@ -25,12 +53,17 @@ export function createThreadRoutes(
     if (req.query.active) filter.active = req.query.active === 'true'
     const threads = threadManager.list(Object.keys(filter).length > 0 ? (filter as never) : undefined)
 
-    // Merge lastActivity + agentStatus from gateway (source of truth)
-    const activityMap = await getGatewayActivityMap()
+    // Merge lastActivity + agentStatus from the OpenClaw activity provider (if available).
+    let activityMap: Map<string, { lastActivity: number; status?: string }> | undefined
+    try {
+      activityMap = (await opts?.activityProvider?.getGatewayActivityMap?.()) ?? undefined
+    } catch {
+      /* ignore */
+    }
+
     const merged = threads.map((t) => {
-      const gw = activityMap.get(t.key)
+      const gw = activityMap?.get(t.key)
       if (!gw) return t
-      // Map gateway status to display status
       let agentStatus = t.agentStatus
       if (gw.status === 'running') agentStatus = 'working' as any
       else if (gw.status === 'failed') agentStatus = 'failed' as any
@@ -114,30 +147,15 @@ export function createThreadRoutes(
 
     let lastMessage: string | null = null
 
-    // Fast path: read last 10 lines from JSONL directly
     try {
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      const { getSessionFilePath, readRecentMessages } = await import('../agent-backend/session-reader.js')
-      const filePath = getSessionFilePath(sessionKey)
-      if (filePath) {
-        const { messages } = readRecentMessages(filePath, 10)
-        // Find last user or assistant message (skip toolResult, system)
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const role = messages[i]?.role
-          if ((role === 'assistant' || role === 'user') && messages[i].content) {
-            // Extract text from content (may be string or array of blocks)
-            let text = ''
-            const content = messages[i].content
-            if (typeof content === 'string') {
-              text = content
-            } else if (Array.isArray(content)) {
-              text = content
-                .filter((b: any) => b.type === 'text')
-                .map((b: any) => b.text ?? '')
-                .join(' ')
-            }
-            // Strip thinking blocks and directive tags
-            text = text
+      const backend = backendForSession(sessionKey)
+      if (backend) {
+        const { turns } = await backend.getHistory(sessionKey)
+        for (let i = turns.length - 1; i >= 0; i--) {
+          const t = turns[i]
+          if ((t.role === 'assistant' || t.role === 'user') && t.content) {
+            const text = t.content
               .replace(/<antThinking>[\s\S]*?<\/antThinking>/g, '')
               .replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '')
               .trim()
@@ -159,8 +177,6 @@ export function createThreadRoutes(
   })
 
   // ── Thread preview messages (last N typed entries for rich card rendering) ──
-  // Returns an array of { type, text } entries where type is one of:
-  //   'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result'
   router.get('/api/threads/:key/preview-messages', async (req, res) => {
     const threadKey = req.params.key
     const thread = threadManager.get(threadKey)
@@ -171,11 +187,10 @@ export function createThreadRoutes(
     const entries: PreviewEntry[] = []
 
     try {
-      // Use cached getHistory from the backend (mtime-based cache, sub-ms on hit)
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      if (opts?.backend) {
-        const { turns } = await opts.backend.getHistory(sessionKey)
-        // Extract preview entries from the last few turns
+      const backend = backendForSession(sessionKey)
+      if (backend) {
+        const { turns } = await backend.getHistory(sessionKey)
         for (let i = turns.length - 1; i >= 0 && entries.length < limit; i--) {
           const turn = turns[i] as any
           if (turn.role === 'user' && turn.content) {
@@ -184,7 +199,6 @@ export function createThreadRoutes(
               entries.push({ type: 'user', text })
             }
           } else if (turn.role === 'assistant') {
-            // Add work items as tool_call/thinking entries
             if (turn.workItems) {
               for (const w of turn.workItems.slice(-3)) {
                 if (w.type === 'tool_call') {
@@ -214,7 +228,6 @@ export function createThreadRoutes(
 
   // ── Thread management endpoints ──────────────────────────────────────
 
-  // Thread session info — model, tokens, compaction, etc.
   router.get('/api/threads/:key/session-info', async (_req, res) => {
     const threadKey = _req.params.key
     const thread = threadManager.get(threadKey)
@@ -222,28 +235,18 @@ export function createThreadRoutes(
 
     try {
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      const sessionsPath = (await import('node:path')).join(
-        process.env.HOME || '',
-        '.openclaw/agents/main/sessions/sessions.json'
-      )
-      const fs = await import('node:fs')
-      const raw = fs.readFileSync(sessionsPath, 'utf-8')
-      const sessions = JSON.parse(raw)
-      const meta = sessions[sessionKey] ?? {}
-
-      // OpenClaw owns sessions.json; never mutate it from a GET. Read-only display.
-      const effectiveProvider = meta.modelProvider ?? null
-      const effectiveModelName = meta.model ?? null
+      const backend = backendForSession(sessionKey)
+      const meta = backend ? await backend.getSessionMeta(sessionKey) : null
 
       res.json({
-        model: effectiveModelName,
-        modelProvider: effectiveProvider,
-        contextTokens: meta.contextTokens ?? null,
-        totalTokens: meta.totalTokens ?? 0,
-        inputTokens: meta.inputTokens ?? 0,
-        outputTokens: meta.outputTokens ?? 0,
-        compactionCount: meta.compactionCount ?? 0,
-        thinkingLevel: meta.thinkingLevel ?? null,
+        model: meta?.model ?? null,
+        modelProvider: meta?.modelProvider ?? null,
+        contextTokens: meta?.contextTokens ?? null,
+        totalTokens: meta?.totalTokens ?? 0,
+        inputTokens: meta?.inputTokens ?? 0,
+        outputTokens: meta?.outputTokens ?? 0,
+        compactionCount: meta?.compactionCount ?? 0,
+        thinkingLevel: meta?.thinkingLevel ?? null,
         agentStatus: thread.agentStatus ?? 'idle',
         sessionKey
       })
@@ -268,7 +271,6 @@ export function createThreadRoutes(
     if (!sessionKey) return res.status(400).json({ error: 'sessionKey required' })
     const thread = threadManager.get(sessionKey)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
-    // Clear the agent status lock
     thread.agentStatus = 'idle'
     res.json({ success: true, thread })
   })
@@ -278,46 +280,21 @@ export function createThreadRoutes(
     if (!sessionKey) return res.status(400).json({ error: 'sessionKey required' })
     const thread = threadManager.get(sessionKey)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
-    // Signal stop by setting status to idle
     thread.agentStatus = 'idle'
     res.json({ success: true, thread })
   })
 
-  // ── Available models (cached, async) ─────────────────────────────────
-  let modelsCache: { models: string[]; defaultModel: string | null; ts: number } | null = null
-  const MODELS_CACHE_TTL = 30_000 // 30 seconds
-
-  async function fetchModels(): Promise<{ models: string[]; defaultModel: string | null }> {
-    if (modelsCache && Date.now() - modelsCache.ts < MODELS_CACHE_TTL) {
-      return { models: modelsCache.models, defaultModel: modelsCache.defaultModel }
-    }
-
-    // Read directly from config file — avoids PATH resolution issues with openclaw CLI
-    try {
-      const fs = await import('node:fs')
-      const nodePath = await import('node:path')
-      const configPath = nodePath.join(process.env.HOME || '', '.openclaw/openclaw.json')
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-      const modelsObj = config?.agents?.defaults?.models ?? {}
-      const models = Object.keys(modelsObj)
-      const defaultModel = config?.agents?.defaults?.model?.primary ?? null
-      modelsCache = { models, defaultModel, ts: Date.now() }
-      return { models, defaultModel }
-    } catch {
-      return { models: [], defaultModel: null }
-    }
-  }
-
   router.get('/api/models', async (_req, res) => {
     try {
-      const result = await fetchModels()
+      const backend = defaultBackend()
+      if (!backend) return res.json({ models: [], defaultModel: null })
+      const result = await backend.listAvailableModels()
       res.json(result)
     } catch {
       res.json({ models: [], defaultModel: null })
     }
   })
 
-  // ── Switch thread model ──────────────────────────────────────────────
   router.patch('/api/threads/:key/model', async (req, res) => {
     const threadKey = req.params.key
     const { model } = req.body ?? {}
@@ -327,23 +304,12 @@ export function createThreadRoutes(
 
     try {
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      const fs = await import('node:fs')
-      const nodePath = await import('node:path')
-      const sessionsPath = nodePath.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
-      const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
-      if (sessions[sessionKey]) {
-        // Parse provider/model from "provider/model" format
-        const slashIdx = model.indexOf('/')
-        if (slashIdx > 0) {
-          sessions[sessionKey].modelProvider = model.slice(0, slashIdx)
-          sessions[sessionKey].model = model.slice(slashIdx + 1)
-        } else {
-          sessions[sessionKey].model = model
-        }
-        const tmpPath = sessionsPath + '.tmp'
-        fs.writeFileSync(tmpPath, JSON.stringify(sessions, null, 2))
-        fs.renameSync(tmpPath, sessionsPath)
-      }
+      const backend = backendForSession(sessionKey)
+      if (!backend) return res.status(500).json({ error: 'No backend available' })
+      const slashIdx = model.indexOf('/')
+      const provider = slashIdx > 0 ? model.slice(0, slashIdx) : ''
+      const modelName = slashIdx > 0 ? model.slice(slashIdx + 1) : model
+      await backend.setSessionModel(sessionKey, provider, modelName)
       res.json({ success: true, model, thread })
     } catch (err) {
       res.status(500).json({ error: 'Failed to update model', detail: (err as Error).message })
@@ -358,23 +324,13 @@ export function createThreadRoutes(
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
 
     try {
-      const fs = await import('node:fs')
-      const nodePath = await import('node:path')
-      const sessionsPath = nodePath.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
       const derivedKey = opts?.chatModule?.getSessionKeyForThread(sessionKey) ?? deriveSessionKey(sessionKey)
-      const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
-      if (sessions[derivedKey]) {
-        const slashIdx = model.indexOf('/')
-        if (slashIdx > 0) {
-          sessions[derivedKey].modelProvider = model.slice(0, slashIdx)
-          sessions[derivedKey].model = model.slice(slashIdx + 1)
-        } else {
-          sessions[derivedKey].model = model
-        }
-        const tmpPath = sessionsPath + '.tmp'
-        fs.writeFileSync(tmpPath, JSON.stringify(sessions, null, 2))
-        fs.renameSync(tmpPath, sessionsPath)
-      }
+      const backend = backendForSession(derivedKey)
+      if (!backend) return res.status(500).json({ error: 'No backend available' })
+      const slashIdx = model.indexOf('/')
+      const provider = slashIdx > 0 ? model.slice(0, slashIdx) : ''
+      const modelName = slashIdx > 0 ? model.slice(slashIdx + 1) : model
+      await backend.setSessionModel(derivedKey, provider, modelName)
       res.json({ success: true, model, thread })
     } catch (err) {
       res.status(500).json({ error: 'Failed to update model', detail: (err as Error).message })
@@ -386,7 +342,6 @@ export function createThreadRoutes(
     const threads = threadManager.list()
     const now = Date.now()
 
-    // Build tree nodes from flat thread list
     interface SessionNode {
       key: string
       fullKey: string
@@ -409,7 +364,6 @@ export function createThreadRoutes(
       children: []
     }
 
-    // Build a map of thread nodes for nesting subagents
     const threadNodes = new Map<string, SessionNode>()
 
     for (const t of threads) {
@@ -429,63 +383,61 @@ export function createThreadRoutes(
         children: []
       }
       mainNode.children.push(node)
-      // Track full session key for parent matching
       const fullSessionKey = t.key.startsWith('agent:') ? t.key : `agent:main:thread:${t.key}`
       threadNodes.set(fullSessionKey, node)
     }
 
-    // Read sessions.json to find subagent→parent relationships
+    // Use backend.listSubagents() if available to attach children under parents.
     try {
-      const fs = await import('node:fs')
-      const path = await import('node:path')
-      const sessionsPath = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
-      if (fs.existsSync(sessionsPath)) {
-        const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf-8'))
-        for (const [sk, meta] of Object.entries(sessions)) {
-          if (!sk.includes(':subagent:')) continue
-          const m = meta as Record<string, unknown>
-          const spawnedBy = m.spawnedBy as string | undefined
-          if (!spawnedBy) continue
-
-          // Find the parent thread node
-          const parentNode = threadNodes.get(spawnedBy)
-          if (!parentNode) continue
-
-          // Check if this subagent is already in the tree (from threadManager)
-          const shortKey = sk.replace(/^agent:main:/, '')
-          const alreadyInTree = mainNode.children.some((c) => c.key === shortKey || c.fullKey === sk)
-          if (alreadyInTree) {
-            // Move it from mainNode.children to parentNode.children
-            const idx = mainNode.children.findIndex((c) => c.key === shortKey || c.fullKey === sk)
-            if (idx >= 0) {
-              const [moved] = mainNode.children.splice(idx, 1)
-              moved.parentKey = parentNode.key
-              parentNode.children.push(moved)
-            }
-            continue
-          }
-
-          // Create a new subagent node under the parent
-          const updatedAt = (m.updatedAt as number) || (m.startedAt as number) || now
-          const label = (m.label as string) || shortKey
-          const subNode: SessionNode = {
-            key: shortKey,
-            fullKey: sk,
-            kind: 'subagent',
-            label,
-            parentKey: parentNode.key,
-            updatedAt,
-            totalTokens: 0,
-            children: []
-          }
-          parentNode.children.push(subNode)
+      const backend = defaultBackend()
+      const allSubagents: SubagentSummary[] = backend ? await backend.listSubagents() : []
+      // For each subagent, look up the parent. SubagentSummary doesn't
+      // include the parent's key; use listSessions to recover that mapping.
+      let parentMap = new Map<string, string>() // childKey -> parentKey
+      if (backend) {
+        const sessions: SessionSummary[] = await backend.listSessions({ kind: 'subagent' })
+        for (const s of sessions) {
+          if (s.parentKey) parentMap.set(s.key, s.parentKey)
         }
       }
+
+      for (const sub of allSubagents) {
+        const sk = sub.sessionKey
+        const parentSessionKey = parentMap.get(sk)
+        if (!parentSessionKey) continue
+        const parentNode = threadNodes.get(parentSessionKey)
+        if (!parentNode) continue
+
+        const shortKey = sk.replace(/^agent:main:/, '')
+        const alreadyInTree = mainNode.children.some((c) => c.key === shortKey || c.fullKey === sk)
+        if (alreadyInTree) {
+          const idx = mainNode.children.findIndex((c) => c.key === shortKey || c.fullKey === sk)
+          if (idx >= 0) {
+            const [moved] = mainNode.children.splice(idx, 1)
+            moved.parentKey = parentNode.key
+            parentNode.children.push(moved)
+          }
+          continue
+        }
+
+        const updatedAt = sub.lastActivity ?? now
+        const label = sub.label ?? shortKey
+        const subNode: SessionNode = {
+          key: shortKey,
+          fullKey: sk,
+          kind: 'subagent',
+          label,
+          parentKey: parentNode.key,
+          updatedAt,
+          totalTokens: 0,
+          children: []
+        }
+        parentNode.children.push(subNode)
+      }
     } catch {
-      /* sessions.json read failed — continue with flat tree */
+      /* backend unavailable — flat tree only */
     }
 
-    // Sort children by updatedAt descending
     mainNode.children.sort((a, b) => b.updatedAt - a.updatedAt)
     for (const child of mainNode.children) {
       if (child.children.length > 0) {
@@ -493,7 +445,6 @@ export function createThreadRoutes(
       }
     }
 
-    // Prune stale subagents: remove subagent children older than 24h
     const DAY_MS = 24 * 60 * 60 * 1000
     const parentLatest = mainNode.children.length > 0 ? mainNode.children[0].updatedAt : now
     mainNode.children = mainNode.children.filter((child) => {
@@ -503,7 +454,6 @@ export function createThreadRoutes(
       }
       return true
     })
-    // Also prune stale subagents nested under threads
     for (const child of mainNode.children) {
       if (child.children.length > 0) {
         child.children = child.children.filter((sub) => {

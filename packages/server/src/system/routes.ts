@@ -1,88 +1,34 @@
 // System REST endpoints: GET /api/system/architecture, GET /api/system/health, GET /api/system/logs
 
 import { Router } from 'express'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { SystemModule } from './system.js'
 import type { LogsChannel } from './ws.js'
 import { readPersistedLogs } from './ws.js'
 import type { HealthHistory } from './health-history.js'
-
-export interface DeviceInfoProvider {
-  getDeviceInfo(): {
-    deviceId: string
-    publicKey: string
-    connectionStatus: string
-    gatewayUrl: string
-    reconnectAttempt: number
-  }
-}
-
-export interface GatewayRestartService {
-  restart(): Promise<{ message: string; command: string }>
-}
+import type { RoutingBackend } from '../agent-backend/factory.js'
+import type { ContextBudget } from '@sovereign/core'
 
 export interface SystemRoutesOptions {
   system: SystemModule
   logsChannel: LogsChannel
   dataDir: string
   healthHistory?: HealthHistory
-  deviceInfoProvider?: DeviceInfoProvider
-  gatewayRestart?: GatewayRestartService
+  /** Routing backend — used for device info, context budget, and gateway restart. */
+  routingBackend?: RoutingBackend
 }
 
-async function fetchContextBudgetFromGateway(): Promise<Record<string, unknown> | null> {
-  const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789/ws'
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN
-  // Try HTTP endpoint first (gateway exposes REST on same port)
-  const httpUrl = gatewayUrl.replace(/^ws/, 'http').replace(/\/ws$/, '/api/context')
-  try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 5000)
-    const headers: Record<string, string> = { Accept: 'application/json' }
-    if (token) headers['Authorization'] = `Bearer ${token}`
-    const res = await fetch(httpUrl, { headers, signal: controller.signal })
-    clearTimeout(timeout)
-    if (res.ok) return (await res.json()) as Record<string, unknown>
-  } catch {
-    // Gateway unavailable — return null for mock fallback
-  }
-  return null
-}
-
-const execFileAsync = promisify(execFile)
-
-export function createGatewayRestartService(): GatewayRestartService {
+function mockContextBudget(): ContextBudget {
   return {
-    async restart() {
-      const command = 'openclaw gateway restart'
-      const { stdout, stderr } = await execFileAsync('openclaw', ['gateway', 'restart'], {
-        timeout: 30_000,
-        maxBuffer: 1024 * 1024
-      })
-      const output = [stdout, stderr].filter(Boolean).join('\n').trim()
-      return {
-        command,
-        message: output || 'OpenClaw gateway restart completed'
-      }
-    }
-  }
-}
-
-function mockContextBudget(): Record<string, unknown> {
-  return {
-    report: {
-      source: 'mock',
-      generatedAt: Date.now(),
-      provider: 'unknown',
-      model: 'unknown',
-      workspaceDir: process.cwd(),
-      bootstrapMaxChars: 50000,
-      systemPrompt: { chars: 15000, projectContextChars: 8000, nonProjectContextChars: 7000 },
-      injectedWorkspaceFiles: [],
-      skills: { promptChars: 3000, entries: [] },
-      tools: { listChars: 4000, schemaChars: 12000, entries: [] }
-    },
+    source: 'mock',
+    generatedAt: Date.now(),
+    provider: 'unknown',
+    model: 'unknown',
+    workspaceDir: process.cwd(),
+    bootstrapMaxChars: 50000,
+    systemPrompt: { chars: 15000, projectContextChars: 8000, nonProjectContextChars: 7000 },
+    injectedWorkspaceFiles: [],
+    skills: { promptChars: 3000, entries: [] },
+    tools: { listChars: 4000, schemaChars: 12000, entries: [] },
     fileContents: {},
     session: { contextTokens: null },
     disabledTools: [],
@@ -93,15 +39,12 @@ function mockContextBudget(): Record<string, unknown> {
 export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Router {
   const router = Router()
 
-  // Support old 1-arg signature for backward compat
   const system = 'system' in opts ? (opts as SystemRoutesOptions).system : (opts as SystemModule)
   const logsChannel = 'logsChannel' in opts ? (opts as SystemRoutesOptions).logsChannel : null
   const dataDir = 'dataDir' in opts ? (opts as SystemRoutesOptions).dataDir : null
   const healthHistory = 'healthHistory' in opts ? (opts as SystemRoutesOptions).healthHistory : null
-  const deviceInfoProvider = 'deviceInfoProvider' in opts ? (opts as SystemRoutesOptions).deviceInfoProvider : null
-  const gatewayRestart =
-    'gatewayRestart' in opts ? (opts as SystemRoutesOptions).gatewayRestart : createGatewayRestartService()
-  let restartInFlight: Promise<{ message: string; command: string }> | null = null
+  const routingBackend = 'routingBackend' in opts ? (opts as SystemRoutesOptions).routingBackend : null
+  let restartInFlight: Promise<{ message: string; command?: string }> | null = null
 
   router.get('/api/system/identity', (_req, res) => {
     res.json({
@@ -130,7 +73,6 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
       })
       res.json({ entries, total: entries.length })
     } else if (logsChannel) {
-      // fallback to buffer
       let entries = logsChannel.getBuffer()
       if (level) entries = entries.filter((e) => e.level === level)
       if (module) entries = entries.filter((e) => e.module === module)
@@ -147,9 +89,19 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
     }
   })
 
-  router.get('/api/system/context-budget', async (_req, res) => {
-    const data = await fetchContextBudgetFromGateway()
-    res.json(data ?? mockContextBudget())
+  router.get('/api/system/context-budget', async (req, res) => {
+    if (!routingBackend) {
+      res.json(mockContextBudget())
+      return
+    }
+    const sessionKey = (req.query.sessionKey as string) || ''
+    try {
+      const backend = sessionKey ? routingBackend.forSession(sessionKey) : routingBackend.default()
+      const budget = await backend.getContextBudget(sessionKey)
+      res.json(budget ?? mockContextBudget())
+    } catch {
+      res.json(mockContextBudget())
+    }
   })
 
   router.get('/api/system/health/history', (req, res) => {
@@ -161,57 +113,62 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
     res.json({ snapshots: healthHistory.getSnapshots(windowMs) })
   })
 
-  // Device identity endpoint
+  // Device identity endpoint — aggregates across all enabled backends.
   router.get('/api/system/devices', (_req, res) => {
-    if (!deviceInfoProvider) {
-      res.json({ devices: [], error: 'Device info not available' })
+    if (!routingBackend) {
+      res.json({ devices: [], error: 'Routing backend not available' })
       return
     }
-    const info = deviceInfoProvider.getDeviceInfo()
-    res.json({
-      devices: [
-        {
-          deviceId: info.deviceId,
-          publicKey: info.publicKey,
-          name: 'This Device',
-          connectionStatus: info.connectionStatus,
-          gatewayUrl: info.gatewayUrl,
-          reconnectAttempt: info.reconnectAttempt,
-          isCurrent: true
-        }
-      ]
-    })
+    const devices: Array<Record<string, unknown>> = []
+    for (const inst of routingBackend.all()) {
+      const info = inst.backend.getDeviceInfo?.()
+      if (!info) continue
+      devices.push({
+        deviceId: info.deviceId,
+        publicKey: info.publicKey,
+        name: 'This Device',
+        connectionStatus: info.connectionStatus,
+        gatewayUrl: info.gatewayUrl,
+        reconnectAttempt: info.reconnectAttempt,
+        backendKind: info.backendKind,
+        isCurrent: true
+      })
+    }
+    res.json({ devices })
   })
 
   router.post('/api/system/gateway/restart', async (_req, res) => {
-    if (!gatewayRestart) {
-      res.status(500).json({ error: 'Gateway restart service unavailable' })
+    if (!routingBackend) {
+      res.status(500).json({ error: 'Routing backend not available' })
       return
     }
-
     if (restartInFlight) {
       res.status(409).json({ error: 'Gateway restart already in progress' })
       return
     }
 
-    restartInFlight = gatewayRestart.restart()
+    // Find the first backend that supports restart (Phase 0: OpenClaw only).
+    const restartable = routingBackend.all().find((i) => typeof i.backend.restart === 'function')
+    if (!restartable?.backend.restart) {
+      res.status(501).json({ error: 'No backend supports restart' })
+      return
+    }
+
+    restartInFlight = restartable.backend.restart!()
     try {
       const result = await restartInFlight
       res.status(202).json({ status: 'accepted', ...result })
     } catch (error) {
-      const message =
-        error instanceof Error && error.message.trim() ? error.message : 'Failed to restart OpenClaw gateway'
+      const message = error instanceof Error && error.message.trim() ? error.message : 'Failed to restart backend'
       res.status(500).json({ error: message })
     } finally {
       restartInFlight = null
     }
   })
 
-  // Watchdog endpoint
   router.get('/api/system/watchdog', async (_req, res) => {
     const checks: Array<{ name: string; status: 'ok' | 'warning' | 'error'; message: string }> = []
 
-    // Check gateway reachability
     const health = system.getHealth()
     const backendStatus = health.connection.agentBackend
     checks.push({
@@ -220,7 +177,6 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
       message: `Agent backend: ${backendStatus}`
     })
 
-    // Check modules initialized
     const arch = system.getArchitecture()
     const errorModules = arch.modules.filter((m) => m.status === 'error')
     checks.push({
@@ -232,7 +188,6 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
           : `All ${arch.modules.length} modules healthy`
     })
 
-    // Check disk space
     const memPct =
       health.resources.memoryUsage.total > 0
         ? (health.resources.memoryUsage.used / health.resources.memoryUsage.total) * 100
@@ -243,7 +198,6 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
       message: `Memory usage: ${memPct.toFixed(1)}%`
     })
 
-    // Check uptime (proxy for stuck threads — if uptime < 5s, still starting)
     checks.push({
       name: 'system_uptime',
       status: health.connection.uptime < 5 ? 'warning' : 'ok',

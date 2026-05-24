@@ -52,10 +52,10 @@ export function createFileRouter(
     return project
   }
 
-  // GET /api/files/workspace — list OpenClaw workspace files for file chip resolution
-  const openclawWorkspace = process.env.OPENCLAW_WORKSPACE || ''
+  // GET /api/files/workspace — list workspace files for file chip resolution.
+  const sovereignWorkspace = (process.env.SOVEREIGN_WORKSPACE || '').trim()
   router.get('/workspace', (async (_req, res) => {
-    if (!openclawWorkspace) {
+    if (!sovereignWorkspace) {
       res.json({ entries: [] })
       return
     }
@@ -105,8 +105,8 @@ export function createFileRouter(
         }
       }
 
-      await scan(openclawWorkspace, '', depth)
-      res.json({ entries, basePath: openclawWorkspace })
+      await scan(sovereignWorkspace, '', depth)
+      res.json({ entries, basePath: sovereignWorkspace })
     } catch (err: any) {
       res.status(500).json({ error: err.message })
     }
@@ -114,7 +114,7 @@ export function createFileRouter(
 
   // GET /api/files/workspace/read?path=... — read a workspace file by absolute path
   router.get('/workspace/read', (async (req, res) => {
-    if (!openclawWorkspace) {
+    if (!sovereignWorkspace) {
       res.status(404).json({ error: 'Workspace not configured' })
       return
     }
@@ -124,7 +124,7 @@ export function createFileRouter(
       return
     }
     const resolved = nodePath.resolve(filePath)
-    if (!resolved.startsWith(openclawWorkspace)) {
+    if (!resolved.startsWith(sovereignWorkspace)) {
       res.status(403).json({ error: 'Path outside workspace' })
       return
     }

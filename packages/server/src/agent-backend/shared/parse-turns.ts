@@ -1,11 +1,12 @@
-// Parse raw gateway ChatMessage[] into ParsedTurn[]
-// Adapted from voice-ui's parseTurns logic
+// Backend-agnostic turn parser. Generic enough to handle ContentBlock arrays
+// from any backend; backend-specific noise filtering lives in each adapter
+// (see `openclaw/parse-turns.ts`).
 
 import type { ParsedTurn, WorkItem } from '@sovereign/core'
 import { stripThinkingBlocks } from './thinking.js'
 
-/** Extract text from gateway message content (string | ContentBlock[]). */
-function extractText(msg: unknown): string | null {
+/** Extract text from a message's content (string | ContentBlock[]). */
+export function extractText(msg: unknown): string | null {
   if (!msg) return null
   if (typeof msg === 'string') return msg
   if (Array.isArray(msg))
@@ -18,8 +19,8 @@ function extractText(msg: unknown): string | null {
   return null
 }
 
-/** Convert base64 to detected MIME type */
-function detectImageMime(base64: string): string {
+/** Convert base64 to detected MIME type. */
+export function detectImageMime(base64: string): string {
   if (base64.startsWith('/9j/')) return 'image/jpeg'
   if (base64.startsWith('iVBOR')) return 'image/png'
   if (base64.startsWith('R0lGO')) return 'image/gif'
@@ -27,8 +28,8 @@ function detectImageMime(base64: string): string {
   return 'image/jpeg'
 }
 
-/** Extract content including image blocks as HTML img tags — for tool result output */
-function extractContentOutput(msg: unknown): string | null {
+/** Extract content including image blocks as HTML img tags — for tool result output. */
+export function extractContentOutput(msg: unknown): string | null {
   if (!msg) return null
   if (typeof msg === 'string') return msg
   if (Array.isArray(msg)) {
@@ -49,107 +50,64 @@ function extractContentOutput(msg: unknown): string | null {
   return null
 }
 
-/** Strip gateway-injected timestamp prefix */
-function stripTimestamp(text: string): string {
+/** Strip a generic gateway-injected timestamp prefix. */
+export function stripTimestamp(text: string): string {
   return text.replace(/^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
 }
 
-/** Strip OpenClaw internal context wrapper markers */
-function stripInternalContextWrapper(text: string): string {
-  return text
-    .replace(/^<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\s*/, '')
-    .replace(/\s*<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\s*$/, '')
-}
-
-/** Strip directive tags */
-function stripDirectives(text: string): string {
+/** Strip backend-agnostic directive tags ([[reply_to_current]] etc.). */
+export function stripDirectives(text: string): string {
   return text.replace(/\[\[\s*(?:reply_to_current|reply_to:\s*[^\]]*|audio_as_voice)\s*\]\]/g, '').trim()
 }
 
-/** Strip the "Sender (untrusted metadata):" envelope from user messages */
-function stripSenderEnvelope(text: string): string {
-  return text.replace(/^Sender \(untrusted metadata\):\s*```json\s*\{[^}]*\}\s*```\s*/s, '').trim()
+/**
+ * Optional hooks supplied by a backend-specific parser.
+ * Default implementations are no-ops so a vanilla backend gets generic behavior.
+ */
+export interface ParseTurnsOptions {
+  /**
+   * Return a system-turn replacement for `text`, or `null` if `text` is not
+   * a system-injected (out-of-band) user message. Backends use this to
+   * filter their own internal/system markers.
+   */
+  classifySystemInjected?(text: string): { systemContent: string } | null
+
+  /**
+   * Given an injected `text`, return the embedded user message that should be
+   * surfaced (if any). Used for cases like OpenClaw's "Sender (untrusted metadata):"
+   * appearing after a system prefix.
+   */
+  extractEmbeddedUser?(text: string): string | null
+
+  /**
+   * Strip backend-specific envelope from a user message after generic stripping
+   * has already been applied. Default: identity.
+   */
+  stripUserEnvelope?(text: string): string
+
+  /**
+   * Final filter pass — return false to drop a turn from the output. Default
+   * keeps everything.
+   */
+  shouldKeepTurn?(turn: ParsedTurn): boolean
+
+  /** Names of tool calls that should be hidden from work items (e.g. OpenClaw's `sessions_yield`). */
+  hiddenToolNames?: Set<string>
 }
 
-/** Try to extract a real user message embedded after a system prefix.
- *  Returns the user message text if found, null otherwise. */
-function extractEmbeddedUserMessage(text: string): string | null {
-  // Pattern: system event text followed by "Sender (untrusted metadata):" user message
-  const senderIdx = text.indexOf('Sender (untrusted metadata):')
-  if (senderIdx > 0) {
-    const userPart = text.substring(senderIdx)
-    const cleaned = stripSenderEnvelope(userPart)
-    const stripped = stripTimestamp(cleaned)
-    if (stripped && stripped.length > 5) return stripped
-  }
-  return null
-}
-
-/** Check if text looks like a system-injected message */
-function isSystemInjected(text: string): boolean {
-  const stripped = stripTimestamp(text)
-  return (
-    stripped.startsWith('[CronResult]') ||
-    /^\[Scheduled[:\s]/.test(stripped) ||
-    stripped.startsWith('[System Message]') ||
-    /^System:\s*\[/.test(text) ||
-    /^\(System\)/i.test(stripped) ||
-    /^Supervisor[\s:]/i.test(stripped) ||
-    /^Write any lasting notes to memory\//i.test(stripped) ||
-    stripped.startsWith('[Subagent Context]') ||
-    stripped.startsWith('[Subagent Task]') ||
-    /^Heartbeat prompt:/i.test(stripped) ||
-    stripped === 'HEARTBEAT_OK' ||
-    /^OpenClaw runtime context \(internal\):/i.test(stripped) ||
-    stripped.startsWith('<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>') ||
-    /^Exec (?:completed|failed)\s*\(/i.test(stripped)
-  )
-}
-
-/** Normalize system-injected message text for rendering. */
-function normalizeSystemText(text: string): string {
-  const stripped = stripInternalContextWrapper(stripTimestamp(text))
-  const isTaskCompletion =
-    /^OpenClaw runtime context \(internal\):/i.test(stripped) && /\[Internal task completion event\]/i.test(stripped)
-  const isSubagentResult = stripped.startsWith('[System Message]') && /subagent task .* completed/i.test(stripped)
-  const isCronResult = stripped.startsWith('[CronResult]')
-  const isScheduled = /^\[Scheduled[:\s]/.test(stripped)
-  const isSystemEvent = /^System:\s*\[/.test(text)
-
-  if (isTaskCompletion) return stripDirectives(stripped)
-
-  if (isSubagentResult) {
-    let cleanText = stripped
-      .replace(/^\[System Message\]\s*/, '')
-      .replace(/^\[sessionId:\s*[^\]]*\]\s*/, '')
-      .trim()
-    cleanText = cleanText
-      .replace(/\n\nStats:.*$/s, '')
-      .replace(/\n\n(?:There are still|A completed subagent task is ready).*$/s, '')
-      .trim()
-    return stripDirectives(cleanText)
-  }
-
-  if (isCronResult) return stripDirectives(stripped.replace(/^\[CronResult\]\s*/, '').trim())
-  if (isScheduled) return stripDirectives(stripped.replace(/^\[Scheduled:\s*[^\]]*\]\s*/, '').trim())
-  if (isSystemEvent) {
-    const cleanText = text
-      .replace(/^System:\s*\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+GMT[^\]]*\]\s*/, '')
-      .trim()
-      .replace(/^Cron\s*\([^)]*\):\s*/, '')
-      .trim()
-    return stripDirectives(cleanText)
-  }
-
-  return stripDirectives(stripped)
-}
+const DEFAULT_HIDDEN_TOOL_NAMES = new Set<string>()
 
 /**
- * Parse raw gateway messages into ParsedTurn[].
- * Groups user→assistant turns, extracts tool calls as work items,
- * strips thinking blocks, and handles system messages.
+ * Parse raw backend messages into ParsedTurn[].
+ * Generic enough for any backend; supply ParseTurnsOptions for backend-specific noise.
  */
-export function parseTurns(messages: any[]): ParsedTurn[] {
+export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): ParsedTurn[] {
+  const hiddenTools = options.hiddenToolNames ?? DEFAULT_HIDDEN_TOOL_NAMES
+  const classifySystem = options.classifySystemInjected ?? (() => null)
+  const extractEmbedded = options.extractEmbeddedUser ?? (() => null)
+  const stripEnvelope = options.stripUserEnvelope ?? ((t: string) => t)
+  const shouldKeep = options.shouldKeepTurn ?? (() => true)
+
   const turns: ParsedTurn[] = []
   let currentWork: WorkItem[] = []
   let currentThinking: string[] = []
@@ -159,13 +117,10 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
     const role = m.role ?? ''
 
     if (role === 'user') {
-      // If there's a pending user turn without an assistant response, push it
       if (lastUserTurn) {
         turns.push(lastUserTurn)
       }
 
-      // Flush accumulated work items as an assistant turn (handles sessions_yield / subagent spawns
-      // where the agent has tool calls but no final text response)
       if (currentWork.length > 0) {
         turns.push({
           role: 'assistant',
@@ -182,12 +137,10 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
       const stripped = stripTimestamp(text)
       const cleaned = stripDirectives(stripped)
 
-      // Skip system-injected messages — collapse into system turns
-      if (isSystemInjected(text)) {
-        // Check for embedded user message after the system prefix
-        const embeddedUser = extractEmbeddedUserMessage(text)
+      const systemReplacement = classifySystem(text)
+      if (systemReplacement) {
+        const embeddedUser = extractEmbedded(text)
         if (embeddedUser) {
-          // Split: system part becomes a system turn (filtered later), user part becomes user turn
           const userCleaned = stripDirectives(stripTimestamp(embeddedUser))
           if (userCleaned) {
             lastUserTurn = {
@@ -199,14 +152,13 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
             }
           }
         } else {
-          const systemTurn: ParsedTurn = {
+          turns.push({
             role: 'system',
-            content: normalizeSystemText(text),
+            content: systemReplacement.systemContent,
             timestamp: m.timestamp ?? 0,
             workItems: [],
             thinkingBlocks: []
-          }
-          turns.push(systemTurn)
+          })
           lastUserTurn = null
         }
         currentWork = []
@@ -214,8 +166,7 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
         continue
       }
 
-      // Strip sender envelope from regular user messages
-      const userText = stripSenderEnvelope(cleaned)
+      const userText = stripEnvelope(cleaned)
       const finalText = stripTimestamp(userText) || userText
 
       lastUserTurn = {
@@ -257,8 +208,6 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
       }
 
       if (toolCalls.length > 0) {
-        // Process blocks in order: emit thinking entries for text blocks, then tool calls
-        // This preserves the interleaving of thinking text and tool calls
         if (typeof m.content === 'string') {
           const cleaned = stripDirectives(stripThinkingBlocks(m.content)).trim()
           if (cleaned) {
@@ -274,9 +223,7 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
                 currentWork.push({ type: 'thinking', output: cleaned, timestamp: m.timestamp ?? 0 })
               }
             } else if (block.type === 'toolCall') {
-              if (block.name === 'sessions_yield') {
-                continue
-              }
+              if (hiddenTools.has(block.name)) continue
               currentWork.push({
                 type: 'tool_call',
                 name: block.name ?? 'tool',
@@ -285,10 +232,7 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
                 timestamp: m.timestamp ?? 0
               })
             } else if (block.type === 'tool_use') {
-              // Claude CLI raw Anthropic API format
-              if (block.name === 'sessions_yield') {
-                continue
-              }
+              if (hiddenTools.has(block.name)) continue
               currentWork.push({
                 type: 'tool_call',
                 name: block.name ?? 'tool',
@@ -302,7 +246,6 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
         continue
       }
 
-      // No tool calls — collect all text parts for final response
       if (!Array.isArray(m.content) || typeof m.content === 'string') {
         // already in allTextParts
       } else {
@@ -312,7 +255,6 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
       const rawText = allTextParts.join('\n').trim()
       const cleanedText = stripDirectives(stripThinkingBlocks(rawText)).trim()
 
-      // Final assistant response (no tool calls)
       if (cleanedText && cleanedText !== 'NO_REPLY' && cleanedText !== 'HEARTBEAT_OK') {
         const turn: ParsedTurn = {
           role: 'assistant',
@@ -329,13 +271,11 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
         currentWork = []
         currentThinking = []
       } else if (cleanedText === '' || cleanedText === 'NO_REPLY' || cleanedText === 'HEARTBEAT_OK') {
-        // Empty/suppressed response — still close the turn
         if (lastUserTurn) {
           turns.push(lastUserTurn)
           lastUserTurn = null
         }
 
-        // Check for error turns (e.g. 429 rate limit) — show error as a system turn
         if (m.stopReason === 'error' && m.errorMessage) {
           turns.push({
             role: 'system',
@@ -352,12 +292,12 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
       continue
     }
 
-    // Other roles (system, etc.)
     const text = extractText(m.content)
     if (text) {
+      const systemReplacement = classifySystem(text)
       turns.push({
         role: 'system',
-        content: normalizeSystemText(text),
+        content: systemReplacement ? systemReplacement.systemContent : stripDirectives(stripTimestamp(text)),
         timestamp: m.timestamp ?? 0,
         workItems: [],
         thinkingBlocks: []
@@ -365,12 +305,10 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
     }
   }
 
-  // Push any remaining user turn
   if (lastUserTurn) {
     turns.push(lastUserTurn)
   }
 
-  // Flush any remaining work items (e.g., agent yielded or spawned subagent as last action)
   if (currentWork.length > 0) {
     turns.push({
       role: 'assistant',
@@ -381,41 +319,25 @@ export function parseTurns(messages: any[]): ParsedTurn[] {
     })
   }
 
-  // Filter out noisy internal/system turns
   const filtered = turns.filter((t) => {
     const text = (t.content ?? '').trim()
     if (!text) return true
 
-    // Exact matches
     if (text === 'NO_REPLY' || text === 'ANNOUNCE_SKIP' || text === 'REPLY_SKIP' || text === 'HEARTBEAT_OK')
       return false
 
-    // Filter exec notifications — these are noise
-    if (/^Exec (?:completed|failed)\s*\(/i.test(text)) return false
-
-    // Starts with
-    if (text.startsWith('Agent-to-agent announce step')) return false
-    if (text.startsWith('No new comments on')) return false
-
-    // Scheduled Result HH:MM\nCompaction
-    if (/^Scheduled Result \d{2}:\d{2}/.test(text)) return false
-
-    return true
+    return shouldKeep(t)
   })
 
-  // Deduplicate consecutive identical messages (non-user roles)
   const afterConsecutive = filtered.filter((t, i) => {
     if (i === 0) return true
-    if (t.role === 'user') return true // user dedup handled by content-hash window below
+    if (t.role === 'user') return true
     const prev = filtered[i - 1]
     return t.content !== prev.content || t.role !== prev.role
   })
 
-  // Content-hash dedup window for user messages:
-  // Collapse identical user messages within DEDUP_WINDOW_S seconds,
-  // even if separated by system/assistant turns.
   const DEDUP_WINDOW_MS = 10_000
-  const seenUser = new Map<string, number>() // content -> timestamp
+  const seenUser = new Map<string, number>()
   return afterConsecutive.filter((t) => {
     if (t.role !== 'user') return true
     const content = t.content.trim()

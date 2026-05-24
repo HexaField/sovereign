@@ -40,7 +40,6 @@ describe('parseTurns — thinking blocks', () => {
     const assistantTurn = turns.find((t) => t.role === 'assistant' && t.content === 'Done!')
     expect(assistantTurn).toBeDefined()
 
-    // The work items from the mid-turn messages should have TWO separate thinking entries
     const thinkingItems = assistantTurn!.workItems.filter((w) => w.type === 'thinking')
     expect(thinkingItems).toHaveLength(2)
     expect(thinkingItems[0].output).toBe('First thought')
@@ -69,7 +68,6 @@ describe('parseTurns — thinking blocks', () => {
     const finalTurn = turns.find((t) => t.role === 'assistant' && t.content === 'Final answer')
     expect(finalTurn).toBeDefined()
 
-    // Should NOT have "Analysis A\nAnalysis B" as a single thinking entry
     const thinkingItems = finalTurn!.workItems.filter((w) => w.type === 'thinking')
     expect(thinkingItems.some((t) => (t.output || '').includes('Analysis A\nAnalysis B'))).toBe(false)
     expect(thinkingItems).toHaveLength(2)
@@ -227,7 +225,6 @@ describe('parseTurns — subagent completion events', () => {
       }
     ]
     const turns = parseTurns(messages)
-    // Ensure the task completion system turn survived filtering
     const completionTurns = turns.filter((t) => t.role === 'system' && /task completion event/i.test(t.content))
     expect(completionTurns).toHaveLength(1)
   })
@@ -249,7 +246,6 @@ describe('parseTurns — wrapped internal completion events', () => {
     const completion = systemTurns[0]
     expect(completion.content).toContain('task completion event')
     expect(completion.content).toContain('task:')
-    // Wrapper markers must not appear in parsed content
     expect(completion.content).not.toContain('<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>')
     expect(completion.content).not.toContain('<<<END_OPENCLAW_INTERNAL_CONTEXT>>>')
   })

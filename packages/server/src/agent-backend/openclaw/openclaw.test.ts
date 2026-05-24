@@ -33,13 +33,8 @@ function waitForConnection(wss: WebSocketServer, timeoutMs = 3000): Promise<WsWe
   })
 }
 
-/**
- * Install the default challenge-response handshake handler on a WSS.
- * Every new client gets a connect.challenge event, and the connect RPC is auto-accepted.
- */
 function installHandshake(wss: WebSocketServer, opts?: { rejectConnect?: boolean; deviceToken?: string }) {
   wss.on('connection', (ws) => {
-    // Send challenge
     ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'test-nonce-123' } }))
 
     ws.on('message', (data: any) => {
@@ -98,21 +93,17 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   })
 
   afterEach(async () => {
-    // Disconnect backend FIRST (sets destroyed=true, clears all timers)
     if (backend) {
       try {
         await backend.disconnect()
       } catch {}
     }
-    // Force-close all server-side client connections
     for (const client of wss.clients) {
       try {
         client.terminate()
       } catch {}
     }
-    // Close the server
     await new Promise<void>((resolve) => wss.close(() => resolve()))
-    // Small delay to let any pending async callbacks drain
     await waitFor(50)
     try {
       rmSync(dataDir, { recursive: true, force: true })
@@ -131,11 +122,10 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     const identity = JSON.parse(readFileSync(keyPath, 'utf-8'))
     expect(identity.publicKey).toBeDefined()
     expect(identity.privateKeyDer).toBeDefined()
-    expect(identity.publicKey.length).toBe(64) // 32 bytes hex
+    expect(identity.publicKey.length).toBe(64)
   })
 
   it('MUST sign authentication payloads with the device private key using base64url encoding', async () => {
-    // Override handshake to capture connect params
     wss.removeAllListeners('connection')
     let connectParams: any = null
     wss.on('connection', (ws) => {
@@ -152,7 +142,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     await backend.connect()
     expect(connectParams).toBeDefined()
     expect(connectParams.device.signature).toBeDefined()
-    // base64url: no +, /, or = characters
     expect(connectParams.device.signature).not.toMatch(/[+/=]/)
   })
 
@@ -172,7 +161,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     backend = createOpenClawBackend(getConfig())
     await backend.connect()
     expect(connectParams.device.publicKey).toBeDefined()
-    // base64url encoded 32 bytes = 43 chars (no padding)
     expect(connectParams.device.publicKey).not.toMatch(/[+/=]/)
   })
 
@@ -399,9 +387,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   })
 
   it('MUST automatically retry the request after the indicated delay', async () => {
-    // The new JSON-RPC protocol doesn't have a built-in retry mechanism from events.
-    // Retry only applies to RPC request failures, not event-based errors.
-    // This test verifies that the backend does not crash on error events.
     const serverWs = await connectBackend()
     serverWs.send(
       JSON.stringify({
@@ -415,8 +400,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   })
 
   it('MUST emit backend.status with error and include metadata about pending pairing request', async () => {
-    // In the new protocol, pairing issues surface as connect request rejections.
-    // The backend sets status to 'error' with errorType 'auth_rejected' when pairing fails.
     wss.removeAllListeners('connection')
     installHandshake(wss, { rejectConnect: true })
     const statuses: Array<{ status: string; errorType?: string }> = []
@@ -425,7 +408,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     try {
       await backend.connect()
     } catch {
-      // Expected — connect rejected with 'pairing required'
+      /* Expected */
     }
     expect(statuses.some((s) => s.errorType === 'auth_rejected')).toBe(true)
   })
@@ -434,7 +417,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     const serverWs = await connectBackend()
     serverWs.send(JSON.stringify({ type: 'pairing.required' }))
     await waitFor(50)
-    // Should not throw, should still be alive
     expect(backend.status()).toBeDefined()
   })
 
@@ -459,17 +441,14 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     await connPromise
     expect(backend.status()).toBe('connected')
 
-    // Create a second server
     const wss2 = new WebSocketServer({ port: 0 })
     installHandshake(wss2)
     const port2 = await new Promise<number>((resolve) => {
       wss2.on('listening', () => resolve((wss2.address() as any).port))
     })
 
-    // Trigger hot-reload
     configCallback!({ gatewayUrl: `ws://127.0.0.1:${port2}/ws` })
 
-    // Wait for reconnection to new server (poll with timeout)
     const start = Date.now()
     while (backend.status() !== 'connected' && Date.now() - start < 5000) {
       await waitFor(50)
@@ -477,7 +456,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     expect(backend.status()).toBe('connected')
 
     await backend.disconnect()
-    backend = null as any // prevent afterEach double-disconnect
+    backend = null as any
     await new Promise<void>((r) => wss2.close(() => r()))
   })
 
@@ -488,15 +467,13 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     serverWs.on('message', (d: any) => {
       const msg = JSON.parse(d.toString())
       messages.push(d.toString())
-      // Handle session.switch RPC
       if (msg.type === 'req' && msg.method === 'session.switch') {
         serverWs.send(JSON.stringify({ type: 'res', id: msg.id, result: { ok: true } }))
       }
     })
 
-    // Set activeSessionKey so history reload is not skipped
     await backend.switchSession('main')
-    messages.length = 0 // clear switch messages
+    messages.length = 0
 
     serverWs.send(
       JSON.stringify({
@@ -513,7 +490,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
         payload: { stream: 'lifecycle', data: { phase: 'end' }, sessionKey: 'main' }
       })
     )
-    await waitFor(2500) // > 2000ms debounce
+    await waitFor(2500)
 
     expect(messages.some((m) => m.includes('chat.history'))).toBe(true)
   })
@@ -530,11 +507,9 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
       }
     })
 
-    // Set activeSessionKey
     await backend.switchSession('main')
     messages.length = 0
 
-    // Rapid working -> idle -> working -> idle
     serverWs.send(
       JSON.stringify({
         type: 'event',
@@ -550,7 +525,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
         payload: { stream: 'lifecycle', data: { phase: 'end' }, sessionKey: 'main' }
       })
     )
-    await waitFor(50) // < 2000ms
+    await waitFor(50)
     serverWs.send(
       JSON.stringify({
         type: 'event',
@@ -571,8 +546,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     const historyMsgs = messages.filter((m) => m.includes('chat.history'))
     expect(historyMsgs.length).toBe(1)
   })
-
-  // --- Phase 6 review fix todos ---
 
   it('MUST clear the 10s timeout in createSession when session is created successfully (timer leak fix)', async () => {
     const serverWs2 = await connectBackend()
@@ -600,8 +573,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   })
 
   it('MUST include error detail (reason string) in backend.status error events — not just status: error', async () => {
-    // In the new protocol, error details come from connection failures or RPC rejections.
-    // Test by disconnecting the server and checking the status event has a reason.
     const statuses: Array<{ status: string; reason?: string }> = []
     backend.on('backend.status', (e) => statuses.push(e as any))
     await backend.disconnect()
@@ -610,7 +581,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   })
 
   it('MUST emit backend.status with error metadata distinguishing auth rejected vs server down vs cert error', async () => {
-    // Test server_down: connect to a bad port
     const statuses: Array<{ status: string; errorType?: string }> = []
     const badBackend = createOpenClawBackend(getConfig({ gatewayUrl: 'ws://127.0.0.1:1/ws' }))
     badBackend.on('backend.status', (e: any) => statuses.push(e))
@@ -624,19 +594,16 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
   })
 
   it('MUST emit bus event or log on reconnect failure instead of silently catching in scheduleReconnect', async () => {
-    // Verify the backend emits status events on connection failure (not silent catch)
     const statuses: Array<{ status: string; reason?: string }> = []
-    // Try to connect to a port with no server
     const badBackend = createOpenClawBackend(getConfig({ gatewayUrl: 'ws://127.0.0.1:1/ws' }))
     badBackend.on('backend.status', (d: any) => statuses.push(d))
     try {
       await badBackend.connect()
     } catch {
-      // Expected to fail
+      /* Expected to fail */
     }
-    await waitFor(300) // Allow reconnect attempt to fire and fail
+    await waitFor(300)
     await badBackend.disconnect()
-    // Should have emitted disconnected with a reason
     expect(statuses.some((s) => s.status === 'disconnected')).toBe(true)
   })
 
@@ -662,7 +629,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
       }
     })
 
-    // Set activeSessionKey
     await backend.switchSession('main')
 
     const received = waitForEvent<any>(backend, 'session.info', 5000)
@@ -688,10 +654,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     expect(info.history[0].content).toBe('hi')
   })
 
-  // --- §6.2 Challenge-response handshake tests ---
-
   it('§6.2 — MUST wait for connect.challenge event before sending connect RPC', async () => {
-    // Override handshake to track message order
     wss.removeAllListeners('connection')
     const events: string[] = []
     wss.on('connection', (ws) => {
@@ -699,10 +662,8 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
         const msg = JSON.parse(data.toString())
         events.push(msg.method ?? msg.type)
       })
-      // Delay challenge slightly
       setTimeout(() => {
         ws.send(JSON.stringify({ type: 'event', event: 'connect.challenge', payload: { nonce: 'delayed-nonce' } }))
-        // Then respond to the connect
         ws.on('message', (data: any) => {
           const msg = JSON.parse(data.toString())
           if (msg.type === 'req' && msg.method === 'connect') {
@@ -713,7 +674,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     })
     backend = createOpenClawBackend(getConfig())
     await backend.connect()
-    // The connect RPC should only appear after we sent the challenge
     expect(events).toContain('connect')
   })
 
@@ -773,7 +733,6 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     })
     backend = createOpenClawBackend(getConfig())
     await backend.connect()
-    // Device ID should be 64-char hex (sha256)
     expect(connectParams.device.id).toMatch(/^[0-9a-f]{64}$/)
   })
 
@@ -842,7 +801,7 @@ describe('§2.2 OpenClaw Implementation', { timeout: 10000 }, () => {
     try {
       await backend.connect()
     } catch {
-      // Expected — connect rejected
+      /* Expected */
     }
     expect(statuses.some((s) => s.errorType === 'auth_rejected')).toBe(true)
   })

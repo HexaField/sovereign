@@ -1,4 +1,9 @@
-// Extracted from the /api/threads/gateway-sessions route handler for testability
+// Parser for OpenClaw's `sessions.json`. Lives in the OpenClaw adapter so
+// nothing outside this directory has to know about the file's shape.
+
+import fs from 'node:fs/promises'
+import { statSync } from 'node:fs'
+import path from 'node:path'
 
 export interface ParsedSession {
   key: string
@@ -42,7 +47,6 @@ export function filterMainAndThread(sessions: ParsedSession[]): ParsedSession[] 
 
 export function mergeWithLocal(sessions: ParsedSession[], localThreads: any[]): MergedSession[] {
   const localMap = new Map(localThreads.map((t: any) => [t.key, t]))
-  // Also map by full gateway key format
   for (const t of localThreads) {
     if (t.key === 'main') localMap.set('agent:main:main', t)
     else if (!t.key.startsWith('agent:')) localMap.set(`agent:main:thread:${t.key}`, t)
@@ -59,26 +63,22 @@ export function mergeWithLocal(sessions: ParsedSession[], localThreads: any[]): 
   })
 }
 
-// Cache the gateway activity map — 60MB sessions.json is too expensive to read on every request
+// Cache the activity map — the OpenClaw sessions.json can grow large (60MB+).
 let cachedMap: Map<string, { lastActivity: number; status?: string }> | null = null
 let cachedMapTime = 0
-const CACHE_TTL = 10_000 // 10s — fresh enough for UI, avoids re-parsing 60MB
+const CACHE_TTL = 10_000
 
-/** Read gateway sessions.json and return a map of shortKey → {lastActivity, status} */
-export async function getGatewayActivityMap(): Promise<Map<string, { lastActivity: number; status?: string }>> {
+/** Read OpenClaw sessions.json and return shortKey → {lastActivity, status}. */
+export async function getGatewayActivityMap(
+  sessionsJsonPath: string = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+): Promise<Map<string, { lastActivity: number; status?: string }>> {
   const now = Date.now()
   if (cachedMap && now - cachedMapTime < CACHE_TTL) return cachedMap
 
   const map = new Map<string, { lastActivity: number; status?: string }>()
   try {
-    const { readFile } = await import('fs/promises')
-    const { join } = await import('path')
-    const { statSync } = await import('fs')
-    const sessionsPath = join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
-
-    // Quick mtime check — skip re-parse if file hasn't changed
     try {
-      const stat = statSync(sessionsPath)
+      const stat = statSync(sessionsJsonPath)
       if (cachedMap && stat.mtimeMs <= cachedMapTime) {
         cachedMapTime = now
         return cachedMap
@@ -87,7 +87,7 @@ export async function getGatewayActivityMap(): Promise<Map<string, { lastActivit
       /* ignore */
     }
 
-    const raw = await readFile(sessionsPath, 'utf-8')
+    const raw = await fs.readFile(sessionsJsonPath, 'utf-8')
     const data = JSON.parse(raw) as Record<string, any>
     for (const [fullKey, meta] of Object.entries(data)) {
       const parsed = parseSessionEntry(fullKey, meta)
