@@ -6,30 +6,30 @@ import { createEventBus } from '@sovereign/core'
 import type { EventBus } from '@sovereign/core'
 
 // Meetings
-import { createMeetingsService, type Meeting } from '../meetings/meetings.js'
-import { createSpeakerService } from '../meetings/speakers.js'
-import { createSummarizationPipeline, type SummarizationResult } from '../meetings/summarize.js'
-import { createImportHandler } from '../meetings/import.js'
-import { createRetentionJob } from '../meetings/retention.js'
+import { createMeetingsService, type Meeting } from '@sovereign/meetings'
+import { createSpeakerService } from '@sovereign/meetings'
+import { createSummarizationPipeline, type SummarizationResult } from '@sovereign/meetings'
+import { createImportHandler } from '@sovereign/meetings'
+import { createRetentionJob } from '@sovereign/meetings'
 
 // Recordings
-import { createRecordingsService } from '../recordings/recordings.js'
+import { createRecordingsService } from '@sovereign/recordings'
 import {
   createTranscriptionQueue,
   type TranscriptionProvider,
   type TranscriptionResult,
   type SpeakerMap
-} from '../recordings/transcription.js'
-import { createTranscriptSearch } from '../recordings/search.js'
+} from '@sovereign/recordings'
+import { createTranscriptSearch } from '@sovereign/recordings'
 
 // Voice
-import { createRuleBasedPostProcessor } from '../voice/post-processor.js'
-import { createAcknowledgmentGenerator } from '../voice/acknowledgment.js'
+import { createRuleBasedPostProcessor } from '@sovereign/voice'
+import { createAcknowledgmentGenerator } from '@sovereign/voice'
 
 // WS
-import { createWsHandler } from '../ws/handler.js'
-import { registerMeetingsChannel } from '../meetings/ws.js'
-import { registerRecordingsChannel } from '../recordings/ws.js'
+import { createWsHandler } from '@sovereign/primitives'
+import { registerMeetingsChannel } from '@sovereign/meetings'
+import { registerRecordingsChannel } from '@sovereign/recordings'
 
 // ── Helpers ──
 

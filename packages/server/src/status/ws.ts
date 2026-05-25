@@ -1,7 +1,7 @@
 // Status — WebSocket channel registration
 
 import type { EventBus } from '@sovereign/core'
-import type { WsHandler } from '../ws/handler.js'
+import type { WsHandler } from '@sovereign/primitives'
 
 export function registerStatusChannel(ws: WsHandler, bus: EventBus): void {
   ws.registerChannel('status', {

@@ -5,11 +5,11 @@ import os from 'node:os'
 import express from 'express'
 import request from 'supertest'
 import { createEventBus } from '@sovereign/core'
-import { createConfigStore } from '../config/config.js'
-import { createConfigRouter } from '../config/routes.js'
-import { createWsHandler, type WsLike } from '../ws/handler.js'
-import { createAuth } from '../auth/auth.js'
-import { createAuthMiddleware } from '../auth/middleware.js'
+import { createConfigStore } from '@sovereign/config'
+import { createConfigRouter } from '@sovereign/config'
+import { createWsHandler, type WsLike } from '@sovereign/primitives'
+import { createAuth } from '@sovereign/auth'
+import { createAuthMiddleware } from '@sovereign/auth'
 
 function makeTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sovereign-p3-'))

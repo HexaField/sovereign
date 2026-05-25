@@ -16,17 +16,14 @@ describe('§P.7 Voice Enhancements', () => {
   })
 
   it('§P.7 SHOULD implement speaker timeline visualization in recording view', () => {
-    const src = fs.readFileSync(
-      path.resolve(__dirname, '../meetings/SpeakerTimeline.tsx'),
-      'utf-8'
-    )
+    const src = fs.readFileSync(path.resolve(__dirname, '../meetings/SpeakerTimeline.tsx'), 'utf-8')
     expect(src).toContain('SpeakerTimeline')
   })
 
   it('§P.7 SHOULD implement transcription progress polling', () => {
     // Verify server-side: RecordingMeta now includes transcriptionProgress and processing status
     const recordingsSrc = fs.readFileSync(
-      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'server', 'src', 'recordings', 'recordings.ts'),
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'recordings', 'src', 'recordings.ts'),
       'utf-8'
     )
     expect(recordingsSrc).toContain('transcriptionProgress')

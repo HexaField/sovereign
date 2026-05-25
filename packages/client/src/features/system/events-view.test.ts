@@ -78,7 +78,7 @@ describe('§P.5 Events/Pipeline View', () => {
 
   it('§P.5 MUST implement retry mechanism for failed events', () => {
     const eventStreamSrc = fs.readFileSync(
-      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'server', 'src', 'system', 'event-stream.ts'),
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'system', 'src', 'event-stream.ts'),
       'utf-8'
     )
     expect(eventStreamSrc).toContain('createEventRetryQueue')
@@ -87,12 +87,14 @@ describe('§P.5 Events/Pipeline View', () => {
   })
 
   it('§P.5 MUST implement server endpoints GET /api/events and POST /api/events/:id/retry', () => {
-    const indexSrc = fs.readFileSync(
-      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'server', 'src', 'index.ts'),
+    // Routes were extracted from index.ts into system/routes.ts; the contract
+    // is the same — REST surface plus bus re-emit on retry.
+    const systemRoutesSrc = fs.readFileSync(
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'packages', 'system', 'src', 'routes.ts'),
       'utf-8'
     )
-    expect(indexSrc).toContain('/api/system/events')
-    expect(indexSrc).toContain('/api/events/:id/retry')
-    expect(indexSrc).toContain('bus.emit(entry.event)')
+    expect(systemRoutesSrc).toContain('/api/system/events')
+    expect(systemRoutesSrc).toContain('/api/events/:id/retry')
+    expect(systemRoutesSrc).toContain('bus.emit(entry.event)')
   })
 })

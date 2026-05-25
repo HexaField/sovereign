@@ -1,5 +1,17 @@
 // Agent Backend — Shared Types & Interfaces
 
+// Forward declaration: the agent-backend layer ships a routing implementation
+// that resolves a session key to its owning backend. Lower-layer modules
+// (scheduler, cron-service) consume this minimal contract so they can route
+// sendMessage calls without depending on the agent-backend package.
+//
+// The full implementation in @sovereign/agent-backend's `RoutingBackend`
+// extends this with `default()`, `forKind()`, etc. Lower layers only need
+// `forSession`.
+export interface BackendRouter {
+  forSession(sessionKey: string): import('./agent-backend.js').AgentBackend
+}
+
 /**
  * Connection status of the agent backend.
  */

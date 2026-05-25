@@ -1,0 +1,270 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import express from 'express'
+import request from 'supertest'
+import { createEventBus } from '@sovereign/core'
+import { createSystemModule, type SystemModule } from './system.js'
+import { createSystemRoutes } from './routes.js'
+import { createOrgManager, type OrgManager } from '@sovereign/orgs'
+import type { RoutingBackend } from '@sovereign/agent-backend'
+import type { AgentBackend } from '@sovereign/core'
+
+/** Build a RoutingBackend stub whose only enabled backend exposes the supplied `restart` impl. */
+function makeRoutingWithRestart(restart: AgentBackend['restart']): RoutingBackend {
+  const fakeBackend: Partial<AgentBackend> = {
+    kind: 'openclaw',
+    restart
+  }
+  return {
+    all: () => [{ kind: 'openclaw', backend: fakeBackend as AgentBackend }],
+    default: () => fakeBackend as AgentBackend,
+    forSession: () => fakeBackend as AgentBackend,
+    forKind: () => fakeBackend as AgentBackend,
+    connectAll: async () => {},
+    disconnectAll: async () => {},
+    statusAll: () => ({ openclaw: 'connected' as const, pi: 'disabled' as const, 'claude-code': 'disabled' as const }),
+    on: () => {},
+    off: () => {},
+    bindThread: ((rec: any) => rec) as any,
+    lookup: () => undefined,
+    registry: {} as any
+  }
+}
+
+function tmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'sovereign-system-test-'))
+}
+
+let dataDir: string
+let bus: ReturnType<typeof createEventBus>
+let system: SystemModule
+
+beforeEach(() => {
+  dataDir = tmpDir()
+  bus = createEventBus(dataDir)
+  system = createSystemModule(bus, dataDir)
+})
+
+afterEach(() => {
+  fs.rmSync(dataDir, { recursive: true, force: true })
+})
+
+describe('System Module', () => {
+  describe('§9.2 — System Endpoints', () => {
+    it('POST /api/system/gateway/restart returns 202 when the gateway restart succeeds', async () => {
+      const app = express()
+      const routingBackend = makeRoutingWithRestart(async () => ({
+        message: 'gateway restarted',
+        command: 'openclaw gateway restart'
+      }))
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, routingBackend }))
+
+      const res = await request(app).post('/api/system/gateway/restart')
+
+      expect(res.status).toBe(202)
+      expect(res.body).toEqual({
+        status: 'accepted',
+        message: 'gateway restarted',
+        command: 'openclaw gateway restart'
+      })
+    })
+
+    it('POST /api/system/gateway/restart returns 409 while a restart is already in progress', async () => {
+      const app = express()
+      let resolveRestart!: (value: { message: string; command: string }) => void
+      let notifyStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        notifyStarted = resolve
+      })
+      const restartPromise = new Promise<{ message: string; command: string }>((resolve) => {
+        resolveRestart = resolve
+      })
+      const routingBackend = makeRoutingWithRestart(() => {
+        notifyStarted()
+        return restartPromise
+      })
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, routingBackend }))
+
+      const firstPromise = request(app)
+        .post('/api/system/gateway/restart')
+        .then((res) => res)
+      await started
+      const second = await request(app).post('/api/system/gateway/restart')
+      resolveRestart({ message: 'gateway restarted', command: 'openclaw gateway restart' })
+      const firstRes = await firstPromise
+
+      expect(second.status).toBe(409)
+      expect(second.body.error).toContain('already in progress')
+      expect(firstRes.status).toBe(202)
+    })
+
+    it('POST /api/system/gateway/restart returns 500 when the gateway restart fails', async () => {
+      const app = express()
+      const routingBackend = makeRoutingWithRestart(async () => {
+        throw new Error('openclaw CLI unavailable')
+      })
+      app.use(createSystemRoutes({ system, logsChannel: null as any, dataDir, routingBackend }))
+
+      const res = await request(app).post('/api/system/gateway/restart')
+
+      expect(res.status).toBe(500)
+      expect(res.body).toEqual({ error: 'openclaw CLI unavailable' })
+    })
+
+    it('§9.2 — GET /api/system/architecture returns module graph with modules array', async () => {
+      const app = express()
+      app.use(createSystemRoutes(system))
+      const res = await request(app).get('/api/system/architecture')
+      expect(res.status).toBe(200)
+      expect(res.body).toHaveProperty('modules')
+      expect(Array.isArray(res.body.modules)).toBe(true)
+    })
+
+    it('§9.2 — each module has name, status, subscribes, publishes', async () => {
+      system.registerModule({
+        name: 'threads',
+        status: 'healthy',
+        subscribes: ['org.*'],
+        publishes: ['thread.created']
+      })
+      const arch = system.getArchitecture()
+      const mod = arch.modules.find((m) => m.name === 'threads')
+      expect(mod).toBeDefined()
+      expect(mod!.name).toBe('threads')
+      expect(mod!.status).toBe('healthy')
+      expect(mod!.subscribes).toEqual(['org.*'])
+      expect(mod!.publishes).toEqual(['thread.created'])
+    })
+
+    it('§9.2 — GET /api/system/health returns health metrics', async () => {
+      const app = express()
+      app.use(createSystemRoutes(system))
+      const res = await request(app).get('/api/system/health')
+      expect(res.status).toBe(200)
+      expect(res.body).toHaveProperty('connection')
+      expect(res.body.connection).toHaveProperty('wsStatus')
+      expect(res.body.connection).toHaveProperty('agentBackend')
+      expect(res.body.connection).toHaveProperty('uptime')
+    })
+
+    it('§9.2 — health includes connection, resources, jobs, errors', () => {
+      const health = system.getHealth()
+      expect(typeof health.connection.uptime).toBe('number')
+      expect(health.connection).toHaveProperty('wsStatus')
+      expect(health.connection).toHaveProperty('agentBackend')
+      expect(health.resources).toHaveProperty('diskUsage')
+      expect(health.resources).toHaveProperty('memoryUsage')
+      expect(health.jobs).toHaveProperty('active')
+      expect(health.jobs).toHaveProperty('lastStatus')
+      expect(health.jobs).toHaveProperty('nextRun')
+      expect(health.errors).toHaveProperty('countLastHour')
+      expect(health.errors).toHaveProperty('recent')
+    })
+
+    it('§9.2 — health agentBackend defaults to disconnected when getAgentBackendStatus not provided', () => {
+      const health = system.getHealth()
+      expect(health.connection.agentBackend).toBe('disconnected')
+    })
+
+    it('§9.2 — health agentBackend uses getAgentBackendStatus when provided', () => {
+      system.dispose()
+      const customSystem = createSystemModule(bus, dataDir, {
+        getAgentBackendStatus: () => 'connected'
+      })
+      const health = customSystem.getHealth()
+      expect(health.connection.agentBackend).toBe('connected')
+      customSystem.dispose()
+    })
+
+    it('§9.2 — aggregates module status() functions for health data', () => {
+      system.registerModule({ name: 'orgs', status: 'healthy', subscribes: [], publishes: ['org.created'] })
+      system.registerModule({ name: 'threads', status: 'degraded', subscribes: ['org.*'], publishes: [] })
+      const arch = system.getArchitecture()
+      expect(arch.modules.length).toBeGreaterThanOrEqual(3) // system + orgs + threads
+      expect(arch.modules.find((m) => m.name === 'orgs')!.status).toBe('healthy')
+      expect(arch.modules.find((m) => m.name === 'threads')!.status).toBe('degraded')
+    })
+  })
+
+  describe('§0.1 — Global Workspace Bootstrap', () => {
+    let orgManager: OrgManager
+
+    beforeEach(() => {
+      orgManager = createOrgManager(bus, dataDir)
+    })
+
+    it('§0.1 — ensures _global workspace exists on startup', () => {
+      const org = orgManager.ensureGlobalWorkspace()
+      expect(org).toBeDefined()
+      expect(org.id).toBe('_global')
+      expect(orgManager.getOrg('_global')).toBeDefined()
+    })
+
+    it('§0.1 — creates _global with name "Global" and provider "radicle" if missing', () => {
+      const org = orgManager.ensureGlobalWorkspace()
+      expect(org.name).toBe('Global')
+      expect(org.provider).toBe('radicle')
+    })
+
+    it('§0.1 — does not duplicate _global if already exists', () => {
+      orgManager.ensureGlobalWorkspace()
+      orgManager.ensureGlobalWorkspace()
+      const orgs = orgManager.listOrgs().filter((o) => o.id === '_global')
+      expect(orgs.length).toBe(1)
+    })
+
+    it('§9.5 — rejects setting _global provider to "github"', () => {
+      orgManager.ensureGlobalWorkspace()
+      expect(() => orgManager.updateOrg('_global', { provider: 'github' })).toThrow()
+      try {
+        orgManager.updateOrg('_global', { provider: 'github' })
+      } catch (e: any) {
+        expect(e.status).toBe(403)
+      }
+    })
+
+    it('§9.5 — allows updating _global name', () => {
+      orgManager.ensureGlobalWorkspace()
+      const updated = orgManager.updateOrg('_global', { name: 'My Global' })
+      expect(updated.name).toBe('My Global')
+    })
+
+    it('§9.5 — rejects deleting _global workspace with 403', () => {
+      orgManager.ensureGlobalWorkspace()
+      expect(() => orgManager.deleteOrg('_global')).toThrow()
+      try {
+        orgManager.deleteOrg('_global')
+      } catch (e: any) {
+        expect(e.status).toBe(403)
+      }
+    })
+
+    it('§9.5 — DELETE /orgs/_global returns 403 via routes', async () => {
+      orgManager.ensureGlobalWorkspace()
+      const { createOrgRoutes } = await import('@sovereign/orgs')
+      const app = express()
+      app.use(express.json())
+      app.use(
+        '/api',
+        createOrgRoutes(orgManager, (_req: any, _res: any, next: any) => next())
+      )
+      const res = await request(app).delete('/api/orgs/_global')
+      expect(res.status).toBe(403)
+    })
+
+    it('§9.5 — PUT /orgs/_global with provider=github returns 403 via routes', async () => {
+      orgManager.ensureGlobalWorkspace()
+      const { createOrgRoutes } = await import('@sovereign/orgs')
+      const app = express()
+      app.use(express.json())
+      app.use(
+        '/api',
+        createOrgRoutes(orgManager, (_req: any, _res: any, next: any) => next())
+      )
+      const res = await request(app).put('/api/orgs/_global').send({ provider: 'github' })
+      expect(res.status).toBe(403)
+    })
+  })
+})

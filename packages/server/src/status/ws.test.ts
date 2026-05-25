@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createEventBus } from '@sovereign/core'
-import { createWsHandler, type WsLike } from '../ws/handler.js'
+import { createWsHandler, type WsLike } from '@sovereign/primitives'
 import { registerStatusChannel } from './ws.js'
 
 function tmpDir(): string {

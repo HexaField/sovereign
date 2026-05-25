@@ -1,0 +1,33 @@
+{
+  "name": "@sovereign/diff",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "Josh Field",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@sovereign/core": "workspace:*",
+    "@types/diff": "^8.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "diff": "^8.0.3",
+    "express": "^5.2.1",
+    "js-yaml": "^4.1.1",
+    "smol-toml": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  }
+}
