@@ -3,9 +3,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createEventBus } from '@sovereign/core'
-import { createPlanningService } from '../planning/planning.js'
-import type { Issue, IssueFilter, IssueComment, IssueTracker } from '../issues/types.js'
-import type { EntityRef, PlanningService } from '../planning/types.js'
+import { createPlanningService } from '@sovereign/planning'
+import type { Issue, IssueFilter, IssueComment, IssueTracker } from '@sovereign/issues'
+import type { EntityRef, PlanningService } from '@sovereign/planning'
 import type { EventBus } from '@sovereign/core'
 
 // --- Helpers ---

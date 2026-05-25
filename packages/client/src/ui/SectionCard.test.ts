@@ -4,14 +4,8 @@ import * as path from 'node:path'
 
 // §P.1 Architecture View tests
 
-const overviewSrc = fs.readFileSync(
-  path.resolve(__dirname, '../features/system/OverviewTab.tsx'),
-  'utf-8'
-)
-const systemViewSrc = fs.readFileSync(
-  path.resolve(__dirname, '../features/system/SystemView.tsx'),
-  'utf-8'
-)
+const overviewSrc = fs.readFileSync(path.resolve(__dirname, '../features/system/OverviewTab.tsx'), 'utf-8')
+const systemViewSrc = fs.readFileSync(path.resolve(__dirname, '../features/system/SystemView.tsx'), 'utf-8')
 
 describe('§P.1 Architecture View', () => {
   // §P.1.1 Overview Tab
@@ -78,10 +72,7 @@ describe('§P.1 Architecture View', () => {
   // §P.1.2 System Flow Graph
   describe('§P.1.2 System Flow Graph', () => {
     it('§P.1.2 FlowGraph component exists', async () => {
-      const src = fs.readFileSync(
-        path.resolve(__dirname, '../features/system/FlowGraph.tsx'),
-        'utf-8'
-      )
+      const src = fs.readFileSync(path.resolve(__dirname, '../features/system/FlowGraph.tsx'), 'utf-8')
       expect(src).toContain('FlowGraph')
     })
   })
@@ -89,26 +80,17 @@ describe('§P.1 Architecture View', () => {
   // §P.1.3 Health Timeline
   describe('§P.1.3 Health Timeline', () => {
     it('§P.1.3 HealthTimeline component exists', async () => {
-      const src = fs.readFileSync(
-        path.resolve(__dirname, '../features/system/HealthTimeline.tsx'),
-        'utf-8'
-      )
+      const src = fs.readFileSync(path.resolve(__dirname, '../features/system/HealthTimeline.tsx'), 'utf-8')
       expect(src).toContain('HealthTimeline')
     })
 
     it('§P.1.3 MUST add health metric polling endpoint GET /api/system/health/history', () => {
-      const routesSrc = fs.readFileSync(
-        path.resolve(__dirname, '../../../../packages/server/src/system/routes.ts'),
-        'utf-8'
-      )
+      const routesSrc = fs.readFileSync(path.resolve(__dirname, '../../../../packages/system/src/routes.ts'), 'utf-8')
       expect(routesSrc).toContain("'/api/system/health/history'")
     })
 
     it('§P.1.3 MUST support configurable time windows', () => {
-      const routesSrc = fs.readFileSync(
-        path.resolve(__dirname, '../../../../packages/server/src/system/routes.ts'),
-        'utf-8'
-      )
+      const routesSrc = fs.readFileSync(path.resolve(__dirname, '../../../../packages/system/src/routes.ts'), 'utf-8')
       expect(routesSrc).toContain('windowMs')
     })
   })

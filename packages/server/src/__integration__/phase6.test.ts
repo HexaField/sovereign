@@ -6,12 +6,12 @@ import http from 'node:http'
 import { WebSocketServer, WebSocket } from 'ws'
 import { createEventBus } from '@sovereign/core'
 import type { EventBus, AgentBackend, AgentBackendEvents, BackendConnectionStatus } from '@sovereign/core'
-import { createOpenClawBackend } from '../agent-backend/openclaw/openclaw.js'
-import { createThreadManager } from '../threads/threads.js'
-import type { EntityBinding, ThreadEvent } from '../threads/types.js'
-import { createVoiceModule } from '../voice/voice.js'
-import { createChatModule } from '../chat/chat.js'
-import type { OpenClawConfig } from '../agent-backend/openclaw/types.js'
+import { createOpenClawBackend } from '@sovereign/agent-backend'
+import { createThreadManager } from '@sovereign/threads'
+import type { EntityBinding, ThreadEvent } from '@sovereign/threads'
+import { createVoiceModule } from '@sovereign/voice'
+import { createChatModule } from '@sovereign/chat'
+import type { OpenClawConfig } from '@sovereign/agent-backend'
 
 // --- Helpers ---
 
