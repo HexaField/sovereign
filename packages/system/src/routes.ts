@@ -119,6 +119,48 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
     res.json({ snapshots: healthHistory.getSnapshots(windowMs) })
   })
 
+  // Active-agent census across all enabled backends. Used by the `sovereign`
+  // CLI's restart guard so an operator iterating on Sovereign doesn't
+  // accidentally kill an in-flight Claude/OpenClaw turn. Treats any session
+  // whose `agentStatus` is not `idle` as active. Fail-soft per backend so a
+  // misbehaving adapter doesn't blank the whole response.
+  router.get('/api/system/agents/active', async (_req, res) => {
+    if (!routingBackend) {
+      res.json({ count: 0, sessions: [] })
+      return
+    }
+    const sessions: Array<{
+      key: string
+      kind: string
+      label?: string
+      agentStatus: string
+      backendKind: string
+      parentKey?: string
+      lastActivity?: number
+    }> = []
+    for (const inst of routingBackend.all()) {
+      try {
+        const list = await inst.backend.listSessions()
+        for (const s of list) {
+          const status = s.agentStatus ?? 'idle'
+          if (status === 'idle') continue
+          sessions.push({
+            key: s.key,
+            kind: s.kind,
+            label: s.label,
+            agentStatus: status,
+            backendKind: inst.kind,
+            parentKey: s.parentKey,
+            lastActivity: s.lastActivity
+          })
+        }
+      } catch {
+        /* per-backend best effort */
+      }
+    }
+    res.json({ count: sessions.length, sessions })
+  })
+
   // Device identity endpoint — aggregates across all enabled backends.
   router.get('/api/system/devices', (_req, res) => {
     if (!routingBackend) {
