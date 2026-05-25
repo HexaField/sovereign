@@ -13,6 +13,7 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
       'chat.compacting',
       'chat.error',
       'chat.session.info',
+      'chat.queue',
       'backend.status',
       'cron.run.completed'
     ],

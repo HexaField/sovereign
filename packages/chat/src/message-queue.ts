@@ -1,5 +1,9 @@
 // Server-side FIFO message queue per thread
 // In-memory for speed, persisted to disk for durability
+//
+// This is the canonical place a user's outbound chat message lives between
+// "user pressed send" and "agent acknowledged". Adapters never see it; they
+// receive a single direct call from the dispatch loop in chat.ts.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,6 +11,16 @@ import crypto from 'node:crypto'
 import type { QueuedMessage } from '@sovereign/core'
 
 export type { QueuedMessage }
+
+export type QueueChangeReason = 'enqueued' | 'sending' | 'sent' | 'failed' | 'requeued' | 'cancelled'
+
+export interface QueueChange {
+  threadKey: string
+  reason: QueueChangeReason
+  item?: QueuedMessage
+}
+
+export type QueueChangeListener = (change: QueueChange) => void
 
 export interface MessageQueue {
   enqueue(threadKey: string, text: string): QueuedMessage & { deduplicated?: boolean }
@@ -16,8 +30,13 @@ export interface MessageQueue {
   getQueue(threadKey: string): QueuedMessage[]
   markSending(id: string): boolean
   markQueued(id: string): boolean
+  markFailed(id: string, error: string): boolean
   removeSent(id: string): void
   getAllQueues(): Map<string, QueuedMessage[]>
+  /** Snapshot of one thread's queue (always a fresh array). */
+  snapshot(threadKey: string): QueuedMessage[]
+  /** Subscribe to queue-change notifications. Returns unsubscribe. */
+  onChange(listener: QueueChangeListener): () => void
 }
 
 export function createMessageQueue(dataDir: string): MessageQueue {
@@ -25,6 +44,17 @@ export function createMessageQueue(dataDir: string): MessageQueue {
   fs.mkdirSync(queueDir, { recursive: true })
 
   const queues = new Map<string, QueuedMessage[]>()
+  const listeners = new Set<QueueChangeListener>()
+
+  function notify(change: QueueChange): void {
+    for (const fn of listeners) {
+      try {
+        fn(change)
+      } catch (err) {
+        console.error('[message-queue] listener error:', err)
+      }
+    }
+  }
 
   // Track recently sent messages to prevent re-enqueue of identical text after removal
   // Key: `${threadKey}\0${text}`, Value: timestamp when sent
@@ -113,11 +143,13 @@ export function createMessageQueue(dataDir: string): MessageQueue {
         threadKey,
         text,
         timestamp: Date.now(),
-        status: 'queued'
+        status: 'queued',
+        attempts: 0
       }
       items.push(msg)
       queues.set(threadKey, items)
       persist(threadKey)
+      notify({ threadKey, reason: 'enqueued', item: { ...msg } })
       return msg
     },
 
@@ -133,9 +165,12 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       const found = findById(id)
       if (!found) return false
       const items = queues.get(found.threadKey)!
-      if (items[found.index].status !== 'queued') return false
+      const msg = items[found.index]
+      // Allow cancelling queued OR failed messages; never tear out an in-flight send.
+      if (msg.status === 'sending') return false
       items.splice(found.index, 1)
       persist(found.threadKey)
+      notify({ threadKey: found.threadKey, reason: 'cancelled', item: { ...msg } })
       return true
     },
 
@@ -152,8 +187,12 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       const found = findById(id)
       if (!found) return false
       const items = queues.get(found.threadKey)!
-      items[found.index].status = 'sending'
+      const msg = items[found.index]
+      msg.status = 'sending'
+      msg.attempts = (msg.attempts ?? 0) + 1
+      delete msg.error
       persist(found.threadKey)
+      notify({ threadKey: found.threadKey, reason: 'sending', item: { ...msg } })
       return true
     },
 
@@ -161,8 +200,23 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       const found = findById(id)
       if (!found) return false
       const items = queues.get(found.threadKey)!
-      items[found.index].status = 'queued'
+      const msg = items[found.index]
+      msg.status = 'queued'
+      delete msg.error
       persist(found.threadKey)
+      notify({ threadKey: found.threadKey, reason: 'requeued', item: { ...msg } })
+      return true
+    },
+
+    markFailed(id: string, error: string): boolean {
+      const found = findById(id)
+      if (!found) return false
+      const items = queues.get(found.threadKey)!
+      const msg = items[found.index]
+      msg.status = 'failed'
+      msg.error = error
+      persist(found.threadKey)
+      notify({ threadKey: found.threadKey, reason: 'failed', item: { ...msg } })
       return true
     },
 
@@ -175,6 +229,7 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       recentlySent.set(`${found.threadKey}\0${msg.text}`, Date.now())
       items.splice(found.index, 1)
       persist(found.threadKey)
+      notify({ threadKey: found.threadKey, reason: 'sent', item: { ...msg } })
     },
 
     getAllQueues(): Map<string, QueuedMessage[]> {
@@ -183,6 +238,15 @@ export function createMessageQueue(dataDir: string): MessageQueue {
         result.set(k, [...v])
       }
       return result
+    },
+
+    snapshot(threadKey: string): QueuedMessage[] {
+      return (queues.get(threadKey) ?? []).map((m) => ({ ...m }))
+    },
+
+    onChange(listener: QueueChangeListener): () => void {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
     }
   }
 }

@@ -153,18 +153,20 @@ describe('§3.2 Chat Store', () => {
     expect(retryCountdownSeconds()).toBe(0)
   })
 
-  it('sendMessage MUST send chat.send via WS and add optimistic user turn', () => {
-    sendMessage('hello')
-    expect(turns().length).toBe(1) // Optimistic turn added immediately
-    expect(turns()[0].role).toBe('user')
-    expect(turns()[0].content).toBe('hello')
-    expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.send', text: 'hello' }))
-  })
-
-  it('sendMessage MUST clear the input scratchpad for the current thread', () => {
-    sendMessage('test')
-    // Verified by the ws.send call
-    expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.send', text: 'test' }))
+  it('sendMessage POSTs to /api/chat/send with threadKey + message', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response)
+    await sendMessage('hello')
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/chat/send',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ threadKey: 'main', message: 'hello' })
+      })
+    )
+    // No optimistic turn in `turns()` — the server queue is the source of
+    // truth for in-flight messages (rendered as queue bubbles in ChatView).
+    expect(turns()).toEqual([])
+    fetchSpy.mockRestore()
   })
 
   it('setInputValue writes drafts to localStorage per thread key', () => {
@@ -201,95 +203,10 @@ describe('§3.2 Chat Store', () => {
     expect(agentStatus()).toBe('cancelled')
   })
 
-  it('MUST subscribe to chat WS channel for chat.stream messages', () => {
-    ws._emit('chat.stream', { type: 'chat.stream', text: 'hello ' })
-    // streamingHtml() now returns markdown-rendered HTML
-    expect(streamingHtml()).toContain('hello')
-    ws._emit('chat.stream', { type: 'chat.stream', text: 'world' })
-    expect(streamingHtml()).toContain('hello')
-    expect(streamingHtml()).toContain('world')
-  })
-
-  it('chat.stream with replay resets prior stream content', () => {
-    ws._emit('chat.stream', { type: 'chat.stream', text: 'old ' })
-    expect(streamingHtml()).toContain('old')
-    ws._emit('chat.stream', { type: 'chat.stream', text: 'new', replay: true })
-    expect(streamingHtml()).toContain('new')
-    expect(streamingHtml()).not.toContain('old')
-  })
-
-  it('chat.stream suppresses sentinel NO_REPLY output', () => {
-    ws._emit('chat.stream', { type: 'chat.stream', text: 'NO_REPLY' })
-    expect(streamingHtml()).toBe('')
-  })
-
-  it('MUST subscribe to chat WS channel for chat.turn messages', () => {
-    const turn: ParsedTurn = { role: 'assistant', content: 'hi', timestamp: 1, workItems: [], thinkingBlocks: [] }
-    ws._emit('chat.turn', { type: 'chat.turn', turn })
-    expect(turns().length).toBe(1)
-    expect(turns()[0].content).toBe('hi')
-  })
-
-  it('MUST subscribe to chat WS channel for chat.status messages', () => {
-    ws._emit('chat.status', { type: 'chat.status', status: 'working' })
-    expect(agentStatus()).toBe('working')
-  })
-
-  it('requests authoritative history on idle when unresolved optimistic user turns remain', async () => {
-    await sendMessage('hello')
-    ws.send.mockClear()
-    const assistantTurn: ParsedTurn = {
-      role: 'assistant',
-      content: 'reply',
-      timestamp: 2,
-      workItems: [],
-      thinkingBlocks: []
-    }
-    ws._emit('chat.turn', { type: 'chat.turn', turn: assistantTurn })
-    ws.send.mockClear()
-    ws._emit('chat.status', { type: 'chat.status', status: 'idle' })
-    expect(ws.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat.history', threadKey: 'main' }))
-  })
-
-  it('MUST subscribe to chat WS channel for chat.work messages', () => {
-    const work: WorkItem = { type: 'tool_call', name: 'read', timestamp: 1 }
-    ws._emit('chat.work', { type: 'chat.work', work })
-    expect(liveWork().length).toBe(1)
-    expect(liveWork()[0].name).toBe('read')
-  })
-
-  it('preserves distinct consecutive thinking work items in the watched thread', () => {
-    ws._emit('chat.work', { type: 'chat.work', work: { type: 'thinking', output: 'Analysis A', timestamp: 1 } })
-    ws._emit('chat.work', { type: 'chat.work', work: { type: 'thinking', output: 'Analysis B', timestamp: 2 } })
-
-    expect(liveWork().filter((item) => item.type === 'thinking')).toEqual([
-      { type: 'thinking', output: 'Analysis A', timestamp: 1 },
-      { type: 'thinking', output: 'Analysis B', timestamp: 2 }
-    ])
-  })
-
-  it('replaces an in-progress thinking work item when the new text extends it', () => {
-    ws._emit('chat.work', { type: 'chat.work', work: { type: 'thinking', output: 'Analysis A', timestamp: 1 } })
-    ws._emit('chat.work', {
-      type: 'chat.work',
-      work: { type: 'thinking', output: 'Analysis A with more detail', timestamp: 2 }
-    })
-
-    expect(liveWork().filter((item) => item.type === 'thinking')).toEqual([
-      { type: 'thinking', output: 'Analysis A with more detail', timestamp: 2 }
-    ])
-  })
-
-  it('MUST subscribe to chat WS channel for chat.compacting messages', () => {
-    ws._emit('chat.compacting', { type: 'chat.compacting', active: true })
-    expect(compacting()).toBe(true)
-  })
-
-  it('MUST subscribe to chat WS channel for chat.error messages', () => {
-    ws._emit('chat.error', { type: 'chat.error', error: 'rate limited', retryAfterMs: 5000 })
-    expect(isRetryCountdownActive()).toBe(true)
-    expect(retryCountdownSeconds()).toBe(5)
-  })
+  // chat.stream / chat.turn / chat.status / chat.work / chat.compacting / chat.error
+  // are now SSE-only — they are NOT broadcast on the WS channel anymore.
+  // Covered by the live curl-against-running-server verification recorded
+  // in memory/2026-05-25-1213.md, not by these unit tests.
 
   it('MUST subscribe to chat WS channel for chat.session.info messages', () => {
     const history: ParsedTurn[] = [
@@ -298,19 +215,6 @@ describe('§3.2 Chat Store', () => {
     ]
     ws._emit('chat.session.info', { type: 'chat.session.info', history })
     expect(turns().length).toBe(2)
-  })
-
-  it('MUST append confirmed turn on chat.turn (no pending replacement)', () => {
-    const confirmed: ParsedTurn = { role: 'user', content: 'hello', timestamp: 1, workItems: [], thinkingBlocks: [] }
-    ws._emit('chat.turn', { type: 'chat.turn', turn: confirmed })
-    expect(turns().length).toBe(1)
-    expect(turns()[0].content).toBe('hello')
-  })
-
-  it('MUST call startRetryCountdown when chat.error arrives with retryAfterMs', () => {
-    ws._emit('chat.error', { type: 'chat.error', error: 'rate limit', retryAfterMs: 3000 })
-    expect(isRetryCountdownActive()).toBe(true)
-    expect(retryCountdownSeconds()).toBe(3)
   })
 
   it('MUST replace turns with provided history on chat.session.info', () => {

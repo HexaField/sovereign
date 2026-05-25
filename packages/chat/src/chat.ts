@@ -3,10 +3,11 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { EventEmitter } from 'node:events'
-import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents } from '@sovereign/core'
+import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents, QueuedMessage } from '@sovereign/core'
 import type { WsHandler } from '@sovereign/primitives'
 import type { ThreadManager } from '@sovereign/threads'
 import { deriveSessionKey } from './derive-session-key.js'
+import { createMessageQueue, type MessageQueue } from './message-queue.js'
 import type { WorkItem } from '@sovereign/core'
 
 /** Chat-level event emitter — all chat events (from backend + JSONL polling) flow through here */
@@ -34,6 +35,14 @@ export interface ChatModule {
   untrackSSEClient(threadKey: string): void
   /** Resolve a threadKey to a sessionKey, creating mapping if needed */
   resolveSessionKey(threadKey: string): string
+  /** Current snapshot of the server-side outbound queue for a thread. */
+  getQueueSnapshot(threadKey: string): QueuedMessage[]
+  /** Cancel a queued or failed message by id. No-op for in-flight messages. */
+  cancelQueued(id: string): boolean
+  /** Re-enqueue a previously-failed message, putting it back to head of queue. */
+  retryQueued(id: string): boolean
+  /** Internal: the underlying queue (exposed for routes/tests; do not mutate from outside). */
+  messageQueue: MessageQueue
 }
 
 export function createChatModule(
@@ -81,6 +90,111 @@ export function createChatModule(
 
   // Load on creation
   loadMapping()
+
+  // ── Outbound message queue (Sovereign-owned) ─────────────────────
+  // The queue is the single source of truth for a user's pending sends.
+  // handleSend enqueues; the dispatch loop calls backend.sendMessage exactly
+  // when the agent is idle for that thread. Clients render queued/sending/
+  // failed entries directly from the queue snapshot (no separate optimistic
+  // queue lives on the client).
+  const messageQueue = createMessageQueue(dataDir)
+
+  /** Threads with an in-flight send (queue head is in 'sending' status, agent
+   * is processing). Used so dispatcher does not double-send while an
+   * adapter+agent are mid-turn. */
+  const inFlightByThread = new Map<string, string>() // threadKey -> queue id
+
+  function emitQueueSnapshot(threadKey: string): void {
+    const items = messageQueue.snapshot(threadKey)
+    const payload = { threadKey, items }
+    if (wsHandler) {
+      wsHandler.broadcastToChannel('chat', { type: 'chat.queue', ...payload })
+    }
+    chatEvents.emit('chat.queue', payload)
+  }
+
+  // Any queue mutation re-broadcasts the affected thread's snapshot. Clients
+  // are declarative — they trust whatever they last saw on `chat.queue`.
+  messageQueue.onChange((change) => {
+    emitQueueSnapshot(change.threadKey)
+  })
+
+  /** Attempt to send the head of the queue for a thread if no send is
+   * already in flight and the head is in 'queued' status. */
+  async function pumpQueue(threadKey: string): Promise<void> {
+    if (inFlightByThread.has(threadKey)) return
+    const head = messageQueue.peek(threadKey)
+    if (!head || head.status !== 'queued') return
+
+    let sessionKey = threadToSession.get(threadKey)
+    if (!sessionKey) {
+      sessionKey = deriveSessionKey(threadKey)
+      setMapping(threadKey, sessionKey)
+    }
+
+    inFlightByThread.set(threadKey, head.id)
+    messageQueue.markSending(head.id)
+
+    try {
+      await backend.sendMessage(sessionKey, head.text)
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      console.error(`[chat] queue send failed for ${threadKey} (${head.id}): ${errMsg}`)
+      inFlightByThread.delete(threadKey)
+      messageQueue.markFailed(head.id, errMsg)
+      // Surface the error to clients via chat.error too — keeps existing UI behaviour.
+      const errorData = { threadKey, error: errMsg, retryAfterMs: 5000 }
+      if (wsHandler) {
+        wsHandler.broadcastToChannel('chat', { type: 'chat.error', ...errorData })
+      }
+      chatEvents.emit('chat.error', errorData)
+      return
+    }
+
+    // Backend accepted the message. We keep it in 'sending' state in the queue
+    // and only remove it once the agent confirms the turn (chat.status → idle
+    // OR chat.turn for this thread). That ensures a queued message UI item
+    // stays visible until the agent has actually started — bridging the
+    // gap between "POST returned" and "user message appears in history".
+    const sentAt = Date.now()
+    bus.emit({
+      type: 'chat.message.sent',
+      timestamp: new Date(sentAt).toISOString(),
+      source: 'chat',
+      payload: { threadKey, text: head.text, timestamp: sentAt, queueId: head.id }
+    })
+    chatEvents.emit('chat.message.sent', { threadKey, text: head.text, timestamp: sentAt, queueId: head.id })
+  }
+
+  function completeInFlight(threadKey: string): void {
+    const id = inFlightByThread.get(threadKey)
+    if (!id) return
+    inFlightByThread.delete(threadKey)
+    // Only remove if the entry is still in 'sending' (might already have been
+    // cancelled / failed elsewhere).
+    const items = messageQueue.getQueue(threadKey)
+    const entry = items.find((m) => m.id === id)
+    if (entry && entry.status === 'sending') {
+      // Synthesize a user chat.turn so clients can promote the queue bubble
+      // into authoritative history without round-tripping for a refetch.
+      // Emit BEFORE removeSent so the SSE order is: user turn → queue empty
+      // → assistant turn, giving a clean visual handover with no flash.
+      const userTurn = {
+        role: 'user' as const,
+        content: entry.text,
+        timestamp: entry.timestamp,
+        workItems: [],
+        thinkingBlocks: []
+      }
+      if (wsHandler) {
+        wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadKey, turn: userTurn })
+      }
+      chatEvents.emit('chat.turn', { threadKey, turn: userTurn })
+      messageQueue.removeSent(id)
+    }
+    // Try to dispatch any following queued message.
+    void pumpQueue(threadKey)
+  }
 
   // Deduplicate rapid duplicate user sends (same text within window)
   const recentUserSends = new Map<string, { text: string; ts: number }>()
@@ -146,6 +260,10 @@ export function createChatModule(
           statusChangedAt.set(threadKey, Date.now())
           if (data.status === 'idle') {
             stopJsonlPoll(threadKey)
+            // Agent finished a turn — clear any in-flight queue entry for this
+            // thread (we've now seen the result hit our state) and try to send
+            // the next queued message.
+            completeInFlight(threadKey)
           } else if (data.status === 'working' || data.status === 'thinking') {
             // Start polling JSONL for tool calls since gateway WS doesn't stream them
             const sessionKey2 = threadToSession.get(threadKey) ?? deriveSessionKey(threadKey)
@@ -171,7 +289,10 @@ export function createChatModule(
           statusChangedAt.delete(threadKey)
           currentWork.delete(threadKey)
           currentStreamText.delete(threadKey)
-          // cache removed
+          // A turn completing also means we should release any in-flight
+          // queue entry for this thread, even if no separate 'idle' status
+          // event arrives. Idempotent with the chat.status handler above.
+          completeInFlight(threadKey)
         }
       }
 
@@ -382,7 +503,8 @@ export function createChatModule(
   async function handleSend(threadKey: string, text: string, _attachments?: Buffer[]): Promise<void> {
     if (!threadKey) return // No thread — don't send
 
-    // Server-side rapid dedup (pre-queue) to prevent duplicate inbound sends
+    // Server-side rapid dedup (pre-queue) to prevent accidental duplicate inbound sends
+    // (e.g. user double-clicks; client retries an HTTP that already succeeded).
     const last = recentUserSends.get(threadKey)
     const now = Date.now()
     if (last && last.text === text && now - last.ts < USER_DEDUP_WINDOW_MS) {
@@ -390,41 +512,30 @@ export function createChatModule(
     }
     recentUserSends.set(threadKey, { text, ts: now })
 
-    let sessionKey = threadToSession.get(threadKey)
-    if (!sessionKey) {
-      sessionKey = deriveSessionKey(threadKey)
-      setMapping(threadKey, sessionKey)
+    // Ensure mapping exists up-front so the queue snapshot carries a valid
+    // threadKey even before the dispatcher gets to it.
+    if (!threadToSession.get(threadKey)) {
+      setMapping(threadKey, deriveSessionKey(threadKey))
     }
 
-    // Direct send — no queue. Immediate error notification on failure.
-    try {
-      await backend.sendMessage(sessionKey, text)
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err)
-      console.error(`[chat] send failed for ${threadKey}: ${errorMsg}`)
-      // Notify clients immediately so they can see the error
-      const errorData = { threadKey, error: errorMsg, retryAfterMs: 5000 }
-      if (wsHandler) {
-        wsHandler.broadcastToChannel('chat', { type: 'chat.error', ...errorData })
-      }
-      chatEvents.emit('chat.error', errorData)
-      return
-    }
-
-    const sentAt = Date.now()
-    bus.emit({
-      type: 'chat.message.sent',
-      timestamp: new Date(sentAt).toISOString(),
-      source: 'chat',
-      payload: { threadKey, text, timestamp: sentAt }
-    })
-    chatEvents.emit('chat.message.sent', { threadKey, text, timestamp: sentAt })
+    // Enqueue. The queue change listener will broadcast the new snapshot.
+    // Then attempt to pump the queue — if the agent is idle this fires
+    // immediately; if not, it'll fire when chat.status → 'idle' arrives.
+    messageQueue.enqueue(threadKey, text)
+    await pumpQueue(threadKey)
   }
 
   async function handleAbort(threadKey: string): Promise<void> {
     const sessionKey = threadToSession.get(threadKey)
     if (sessionKey) {
       await backend.abort(sessionKey)
+    }
+    // After abort, the in-flight queue entry (if any) is moot — the agent
+    // won't produce a turn for it. Drop it so the user can re-send.
+    const id = inFlightByThread.get(threadKey)
+    if (id) {
+      inFlightByThread.delete(threadKey)
+      messageQueue.removeSent(id)
     }
   }
 
@@ -553,6 +664,21 @@ export function createChatModule(
         setMapping(threadKey, sk)
       }
       return sk
-    }
+    },
+    getQueueSnapshot: (threadKey: string) => messageQueue.snapshot(threadKey),
+    cancelQueued: (id: string) => messageQueue.cancel(id),
+    retryQueued: (id: string) => {
+      const ok = messageQueue.markQueued(id)
+      if (!ok) return false
+      // Find the thread for this id by scanning snapshots (cheap; queues are small).
+      for (const [tk, items] of messageQueue.getAllQueues()) {
+        if (items.some((m) => m.id === id)) {
+          void pumpQueue(tk)
+          return true
+        }
+      }
+      return true
+    },
+    messageQueue
   }
 }
