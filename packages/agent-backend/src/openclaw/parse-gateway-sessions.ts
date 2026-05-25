@@ -5,6 +5,30 @@ import fs from 'node:fs/promises'
 import { statSync } from 'node:fs'
 import path from 'node:path'
 
+// A session marked `running` whose `updatedAt` is older than this is treated
+// as stale — the gateway either crashed or was restarted without reconciling
+// terminal state. Long-running agent turns tick `updatedAt` on every tool
+// call / chat event, so 30 minutes of total silence is a strong dead signal.
+// Coerce stale `running` to `failed` for read consumers (UI, restart guard,
+// dashboard) without mutating sessions.json itself.
+export const STALE_RUNNING_MS = 30 * 60 * 1000
+
+/**
+ * Resolve a session's effective status given its last activity timestamp.
+ * Today this only coerces stale `running` → `failed`; other statuses pass
+ * through unchanged. Centralised so every consumer sees the same view.
+ */
+export function effectiveStatus(
+  status: string | undefined,
+  lastActivity: number | undefined,
+  now: number = Date.now()
+): string | undefined {
+  if (status === 'running' && lastActivity && now - lastActivity > STALE_RUNNING_MS) {
+    return 'failed'
+  }
+  return status
+}
+
 export interface ParsedSession {
   key: string
   shortKey: string
@@ -92,7 +116,7 @@ export async function getGatewayActivityMap(
     for (const [fullKey, meta] of Object.entries(data)) {
       const parsed = parseSessionEntry(fullKey, meta)
       if ((parsed.kind === 'main' || parsed.kind === 'thread') && parsed.lastActivity) {
-        const status = meta?.status
+        const status = effectiveStatus(meta?.status, parsed.lastActivity)
         map.set(parsed.shortKey, { lastActivity: parsed.lastActivity, status })
       }
     }

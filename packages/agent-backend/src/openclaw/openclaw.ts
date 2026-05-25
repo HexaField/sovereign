@@ -19,6 +19,7 @@ import type { OpenClawConfig, DeviceIdentity, InternalState } from './types.js'
 import { stripThinkingBlocks } from '@sovereign/primitives'
 import { createBackendEmitter } from '@sovereign/primitives'
 import { parseTurns } from './parse-turns.js'
+import { effectiveStatus } from './parse-gateway-sessions.js'
 import {
   defaultOpenClawPaths,
   type OpenClawPaths,
@@ -806,13 +807,14 @@ export function createOpenClawBackend(config: OpenClawConfig): OpenClawBackend {
       if (filter?.kind && filter.kind !== kind) continue
       const parentKey = meta?.spawnedBy as string | undefined
       if (filter?.parentKey && parentKey !== filter.parentKey) continue
+      const lastActivity = meta?.updatedAt ?? meta?.createdAt
       out.push({
         key: fullKey,
         backendSessionId: meta?.sessionId,
         kind,
         label: meta?.label,
-        lastActivity: meta?.updatedAt ?? meta?.createdAt,
-        agentStatus: meta?.status,
+        lastActivity,
+        agentStatus: effectiveStatus(meta?.status, lastActivity),
         parentKey,
         task: meta?.task
       })
@@ -830,7 +832,7 @@ export function createOpenClawBackend(config: OpenClawConfig): OpenClawBackend {
       out.push({
         sessionKey: fullKey,
         label: meta.label ?? fullKey.split(':subagent:')[1]?.slice(0, 8) ?? 'Subagent',
-        status: meta.status ?? 'idle',
+        status: effectiveStatus(meta.status, meta.updatedAt) ?? 'idle',
         lastActivity: meta.updatedAt,
         task: meta.task ?? meta.label
       })
