@@ -12,7 +12,8 @@ function makeState(): ClaudeSessionState {
     agentStatus: 'idle',
     liveSubagents: new Set(),
     streamLastLength: 0,
-    thinkingAccum: ''
+    thinkingAccum: '',
+    textAccum: []
   }
 }
 

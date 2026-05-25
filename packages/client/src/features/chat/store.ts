@@ -465,10 +465,16 @@ function connectSSE(threadKey: string): void {
     const data = JSON.parse((e as MessageEvent).data)
     const turn = data.turn as ParsedTurn
 
+    // Only the assistant's turn owns liveWork — never attach the agent's
+    // tool calls / thinking to the synthetic user turn, or the UI will
+    // render WorkSection above BOTH the user bubble and the assistant
+    // bubble (same items shown twice). User turns always render with
+    // empty workItems.
+    const isUser = turn.role === 'user'
     const liveWorkItems = liveWork()
     const merged: ParsedTurn = {
       ...turn,
-      workItems: turn.workItems?.length > 0 ? turn.workItems : liveWorkItems
+      workItems: isUser ? (turn.workItems ?? []) : turn.workItems?.length > 0 ? turn.workItems : liveWorkItems
     }
 
     setTurns((prev) => {
@@ -478,7 +484,7 @@ function connectSSE(threadKey: string): void {
       }
       return [...prev, merged]
     })
-    if (merged.role !== 'user') clearLiveState()
+    if (!isUser) clearLiveState()
   })
 
   // ── compacting ──
