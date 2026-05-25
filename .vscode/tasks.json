@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Sovereign: build all (server + client)",
+      "detail": "Guarded server build + reload, then vite-build the SPA",
+      "type": "shell",
+      "command": "${workspaceFolder}/bin/sovereign build && pnpm --filter @sovereign/client build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Sovereign: server build + reload",
+      "detail": "Run bin/sovereign build (guarded check, tsc -b, launchd kickstart, health check)",
+      "type": "shell",
+      "command": "${workspaceFolder}/bin/sovereign build",
+      "group": "build",
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Sovereign: client vite build",
+      "detail": "Build the client SPA only (no server reload)",
+      "type": "shell",
+      "command": "pnpm --filter @sovereign/client build",
+      "group": "build",
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "clear": true
+      },
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}
