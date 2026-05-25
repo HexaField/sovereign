@@ -54,6 +54,23 @@ const KNOWN_MODELS = ['opus', 'sonnet', 'haiku', 'opusplan']
 
 const SUBAGENT_SESSION_PREFIX = 'agent:main:subagent:'
 
+// SDK built-in scheduling tools. These depend on `claude daemon` which we
+// deliberately do not run — their schedules would never fire and would
+// bypass Sovereign's message queue (no audit trail, no UI visibility).
+// PreToolUse denies them with a redirect to the Sovereign equivalent.
+// See plans/claude-code-wakeup-bridge-spec.md (revision 3).
+const WAKEUP_TOOLS = new Set(['ScheduleWakeup', 'CronCreate', 'CronList', 'CronDelete'])
+// MCP-exposed tool names (the SDK prefixes user-registered MCP tools with
+// `mcp__<server-name>__`; see mcp-server.ts where the server is named
+// 'sovereign'). Spell the FULL exposed name in the redirect so the agent
+// doesn't have to guess the namespace convention.
+const WAKEUP_REDIRECT: Record<string, string> = {
+  ScheduleWakeup: 'mcp__sovereign__cron_create with schedule={kind:"oneshot", at:"<future ISO>"}',
+  CronCreate: 'mcp__sovereign__cron_create',
+  CronList: 'mcp__sovereign__cron_list',
+  CronDelete: 'mcp__sovereign__cron_delete'
+}
+
 export interface ClaudeCodeBackend extends AgentBackend {
   /** Inject the canonical session key for the active in-flight request, used by MCP `agents_spawn`. */
   setActiveSession(sessionKey: string | undefined): void
@@ -207,10 +224,34 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     }
     const onPreToolUse = async (input: HookInput) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true }
+      const inp = input as Extract<HookInput, { hook_event_name: 'PreToolUse' }>
+
+      // Redirect SDK built-in scheduling tools to Sovereign equivalents.
+      // Runs before the toolPolicy check so the redirect applies regardless
+      // of per-org allowlists and even when no session/policy is bound.
+      // Includes the current session's threadKey in the reason so the agent
+      // doesn't have to guess it (mcp__sovereign__cron_create requires it).
+      if (WAKEUP_TOOLS.has(inp.tool_name)) {
+        const target = WAKEUP_REDIRECT[inp.tool_name]
+        const sk = activeSessionKey ?? ''
+        const threadKeyHint = sk ? ` Pass threadKey="${sk}" so the wakeup fires back into THIS thread.` : ''
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse' as const,
+            permissionDecision: 'deny' as const,
+            permissionDecisionReason:
+              `This Sovereign-managed session does not support ${inp.tool_name}. ` +
+              `Use ${target} instead — it schedules through Sovereign's own ` +
+              `scheduler which fires the prompt back into this thread via the ` +
+              `standard message queue (observable, cancellable, durable).${threadKeyHint}`
+          }
+        }
+      }
+
       const sessionKey = activeSessionKey
       const policy = deps.toolPolicy
       if (!sessionKey || !policy) return { continue: true }
-      const inp = input as Extract<HookInput, { hook_event_name: 'PreToolUse' }>
       const orgId = lookupSessionOrgId(sessionKey)
       const decision = await policy({
         sessionKey,
@@ -246,6 +287,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       const state = internal.sessions.get(sessionKey)
       if (!state) return { continue: true }
       const inp = input as Extract<HookInput, { hook_event_name: 'PostToolUse' }>
+
       const outputStr =
         typeof inp.tool_response === 'string' ? inp.tool_response : JSON.stringify(inp.tool_response ?? '')
       emitter.emit('chat.work', {

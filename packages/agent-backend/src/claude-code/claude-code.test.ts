@@ -120,6 +120,71 @@ describe('claude-code/createClaudeCodeBackend', () => {
     expect(policyContext).toBeNull()
   })
 
+  it('PreToolUse denies ScheduleWakeup with a redirect to sovereign.cron_create', async () => {
+    let capturedHooks: any = null
+    const sdkQuery: any = (args: any) => {
+      capturedHooks = args.options?.hooks
+      return Object.assign((async function* () {})(), {
+        interrupt: async () => {},
+        setPermissionMode: async () => {},
+        setModel: async () => {},
+        setMaxTurns: async () => {},
+        setMaxThinkingTokens: async () => {},
+        mcpServerStatus: async () => [],
+        supportedCommands: async () => [],
+        supportedModels: async () => [],
+        close: () => {}
+      })
+    }
+    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery })
+    await backend.createSession('t', { threadKey: 'wakeup-test' })
+    // Drive a send to register the hooks with the SDK (capturedHooks gets populated).
+    backend.sendMessage('agent:main:thread:wakeup-test', 'go').catch(() => {})
+    // Yield to the event loop so sdkQuery is invoked.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(capturedHooks).not.toBeNull()
+    const preToolUse = capturedHooks.PreToolUse[0].hooks[0]
+    const out = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'ScheduleWakeup',
+      tool_input: { delaySeconds: 60, prompt: 'p' },
+      tool_use_id: 'tu1'
+    })
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny')
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain('mcp__sovereign__cron_create')
+  })
+
+  it('PreToolUse denies CronList with a redirect to sovereign.cron_list', async () => {
+    let capturedHooks: any = null
+    const sdkQuery: any = (args: any) => {
+      capturedHooks = args.options?.hooks
+      return Object.assign((async function* () {})(), {
+        interrupt: async () => {},
+        setPermissionMode: async () => {},
+        setModel: async () => {},
+        setMaxTurns: async () => {},
+        setMaxThinkingTokens: async () => {},
+        mcpServerStatus: async () => [],
+        supportedCommands: async () => [],
+        supportedModels: async () => [],
+        close: () => {}
+      })
+    }
+    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery })
+    await backend.createSession('t', { threadKey: 'cronlist-test' })
+    backend.sendMessage('agent:main:thread:cronlist-test', 'go').catch(() => {})
+    await new Promise((r) => setTimeout(r, 10))
+    const preToolUse = capturedHooks.PreToolUse[0].hooks[0]
+    const out = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'CronList',
+      tool_input: {},
+      tool_use_id: 'tu2'
+    })
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny')
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain('mcp__sovereign__cron_list')
+  })
+
   it('createSession persists registry record + returns canonical key', async () => {
     const upserts: any[] = []
     const backend = createClaudeCodeBackend(
