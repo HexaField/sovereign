@@ -309,28 +309,31 @@ _stop_non_macos() {
 
 _backup_artifacts() {
   BACKUP_DIR=$(mktemp -d "$TMP_ROOT/sovereign-build-backup.XXXXXX")
-  local pkg
-  for pkg in core client server; do
-    local src="$REPO_DIR/packages/$pkg/dist"
-    local dest="$BACKUP_DIR/$pkg"
+  # Snapshot every workspace package that currently has a dist/, so a
+  # mid-build failure can be rolled back cleanly. Packages added or freshly
+  # built later have no snapshot and are left alone on restore.
+  local dist pkg dest
+  for dist in "$REPO_DIR"/packages/*/dist; do
+    [ -d "$dist" ] || continue
+    pkg="$(basename "$(dirname "$dist")")"
+    dest="$BACKUP_DIR/$pkg"
     mkdir -p "$dest"
-    if [ -d "$src" ]; then
-      cp -R "$src" "$dest/dist"
-      touch "$dest/.had_dist"
-    fi
+    cp -R "$dist" "$dest/dist"
+    touch "$dest/.had_dist"
   done
 }
 
 _restore_artifacts() {
   [ -n "${BACKUP_DIR:-}" ] || return 0
-  local pkg
-  for pkg in core client server; do
-    local src="$REPO_DIR/packages/$pkg/dist"
-    local snapshot="$BACKUP_DIR/$pkg/dist"
-    rm -rf "$src"
-    if [ -f "$BACKUP_DIR/$pkg/.had_dist" ] && [ -d "$snapshot" ]; then
+  local snapshot pkg src
+  for snapshot in "$BACKUP_DIR"/*; do
+    [ -d "$snapshot" ] || continue
+    pkg="$(basename "$snapshot")"
+    src="$REPO_DIR/packages/$pkg/dist"
+    if [ -f "$snapshot/.had_dist" ] && [ -d "$snapshot/dist" ]; then
+      rm -rf "$src"
       mkdir -p "$(dirname "$src")"
-      cp -R "$snapshot" "$src"
+      cp -R "$snapshot/dist" "$src"
     fi
   done
 }
@@ -347,12 +350,12 @@ _run_checks() {
 }
 
 _run_builds() {
-  _note "Building core"
-  (cd "$REPO_DIR" && pnpm --filter @sovereign/core build)
-  _note "Building client"
-  (cd "$REPO_DIR" && pnpm --filter @sovereign/client build)
-  _note "Building server"
-  (cd "$REPO_DIR" && pnpm --filter @sovereign/server build)
+  # `pnpm -r --if-present build` walks every workspace package that has a
+  # build script in topological order — required after the modularisation
+  # refactor where the server now depends on ~25 sibling packages whose
+  # `dist/` directories must be present at runtime.
+  _note "Building all workspace packages"
+  (cd "$REPO_DIR" && pnpm -r --if-present build)
 }
 
 _guarded_build() {

@@ -121,9 +121,13 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
 
   // Active-agent census across all enabled backends. Used by the `sovereign`
   // CLI's restart guard so an operator iterating on Sovereign doesn't
-  // accidentally kill an in-flight Claude/OpenClaw turn. Treats any session
-  // whose `agentStatus` is not `idle` as active. Fail-soft per backend so a
-  // misbehaving adapter doesn't blank the whole response.
+  // accidentally kill an in-flight Claude/OpenClaw turn. Allow-list of
+  // statuses that indicate live work: the canonical AgentStatus uses
+  // `working`/`thinking`; OpenClaw's persisted `sessions.json` also exposes
+  // gateway lifecycle states (`done`, `failed`, `timeout`, `running`) — only
+  // `running` of those represents an in-flight turn. Fail-soft per backend
+  // so a misbehaving adapter doesn't blank the whole response.
+  const ACTIVE_STATUSES = new Set(['working', 'thinking', 'running'])
   router.get('/api/system/agents/active', async (_req, res) => {
     if (!routingBackend) {
       res.json({ count: 0, sessions: [] })
@@ -143,7 +147,7 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
         const list = await inst.backend.listSessions()
         for (const s of list) {
           const status = s.agentStatus ?? 'idle'
-          if (status === 'idle') continue
+          if (!ACTIVE_STATUSES.has(status)) continue
           sessions.push({
             key: s.key,
             kind: s.kind,
