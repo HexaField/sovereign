@@ -106,6 +106,15 @@ export function handleAssistantMessage(msg: any, state: ClaudeSessionState, emit
     state.streamLastLength = text.length
     if (delta) emitter.emit('chat.stream', { sessionKey: state.sessionKey, text: delta })
   }
+  // Record this message's text fragment for round-content reconstruction.
+  // SDK assistant messages between tool calls each carry their own text;
+  // the SDK's terminal `result` only includes the final fragment, so we
+  // need to keep them ourselves to match what the JSONL parser produces
+  // on reload (see [parse-turns.ts](../../../primitives/src/parse-turns.ts)).
+  const trimmed = text.trim()
+  if (trimmed && state.textAccum[state.textAccum.length - 1] !== trimmed) {
+    state.textAccum.push(trimmed)
+  }
   const thinking = joinThinking(blocks)
   if (thinking) {
     if (thinking.length > state.thinkingAccum.length) state.thinkingAccum = thinking
@@ -157,10 +166,20 @@ export function handleSdkUserMessage(msg: any, state: ClaudeSessionState, emitte
  */
 export function handleResult(msg: any, state: ClaudeSessionState, emitter: BackendEmitter): void {
   flushThinking(state, emitter)
-  const cleaned = (msg?.result ?? '').toString().trim()
+  // Prefer the accumulated text fragments — they include every intermediate
+  // narration ("About to run X.") between tool calls. msg.result is only the
+  // final fragment, which would make the live chat.turn diverge from what the
+  // JSONL parser produces on reload. Fall back to msg.result if accumulator
+  // is empty (rare: agents that emit nothing during a round).
+  const resultFallback = stripThinkingBlocks((msg?.result ?? '').toString().trim())
+  const joined = state.textAccum
+    .map((s) => stripThinkingBlocks(s).trim())
+    .filter(Boolean)
+    .join('\n\n')
+  const finalContent = joined || resultFallback
   const turn: ParsedTurn = {
     role: 'assistant',
-    content: stripThinkingBlocks(cleaned),
+    content: finalContent,
     timestamp: Date.now(),
     workItems: [],
     thinkingBlocks: []
@@ -188,6 +207,7 @@ export function handleResult(msg: any, state: ClaudeSessionState, emitter: Backe
   }
   setIdle(state, emitter)
   state.streamLastLength = 0
+  state.textAccum = []
 }
 
 /** Handle compaction boundary system messages. */

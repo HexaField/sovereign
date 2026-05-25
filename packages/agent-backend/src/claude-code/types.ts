@@ -90,6 +90,12 @@ export interface ClaudeSessionState {
   /** Streaming bookkeeping per-session. */
   streamLastLength: number
   thinkingAccum: string
+  /** All text fragments emitted by the agent during the current round.
+   * Joined with `\n\n` on handleResult to form the turn's content — the
+   * SDK's `msg.result` only carries the FINAL text, so intermediate
+   * narration ("About to run ls /tmp") would otherwise be lost from the
+   * live chat.turn even though it survives in the JSONL. */
+  textAccum: string[]
   /** Aggregate usage carried forward across turns. */
   lastUsage?: ClaudeUsage
   /** Path of the session JSONL on disk (set when known). */

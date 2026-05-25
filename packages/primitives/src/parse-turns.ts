@@ -120,27 +120,108 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
   const turns: ParsedTurn[] = []
   let currentWork: WorkItem[] = []
   let currentThinking: string[] = []
+  // Accumulator for the agent's narration text across a round. Claude Code
+  // emits the agent's reply in chunks: intermediate text ("Let me check X"),
+  // followed by more tool calls, followed by the final answer. Everything
+  // between two REAL user messages is one logical assistant turn.
+  let currentAssistantTexts: string[] = []
+  let lastAssistantTs: number = 0
   let lastUserTurn: ParsedTurn | null = null
+
+  function flushAssistantRound(): void {
+    if (currentWork.length === 0 && currentAssistantTexts.length === 0) return
+    const content = currentAssistantTexts.join('\n\n').trim()
+    // Skip the round entirely if it only contains sentinel-only text and no
+    // work. (Non-sentinel content with work-only is fine — empty bubble.)
+    if (currentWork.length === 0 && (content === 'NO_REPLY' || content === 'HEARTBEAT_OK')) {
+      currentAssistantTexts = []
+      return
+    }
+    turns.push({
+      role: 'assistant',
+      content,
+      timestamp: lastAssistantTs || (currentWork[currentWork.length - 1]?.timestamp ?? 0),
+      workItems: currentWork,
+      thinkingBlocks: currentThinking
+    })
+    currentWork = []
+    currentThinking = []
+    currentAssistantTexts = []
+    lastAssistantTs = 0
+  }
+
+  function pushAssistantBlocks(m: any): void {
+    lastAssistantTs = m.timestamp ?? lastAssistantTs
+    if (typeof m.content === 'string') {
+      const cleaned = stripDirectives(stripThinkingBlocks(m.content)).trim()
+      if (cleaned) currentAssistantTexts.push(cleaned)
+      return
+    }
+    const blocks = Array.isArray(m.content) ? m.content : []
+    for (const block of blocks) {
+      if (block.type === 'text' && block.text) {
+        const cleaned = stripDirectives(stripThinkingBlocks(block.text)).trim()
+        if (cleaned) currentAssistantTexts.push(cleaned)
+      } else if (block.type === 'thinking') {
+        const raw = (block.thinking ?? block.text ?? '').toString().trim()
+        if (raw) {
+          currentThinking.push(raw)
+          currentWork.push({ type: 'thinking', output: raw, timestamp: m.timestamp ?? 0 })
+        }
+      } else if (block.type === 'toolCall') {
+        if (hiddenTools.has(block.name)) continue
+        currentWork.push({
+          type: 'tool_call',
+          name: block.name ?? 'tool',
+          input: typeof block.arguments === 'string' ? block.arguments : JSON.stringify(block.arguments ?? {}),
+          toolCallId: block.id,
+          timestamp: m.timestamp ?? 0
+        })
+      } else if (block.type === 'tool_use') {
+        if (hiddenTools.has(block.name)) continue
+        currentWork.push({
+          type: 'tool_call',
+          name: block.name ?? 'tool',
+          input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input ?? {}),
+          toolCallId: block.id,
+          timestamp: m.timestamp ?? 0
+        })
+      }
+    }
+  }
 
   for (const m of messages) {
     const role = m.role ?? ''
 
     if (role === 'user') {
+      // Tool-result envelope: when an assistant has called a tool, the SDK
+      // emits a user-role message whose content is an array of `tool_result`
+      // blocks (no text). It is NOT a real user turn — it's the agent's own
+      // tool result feedback. Accumulate into currentWork and continue so the
+      // surrounding round of [thinking → tool_use → tool_result → text]
+      // coalesces into a SINGLE assistant turn.
+      if (Array.isArray(m.content)) {
+        const blocks = m.content as any[]
+        const hasText = blocks.some((b) => b.type === 'text' && b.text)
+        const toolResults = blocks.filter((b) => b.type === 'tool_result')
+        if (toolResults.length > 0 && !hasText) {
+          for (const b of toolResults) {
+            currentWork.push({
+              type: 'tool_result',
+              output: extractContentOutput(b.content) ?? undefined,
+              toolCallId: b.tool_use_id,
+              timestamp: m.timestamp ?? 0
+            })
+          }
+          continue
+        }
+      }
+
+      // Real user message — flush the previous round.
       if (lastUserTurn) {
         turns.push(lastUserTurn)
       }
-
-      if (currentWork.length > 0) {
-        turns.push({
-          role: 'assistant',
-          content: '',
-          timestamp: currentWork[currentWork.length - 1].timestamp ?? 0,
-          workItems: currentWork,
-          thinkingBlocks: currentThinking
-        })
-        currentWork = []
-        currentThinking = []
-      }
+      flushAssistantRound()
 
       const text = extractText(m.content) ?? ''
       const stripped = stripTimestamp(text)
@@ -183,8 +264,6 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
           })
           lastUserTurn = null
         }
-        currentWork = []
-        currentThinking = []
         continue
       }
 
@@ -198,8 +277,6 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
         workItems: [],
         thinkingBlocks: []
       }
-      currentWork = []
-      currentThinking = []
       continue
     }
 
@@ -215,115 +292,27 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
     }
 
     if (role === 'assistant') {
-      const blocks = Array.isArray(m.content) ? m.content : []
-      const toolCalls: any[] = []
-      const thinkingStructured: any[] = []
-      let allTextParts: string[] = []
+      // The user-turn boundary is the only thing that ends an assistant
+      // round. Any text, thinking, or tool_use in this message just adds to
+      // the running accumulators. A round is later emitted as ONE turn whose
+      // `content` is the joined narration and whose `workItems` are all the
+      // tool calls + thinking in chronological order.
+      pushAssistantBlocks(m)
 
-      if (typeof m.content === 'string') {
-        allTextParts.push(m.content)
-      } else {
-        for (const block of blocks) {
-          if (block.type === 'toolCall' || block.type === 'tool_use') {
-            toolCalls.push(block)
-          } else if (block.type === 'thinking') {
-            thinkingStructured.push(block)
-          }
+      // Stop-reason: error → emit a system turn after flushing.
+      if (m.stopReason === 'error' && m.errorMessage) {
+        if (lastUserTurn) {
+          turns.push(lastUserTurn)
+          lastUserTurn = null
         }
-      }
-
-      // Treat this message as "work-bearing" when it has tool calls or
-      // structured thinking blocks — accumulate into currentWork and defer
-      // turn emission until a downstream message produces final text.
-      // This handles Claude Code's pattern of one-block-per-message
-      // (thinking → tool_use → tool_result → … → text).
-      if (toolCalls.length > 0 || thinkingStructured.length > 0) {
-        if (typeof m.content === 'string') {
-          const cleaned = stripDirectives(stripThinkingBlocks(m.content)).trim()
-          if (cleaned) {
-            currentThinking.push(cleaned)
-            currentWork.push({ type: 'thinking', output: cleaned, timestamp: m.timestamp ?? 0 })
-          }
-        } else {
-          for (const block of blocks) {
-            if (block.type === 'text' && block.text) {
-              const cleaned = stripDirectives(stripThinkingBlocks(block.text)).trim()
-              if (cleaned) {
-                currentThinking.push(cleaned)
-                currentWork.push({ type: 'thinking', output: cleaned, timestamp: m.timestamp ?? 0 })
-              }
-            } else if (block.type === 'thinking') {
-              const raw = (block.thinking ?? block.text ?? '').toString().trim()
-              if (raw) {
-                currentThinking.push(raw)
-                currentWork.push({ type: 'thinking', output: raw, timestamp: m.timestamp ?? 0 })
-              }
-            } else if (block.type === 'toolCall') {
-              if (hiddenTools.has(block.name)) continue
-              currentWork.push({
-                type: 'tool_call',
-                name: block.name ?? 'tool',
-                input: typeof block.arguments === 'string' ? block.arguments : JSON.stringify(block.arguments ?? {}),
-                toolCallId: block.id,
-                timestamp: m.timestamp ?? 0
-              })
-            } else if (block.type === 'tool_use') {
-              if (hiddenTools.has(block.name)) continue
-              currentWork.push({
-                type: 'tool_call',
-                name: block.name ?? 'tool',
-                input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input ?? {}),
-                toolCallId: block.id,
-                timestamp: m.timestamp ?? 0
-              })
-            }
-          }
-        }
-        continue
-      }
-
-      if (!Array.isArray(m.content) || typeof m.content === 'string') {
-        // already in allTextParts
-      } else {
-        allTextParts = blocks.filter((b: any) => b.type === 'text' && b.text).map((b: any) => b.text)
-      }
-
-      const rawText = allTextParts.join('\n').trim()
-      const cleanedText = stripDirectives(stripThinkingBlocks(rawText)).trim()
-
-      if (cleanedText && cleanedText !== 'NO_REPLY' && cleanedText !== 'HEARTBEAT_OK') {
-        const turn: ParsedTurn = {
-          role: 'assistant',
-          content: cleanedText,
+        flushAssistantRound()
+        turns.push({
+          role: 'system',
+          content: `Error: ${m.errorMessage}`,
           timestamp: m.timestamp ?? 0,
-          workItems: currentWork,
-          thinkingBlocks: currentThinking
-        }
-        if (lastUserTurn) {
-          turns.push(lastUserTurn)
-          lastUserTurn = null
-        }
-        turns.push(turn)
-        currentWork = []
-        currentThinking = []
-      } else if (cleanedText === '' || cleanedText === 'NO_REPLY' || cleanedText === 'HEARTBEAT_OK') {
-        if (lastUserTurn) {
-          turns.push(lastUserTurn)
-          lastUserTurn = null
-        }
-
-        if (m.stopReason === 'error' && m.errorMessage) {
-          turns.push({
-            role: 'system',
-            content: `Error: ${m.errorMessage}`,
-            timestamp: m.timestamp ?? 0,
-            workItems: [],
-            thinkingBlocks: []
-          })
-        }
-
-        currentWork = []
-        currentThinking = []
+          workItems: [],
+          thinkingBlocks: []
+        })
       }
       continue
     }
@@ -344,16 +333,7 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
   if (lastUserTurn) {
     turns.push(lastUserTurn)
   }
-
-  if (currentWork.length > 0) {
-    turns.push({
-      role: 'assistant',
-      content: '',
-      timestamp: currentWork[currentWork.length - 1].timestamp ?? 0,
-      workItems: currentWork,
-      thinkingBlocks: currentThinking
-    })
-  }
+  flushAssistantRound()
 
   const filtered = turns.filter((t) => {
     const text = (t.content ?? '').trim()
