@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { parseTurns } from './parse-turns.js'
 
-describe('parseTurns — thinking blocks', () => {
-  it('should emit separate thinking entries for interleaved text + toolCall blocks', () => {
+describe('parseTurns — assistant round coalescing', () => {
+  it('joins interleaved text + tool_call blocks into ONE assistant turn whose content is the joined narration', () => {
     const messages = [
       { role: 'user', content: 'hello' },
       {
@@ -15,20 +15,8 @@ describe('parseTurns — thinking blocks', () => {
         ],
         timestamp: 1000
       },
-      {
-        role: 'toolResult',
-        toolCallId: 'tc1',
-        toolName: 'read',
-        content: 'file contents',
-        timestamp: 1001
-      },
-      {
-        role: 'toolResult',
-        toolCallId: 'tc2',
-        toolName: 'write',
-        content: 'ok',
-        timestamp: 1002
-      },
+      { role: 'toolResult', toolCallId: 'tc1', toolName: 'read', content: 'file contents', timestamp: 1001 },
+      { role: 'toolResult', toolCallId: 'tc2', toolName: 'write', content: 'ok', timestamp: 1002 },
       {
         role: 'assistant',
         content: [{ type: 'text', text: 'Done!' }],
@@ -37,16 +25,18 @@ describe('parseTurns — thinking blocks', () => {
     ]
 
     const turns = parseTurns(messages)
-    const assistantTurn = turns.find((t) => t.role === 'assistant' && t.content === 'Done!')
-    expect(assistantTurn).toBeDefined()
-
-    const thinkingItems = assistantTurn!.workItems.filter((w) => w.type === 'thinking')
-    expect(thinkingItems).toHaveLength(2)
-    expect(thinkingItems[0].output).toBe('First thought')
-    expect(thinkingItems[1].output).toBe('Second thought')
+    const assistantTurns = turns.filter((t) => t.role === 'assistant')
+    // One round = one assistant turn (was previously split into multiple).
+    expect(assistantTurns).toHaveLength(1)
+    const assistantTurn = assistantTurns[0]
+    expect(assistantTurn.content).toBe('First thought\n\nSecond thought\n\nDone!')
+    const toolCalls = assistantTurn.workItems.filter((w) => w.type === 'tool_call')
+    const toolResults = assistantTurn.workItems.filter((w) => w.type === 'tool_result')
+    expect(toolCalls).toHaveLength(2)
+    expect(toolResults).toHaveLength(2)
   })
 
-  it('should not concatenate text blocks into a single thinking entry', () => {
+  it('text blocks become bubble content, NOT thinking work items', () => {
     const messages = [
       { role: 'user', content: 'do stuff' },
       {
@@ -65,15 +55,13 @@ describe('parseTurns — thinking blocks', () => {
     ]
 
     const turns = parseTurns(messages)
-    const finalTurn = turns.find((t) => t.role === 'assistant' && t.content === 'Final answer')
-    expect(finalTurn).toBeDefined()
-
-    const thinkingItems = finalTurn!.workItems.filter((w) => w.type === 'thinking')
-    expect(thinkingItems.some((t) => (t.output || '').includes('Analysis A\nAnalysis B'))).toBe(false)
-    expect(thinkingItems).toHaveLength(2)
+    const finalTurn = turns.find((t) => t.role === 'assistant')!
+    expect(finalTurn.content).toBe('Analysis A\n\nAnalysis B\n\nFinal answer')
+    // Only structured {type: 'thinking'} blocks become thinking work items.
+    expect(finalTurn.workItems.filter((w) => w.type === 'thinking')).toHaveLength(0)
   })
 
-  it('should strip thinking tags from text blocks without eating content between them', () => {
+  it('strips inline <thinking> tags from text blocks without eating surrounding content', () => {
     const messages = [
       { role: 'user', content: 'test' },
       {
@@ -89,13 +77,11 @@ describe('parseTurns — thinking blocks', () => {
     ]
 
     const turns = parseTurns(messages)
-    const finalTurn = turns.find((t) => t.role === 'assistant' && t.content === 'result')
-    const thinkingItems = finalTurn!.workItems.filter((w) => w.type === 'thinking')
-    expect(thinkingItems).toHaveLength(1)
-    expect(thinkingItems[0].output).toBe('visible thought')
+    const finalTurn = turns.find((t) => t.role === 'assistant')!
+    expect(finalTurn.content).toBe('visible thought\n\nresult')
   })
 
-  it('should handle assistant messages with only tool calls (no text)', () => {
+  it('handles assistant messages with only tool calls (no text)', () => {
     const messages = [
       { role: 'user', content: 'go' },
       {
@@ -108,9 +94,31 @@ describe('parseTurns — thinking blocks', () => {
     ]
 
     const turns = parseTurns(messages)
-    const finalTurn = turns.find((t) => t.role === 'assistant' && t.content === 'done')
-    const thinkingItems = finalTurn!.workItems.filter((w) => w.type === 'thinking')
-    expect(thinkingItems).toHaveLength(0)
+    const finalTurn = turns.find((t) => t.role === 'assistant' && t.content === 'done')!
+    expect(finalTurn.workItems.filter((w) => w.type === 'thinking')).toHaveLength(0)
+    expect(finalTurn.workItems.filter((w) => w.type === 'tool_call')).toHaveLength(1)
+  })
+
+  it('preserves structured thinking blocks as thinking work items', () => {
+    const messages = [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'reasoning step' },
+          { type: 'toolCall', id: 'tc1', name: 'exec', arguments: {} }
+        ],
+        timestamp: 100
+      },
+      { role: 'toolResult', toolCallId: 'tc1', toolName: 'exec', content: 'out', timestamp: 101 },
+      { role: 'assistant', content: 'final', timestamp: 102 }
+    ]
+    const turns = parseTurns(messages)
+    const t = turns.find((x) => x.role === 'assistant')!
+    expect(t.content).toBe('final')
+    const thinking = t.workItems.filter((w) => w.type === 'thinking')
+    expect(thinking).toHaveLength(1)
+    expect(thinking[0].output).toBe('reasoning step')
   })
 })
 

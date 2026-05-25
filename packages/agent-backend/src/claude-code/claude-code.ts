@@ -168,6 +168,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       liveSubagents: new Set(),
       streamLastLength: 0,
       thinkingAccum: '',
+      textAccum: [],
       sessionFile
     }
     internal.sessions.set(opts.sessionKey, state)
