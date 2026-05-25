@@ -21,12 +21,14 @@
     "lint": "oxlint --fix",
     "format": "oxfmt --write",
     "check": "pnpm -r check && oxlint",
+    "check-deps": "depcruise --config .dependency-cruiser.cjs packages",
     "prepare": "husky"
   },
   "devDependencies": {
     "@fastify/pre-commit": "^2.2.1",
     "@types/node": "^25.0.3",
     "concurrently": "^9.2.1",
+    "dependency-cruiser": "^17.0.1",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "oxfmt": "^0.23.0",
@@ -43,5 +45,6 @@
     "*.{json,css,md,html}": [
       "oxfmt --write"
     ]
-  }
+  },
+  "packageManager": "pnpm@10.16.1"
 }

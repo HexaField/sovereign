@@ -1,0 +1,48 @@
+// Public surface of the agent-backend layer. Nothing outside this package
+// should import from `./openclaw/*`, `./pi/*`, `./claude-code/*` directly —
+// those are implementation details.
+
+export { createBackend } from './factory.js'
+export type { RoutingBackend, MultiBackendConfig, BackendInstance } from './factory.js'
+export { routingAsBackend } from './routing-as-backend.js'
+export { wireAgentBackend } from './wiring.js'
+export type { AgentBackendWiringInput, AgentBackendWiringResult } from './wiring.js'
+export { buildSovereignMcpDeps } from './mcp-deps.js'
+export type { SovereignMcpDepsInput } from './mcp-deps.js'
+export { createSessionsRegistry } from '@sovereign/primitives'
+export type { SessionsRegistry, ThreadSessionRecord } from '@sovereign/primitives'
+
+// Re-export the canonical interface types from core so consumers only need a
+// single import.
+export type {
+  AgentBackend,
+  AgentBackendKind,
+  AgentBackendEvents,
+  BackendCapabilities,
+  BackendConnectionStatus,
+  CreateSessionOptions,
+  ContextBudget,
+  DeviceInfo,
+  SessionKind,
+  SessionMeta,
+  SessionSummary,
+  SpawnSubagentOptions,
+  SubagentSummary
+} from '@sovereign/core'
+
+// OpenClaw adapter
+export { createOpenClawBackend } from './openclaw/openclaw.js'
+export type { OpenClawBackend } from './openclaw/openclaw.js'
+export type { OpenClawConfig } from './openclaw/types.js'
+export { openClawConfigFromEnv } from './openclaw/env-config.js'
+export { getGatewayActivityMap } from './openclaw/parse-gateway-sessions.js'
+
+// Claude Code adapter
+export {
+  createClaudeCodeBackend,
+  claudeCodeConfigFromEnv,
+  createSovereignMcpServer,
+  createWorkspaceIndex,
+  type ClaudeCodeBackend,
+  type SovereignToolDeps
+} from './claude-code/index.js'

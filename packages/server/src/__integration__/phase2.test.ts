@@ -6,15 +6,15 @@ import { execFileSync } from 'node:child_process'
 import express from 'express'
 import request from 'supertest'
 import { createEventBus } from '@sovereign/core'
-import { createOrgManager } from '../orgs/orgs.js'
-import { createWorktreeManager } from '../worktrees/worktrees.js'
-import { createFileService, PathTraversalError } from '../files/files.js'
-import { createGitCli } from '../git/git.js'
-import { createGitService } from '../git/service.js'
+import { createOrgManager } from '@sovereign/orgs'
+import { createWorktreeManager } from '@sovereign/worktrees'
+import { createFileService, PathTraversalError } from '@sovereign/files'
+import { createGitCli } from '@sovereign/git'
+import { createGitService } from '@sovereign/git'
 import { createStatusAggregator } from '../status/status.js'
-import { createNotifications } from '../notifications/notifications.js'
-import { createAuth } from '../auth/auth.js'
-import { createAuthMiddleware } from '../auth/middleware.js'
+import { createNotifications } from '@sovereign/notifications'
+import { createAuth } from '@sovereign/auth'
+import { createAuthMiddleware } from '@sovereign/auth'
 
 function makeTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sovereign-test-'))
@@ -193,7 +193,7 @@ describe('Phase 2 Integration: Org → Project → Worktree → Files → Git', 
     const allowedPaths = [path.join(tmpDir, 'repo')]
 
     // Import the module - we test that validation works by checking the error
-    const { createTerminalManager } = await import('../terminal/terminal.js')
+    const { createTerminalManager } = await import('@sovereign/terminal')
     const termMgr = createTerminalManager(bus, {
       validateCwd: (cwd) => allowedPaths.some((p) => cwd.startsWith(p))
     })

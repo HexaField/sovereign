@@ -1,10 +1,10 @@
 // Dashboard summary endpoint — aggregates per-org data for workspace cards
 
 import { Router } from 'express'
-import type { OrgManager } from '../orgs/orgs.js'
-import type { ThreadManager } from '../threads/types.js'
-import type { Notifications } from '../notifications/notifications.js'
-import type { SystemModule } from '../system/system.js'
+import type { OrgManager } from '@sovereign/orgs'
+import type { ThreadManager } from '@sovereign/threads'
+import type { Notifications } from '@sovereign/notifications'
+import type { SystemModule } from '@sovereign/system'
 
 export interface DashboardRoutesOptions {
   orgManager: OrgManager
