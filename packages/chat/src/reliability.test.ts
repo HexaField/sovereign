@@ -40,7 +40,11 @@ function createMockChatModule(): ChatModule {
     resolveSessionKey: vi.fn((tk: string) => `session-${tk}`),
     ensurePolling: vi.fn(),
     trackSSEClient: vi.fn(),
-    untrackSSEClient: vi.fn()
+    untrackSSEClient: vi.fn(),
+    getQueueSnapshot: vi.fn(() => []),
+    cancelQueued: vi.fn(() => false),
+    retryQueued: vi.fn(() => false),
+    messageQueue: {} as any
   }
 }
 

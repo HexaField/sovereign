@@ -9,11 +9,30 @@ export * from './session-key.js'
 
 /**
  * A message in the server-side queue waiting to be sent to the agent.
+ *
+ * State machine:
+ *   queued → sending → (removed on success | failed)
+ *
+ * `failed` entries remain in the queue (with `error`) until the client
+ * explicitly retries or cancels them.
  */
 export interface QueuedMessage {
   id: string
   threadKey: string
   text: string
   timestamp: number
-  status: 'queued' | 'sending'
+  status: 'queued' | 'sending' | 'failed'
+  error?: string
+  /** Number of send attempts so far (0 = never tried). */
+  attempts?: number
+}
+
+/**
+ * SSE/WS payload broadcast whenever a thread's queue changes.
+ * The client uses this to render queued+sending+failed messages as a
+ * single source of truth, replacing the previous client-side optimistic queue.
+ */
+export interface ChatQueueSnapshot {
+  threadKey: string
+  items: QueuedMessage[]
 }

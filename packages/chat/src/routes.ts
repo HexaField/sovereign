@@ -101,10 +101,29 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       // Convert base64 attachments to Buffers
       const buffers = attachments?.map((a: string) => Buffer.from(a, 'base64'))
       await chatModule.handleSend(threadKey, message || '', buffers)
-      res.json({ success: true })
+      // Return current queue snapshot so HTTP-only clients have a fresh view
+      // without waiting for the SSE round-trip.
+      res.json({ success: true, queue: chatModule.getQueueSnapshot(threadKey) })
     } catch (err) {
       res.status(500).json({ error: (err as Error).message })
     }
+  })
+
+  // ── Outbound queue endpoints ─────────────────────────────────────
+  router.get('/api/threads/:threadKey/queue', (req, res) => {
+    res.json({ items: chatModule.getQueueSnapshot(req.params.threadKey) })
+  })
+
+  router.delete('/api/chat/queue/:id', (req, res) => {
+    const ok = chatModule.cancelQueued(req.params.id)
+    if (!ok) return res.status(404).json({ error: 'not cancellable (missing or in-flight)' })
+    res.json({ ok: true })
+  })
+
+  router.post('/api/chat/queue/:id/retry', (req, res) => {
+    const ok = chatModule.retryQueued(req.params.id)
+    if (!ok) return res.status(404).json({ error: 'not retriable' })
+    res.json({ ok: true })
   })
 
   router.post('/api/chat/sessions', async (_req, res) => {
@@ -199,6 +218,10 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     // Send lightweight initial state immediately (no blocking I/O)
     send('backend-status', { status: backend.status() })
 
+    // Always send the current queue snapshot on connect so the client can
+    // render queued/sending/failed items without a separate REST round-trip.
+    send('queue', { threadKey, items: chatModule.getQueueSnapshot(threadKey) })
+
     // Replay cached live state for in-progress work
     const live = chatModule.getLiveState(threadKey)
     let activeStatus = live.status
@@ -280,6 +303,9 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     })
     addHandler('chat.error', (data) => {
       if (forThread(data)) send('error', data)
+    })
+    addHandler('chat.queue', (data) => {
+      if (forThread(data)) send('queue', data)
     })
     // chat.user-message handler removed — user turns come from history (single source of truth)
     addHandler('backend.status', (data) => {

@@ -217,6 +217,7 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
     if (role === 'assistant') {
       const blocks = Array.isArray(m.content) ? m.content : []
       const toolCalls: any[] = []
+      const thinkingStructured: any[] = []
       let allTextParts: string[] = []
 
       if (typeof m.content === 'string') {
@@ -225,11 +226,18 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
         for (const block of blocks) {
           if (block.type === 'toolCall' || block.type === 'tool_use') {
             toolCalls.push(block)
+          } else if (block.type === 'thinking') {
+            thinkingStructured.push(block)
           }
         }
       }
 
-      if (toolCalls.length > 0) {
+      // Treat this message as "work-bearing" when it has tool calls or
+      // structured thinking blocks — accumulate into currentWork and defer
+      // turn emission until a downstream message produces final text.
+      // This handles Claude Code's pattern of one-block-per-message
+      // (thinking → tool_use → tool_result → … → text).
+      if (toolCalls.length > 0 || thinkingStructured.length > 0) {
         if (typeof m.content === 'string') {
           const cleaned = stripDirectives(stripThinkingBlocks(m.content)).trim()
           if (cleaned) {
@@ -243,6 +251,12 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
               if (cleaned) {
                 currentThinking.push(cleaned)
                 currentWork.push({ type: 'thinking', output: cleaned, timestamp: m.timestamp ?? 0 })
+              }
+            } else if (block.type === 'thinking') {
+              const raw = (block.thinking ?? block.text ?? '').toString().trim()
+              if (raw) {
+                currentThinking.push(raw)
+                currentWork.push({ type: 'thinking', output: raw, timestamp: m.timestamp ?? 0 })
               }
             } else if (block.type === 'toolCall') {
               if (hiddenTools.has(block.name)) continue
