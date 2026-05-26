@@ -14,7 +14,8 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"pnpm --filter @sovereign/client dev\" \"pnpm --filter @sovereign/server dev\"",
-    "build": "pnpm -r --if-present build",
+    "build:vendor": "cd vendor/coasys/ad4m/core && node_modules/.bin/tsc --emitDeclarationOnly --skipLibCheck",
+    "build": "pnpm run build:vendor && pnpm -r --if-present build",
     "start": "pnpm --filter @sovereign/server start",
     "test": "pnpm -r test",
     "certs": "mkdir -p .certs && openssl req -x509 -newkey rsa:2048 -keyout .certs/localhost.key -out .certs/localhost.cert -days 365 -nodes -subj \"/CN=localhost\"",

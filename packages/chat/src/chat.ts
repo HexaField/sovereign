@@ -196,6 +196,22 @@ export function createChatModule(
     void pumpQueue(threadKey)
   }
 
+  // Reclaim queue heads left in 'sending' state by a previous process (crash
+  // or restart killed the in-flight backend subprocess; on-disk status was
+  // never advanced). The new process has no in-memory ownership of these,
+  // so pumpQueue would otherwise skip them forever. Reset to 'queued' and
+  // pump each affected thread once.
+  for (const [threadKey, items] of messageQueue.getAllQueues()) {
+    const head = items[0]
+    if (!head || head.status !== 'sending') continue
+    console.log(
+      `[chat] orphaned 'sending' queue head on ${threadKey} (${head.id}, attempts=${head.attempts ?? 0}) — requeuing`
+    )
+    if (messageQueue.markQueued(head.id)) {
+      void pumpQueue(threadKey)
+    }
+  }
+
   // Deduplicate rapid duplicate user sends (same text within window)
   const recentUserSends = new Map<string, { text: string; ts: number }>()
   const USER_DEDUP_WINDOW_MS = 4000
