@@ -27,6 +27,19 @@ interface CronJob {
   state?: { lastStatus?: string; nextRunAtMs?: number }
 }
 
+interface WatchEntry {
+  uuid: string
+  threadKey: string
+  label: string
+  autoDiscovered: boolean
+}
+
+interface PerspectiveItem {
+  uuid: string
+  name: string
+  sharedUrl: string | null
+}
+
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
@@ -64,6 +77,11 @@ export function ChatSettingsButton() {
   const [modelSaving, setModelSaving] = createSignal(false)
   const [actionFeedback, setActionFeedback] = createSignal('')
   const [cronManagerOpen, setCronManagerOpen] = createSignal(false)
+  const [watchedNeighbourhoods, setWatchedNeighbourhoods] = createSignal<WatchEntry[]>([])
+  const [allPerspectives, setAllPerspectives] = createSignal<PerspectiveItem[]>([])
+  const [ad4mLoaded, setAd4mLoaded] = createSignal(false)
+  const [watchInput, setWatchInput] = createSignal('')
+  const [watchSaving, setWatchSaving] = createSignal(false)
   let containerRef!: HTMLDivElement
   let dropdownRef!: HTMLDivElement
 
@@ -108,6 +126,26 @@ export function ChatSettingsButton() {
     } catch {
       /* crons unavailable — UI still works */
     }
+
+    // AD4M neighbourhood watches — best-effort, won't block if AD4M is down
+    try {
+      const [watchRes, perspRes] = await Promise.all([
+        fetch('/api/ad4m/watch/perspectives'),
+        fetch('/api/ad4m/perspectives')
+      ])
+      const currentKey = threadKey()
+      if (watchRes.ok) {
+        const data = await watchRes.json()
+        setWatchedNeighbourhoods((data.watched ?? []).filter((e: WatchEntry) => e.threadKey === currentKey))
+      }
+      if (perspRes.ok) {
+        const data = await perspRes.json()
+        setAllPerspectives(data.perspectives ?? [])
+      }
+      setAd4mLoaded(true)
+    } catch {
+      /* AD4M not connected — section hidden */
+    }
   }
 
   const handleModelSwitch = async (model: string) => {
@@ -131,6 +169,43 @@ export function ChatSettingsButton() {
     }
     setModelSaving(false)
     setTimeout(() => setActionFeedback(''), 2000)
+  }
+
+  // Perspectives not yet watched by this thread (has sharedUrl = is a neighbourhood)
+  const unwatchedPerspectives = () => {
+    const watchedUuids = new Set(watchedNeighbourhoods().map((e) => e.uuid))
+    return allPerspectives().filter((p: PerspectiveItem) => p.sharedUrl && !watchedUuids.has(p.uuid))
+  }
+
+  const handleUnwatch = async (uuid: string) => {
+    try {
+      await fetch(`/api/ad4m/watch/perspectives/${encodeURIComponent(uuid)}`, { method: 'DELETE' })
+      setWatchedNeighbourhoods((prev) => prev.filter((e) => e.uuid !== uuid))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const handleWatch = async (uuid: string) => {
+    if (!uuid) return
+    const key = threadKey()
+    const persp = allPerspectives().find((p: PerspectiveItem) => p.uuid === uuid)
+    const label = persp?.name || `AD4M: ${uuid.slice(0, 8)}`
+    setWatchSaving(true)
+    try {
+      const res = await fetch('/api/ad4m/watch/perspectives', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uuid, threadKey: key, label })
+      })
+      if (res.ok) {
+        setWatchedNeighbourhoods((prev) => [...prev, { uuid, threadKey: key!, label, autoDiscovered: false }])
+        setWatchInput('')
+      }
+    } catch {
+      /* ignore */
+    }
+    setWatchSaving(false)
   }
 
   const toggle = () => {
@@ -482,6 +557,131 @@ export function ChatSettingsButton() {
                   >
                     Manage Crons
                   </button>
+                </div>
+              </Show>
+
+              {/* AD4M Neighbourhoods — only shown when AD4M is reachable */}
+              <Show when={ad4mLoaded()}>
+                <div
+                  style={{
+                    'margin-top': '10px',
+                    'padding-top': '10px',
+                    'border-top': '1px solid var(--c-border)'
+                  }}
+                >
+                  <div class="text-xs font-medium" style={{ color: 'var(--c-text-heading)', 'margin-bottom': '6px' }}>
+                    AD4M Neighbourhoods
+                  </div>
+
+                  {/* Currently watched for this thread */}
+                  <Show when={watchedNeighbourhoods().length > 0}>
+                    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px', 'margin-bottom': '6px' }}>
+                      <For each={watchedNeighbourhoods()}>
+                        {(entry) => (
+                          <div
+                            class="text-xs"
+                            style={{
+                              display: 'flex',
+                              'align-items': 'center',
+                              gap: '6px',
+                              padding: '4px 6px',
+                              'border-radius': '6px',
+                              background: 'var(--c-bg)',
+                              color: 'var(--c-text)'
+                            }}
+                          >
+                            <span
+                              style={{
+                                width: '6px',
+                                height: '6px',
+                                'border-radius': '50%',
+                                background: 'var(--c-success, #22c55e)',
+                                'flex-shrink': '0'
+                              }}
+                            />
+                            <span
+                              style={{
+                                flex: '1',
+                                'min-width': '0',
+                                overflow: 'hidden',
+                                'text-overflow': 'ellipsis',
+                                'white-space': 'nowrap'
+                              }}
+                              title={entry.uuid}
+                            >
+                              {entry.label}
+                            </span>
+                            <button
+                              class="cursor-pointer"
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                color: 'var(--c-text-muted)',
+                                cursor: 'pointer',
+                                padding: '0 2px',
+                                'flex-shrink': '0',
+                                'font-size': '14px',
+                                'line-height': '1'
+                              }}
+                              title="Unwatch"
+                              onClick={() => handleUnwatch(entry.uuid)}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+
+                  {/* Watch a new neighbourhood — select from joined perspectives */}
+                  <Show when={unwatchedPerspectives().length > 0}>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <select
+                        value={watchInput()}
+                        onChange={(e) => setWatchInput(e.currentTarget.value)}
+                        class="text-xs"
+                        style={{
+                          flex: '1',
+                          'min-width': '0',
+                          padding: '4px 6px',
+                          'border-radius': '6px',
+                          border: '1px solid var(--c-border)',
+                          background: 'var(--c-bg)',
+                          color: watchInput() ? 'var(--c-text)' : 'var(--c-text-muted)'
+                        }}
+                      >
+                        <option value="">Watch neighbourhood…</option>
+                        <For each={unwatchedPerspectives()}>
+                          {(p) => <option value={p.uuid}>{p.name || p.uuid.slice(0, 8)}</option>}
+                        </For>
+                      </select>
+                      <button
+                        class="cursor-pointer text-xs"
+                        disabled={!watchInput() || watchSaving()}
+                        style={{
+                          padding: '4px 8px',
+                          'border-radius': '6px',
+                          border: '1px solid var(--c-border)',
+                          background: watchInput() ? 'var(--c-accent)' : 'transparent',
+                          color: watchInput() ? 'white' : 'var(--c-text-muted)',
+                          cursor: watchInput() ? 'pointer' : 'default',
+                          'font-weight': '500',
+                          'flex-shrink': '0'
+                        }}
+                        onClick={() => handleWatch(watchInput())}
+                      >
+                        {watchSaving() ? '…' : 'Watch'}
+                      </button>
+                    </div>
+                  </Show>
+
+                  {/* Empty state — AD4M connected but no joined neighbourhoods */}
+                  <Show when={watchedNeighbourhoods().length === 0 && unwatchedPerspectives().length === 0}>
+                    <div class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                      No joined neighbourhoods
+                    </div>
+                  </Show>
                 </div>
               </Show>
 

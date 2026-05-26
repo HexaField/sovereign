@@ -134,7 +134,11 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   const defaultModel = config.defaultModel ?? DEFAULT_MODEL_FALLBACK
   const query = deps.sdkQuery ?? sdkQuery
   const mcpServers: Record<string, any> = { ...config.mcpServers }
-  if (deps.sovereignMcpServer) mcpServers.sovereign = deps.sovereignMcpServer
+  // Prefer the HTTP-registered 'sovereign' entry (survives server restarts) over
+  // the in-process injection. Only fall back to in-process if no HTTP entry exists.
+  if (deps.sovereignMcpServer && !mcpServers['sovereign']) {
+    mcpServers.sovereign = deps.sovereignMcpServer
+  }
 
   // Personality files — best-effort, never fatal.
   try {

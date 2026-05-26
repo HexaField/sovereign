@@ -1,0 +1,33 @@
+{
+  "name": "@sovereign/ad4m",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "Josh Field",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@coasys/ad4m": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@sovereign/core": "workspace:*",
+    "@sovereign/notifications": "workspace:*",
+    "@sovereign/primitives": "workspace:*",
+    "express": "^5.2.1",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  }
+}

@@ -1,0 +1,3 @@
+[submodule "vendor/coasys/ad4m"]
+	path = vendor/coasys/ad4m
+	url = https://github.com/coasys/ad4m

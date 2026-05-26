@@ -14,3 +14,6 @@ test-results
 
 # Server data directory
 .data
+
+# Vendor submodule build artifacts (generated — run 'pnpm run build:vendor' to rebuild)
+vendor/coasys/ad4m/core/lib/
