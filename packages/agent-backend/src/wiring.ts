@@ -46,6 +46,9 @@ export interface AgentBackendWiringResult {
   openClawBackend: OpenClawBackend | undefined
   claudeCodeBackend: ClaudeCodeBackend | undefined
   sessionsRegistry: SessionsRegistry
+  sovereignMcpServer: import('@anthropic-ai/claude-agent-sdk').McpSdkServerConfigWithInstance
+  /** Creates a fresh McpServer instance bound to the same live deps — use for per-session HTTP transport. */
+  createSovereignMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
 }
 
 function makeToolPolicy(orgManager: OrgManager) {
@@ -90,20 +93,19 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   let routingBackend!: RoutingBackend
 
   const sessionsRegistry = createSessionsRegistry(dataDir)
-  const sovereignMcpServer = createSovereignMcpServer(
-    buildSovereignMcpDeps({
-      bus,
-      routing: new Proxy({} as any, { get: (_t, p) => (routingBackend as any)[p as any] }),
-      cronService: new Proxy({} as any, { get: (_t, p) => (cronService as any)[p as any] }),
-      orgManager,
-      planningService,
-      issueTracker,
-      meetingsService,
-      notificationsModule,
-      browserService,
-      getClaudeCodeBackend: () => claudeCodeBackend
-    })
-  )
+  const sharedMcpDeps = buildSovereignMcpDeps({
+    bus,
+    routing: new Proxy({} as any, { get: (_t, p) => (routingBackend as any)[p as any] }),
+    cronService: new Proxy({} as any, { get: (_t, p) => (cronService as any)[p as any] }),
+    orgManager,
+    planningService,
+    issueTracker,
+    meetingsService,
+    notificationsModule,
+    browserService,
+    getClaudeCodeBackend: () => claudeCodeBackend
+  })
+  const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 
   const enabledBackends = (process.env.SOVEREIGN_ENABLED_BACKENDS?.trim() || 'openclaw')
     .split(',')
@@ -156,6 +158,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     cronService,
     openClawBackend,
     claudeCodeBackend,
-    sessionsRegistry
+    sessionsRegistry,
+    sovereignMcpServer,
+    createSovereignMcpInstance: () => createSovereignMcpServer(sharedMcpDeps).instance
   }
 }
