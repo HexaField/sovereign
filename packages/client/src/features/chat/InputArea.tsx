@@ -325,10 +325,51 @@ export function InputArea(props: InputAreaProps) {
     if (e.dataTransfer?.files.length) handleUploadFiles(e.dataTransfer.files)
   }
 
+  // ── AD4M slash command ─────────────────────────────────────────────────────
+  const [commandStatus, setCommandStatus] = createSignal<{ ok: boolean; text: string } | null>(null)
+
+  const handleAd4mCommand = async (raw: string) => {
+    const parts = raw.trim().split(/\s+/)
+    const action = parts[1]
+    const url = parts[2]
+
+    if (!action || !url || (action !== 'watch' && action !== 'unwatch')) {
+      setCommandStatus({ ok: false, text: 'Usage: /ad4m watch|unwatch <neighbourhood://url>' })
+      setTimeout(() => setCommandStatus(null), 5000)
+      return
+    }
+
+    try {
+      const res = await fetch('/api/ad4m/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, url, threadKey: threadKey() })
+      })
+      const data = (await res.json()) as { ok: boolean; message?: string; error?: string }
+      setCommandStatus({ ok: data.ok, text: data.message ?? data.error ?? 'Done' })
+    } catch (err) {
+      setCommandStatus({ ok: false, text: `Command failed: ${(err as Error)?.message}` })
+    }
+    setTimeout(() => setCommandStatus(null), 5000)
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   const handleSend = async () => {
     const text = inputValue().trim()
     const files = attachedFiles()
     if (!text && !files.length) return
+
+    // Intercept /ad4m slash commands — handled locally, not sent to agent
+    if (text.startsWith('/ad4m ') || text === '/ad4m') {
+      pushMsgHistory(threadKey(), text)
+      setHistoryIndex(-1)
+      draftText = ''
+      setInputValue('')
+      clearScratchpad(localStorage, threadKey())
+      if (textareaRef) textareaRef.style.height = 'auto'
+      handleAd4mCommand(text)
+      return
+    }
 
     // Build message with file context for display
     let msg = text
@@ -516,6 +557,18 @@ export function InputArea(props: InputAreaProps) {
           </svg>
           <span class="text-xs" style={{ color: '#8b5cf6' }}>
             Compacting context…
+          </span>
+        </div>
+      </Show>
+
+      {/* AD4M command feedback */}
+      <Show when={commandStatus() !== null}>
+        <div class="flex w-full items-center gap-2 px-0.5">
+          <span
+            class="text-xs"
+            style={{ color: commandStatus()?.ok ? 'var(--c-success, #22c55e)' : 'var(--c-danger, #ef4444)' }}
+          >
+            {commandStatus()?.text}
           </span>
         </div>
       </Show>

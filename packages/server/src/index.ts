@@ -41,6 +41,20 @@ const server: http.Server | https.Server = useTls
 const wss = new WebSocketServer({ server, path: '/ws' })
 const dataDir = process.env.SOVEREIGN_DATA_DIR || path.join(process.cwd(), '.data')
 fs.mkdirSync(dataDir, { recursive: true })
+console.log(
+  `Data dir: ${dataDir}${process.env.SOVEREIGN_DATA_DIR ? '' : ' (defaulted — set SOVEREIGN_DATA_DIR to pin)'}`
+)
+// Drift guard: warn if another populated sovereign data dir exists nearby. This is the exact
+// failure mode where threads/sessions silently disappear because the active dir is stale.
+if (!process.env.SOVEREIGN_DATA_DIR && process.env.OPENCLAW_WORKSPACE) {
+  const siblingDataDir = path.join(process.env.OPENCLAW_WORKSPACE, '.sovereign-data')
+  if (fs.existsSync(path.join(siblingDataDir, 'threads', 'registry.json')) && siblingDataDir !== dataDir) {
+    console.warn(`[data-dir] WARNING: another Sovereign data dir exists at ${siblingDataDir}.`)
+    console.warn(
+      `[data-dir] You are using the default (${dataDir}); state may diverge. Set SOVEREIGN_DATA_DIR to pick one explicitly.`
+    )
+  }
+}
 const bus = createEventBus(dataDir)
 
 const { shutdown } = bootstrapServer({ app, server, wss, bus, dataDir })

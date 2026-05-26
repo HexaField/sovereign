@@ -6,11 +6,13 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type express from 'express'
 import type http from 'node:http'
 import type https from 'node:https'
 import type { WebSocketServer } from 'ws'
 import type { EventBus } from '@sovereign/core'
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
 import { createScheduler } from '@sovereign/scheduler'
 import { registerSchedulerChannel } from '@sovereign/scheduler'
@@ -80,6 +82,7 @@ import { registerDefaultModules } from '@sovereign/system'
 import { createNotifications } from '@sovereign/notifications'
 import { createNotificationRoutes } from '@sovereign/notifications'
 import { createBrowserService } from '@sovereign/browser'
+import { createAd4mService } from '@sovereign/ad4m'
 import { createDashboardRoutes } from './dashboard/routes.js'
 import { createMeetingsService } from '@sovereign/meetings'
 import { createSpeakerService } from '@sovereign/meetings'
@@ -253,19 +256,100 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   app.use(createNotificationRoutes(notificationsModule))
   const browserService = createBrowserService(dataDir)
 
+  // AD4M integration (optional — only if AD4M_HOST is set)
+  const ad4mService = process.env.AD4M_HOST
+    ? createAd4mService(
+        {
+          host: process.env.AD4M_HOST,
+          tokenFile: path.join(dataDir, 'ad4m-token.json'),
+          agentName: process.env.SOVEREIGN_AGENT_NAME
+        },
+        bus,
+        notificationsModule
+      )
+    : undefined
+
+  if (ad4mService) {
+    ad4mService.mountRoutes(app)
+  }
+
   // Agent backend (the only construction cycle)
-  const { routingBackend, backend, cronService, openClawBackend, sessionsRegistry } = wireAgentBackend({
-    bus,
-    dataDir,
-    scheduler,
-    orgManager,
-    planningService,
-    issueTracker,
-    meetingsService,
-    notificationsModule,
-    browserService
-  })
+  const { routingBackend, backend, cronService, openClawBackend, sessionsRegistry, createSovereignMcpInstance } =
+    wireAgentBackend({
+      bus,
+      dataDir,
+      scheduler,
+      orgManager,
+      planningService,
+      issueTracker,
+      meetingsService,
+      notificationsModule,
+      browserService
+    })
   app.use(createSchedulerRoutes(scheduler, cronService))
+
+  // Sovereign MCP over Streamable HTTP — per-session transport pattern.
+  // Each initialize request creates a fresh McpServer + transport pair (session-scoped).
+  // Register with Claude Code once: claude mcp add --transport http sovereign http://127.0.0.1:5801/api/mcp
+  {
+    const sessions = new Map<string, StreamableHTTPServerTransport>()
+    const isInit = (body: any) => typeof body === 'object' && body !== null && body.method === 'initialize'
+
+    async function handleMcp(req: any, res: any) {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined
+      if (sessionId && sessions.has(sessionId)) {
+        return sessions.get(sessionId)!.handleRequest(req, res, req.body)
+      }
+      if (!sessionId && isInit(req.body)) {
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() })
+        const server = createSovereignMcpInstance()
+        await server.connect(transport)
+        transport.onclose = () => {
+          if (transport.sessionId) sessions.delete(transport.sessionId)
+        }
+        await transport.handleRequest(req, res, req.body)
+        if (transport.sessionId) sessions.set(transport.sessionId, transport)
+        return
+      }
+      res
+        .status(400)
+        .json({
+          jsonrpc: '2.0',
+          error: { code: -32600, message: 'Bad MCP request — missing session or not initialize' },
+          id: null
+        })
+    }
+
+    app.post('/api/mcp', handleMcp)
+    app.get('/api/mcp', handleMcp)
+    app.delete('/api/mcp', (req: any, res: any) => {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined
+      if (sessionId) {
+        sessions.get(sessionId)?.close()
+        sessions.delete(sessionId)
+      }
+      res.status(200).end()
+    })
+    console.log('[sovereign] MCP HTTP endpoint ready at /api/mcp')
+  }
+
+  // AD4M → thread injection (after routingBackend and threadManager are available)
+  if (ad4mService) {
+    bus.on('ad4m.thread.message', async (event) => {
+      const { threadKey, threadLabel, text } = event.payload as {
+        threadKey: string
+        threadLabel: string
+        text: string
+      }
+      threadManager.create({ label: threadLabel, orgId: '_global' })
+      const sessionKey = `agent:main:thread:${threadKey}`
+      try {
+        await routingBackend.forSession(sessionKey).sendMessage(sessionKey, text)
+      } catch (err: unknown) {
+        console.error('[ad4m] thread message injection failed:', threadKey, (err as Error)?.message)
+      }
+    })
+  }
 
   // Chat + threads (after routing/cron exist)
   const chatModule = createChatModule(bus, backend, threadManager, { dataDir, wsHandler })
@@ -322,6 +406,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
   return {
     shutdown() {
+      ad4mService?.close()
       fileWatcher.stop()
       scheduler.destroy()
       terminalManager.dispose()
