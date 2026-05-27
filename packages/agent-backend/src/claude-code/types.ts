@@ -21,6 +21,12 @@ export interface ClaudeCodeConfig {
   /** Default model alias used when none is set per-session. */
   defaultModel?: string
   /**
+   * Map of model alias → max context window tokens. Returned in
+   * `getSessionMeta().contextTokens` so the UI can render a sensible
+   * "X / 200k" usage bar. Unknown models fall back to 200_000.
+   */
+  modelContextWindows?: Record<string, number>
+  /**
    * MCP servers to register with every session. Keys are server names. When
    * omitted, only the built-in `sovereign` server (registered by the adapter)
    * is exposed.

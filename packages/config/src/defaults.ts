@@ -38,7 +38,13 @@ export const defaults: SovereignConfig = {
     claudeCode: {
       cwd: '',
       agentDir: home ? path.join(home, '.claude') : '',
-      defaultModel: ''
+      defaultModel: '',
+      modelContextWindows: {
+        opus: 200000,
+        sonnet: 200000,
+        haiku: 200000,
+        opusplan: 200000
+      }
     }
   },
   ad4m: {

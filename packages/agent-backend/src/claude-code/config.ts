@@ -47,12 +47,15 @@ export function claudeCodeConfigFromStore(configStore: ConfigStore, dataDir: str
     path.join(home, 'workspaces')
   const agentDir = configStore.get<string>('agentBackend.claudeCode.agentDir')?.trim() || defaultAgentDir(home)
   const defaultModel = configStore.get<string>('agentBackend.claudeCode.defaultModel')?.trim() || undefined
+  const modelContextWindows =
+    configStore.get<Record<string, number>>('agentBackend.claudeCode.modelContextWindows') || undefined
 
   return {
     dataDir,
     cwd,
     agentDir,
     defaultModel,
+    modelContextWindows,
     mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined
   }
 }

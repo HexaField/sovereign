@@ -89,7 +89,12 @@ export const schema = {
           properties: {
             cwd: { ...stringSession },
             agentDir: { ...stringSession },
-            defaultModel: { ...stringSession }
+            defaultModel: { ...stringSession },
+            modelContextWindows: {
+              type: 'object',
+              additionalProperties: { type: 'number' },
+              'x-reload': 'session'
+            }
           },
           additionalProperties: false
         }

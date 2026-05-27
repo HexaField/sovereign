@@ -53,6 +53,13 @@ const KIND: AgentBackendKind = 'claude-code'
 const DEFAULT_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'LS']
 const DEFAULT_MODEL_FALLBACK = 'opus'
 const KNOWN_MODELS = ['opus', 'sonnet', 'haiku', 'opusplan']
+const PROVIDER = 'anthropic'
+const DEFAULT_CONTEXT_WINDOW = 200000
+
+/** Strip a leading "anthropic/" if present so callers can pass either form. */
+function bareModelName(model: string): string {
+  return model.startsWith(`${PROVIDER}/`) ? model.slice(PROVIDER.length + 1) : model
+}
 
 const SUBAGENT_SESSION_PREFIX = 'agent:main:subagent:'
 
@@ -164,6 +171,13 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   const cwd = config.cwd ?? process.cwd()
   const defaultTools = config.defaultTools ?? DEFAULT_TOOLS
   const defaultModel = config.defaultModel ?? DEFAULT_MODEL_FALLBACK
+  const modelContextWindows = config.modelContextWindows ?? {}
+
+  function contextWindowFor(model: string | null | undefined): number {
+    if (!model) return DEFAULT_CONTEXT_WINDOW
+    const bare = bareModelName(model)
+    return modelContextWindows[bare] ?? modelContextWindows[model] ?? DEFAULT_CONTEXT_WINDOW
+  }
   const query = deps.sdkQuery ?? sdkQuery
   const mcpServers: Record<string, any> = { ...config.mcpServers }
   // Prefer the HTTP-registered 'sovereign' entry (survives server restarts) over
@@ -927,12 +941,24 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
           : 'thread'
       if (filter?.kind && filter.kind !== kind) continue
       if (filter?.parentKey && state.parentSessionKey !== filter.parentKey) continue
+      let lastActivity = 0
+      if (state.sessionFile) {
+        try {
+          lastActivity = fs.statSync(state.sessionFile).mtimeMs
+        } catch {
+          /* JSONL not yet written */
+        }
+      }
+      if (!lastActivity) {
+        const active = activeSessions?.get(state.sessionKey)
+        lastActivity = active?.lastAssistantMessageAt ?? active?.lastTransitionAt ?? Date.now()
+      }
       out.push({
         key: state.sessionKey,
         backendSessionId: state.backendSessionId,
         kind,
         label: state.label,
-        lastActivity: Date.now(),
+        lastActivity,
         agentStatus: state.agentStatus,
         parentKey: state.parentSessionKey
       })
@@ -940,16 +966,59 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     return out
   }
 
+  /** sessionKey → ms timestamp of the JSONL's last write. Falls back to
+   * `lastUsage`-bearing turns and finally session-state writes so a session
+   * with no JSONL yet still reports *something* fresh. */
+  async function getActivityMap(): Promise<Map<string, number>> {
+    const map = new Map<string, number>()
+    for (const state of internal.sessions.values()) {
+      let ts = 0
+      if (state.sessionFile) {
+        try {
+          ts = fs.statSync(state.sessionFile).mtimeMs
+        } catch {
+          /* JSONL not yet written */
+        }
+      }
+      if (!ts) {
+        // No JSONL? Fall back to the active-sessions snapshot for live work.
+        const active = activeSessions?.get(state.sessionKey)
+        ts = active?.lastAssistantMessageAt ?? active?.lastTransitionAt ?? 0
+      }
+      if (!ts) continue
+      map.set(state.sessionKey, ts)
+      // Also index by thread key shape so callers don't have to translate.
+      if (state.sessionKey === 'agent:main:main') {
+        map.set('main', ts)
+      } else if (state.sessionKey.startsWith('agent:main:thread:')) {
+        map.set(state.sessionKey.slice('agent:main:thread:'.length), ts)
+      }
+    }
+    return map
+  }
+
   async function listSubagents(parentKey?: string): Promise<SubagentSummary[]> {
     const out: SubagentSummary[] = []
     for (const state of internal.sessions.values()) {
       if (!state.parentSessionKey) continue
       if (parentKey && state.parentSessionKey !== parentKey) continue
+      let lastActivity = 0
+      if (state.sessionFile) {
+        try {
+          lastActivity = fs.statSync(state.sessionFile).mtimeMs
+        } catch {
+          /* JSONL not yet written — fall through to active-sessions snapshot */
+        }
+      }
+      if (!lastActivity) {
+        const active = activeSessions?.get(state.sessionKey)
+        lastActivity = active?.lastAssistantMessageAt ?? active?.lastTransitionAt ?? Date.now()
+      }
       out.push({
         sessionKey: state.sessionKey,
         label: state.label ?? state.backendSessionId.slice(0, 8),
         status: state.agentStatus,
-        lastActivity: Date.now()
+        lastActivity
       })
     }
     return out
@@ -958,13 +1027,22 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   async function getSessionMeta(sessionKey: string): Promise<SessionMeta | null> {
     const state = internal.sessions.get(sessionKey)
     if (!state) return null
+    // `totalTokens` here means "tokens currently filling the context window"
+    // — what the UI divides by `contextTokens` for the usage bar. For
+    // Anthropic that's input + cache_read + cache_creation on the latest
+    // turn (the full prompt size). Output tokens are not in-window after
+    // the turn completes and are exposed separately via `outputTokens`.
+    const inputTokens = state.lastUsage?.inputTokens ?? 0
+    const cacheRead = state.lastUsage?.cacheReadInputTokens ?? 0
+    const cacheCreate = state.lastUsage?.cacheCreationInputTokens ?? 0
+    const filled = inputTokens + cacheRead + cacheCreate
     return {
       sessionKey,
       model: state.model,
-      modelProvider: 'anthropic',
-      contextTokens: state.lastUsage?.inputTokens ?? null,
-      totalTokens: (state.lastUsage?.inputTokens ?? 0) + (state.lastUsage?.outputTokens ?? 0),
-      inputTokens: state.lastUsage?.inputTokens ?? 0,
+      modelProvider: PROVIDER,
+      contextTokens: contextWindowFor(state.model),
+      totalTokens: filled,
+      inputTokens,
       outputTokens: state.lastUsage?.outputTokens ?? 0,
       compactionCount: 0,
       thinkingLevel: null,
@@ -975,10 +1053,15 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   }
 
   async function setSessionModel(sessionKey: string, provider: string, model: string) {
-    if (provider !== 'anthropic') throw new Error(`claude-code: only anthropic provider is supported (got ${provider})`)
+    // Accept empty provider as a shortcut for "anthropic" so the UI can pass
+    // bare aliases when callers haven't reconciled the prefix yet.
+    const effectiveProvider = provider || PROVIDER
+    if (effectiveProvider !== PROVIDER) {
+      throw new Error(`claude-code: only ${PROVIDER} provider is supported (got ${provider})`)
+    }
     const state = internal.sessions.get(sessionKey)
     if (!state) return
-    state.model = model
+    state.model = bareModelName(model)
     // Persist so the choice survives a Sovereign restart.
     const existing = deps.registry?.lookupSession?.(sessionKey)
     if (existing) {
@@ -992,7 +1075,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     // session restart.
     if (state.liveQuery) {
       try {
-        await state.liveQuery.setModel(model)
+        await state.liveQuery.setModel(state.model ?? undefined)
       } catch {
         /* SDK may not support setModel in this build; the change still takes
            effect when a new session loop starts. */
@@ -1001,7 +1084,15 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   }
 
   async function listAvailableModels() {
-    return { models: KNOWN_MODELS, defaultModel }
+    // Return `provider/model` form to match the rest of Sovereign (OpenClaw,
+    // routes that split on '/'). The UI's `selectedModel` derived from
+    // `getSessionMeta` (`${modelProvider}/${model}`) only lines up with the
+    // dropdown options when these are prefixed too — otherwise the current
+    // model never appears as the selected option.
+    return {
+      models: KNOWN_MODELS.map((m) => `${PROVIDER}/${m}`),
+      defaultModel: defaultModel ? `${PROVIDER}/${bareModelName(defaultModel)}` : null
+    }
   }
 
   async function getContextBudget(sessionKey: string): Promise<ContextBudget | null> {
@@ -1089,6 +1180,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     getContextBudget,
     spawnSubagent,
     getSessionFilePath,
+    getActivityMap,
     getDeviceInfo,
     setActiveSession(sessionKey) {
       setActiveSessionKey(sessionKey)

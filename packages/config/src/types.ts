@@ -40,6 +40,13 @@ export interface SovereignConfig {
       cwd: string
       agentDir: string
       defaultModel: string
+      /**
+       * Map of model alias → max context window tokens. Drives the
+       * "X / 200k" usage display in the chat settings dropdown. Aliases
+       * here should match what the SDK accepts (opus, sonnet, haiku,
+       * opusplan, or fully-qualified ids).
+       */
+      modelContextWindows: Record<string, number>
     }
   }
   ad4m: {
