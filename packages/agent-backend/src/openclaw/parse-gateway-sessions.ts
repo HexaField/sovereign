@@ -92,9 +92,14 @@ let cachedMap: Map<string, { lastActivity: number; status?: string }> | null = n
 let cachedMapTime = 0
 const CACHE_TTL = 10_000
 
+/** Default sessions.json location for the OpenClaw gateway. */
+export function defaultGatewaySessionsJsonPath(): string {
+  return path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+}
+
 /** Read OpenClaw sessions.json and return shortKey → {lastActivity, status}. */
 export async function getGatewayActivityMap(
-  sessionsJsonPath: string = path.join(process.env.HOME || '', '.openclaw/agents/main/sessions/sessions.json')
+  sessionsJsonPath: string = defaultGatewaySessionsJsonPath()
 ): Promise<Map<string, { lastActivity: number; status?: string }>> {
   const now = Date.now()
   if (cachedMap && now - cachedMapTime < CACHE_TTL) return cachedMap

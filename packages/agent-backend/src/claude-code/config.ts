@@ -1,8 +1,8 @@
-// Read CLAUDE_CODE_* env vars into a ClaudeCodeConfig. Keeps every env
-// reference inside the adapter directory.
+// Resolve the Claude Code adapter's config from the Sovereign ConfigStore.
 
 import fs from 'node:fs'
 import path from 'node:path'
+import type { ConfigStore } from '@sovereign/config'
 import type { ClaudeCodeConfig } from './types.js'
 import { defaultAgentDir } from './path-encoding.js'
 
@@ -16,15 +16,13 @@ function readAd4mToken(tokenFile: string): string | null {
   }
 }
 
-export function claudeCodeConfigFromEnv(dataDir: string): ClaudeCodeConfig {
+export function claudeCodeConfigFromStore(configStore: ConfigStore, dataDir: string): ClaudeCodeConfig {
   const home = process.env.HOME ?? ''
   const mcpServers: Record<string, unknown> = {}
 
   // Inject AD4M MCP directly into every Claude Code session so agents get
   // mcp__ad4m__* tools as first-class capabilities — no Sovereign proxy hop.
-  // AD4M_MCP_URL: the executor's native MCP endpoint (e.g. http://127.0.0.1:13001/mcp).
-  // The JWT token is read from disk so it survives re-auth without a code change.
-  const ad4mMcpUrl = process.env.AD4M_MCP_URL?.trim()
+  const ad4mMcpUrl = configStore.get<string>('ad4m.mcpUrl')?.trim() || ''
   if (ad4mMcpUrl) {
     const tokenFile = path.join(dataDir, 'ad4m-token.json')
     const token = readAd4mToken(tokenFile)
@@ -36,19 +34,25 @@ export function claudeCodeConfigFromEnv(dataDir: string): ClaudeCodeConfig {
       }
     } else {
       console.warn(
-        '[sovereign] AD4M_MCP_URL is set but no token found at',
+        '[sovereign] ad4m.mcpUrl is set but no token found at',
         tokenFile,
         '— skipping MCP injection. Complete AD4M auth first.'
       )
     }
   }
 
+  const cwd =
+    configStore.get<string>('agentBackend.claudeCode.cwd')?.trim() ||
+    configStore.get<string>('workspace.root')?.trim() ||
+    path.join(home, 'workspaces')
+  const agentDir = configStore.get<string>('agentBackend.claudeCode.agentDir')?.trim() || defaultAgentDir(home)
+  const defaultModel = configStore.get<string>('agentBackend.claudeCode.defaultModel')?.trim() || undefined
+
   return {
     dataDir,
-    cwd:
-      process.env.CLAUDE_CODE_CWD?.trim() || process.env.SOVEREIGN_WORKSPACE?.trim() || path.join(home, 'workspaces'),
-    agentDir: process.env.CLAUDE_CODE_AGENT_DIR?.trim() || defaultAgentDir(home),
-    defaultModel: process.env.CLAUDE_CODE_DEFAULT_MODEL?.trim() || undefined,
+    cwd,
+    agentDir,
+    defaultModel,
     mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined
   }
 }

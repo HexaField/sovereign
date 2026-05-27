@@ -44,13 +44,13 @@ export type {
 export { createOpenClawBackend } from './openclaw/openclaw.js'
 export type { OpenClawBackend } from './openclaw/openclaw.js'
 export type { OpenClawConfig } from './openclaw/types.js'
-export { openClawConfigFromEnv } from './openclaw/env-config.js'
+export { openClawConfigFromStore } from './openclaw/config.js'
 export { getGatewayActivityMap } from './openclaw/parse-gateway-sessions.js'
 
 // Claude Code adapter
 export {
   createClaudeCodeBackend,
-  claudeCodeConfigFromEnv,
+  claudeCodeConfigFromStore,
   createSovereignMcpServer,
   createWorkspaceIndex,
   type ClaudeCodeBackend,
