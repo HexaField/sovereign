@@ -23,6 +23,31 @@ interface RoutingBackend extends BackendRouter {
   default(): AgentBackend
 }
 
+/** Aggregate `getActivityMap()` across every enabled backend in a routing
+ *  setup. Returns short-key → lastActivity (max across backends so a
+ *  re-bound thread always picks up the freshest reading). */
+async function collectActivityMap(b: RoutingBackend | AgentBackend | undefined): Promise<Map<string, number>> {
+  const merged = new Map<string, number>()
+  if (!b) return merged
+  const instances =
+    'all' in b && typeof (b as RoutingBackend).all === 'function'
+      ? (b as RoutingBackend).all().map((i) => i.backend)
+      : [b as AgentBackend]
+  for (const inst of instances) {
+    if (!inst.getActivityMap) continue
+    try {
+      const m = await inst.getActivityMap()
+      for (const [k, v] of m) {
+        const prev = merged.get(k) ?? 0
+        if (v > prev) merged.set(k, v)
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return merged
+}
+
 interface OpenClawActivityProvider {
   /**
    * Returns shortKey → {lastActivity, status} for "main" / "thread" sessions.
@@ -69,21 +94,25 @@ export function createThreadRoutes(
     if (req.query.active) filter.active = req.query.active === 'true'
     const threads = threadManager.list(Object.keys(filter).length > 0 ? (filter as never) : undefined)
 
-    // Merge lastActivity + agentStatus from the OpenClaw activity provider (if available).
-    let activityMap: Map<string, { lastActivity: number; status?: string }> | undefined
+    // Merge lastActivity + agentStatus from the OpenClaw gateway snapshot
+    // (status field) and from each backend's `getActivityMap()` (Claude Code
+    // + OpenClaw). The status overlay is OpenClaw-specific; the timestamp
+    // overlay applies to every backend that knows about a session.
+    let gatewayMap: Map<string, { lastActivity: number; status?: string }> | undefined
     try {
-      activityMap = (await opts?.activityProvider?.getGatewayActivityMap?.()) ?? undefined
+      gatewayMap = (await opts?.activityProvider?.getGatewayActivityMap?.()) ?? undefined
     } catch {
       /* ignore */
     }
+    const activityMap = await collectActivityMap(opts?.backend)
 
     const merged = threads.map((t) => {
-      const gw = activityMap?.get(t.key)
-      if (!gw) return t
+      const gw = gatewayMap?.get(t.key)
+      const freshTs = activityMap.get(t.key) ?? gw?.lastActivity ?? t.lastActivity
       let agentStatus = t.agentStatus
-      if (gw.status === 'running') agentStatus = 'working' as any
-      else if (gw.status === 'failed') agentStatus = 'failed' as any
-      return { ...t, lastActivity: gw.lastActivity, agentStatus }
+      if (gw?.status === 'running') agentStatus = 'working' as any
+      else if (gw?.status === 'failed') agentStatus = 'failed' as any
+      return { ...t, lastActivity: freshTs, agentStatus }
     })
     merged.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
 
@@ -580,18 +609,28 @@ export function createThreadRoutes(
       children: SessionNode[]
     }
 
+    // Overlay per-backend activity timestamps so labels read "5m ago" instead
+    // of "stale since thread creation". Same map drives both mainNode and
+    // child threads — keyed by both short and canonical forms.
+    const activityMap = await collectActivityMap(opts?.backend)
+
     const mainNode: SessionNode = {
       key: 'main',
-      fullKey: 'main',
+      fullKey: 'agent:main:main',
       kind: 'main',
       label: 'Main',
       parentKey: null,
-      updatedAt: now,
+      updatedAt: activityMap.get('main') ?? activityMap.get('agent:main:main') ?? 0,
       totalTokens: 0,
       children: []
     }
 
     const threadNodes = new Map<string, SessionNode>()
+    // CRITICAL: main is a valid parent for subagents (parentSessionKey ===
+    // 'agent:main:main' in Claude Code's SubagentStart hook). Without this
+    // entry, main-session subagents silently fall off the tree.
+    threadNodes.set('agent:main:main', mainNode)
+    threadNodes.set('main', mainNode)
 
     for (const t of threads) {
       const kind = t.key.startsWith('cron:')
@@ -599,33 +638,53 @@ export function createThreadRoutes(
         : t.key.startsWith('subagent:')
           ? ('subagent' as const)
           : ('thread' as const)
+      const fullSessionKey = t.key.startsWith('agent:') ? t.key : `agent:main:thread:${t.key}`
+      const overlayTs = activityMap.get(t.key) ?? activityMap.get(fullSessionKey) ?? 0
       const node: SessionNode = {
         key: t.key,
-        fullKey: t.key,
+        fullKey: fullSessionKey,
         kind,
         label: t.label || t.key,
         parentKey: 'main',
-        updatedAt: t.lastActivity || t.createdAt || now,
+        updatedAt: Math.max(overlayTs, t.lastActivity ?? 0, t.createdAt ?? 0) || now,
         totalTokens: 0,
         children: []
       }
       mainNode.children.push(node)
-      const fullSessionKey = t.key.startsWith('agent:') ? t.key : `agent:main:thread:${t.key}`
       threadNodes.set(fullSessionKey, node)
+      threadNodes.set(t.key, node)
     }
 
-    // Use backend.listSubagents() if available to attach children under parents.
+    // Attach subagents under their parents. Iterate EVERY enabled backend
+    // so claude-code subagents still appear when openclaw is the default
+    // (and vice-versa); the previous `defaultBackend()`-only call dropped
+    // subagents from non-default backends.
     try {
-      const backend = defaultBackend()
-      const allSubagents: SubagentSummary[] = backend ? await backend.listSubagents() : []
-      // For each subagent, look up the parent. SubagentSummary doesn't
-      // include the parent's key; use listSessions to recover that mapping.
-      let parentMap = new Map<string, string>() // childKey -> parentKey
-      if (backend) {
-        const sessions: SessionSummary[] = await backend.listSessions({ kind: 'subagent' })
-        for (const s of sessions) {
-          if (s.parentKey) parentMap.set(s.key, s.parentKey)
+      const routing = opts?.backend
+      const instances: AgentBackend[] =
+        routing && 'all' in routing && typeof (routing as RoutingBackend).all === 'function'
+          ? (routing as RoutingBackend).all().map((i) => i.backend)
+          : routing
+            ? [routing as AgentBackend]
+            : []
+
+      const allSubagents: SubagentSummary[] = []
+      const parentMap = new Map<string, string>() // childKey -> parentKey
+      const subagentSessions: SessionSummary[] = []
+      for (const inst of instances) {
+        try {
+          allSubagents.push(...(await inst.listSubagents()))
+        } catch {
+          /* ignore */
         }
+        try {
+          subagentSessions.push(...(await inst.listSessions({ kind: 'subagent' })))
+        } catch {
+          /* ignore */
+        }
+      }
+      for (const s of subagentSessions) {
+        if (s.parentKey) parentMap.set(s.key, s.parentKey)
       }
 
       for (const sub of allSubagents) {
@@ -647,7 +706,7 @@ export function createThreadRoutes(
           continue
         }
 
-        const updatedAt = sub.lastActivity ?? now
+        const updatedAt = sub.lastActivity ?? activityMap.get(sk) ?? now
         const label = sub.label ?? shortKey
         const subNode: SessionNode = {
           key: shortKey,
@@ -664,6 +723,13 @@ export function createThreadRoutes(
     } catch {
       /* backend unavailable — flat tree only */
     }
+
+    // Now that children are attached, lift mainNode's timestamp to reflect
+    // its freshest child so it sorts correctly in the drawer.
+    if (mainNode.children.length > 0) {
+      mainNode.updatedAt = Math.max(mainNode.updatedAt, ...mainNode.children.map((c) => c.updatedAt))
+    }
+    if (mainNode.updatedAt === 0) mainNode.updatedAt = now
 
     mainNode.children.sort((a, b) => b.updatedAt - a.updatedAt)
     for (const child of mainNode.children) {

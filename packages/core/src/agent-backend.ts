@@ -296,6 +296,24 @@ export interface AgentBackend {
    * Used for fast history reads and live-poll views.
    */
   getSessionFilePath?(sessionKey: string): string | null
+
+  /**
+   * OPTIONAL — returns the last-activity wall time (ms) for every session
+   * the backend knows about, regardless of whether it's currently running.
+   *
+   * Must be cheap: backends should derive timestamps from file mtimes or
+   * registry/index lookups — NEVER load conversation contents. This feeds
+   * the ThreadDrawer "5m ago" labels and the threads-list sort order;
+   * calling it on every render must remain O(sessions) and IO-bounded by a
+   * stat per session at worst.
+   *
+   * Map keys are *both* canonical session keys and the equivalent thread
+   * key (so callers don't have to know the encoding) — e.g. an entry for
+   * `agent:main:thread:foo` will also appear under `foo`, and
+   * `agent:main:main` will also appear under `main`. Backends that don't
+   * know about a session simply omit it.
+   */
+  getActivityMap?(): Promise<Map<string, number>>
 }
 
 /**
