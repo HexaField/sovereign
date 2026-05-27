@@ -103,11 +103,12 @@ _healthcheck() {
   return 1
 }
 
-# ── Active-agent guard ──────────────────────────────────────────────────────
-# Hits Sovereign's /api/system/agents/active to find sessions currently doing
-# work, so destructive lifecycle commands don't silently kill an in-flight
-# Claude or OpenClaw turn. Fail-open: if the API is unreachable (server hung,
-# port wrong, JSON parse fails) we don't block the operator from recovering.
+# ── Active-agent notice ─────────────────────────────────────────────────────
+# Sovereign snapshots active threads to disk continuously (active-sessions.json)
+# and auto-resumes them on restart, so destructive lifecycle commands no longer
+# need to refuse when sessions are working. We still report what's about to be
+# snapshotted so the operator knows what'll resume. Fail-open: if the API is
+# unreachable, just skip the notice.
 AGENTS_URL="${HEALTH_SCHEME}://127.0.0.1:${PORT_VALUE}/api/system/agents/active"
 
 _active_agents_json() {
@@ -121,44 +122,15 @@ _active_agents_count() {
   if command -v node >/dev/null 2>&1; then
     printf '%s' "$json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).count||0))}catch{process.stdout.write("0")}})' 2>/dev/null || printf '0'
   else
-    # No node? fall back to a strict regex on the top-level count field.
     printf '%s' "$json" | grep -oE '"count":[0-9]+' | head -1 | sed 's/"count"://' || printf '0'
   fi
 }
 
-_print_active_agents() {
-  local json
-  json="$(_active_agents_json)" || return 1
-  [ -n "$json" ] || return 1
-  if command -v node >/dev/null 2>&1; then
-    printf '%s' "$json" | node -e '
-      let s = "";
-      process.stdin.on("data", d => s += d).on("end", () => {
-        try {
-          const obj = JSON.parse(s);
-          for (const sess of obj.sessions || []) {
-            const label = sess.label || sess.key;
-            const status = sess.agentStatus || "?";
-            const kind = sess.backendKind ? " (" + sess.backendKind + ")" : "";
-            process.stderr.write("  - " + label + " [" + status + "]" + kind + "\n");
-          }
-        } catch {}
-      });
-    ' 2>&1 1>/dev/null || true
-  else
-    printf '%s\n' "$json" >&2
-  fi
-}
-
-# Block a destructive action if any agent session is non-idle. Caller passes
-# the action name (for the warning) and FORCE flag (skip when set to "force").
-_guard_active_agents() {
+# Print a one-line notice when a destructive action is about to fire against a
+# server with non-idle sessions. Caller passes the action name. --force is
+# tolerated as a no-op (R16) so muscle memory and scripts don't break.
+_notice_active_agents() {
   local action="$1"
-  local force="${2:-}"
-  if [ "$force" = "force" ]; then
-    _note "Bypassing active-agent guard (--force) for $action"
-    return 0
-  fi
   if ! _is_running; then
     return 0
   fi
@@ -171,13 +143,7 @@ _guard_active_agents() {
   if [ "$count" = "0" ]; then
     return 0
   fi
-  printf '\n' >&2
-  _warn "Refusing to $action: $count agent session(s) currently working."
-  _warn "Restarting Sovereign would terminate any in-flight Claude/OpenClaw turn."
-  printf '\nActive sessions:\n' >&2
-  _print_active_agents
-  printf '\nWait for these to finish, or override with:\n  sovereign %s --force\n\n' "$action" >&2
-  exit 1
+  _note "$count active session(s) — will snapshot and resume on next start."
 }
 
 _wait_for_health() {
@@ -463,15 +429,6 @@ _tail_logs() {
   esac
 }
 
-FORCE=""
-case "${1:-help}" in
-  stop|restart|reload|build)
-    case "${2:-}" in
-      --force|-f) FORCE="force" ;;
-    esac
-    ;;
-esac
-
 case "${1:-help}" in
   install)
     _is_macos || _die "install is only needed on macOS"
@@ -486,7 +443,7 @@ case "${1:-help}" in
     fi
     ;;
   stop)
-    _guard_active_agents stop "$FORCE"
+    _notice_active_agents stop
     if _is_macos; then
       _stop_launchd_service
     else
@@ -494,7 +451,7 @@ case "${1:-help}" in
     fi
     ;;
   restart|reload)
-    _guard_active_agents restart "$FORCE"
+    _notice_active_agents restart
     if _is_macos; then
       _restart_launchd_service
     else
@@ -506,8 +463,7 @@ case "${1:-help}" in
     _show_status
     ;;
   build)
-    # `build` reloads the running service on success, so the same guard applies.
-    _guard_active_agents build "$FORCE"
+    _notice_active_agents build
     _guarded_build
     ;;
   health)
@@ -540,9 +496,8 @@ Commands:
   logs [mode]        Tail logs (stdout|stderr|all)
   run                Run in foreground (no daemon)
 
-  stop, restart, reload, and build abort if any agent session is currently
-  working. Pass --force (or -f) as the second argument to override:
-    sovereign restart --force
+  stop, restart, reload, and build snapshot any non-idle agent sessions to
+  active-sessions.json and auto-resume them on next start.
 
 Environment (from shell or .env/.env.local):
   SOVEREIGN_DATA_DIR  Data directory (default: $REPO_DIR/packages/server/.data)
