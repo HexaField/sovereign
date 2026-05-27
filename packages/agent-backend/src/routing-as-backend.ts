@@ -110,6 +110,22 @@ export function routingAsBackend(routing: RoutingBackend): AgentBackend {
     },
     getSessionFilePath(sessionKey) {
       return forSession(sessionKey).getSessionFilePath?.(sessionKey) ?? null
+    },
+    async getActivityMap() {
+      const merged = new Map<string, number>()
+      for (const inst of routing.all()) {
+        if (!inst.backend.getActivityMap) continue
+        try {
+          const m = await inst.backend.getActivityMap()
+          for (const [k, v] of m) {
+            const prev = merged.get(k) ?? 0
+            if (v > prev) merged.set(k, v)
+          }
+        } catch {
+          /* ignore per-backend failure */
+        }
+      }
+      return merged
     }
   }
 }

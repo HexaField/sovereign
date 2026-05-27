@@ -225,7 +225,12 @@ describe('claude-code/createClaudeCodeBackend', () => {
         type: 'result',
         subtype: 'success',
         result: 'done',
-        usage: { input_tokens: 100, output_tokens: 20 }
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0
+        }
       }
     ])
     const backend = createClaudeCodeBackend(
@@ -245,7 +250,11 @@ describe('claude-code/createClaudeCodeBackend', () => {
     })
     expect(meta!.inputTokens).toBe(100)
     expect(meta!.outputTokens).toBe(20)
-    expect(meta!.totalTokens).toBe(120)
+    // totalTokens = "tokens currently filling the context window" — input +
+    // cache_read + cache_creation. Drives the UI's `total/contextTokens` bar.
+    expect(meta!.totalTokens).toBe(100)
+    // contextTokens is now the model's max window (driven by config).
+    expect(meta!.contextTokens).toBe(200000)
   })
 
   it('lists available models including the default', async () => {
@@ -254,9 +263,12 @@ describe('claude-code/createClaudeCodeBackend', () => {
       { sdkQuery: stubSdkQuery() }
     )
     const out = await backend.listAvailableModels()
-    expect(out.models).toContain('opus')
-    expect(out.models).toContain('sonnet')
-    expect(out.defaultModel).toBe('sonnet')
+    // Models are returned in provider/model form so the UI's `selectedModel`
+    // (built from `getSessionMeta` as `${provider}/${model}`) lines up with
+    // the dropdown options.
+    expect(out.models).toContain('anthropic/opus')
+    expect(out.models).toContain('anthropic/sonnet')
+    expect(out.defaultModel).toBe('anthropic/sonnet')
   })
 
   it('setSessionModel rejects non-anthropic providers', async () => {

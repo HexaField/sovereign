@@ -19,7 +19,7 @@ import type { OpenClawConfig, DeviceIdentity, InternalState } from './types.js'
 import { stripThinkingBlocks } from '@sovereign/primitives'
 import { createBackendEmitter } from '@sovereign/primitives'
 import { parseTurns } from './parse-turns.js'
-import { effectiveStatus } from './parse-gateway-sessions.js'
+import { effectiveStatus, getGatewayActivityMap } from './parse-gateway-sessions.js'
 import {
   defaultOpenClawPaths,
   type OpenClawPaths,
@@ -1123,6 +1123,20 @@ export function createOpenClawBackend(config: OpenClawConfig): OpenClawBackend {
     getDeviceInfo,
     getSessionFilePath(sessionKey: string) {
       return openClawGetSessionFile(paths, sessionKey)
+    },
+    async getActivityMap() {
+      // Reuse the existing parse-gateway-sessions reader so the threads UI
+      // and the existing `getGatewayActivityMap` provider see the same data.
+      // Keys are emitted as both canonical (`agent:main:thread:foo`) and
+      // short (`foo`) form to match the AgentBackend contract.
+      const shortMap = await getGatewayActivityMap(paths.sessionsJsonPath)
+      const out = new Map<string, number>()
+      for (const [shortKey, entry] of shortMap.entries()) {
+        out.set(shortKey, entry.lastActivity)
+        if (shortKey === 'main') out.set('agent:main:main', entry.lastActivity)
+        else out.set(`agent:main:thread:${shortKey}`, entry.lastActivity)
+      }
+      return out
     },
     listGatewaySessions
   }
