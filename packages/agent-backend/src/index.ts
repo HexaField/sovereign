@@ -11,6 +11,16 @@ export { buildSovereignMcpDeps } from './mcp-deps.js'
 export type { SovereignMcpDepsInput } from './mcp-deps.js'
 export { createSessionsRegistry } from '@sovereign/primitives'
 export type { SessionsRegistry, ThreadSessionRecord } from '@sovereign/primitives'
+export { createActiveSessions } from './active-sessions.js'
+export type {
+  ActiveSessions,
+  ActiveSessionEntry,
+  ActiveAgentStatus,
+  ActiveSubagent,
+  CreateActiveSessionsOptions
+} from './active-sessions.js'
+export { resumeActiveSessions } from './resume.js'
+export type { ResumeOrchestratorOptions, ResumeOutcome, ResumeReport } from './resume.js'
 
 // Re-export the canonical interface types from core so consumers only need a
 // single import.

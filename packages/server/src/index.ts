@@ -55,12 +55,60 @@ if (!process.env.SOVEREIGN_DATA_DIR && process.env.OPENCLAW_WORKSPACE) {
     )
   }
 }
+// Single-instance lockfile (R17). Two Sovereign processes on the same data
+// dir would race on active-sessions.json and try to resume the same SDK
+// session — refuse hard instead of best-effort.
+const lockPath = path.join(dataDir, '.sovereign.lock')
+function acquireLock(): void {
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf-8')
+    const prev = JSON.parse(raw) as { pid: number; startedAt: number; host: string }
+    if (prev.pid && prev.pid !== process.pid) {
+      try {
+        process.kill(prev.pid, 0) // probe — throws ESRCH if not running
+        console.error(
+          `[lockfile] another Sovereign is running (pid ${prev.pid}, started ${new Date(prev.startedAt).toISOString()}, host ${prev.host}).`
+        )
+        console.error(`[lockfile] Refusing to boot. Stop the other instance or delete ${lockPath} if stale.`)
+        process.exit(1)
+      } catch {
+        console.warn(`[lockfile] stale lock from pid ${prev.pid} — claiming it`)
+      }
+    }
+  } catch {
+    /* no lock yet — fall through */
+  }
+  fs.writeFileSync(
+    lockPath,
+    JSON.stringify({ pid: process.pid, startedAt: Date.now(), host: process.env.HOST ?? 'localhost' })
+  )
+}
+function releaseLock(): void {
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf-8')
+    const prev = JSON.parse(raw) as { pid: number }
+    if (prev.pid === process.pid) fs.unlinkSync(lockPath)
+  } catch {
+    /* gone — fine */
+  }
+}
+acquireLock()
+
 const bus = createEventBus(dataDir)
 
 const { shutdown } = bootstrapServer({ app, server, wss, bus, dataDir })
 
-process.on('SIGTERM', shutdown)
-process.on('SIGINT', shutdown)
+function shutdownWithLock() {
+  try {
+    shutdown()
+  } finally {
+    releaseLock()
+  }
+}
+
+process.on('SIGTERM', shutdownWithLock)
+process.on('SIGINT', shutdownWithLock)
+process.on('exit', releaseLock)
 
 const clientDist = path.resolve(__dirname, '../../client/dist')
 if (fs.existsSync(clientDist)) {

@@ -32,7 +32,8 @@ import type {
   WorkItem
 } from '@sovereign/core'
 
-import { createBackendEmitter } from '@sovereign/primitives'
+import { createBackendEmitter, createWriteThroughFile, createWriteThroughStore } from '@sovereign/primitives'
+import type { WriteThroughFile, WriteThroughStore } from '@sovereign/primitives'
 import {
   parseClaudeCodeTurns,
   readAllClaudeCodeMessages,
@@ -45,6 +46,7 @@ import { defaultAgentDir, projectsDirForCwd, sessionJsonlPath } from './path-enc
 import { ensureDefaultSubagentFile, ensureLayeredContextFile, ensurePersonalityFile } from './personality.js'
 import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, ToolPolicy } from './types.js'
 import type { DeviceInfo } from '@sovereign/core'
+import type { ActiveSessions } from '../active-sessions.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -76,6 +78,8 @@ export interface ClaudeCodeBackend extends AgentBackend {
   setActiveSession(sessionKey: string | undefined): void
   /** Return the canonical session key currently driving the active SDK iteration (if any). */
   getActiveSessionKey(): string | undefined
+  /** Synchronously flush all file-backed state. Called on shutdown (R5). */
+  flushState(): void
 }
 
 export interface ClaudeCodeBackendDeps {
@@ -115,9 +119,37 @@ export interface ClaudeCodeBackendDeps {
    * `reason` to the agent as the tool_result.
    */
   toolPolicy?: ToolPolicy
+  /**
+   * Canonical liveness index across backends. The adapter writes to it on
+   * every status transition + subagent hook so a restart can resume (R3).
+   * Optional for tests.
+   */
+  activeSessions?: ActiveSessions
   /** Override sdkQuery for tests; defaults to the SDK's query(). */
   sdkQuery?: typeof sdkQuery
 }
+
+/** Persisted slice of `ClaudeSessionState` — everything serialisable. Live OS
+ * handles (`liveQuery`, `abortController`, `pushUserMessage`, `endInput`,
+ * `iteratorDone`) are re-created by `startSessionLoop` on demand and are
+ * never written to disk. Per R2. */
+interface PersistedClaudeSessionState {
+  backendSessionId: string
+  cwd: string
+  model: string | null
+  agentStatus: ClaudeSessionState['agentStatus']
+  label?: string
+  parentSessionKey?: string
+  liveSubagents: string[]
+  streamLastLength: number
+  thinkingAccum: string
+  textAccum: string[]
+  lastUsage?: ClaudeSessionState['lastUsage']
+  sessionFile?: string
+}
+
+const SESSION_STATE_SCHEMA_VERSION = 1
+const ACTIVE_KEY_SCHEMA_VERSION = 1
 
 export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCodeBackendDeps = {}): ClaudeCodeBackend {
   const emitter = createBackendEmitter(KIND)
@@ -150,7 +182,170 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     /* user may have a read-only cwd in tests */
   }
 
-  let activeSessionKey: string | undefined
+  // ── Persistence (R2, R3) ──────────────────────────────────────────────
+  // Per-session state under <dataDir>/agent-backend/claude-code-state/<sessionKey>.json
+  // and the global active-session-pointer.json. Both rehydrated on adapter
+  // construction so a restart resumes the last known state.
+  const sessionStateStore: WriteThroughStore<PersistedClaudeSessionState> = createWriteThroughStore({
+    dirPath: path.join(config.dataDir, 'agent-backend', 'claude-code-state'),
+    version: SESSION_STATE_SCHEMA_VERSION,
+    debounceMs: 250,
+    label: 'claude-code-state'
+  })
+  const activeKeyFile: WriteThroughFile<string | null> = createWriteThroughFile<string | null>({
+    filePath: path.join(config.dataDir, 'agent-backend', 'active-session-pointer.json'),
+    version: ACTIVE_KEY_SCHEMA_VERSION,
+    defaultValue: null,
+    debounceMs: 0, // pointer changes are always synchronous (R5)
+    label: 'active-session-pointer'
+  })
+
+  let activeSessionKey: string | undefined = activeKeyFile.read() ?? undefined
+
+  function setActiveSessionKey(key: string | undefined): void {
+    if (activeSessionKey === key) return
+    activeSessionKey = key
+    activeKeyFile.writeSync(key ?? null)
+  }
+
+  function persistState(state: ClaudeSessionState): void {
+    sessionStateStore.set(state.sessionKey, {
+      backendSessionId: state.backendSessionId,
+      cwd: state.cwd,
+      model: state.model,
+      agentStatus: state.agentStatus,
+      label: state.label,
+      parentSessionKey: state.parentSessionKey,
+      liveSubagents: [...state.liveSubagents],
+      streamLastLength: state.streamLastLength,
+      thinkingAccum: state.thinkingAccum,
+      textAccum: state.textAccum,
+      lastUsage: state.lastUsage,
+      sessionFile: state.sessionFile
+    })
+  }
+
+  function rehydrate(): void {
+    for (const { key, value } of sessionStateStore.entries()) {
+      internal.sessions.set(key, {
+        sessionKey: key,
+        backendSessionId: value.backendSessionId,
+        cwd: value.cwd,
+        model: value.model,
+        agentStatus: value.agentStatus,
+        label: value.label,
+        parentSessionKey: value.parentSessionKey,
+        liveSubagents: new Set(value.liveSubagents),
+        streamLastLength: value.streamLastLength,
+        thinkingAccum: value.thinkingAccum,
+        textAccum: value.textAccum,
+        lastUsage: value.lastUsage,
+        sessionFile: value.sessionFile
+      })
+      if (value.parentSessionKey) internal.subagentToParent.set(value.backendSessionId, value.parentSessionKey)
+    }
+  }
+  rehydrate()
+
+  // Active-sessions index — written through on every status transition + subagent hook (R8).
+  const activeSessions = deps.activeSessions
+
+  function lookupThreadKey(sessionKey: string): string | undefined {
+    return deps.registry?.lookupSession?.(sessionKey) ? sessionKey : undefined
+  }
+
+  /** Mark a session as active in the liveness index. Idempotent. */
+  function markActive(state: ClaudeSessionState, reason: string): void {
+    if (!activeSessions) return
+    const reg = deps.registry?.lookupSession?.(state.sessionKey) ?? null
+    const threadKey = reg && 'threadKey' in (reg as object) ? (reg as { threadKey?: string }).threadKey : undefined
+    const inferredThreadKey =
+      threadKey ??
+      (state.sessionKey.startsWith('agent:main:thread:')
+        ? state.sessionKey.slice('agent:main:thread:'.length)
+        : state.sessionKey)
+    const status: 'working' | 'thinking' = state.agentStatus === 'thinking' ? 'thinking' : 'working'
+    let lastJsonlSize: number | undefined
+    if (state.sessionFile) {
+      try {
+        lastJsonlSize = fs.statSync(state.sessionFile).size
+      } catch {
+        /* file not yet created */
+      }
+    }
+    activeSessions.upsert({
+      sessionKey: state.sessionKey,
+      threadKey: inferredThreadKey,
+      backendKind: KIND,
+      backendSessionId: state.backendSessionId,
+      backendSessionFile: state.sessionFile,
+      cwd: state.cwd,
+      orgId: reg?.orgId,
+      agentStatus: status,
+      lastTransitionAt: Date.now(),
+      lastTransitionReason: reason,
+      lastJsonlSize
+    })
+  }
+
+  /** Drop a session from the liveness index. Idempotent. */
+  function markIdle(state: ClaudeSessionState): void {
+    activeSessions?.remove(state.sessionKey)
+  }
+
+  // Reference suppression — kept for future use when chat module needs to
+  // resolve thread keys from session keys directly.
+  void lookupThreadKey
+
+  // Internal subscription: every emission that changes durable state is
+  // mirrored to disk so a restart resumes from the last transition (R1–R3).
+  emitter.on('chat.status', (data) => {
+    const state = internal.sessions.get(data.sessionKey)
+    if (!state) return
+    if (data.status === 'idle') markIdle(state)
+    else markActive(state, `status:${data.status}`)
+    persistState(state)
+  })
+  emitter.on('chat.work', (data) => {
+    const state = internal.sessions.get(data.sessionKey)
+    if (!state) return
+    persistState(state)
+    if (!activeSessions) return
+    let lastJsonlSize: number | undefined
+    if (state.sessionFile) {
+      try {
+        lastJsonlSize = fs.statSync(state.sessionFile).size
+      } catch {
+        /* missing */
+      }
+    }
+    activeSessions.bumpActivity(state.sessionKey, {
+      lastJsonlSize,
+      lastAssistantMessageAt: Date.now()
+    })
+  })
+  emitter.on('chat.turn', (data) => {
+    const state = internal.sessions.get(data.sessionKey)
+    if (state) persistState(state)
+  })
+  emitter.on('subagent.spawned', (data) => {
+    if (!data.parentKey) return
+    const backendId = data.childKey.startsWith(SUBAGENT_SESSION_PREFIX)
+      ? data.childKey.slice(SUBAGENT_SESSION_PREFIX.length)
+      : data.childKey
+    activeSessions?.addSubagent(data.parentKey, {
+      agentId: backendId,
+      label: data.label,
+      startedAt: Date.now()
+    })
+  })
+  emitter.on('subagent.completed', (data) => {
+    if (!data.parentKey) return
+    const backendId = data.childKey.startsWith(SUBAGENT_SESSION_PREFIX)
+      ? data.childKey.slice(SUBAGENT_SESSION_PREFIX.length)
+      : data.childKey
+    activeSessions?.removeSubagent(data.parentKey, backendId)
+  })
 
   function setStatus(status: BackendConnectionStatus, reason?: string) {
     internal.connectionStatus = status
@@ -517,7 +712,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     state.iteratorDone = (async () => {
       try {
         for await (const msg of q) {
-          activeSessionKey = state.sessionKey
+          setActiveSessionKey(state.sessionKey)
           dispatchSdkMessage(msg, state, emitter)
         }
       } catch (err: any) {
@@ -637,11 +832,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       }
     }
     getOrStartSession(state)
-    activeSessionKey = sessionKey
+    setActiveSessionKey(sessionKey)
     state.streamLastLength = 0
     state.thinkingAccum = ''
     state.agentStatus = 'working'
     emitter.emit('chat.status', { sessionKey, status: 'working' })
+    persistState(state)
     state.pushUserMessage?.(text, attachments)
   }
 
@@ -674,7 +870,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   }
 
   async function switchSession(sessionKey: string) {
-    activeSessionKey = sessionKey
+    setActiveSessionKey(sessionKey)
   }
 
   async function getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }> {
@@ -849,7 +1045,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     const state = internal.sessions.get(parentSessionKey)
     if (!state) throw new Error(`claude-code: parent session ${parentSessionKey} unknown`)
     getOrStartSession(state)
-    activeSessionKey = parentSessionKey
+    setActiveSessionKey(parentSessionKey)
     const text = `Use the Task tool to spawn a subagent.\n\nTask: ${opts.task}\n${opts.label ? `Label: ${opts.label}\n` : ''}`
     state.pushUserMessage?.(text)
     // We don't know the agent_id yet — the hook will register on SubagentStart.
@@ -895,10 +1091,14 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     getSessionFilePath,
     getDeviceInfo,
     setActiveSession(sessionKey) {
-      activeSessionKey = sessionKey
+      setActiveSessionKey(sessionKey)
     },
     getActiveSessionKey() {
       return activeSessionKey
+    },
+    flushState() {
+      sessionStateStore.flush()
+      activeKeyFile.flush()
     }
   }
 

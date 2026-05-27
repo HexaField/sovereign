@@ -55,6 +55,7 @@ import { createDraftRouter } from '@sovereign/drafts'
 import { wireAgentBackend } from '@sovereign/agent-backend'
 import { getGatewayActivityMap } from '@sovereign/agent-backend'
 import { createWorkspaceIndex } from '@sovereign/agent-backend'
+import { resumeActiveSessions } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
 import { createChatRoutes } from '@sovereign/chat'
@@ -273,19 +274,36 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     ad4mService.mountRoutes(app)
   }
 
+  // Boot-time resume summary, populated after the resume sweep finishes.
+  // Exposed on /api/dashboard/resume-summary (R19) so the UI can render the
+  // "Last restart resumed N sessions" tile.
+  let lastResumeReport: {
+    at: number
+    counts: { tier1: number; tier2: number; tier3: number; invalidated: number }
+    total: number
+  } | null = null
+
   // Agent backend (the only construction cycle)
-  const { routingBackend, backend, cronService, openClawBackend, sessionsRegistry, createSovereignMcpInstance } =
-    wireAgentBackend({
-      bus,
-      dataDir,
-      scheduler,
-      orgManager,
-      planningService,
-      issueTracker,
-      meetingsService,
-      notificationsModule,
-      browserService
-    })
+  const {
+    routingBackend,
+    backend,
+    cronService,
+    openClawBackend,
+    claudeCodeBackend,
+    sessionsRegistry,
+    activeSessions,
+    createSovereignMcpInstance
+  } = wireAgentBackend({
+    bus,
+    dataDir,
+    scheduler,
+    orgManager,
+    planningService,
+    issueTracker,
+    meetingsService,
+    notificationsModule,
+    browserService
+  })
   app.use(createSchedulerRoutes(scheduler, cronService))
 
   // Sovereign MCP over Streamable HTTP — per-session transport pattern.
@@ -311,13 +329,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         if (transport.sessionId) sessions.set(transport.sessionId, transport)
         return
       }
-      res
-        .status(400)
-        .json({
-          jsonrpc: '2.0',
-          error: { code: -32600, message: 'Bad MCP request — missing session or not initialize' },
-          id: null
-        })
+      res.status(400).json({
+        jsonrpc: '2.0',
+        error: { code: -32600, message: 'Bad MCP request — missing session or not initialize' },
+        id: null
+      })
     }
 
     app.post('/api/mcp', handleMcp)
@@ -352,7 +368,13 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   }
 
   // Chat + threads (after routing/cron exist)
-  const chatModule = createChatModule(bus, backend, threadManager, { dataDir, wsHandler })
+  const chatModule = createChatModule(bus, backend, threadManager, {
+    dataDir,
+    wsHandler,
+    activeSessions: {
+      setInFlight: (sessionKey, info) => activeSessions.setInFlight(sessionKey, info)
+    }
+  })
   registerChatWs(wsHandler, chatModule)
   app.use(createChatRoutes(chatModule, backend, dataDir))
   app.use(
@@ -373,7 +395,16 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     getAgentBackendStatus: () => backend.status()
   })
   app.use(
-    createSystemRoutes({ system: systemModule, logsChannel, dataDir, healthHistory, routingBackend, eventStream, bus })
+    createSystemRoutes({
+      system: systemModule,
+      logsChannel,
+      dataDir,
+      healthHistory,
+      routingBackend,
+      activeSessions,
+      eventStream,
+      bus
+    })
   )
   registerEventsChannel(wsHandler, eventStream)
   wireBusLogging(bus, logsChannel)
@@ -386,6 +417,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   app.use(
     createDashboardRoutes({ orgManager, threadManager, notifications: notificationsModule, system: systemModule })
   )
+  app.get('/api/dashboard/resume-summary', (_req, res) => {
+    res.json(lastResumeReport ?? { at: null, counts: { tier1: 0, tier2: 0, tier3: 0, invalidated: 0 }, total: 0 })
+  })
 
   // Status aggregator + WS connection handler
   const statusAggregator = wireStatusAggregator({
@@ -400,7 +434,31 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     systemModule
   })
 
-  routingBackend.connectAll().catch((err: any) => console.error('Failed to connect agent backend(s):', err.message))
+  // Connect backends, then run the boot-time resume sweep (R10).
+  // resumeActiveSessions is a no-op when no entries exist, so a clean boot
+  // pays no cost. Runs *before* WS connections are accepted so any UI
+  // reconnecting sees the resumed state. The report is exposed via
+  // /api/dashboard/resume-summary (R19).
+  void routingBackend
+    .connectAll()
+    .then(() =>
+      resumeActiveSessions({
+        activeSessions,
+        routingBackend,
+        bus,
+        getAllQueues: () => chatModule.messageQueue.getAllQueues(),
+        replayQueueHead: (id) => chatModule.retryQueued(id),
+        dropQueueHead: (id) => chatModule.cancelQueued(id),
+        sendContinuation: async (threadKey, text) => {
+          await chatModule.handleSend(threadKey, text)
+        }
+      })
+        .then((report) => {
+          lastResumeReport = { at: Date.now(), counts: report.counts, total: report.outcomes.length }
+        })
+        .catch((err: any) => console.error('[resume] orchestrator failed:', err?.message ?? err))
+    )
+    .catch((err: any) => console.error('Failed to connect agent backend(s):', err.message))
   const cronMonitor = createCronMonitor({ cronService, wsHandler, pollIntervalMs: 30_000, autoFixIntervalMs: 15_000 })
   setTimeout(() => cronMonitor.start(), 5000)
 
@@ -412,7 +470,13 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       terminalManager.dispose()
       cronMonitor.stop()
       routingBackend.disconnectAll().catch(() => {})
+      // Flush every file-backed cache synchronously so SIGTERM leaves disk
+      // in its latest known-good state (R5). Order matters only in that
+      // active-sessions sees the final transitions from the backend.
       sessionsRegistry.flush()
+      activeSessions.flush()
+      claudeCodeBackend?.flushState()
+      chatModule.flushState()
       workspaceIndex.flush()
       workspaceIndex.dispose()
       browserService.dispose().catch(() => {})
