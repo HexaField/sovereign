@@ -5,10 +5,29 @@ import * as path from 'node:path'
 import { EventEmitter } from 'node:events'
 import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents, QueuedMessage } from '@sovereign/core'
 import type { WsHandler } from '@sovereign/primitives'
+import { createWriteThroughStore, type WriteThroughStore } from '@sovereign/primitives'
 import type { ThreadManager } from '@sovereign/threads'
 import { deriveSessionKey } from './derive-session-key.js'
 import { createMessageQueue, type MessageQueue } from './message-queue.js'
 import type { WorkItem } from '@sovereign/core'
+
+/** Minimal subset of @sovereign/agent-backend ActiveSessions used by chat,
+ * defined here so chat doesn't depend on agent-backend. The full interface
+ * is structurally compatible. */
+export interface ChatActiveSessionsHook {
+  setInFlight(sessionKey: string, info: { queueId: string; promptText: string }): void
+}
+
+/** Persisted live state per thread (R1). */
+interface LiveStateEntry {
+  status?: string
+  work?: WorkItem[]
+  streamText?: string
+  statusChangedAt?: number
+}
+
+const LIVE_STATE_SCHEMA_VERSION = 1
+const LIVE_STATE_DEBOUNCE_MS = 100
 
 /** Chat-level event emitter — all chat events (from backend + JSONL polling) flow through here */
 export type ChatEventHandler = (data: Record<string, unknown>) => void
@@ -43,16 +62,19 @@ export interface ChatModule {
   retryQueued(id: string): boolean
   /** Internal: the underlying queue (exposed for routes/tests; do not mutate from outside). */
   messageQueue: MessageQueue
+  /** Synchronously flush all file-backed state. Called on shutdown (R5). */
+  flushState(): void
 }
 
 export function createChatModule(
   bus: EventBus,
   backend: AgentBackend,
   threadManager: ThreadManager,
-  options?: { dataDir?: string; wsHandler?: WsHandler }
+  options?: { dataDir?: string; wsHandler?: WsHandler; activeSessions?: ChatActiveSessionsHook }
 ): ChatModule {
   const dataDir = options?.dataDir ?? '.'
   const wsHandler = options?.wsHandler
+  const activeSessionsHook = options?.activeSessions
 
   // Chat-level event emitter — SSE endpoint subscribes to this
   const chatEvents = new EventEmitter()
@@ -134,6 +156,9 @@ export function createChatModule(
 
     inFlightByThread.set(threadKey, head.id)
     messageQueue.markSending(head.id)
+    // Record the in-flight prompt on the liveness index so Tier 1 resume
+    // can correlate the queue head with the active session after a restart.
+    activeSessionsHook?.setInFlight(sessionKey, { queueId: head.id, promptText: head.text })
 
     try {
       await backend.sendMessage(sessionKey, head.text)
@@ -231,6 +256,7 @@ export function createChatModule(
         )
         currentStatus.set(threadKey, 'idle')
         statusChangedAt.set(threadKey, now)
+        persistLiveState(threadKey)
         stopJsonlPoll(threadKey)
         // Broadcast the status change to clients
         if (wsHandler) {
@@ -249,9 +275,45 @@ export function createChatModule(
   }
 
   // --- Live state cache for replay on reconnect ---
+  // Backed by `<dataDir>/chat/live-state/<encodedThreadKey>.json` so resume
+  // sees the same view as live operation (R1). The in-memory Maps are caches
+  // over the file; on boot they're rehydrated from disk.
+  const liveStateStore: WriteThroughStore<LiveStateEntry> = createWriteThroughStore<LiveStateEntry>({
+    dirPath: path.join(dataDir, 'chat', 'live-state'),
+    version: LIVE_STATE_SCHEMA_VERSION,
+    debounceMs: LIVE_STATE_DEBOUNCE_MS,
+    label: 'chat-live-state'
+  })
   const currentStatus = new Map<string, string>()
   const currentWork = new Map<string, any[]>()
   const currentStreamText = new Map<string, string>()
+
+  // Hydrate the in-memory caches from disk on boot.
+  for (const { key, value } of liveStateStore.entries()) {
+    if (value.status) currentStatus.set(key, value.status)
+    if (value.work) currentWork.set(key, value.work)
+    if (value.streamText) currentStreamText.set(key, value.streamText)
+    if (value.statusChangedAt) statusChangedAt.set(key, value.statusChangedAt)
+  }
+
+  function persistLiveState(threadKey: string): void {
+    const status = currentStatus.get(threadKey)
+    const work = currentWork.get(threadKey)
+    const streamText = currentStreamText.get(threadKey)
+    const changedAt = statusChangedAt.get(threadKey)
+    // No active state for this thread — remove the per-thread file so the
+    // directory mirrors `currently-non-idle` semantics.
+    if (!status && (!work || work.length === 0) && !streamText) {
+      liveStateStore.remove(threadKey)
+      return
+    }
+    liveStateStore.set(threadKey, {
+      status,
+      work,
+      streamText,
+      statusChangedAt: changedAt
+    })
+  }
 
   // Proxy backend events to WS subscribers
   const backendEvents: (keyof AgentBackendEvents)[] = [
@@ -274,6 +336,7 @@ export function createChatModule(
         if (eventName === 'chat.status') {
           currentStatus.set(threadKey, data.status as string)
           statusChangedAt.set(threadKey, Date.now())
+          persistLiveState(threadKey)
           if (data.status === 'idle') {
             stopJsonlPoll(threadKey)
             // Agent finished a turn — clear any in-flight queue entry for this
@@ -296,15 +359,18 @@ export function createChatModule(
           if ((data.work as any)?.type === 'tool_call') {
             currentStreamText.delete(threadKey)
           }
+          persistLiveState(threadKey)
         } else if (eventName === 'chat.stream') {
           const prev = currentStreamText.get(threadKey) ?? ''
           currentStreamText.set(threadKey, prev + (data.text as string))
+          persistLiveState(threadKey)
         } else if (eventName === 'chat.turn') {
           // Turn complete — clear cached state and invalidate history cache
           currentStatus.delete(threadKey)
           statusChangedAt.delete(threadKey)
           currentWork.delete(threadKey)
           currentStreamText.delete(threadKey)
+          persistLiveState(threadKey)
           // A turn completing also means we should release any in-flight
           // queue entry for this thread, even if no separate 'idle' status
           // event arrives. Idempotent with the chat.status handler above.
@@ -471,6 +537,9 @@ export function createChatModule(
           items.push(work)
           currentWork.set(threadKey, items)
         }
+        // Persist whatever new work items arrived this cycle (R1) — debounced
+        // through the live-state store so high-frequency poll bumps coalesce.
+        persistLiveState(threadKey)
       } catch {
         /* file read error — ignore */
       }
@@ -695,6 +764,7 @@ export function createChatModule(
       }
       return true
     },
-    messageQueue
+    messageQueue,
+    flushState: () => liveStateStore.flush()
   }
 }

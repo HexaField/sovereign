@@ -5,7 +5,7 @@ import type { SystemModule } from './system.js'
 import type { LogsChannel } from './ws.js'
 import { readPersistedLogs } from './ws.js'
 import type { HealthHistory } from './health-history.js'
-import type { RoutingBackend } from '@sovereign/agent-backend'
+import type { RoutingBackend, ActiveSessions } from '@sovereign/agent-backend'
 import type { ContextBudget, EventBus } from '@sovereign/core'
 import type { EventStream } from './event-stream.js'
 import type { WsHandler } from '@sovereign/primitives'
@@ -17,6 +17,8 @@ export interface SystemRoutesOptions {
   healthHistory?: HealthHistory
   /** Routing backend — used for device info, context budget, and gateway restart. */
   routingBackend?: RoutingBackend
+  /** Canonical liveness index — when present, `/api/system/agents/active` reads from here (R9). */
+  activeSessions?: ActiveSessions
   /** Event-stream module — when present the `/api/system/events*` routes are mounted. */
   eventStream?: EventStream
   /** Used by event-stream retry to re-emit events on the bus. */
@@ -50,6 +52,7 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   const dataDir = 'dataDir' in opts ? (opts as SystemRoutesOptions).dataDir : null
   const healthHistory = 'healthHistory' in opts ? (opts as SystemRoutesOptions).healthHistory : null
   const routingBackend = 'routingBackend' in opts ? (opts as SystemRoutesOptions).routingBackend : null
+  const activeSessions = 'activeSessions' in opts ? (opts as SystemRoutesOptions).activeSessions : null
   let restartInFlight: Promise<{ message: string; command?: string }> | null = null
 
   router.get('/api/system/identity', (_req, res) => {
@@ -119,49 +122,21 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
     res.json({ snapshots: healthHistory.getSnapshots(windowMs) })
   })
 
-  // Active-agent census across all enabled backends. Used by the `sovereign`
-  // CLI's restart guard so an operator iterating on Sovereign doesn't
-  // accidentally kill an in-flight Claude/OpenClaw turn. Allow-list of
-  // statuses that indicate live work: the canonical AgentStatus uses
-  // `working`/`thinking`; OpenClaw's persisted `sessions.json` also exposes
-  // gateway lifecycle states (`done`, `failed`, `timeout`, `running`) — only
-  // `running` of those represents an in-flight turn. Fail-soft per backend
-  // so a misbehaving adapter doesn't blank the whole response.
-  const ACTIVE_STATUSES = new Set(['working', 'thinking', 'running'])
-  router.get('/api/system/agents/active', async (_req, res) => {
-    if (!routingBackend) {
+  // Active-agent census, served from the file-backed `active-sessions.json`
+  // (R9). Adapters write through to it on every status transition, so the
+  // endpoint is just a serialiser.
+  router.get('/api/system/agents/active', (_req, res) => {
+    if (!activeSessions) {
       res.json({ count: 0, sessions: [] })
       return
     }
-    const sessions: Array<{
-      key: string
-      kind: string
-      label?: string
-      agentStatus: string
-      backendKind: string
-      parentKey?: string
-      lastActivity?: number
-    }> = []
-    for (const inst of routingBackend.all()) {
-      try {
-        const list = await inst.backend.listSessions()
-        for (const s of list) {
-          const status = s.agentStatus ?? 'idle'
-          if (!ACTIVE_STATUSES.has(status)) continue
-          sessions.push({
-            key: s.key,
-            kind: s.kind,
-            label: s.label,
-            agentStatus: status,
-            backendKind: inst.kind,
-            parentKey: s.parentKey,
-            lastActivity: s.lastActivity
-          })
-        }
-      } catch {
-        /* per-backend best effort */
-      }
-    }
+    const sessions = activeSessions.list().map((e) => ({
+      key: e.sessionKey,
+      kind: e.sessionKey.includes(':subagent:') ? 'subagent' : 'thread',
+      agentStatus: e.agentStatus,
+      backendKind: e.backendKind,
+      lastActivity: e.lastTransitionAt
+    }))
     res.json({ count: sessions.length, sessions })
   })
 
