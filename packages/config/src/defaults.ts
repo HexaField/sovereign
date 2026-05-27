@@ -1,9 +1,15 @@
+import path from 'node:path'
 import type { SovereignConfig } from './types.js'
+
+const home = process.env.HOME ?? ''
 
 export const defaults: SovereignConfig = {
   server: {
     port: 3001,
-    host: 'localhost'
+    host: 'localhost',
+    tls: {
+      enabled: true
+    }
   },
   terminal: {
     shell: process.env.SHELL || '/bin/zsh',
@@ -18,5 +24,40 @@ export const defaults: SovereignConfig = {
     defaults: {
       remotes: []
     }
+  },
+  workspace: {
+    root: home ? path.join(home, 'workspaces') : '',
+    globalPath: ''
+  },
+  agentBackend: {
+    enabled: ['openclaw'],
+    default: 'openclaw',
+    openclaw: {
+      gatewayUrl: 'ws://localhost:3456/ws'
+    },
+    claudeCode: {
+      cwd: '',
+      agentDir: home ? path.join(home, '.claude') : '',
+      defaultModel: ''
+    }
+  },
+  ad4m: {
+    host: '',
+    mcpUrl: ''
+  },
+  voice: {
+    transcribeUrl: '',
+    ttsUrl: ''
+  },
+  meetings: {
+    summarizeUrl: ''
+  },
+  identity: {
+    agentName: 'Sovereign',
+    agentIcon: '⬡'
+  },
+  models: {
+    available: [],
+    default: ''
   }
 }

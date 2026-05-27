@@ -1,5 +1,6 @@
 // HTTP-backed summarization callback. Used by `createSummarizationPipeline`
-// when `SOVEREIGN_SUMMARIZE_URL` is configured.
+// when a URL is provided. The URL is read lazily via `getUrl` so a runtime
+// config change picks up on the next summarisation without re-wiring.
 
 import type { Meeting, ActionItem } from './meetings.js'
 
@@ -10,12 +11,19 @@ export interface SummaryShape {
   keyTopics: string[]
 }
 
-export function makeFetchSummarizer(): (_m: Meeting, transcriptText: string) => Promise<SummaryShape> {
+export interface MakeFetchSummarizerOptions {
+  /** Lazy URL accessor — re-read on every call so config hot-reload is observed. */
+  getUrl: () => string
+}
+
+export function makeFetchSummarizer(
+  opts: MakeFetchSummarizerOptions
+): (_m: Meeting, transcriptText: string) => Promise<SummaryShape> {
   return async (_m, transcriptText) => {
-    const url = process.env.SOVEREIGN_SUMMARIZE_URL
+    const url = opts.getUrl()
     if (!url) {
       return {
-        text: 'Summarization not configured — set SOVEREIGN_SUMMARIZE_URL',
+        text: 'Summarization not configured — set meetings.summarizeUrl in config',
         actionItems: [],
         decisions: [],
         keyTopics: []

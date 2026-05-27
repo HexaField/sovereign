@@ -1,8 +1,8 @@
 // Sovereign server bootstrap — instantiates every module, mounts routes, and
 // returns the handles the entry point needs for shutdown.
 //
-// The entry point owns transport (HTTP/WS), config (env vars), and the
-// listen call — everything else lives here so `index.ts` stays at a glance.
+// The entry point owns transport (HTTP/WS), config loading, and the listen
+// call — everything else lives here so `index.ts` stays at a glance.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -37,8 +37,8 @@ import { registerTerminalChannel } from '@sovereign/terminal'
 import { createWorktreeManager } from '@sovereign/worktrees'
 import { createWorktreeRouter } from '@sovereign/worktrees'
 import { registerWorktreesChannel } from '@sovereign/worktrees'
-import { createConfigStore } from '@sovereign/config'
 import { createConfigRouter } from '@sovereign/config'
+import type { ConfigStore, SovereignConfig } from '@sovereign/config'
 import { createChangeSetManager } from '@sovereign/diff'
 import { createDiffRouter } from '@sovereign/diff'
 import { createIssueTracker } from '@sovereign/issues'
@@ -102,6 +102,7 @@ export interface BootstrapInput {
   wss: WebSocketServer
   bus: EventBus
   dataDir: string
+  configStore: ConfigStore
 }
 
 export interface BootstrapResult {
@@ -111,8 +112,9 @@ export interface BootstrapResult {
 const authMiddleware = (_req: any, _res: any, next: any) => next()
 
 export function bootstrapServer(input: BootstrapInput): BootstrapResult {
-  const { app, server, wss, bus, dataDir } = input
+  const { app, server, wss, bus, dataDir, configStore } = input
   const wsHandler = createWsHandler(bus)
+  const cfg: SovereignConfig = configStore.get()
 
   // Scheduler + notifications
   const scheduler = createScheduler(bus, dataDir)
@@ -122,7 +124,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
   // Orgs + bootstrap global workspace + per-project services
   const orgManager = createOrgManager(bus, dataDir)
-  const globalPath = process.env.SOVEREIGN_GLOBAL_PATH || path.join(dataDir, 'orgs', '_global')
+  const globalPath = cfg.workspace.globalPath || path.join(dataDir, 'orgs', '_global')
   if (!orgManager.getOrg('_global')) {
     fs.mkdirSync(globalPath, { recursive: true })
     orgManager.createOrg({ id: '_global', name: 'Global', path: globalPath, provider: 'radicle' })
@@ -143,7 +145,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     }
     return projectId
   }
-  app.use('/api/files', createFileRouter(fileService, undefined, fileProjectResolver))
+  app.use(
+    '/api/files',
+    createFileRouter(fileService, undefined, fileProjectResolver, { workspaceRoot: cfg.workspace.root })
+  )
   registerFilesChannel(wsHandler, bus)
   const fileWatcher = createFileWatcher(bus, globalPath)
   fileWatcher.start()
@@ -171,8 +176,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   app.use(createWorktreeRouter(worktreeManager, authMiddleware))
   registerWorktreesChannel(wsHandler, bus)
 
-  // Config + diff/issues/review/radicle
-  const configStore = createConfigStore(bus, dataDir)
+  // Config router
   app.use('/api/config', createConfigRouter(configStore))
   const changeSetManager = createChangeSetManager(bus, dataDir)
   app.use(createDiffRouter(changeSetManager))
@@ -214,10 +218,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     if (!threadManager.get(label)) threadManager.create({ label })
   }
 
-  // Voice / Recordings / Meetings
+  // Voice / Recordings / Meetings (config-driven URLs; hot-reloadable)
   const voiceModule = createVoiceModule(bus, {
-    transcribeUrl: process.env.VOICE_TRANSCRIBE_URL,
-    ttsUrl: process.env.VOICE_TTS_URL
+    transcribeUrl: cfg.voice.transcribeUrl || undefined,
+    ttsUrl: cfg.voice.ttsUrl || undefined
+  })
+  configStore.onChange('voice', () => {
+    const next = configStore.get<SovereignConfig['voice']>('voice')
+    voiceModule.updateConfig({ transcribeUrl: next.transcribeUrl || undefined, ttsUrl: next.ttsUrl || undefined })
   })
   app.use(createVoiceRoutes(voiceModule))
   const recordingsService = createRecordingsService(dataDir)
@@ -232,7 +240,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     bus,
     meetings: meetingsService,
     dataDir,
-    onSummarize: makeFetchSummarizer()
+    onSummarize: makeFetchSummarizer({ getUrl: () => configStore.get<string>('meetings.summarizeUrl') })
   })
   const importHandler = createImportHandler({ bus, meetings: meetingsService })
   void createRetentionJob(bus)
@@ -257,13 +265,13 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   app.use(createNotificationRoutes(notificationsModule))
   const browserService = createBrowserService(dataDir)
 
-  // AD4M integration (optional — only if AD4M_HOST is set)
-  const ad4mService = process.env.AD4M_HOST
+  // AD4M integration (optional — only if host configured)
+  const ad4mService = cfg.ad4m.host
     ? createAd4mService(
         {
-          host: process.env.AD4M_HOST,
+          host: cfg.ad4m.host,
           tokenFile: path.join(dataDir, 'ad4m-token.json'),
-          agentName: process.env.SOVEREIGN_AGENT_NAME
+          agentName: cfg.identity.agentName
         },
         bus,
         notificationsModule
@@ -296,6 +304,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   } = wireAgentBackend({
     bus,
     dataDir,
+    configStore,
     scheduler,
     orgManager,
     planningService,
@@ -392,7 +401,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // System module + routes
   const systemModule = createSystemModule(bus, dataDir, {
     wsHandler,
-    getAgentBackendStatus: () => backend.status()
+    getAgentBackendStatus: () => backend.status(),
+    getModelConfig: () => ({
+      models: configStore.get<string[]>('models.available'),
+      defaultModel: configStore.get<string>('models.default') || null
+    })
   })
   app.use(
     createSystemRoutes({
@@ -403,7 +416,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       routingBackend,
       activeSessions,
       eventStream,
-      bus
+      bus,
+      getIdentity: () => ({
+        agentName: configStore.get<string>('identity.agentName'),
+        agentIcon: configStore.get<string>('identity.agentIcon')
+      })
     })
   )
   registerEventsChannel(wsHandler, eventStream)

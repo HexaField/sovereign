@@ -3,18 +3,19 @@
 // returning concrete refs the entry point binds to chat/threads/scheduler.
 
 import type { EventBus, AgentBackendKind } from '@sovereign/core'
+import type { ConfigStore } from '@sovereign/config'
 import { createBackend } from './factory.js'
 import { routingAsBackend } from './routing-as-backend.js'
 import { createSessionsRegistry } from '@sovereign/primitives'
 import { createActiveSessions, type ActiveSessions } from './active-sessions.js'
 import {
   createClaudeCodeBackend,
-  claudeCodeConfigFromEnv,
+  claudeCodeConfigFromStore,
   createSovereignMcpServer,
   type ClaudeCodeBackend
 } from './claude-code/index.js'
 import { createOpenClawBackend, type OpenClawBackend } from './openclaw/openclaw.js'
-import { openClawConfigFromEnv } from './openclaw/env-config.js'
+import { openClawConfigFromStore } from './openclaw/config.js'
 import { buildSovereignMcpDeps } from './mcp-deps.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
@@ -31,6 +32,7 @@ import type { RoutingBackend } from './factory.js'
 export interface AgentBackendWiringInput {
   bus: EventBus
   dataDir: string
+  configStore: ConfigStore
   scheduler: Scheduler
   orgManager: OrgManager
   planningService: PlanningService
@@ -79,6 +81,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const {
     bus,
     dataDir,
+    configStore,
     scheduler,
     orgManager,
     planningService,
@@ -110,20 +113,17 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 
-  const enabledBackends = (process.env.SOVEREIGN_ENABLED_BACKENDS?.trim() || 'openclaw')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean) as AgentBackendKind[]
-  const defaultKind = (process.env.SOVEREIGN_DEFAULT_BACKEND?.trim() || 'openclaw') as AgentBackendKind
+  const enabledBackends = configStore.get<string[]>('agentBackend.enabled') as AgentBackendKind[]
+  const defaultKind = configStore.get<AgentBackendKind>('agentBackend.default')
 
   routingBackend = createBackend({
     enabled: enabledBackends,
     default: defaultKind,
     registry: sessionsRegistry,
     factories: {
-      openclaw: () => createOpenClawBackend(openClawConfigFromEnv(dataDir)),
+      openclaw: () => createOpenClawBackend(openClawConfigFromStore(configStore, dataDir)),
       'claude-code': () => {
-        const cc = createClaudeCodeBackend(claudeCodeConfigFromEnv(dataDir), {
+        const cc = createClaudeCodeBackend(claudeCodeConfigFromStore(configStore, dataDir), {
           sovereignMcpServer,
           registry: {
             upsertSession(record) {

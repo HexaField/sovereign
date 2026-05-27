@@ -11,6 +11,13 @@ export function createConfigRouter(configStore: ConfigStore): Router {
     res.json(configStore.get())
   })
 
+  // GET /api/config/client — public subset safe for unauthenticated clients
+  // (identity + models only). Never includes secrets. Wired before the
+  // catch-all `/*path` route so it isn't shadowed.
+  router.get('/client', (_req, res) => {
+    res.json(configStore.getPublic())
+  })
+
   // GET /api/config/schema — JSON Schema
   router.get('/schema', (_req, res) => {
     res.json(configStore.getSchema())
@@ -23,12 +30,12 @@ export function createConfigRouter(configStore: ConfigStore): Router {
     res.json(configStore.getHistory({ limit, offset }))
   })
 
-  // POST /api/config/export
+  // POST /api/config/export — full config, never includes secrets
   router.post('/export', (_req, res) => {
     res.json(configStore.exportConfig())
   })
 
-  // POST /api/config/import
+  // POST /api/config/import — non-secret config only. Doesn't clear secrets.
   router.post('/import', (req, res) => {
     try {
       configStore.importConfig(req.body)
@@ -48,9 +55,13 @@ export function createConfigRouter(configStore: ConfigStore): Router {
     }
   })
 
-  // GET /api/config/:path — namespaced read (must be after /schema, /history, /export, /import)
-  router.get('/*path', (req: Request<{ path: string }>, res) => {
-    const value = configStore.get(req.params.path)
+  // GET /api/config/:path — namespaced read (must be after /schema, /history, /export, /import, /client).
+  // Express 5 splat params arrive as string[] (URL segments); we re-join them with '.' to match
+  // the dot-path conventions used by configStore.get().
+  router.get('/*path', (req: Request, res) => {
+    const raw = (req.params as { path: string | string[] }).path
+    const dotPath = Array.isArray(raw) ? raw.join('.') : raw
+    const value = configStore.get(dotPath)
     if (value === undefined) {
       res.status(404).json({ error: 'Config path not found' })
     } else {

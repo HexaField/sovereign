@@ -10,6 +10,11 @@
     </array>
     <key>WorkingDirectory</key>
     <string>REPO_DIR_PLACEHOLDER</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SOVEREIGN_DATA_DIR</key>
+        <string>DATA_DIR_PLACEHOLDER</string>
+    </dict>
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
