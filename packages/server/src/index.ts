@@ -1,7 +1,10 @@
-// Sovereign server entry point — transport + listen only. All module
-// composition lives in `bootstrap.ts`.
+// Sovereign server entry point — resolves data dir, loads config, builds the
+// transport from the resolved config, then hands off to bootstrap.ts.
+//
+// Every former env-var read (HOST/PORT/SOVEREIGN_TLS/...) now flows through
+// {SOVEREIGN_DATA_DIR}/config.json. SOVEREIGN_DATA_DIR is the only remaining
+// process.env read.
 
-import dotenv from 'dotenv'
 import fs from 'node:fs'
 import https from 'node:https'
 import http from 'node:http'
@@ -12,23 +15,49 @@ import express from 'express'
 import { WebSocketServer } from 'ws'
 
 process.on('unhandledRejection', (r) => console.error('[server] Unhandled rejection:', r))
-dotenv.config({ path: '.env.local' })
-dotenv.config()
 
 import { createEventBus } from '@sovereign/core'
+import { createConfigStore } from '@sovereign/config'
 import healthRouter from './routes/health.js'
 import { bootstrapServer } from './bootstrap.js'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const repoRoot = path.resolve(__dirname, '../../..')
+
+// ── Data dir (only remaining env-var read) ──────────────────────────────
+const dataDir = process.env.SOVEREIGN_DATA_DIR || path.join(process.cwd(), '.data')
+fs.mkdirSync(dataDir, { recursive: true })
+console.log(
+  `Data dir: ${dataDir}${process.env.SOVEREIGN_DATA_DIR ? '' : ' (defaulted — set SOVEREIGN_DATA_DIR to pin)'}`
+)
+
+// Drift guard: warn if a sibling sovereign data dir under ~/.openclaw/workspace
+// exists but isn't the one we're using. This is the exact failure mode where
+// threads/sessions silently disappear because the active dir is stale.
+if (!process.env.SOVEREIGN_DATA_DIR) {
+  const home = process.env.HOME ?? ''
+  const siblingDataDir = path.join(home, '.openclaw', 'workspace', '.sovereign-data')
+  if (fs.existsSync(path.join(siblingDataDir, 'threads', 'registry.json')) && siblingDataDir !== dataDir) {
+    console.warn(`[data-dir] WARNING: another Sovereign data dir exists at ${siblingDataDir}.`)
+    console.warn(
+      `[data-dir] You are using the default (${dataDir}); state may diverge. Set SOVEREIGN_DATA_DIR to pick one explicitly.`
+    )
+  }
+}
+
+// ── Config (everything else) ────────────────────────────────────────────
+const bus = createEventBus(dataDir)
+const configStore = createConfigStore(bus, dataDir)
+
+const host = configStore.get<string>('server.host')
+const port = configStore.get<number>('server.port')
+const useTls = configStore.get<boolean>('server.tls.enabled')
+
 const app = express()
-const port = process.env.PORT || 3001
-const host = process.env.HOST || 'localhost'
 app.use(cors())
 app.use(express.json())
 app.use('/health', healthRouter)
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(__dirname, '../../..')
-const useTls = process.env.SOVEREIGN_TLS !== 'false'
 const server: http.Server | https.Server = useTls
   ? https.createServer(
       {
@@ -39,25 +68,8 @@ const server: http.Server | https.Server = useTls
     )
   : http.createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
-const dataDir = process.env.SOVEREIGN_DATA_DIR || path.join(process.cwd(), '.data')
-fs.mkdirSync(dataDir, { recursive: true })
-console.log(
-  `Data dir: ${dataDir}${process.env.SOVEREIGN_DATA_DIR ? '' : ' (defaulted — set SOVEREIGN_DATA_DIR to pin)'}`
-)
-// Drift guard: warn if another populated sovereign data dir exists nearby. This is the exact
-// failure mode where threads/sessions silently disappear because the active dir is stale.
-if (!process.env.SOVEREIGN_DATA_DIR && process.env.OPENCLAW_WORKSPACE) {
-  const siblingDataDir = path.join(process.env.OPENCLAW_WORKSPACE, '.sovereign-data')
-  if (fs.existsSync(path.join(siblingDataDir, 'threads', 'registry.json')) && siblingDataDir !== dataDir) {
-    console.warn(`[data-dir] WARNING: another Sovereign data dir exists at ${siblingDataDir}.`)
-    console.warn(
-      `[data-dir] You are using the default (${dataDir}); state may diverge. Set SOVEREIGN_DATA_DIR to pick one explicitly.`
-    )
-  }
-}
-// Single-instance lockfile (R17). Two Sovereign processes on the same data
-// dir would race on active-sessions.json and try to resume the same SDK
-// session — refuse hard instead of best-effort.
+
+// ── Single-instance lockfile (R17) ──────────────────────────────────────
 const lockPath = path.join(dataDir, '.sovereign.lock')
 function acquireLock(): void {
   try {
@@ -78,10 +90,7 @@ function acquireLock(): void {
   } catch {
     /* no lock yet — fall through */
   }
-  fs.writeFileSync(
-    lockPath,
-    JSON.stringify({ pid: process.pid, startedAt: Date.now(), host: process.env.HOST ?? 'localhost' })
-  )
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now(), host }))
 }
 function releaseLock(): void {
   try {
@@ -94,9 +103,7 @@ function releaseLock(): void {
 }
 acquireLock()
 
-const bus = createEventBus(dataDir)
-
-const { shutdown } = bootstrapServer({ app, server, wss, bus, dataDir })
+const { shutdown } = bootstrapServer({ app, server, wss, bus, dataDir, configStore })
 
 function shutdownWithLock() {
   try {

@@ -45,9 +45,9 @@ function createChatDraftStore(dataDir: string) {
   }
 }
 
-export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, dataDir?: string): Router {
+export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, dataDir: string): Router {
   const router = Router()
-  const draftStore = createChatDraftStore(dataDir || process.env.SOVEREIGN_DATA_DIR || '.data')
+  const draftStore = createChatDraftStore(dataDir)
 
   router.get('/api/chat/status', (_req, res) => {
     res.json({ status: backend.status() })
