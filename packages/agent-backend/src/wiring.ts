@@ -6,6 +6,7 @@ import type { EventBus, AgentBackendKind } from '@sovereign/core'
 import { createBackend } from './factory.js'
 import { routingAsBackend } from './routing-as-backend.js'
 import { createSessionsRegistry } from '@sovereign/primitives'
+import { createActiveSessions, type ActiveSessions } from './active-sessions.js'
 import {
   createClaudeCodeBackend,
   claudeCodeConfigFromEnv,
@@ -46,6 +47,7 @@ export interface AgentBackendWiringResult {
   openClawBackend: OpenClawBackend | undefined
   claudeCodeBackend: ClaudeCodeBackend | undefined
   sessionsRegistry: SessionsRegistry
+  activeSessions: ActiveSessions
   sovereignMcpServer: import('@anthropic-ai/claude-agent-sdk').McpSdkServerConfigWithInstance
   /** Creates a fresh McpServer instance bound to the same live deps — use for per-session HTTP transport. */
   createSovereignMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
@@ -93,6 +95,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   let routingBackend!: RoutingBackend
 
   const sessionsRegistry = createSessionsRegistry(dataDir)
+  const activeSessions = createActiveSessions({ dataDir })
   const sharedMcpDeps = buildSovereignMcpDeps({
     bus,
     routing: new Proxy({} as any, { get: (_t, p) => (routingBackend as any)[p as any] }),
@@ -140,7 +143,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               }
             }
           },
-          toolPolicy: makeToolPolicy(orgManager)
+          toolPolicy: makeToolPolicy(orgManager),
+          activeSessions
         })
         claudeCodeBackend = cc
         return cc
@@ -159,6 +163,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     openClawBackend,
     claudeCodeBackend,
     sessionsRegistry,
+    activeSessions,
     sovereignMcpServer,
     createSovereignMcpInstance: () => createSovereignMcpServer(sharedMcpDeps).instance
   }
