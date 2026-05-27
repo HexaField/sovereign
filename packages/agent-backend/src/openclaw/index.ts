@@ -3,7 +3,7 @@
 export { createOpenClawBackend } from './openclaw.js'
 export type { OpenClawBackend } from './openclaw.js'
 export type { OpenClawConfig, ReconnectConfig, DeviceIdentity } from './types.js'
-export { openClawConfigFromEnv } from './env-config.js'
+export { openClawConfigFromStore } from './config.js'
 export { defaultOpenClawPaths, type OpenClawPaths } from './session-reader.js'
 export { restartOpenClawGateway } from './restart-service.js'
 export {

@@ -8,10 +8,16 @@ import { buildTree } from './tree.js'
 
 type ProjectResolver = (project: string) => string
 
+export interface FileRouterOptions {
+  /** Default cwd used to enumerate workspace files for the `/workspace` endpoints. */
+  workspaceRoot?: string
+}
+
 export function createFileRouter(
   fileService: FileService,
   authMiddleware?: RequestHandler,
-  resolveProject?: ProjectResolver
+  resolveProject?: ProjectResolver,
+  options: FileRouterOptions = {}
 ): Router {
   const router = Router()
 
@@ -53,7 +59,7 @@ export function createFileRouter(
   }
 
   // GET /api/files/workspace — list workspace files for file chip resolution.
-  const sovereignWorkspace = (process.env.SOVEREIGN_WORKSPACE || '').trim()
+  const sovereignWorkspace = (options.workspaceRoot ?? '').trim()
   router.get('/workspace', (async (_req, res) => {
     if (!sovereignWorkspace) {
       res.json({ entries: [] })

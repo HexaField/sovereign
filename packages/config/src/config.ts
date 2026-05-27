@@ -8,6 +8,7 @@ import { defaults } from './defaults.js'
 import { schema, validate } from './schema.js'
 import { resolveEnvOverrides } from './env.js'
 import { createHistory } from './history.js'
+import { createSecretsStore, SECRET_MASK } from './secrets.js'
 
 function deepClone<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj))
@@ -81,14 +82,36 @@ function diffPaths(
   return changes
 }
 
+/** Per resolved decision in config-consolidation-spec §7: one config profile per dataDir. */
+function rejectProfileSiblings(dataDir: string): void {
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(dataDir)
+  } catch {
+    return
+  }
+  const siblings = entries.filter((f) => /^config\.[^.]+\.json$/.test(f) && f !== 'config.json')
+  if (siblings.length > 0) {
+    throw new Error(
+      `[config] refusing to start: found ${siblings.length} profile sibling(s) in ${dataDir}: ` +
+        `${siblings.join(', ')}. One config profile per dataDir is enforced — ` +
+        `use a different SOVEREIGN_DATA_DIR for each environment instead. ` +
+        `See plans/config-consolidation-spec.md §7.`
+    )
+  }
+}
+
 export function createConfigStore(bus: EventBus, dataDir: string): ConfigStore {
+  fs.mkdirSync(dataDir, { recursive: true })
+  rejectProfileSiblings(dataDir)
+
   const configPath = path.join(dataDir, 'config.json')
   const history = createHistory(dataDir)
+  const secrets = createSecretsStore(dataDir)
   const changeHandlers = new Map<string, Set<(change: ConfigChange) => void>>()
 
   // Load file config
   let fileConfig: Record<string, unknown> = {}
-  fs.mkdirSync(dataDir, { recursive: true })
   if (fs.existsSync(configPath)) {
     try {
       fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
@@ -97,7 +120,7 @@ export function createConfigStore(bus: EventBus, dataDir: string): ConfigStore {
     }
   }
 
-  // Merge: defaults + file + env
+  // Merge: defaults + file + env (env layered last; never written to disk)
   const envOverrides = resolveEnvOverrides()
   let config = deepMerge(
     deepMerge(deepClone(defaults) as unknown as Record<string, unknown>, fileConfig),
@@ -107,7 +130,7 @@ export function createConfigStore(bus: EventBus, dataDir: string): ConfigStore {
   // Validate on startup
   const startupValidation = validate(config)
   if (!startupValidation.valid) {
-    // Fall back to defaults
+    console.warn('[config] startup validation failed, falling back to defaults:', startupValidation.errors.join('; '))
     config = deepClone(defaults)
   }
 
@@ -156,6 +179,13 @@ export function createConfigStore(bus: EventBus, dataDir: string): ConfigStore {
     get<T = unknown>(dotPath?: string): T {
       if (!dotPath) return deepClone(config) as T
       return deepClone(getByPath(config, dotPath)) as T
+    },
+
+    getPublic() {
+      return {
+        identity: deepClone(config.identity),
+        models: deepClone(config.models)
+      }
     },
 
     set(dotPath: string, value: unknown) {
@@ -244,6 +274,23 @@ export function createConfigStore(bus: EventBus, dataDir: string): ConfigStore {
       return () => {
         changeHandlers.get(pathPattern)?.delete(handler)
       }
+    },
+
+    getSecret(key: string): string {
+      return secrets.get(key)
+    },
+
+    setSecret(key: string, value: string): void {
+      const had = secrets.has(key)
+      secrets.set(key, value)
+      // History records the fact, not the value (per spec §5).
+      emitChange({
+        timestamp: new Date().toISOString(),
+        path: `secrets.${key}`,
+        oldValue: had ? SECRET_MASK : undefined,
+        newValue: value === '' ? undefined : SECRET_MASK,
+        source: 'api'
+      })
     },
 
     status(): ModuleStatus {

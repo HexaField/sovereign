@@ -53,6 +53,8 @@ export interface SystemModuleOptions {
   healthIntervalMs?: number
   wsHandler?: WsHandler
   getAgentBackendStatus?: () => string
+  /** Optional accessor for the curated models list + default. Falls back to {models:[], defaultModel:null}. */
+  getModelConfig?: () => { models: string[]; defaultModel: string | null }
 }
 
 let cachedDiskUsage = { used: 0, total: 0 }
@@ -130,10 +132,7 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
 
   const getArchitecture = (): ArchitectureData => ({
     modules: [...registeredModules],
-    config: {
-      models: (process.env.SOVEREIGN_MODELS ?? '').split(',').filter(Boolean),
-      defaultModel: process.env.SOVEREIGN_DEFAULT_MODEL ?? null
-    },
+    config: options?.getModelConfig?.() ?? { models: [], defaultModel: null },
     sessions: { total: 0, byKind: {} },
     cron: { jobs: [] },
     skills: { entries: [], total: 0, enabled: 0 },

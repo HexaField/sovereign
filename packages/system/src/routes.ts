@@ -23,6 +23,8 @@ export interface SystemRoutesOptions {
   eventStream?: EventStream
   /** Used by event-stream retry to re-emit events on the bus. */
   bus?: EventBus
+  /** Identity accessor — overrides the static default for /api/system/identity. */
+  getIdentity?: () => { agentName: string; agentIcon: string }
 }
 
 function mockContextBudget(): ContextBudget {
@@ -55,11 +57,13 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   const activeSessions = 'activeSessions' in opts ? (opts as SystemRoutesOptions).activeSessions : null
   let restartInFlight: Promise<{ message: string; command?: string }> | null = null
 
+  const getIdentity = 'getIdentity' in opts ? (opts as SystemRoutesOptions).getIdentity : null
   router.get('/api/system/identity', (_req, res) => {
-    res.json({
-      agentName: process.env.SOVEREIGN_AGENT_NAME || 'Sovereign',
-      agentIcon: process.env.SOVEREIGN_AGENT_ICON || '⬡'
-    })
+    if (getIdentity) {
+      res.json(getIdentity())
+      return
+    }
+    res.json({ agentName: 'Sovereign', agentIcon: '⬡' })
   })
 
   router.get('/api/system/architecture', (_req, res) => {
