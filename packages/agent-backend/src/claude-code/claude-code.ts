@@ -166,6 +166,17 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     subagentToParent: new Map()
   }
 
+  // Reverse index from the SDK's session_id (backendSessionId) to our session
+  // state. Every SDK hook input carries `session_id` — using this map to
+  // resolve the owning session is race-free, unlike the legacy `activeSessionKey`
+  // global which gets overwritten by every concurrent iterator iteration. Two
+  // sessions running concurrently (e.g. cron-driven thread fires while you're
+  // chatting in another) would otherwise see hook emissions cross-attributed.
+  const sessionsByBackendId = new Map<string, ClaudeSessionState>()
+  function indexSession(state: ClaudeSessionState): void {
+    sessionsByBackendId.set(state.backendSessionId, state)
+  }
+
   const home = process.env.HOME ?? ''
   const agentDir = config.agentDir ?? defaultAgentDir(home)
   const cwd = config.cwd ?? process.cwd()
@@ -214,6 +225,11 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     label: 'active-session-pointer'
   })
 
+  // ⚠️ `activeSessionKey` is the "last session whose iterator delivered a
+  // message" pointer, used **only** as a hint for the MCP layer (which has no
+  // session_id in its callback context). It is NOT safe for hook attribution
+  // — concurrent sessions stomp on each other. Every SDK hook reads
+  // `input.session_id` via `stateForHook` instead.
   let activeSessionKey: string | undefined = activeKeyFile.read() ?? undefined
 
   function setActiveSessionKey(key: string | undefined): void {
@@ -241,7 +257,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
 
   function rehydrate(): void {
     for (const { key, value } of sessionStateStore.entries()) {
-      internal.sessions.set(key, {
+      const state: ClaudeSessionState = {
         sessionKey: key,
         backendSessionId: value.backendSessionId,
         cwd: value.cwd,
@@ -255,7 +271,9 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         textAccum: value.textAccum,
         lastUsage: value.lastUsage,
         sessionFile: value.sessionFile
-      })
+      }
+      internal.sessions.set(key, state)
+      indexSession(state)
       if (value.parentSessionKey) internal.subagentToParent.set(value.backendSessionId, value.parentSessionKey)
     }
   }
@@ -402,6 +420,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       sessionFile
     }
     internal.sessions.set(opts.sessionKey, state)
+    indexSession(state)
     return state
   }
 
@@ -424,11 +443,21 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     return existing?.orgId
   }
 
+  /** Resolve the session that owns a hook firing. Every `HookInput` carries
+   * `session_id` (the SDK's backend UUID) — using this map is race-free,
+   * unlike reading the legacy `activeSessionKey` global which gets stomped
+   * by every concurrent iterator iteration. */
+  function stateForHook(input: HookInput): ClaudeSessionState | undefined {
+    const sid = (input as { session_id?: string }).session_id
+    if (!sid) return undefined
+    return sessionsByBackendId.get(sid)
+  }
+
   function buildHooks(): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
     const onSessionStart = async (input: HookInput) => {
       if (input.hook_event_name !== 'SessionStart') return { continue: true }
-      const sessionKey = activeSessionKey
-      if (sessionKey) emitter.emit('chat.status', { sessionKey, status: 'idle' })
+      const state = stateForHook(input)
+      if (state) emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
       return { continue: true }
     }
     const onUserPromptSubmit = async (_input: HookInput) => {
@@ -438,6 +467,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     const onPreToolUse = async (input: HookInput) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true }
       const inp = input as Extract<HookInput, { hook_event_name: 'PreToolUse' }>
+      const state = stateForHook(input)
 
       // Redirect SDK built-in scheduling tools to Sovereign equivalents.
       // Runs before the toolPolicy check so the redirect applies regardless
@@ -446,7 +476,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       // doesn't have to guess it (mcp__sovereign__cron_create requires it).
       if (WAKEUP_TOOLS.has(inp.tool_name)) {
         const target = WAKEUP_REDIRECT[inp.tool_name]
-        const sk = activeSessionKey ?? ''
+        const sk = state?.sessionKey ?? ''
         const threadKeyHint = sk ? ` Pass threadKey="${sk}" so the wakeup fires back into THIS thread.` : ''
         return {
           continue: true,
@@ -462,12 +492,11 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         }
       }
 
-      const sessionKey = activeSessionKey
       const policy = deps.toolPolicy
-      if (!sessionKey || !policy) return { continue: true }
-      const orgId = lookupSessionOrgId(sessionKey)
+      if (!state || !policy) return { continue: true }
+      const orgId = lookupSessionOrgId(state.sessionKey)
       const decision = await policy({
-        sessionKey,
+        sessionKey: state.sessionKey,
         toolName: inp.tool_name,
         toolInput: inp.tool_input,
         orgId
@@ -495,16 +524,15 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       return { continue: true }
     }
     const onPostToolUse = async (input: HookInput) => {
-      const sessionKey = activeSessionKey
-      if (!sessionKey || input.hook_event_name !== 'PostToolUse') return { continue: true }
-      const state = internal.sessions.get(sessionKey)
+      if (input.hook_event_name !== 'PostToolUse') return { continue: true }
+      const state = stateForHook(input)
       if (!state) return { continue: true }
       const inp = input as Extract<HookInput, { hook_event_name: 'PostToolUse' }>
 
       const outputStr =
         typeof inp.tool_response === 'string' ? inp.tool_response : JSON.stringify(inp.tool_response ?? '')
       emitter.emit('chat.work', {
-        sessionKey,
+        sessionKey: state.sessionKey,
         work: {
           type: 'tool_result',
           name: inp.tool_name,
@@ -516,11 +544,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       return { continue: true }
     }
     const onPostToolUseFailure = async (input: HookInput) => {
-      const sessionKey = activeSessionKey
-      if (!sessionKey || input.hook_event_name !== 'PostToolUseFailure') return { continue: true }
+      if (input.hook_event_name !== 'PostToolUseFailure') return { continue: true }
+      const state = stateForHook(input)
+      if (!state) return { continue: true }
       const inp = input as any
       emitter.emit('chat.work', {
-        sessionKey,
+        sessionKey: state.sessionKey,
         work: {
           type: 'tool_result',
           name: inp.tool_name,
@@ -533,8 +562,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     }
     const onSubagentStart = async (input: HookInput) => {
       if (input.hook_event_name !== 'SubagentStart') return { continue: true }
-      const parentKey = activeSessionKey
-      if (!parentKey) return { continue: true }
+      // SubagentStart's `input.session_id` is the parent's session id (the SDK
+      // fires the hook from the parent's context). The new subagent's id is on
+      // `inp.agent_id`.
+      const parent = stateForHook(input)
+      if (!parent) return { continue: true }
+      const parentKey = parent.sessionKey
       const inp = input as Extract<HookInput, { hook_event_name: 'SubagentStart' }>
       const childKey = `${SUBAGENT_SESSION_PREFIX}${inp.agent_id}`
       internal.subagentToParent.set(inp.agent_id, parentKey)
@@ -557,14 +590,16 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         task: inp.agent_type,
         label: inp.agent_type
       })
-      const parent = internal.sessions.get(parentKey)
-      parent?.liveSubagents.add(inp.agent_id)
+      parent.liveSubagents.add(inp.agent_id)
       return { continue: true }
     }
     const onSubagentStop = async (input: HookInput) => {
       if (input.hook_event_name !== 'SubagentStop') return { continue: true }
       const inp = input as Extract<HookInput, { hook_event_name: 'SubagentStop' }>
-      const parentKey = internal.subagentToParent.get(inp.agent_id) ?? activeSessionKey
+      // Prefer the recorded parent (set by SubagentStart) — that's authoritative
+      // even after this adapter restarts. Fall back to the hook's own
+      // session_id, which the SDK fires from the parent's context.
+      const parentKey = internal.subagentToParent.get(inp.agent_id) ?? stateForHook(input)?.sessionKey
       if (!parentKey) return { continue: true }
       const childKey = `${SUBAGENT_SESSION_PREFIX}${inp.agent_id}`
       const parent = internal.sessions.get(parentKey)
@@ -578,32 +613,34 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       return { continue: true }
     }
     const onPreCompact = async (input: HookInput) => {
-      const sessionKey = activeSessionKey
-      if (!sessionKey || input.hook_event_name !== 'PreCompact') return { continue: true }
-      emitter.emit('chat.compacting', { sessionKey, active: true })
+      if (input.hook_event_name !== 'PreCompact') return { continue: true }
+      const state = stateForHook(input)
+      if (!state) return { continue: true }
+      emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: true })
       return { continue: true }
     }
     const onPostCompact = async (input: HookInput) => {
-      const sessionKey = activeSessionKey
-      if (!sessionKey || input.hook_event_name !== 'PostCompact') return { continue: true }
-      emitter.emit('chat.compacting', { sessionKey, active: false })
+      if (input.hook_event_name !== 'PostCompact') return { continue: true }
+      const state = stateForHook(input)
+      if (!state) return { continue: true }
+      emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: false })
       return { continue: true }
     }
     const onStop = async (input: HookInput) => {
-      const sessionKey = activeSessionKey
-      if (!sessionKey || input.hook_event_name !== 'Stop') return { continue: true }
-      const state = internal.sessions.get(sessionKey)
-      if (state && state.agentStatus !== 'idle') {
+      if (input.hook_event_name !== 'Stop') return { continue: true }
+      const state = stateForHook(input)
+      if (!state) return { continue: true }
+      if (state.agentStatus !== 'idle') {
         state.agentStatus = 'idle'
-        emitter.emit('chat.status', { sessionKey, status: 'idle' })
+        emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
       }
       return { continue: true }
     }
     const onNotification = async (_input: HookInput) => ({ continue: true })
     const onSessionEnd = async (input: HookInput) => {
       if (input.hook_event_name !== 'SessionEnd') return { continue: true }
-      const sessionKey = activeSessionKey
-      if (sessionKey) emitter.emit('chat.status', { sessionKey, status: 'idle' })
+      const state = stateForHook(input)
+      if (state) emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
       return { continue: true }
     }
 

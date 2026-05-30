@@ -4,6 +4,7 @@ import {
   formatDateSeparator,
   isEmptyState,
   isNearBottom,
+  shouldAutoScrollOnNewContent,
   SCROLL_THRESHOLD,
   ChatView
 } from './ChatView.js'
@@ -47,6 +48,84 @@ describe('§4.1 ChatView', () => {
     it('uses double-requestAnimationFrame for scroll-after-render to ensure DOM layout is complete', () => {
       // DOM behavior - verify threshold constant exists
       expect(SCROLL_THRESHOLD).toBe(80)
+    })
+  })
+
+  describe('auto-scroll gating (follow-bottom behaviour)', () => {
+    it('shouldAutoScrollOnNewContent returns true when user is anchored at the bottom', () => {
+      expect(shouldAutoScrollOnNewContent(true)).toBe(true)
+    })
+
+    it('shouldAutoScrollOnNewContent returns false when user has scrolled up', () => {
+      expect(shouldAutoScrollOnNewContent(false)).toBe(false)
+    })
+
+    it('auto-scrolls when user is at bottom and new content arrives', () => {
+      // User at bottom: scrollTop=900, scrollHeight=1000, clientHeight=100 → distance 0
+      const followBottom = isNearBottom(900, 1000, 100)
+      expect(followBottom).toBe(true)
+      expect(shouldAutoScrollOnNewContent(followBottom)).toBe(true)
+    })
+
+    it('preserves scroll position when user has scrolled up and new content arrives', () => {
+      // User scrolled to top of a 1000px container → not near bottom
+      const followBottom = isNearBottom(0, 1000, 100)
+      expect(followBottom).toBe(false)
+      expect(shouldAutoScrollOnNewContent(followBottom)).toBe(false)
+    })
+
+    it('keeps following bottom across a stream of tool calls', () => {
+      // Simulate sequence: user at bottom → tool call lands (content grows but
+      // we scroll to bottom programmatically) → tool result lands → still at
+      // bottom. The programmatic scroll keeps followBottom = true via
+      // self-consistent recompute against the post-scroll state.
+      let followBottom = isNearBottom(900, 1000, 100) // initial: at bottom
+      expect(followBottom).toBe(true)
+
+      // Content grew to 1200 (new tool call rendered); programmatic scroll
+      // landed us at scrollTop = 1100 (bottom). Recompute.
+      followBottom = isNearBottom(1100, 1200, 100)
+      expect(followBottom).toBe(true)
+
+      // Another result lands, content grows to 1400, scrolled to 1300.
+      followBottom = isNearBottom(1300, 1400, 100)
+      expect(followBottom).toBe(true)
+      expect(shouldAutoScrollOnNewContent(followBottom)).toBe(true)
+    })
+
+    it('does not chase new tool calls after the user scrolls up to read history', () => {
+      // User scrolls from bottom up by 500px on a 1000px container.
+      // scrollTop=400, scrollHeight=1000, clientHeight=100 → distance=500 > 80
+      let followBottom = isNearBottom(400, 1000, 100)
+      expect(followBottom).toBe(false)
+      expect(shouldAutoScrollOnNewContent(followBottom)).toBe(false)
+
+      // Two more tool calls arrive (content grows to 1400) while user reads.
+      // Their scrollTop hasn't changed (still 400), only scrollHeight grew.
+      // Distance is now even larger; still not near bottom.
+      followBottom = isNearBottom(400, 1400, 100)
+      expect(followBottom).toBe(false)
+      expect(shouldAutoScrollOnNewContent(followBottom)).toBe(false)
+    })
+
+    it('resumes auto-scroll when the user scrolls back to within the threshold', () => {
+      // User had scrolled up...
+      let followBottom = isNearBottom(200, 1000, 100)
+      expect(followBottom).toBe(false)
+
+      // ...then scrolled back to within 80px of the bottom (scrollTop=830,
+      // distance=1000-830-100=70).
+      followBottom = isNearBottom(830, 1000, 100)
+      expect(followBottom).toBe(true)
+      expect(shouldAutoScrollOnNewContent(followBottom)).toBe(true)
+    })
+
+    it('loading older messages does not trigger an auto-scroll', () => {
+      // User clicks "load older messages" → scrollHeight grows from the top,
+      // scrollTop stays at 0 (or wherever). Not near bottom → no auto-scroll.
+      const followBottom = isNearBottom(0, 3000, 100)
+      expect(followBottom).toBe(false)
+      expect(shouldAutoScrollOnNewContent(followBottom)).toBe(false)
     })
   })
 
