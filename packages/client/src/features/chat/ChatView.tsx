@@ -149,8 +149,21 @@ export function isNearBottom(scrollTop: number, scrollHeight: number, clientHeig
   return scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD
 }
 
+/** Policy: should new content trigger an auto-scroll, given the user's current
+ *  follow-bottom state? Extracted as a pure function so the policy is testable
+ *  without a DOM. The full rule: scroll iff the user was anchored at (or near)
+ *  the bottom *before* the new content arrived. */
+export function shouldAutoScrollOnNewContent(followBottom: boolean): boolean {
+  return followBottom
+}
+
 export function ChatView(props: ChatViewProps) {
   let scrollRef!: HTMLDivElement
+
+  // Whether the user is currently anchored at the bottom of the scroll
+  // container. Drives the gate in the auto-scroll effect below. Defaults to
+  // true so first-render content always scrolls into view.
+  const [followBottom, setFollowBottom] = createSignal(true)
 
   const scrollToBottom = () => {
     if (scrollRef) {
@@ -158,7 +171,26 @@ export function ChatView(props: ChatViewProps) {
     }
   }
 
-  // Auto-scroll when messages or live state changes
+  // Every scroll event (user-initiated OR programmatic) recomputes whether
+  // we're anchored at the bottom. A programmatic `scrollToBottom` ends at the
+  // bottom, so this stays self-consistently in follow mode. A manual scroll
+  // up past the threshold flips followBottom to false and pauses auto-scroll.
+  const onScroll = () => {
+    if (!scrollRef) return
+    setFollowBottom(isNearBottom(scrollRef.scrollTop, scrollRef.scrollHeight, scrollRef.clientHeight))
+  }
+
+  // Reset to follow-bottom when the active thread changes — opening a thread
+  // should land at the latest message regardless of where the previous thread's
+  // scroll was.
+  createEffect(() => {
+    props.threadKey
+    setFollowBottom(true)
+  })
+
+  // Auto-scroll when messages or live state changes — but only if the user is
+  // currently anchored at the bottom. This preserves the scroll position when
+  // the user has scrolled up to read an earlier message.
   createEffect(() => {
     props.messages.length
     const last = props.messages[props.messages.length - 1]
@@ -170,6 +202,7 @@ export function ChatView(props: ChatViewProps) {
     liveWork().length
     streamingText()
     serverQueue().length
+    if (!shouldAutoScrollOnNewContent(followBottom())) return
     // Double-RAF to ensure DOM has rendered (especially for large history loads)
     requestAnimationFrame(() => requestAnimationFrame(scrollToBottom))
   })
@@ -179,6 +212,7 @@ export function ChatView(props: ChatViewProps) {
       {/* Message list */}
       <div
         ref={scrollRef}
+        onScroll={onScroll}
         class="flex flex-1 flex-col gap-4 overflow-y-auto p-5"
         tabindex="0"
         style={{ outline: 'none' }}
