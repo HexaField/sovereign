@@ -154,6 +154,118 @@ describe('claude-code/createClaudeCodeBackend', () => {
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain('mcp__sovereign__cron_create')
   })
 
+  // ── Regression: tool_result must be emitted EXACTLY ONCE per tool ──
+  // Previously, both the PostToolUse SDK hook AND handleSdkUserMessage
+  // (responding to the SDK's user-role tool_result echo) emitted
+  // chat.work tool_result for the same tool_use_id. Live state in
+  // production showed `tool_call: 11, tool_result: 22` — every tool
+  // ended up with a JSON-wrapped duplicate and a plain-text duplicate,
+  // the latter rendering as an orphan row beneath the tool card and
+  // visibly inflating the work list. The fix drops the PostToolUse
+  // hook's chat.work emission and lets the user-role echo path
+  // (handleSdkUserMessage in events.ts, which uses contentToOutputStr
+  // for clean text + image handling) be the single source of truth.
+  // PostToolUseFailure is left untouched as the safety net for the
+  // failure path where the SDK does not consistently echo tool_results.
+  it('emits exactly ONE chat.work tool_result per successful tool execution', async () => {
+    let capturedHooks: any = null
+    const toolUseId = 'toolu_test_dedup_xyz'
+    // Script the SDK to emit the same sequence a real Bash tool round trip
+    // produces: assistant message with a tool_use block, then a user-role
+    // message echoing the tool_result, then the terminal result.
+    const sdk: any = (args: any) => {
+      capturedHooks = args.options?.hooks
+      const messages = [
+        {
+          type: 'assistant',
+          parent_tool_use_id: null,
+          message: {
+            content: [{ type: 'tool_use', id: toolUseId, name: 'Bash', input: { command: 'echo hi' } }]
+          }
+        },
+        {
+          type: 'user',
+          parent_tool_use_id: null,
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'hi\n' }]
+          }
+        },
+        { type: 'result', subtype: 'success', result: '', usage: {} }
+      ]
+      return Object.assign(
+        (async function* () {
+          for (const m of messages) yield m
+        })(),
+        {
+          interrupt: async () => {},
+          setPermissionMode: async () => {},
+          setModel: async () => {},
+          setMaxTurns: async () => {},
+          setMaxThinkingTokens: async () => {},
+          mcpServerStatus: async () => [],
+          supportedCommands: async () => [],
+          supportedModels: async () => [],
+          close: () => {}
+        }
+      )
+    }
+
+    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: sdk })
+    const work: any[] = []
+    backend.on('chat.work', (d) => work.push(d.work))
+
+    const sessionKey = await backend.createSession('t', { threadKey: 'dedup-test' })
+    await backend.sendMessage(sessionKey, 'go')
+    // Drain the SDK iterator
+    await new Promise((r) => setTimeout(r, 20))
+
+    // The PostToolUse hook ALSO fires in real production (out-of-band
+    // with the iterator). Invoke it explicitly with the same tool_use_id
+    // to simulate the dual-firing scenario. With the fix this is a
+    // no-op; without the fix it would push a second tool_result.
+    expect(capturedHooks).not.toBeNull()
+    const postToolUse = capturedHooks.PostToolUse[0].hooks[0]
+    // Grab the SDK session id we used so stateForHook resolves.
+    // It's the backendSessionId Sovereign minted for this thread.
+    const meta = await backend.getSessionMeta(sessionKey)
+    // We can't easily fish session_id out from outside, but the hook is
+    // wired through stateForHook(input) which reads input.session_id.
+    // sendMessage above already ran the iterator with the SDK's options
+    // — the hooks closure captured the real session lookup, so we feed
+    // it the same backendSessionId by reading from getSessionFilePath.
+    const sessionFile = backend.getSessionFilePath!(sessionKey) ?? ''
+    const backendSessionId =
+      sessionFile
+        .split('/')
+        .pop()
+        ?.replace(/\.jsonl$/, '') ?? ''
+    expect(backendSessionId).not.toBe('')
+    await postToolUse({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_response: { stdout: 'hi\n', stderr: '', interrupted: false, isImage: false },
+      tool_use_id: toolUseId,
+      session_id: backendSessionId
+    })
+
+    // Tally tool_results for this tool_use_id. The fix asserts ONE.
+    const resultsForTool = work.filter((w) => w.type === 'tool_result' && w.toolCallId === toolUseId)
+    expect(resultsForTool).toHaveLength(1)
+    // And the surviving emission must be the clean handleSdkUserMessage
+    // output (plain text), not the JSON-wrapped PostToolUse one.
+    expect(resultsForTool[0].output).toBe('hi\n')
+    // The defunct PostToolUse path used to set `name: 'Bash'` on the
+    // tool_result; the canonical path leaves name unset (the UI looks
+    // up the name via toolCallId pairing). If a stale name shows up
+    // here it means the dropped path is still firing.
+    expect(resultsForTool[0].name).toBeUndefined()
+
+    // Sanity: getSessionMeta returned something so the test exercised
+    // the full plumbing (drains the iterator etc).
+    void meta
+  })
+
   it('PreToolUse denies CronList with a redirect to sovereign.cron_list', async () => {
     let capturedHooks: any = null
     const sdkQuery: any = (args: any) => {
