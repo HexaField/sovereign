@@ -94,28 +94,64 @@ function setIdle(state: ClaudeSessionState, emitter: BackendEmitter) {
 }
 
 /**
+ * True iff a Claude Agent SDK message originated inside a subagent. Per
+ * @anthropic-ai/claude-agent-sdk SDKAssistantMessage / SDKUserMessage:
+ * every message emitted from a subagent carries `parent_tool_use_id`
+ * set to the spawning tool's id (`null` for the main thread).
+ *
+ * The SDK forwards subagent tool_use / tool_result blocks to the parent
+ * stream by default (forwardSubagentText:false) — enough for a heartbeat
+ * counter — and with forwardSubagentText:true it also forwards text and
+ * thinking. NONE of these belong on the parent's chat.stream / chat.work
+ * / chat.turn surface: they would render the child's tool calls in the
+ * parent's collapsible tool list and (under forwardSubagentText:true)
+ * splice the child's narration into the parent's final assistant bubble.
+ *
+ * The subagent's own activity surfaces independently via the
+ * SubagentStart / SubagentStop hooks (see claude-code.ts) which feed the
+ * subagent.* bus events and the SubagentCard UI.
+ */
+function isSubagentMessage(msg: any): boolean {
+  return msg?.parent_tool_use_id != null
+}
+
+/**
  * Handle a full (non-partial) assistant message — emits incremental
  * `chat.stream` (relative to whatever we'd already streamed), tool_call work
  * items, and accumulates thinking. The final turn is emitted by `handleResult`.
  */
 export function handleAssistantMessage(msg: any, state: ClaudeSessionState, emitter: BackendEmitter): void {
+  if (isSubagentMessage(msg)) return
   setWorking(state, emitter)
   const blocks = blocksOf(msg.message)
   const text = stripThinkingBlocks(joinText(blocks))
-  if (text.length > state.streamLastLength) {
-    const delta = text.slice(state.streamLastLength)
-    state.streamLastLength = text.length
-    if (delta) emitter.emit('chat.stream', { sessionKey: state.sessionKey, text: delta })
-  }
-  // Record this message's text fragment for round-content reconstruction.
-  // SDK assistant messages between tool calls each carry their own text;
-  // the SDK's terminal `result` only includes the final fragment, so we
-  // need to keep them ourselves to match what the JSONL parser produces
-  // on reload (see [parse-turns.ts](../../../primitives/src/parse-turns.ts)).
+  // Each SDKAssistantMessage carries its own complete text — NOT a
+  // cumulative running buffer — because we run with
+  // `includePartialMessages:false` (see claude-code.ts startSessionLoop).
+  // The previous logic compared `text.length` against a streamLastLength
+  // that persisted across messages within a round, which produced
+  // wrong-tail deltas when a later message's text was longer than an
+  // earlier one and missed emissions when shorter. Dedup the message by
+  // string match against the last accumulated fragment instead — that
+  // both prevents duplicates on resume / redelivery and keeps every
+  // delta a clean self-contained fragment.
   const trimmed = text.trim()
-  if (trimmed && state.textAccum[state.textAccum.length - 1] !== trimmed) {
-    state.textAccum.push(trimmed)
+  if (trimmed) {
+    const lastFragment = state.textAccum[state.textAccum.length - 1]
+    if (lastFragment !== trimmed) {
+      // \n\n separator between rounds of intermediate narration so the
+      // streaming view matches the joined chat.turn content reconstructed
+      // from textAccum in handleResult.
+      const prefix = state.textAccum.length === 0 ? '' : '\n\n'
+      emitter.emit('chat.stream', { sessionKey: state.sessionKey, text: prefix + text })
+      state.textAccum.push(trimmed)
+    }
   }
+  // Keep streamLastLength updated for any downstream code that might
+  // still read it (write-through persistence schema, telemetry) — but
+  // never use it as a gate. Set to the cumulative joined-length of what
+  // we've emitted so post-restart resume keeps a sensible snapshot.
+  state.streamLastLength = state.textAccum.join('\n\n').length
   const thinking = joinThinking(blocks)
   if (thinking) {
     if (thinking.length > state.thinkingAccum.length) state.thinkingAccum = thinking
@@ -146,6 +182,7 @@ export function handleAssistantMessage(msg: any, state: ClaudeSessionState, emit
  * results from those blocks.
  */
 export function handleSdkUserMessage(msg: any, state: ClaudeSessionState, emitter: BackendEmitter): void {
+  if (isSubagentMessage(msg)) return
   const blocks = blocksOf(msg.message)
   for (const tr of toolResultBlocks(blocks)) {
     if (!tr.toolCallId) continue
