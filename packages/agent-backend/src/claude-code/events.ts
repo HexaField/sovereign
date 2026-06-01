@@ -81,6 +81,37 @@ function flushThinking(state: ClaudeSessionState, emitter: BackendEmitter) {
   state.thinkingAccum = ''
 }
 
+/**
+ * Move every text fragment we've accumulated so far in this round out of
+ * `textAccum` and emit it as a `chat.work` thinking-style item.
+ *
+ * Called right before we emit a `tool_call` work item: by that point we
+ * know any text seen so far was INTERMEDIATE NARRATION ("Let me check
+ * that file.", "Now let me grep.") preceding a tool call, NOT the final
+ * answer. The final answer is whatever text arrives AFTER all tool
+ * calls in the round and stays in `textAccum` until `handleResult`
+ * builds the `chat.turn` content from it.
+ *
+ * Without this flush, every intermediate narration in a multi-tool
+ * round gets joined into the final agent bubble — visible in
+ * production as a single bubble containing 4+ paragraphs of
+ * "thinking-style" narration glued together where the user expects to
+ * see only the agent's final answer.
+ *
+ * The intermediate narration still renders — but inside the collapsible
+ * WorkSection between tool cards, which is where this content
+ * semantically belongs.
+ */
+function flushTextAccumAsNarration(state: ClaudeSessionState, emitter: BackendEmitter): void {
+  if (state.textAccum.length === 0) return
+  const narration = state.textAccum.join('\n\n')
+  emitter.emit('chat.work', {
+    sessionKey: state.sessionKey,
+    work: { type: 'thinking', output: narration, timestamp: Date.now() } as WorkItem
+  })
+  state.textAccum = []
+}
+
 function setWorking(state: ClaudeSessionState, emitter: BackendEmitter) {
   if (state.agentStatus === 'working') return
   state.agentStatus = 'working'
@@ -162,6 +193,11 @@ export function handleAssistantMessage(msg: any, state: ClaudeSessionState, emit
   }
   for (const tc of toolUseBlocks(blocks)) {
     flushThinking(state, emitter)
+    // Whatever text we've accumulated so far in this round is
+    // intermediate narration before this tool call — move it into the
+    // work section so the final chat.turn doesn't render it as part of
+    // the agent's final answer. See `flushTextAccumAsNarration`.
+    flushTextAccumAsNarration(state, emitter)
     const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input ?? {})
     emitter.emit('chat.work', {
       sessionKey: state.sessionKey,
