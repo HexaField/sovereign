@@ -116,6 +116,27 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
     lastAssistantTs = 0
   }
 
+  /**
+   * Move every text fragment we've accumulated so far in the round out
+   * of `currentAssistantTexts` and into a `currentWork` thinking-style
+   * item. Called right before pushing a `tool_call` work item — by
+   * which point any text seen so far was intermediate narration before
+   * the tool call, NOT the final answer.
+   *
+   * Mirror of `flushTextAccumAsNarration` on the live-event path
+   * (see packages/agent-backend/src/claude-code/events.ts). Required for
+   * history reloads (re-parsing JSONL) to produce the same visual layout
+   * as live streaming — intermediate narration in the collapsible work
+   * section, final answer as the bubble's `content`.
+   */
+  function flushAssistantTextsAsNarration(ts: number): void {
+    if (currentAssistantTexts.length === 0) return
+    const narration = currentAssistantTexts.join('\n\n')
+    currentThinking.push(narration)
+    currentWork.push({ type: 'thinking', output: narration, timestamp: ts })
+    currentAssistantTexts = []
+  }
+
   function pushAssistantBlocks(m: any): void {
     lastAssistantTs = m.timestamp ?? lastAssistantTs
     if (typeof m.content === 'string') {
@@ -135,6 +156,7 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
           currentWork.push({ type: 'thinking', output: raw, timestamp: m.timestamp ?? 0 })
         }
       } else if (block.type === 'toolCall') {
+        flushAssistantTextsAsNarration(m.timestamp ?? 0)
         currentWork.push({
           type: 'tool_call',
           name: block.name ?? 'tool',
@@ -143,6 +165,7 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
           timestamp: m.timestamp ?? 0
         })
       } else if (block.type === 'tool_use') {
+        flushAssistantTextsAsNarration(m.timestamp ?? 0)
         currentWork.push({
           type: 'tool_call',
           name: block.name ?? 'tool',

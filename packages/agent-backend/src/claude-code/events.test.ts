@@ -362,24 +362,27 @@ describe('claude-code/events', () => {
         emitter
       )
 
-      // What the user sees streamed, when concatenated, MUST equal what
-      // the final chat.turn renders. Anything else means the streaming
-      // view is silently dropping or corrupting fragments that DO appear
-      // in the final agent bubble (the "thinking-coalesces-into-message"
-      // symptom).
-      const streamConcatenated = stream.join('')
+      // Updated assertion (see the narration-flush test below for the
+      // motivating bug): intermediate text fragments before a tool_use
+      // are MOVED to chat.work as narration items. Only the FINAL text
+      // (after all tools) stays in textAccum and becomes
+      // chat.turn.content. The result: a focused final bubble + the
+      // intermediate "thinking-style" narration in the collapsible work
+      // section.
       const finalContent = turns[turns.length - 1]?.content ?? ''
-      expect(finalContent).toBe('Let me check that.\n\nHere is the answer.')
-      expect(streamConcatenated).toBe(finalContent)
+      expect(finalContent).toBe('Here is the answer.')
 
-      // And no partial-tail garbage like "swer" (text.slice past
-      // streamLastLength) should leak into the stream.
+      // "Let me check that." is flushed as a narration work item before
+      // the Read tool_call.
+      const narration = work
+        .filter((w) => w.type === 'thinking')
+        .map((w) => w.output ?? '')
+        .join(' || ')
+      expect(narration).toContain('Let me check that.')
+
+      // No partial-tail garbage like "swer" leaks into the stream.
       for (const piece of stream) {
         expect(piece.startsWith('swer')).toBe(false)
-        // Each emitted piece is either pure text or a \n\n-prefixed
-        // continuation — never a substring of a fragment.
-        const cleaned = piece.replace(/^\n\n/, '')
-        expect(['Let me check that.', 'Here is the answer.']).toContain(cleaned)
       }
     })
 
@@ -402,6 +405,128 @@ describe('claude-code/events', () => {
 
       expect(stream).toEqual(['Hello world'])
       expect(state.textAccum).toEqual(['Hello world'])
+    })
+
+    // ── REGRESSION: intermediate narration between tool calls MUST
+    // appear in chat.work (the collapsible tool list), NOT coalesced
+    // into the final agent bubble. The previous behaviour joined
+    // every text fragment in a round into one giant final
+    // chat.turn.content, producing a bubble like:
+    //   "Let me check that.\n\nNow let me write the tests.\n\nAll tests
+    //    pass.\n\nHere's the summary..."
+    // — when only the last paragraph should be in the bubble and the
+    // earlier ones belong in the work section between the tool cards.
+    it('flushes intermediate narration to chat.work; final text only in chat.turn', () => {
+      const emitter = createBackendEmitter('claude-code')
+      const stream: string[] = []
+      const work: any[] = []
+      const turns: any[] = []
+      emitter.on('chat.stream', (d) => stream.push(d.text))
+      emitter.on('chat.work', (d) => work.push(d.work))
+      emitter.on('chat.turn', (d) => turns.push(d.turn))
+
+      const state = makeState()
+      state.agentStatus = 'working'
+
+      // text → tool → text → tool → text (final) → result
+      handleAssistantMessage(
+        {
+          type: 'assistant',
+          parent_tool_use_id: null,
+          message: { content: [{ type: 'text', text: 'Let me check that file.' }] }
+        },
+        state,
+        emitter
+      )
+      handleAssistantMessage(
+        {
+          type: 'assistant',
+          parent_tool_use_id: null,
+          message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { path: '/a' } }] }
+        },
+        state,
+        emitter
+      )
+      handleSdkUserMessage(
+        {
+          type: 'user',
+          parent_tool_use_id: null,
+          message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'contents' }] }
+        },
+        state,
+        emitter
+      )
+      handleAssistantMessage(
+        {
+          type: 'assistant',
+          parent_tool_use_id: null,
+          message: { content: [{ type: 'text', text: 'Found it. Let me also grep.' }] }
+        },
+        state,
+        emitter
+      )
+      handleAssistantMessage(
+        {
+          type: 'assistant',
+          parent_tool_use_id: null,
+          message: { content: [{ type: 'tool_use', id: 't2', name: 'Grep', input: { pattern: 'foo' } }] }
+        },
+        state,
+        emitter
+      )
+      handleSdkUserMessage(
+        {
+          type: 'user',
+          parent_tool_use_id: null,
+          message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'match' }] }
+        },
+        state,
+        emitter
+      )
+      handleAssistantMessage(
+        {
+          type: 'assistant',
+          parent_tool_use_id: null,
+          message: { content: [{ type: 'text', text: 'The final answer is 42.' }] }
+        },
+        state,
+        emitter
+      )
+      handleResult({ type: 'result', subtype: 'success', result: 'The final answer is 42.', usage: {} }, state, emitter)
+
+      // Final turn content: ONLY the last text fragment. The intermediate
+      // "Let me check..." and "Found it..." must NOT appear here.
+      const finalTurn = turns[turns.length - 1]
+      expect(finalTurn.content).toBe('The final answer is 42.')
+      expect(finalTurn.content).not.toContain('Let me check')
+      expect(finalTurn.content).not.toContain('Found it')
+
+      // Intermediate narrations live on chat.work as thinking items.
+      const narrations = work
+        .filter((w) => w.type === 'thinking')
+        .map((w) => w.output ?? '')
+        .join(' || ')
+      expect(narrations).toContain('Let me check that file.')
+      expect(narrations).toContain('Found it. Let me also grep.')
+      // The final answer must NOT be in the narration work items.
+      expect(narrations).not.toContain('The final answer is 42.')
+
+      // The narration items must come BEFORE their corresponding
+      // tool_call work item (visual ordering: narration → tool, narration
+      // → tool, …).
+      let sawCheckBeforeReadCall = false
+      for (let i = 0; i < work.length - 1; i++) {
+        if (
+          work[i].type === 'thinking' &&
+          (work[i].output || '').includes('Let me check') &&
+          work[i + 1].type === 'tool_call' &&
+          work[i + 1].name === 'Read'
+        ) {
+          sawCheckBeforeReadCall = true
+          break
+        }
+      }
+      expect(sawCheckBeforeReadCall).toBe(true)
     })
 
     it('thinking blocks NEVER land in textAccum or final content', () => {
