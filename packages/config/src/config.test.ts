@@ -37,8 +37,55 @@ describe('ConfigStore', () => {
       fs.mkdirSync(tmpDir, { recursive: true })
       fs.writeFileSync(path.join(tmpDir, 'config.json'), JSON.stringify({ server: { port: 'bad' } }))
       const store = createConfigStore(bus, tmpDir)
-      // Falls back to defaults on invalid
+      // Invalid port is pruned; default backfills.
       expect(store.get('server.port')).toBe(3001)
+    })
+
+    it('prunes only the invalid keys and keeps the rest of the config', () => {
+      fs.mkdirSync(tmpDir, { recursive: true })
+      // One bad value (port) alongside several valid custom values. A single
+      // stale key must not wipe the whole config back to defaults.
+      fs.writeFileSync(
+        path.join(tmpDir, 'config.json'),
+        JSON.stringify({
+          server: { port: 'bad', host: '127.0.0.1' },
+          terminal: { maxSessions: 42 }
+        })
+      )
+      const store = createConfigStore(bus, tmpDir)
+      expect(store.get('server.port')).toBe(3001) // invalid → default backfill
+      expect(store.get('server.host')).toBe('127.0.0.1') // valid sibling survives
+      expect(store.get('terminal.maxSessions')).toBe(42) // unrelated section survives
+    })
+
+    it('drops an obsolete unknown key (additionalProperties) without losing valid keys', () => {
+      fs.mkdirSync(tmpDir, { recursive: true })
+      // Simulates an OpenClaw-era config: a dead key the new schema rejects,
+      // plus a valid custom value that must be preserved.
+      fs.writeFileSync(
+        path.join(tmpDir, 'config.json'),
+        JSON.stringify({
+          server: { port: 5801 },
+          agentBackend: { default: 'claude-code', openclaw: { gatewayUrl: 'ws://x' } }
+        })
+      )
+      const store = createConfigStore(bus, tmpDir)
+      expect(store.get('server.port')).toBe(5801) // valid custom value kept
+      expect(store.get('agentBackend.default')).toBe('claude-code')
+      const ab = store.get('agentBackend') as Record<string, unknown>
+      expect(ab).not.toHaveProperty('openclaw') // dead key gone
+    })
+
+    it('prunes an invalid enum array item back to the default array', () => {
+      fs.mkdirSync(tmpDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(tmpDir, 'config.json'),
+        JSON.stringify({ server: { port: 5801 }, agentBackend: { enabled: ['openclaw'] } })
+      )
+      const store = createConfigStore(bus, tmpDir)
+      expect(store.get('server.port')).toBe(5801)
+      // The whole invalid array is dropped; defaults restore a coherent value.
+      expect(store.get('agentBackend.enabled')).toEqual(['claude-code'])
     })
 
     it('applies defaults for missing keys', () => {
