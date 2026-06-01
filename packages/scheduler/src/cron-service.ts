@@ -1,19 +1,13 @@
-// Sovereign-native cron orchestration. Combines two sources:
+// Sovereign-native cron orchestration. Jobs are persisted via the existing
+// `Scheduler` (croner-backed, in `scheduler.ts`) and created via
+// `createUserMessageCron`. At fire time the service routes a user-message
+// into the bound thread via
+// `routing.forSession(threadKey).sendMessage(threadKey, …)`.
 //
-// 1. **Sovereign-managed jobs** — persisted via the existing `Scheduler`
-//    (croner-backed, in `scheduler.ts`). Created via `createUserMessageCron`.
-//    At fire time the service routes a user-message into the bound thread
-//    via `routing.forSession(threadKey).sendMessage(threadKey, …)`. Works
-//    identically across OpenClaw, Pi, and Claude Code threads.
-//
-// 2. **Backend-managed jobs** — adapters that expose cron via a CronBridge.
-//    Currently OpenClaw's gateway-side cron bridge; registered via DI at
-//    boot so this module has no dep on any concrete backend.
-//
-// Modules outside this file talk to `CronService`, never directly to a
-// backend's cron RPC or the Scheduler.
+// Modules outside this file talk to `CronService`, never directly to the
+// Scheduler.
 
-import type { EventBus, CronBridge, CronJob, CronRunEntry, BackendRouter } from '@sovereign/core'
+import type { EventBus, CronJob, CronRunEntry, BackendRouter } from '@sovereign/core'
 import type { Job, Schedule } from './types.js'
 import type { Scheduler } from './scheduler.js'
 
@@ -21,7 +15,7 @@ import type { Scheduler } from './scheduler.js'
 // full RoutingBackend (agent-backend's superset interface).
 type RoutingBackend = BackendRouter
 
-export type { CronJob, CronRunEntry, CronBridge } from '@sovereign/core'
+export type { CronJob, CronRunEntry } from '@sovereign/core'
 
 const SOVEREIGN_CRON_JOB_KIND = 'sovereign.userMessage'
 
@@ -37,10 +31,6 @@ export interface CronService {
   runs(jobId?: string): Promise<CronRunEntry[]>
   update(id: string, patch: Record<string, unknown>): Promise<unknown>
   remove(id: string): Promise<void>
-  /** Detect whether a backend-managed cron job needs an auto-fix patch. */
-  needsAutoFix(job: CronJob): boolean
-  /** Build a patch that converts a broken job to the working delivery pattern. */
-  buildFixPatch(job: CronJob): Record<string, unknown>
   /** Send a message into a backend session (used by cron-monitor for delivery relay). */
   sendMessage(sessionKey: string, text: string): Promise<void>
 
@@ -50,12 +40,6 @@ export interface CronService {
    * and calls `backend.sendMessage(threadKey, renderedPrompt)`.
    */
   createUserMessageCron(opts: CreateUserMessageCronOpts): { id: string; schedule: string }
-  /**
-   * Register a backend-managed cron bridge. Adapters (e.g. OpenClaw) call
-   * this at boot so the scheduler treats their cron RPC as an additional
-   * source alongside the native scheduler.
-   */
-  registerCronBridge(bridge: CronBridge): void
 }
 
 /** Convert a Schedule to a human-readable label for the chip/UI. */
@@ -89,8 +73,6 @@ export interface CronServiceOptions {
   routing: RoutingBackend
   scheduler?: Scheduler
   bus?: EventBus
-  /** Optional cron bridges available at construction time. More can be added later via registerCronBridge. */
-  bridges?: CronBridge[]
 }
 
 export function createCronService(opts: CronServiceOptions | RoutingBackend): CronService {
@@ -100,11 +82,6 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
   const routing = config.routing
   const scheduler = config.scheduler
   const bus = config.bus
-  const bridges: CronBridge[] = [...(config.bridges ?? [])]
-
-  function bridge() {
-    return bridges[0] ?? null
-  }
 
   function listSovereignJobs(): CronJob[] {
     if (!scheduler) return []
@@ -168,11 +145,7 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
 
   return {
     async list(includeDisabled = false) {
-      const sovereign = listSovereignJobs().filter((j) => includeDisabled || j.enabled !== false)
-      const b = bridge()
-      if (!b) return sovereign
-      const backend = await b.list(includeDisabled)
-      return [...sovereign, ...backend]
+      return listSovereignJobs().filter((j) => includeDisabled || j.enabled !== false)
     },
     async runs(jobId?: string) {
       const sovereign: CronRunEntry[] = scheduler
@@ -192,38 +165,15 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
               }))
             )
         : []
-      const sovereignFiltered = jobId ? sovereign.filter((r) => r.jobId === jobId) : sovereign
-      const b = bridge()
-      if (!b) return sovereignFiltered
-      const backend = await b.runs(jobId)
-      return [...sovereignFiltered, ...backend]
+      return jobId ? sovereign.filter((r) => r.jobId === jobId) : sovereign
     },
     async update(id, patch) {
-      if (scheduler && scheduler.get(id)) {
-        return scheduler.update(id, patch as Partial<Job>)
-      }
-      const b = bridge()
-      if (!b) throw new Error('cron: no backend-managed cron available')
-      return await b.update(id, patch)
+      if (!scheduler || !scheduler.get(id)) throw new Error(`cron: unknown job '${id}'`)
+      return scheduler.update(id, patch as Partial<Job>)
     },
     async remove(id) {
-      if (scheduler && scheduler.get(id)) {
-        scheduler.remove(id)
-        return
-      }
-      const b = bridge()
-      if (!b) throw new Error('cron: no backend-managed cron available')
-      await b.remove(id)
-    },
-    needsAutoFix(job) {
-      const b = bridge()
-      if (!b) return false
-      return b.needsAutoFix(job)
-    },
-    buildFixPatch(job) {
-      const b = bridge()
-      if (!b) return {}
-      return b.buildFixPatch(job)
+      if (!scheduler || !scheduler.get(id)) throw new Error(`cron: unknown job '${id}'`)
+      scheduler.remove(id)
     },
     async sendMessage(sessionKey, text) {
       const target = routing.forSession(sessionKey)
@@ -243,9 +193,6 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
         }
       })
       return { id: job.id, schedule: describeSchedule(input.schedule) }
-    },
-    registerCronBridge(b: CronBridge) {
-      bridges.push(b)
     }
   }
 }

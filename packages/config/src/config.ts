@@ -82,30 +82,36 @@ function diffPaths(
   return changes
 }
 
-/** Per resolved decision in config-consolidation-spec §7: one config profile per dataDir. */
-function rejectProfileSiblings(dataDir: string): void {
+/** Per resolved decision in config-consolidation-spec §7: one config profile per configDir. */
+function rejectProfileSiblings(configDir: string): void {
   let entries: string[]
   try {
-    entries = fs.readdirSync(dataDir)
+    entries = fs.readdirSync(configDir)
   } catch {
     return
   }
   const siblings = entries.filter((f) => /^config\.[^.]+\.json$/.test(f) && f !== 'config.json')
   if (siblings.length > 0) {
     throw new Error(
-      `[config] refusing to start: found ${siblings.length} profile sibling(s) in ${dataDir}: ` +
-        `${siblings.join(', ')}. One config profile per dataDir is enforced — ` +
-        `use a different SOVEREIGN_DATA_DIR for each environment instead. ` +
+      `[config] refusing to start: found ${siblings.length} profile sibling(s) in ${configDir}: ` +
+        `${siblings.join(', ')}. One config profile per config dir is enforced — ` +
+        `use a different SOVEREIGN_CONFIG_DIR for each environment instead. ` +
         `See plans/config-consolidation-spec.md §7.`
     )
   }
 }
 
-export function createConfigStore(bus: EventBus, dataDir: string): ConfigStore {
+/**
+ * `configDir` holds user-edited state (`config.json`) — version-controlled.
+ * `dataDir`   holds runtime state (`secrets.json`, `config-history.jsonl`) —
+ *             gitignored. Defaults to `configDir` for tests that don't care.
+ */
+export function createConfigStore(bus: EventBus, configDir: string, dataDir: string = configDir): ConfigStore {
+  fs.mkdirSync(configDir, { recursive: true })
   fs.mkdirSync(dataDir, { recursive: true })
-  rejectProfileSiblings(dataDir)
+  rejectProfileSiblings(configDir)
 
-  const configPath = path.join(dataDir, 'config.json')
+  const configPath = path.join(configDir, 'config.json')
   const history = createHistory(dataDir)
   const secrets = createSecretsStore(dataDir)
   const changeHandlers = new Map<string, Set<(change: ConfigChange) => void>>()
@@ -140,7 +146,7 @@ export function createConfigStore(bus: EventBus, dataDir: string): ConfigStore {
   }
 
   function writeConfig(data: Record<string, unknown>) {
-    fs.mkdirSync(dataDir, { recursive: true })
+    fs.mkdirSync(configDir, { recursive: true })
     const tmpPath = configPath + '.tmp'
     fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2))
     fs.renameSync(tmpPath, configPath)

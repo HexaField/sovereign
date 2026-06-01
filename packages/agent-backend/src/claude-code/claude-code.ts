@@ -43,7 +43,7 @@ import {
 } from './history.js'
 import { dispatchSdkMessage } from './events.js'
 import { defaultAgentDir, projectsDirForCwd, sessionJsonlPath } from './path-encoding.js'
-import { ensureDefaultSubagentFile, ensureLayeredContextFile, ensurePersonalityFile } from './personality.js'
+import { ensureDefaultSubagentFile, ensureLayeredContextFile } from './personality.js'
 import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, ToolPolicy } from './types.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
@@ -197,10 +197,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     mcpServers.sovereign = deps.sovereignMcpServer
   }
 
-  // Personality files — best-effort, never fatal.
+  // Workspace-local seed files — best-effort, never fatal. The global
+  // personality (~/.claude/CLAUDE.md) is owned by the personality compiler
+  // in bootstrap; only the layered-context file and default subagent get
+  // seeded here.
   try {
     fs.mkdirSync(cwd, { recursive: true })
-    ensurePersonalityFile(cwd)
     ensureLayeredContextFile(cwd)
     ensureDefaultSubagentFile(cwd)
   } catch {
@@ -839,12 +841,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       parentSessionKey: opts?.parentSessionKey
     })
     persistRegistry(state, opts?.threadKey ?? sessionKey, opts?.orgId)
-    // Seed the per-cwd personality files if this session uses a different cwd
-    // than the adapter default — gives per-org workspaces their own CLAUDE.md
-    // walk-up content without overwriting anything the user already wrote.
+    // Seed the per-cwd workspace files if this session uses a different cwd
+    // than the adapter default — gives per-org workspaces their own
+    // layered-context + default-subagent without touching the global
+    // personality (which the compiler owns).
     if (opts?.cwd && opts.cwd !== cwd) {
       try {
-        ensurePersonalityFile(opts.cwd)
         ensureLayeredContextFile(opts.cwd)
         ensureDefaultSubagentFile(opts.cwd)
       } catch {
@@ -1121,8 +1123,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   }
 
   async function listAvailableModels() {
-    // Return `provider/model` form to match the rest of Sovereign (OpenClaw,
-    // routes that split on '/'). The UI's `selectedModel` derived from
+    // Return `provider/model` form to match the rest of Sovereign (routes
+    // that split on '/'). The UI's `selectedModel` derived from
     // `getSessionMeta` (`${modelProvider}/${model}`) only lines up with the
     // dropdown options when these are prefixed too — otherwise the current
     // model never appears as the selected option.

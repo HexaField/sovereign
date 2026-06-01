@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { EventBus } from '@sovereign/core'
+import type { AgentBackend, EventBus } from '@sovereign/core'
 
 // These tests verify that server index.ts correctly wires Phase 6 modules.
 // Since index.ts has side effects (starts server), we test the wiring pattern
@@ -15,62 +15,63 @@ function createMockBus(): EventBus {
   } as unknown as EventBus
 }
 
+/** Minimal AgentBackend stub for wiring tests that don't actually drive a backend. */
+function createStubBackend(): AgentBackend {
+  return {
+    kind: 'claude-code',
+    connect: vi.fn(async () => {}),
+    disconnect: vi.fn(async () => {}),
+    status: vi.fn(() => 'disconnected' as const),
+    sendMessage: vi.fn(async () => {}),
+    abort: vi.fn(async () => {}),
+    switchSession: vi.fn(async () => {}),
+    createSession: vi.fn(async () => 'stub-session'),
+    getHistory: vi.fn(async () => ({ turns: [], hasMore: false })),
+    getFullHistory: vi.fn(async () => []),
+    on: vi.fn(),
+    off: vi.fn(),
+    capabilities: vi.fn(() => ({
+      subagents: 'native',
+      cron: 'sovereign-managed',
+      steering: false,
+      followUp: false,
+      compaction: 'automatic-only',
+      toolStreaming: true,
+      deviceIdentity: false,
+      multiProvider: false
+    })),
+    listSessions: vi.fn(async () => []),
+    listSubagents: vi.fn(async () => []),
+    getSessionMeta: vi.fn(async () => null),
+    setSessionModel: vi.fn(async () => {}),
+    listAvailableModels: vi.fn(async () => ({ models: [], defaultModel: null })),
+    getContextBudget: vi.fn(async () => null)
+  } as unknown as AgentBackend
+}
+
 describe('Server index.ts wiring — Phase 6 modules', () => {
-  describe('agent backend initialization', () => {
-    it('creates OpenClaw backend with config from the openclaw gateway URL', async () => {
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
-      const backend = createOpenClawBackend({
-        gatewayUrl: 'ws://localhost:3456/ws',
-        dataDir: '/tmp/test-wiring'
-      })
-      expect(backend).toBeDefined()
-      expect(backend.connect).toBeInstanceOf(Function)
-      expect(backend.sendMessage).toBeInstanceOf(Function)
-    })
-
-    it('calls backend.connect() during server startup', async () => {
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
-      const backend = createOpenClawBackend({
-        gatewayUrl: 'ws://localhost:1/ws',
-        dataDir: '/tmp/test-wiring'
-      })
-      expect(typeof backend.connect).toBe('function')
-    })
-
-    it('emits backend.status events through to connected clients', async () => {
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
-      const backend = createOpenClawBackend({
-        gatewayUrl: 'ws://localhost:1/ws',
-        dataDir: '/tmp/test-wiring'
-      })
-      const statuses: string[] = []
-      backend.on('backend.status', (d) => statuses.push(d.status))
-      expect(backend.on).toBeInstanceOf(Function)
-    })
-  })
-
-  describe('routing backend', () => {
+  describe('agent backend layer', () => {
     it('exposes createBackend and createSessionsRegistry from agent-backend/index.ts', async () => {
       const mod = await import('@sovereign/agent-backend')
       expect(typeof mod.createBackend).toBe('function')
       expect(typeof mod.createSessionsRegistry).toBe('function')
+      expect(typeof mod.createClaudeCodeBackend).toBe('function')
     })
 
-    it('routes a session to the OpenClaw backend when only OpenClaw is enabled', async () => {
+    it('routes a session to the claude-code backend when only claude-code is enabled', async () => {
       const { createBackend, createSessionsRegistry } = await import('@sovereign/agent-backend')
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
       const tmp = await import('node:fs/promises').then((m) => m.mkdtemp((process.env.TMPDIR ?? '/tmp/') + 'sov-wire-'))
       const registry = createSessionsRegistry(tmp)
       const routing = createBackend({
-        enabled: ['openclaw'],
-        default: 'openclaw',
+        enabled: ['claude-code'],
+        default: 'claude-code',
         registry,
         factories: {
-          openclaw: () => createOpenClawBackend({ gatewayUrl: 'ws://localhost:1/ws', dataDir: tmp })
+          'claude-code': () => createStubBackend()
         }
       })
-      expect(routing.default().kind).toBe('openclaw')
-      expect(routing.forSession('agent:main:thread:x').kind).toBe('openclaw')
+      expect(routing.default().kind).toBe('claude-code')
+      expect(routing.forSession('agent:main:thread:x').kind).toBe('claude-code')
       await routing.disconnectAll()
     })
   })
@@ -78,10 +79,9 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
   describe('chat module wiring', () => {
     it('creates chat module with bus, backend, and thread manager', async () => {
       const { createChatModule } = await import('@sovereign/chat')
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
       const { createThreadManager } = await import('@sovereign/threads')
       const bus = createMockBus()
-      const backend = createOpenClawBackend({ gatewayUrl: 'ws://localhost:1/ws', dataDir: '/tmp/test-wiring' })
+      const backend = createStubBackend()
       const threads = createThreadManager(bus, '/tmp/test-wiring')
       const chat = createChatModule(bus, backend, threads, { dataDir: '/tmp/test-wiring' })
       expect(chat.status()).toEqual({ name: 'chat', status: 'ok' })
@@ -99,10 +99,9 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
 
     it('includes chat module in status aggregator', async () => {
       const { createChatModule } = await import('@sovereign/chat')
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
       const { createThreadManager } = await import('@sovereign/threads')
       const bus = createMockBus()
-      const backend = createOpenClawBackend({ gatewayUrl: 'ws://localhost:1/ws', dataDir: '/tmp/test-wiring' })
+      const backend = createStubBackend()
       const threads = createThreadManager(bus, '/tmp/test-wiring')
       const chat = createChatModule(bus, backend, threads, { dataDir: '/tmp/test-wiring' })
       const status = chat.status()
@@ -164,19 +163,6 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
   })
 
   describe('config hot-reload', () => {
-    it('updates backend gateway URL when the openclaw gateway URL config changes', async () => {
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
-      let configCb: ((c: any) => void) | null = null
-      createOpenClawBackend({
-        gatewayUrl: 'ws://localhost:1/ws',
-        dataDir: '/tmp/test-wiring',
-        onConfigChange: (cb) => {
-          configCb = cb
-        }
-      })
-      expect(configCb).toBeInstanceOf(Function)
-    })
-
     it('updates voice URLs when voice.transcribeUrl or voice.ttsUrl change', async () => {
       const { createVoiceModule } = await import('@sovereign/voice')
       const bus = createMockBus()
@@ -188,24 +174,10 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
 
   describe('graceful shutdown', () => {
     it('disconnects agent backend on server shutdown', async () => {
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
-      const backend = createOpenClawBackend({
-        gatewayUrl: 'ws://localhost:1/ws',
-        dataDir: '/tmp/test-wiring'
-      })
+      const backend = createStubBackend()
+      await backend.connect()
       await backend.disconnect()
       expect(backend.status()).toBe('disconnected')
-    })
-
-    it('cleans up all Phase 6 module resources on shutdown', async () => {
-      const { createOpenClawBackend } = await import('@sovereign/agent-backend')
-      const { createVoiceModule } = await import('@sovereign/voice')
-      const bus = createMockBus()
-      const b = createOpenClawBackend({ gatewayUrl: 'ws://localhost:1/ws', dataDir: '/tmp/test-wiring' })
-      const voice = createVoiceModule(bus, {})
-      await b.disconnect()
-      expect(b.status()).toBe('disconnected')
-      expect(voice.status().status).toBe('error')
     })
   })
 })

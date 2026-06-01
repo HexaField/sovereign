@@ -42,7 +42,7 @@ function createMockBackend(): AgentBackend & { _handlers: Map<string, Array<(...
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>()
   return {
     _handlers: handlers,
-    kind: 'openclaw',
+    kind: 'claude-code',
     connect: vi.fn(async () => {}),
     disconnect: vi.fn(async () => {}),
     status: vi.fn(() => 'connected' as BackendConnectionStatus),

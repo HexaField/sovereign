@@ -2,9 +2,10 @@
 
 export { createClaudeCodeBackend, type ClaudeCodeBackend, type ClaudeCodeBackendDeps } from './claude-code.js'
 export { claudeCodeConfigFromStore } from './config.js'
-export { createWorkspaceIndex, type WorkspaceIndex, type WorkspaceEntry } from './workspace-index.js'
 export { createSovereignMcpServer, type SovereignToolDeps } from './mcp-server.js'
-export { ensurePersonalityFile, ensureLayeredContextFile, ensureDefaultSubagentFile } from './personality.js'
+export { ensureLayeredContextFile, ensureDefaultSubagentFile } from './personality.js'
+export { createPersonalityCompiler } from './personality-compiler.js'
+export type { PersonalityCompiler, PersonalityCompilerOptions, PersonalityManifest } from './personality-compiler.js'
 export {
   parseClaudeCodeTurns,
   readAllClaudeCodeMessages,

@@ -263,8 +263,8 @@ export function MessageBubble(props: MessageBubbleProps) {
   // Check BEFORE the system-typed branch so the `⚙️ Compacted (…)` chip
   // wins over the generic system-turn renderer (whose "Event Routing"
   // heuristic would otherwise match summary-body keywords). Applies to
-  // any role — historically these arrived as user/assistant turns; now
-  // the OpenClaw rehydration parser emits them as role='system'.
+  // any role — legacy transcripts arrived as user/assistant turns; current
+  // rehydration emits them as role='system'.
   if (isCompactionMessage(rawContent())) {
     const compactionMarker = (): string => {
       const text = rawContent().trim()

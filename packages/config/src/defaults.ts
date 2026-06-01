@@ -30,11 +30,8 @@ export const defaults: SovereignConfig = {
     globalPath: ''
   },
   agentBackend: {
-    enabled: ['openclaw'],
-    default: 'openclaw',
-    openclaw: {
-      gatewayUrl: 'ws://localhost:3456/ws'
-    },
+    enabled: ['claude-code'],
+    default: 'claude-code',
     claudeCode: {
       cwd: '',
       agentDir: home ? path.join(home, '.claude') : '',
@@ -65,5 +62,10 @@ export const defaults: SovereignConfig = {
   models: {
     available: [],
     default: ''
+  },
+  personality: {
+    sourceDir: '',
+    files: [],
+    separator: '\n\n---\n\n'
   }
 }

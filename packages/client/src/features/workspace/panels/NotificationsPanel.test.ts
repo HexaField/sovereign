@@ -64,7 +64,9 @@ describe('NotificationsPanel', () => {
         read: false,
         priority: 'warning'
       }
-      expect(notif.icon).toBe('⚠️')
+      // The icon field is a JSX.Element (icon component) since the rework
+      // away from emoji strings — just assert it's present.
+      expect(notif.icon).toBeDefined()
       expect(notif.read).toBe(false)
       expect(formatRelativeTime(notif.timestamp)).toBe('2m ago')
     })

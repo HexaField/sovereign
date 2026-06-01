@@ -33,9 +33,19 @@ function createTestBus(): EventBus & { events: BusEvent[] } {
   }
 }
 
-let ptyAvailable = true
+// Probe both that node-pty's binding loads AND that pty.spawn() actually
+// succeeds in this environment. The native binding can load happily but
+// `posix_spawnp` can still fail under sandboxed test runners (vitest workers
+// on macOS Tahoe in particular), in which case every test below would error
+// uniformly with `posix_spawnp failed`. Skip the whole block in that case so
+// the failure is reported once at gate level instead of N times per test.
+let ptyAvailable = false
 try {
-  await import('node-pty')
+  const pty = await import('node-pty')
+  const shell = process.env.SHELL ?? '/bin/bash'
+  const probe = pty.spawn(shell, ['-c', 'true'], { name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd() })
+  probe.kill()
+  ptyAvailable = true
 } catch {
   ptyAvailable = false
 }

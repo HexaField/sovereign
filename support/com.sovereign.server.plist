@@ -12,6 +12,8 @@
     <string>REPO_DIR_PLACEHOLDER</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>SOVEREIGN_CONFIG_DIR</key>
+        <string>CONFIG_DIR_PLACEHOLDER</string>
         <key>SOVEREIGN_DATA_DIR</key>
         <string>DATA_DIR_PLACEHOLDER</string>
     </dict>
