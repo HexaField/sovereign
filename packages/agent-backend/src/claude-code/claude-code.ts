@@ -525,26 +525,29 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       }
       return { continue: true }
     }
+    // PostToolUse fires AFTER a successful tool execution. We DELIBERATELY
+    // do NOT emit chat.work tool_result here — the SDK echoes the same
+    // tool result a few ms later as a user-role message with a
+    // `tool_result` content block, which `handleSdkUserMessage` surfaces
+    // through `events.ts` with a clean, image-aware output via
+    // `contentToOutputStr`. Emitting from both paths produced the
+    // visible 2× duplication seen in production live state (every
+    // tool_call ended up with two tool_results: one JSON-wrapped from
+    // this hook, one plain-text from the user-role echo). The user-role
+    // echo wins because its output formatting is what the UI's tool
+    // detail views are built around.
+    //
+    // We keep the hook registered as a no-op return so future audits
+    // (or per-org PostToolUse instrumentation) have a stable wiring
+    // point.
     const onPostToolUse = async (input: HookInput) => {
       if (input.hook_event_name !== 'PostToolUse') return { continue: true }
-      const state = stateForHook(input)
-      if (!state) return { continue: true }
-      const inp = input as Extract<HookInput, { hook_event_name: 'PostToolUse' }>
-
-      const outputStr =
-        typeof inp.tool_response === 'string' ? inp.tool_response : JSON.stringify(inp.tool_response ?? '')
-      emitter.emit('chat.work', {
-        sessionKey: state.sessionKey,
-        work: {
-          type: 'tool_result',
-          name: inp.tool_name,
-          output: outputStr,
-          toolCallId: inp.tool_use_id,
-          timestamp: Date.now()
-        } as WorkItem
-      })
       return { continue: true }
     }
+    // PostToolUseFailure DOES still emit — the SDK does not always echo a
+    // user-role tool_result for failed tools, so the failure hook is the
+    // safety net. If the SDK ever starts double-echoing failures we'll
+    // see them in the live state and add dedup here.
     const onPostToolUseFailure = async (input: HookInput) => {
       if (input.hook_event_name !== 'PostToolUseFailure') return { continue: true }
       const state = stateForHook(input)
