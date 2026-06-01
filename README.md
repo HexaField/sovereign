@@ -48,17 +48,23 @@ Real-time architecture view showing every module, its subscriptions, and event f
 
 ### Agent Backend
 
-Connects to an AI agent runtime (currently OpenClaw) via authenticated WebSocket with challenge-response device identity. Entity events trigger autonomous agent work; notification events surface for user response. Designed for full backend independence — a native agent core (session store, tool runtime, LLM router, multi-agent orchestration) replaces the external bridge.
+A native agent core built on the Claude Agent SDK — no external bridge. Durable session store, multi-agent orchestration, an in-process cron scheduler, and a Sovereign MCP server that exposes workspace tools (sessions, agents, planning, meetings, orgs, notifications) to the agent. Entity events trigger autonomous agent work; notification events surface for user response. Sessions resume automatically after a restart, and a personality compiler assembles the agent's system prompt from per-concern Markdown source files.
 
 ## Architecture
 
-TypeScript monorepo. SolidJS client, Express server, shared core library. Modules export `init(bus)` and `status()` — nothing else. The event bus is the only integration surface.
+TypeScript monorepo. A SolidJS client and an Express server compose a set of self-contained domain packages, each wired into a typed event bus. Modules export a `create*`/`register*` factory and a `status()` — nothing else. The event bus is the only integration surface.
 
 ```
 packages/
-├── client/     SolidJS + Vite + Tailwind
-├── server/     Express + typed event bus + 17 modules
-└── core/       Shared types, event bus, agent backend interface
+├── client/      SolidJS + Vite + Tailwind
+├── server/      Express + typed event bus — wires every module together
+├── core/        Shared types, event bus, agent backend interface
+├── config/      Runtime config store (config.json) + hot-reload + secrets
+├── agent-backend/  Native Claude Code agent core, MCP server, session resume
+├── primitives/  Session registry and shared low-level utilities
+└── orgs · files · git · worktrees · diff · issues · review · radicle ·
+    planning · drafts · threads · chat · voice · recordings · meetings ·
+    notifications · scheduler · terminal · system · browser · auth · ad4m
 ```
 
 ## Quick Start
@@ -81,18 +87,29 @@ bin/sovereign stop            # Graceful shutdown
 
 On macOS, Sovereign now runs under a single launchd-managed service with `KeepAlive` crash recovery. `bin/sovereign build` snapshots the last known-good build artifacts, runs checks/builds first, and only then reloads the service. If startup fails after reload, it automatically restores the previous build and brings the old version back up.
 
-### Environment
+### Configuration
 
-Copy `.env.example` to `.env.local` and configure:
+Settings live in `config.json`, not environment variables. The file is created on first run inside the config directory (`~/.sovereign/config.json` by default) and is hot-reloadable — host/port/TLS, agent backend, voice, models, and identity all update at runtime through the event bus with no restart. Edit it directly, or change values from the system view in the UI.
+
+Only two paths are read from the environment, for bootstrap:
 
 ```bash
-SOVEREIGN_DATA_DIR=~/.sovereign          # Persistent data directory
-HOST=0.0.0.0                             # Bind address
-PORT=5801                                # Server port
-OPENCLAW_GATEWAY_URL=ws://localhost:3456/ws  # Agent backend
-OPENCLAW_GATEWAY_TOKEN=                  # Gateway auth token
+SOVEREIGN_CONFIG_DIR=~/.sovereign        # User-edited state (config.json)
+SOVEREIGN_DATA_DIR=~/.sovereign/data     # Runtime state (threads, secrets, logs, scheduler)
 ```
+
+Secrets (API keys, tokens) live in `data/secrets.json` and never enter `config.json`.
+
+### Migrating from OpenClaw
+
+Sovereign began as an OpenClaw front-end and is now fully standalone. If you're coming from an `~/.openclaw/` install, one command copies all live state into a new `~/.sovereign/` home:
+
+```bash
+sovereign migrate
+```
+
+It only ever **copies** (never moves or deletes) from `~/.openclaw/`, backs up `~/.claude/CLAUDE.md` and the launchd plist, rewrites embedded absolute paths, migrates the Claude Code transcripts, and restarts with a health check — so rollback is just pointing the service back at the old data dir. See [plans/openclaw-to-sovereign-migration.md](plans/openclaw-to-sovereign-migration.md) for the full procedure and manual recovery steps.
 
 ## Tech Stack
 
-TypeScript · SolidJS · Express · Vite · Vitest · Tailwind CSS · pnpm workspaces · Oxlint · Husky + lint-staged
+TypeScript · SolidJS · Express · Vite · Vitest · Tailwind CSS · Claude Agent SDK · pnpm workspaces · Oxlint · Husky + lint-staged
