@@ -29,13 +29,10 @@ export interface SovereignConfig {
     globalPath: string
   }
   agentBackend: {
-    /** Backends to enable on boot. Comma-separated env value used to be SOVEREIGN_ENABLED_BACKENDS. */
-    enabled: ('openclaw' | 'claude-code')[]
+    /** Backends to enable on boot. */
+    enabled: 'claude-code'[]
     /** Backend chosen when a session has no recorded kind. */
-    default: 'openclaw' | 'claude-code'
-    openclaw: {
-      gatewayUrl: string
-    }
+    default: 'claude-code'
     claudeCode: {
       cwd: string
       agentDir: string
@@ -70,6 +67,22 @@ export interface SovereignConfig {
     available: string[]
     /** Optional default model identifier; empty string means "use backend default". */
     default: string
+  }
+  /**
+   * Personality compiler — assembles `~/.claude/CLAUDE.md` (the user-global
+   * Claude Code system prompt) by concatenating per-concern Markdown source
+   * files in the order declared here. Output is an exact concatenation:
+   * `files.map(read).join(separator)`.
+   *
+   * Compiler is a no-op when `files` is empty.
+   */
+  personality: {
+    /** Directory holding the source `.md` files. Empty string falls back to {workspace.root}. */
+    sourceDir: string
+    /** Source files in assembly order. CLAUDE.md is refused (it's the output target). */
+    files: string[]
+    /** String inserted between concatenated source bodies. */
+    separator: string
   }
 }
 

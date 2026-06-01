@@ -7,9 +7,8 @@ import type { AgentBackendKind } from './agent-backend.js'
 /**
  * Derive the canonical Sovereign session key for a logical thread key.
  *
- * The canonical form is `agent:main:thread:<x>` (matching the historic
- * OpenClaw convention). For Pi and Claude Code backends, the canonical key
- * is registry-mapped to a backend-internal id at session-create time.
+ * The canonical form is `agent:main:thread:<x>`. The registry maps that to a
+ * backend-internal id at session-create time.
  *
  * `backendKind` is accepted for forward compatibility — callers can pass it
  * to make their intent explicit, but the canonical key is the same across

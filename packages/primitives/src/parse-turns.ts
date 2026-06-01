@@ -1,6 +1,5 @@
 // Backend-agnostic turn parser. Generic enough to handle ContentBlock arrays
-// from any backend; backend-specific noise filtering lives in each adapter
-// (see `openclaw/parse-turns.ts`).
+// from any backend; backend-specific noise filtering lives in each adapter.
 
 import type { ParsedTurn, WorkItem } from '@sovereign/core'
 import { stripThinkingBlocks } from './thinking.js'
@@ -83,8 +82,8 @@ export interface ParseTurnsOptions {
 
   /**
    * Given an injected `text`, return the embedded user message that should be
-   * surfaced (if any). Used for cases like OpenClaw's "Sender (untrusted metadata):"
-   * appearing after a system prefix.
+   * surfaced (if any). Used for cases like a backend that wraps user text in
+   * a `Sender (untrusted metadata):` header after a system prefix.
    */
   extractEmbeddedUser?(text: string): string | null
 

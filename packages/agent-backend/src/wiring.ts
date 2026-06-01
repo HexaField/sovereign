@@ -14,8 +14,6 @@ import {
   createSovereignMcpServer,
   type ClaudeCodeBackend
 } from './claude-code/index.js'
-import { createOpenClawBackend, type OpenClawBackend } from './openclaw/openclaw.js'
-import { openClawConfigFromStore } from './openclaw/config.js'
 import { buildSovereignMcpDeps } from './mcp-deps.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
@@ -46,7 +44,6 @@ export interface AgentBackendWiringResult {
   routingBackend: RoutingBackend
   backend: AgentBackend
   cronService: CronService
-  openClawBackend: OpenClawBackend | undefined
   claudeCodeBackend: ClaudeCodeBackend | undefined
   sessionsRegistry: SessionsRegistry
   activeSessions: ActiveSessions
@@ -121,7 +118,6 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     default: defaultKind,
     registry: sessionsRegistry,
     factories: {
-      openclaw: () => createOpenClawBackend(openClawConfigFromStore(configStore, dataDir)),
       'claude-code': () => {
         const cc = createClaudeCodeBackend(claudeCodeConfigFromStore(configStore, dataDir), {
           sovereignMcpServer,
@@ -152,15 +148,12 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     }
   })
 
-  const openClawBackend = routingBackend.forKind('openclaw') as OpenClawBackend | undefined
   cronService = createCronService({ routing: routingBackend, scheduler, bus })
-  if (openClawBackend?.cronBridge) cronService.registerCronBridge(openClawBackend.cronBridge)
 
   return {
     routingBackend,
     backend: routingAsBackend(routingBackend),
     cronService,
-    openClawBackend,
     claudeCodeBackend,
     sessionsRegistry,
     activeSessions,
