@@ -1,4 +1,7 @@
 // Secrets store — kept in a separate {dataDir}/secrets.json file with mode 0600.
+// Secrets are runtime credentials (API keys, tokens), not user-edited config,
+// so they live alongside other runtime state — not in the version-controlled
+// config dir.
 // Values never appear in the main config, in /api/config responses (unmasked),
 // in history JSONL, or in exports.
 

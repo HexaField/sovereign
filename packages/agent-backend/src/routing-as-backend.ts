@@ -1,8 +1,6 @@
 // Wraps a RoutingBackend so callers that expect a single `AgentBackend`
 // transparently dispatch per-session calls to the correct underlying
-// backend. Used by the chat module so a `claude-code`-bound thread routes
-// to the Claude Code adapter while OpenClaw threads keep routing to
-// OpenClaw, all through one backend reference.
+// backend.
 
 import type {
   AgentBackend,

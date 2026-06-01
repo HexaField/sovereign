@@ -1,7 +1,5 @@
-// Cron Monitor — polls Sovereign's CronService for run results, emits
-// thread-targeted events, and auto-fixes misconfigured jobs through the
-// service. Backend-specific knowledge (gateway auto-fix patterns) lives in
-// each adapter's cron-bridge; the monitor itself is backend-agnostic.
+// Cron Monitor — polls Sovereign's CronService for run results and emits
+// thread-targeted events. Backend-agnostic.
 
 import type { WsHandler } from '@sovereign/primitives'
 import type { CronRunEntry, CronService } from './cron-service.js'
@@ -12,7 +10,6 @@ export interface CronMonitorOptions {
   cronService: CronService
   wsHandler: WsHandler
   pollIntervalMs?: number
-  autoFixIntervalMs?: number
 }
 
 /** Derive threadKey from sessionTarget or sessionKey */
@@ -28,14 +25,12 @@ function deriveThreadKey(sessionTarget?: string, sessionKey?: string): string | 
 }
 
 export function createCronMonitor(options: CronMonitorOptions) {
-  const { cronService, wsHandler, pollIntervalMs = 30_000, autoFixIntervalMs = 15_000 } = options
+  const { cronService, wsHandler, pollIntervalMs = 30_000 } = options
 
   let lastSeenRunTs = Date.now() - 60_000
   let pollTimer: ReturnType<typeof setInterval> | null = null
-  let autoFixTimer: ReturnType<typeof setInterval> | null = null
   let destroyed = false
 
-  const fixedJobIds = new Set<string>()
   const jobCache = new Map<string, { name: string; threadKey: string | null; sessionTarget?: string }>()
 
   async function refreshJobCache(): Promise<void> {
@@ -49,43 +44,6 @@ export function createCronMonitor(options: CronMonitorOptions) {
           threadKey,
           sessionTarget: job.sessionTarget
         })
-      }
-    } catch {
-      /* non-fatal */
-    }
-  }
-
-  async function autoFixScan(): Promise<void> {
-    if (destroyed) return
-
-    try {
-      const jobs = await cronService.list(true)
-      for (const job of jobs) {
-        if (fixedJobIds.has(job.id)) continue
-        if (!cronService.needsAutoFix(job)) continue
-
-        const patch = cronService.buildFixPatch(job)
-        try {
-          await cronService.update(job.id, patch)
-          fixedJobIds.add(job.id)
-
-          const threadKey = deriveThreadKey(job.sessionTarget, job.sessionKey)
-          console.log(
-            `[cron-monitor] Auto-fixed cron "${job.name || job.id}" → delivery:none` +
-              (threadKey ? ` (thread: ${threadKey})` : '')
-          )
-
-          wsHandler.broadcastToChannel('chat', {
-            type: 'cron.auto-fixed',
-            threadKey,
-            jobId: job.id,
-            jobName: job.name || job.id,
-            message: `Auto-fixed cron "${job.name || job.id}": removed broken delivery config (announce/webchat → none)`,
-            timestamp: Date.now()
-          } as any)
-        } catch (err: any) {
-          console.error(`[cron-monitor] Failed to auto-fix cron "${job.name || job.id}":`, err.message)
-        }
       }
     } catch {
       /* non-fatal */
@@ -146,14 +104,10 @@ export function createCronMonitor(options: CronMonitorOptions) {
   function start(): void {
     if (destroyed || pollTimer) return
     refreshJobCache().catch(() => {})
-    autoFixScan().catch(() => {})
     poll().catch(() => {})
     pollTimer = setInterval(() => {
       poll().catch(() => {})
     }, pollIntervalMs)
-    autoFixTimer = setInterval(() => {
-      autoFixScan().catch(() => {})
-    }, autoFixIntervalMs)
   }
 
   function stop(): void {
@@ -161,10 +115,6 @@ export function createCronMonitor(options: CronMonitorOptions) {
     if (pollTimer) {
       clearInterval(pollTimer)
       pollTimer = null
-    }
-    if (autoFixTimer) {
-      clearInterval(autoFixTimer)
-      autoFixTimer = null
     }
   }
 
@@ -178,7 +128,7 @@ export function createCronMonitor(options: CronMonitorOptions) {
     }
   }
 
-  return { start, stop, poll, autoFixScan, getRunsForThread, refreshJobCache }
+  return { start, stop, poll, getRunsForThread, refreshJobCache }
 }
 
 // Re-export for callers that previously imported the type from here.

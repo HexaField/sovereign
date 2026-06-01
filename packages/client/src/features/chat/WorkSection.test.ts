@@ -18,13 +18,15 @@ describe('§4.4 WorkSection', () => {
       expect(typeof WorkSection).toBe('function')
     })
     it('maps tool icons correctly', () => {
-      expect(getToolIcon('read')).toBe('read')
-      expect(getToolIcon('write')).toBe('write')
-      expect(getToolIcon('edit')).toBe('edit')
-      expect(getToolIcon('exec')).toBe('exec')
-      expect(getToolIcon('process')).toBe('process')
-      expect(getToolIcon('browser')).toBe('browser')
-      expect(getToolIcon('web_fetch')).toBe('fetch')
+      // Production uses emoji glyphs for the recognisable tools and falls back
+      // to the literal string 'tool' for unknown ones.
+      expect(getToolIcon('read')).toBe('📖')
+      expect(getToolIcon('write')).toBe('✏️')
+      expect(getToolIcon('edit')).toBe('✂️')
+      expect(getToolIcon('exec')).toBe('▶')
+      expect(getToolIcon('process')).toBe('⚙')
+      expect(getToolIcon('browser')).toBe('🌐')
+      expect(getToolIcon('web_fetch')).toBe('🌐')
       expect(getToolIcon('memory_search')).toBe('search')
       expect(getToolIcon('memory_get')).toBe('list')
       expect(getToolIcon('unknown_tool')).toBe('tool')
@@ -92,7 +94,20 @@ describe('§4.4 WorkSection', () => {
         { type: 'tool_call', name: 'write', timestamp: 2 },
         { type: 'thinking', timestamp: 3 }
       ]
-      expect(summarizeWork(items)).toBe('2 tool calls, 1 thinking block')
+      // Production lists unique tool names when ≤5 are present; collapses to a
+      // numeric count past that threshold (tested separately below).
+      expect(summarizeWork(items)).toBe('read, write, 1 thinking block')
+    })
+    it('collapses to numeric count when more than 5 unique tools', () => {
+      const items: WorkItem[] = [
+        { type: 'tool_call', name: 'read', timestamp: 1 },
+        { type: 'tool_call', name: 'write', timestamp: 2 },
+        { type: 'tool_call', name: 'edit', timestamp: 3 },
+        { type: 'tool_call', name: 'exec', timestamp: 4 },
+        { type: 'tool_call', name: 'browser', timestamp: 5 },
+        { type: 'tool_call', name: 'process', timestamp: 6 }
+      ]
+      expect(summarizeWork(items)).toBe('6 tool calls')
     })
     it('handles empty work items', () => {
       expect(summarizeWork([])).toBe('No work items')

@@ -48,21 +48,12 @@ async function collectActivityMap(b: RoutingBackend | AgentBackend | undefined):
   return merged
 }
 
-interface OpenClawActivityProvider {
-  /**
-   * Returns shortKey → {lastActivity, status} for "main" / "thread" sessions.
-   * Implemented by the OpenClaw adapter; absent for Pi / Claude Code.
-   */
-  getGatewayActivityMap?(): Promise<Map<string, { lastActivity: number; status?: string }>>
-}
-
 export function createThreadRoutes(
   threadManager: ThreadManager,
   forwardHandler: ForwardHandler,
   opts?: {
     chatModule?: ThreadSessionBinding
     backend?: RoutingBackend | AgentBackend
-    activityProvider?: OpenClawActivityProvider
     cronService?: CronService
   }
 ): Router {
@@ -94,25 +85,14 @@ export function createThreadRoutes(
     if (req.query.active) filter.active = req.query.active === 'true'
     const threads = threadManager.list(Object.keys(filter).length > 0 ? (filter as never) : undefined)
 
-    // Merge lastActivity + agentStatus from the OpenClaw gateway snapshot
-    // (status field) and from each backend's `getActivityMap()` (Claude Code
-    // + OpenClaw). The status overlay is OpenClaw-specific; the timestamp
-    // overlay applies to every backend that knows about a session.
-    let gatewayMap: Map<string, { lastActivity: number; status?: string }> | undefined
-    try {
-      gatewayMap = (await opts?.activityProvider?.getGatewayActivityMap?.()) ?? undefined
-    } catch {
-      /* ignore */
-    }
+    // Overlay lastActivity from each backend's `getActivityMap()` so the
+    // sort reflects on-disk freshness even when the thread registry hasn't
+    // been touched recently.
     const activityMap = await collectActivityMap(opts?.backend)
 
     const merged = threads.map((t) => {
-      const gw = gatewayMap?.get(t.key)
-      const freshTs = activityMap.get(t.key) ?? gw?.lastActivity ?? t.lastActivity
-      let agentStatus = t.agentStatus
-      if (gw?.status === 'running') agentStatus = 'working' as any
-      else if (gw?.status === 'failed') agentStatus = 'failed' as any
-      return { ...t, lastActivity: freshTs, agentStatus }
+      const freshTs = activityMap.get(t.key) ?? t.lastActivity
+      return { ...t, lastActivity: freshTs }
     })
     merged.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
 
@@ -655,10 +635,9 @@ export function createThreadRoutes(
       threadNodes.set(t.key, node)
     }
 
-    // Attach subagents under their parents. Iterate EVERY enabled backend
-    // so claude-code subagents still appear when openclaw is the default
-    // (and vice-versa); the previous `defaultBackend()`-only call dropped
-    // subagents from non-default backends.
+    // Attach subagents under their parents. Iterate EVERY enabled backend so
+    // subagents from any backend appear; the previous `defaultBackend()`-only
+    // call dropped subagents from non-default backends.
     try {
       const routing = opts?.backend
       const instances: AgentBackend[] =

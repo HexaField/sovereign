@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Sovereign runtime entrypoint for launchd.
-# All configuration lives in {SOVEREIGN_DATA_DIR}/config.json —
-# no .env files consulted.
+# All configuration lives in {SOVEREIGN_CONFIG_DIR}/config.json —
+# no .env files consulted. SOVEREIGN_CONFIG_DIR and SOVEREIGN_DATA_DIR are
+# the only env vars consulted directly by the server.
 
 set -euo pipefail
 
@@ -11,7 +12,8 @@ SERVER_ENTRY="$REPO_DIR/packages/server/dist/index.js"
 export HOME="${HOME:-/Users/josh}"
 export PATH="/Users/josh/.nvm/versions/node/v24.4.1/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 export NODE_ENV="${NODE_ENV:-production}"
-export SOVEREIGN_DATA_DIR="${SOVEREIGN_DATA_DIR:-$REPO_DIR/packages/server/.data}"
+export SOVEREIGN_CONFIG_DIR="${SOVEREIGN_CONFIG_DIR:-$HOME/.sovereign}"
+export SOVEREIGN_DATA_DIR="${SOVEREIGN_DATA_DIR:-$SOVEREIGN_CONFIG_DIR/data}"
 
 NODE_BIN="$(command -v node || true)"
 if [ -z "$NODE_BIN" ]; then
@@ -19,7 +21,7 @@ if [ -z "$NODE_BIN" ]; then
   exit 1
 fi
 
-mkdir -p "$SOVEREIGN_DATA_DIR"
+mkdir -p "$SOVEREIGN_CONFIG_DIR" "$SOVEREIGN_DATA_DIR"
 cd "$REPO_DIR"
 
 if [ ! -f "$SERVER_ENTRY" ]; then

@@ -1,4 +1,4 @@
-// Cron Manager Modal — full CRUD management of OpenClaw cron jobs
+// Cron Manager Modal — full CRUD management of Sovereign cron jobs
 import { createSignal, Show, For, onMount, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import type { CronJob, CronIssue } from './types.js'

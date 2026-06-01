@@ -16,7 +16,7 @@ describe('SessionsRegistry', () => {
     reg.upsert({
       threadKey: 'thread-a',
       sessionKey: 'agent:main:thread:a',
-      backendKind: 'openclaw',
+      backendKind: 'claude-code',
       backendSessionId: 'oc-1'
     })
     reg.flush()
@@ -25,7 +25,7 @@ describe('SessionsRegistry', () => {
     expect(existsSync(filePath)).toBe(true)
     const data = JSON.parse(readFileSync(filePath, 'utf-8'))
     expect(data['thread-a'].sessionKey).toBe('agent:main:thread:a')
-    expect(data['thread-a'].backendKind).toBe('openclaw')
+    expect(data['thread-a'].backendKind).toBe('claude-code')
     expect(data['thread-a'].backendSessionId).toBe('oc-1')
   })
 
@@ -51,7 +51,7 @@ describe('SessionsRegistry', () => {
     reg.upsert({
       threadKey: 't',
       sessionKey: 'agent:main:thread:t',
-      backendKind: 'openclaw'
+      backendKind: 'claude-code'
     })
     reg.remove('t')
     reg.flush()
@@ -61,21 +61,20 @@ describe('SessionsRegistry', () => {
 
   it('filters list by backendKind', () => {
     const reg = createSessionsRegistry(dataDir, { debounceMs: 0 })
-    reg.upsert({ threadKey: 'oc1', sessionKey: 'k1', backendKind: 'openclaw' })
+    reg.upsert({ threadKey: 'cc1', sessionKey: 'k1', backendKind: 'claude-code' })
     reg.upsert({ threadKey: 'pi1', sessionKey: 'k2', backendKind: 'pi' })
-    reg.upsert({ threadKey: 'cc1', sessionKey: 'k3', backendKind: 'claude-code' })
+    reg.upsert({ threadKey: 'cc2', sessionKey: 'k3', backendKind: 'claude-code' })
 
-    expect(reg.list({ backendKind: 'openclaw' })).toHaveLength(1)
+    expect(reg.list({ backendKind: 'claude-code' })).toHaveLength(2)
     expect(reg.list({ backendKind: 'pi' })).toHaveLength(1)
-    expect(reg.list({ backendKind: 'claude-code' })).toHaveLength(1)
     expect(reg.list()).toHaveLength(3)
   })
 
   it('preserves createdAt across updates and bumps updatedAt', async () => {
     const reg = createSessionsRegistry(dataDir, { debounceMs: 0 })
-    const first = reg.upsert({ threadKey: 't', sessionKey: 'k', backendKind: 'openclaw' })
+    const first = reg.upsert({ threadKey: 't', sessionKey: 'k', backendKind: 'claude-code' })
     await new Promise((r) => setTimeout(r, 5))
-    const second = reg.upsert({ threadKey: 't', sessionKey: 'k', backendKind: 'openclaw', label: 'new label' })
+    const second = reg.upsert({ threadKey: 't', sessionKey: 'k', backendKind: 'claude-code', label: 'new label' })
     expect(second.createdAt).toBe(first.createdAt)
     expect(second.updatedAt).toBeGreaterThanOrEqual(first.updatedAt)
     expect(second.label).toBe('new label')

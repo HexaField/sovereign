@@ -14,7 +14,7 @@ export interface ThreadSessionRecord {
   /** Canonical session key Sovereign uses for routing. */
   sessionKey: string
   backendKind: AgentBackendKind
-  /** Backend-internal id (Pi UUID, Claude Code UUID, OpenClaw sessionId). May equal sessionKey for OpenClaw. */
+  /** Backend-internal id (Pi UUID, Claude Code UUID). */
   backendSessionId?: string
   /** Optional path to the backend's JSONL file, if any. */
   backendSessionFile?: string

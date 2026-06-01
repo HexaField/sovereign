@@ -53,8 +53,7 @@ import { registerPlanningWs } from '@sovereign/planning'
 import { createDraftStore } from '@sovereign/drafts'
 import { createDraftRouter } from '@sovereign/drafts'
 import { wireAgentBackend } from '@sovereign/agent-backend'
-import { getGatewayActivityMap } from '@sovereign/agent-backend'
-import { createWorkspaceIndex } from '@sovereign/agent-backend'
+import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
@@ -207,12 +206,29 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   registerPlanningWs(wsHandler, bus)
   app.use(createDraftRouter(bus, draftStore, { issueTracker, getRemotes }))
 
-  // Threads + workspace index
-  const workspaceIndex = createWorkspaceIndex({ filePath: path.join(process.env.HOME ?? '', '.claude', 'CLAUDE.md') })
-  const refreshWorkspaceIndex = () =>
-    workspaceIndex.setEntries(
-      orgManager.listOrgs().map((o: any) => ({ path: o.path, description: o.name, orgId: o.id }))
-    )
+  // Personality compiler — assembles `~/.claude/CLAUDE.md` as an exact
+  // concatenation of the source files listed in `config.personality`. Owns
+  // the whole file. Recompiles on (a) source `.md` file changes (via fs.watch)
+  // and (b) `config.personality` changes (via configStore.onChange).
+  const personalityDir = cfg.personality.sourceDir || cfg.workspace.root
+  const personalityCompiler = personalityDir
+    ? createPersonalityCompiler({
+        sourceDir: personalityDir,
+        manifest: { files: cfg.personality.files, separator: cfg.personality.separator }
+      })
+    : null
+  if (personalityCompiler) {
+    try {
+      personalityCompiler.compile()
+    } catch (err: unknown) {
+      console.error('[personality] initial compile failed:', (err as Error)?.message ?? err)
+    }
+    personalityCompiler.start()
+    configStore.onChange('personality', () => {
+      const next = configStore.get<SovereignConfig['personality']>('personality')
+      personalityCompiler.setManifest({ files: next.files, separator: next.separator })
+    })
+  }
   const threadManager = createThreadManager(bus, dataDir)
   for (const label of ['main', 'upgrades', 'v2-app']) {
     if (!threadManager.get(label)) threadManager.create({ label })
@@ -296,7 +312,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     routingBackend,
     backend,
     cronService,
-    openClawBackend,
     claudeCodeBackend,
     sessionsRegistry,
     activeSessions,
@@ -390,9 +405,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     createThreadRoutes(threadManager, createForwardHandler(bus, threadManager), {
       chatModule,
       backend: routingBackend,
-      activityProvider: openClawBackend
-        ? { getGatewayActivityMap: () => getGatewayActivityMap(openClawBackend.paths.sessionsJsonPath) }
-        : undefined,
       cronService
     })
   )
@@ -427,10 +439,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   wireBusLogging(bus, logsChannel)
   registerDefaultModules(systemModule)
 
-  refreshWorkspaceIndex()
-  bus.on('org.created', () => refreshWorkspaceIndex())
-  bus.on('org.updated', () => refreshWorkspaceIndex())
-  bus.on('org.deleted', () => refreshWorkspaceIndex())
   app.use(
     createDashboardRoutes({ orgManager, threadManager, notifications: notificationsModule, system: systemModule })
   )
@@ -476,7 +484,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         .catch((err: any) => console.error('[resume] orchestrator failed:', err?.message ?? err))
     )
     .catch((err: any) => console.error('Failed to connect agent backend(s):', err.message))
-  const cronMonitor = createCronMonitor({ cronService, wsHandler, pollIntervalMs: 30_000, autoFixIntervalMs: 15_000 })
+  const cronMonitor = createCronMonitor({ cronService, wsHandler, pollIntervalMs: 30_000 })
   setTimeout(() => cronMonitor.start(), 5000)
 
   return {
@@ -494,8 +502,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       activeSessions.flush()
       claudeCodeBackend?.flushState()
       chatModule.flushState()
-      workspaceIndex.flush()
-      workspaceIndex.dispose()
+      personalityCompiler?.stop()
       browserService.dispose().catch(() => {})
       statusAggregator.destroy()
       systemModule.dispose()

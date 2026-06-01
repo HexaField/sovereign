@@ -26,7 +26,7 @@ export type AgentStatus = 'idle' | 'working' | 'thinking'
  * Identifies which concrete backend implementation owns a session/event.
  * Sovereign supports multiple backends concurrently (one per thread).
  */
-export type AgentBackendKind = 'openclaw' | 'pi' | 'claude-code'
+export type AgentBackendKind = 'pi' | 'claude-code'
 
 /**
  * A single unit of agent work: tool call, result, thinking block, or system event.
@@ -123,7 +123,7 @@ export type SessionKind = 'main' | 'thread' | 'cron' | 'subagent' | 'event-agent
 export interface SessionSummary {
   /** Canonical session key the backend uses for routing (`agent:main:thread:<x>` etc.) */
   key: string
-  /** Backend-specific id (Pi UUID, Claude Code UUID, OpenClaw sessionId). May equal key for OpenClaw. */
+  /** Backend-specific id (Pi UUID, Claude Code UUID). */
   backendSessionId?: string
   kind: SessionKind
   label?: string
@@ -285,9 +285,7 @@ export interface AgentBackend {
 
   /** OPTIONAL — backends that natively support subagents implement this. */
   spawnSubagent?(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string>
-  /** OPTIONAL — backends whose runtime can be restarted out-of-band. */
-  restart?(): Promise<{ message: string; command?: string }>
-  /** OPTIONAL — backends with a device identity (e.g. OpenClaw). */
+  /** OPTIONAL — backends with a device identity. */
   getDeviceInfo?(): DeviceInfo | null
 
   /**

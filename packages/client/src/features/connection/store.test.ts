@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { connectionStatus, statusText, setConnectionStatus, initConnectionStore } from './store.js'
+import { connectionStatus, statusText, setConnectionStatus, setBackendStatus, initConnectionStore } from './store.js'
 
 function createMockWs() {
   const handlers = new Map<string, Set<(msg: any) => void>>()
@@ -23,8 +23,14 @@ function createMockWs() {
 }
 
 describe('§3.1 Connection Store', () => {
+  // The store splits liveness into two signals: `wsStatus` (browser ↔ Sovereign)
+  // and `backendStatus` (Sovereign ↔ agent backend). `setConnectionStatus` is
+  // a backcompat alias for `setWsStatus`. The combined `connectionStatus()`
+  // returns 'connected' only when BOTH are connected; backend errors collapse
+  // to 'disconnected' visually so the user sees a single binary live/dead chip.
   beforeEach(() => {
     setConnectionStatus('disconnected')
+    setBackendStatus('disconnected')
   })
 
   it('MUST expose connectionStatus: Accessor<ConnectionStatus>', () => {
@@ -40,8 +46,9 @@ describe('§3.1 Connection Store', () => {
     expect(statusText()).toBe('Connecting…')
   })
 
-  it('MUST map connected to Connected', () => {
+  it('MUST map connected to Connected (when both ws AND backend are connected)', () => {
     setConnectionStatus('connected')
+    setBackendStatus('connected')
     expect(statusText()).toBe('Connected')
   })
 
@@ -50,12 +57,19 @@ describe('§3.1 Connection Store', () => {
     expect(statusText()).toBe('Disconnected')
   })
 
-  it('MUST map error to Connection error', () => {
+  it('MUST map error to Connection error (ws-level error)', () => {
     setConnectionStatus('error')
     expect(statusText()).toBe('Connection error')
   })
 
+  it('MUST collapse backend errors to Disconnected when ws is connected', () => {
+    setConnectionStatus('connected')
+    setBackendStatus('error')
+    expect(statusText()).toBe('Disconnected')
+  })
+
   it('MUST subscribe to chat WS channel for backend.status messages', () => {
+    setConnectionStatus('connected') // ws side must be up for combined status to reflect backend
     const ws = createMockWs()
     const unsub = initConnectionStore(ws as any)
     ws._emit('backend.status', { type: 'backend.status', status: 'connected' })
@@ -64,10 +78,12 @@ describe('§3.1 Connection Store', () => {
   })
 
   it('MUST update connectionStatus when backend.status messages arrive', () => {
+    setConnectionStatus('connected')
     const ws = createMockWs()
     const unsub = initConnectionStore(ws as any)
+    // backend 'error' collapses to 'disconnected' visually.
     ws._emit('backend.status', { type: 'backend.status', status: 'error' })
-    expect(connectionStatus()).toBe('error')
+    expect(connectionStatus()).toBe('disconnected')
     ws._emit('backend.status', { type: 'backend.status', status: 'connecting' })
     expect(connectionStatus()).toBe('connecting')
     unsub()
