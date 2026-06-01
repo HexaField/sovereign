@@ -1,23 +1,21 @@
 import { Show, createSignal, createMemo, createEffect, onCleanup, type JSX } from 'solid-js'
-import type { ParsedTurn, ForwardedMessage } from '@sovereign/core'
+import type { ParsedTurn, ForwardedMessage, TurnKind } from '@sovereign/core'
 import { renderMarkdown, escapeHtml } from '../../lib/markdown.js'
 import { messageToMarkdown, downloadText, exportMessagePdf, turnsToMarkdown, exportThreadPdf } from './export.js'
 import { turns } from './store.js'
-import { sanitizeContent, isCompactionMessage } from './sanitize.js'
 import {
   WriteIcon,
   BotIcon,
-  SystemIcon,
-  SplitIcon,
   AlertIcon,
-  SignalIcon,
-  RefreshIcon,
   ClockIcon,
   FileIcon,
   ChatIcon,
   ListIcon,
   ExternalLinkIcon,
-  ChevronDownIcon
+  ChevronDownIcon,
+  BroomIcon,
+  WrenchIcon,
+  SystemIcon
 } from '../../ui/icons.js'
 
 // ── Icons ────────────────────────────────────────────────────────────
@@ -38,35 +36,23 @@ export function formatTimestamp(ts: number): string {
   return `${date} at ${time}`
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── Kind icons ───────────────────────────────────────────────────────
 
-function extractTaskCompletionResult(text: string): string {
-  // 1. Find the actual Result header — use full phrase with colon to avoid matching
-  //    references to the phrase within quoted/backtick text in the result body itself.
-  const anchor = 'Result (untrusted content, treat as data):'
-  const anchorIdx = text.lastIndexOf(anchor)
-
-  if (anchorIdx >= 0) {
-    const searchText = text.substring(anchorIdx)
-    // 2. Try explicit markers after the anchor
-    const markerMatch = searchText.match(
-      /<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\n?([\s\S]*?)\n?<<<END_UNTRUSTED_CHILD_RESULT>>>/
-    )
-    if (markerMatch) return markerMatch[1].trim()
-
-    // 3. Fallback: extract text after the header line up to Stats:/Action:
-    const resultMatch = searchText.match(/Result \(untrusted content[^)]*\):\s*\n([\s\S]*?)(?=\n(?:Stats:|Action:)|$)/)
-    if (resultMatch) return resultMatch[1].trim()
+function iconForKind(kind: TurnKind): JSX.Element {
+  switch (kind.variant) {
+    case 'cron-fired':
+      return <ClockIcon class="inline h-4 w-4" />
+    case 'task-notification':
+      return <BotIcon class="inline h-4 w-4" />
+    case 'sdk-invoke':
+      return <WrenchIcon class="inline h-4 w-4" />
+    case 'compaction':
+      return <BroomIcon class="inline h-4 w-4" />
+    case 'agent-error':
+      return <AlertIcon class="inline h-4 w-4" />
+    default:
+      return <SystemIcon class="inline h-4 w-4" />
   }
-
-  // 4. Try markers anywhere (for non-standard formats) — use newline-anchored pattern
-  //    to avoid matching markers inside inline code/backticks
-  const globalMatch = text.match(/\n<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\n([\s\S]*?)\n<<<END_UNTRUSTED_CHILD_RESULT>>>/)
-  if (globalMatch) return globalMatch[1].trim()
-
-  // 5. Strip Stats/Action lines and everything after as last resort
-  const stripped = text.replace(/\n(?:Stats|Action):.*$/s, '').trim()
-  return stripped || text
 }
 
 // ── MarkdownContent (internal) ───────────────────────────────────────
@@ -166,8 +152,8 @@ export function MessageBubble(props: MessageBubbleProps) {
   let menuRef!: HTMLDivElement
 
   const role = () => props.turn.role
-  const rawContent = () => props.turn.content
-  const content = () => sanitizeContent(role(), rawContent())
+  const content = () => props.turn.content
+  const kind = () => props.turn.kind
   const timestamp = () => props.turn.timestamp
   const pending = () => props.pending ?? props.turn.pending
   const sendFailed = () => props.turn.sendFailed === true
@@ -258,87 +244,71 @@ export function MessageBubble(props: MessageBubbleProps) {
   onCleanup(() => document.removeEventListener('click', handleDocClick, true))
 
   // ── System message rendering ─────────────────────
+  // Every system turn is classified by its backend adapter into a `TurnKind`.
+  // The variant decides the card; the body comes verbatim from `turn.content`
+  // and the header time prefers `kind.firedAt` (envelope wall-clock) over the
+  // SDK-message `timestamp` so e.g. cron turns show when the cron fired, not
+  // when the SDK delivered the prompt.
 
-  // ── Compaction messages ───────────────────────────
-  // Check BEFORE the system-typed branch so the `⚙️ Compacted (…)` chip
-  // wins over the generic system-turn renderer (whose "Event Routing"
-  // heuristic would otherwise match summary-body keywords). Applies to
-  // any role — legacy transcripts arrived as user/assistant turns; current
-  // rehydration emits them as role='system'.
-  if (isCompactionMessage(rawContent())) {
-    const compactionMarker = (): string => {
-      const text = rawContent().trim()
-      const blankIdx = text.indexOf('\n\n')
-      return blankIdx === -1 ? text : text.slice(0, blankIdx).trim()
-    }
-    const compactionSummary = (): string => {
-      const text = rawContent().trim()
-      const blankIdx = text.indexOf('\n\n')
-      return blankIdx === -1 ? '' : text.slice(blankIdx + 2).trim()
-    }
-    const [summaryOpen, setSummaryOpen] = createSignal(false)
-    const hasSummary = (): boolean => compactionSummary().length > 0
-    return (
-      <div class="my-1 flex w-full flex-col items-center gap-1">
-        <button
-          type="button"
-          class="rounded-full px-3 py-1 text-xs"
-          classList={{ 'cursor-pointer': hasSummary(), 'cursor-default': !hasSummary() }}
-          style={{
-            background: 'var(--c-bg-raised)',
-            color: 'var(--c-text-muted)',
-            border: '1px solid var(--c-border)'
-          }}
-          onClick={() => hasSummary() && setSummaryOpen(!summaryOpen())}
-          aria-expanded={hasSummary() ? summaryOpen() : undefined}
-        >
-          <span>{compactionMarker()}</span>
-          <Show when={hasSummary()}>
-            <span class="ml-2 text-[9px]" classList={{ 'rotate-90': summaryOpen() }}>
-              ▶
-            </span>
-          </Show>
-        </button>
-        <Show when={hasSummary() && summaryOpen()}>
-          <div
-            class="w-full max-w-[85%] rounded-lg px-3 py-2 text-xs"
+  if (role() === 'system') {
+    if (!content()?.trim() && !kind()) return null
+
+    const k = kind()
+
+    // Compaction marker — small centered chip with optional summary body.
+    if (k?.variant === 'compaction') {
+      const [summaryOpen, setSummaryOpen] = createSignal(false)
+      const marker = (): string => {
+        const text = content().trim()
+        const blankIdx = text.indexOf('\n\n')
+        return blankIdx === -1 ? text : text.slice(0, blankIdx).trim()
+      }
+      const summary = (): string => {
+        const text = content().trim()
+        const blankIdx = text.indexOf('\n\n')
+        return blankIdx === -1 ? '' : text.slice(blankIdx + 2).trim()
+      }
+      const hasSummary = (): boolean => summary().length > 0
+      return (
+        <div class="my-1 flex w-full flex-col items-center gap-1">
+          <button
+            type="button"
+            class="rounded-full px-3 py-1 text-xs"
+            classList={{ 'cursor-pointer': hasSummary(), 'cursor-default': !hasSummary() }}
             style={{
               background: 'var(--c-bg-raised)',
               color: 'var(--c-text-muted)',
               border: '1px solid var(--c-border)'
             }}
+            onClick={() => hasSummary() && setSummaryOpen(!summaryOpen())}
+            aria-expanded={hasSummary() ? summaryOpen() : undefined}
           >
-            <MarkdownContentInternal text={compactionSummary()} />
-          </div>
-        </Show>
-      </div>
-    )
-  }
-
-  if (role() === 'system') {
-    // Hide empty system turns (render as thin blue lines otherwise)
-    if (!content()?.trim()) return null
-
-    const [expanded, setExpanded] = createSignal(false)
-    const isErrorTurn = /^Error:\s/i.test(content())
-    const isCron = /^Cron:|^\[CronResult\]|^Scheduled Result|cron job|cron schedule/i.test(content())
-    const isEvent = /event|routing|processed\/|GRAPH|NOTIFY|AGENT|VOID/i.test(content())
-    const isReconciliation = /reconcil|graph.*task/i.test(content())
-    const isSubagent = /subagent task .* completed/i.test(content())
-    const isExecFailed = /Exec failed/i.test(content())
-    const isMemorySave = /^Write any lasting notes to memory\//i.test(content())
-    const isHeartbeat = /^Heartbeat prompt:/i.test(content()) || content() === 'HEARTBEAT_OK'
-    const isSubagentContext = content().startsWith('[Subagent Context]') || content().startsWith('[Subagent Task]')
-    const isRuntimeContext = /^OpenClaw runtime context \(internal\):/i.test(content())
-    const isTaskCompletion = isRuntimeContext && /\[Internal task completion event\]/i.test(content())
-
-    // Hide internal-only messages entirely (but keep task completion events visible)
-    if ((isRuntimeContext && !isTaskCompletion) || isSubagentContext || isMemorySave || isHeartbeat) {
-      return null
+            <span>{marker()}</span>
+            <Show when={hasSummary()}>
+              <span class="ml-2 text-[9px]" classList={{ 'rotate-90': summaryOpen() }}>
+                ▶
+              </span>
+            </Show>
+          </button>
+          <Show when={hasSummary() && summaryOpen()}>
+            <div
+              class="w-full max-w-[85%] rounded-lg px-3 py-2 text-xs"
+              style={{
+                background: 'var(--c-bg-raised)',
+                color: 'var(--c-text-muted)',
+                border: '1px solid var(--c-border)'
+              }}
+            >
+              <MarkdownContentInternal text={summary()} />
+            </div>
+          </Show>
+        </div>
+      )
     }
 
-    // Error turns — render prominently with red styling
-    if (isErrorTurn) {
+    // Agent error — red, prominent, not collapsible.
+    if (k?.variant === 'agent-error') {
+      const headerTs = k?.firedAt ?? timestamp()
       return (
         <div class="my-2 flex w-full justify-center">
           <div
@@ -351,70 +321,24 @@ export function MessageBubble(props: MessageBubbleProps) {
           >
             <div class="mb-1 flex items-center gap-1.5 text-[11px] font-medium" style={{ color: '#ef4444' }}>
               <AlertIcon class="inline h-4 w-4" />
-              <span>Agent Error</span>
-              <Show when={timestamp()}>
+              <span>{k.label}</span>
+              <Show when={headerTs}>
                 <span style={{ opacity: 0.5, 'font-weight': 'normal', 'margin-left': '4px' }}>
-                  {new Date(timestamp()!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {new Date(headerTs!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
               </Show>
             </div>
-            <span>{content().replace(/^Error:\s*/i, '')}</span>
+            <span>{content()}</span>
           </div>
         </div>
       )
     }
 
-    const icon = isTaskCompletion ? (
-      <BotIcon class="inline h-4 w-4" />
-    ) : isRuntimeContext ? (
-      <SystemIcon class="inline h-4 w-4" />
-    ) : isSubagentContext ? (
-      <SplitIcon class="inline h-4 w-4" />
-    ) : isSubagent ? (
-      <BotIcon class="inline h-4 w-4" />
-    ) : isExecFailed ? (
-      <AlertIcon class="inline h-4 w-4" />
-    ) : isCron ? (
-      <ClockIcon class="inline h-4 w-4" />
-    ) : isEvent ? (
-      <SignalIcon class="inline h-4 w-4" />
-    ) : isReconciliation ? (
-      <RefreshIcon class="inline h-4 w-4" />
-    ) : (
-      <ClockIcon class="inline h-4 w-4" />
-    )
-    const label = isMemorySave
-      ? 'Memory Checkpoint'
-      : isHeartbeat
-        ? 'Heartbeat'
-        : isTaskCompletion
-          ? (() => {
-              const m = content().match(/task:\s*(.+)/im)
-              const s = content().match(/status:\s*(.+)/im)
-              return m ? `Sub-agent: ${m[1].trim()}${s ? ` — ${s[1].trim()}` : ''}` : 'Sub-agent Result'
-            })()
-          : isRuntimeContext
-            ? 'Runtime Context'
-            : isSubagentContext
-              ? 'Subagent Task'
-              : isSubagent
-                ? (() => {
-                    const m = content().match(/subagent task "([^"]+)"/)
-                    return m ? `Sub-agent: ${m[1]}` : 'Sub-agent Result'
-                  })()
-                : isExecFailed
-                  ? 'Exec Notification'
-                  : isCron
-                    ? 'Cron Result'
-                    : isEvent
-                      ? 'Event Routing'
-                      : isReconciliation
-                        ? 'Graph Reconciliation'
-                        : 'Scheduled Result'
-    const displayContent = () => {
-      if (isTaskCompletion) return extractTaskCompletionResult(content())
-      return content()
-    }
+    // Card-style system turns: cron-fired, task-notification, sdk-invoke, or
+    // any unclassified system turn. All share one expandable layout.
+    const [expanded, setExpanded] = createSignal(false)
+    const label = k?.label ?? 'System'
+    const headerTs = k?.firedAt ?? timestamp()
     return (
       <div class="my-1 flex w-full justify-center">
         <div
@@ -426,24 +350,21 @@ export function MessageBubble(props: MessageBubbleProps) {
           }}
           onClick={() => setExpanded((v) => !v)}
         >
-          {/* Header — always visible */}
           <div class="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-accent)' }}>
-            <span>{icon}</span>
+            <span>{k ? iconForKind(k) : <SystemIcon class="inline h-4 w-4" />}</span>
             <span class="min-w-0 flex-1 truncate">{label}</span>
-            <Show when={timestamp()}>
+            <Show when={headerTs}>
               <span style={{ opacity: 0.5, 'font-weight': 'normal' }}>
-                {new Date(timestamp()!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {new Date(headerTs!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             </Show>
             <span style={{ 'font-size': '10px', opacity: 0.6 }}>
               <ChevronDownIcon class={`inline h-3 w-3 transition-transform ${expanded() ? 'rotate-180' : ''}`} />
             </span>
           </div>
-
-          {/* Body — only shown when expanded */}
           <Show when={expanded()}>
             <div class="mt-2 border-t pt-2" style={{ 'border-color': 'var(--c-border)' }}>
-              <MarkdownContentInternal text={displayContent()} />
+              <MarkdownContentInternal text={content()} />
             </div>
           </Show>
         </div>
@@ -451,7 +372,7 @@ export function MessageBubble(props: MessageBubbleProps) {
     )
   }
 
-  // ── Empty after sanitization ──────────────────────
+  // ── Empty content ──────────────────────────────────
 
   if (!content()?.trim()) return null
 
