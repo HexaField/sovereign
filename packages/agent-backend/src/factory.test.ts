@@ -58,19 +58,19 @@ describe('createBackend / RoutingBackend', () => {
 
   it('routes a registered session to the owning backend', () => {
     const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
-    const oc = makeStub('openclaw')
+    const cc = makeStub('claude-code')
     const pi = makeStub('pi')
     registry.upsert({ threadKey: 'pi-thread', sessionKey: 'agent:main:thread:pi-thread', backendKind: 'pi' })
 
     const routing = createBackend({
-      enabled: ['openclaw', 'pi'],
-      default: 'openclaw',
+      enabled: ['claude-code', 'pi'],
+      default: 'claude-code',
       registry,
-      factories: { openclaw: () => oc, pi: () => pi }
+      factories: { 'claude-code': () => cc, pi: () => pi }
     })
 
     expect(routing.forSession('agent:main:thread:pi-thread').kind).toBe('pi')
-    expect(routing.forSession('agent:main:thread:other').kind).toBe('openclaw')
+    expect(routing.forSession('agent:main:thread:other').kind).toBe('claude-code')
     rmSync(dataDir, { recursive: true, force: true })
   })
 
@@ -78,82 +78,64 @@ describe('createBackend / RoutingBackend', () => {
     const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
     expect(() =>
       createBackend({
-        enabled: ['openclaw'],
+        enabled: ['claude-code'],
         default: 'pi',
         registry,
-        factories: { openclaw: () => makeStub('openclaw') }
+        factories: { 'claude-code': () => makeStub('claude-code') }
       })
     ).toThrow(/SOVEREIGN_DEFAULT_BACKEND/)
   })
 
   it('multiplexes events from every enabled backend', async () => {
     const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
-    const oc = makeStub('openclaw') as AgentBackend & { __emit: any }
+    const cc = makeStub('claude-code') as AgentBackend & { __emit: any }
     const pi = makeStub('pi') as AgentBackend & { __emit: any }
     const routing = createBackend({
-      enabled: ['openclaw', 'pi'],
-      default: 'openclaw',
+      enabled: ['claude-code', 'pi'],
+      default: 'claude-code',
       registry,
-      factories: { openclaw: () => oc, pi: () => pi }
+      factories: { 'claude-code': () => cc, pi: () => pi }
     })
 
     const seen: any[] = []
     routing.on('chat.stream', (d) => seen.push(d))
 
-    oc.__emit('chat.stream', { sessionKey: 'k1', text: 'from oc' })
+    cc.__emit('chat.stream', { sessionKey: 'k1', text: 'from cc' })
     pi.__emit('chat.stream', { sessionKey: 'k2', text: 'from pi' })
 
-    expect(seen.find((e) => e.text === 'from oc' && e.backendKind === 'openclaw')).toBeDefined()
+    expect(seen.find((e) => e.text === 'from cc' && e.backendKind === 'claude-code')).toBeDefined()
     expect(seen.find((e) => e.text === 'from pi' && e.backendKind === 'pi')).toBeDefined()
   })
 
   it('connectAll / disconnectAll cycles every backend', async () => {
     const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
-    const oc = makeStub('openclaw')
+    const cc = makeStub('claude-code')
     const pi = makeStub('pi')
     const routing = createBackend({
-      enabled: ['openclaw', 'pi'],
-      default: 'openclaw',
+      enabled: ['claude-code', 'pi'],
+      default: 'claude-code',
       registry,
-      factories: { openclaw: () => oc, pi: () => pi }
+      factories: { 'claude-code': () => cc, pi: () => pi }
     })
     await routing.connectAll()
     const connected = routing.statusAll()
-    expect(connected['openclaw' as const]).toBe('connected')
-    expect(connected['pi' as const]).toBe('connected')
-    expect(connected['claude-code']).toBe('disabled')
+    expect(connected['claude-code']).toBe('connected')
+    expect(connected.pi).toBe('connected')
 
     await routing.disconnectAll()
     const disconnected = routing.statusAll()
-    expect(disconnected['openclaw' as const]).toBe('disconnected')
-    expect(disconnected['pi' as const]).toBe('disconnected')
+    expect(disconnected['claude-code']).toBe('disconnected')
+    expect(disconnected.pi).toBe('disconnected')
   })
 
-  it('routes unmapped agent: keys to the configured default, not OpenClaw', () => {
+  it('routes unmapped agent: keys to the configured default', () => {
     const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
     const routing = createBackend({
-      enabled: ['openclaw', 'pi'],
+      enabled: ['claude-code', 'pi'],
       default: 'pi',
       registry,
-      factories: { openclaw: () => makeStub('openclaw'), pi: () => makeStub('pi') }
+      factories: { 'claude-code': () => makeStub('claude-code'), pi: () => makeStub('pi') }
     })
-    // Even though `agent:*` keys used to be OpenClaw-exclusive, the configured
-    // default now wins — otherwise flipping SOVEREIGN_DEFAULT_BACKEND has no
-    // effect on legacy threads that lack registry entries.
     expect(routing.forSession('agent:main:thread:legacy').kind).toBe('pi')
-  })
-
-  it('keeps routing unmapped agent: keys to OpenClaw when OpenClaw is the default', () => {
-    const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
-    const routing = createBackend({
-      enabled: ['openclaw', 'claude-code' as const],
-      default: 'openclaw',
-      registry,
-      factories: {
-        openclaw: () => makeStub('openclaw'),
-        'claude-code': () => makeStub('claude-code' as const)
-      }
-    })
-    expect(routing.forSession('agent:main:thread:legacy').kind).toBe('openclaw')
   })
 })

@@ -26,15 +26,21 @@ PLIST_TEMPLATE="$REPO_DIR/support/com.sovereign.server.plist"
 LAUNCH_SCRIPT="$REPO_DIR/bin/sovereign-launchd.sh"
 TMP_ROOT="${TMPDIR:-/tmp}"
 
-# Sovereign config now lives in {DATA_DIR}/config.json — env vars are no
-# longer consulted for HOST/PORT/SOVEREIGN_TLS. SOVEREIGN_DATA_DIR remains
-# the only bootstrap env var; it tells us where to find config.json.
+# Sovereign separates *config* from *data*:
+#   SOVEREIGN_CONFIG_DIR  — user-edited state (just config.json today).
+#                           Defaults to ~/.sovereign. Intended to be
+#                           version-controlled.
+#   SOVEREIGN_DATA_DIR    — runtime state (threads, queues, logs, scheduler,
+#                           secrets.json, config-history.jsonl). Defaults to
+#                           ${SOVEREIGN_CONFIG_DIR}/data. Should be gitignored.
+# Everything else (HOST/PORT/TLS/...) lives in config.json — env vars are not
+# consulted for those.
 
 _read_config_json() {
   # _read_config_json <dot.path> <default>
   local dotpath="$1"
   local default="$2"
-  local config="$DATA_DIR/config.json"
+  local config="$CONFIG_DIR/config.json"
   if [ ! -f "$config" ] || ! command -v node >/dev/null 2>&1; then
     printf '%s' "$default"
     return
@@ -51,7 +57,8 @@ _read_config_json() {
   ' "$config" "$dotpath" "$default" 2>/dev/null || printf '%s' "$default"
 }
 
-DATA_DIR="${SOVEREIGN_DATA_DIR:-$REPO_DIR/packages/server/.data}"
+CONFIG_DIR="${SOVEREIGN_CONFIG_DIR:-$HOME/.sovereign}"
+DATA_DIR="${SOVEREIGN_DATA_DIR:-$CONFIG_DIR/data}"
 LOG_DIR="$DATA_DIR/logs"
 STDOUT_LOG="$LOG_DIR/sovereign.stdout.log"
 STDERR_LOG="$LOG_DIR/sovereign.stderr.log"
@@ -171,6 +178,7 @@ _install_plist() {
       -e "s|LAUNCH_SCRIPT_PLACEHOLDER|${LAUNCH_SCRIPT}|g" \
       -e "s|STDOUT_LOG_PLACEHOLDER|${STDOUT_LOG}|g" \
       -e "s|STDERR_LOG_PLACEHOLDER|${STDERR_LOG}|g" \
+      -e "s|CONFIG_DIR_PLACEHOLDER|${CONFIG_DIR}|g" \
       -e "s|DATA_DIR_PLACEHOLDER|${DATA_DIR}|g" \
       "$PLIST_TEMPLATE" > "$PLIST_DEST"
 }
@@ -387,6 +395,7 @@ _guarded_build() {
 _show_status() {
   echo "Label: $PLIST_LABEL"
   echo "Repo: $REPO_DIR"
+  echo "Config: $CONFIG_DIR"
   echo "Data: $DATA_DIR"
   echo "Plist: $PLIST_DEST"
   echo "Stdout: $STDOUT_LOG"
@@ -486,6 +495,10 @@ case "${1:-help}" in
     cd "$REPO_DIR"
     exec node "$SERVER_ENTRY"
     ;;
+  migrate)
+    shift
+    exec "$REPO_DIR/bin/sovereign-migrate.sh" "$@"
+    ;;
   help|--help|-h)
     cat <<EOF
 Usage: sovereign <command>
@@ -501,17 +514,22 @@ Commands:
   health             Print /health response
   logs [mode]        Tail logs (stdout|stderr|all)
   run                Run in foreground (no daemon)
+  migrate [flags]    One-shot OpenClaw → Sovereign migration (--dry-run, --yes)
 
   stop, restart, reload, and build snapshot any non-idle agent sessions to
   active-sessions.json and auto-resume them on next start.
 
-Configuration (lives in {DATA_DIR}/config.json; managed via /api/config):
+Configuration (lives in {CONFIG_DIR}/config.json; managed via /api/config):
   server.host        Bind address (default: localhost)
   server.port        Server port (default: 3001)
   server.tls.enabled HTTPS toggle (default: true)
 
-Environment (the only bootstrap env var):
-  SOVEREIGN_DATA_DIR  Data directory (default: $REPO_DIR/packages/server/.data)
+Environment (the only bootstrap env vars):
+  SOVEREIGN_CONFIG_DIR  User-edited state (default: \$HOME/.sovereign)
+                        Holds config.json. Intended to be version-controlled.
+  SOVEREIGN_DATA_DIR    Runtime state (default: \$SOVEREIGN_CONFIG_DIR/data)
+                        Holds threads, queues, logs, scheduler, secrets.json,
+                        config-history.jsonl. Should be gitignored.
 EOF
     ;;
   *)

@@ -1,13 +1,21 @@
-// Sovereign server entry point — resolves data dir, loads config, builds the
-// transport from the resolved config, then hands off to bootstrap.ts.
+// Sovereign server entry point — resolves the config + data dirs, loads
+// config, builds the transport from the resolved config, then hands off to
+// bootstrap.ts.
 //
-// Every former env-var read (HOST/PORT/SOVEREIGN_TLS/...) now flows through
-// {SOVEREIGN_DATA_DIR}/config.json. SOVEREIGN_DATA_DIR is the only remaining
-// process.env read.
+// Two bootstrap env vars (the only ones consulted directly):
+//   SOVEREIGN_CONFIG_DIR  — tracks user-edited state (config.json, secrets.json,
+//                           config-history.jsonl). Defaults to `~/.sovereign`.
+//                           Intended to be version-controlled by the user.
+//   SOVEREIGN_DATA_DIR    — holds pure runtime state (threads, queues, logs,
+//                           events, scheduler, etc). Defaults to
+//                           `${SOVEREIGN_CONFIG_DIR}/data`. Should be gitignored.
+//
+// Everything else (HOST/PORT/SOVEREIGN_TLS/...) flows through config.json.
 
 import fs from 'node:fs'
 import https from 'node:https'
 import http from 'node:http'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import cors from 'cors'
@@ -24,21 +32,28 @@ import { bootstrapServer } from './bootstrap.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '../../..')
 
-// ── Data dir (only remaining env-var read) ──────────────────────────────
-const dataDir = process.env.SOVEREIGN_DATA_DIR || path.join(process.cwd(), '.data')
+// ── Config dir + data dir (the two bootstrap env reads) ─────────────────
+const configDir = process.env.SOVEREIGN_CONFIG_DIR || path.join(os.homedir(), '.sovereign')
+fs.mkdirSync(configDir, { recursive: true })
+const dataDir = process.env.SOVEREIGN_DATA_DIR || path.join(configDir, 'data')
 fs.mkdirSync(dataDir, { recursive: true })
+console.log(
+  `Config dir: ${configDir}${process.env.SOVEREIGN_CONFIG_DIR ? '' : ' (defaulted — set SOVEREIGN_CONFIG_DIR to pin)'}`
+)
 console.log(
   `Data dir: ${dataDir}${process.env.SOVEREIGN_DATA_DIR ? '' : ' (defaulted — set SOVEREIGN_DATA_DIR to pin)'}`
 )
 
-// Drift guard: warn if a sibling sovereign data dir under ~/.openclaw/workspace
-// exists but isn't the one we're using. This is the exact failure mode where
-// threads/sessions silently disappear because the active dir is stale.
+// Drift guard: warn if a populated Sovereign data dir exists at a historical
+// location (`~/.openclaw/workspace/.sovereign-data`) but isn't the one we're
+// using. The legacy path predates the OpenClaw removal but still holds live
+// user state for existing installs — without this warning the operator would
+// silently see an empty Sovereign because the active dir is stale.
 if (!process.env.SOVEREIGN_DATA_DIR) {
   const home = process.env.HOME ?? ''
-  const siblingDataDir = path.join(home, '.openclaw', 'workspace', '.sovereign-data')
-  if (fs.existsSync(path.join(siblingDataDir, 'threads', 'registry.json')) && siblingDataDir !== dataDir) {
-    console.warn(`[data-dir] WARNING: another Sovereign data dir exists at ${siblingDataDir}.`)
+  const legacyDataDir = path.join(home, '.openclaw', 'workspace', '.sovereign-data')
+  if (fs.existsSync(path.join(legacyDataDir, 'threads', 'registry.json')) && legacyDataDir !== dataDir) {
+    console.warn(`[data-dir] WARNING: another Sovereign data dir exists at ${legacyDataDir}.`)
     console.warn(
       `[data-dir] You are using the default (${dataDir}); state may diverge. Set SOVEREIGN_DATA_DIR to pick one explicitly.`
     )
@@ -46,8 +61,10 @@ if (!process.env.SOVEREIGN_DATA_DIR) {
 }
 
 // ── Config (everything else) ────────────────────────────────────────────
+// config.json lives in configDir (version-controlled); secrets.json + the
+// change-history JSONL live in dataDir (runtime, gitignored).
 const bus = createEventBus(dataDir)
-const configStore = createConfigStore(bus, dataDir)
+const configStore = createConfigStore(bus, configDir, dataDir)
 
 const host = configStore.get<string>('server.host')
 const port = configStore.get<number>('server.port')

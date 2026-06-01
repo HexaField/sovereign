@@ -1,6 +1,6 @@
 // Public surface of the agent-backend layer. Nothing outside this package
-// should import from `./openclaw/*`, `./pi/*`, `./claude-code/*` directly —
-// those are implementation details.
+// should import from `./pi/*` or `./claude-code/*` directly — those are
+// implementation details.
 
 export { createBackend } from './factory.js'
 export type { RoutingBackend, MultiBackendConfig, BackendInstance } from './factory.js'
@@ -40,19 +40,15 @@ export type {
   SubagentSummary
 } from '@sovereign/core'
 
-// OpenClaw adapter
-export { createOpenClawBackend } from './openclaw/openclaw.js'
-export type { OpenClawBackend } from './openclaw/openclaw.js'
-export type { OpenClawConfig } from './openclaw/types.js'
-export { openClawConfigFromStore } from './openclaw/config.js'
-export { getGatewayActivityMap } from './openclaw/parse-gateway-sessions.js'
-
 // Claude Code adapter
 export {
   createClaudeCodeBackend,
   claudeCodeConfigFromStore,
   createSovereignMcpServer,
-  createWorkspaceIndex,
+  createPersonalityCompiler,
   type ClaudeCodeBackend,
-  type SovereignToolDeps
+  type SovereignToolDeps,
+  type PersonalityCompiler,
+  type PersonalityCompilerOptions,
+  type PersonalityManifest
 } from './claude-code/index.js'

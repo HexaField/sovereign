@@ -21,9 +21,8 @@ export interface BrowserOpenResult {
   summary: string
 }
 
-/** Discriminated union of supported actions. Mirrors a useful subset of
- *  OpenClaw's `BROWSER_ACT_KINDS` + the page-level actions you'd run in
- *  a typical browse-and-extract workflow. */
+/** Discriminated union of supported actions covering the page-level
+ *  operations you'd run in a typical browse-and-extract workflow. */
 export type BrowserAct =
   | { kind: 'navigate'; url: string; waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' }
   | {

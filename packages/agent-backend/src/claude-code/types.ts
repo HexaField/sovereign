@@ -33,7 +33,7 @@ export interface ClaudeCodeConfig {
    */
   mcpServers?: Record<string, unknown>
   /**
-   * Built-in tool allowlist for new sessions. Defaults to OpenClaw-parity set:
+   * Built-in tool allowlist for new sessions. Defaults to:
    * `Read, Write, Edit, Bash, Grep, Glob, LS`.
    */
   defaultTools?: string[]

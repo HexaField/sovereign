@@ -55,7 +55,6 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   const healthHistory = 'healthHistory' in opts ? (opts as SystemRoutesOptions).healthHistory : null
   const routingBackend = 'routingBackend' in opts ? (opts as SystemRoutesOptions).routingBackend : null
   const activeSessions = 'activeSessions' in opts ? (opts as SystemRoutesOptions).activeSessions : null
-  let restartInFlight: Promise<{ message: string; command?: string }> | null = null
 
   const getIdentity = 'getIdentity' in opts ? (opts as SystemRoutesOptions).getIdentity : null
   router.get('/api/system/identity', (_req, res) => {
@@ -166,35 +165,6 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
       })
     }
     res.json({ devices })
-  })
-
-  router.post('/api/system/gateway/restart', async (_req, res) => {
-    if (!routingBackend) {
-      res.status(500).json({ error: 'Routing backend not available' })
-      return
-    }
-    if (restartInFlight) {
-      res.status(409).json({ error: 'Gateway restart already in progress' })
-      return
-    }
-
-    // Find the first backend that supports restart (Phase 0: OpenClaw only).
-    const restartable = routingBackend.all().find((i) => typeof i.backend.restart === 'function')
-    if (!restartable?.backend.restart) {
-      res.status(501).json({ error: 'No backend supports restart' })
-      return
-    }
-
-    restartInFlight = restartable.backend.restart!()
-    try {
-      const result = await restartInFlight
-      res.status(202).json({ status: 'accepted', ...result })
-    } catch (error) {
-      const message = error instanceof Error && error.message.trim() ? error.message : 'Failed to restart backend'
-      res.status(500).json({ error: message })
-    } finally {
-      restartInFlight = null
-    }
   })
 
   router.get('/api/system/watchdog', async (_req, res) => {

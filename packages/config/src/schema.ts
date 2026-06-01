@@ -73,17 +73,10 @@ export const schema = {
       properties: {
         enabled: {
           type: 'array',
-          items: { type: 'string', enum: ['openclaw', 'claude-code'] },
+          items: { type: 'string', enum: ['claude-code'] },
           'x-reload': 'restart'
         },
-        default: { type: 'string', enum: ['openclaw', 'claude-code'], 'x-reload': 'restart' },
-        openclaw: {
-          type: 'object',
-          properties: {
-            gatewayUrl: { ...stringRestart }
-          },
-          additionalProperties: false
-        },
+        default: { type: 'string', enum: ['claude-code'], 'x-reload': 'restart' },
         claudeCode: {
           type: 'object',
           properties: {
@@ -139,6 +132,15 @@ export const schema = {
         default: { ...stringHot }
       },
       additionalProperties: false
+    },
+    personality: {
+      type: 'object',
+      properties: {
+        sourceDir: { ...stringHot },
+        files: { type: 'array', items: { type: 'string' }, 'x-reload': 'hot' },
+        separator: { ...stringHot }
+      },
+      additionalProperties: false
     }
   },
   additionalProperties: false
@@ -147,9 +149,7 @@ export const schema = {
 /** Secret keys live in {dataDir}/secrets.json, not config.json. */
 export const secretsSchema = {
   type: 'object',
-  properties: {
-    openclawGatewayToken: { type: 'string' }
-  },
+  properties: {},
   additionalProperties: false
 } as const
 

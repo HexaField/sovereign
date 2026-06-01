@@ -236,7 +236,7 @@ export function startWaker(
   const proxies = new Map<string, InstanceType<typeof QuerySubscriptionProxy>>()
   // Per-perspective seen message SOURCE addresses (message node, not body link)
   const seenMessages = new Map<string, Set<string>>()
-  // Debounce timers per perspective (2 s, matching the OpenClaw plugin)
+  // Debounce timers per perspective (2 s)
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
   let lastClient: Ad4mTypedClient | null = null
   let agentIdentity: AgentIdentity | null = null

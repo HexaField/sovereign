@@ -2,9 +2,6 @@
 // `AgentBackend` instances and dispatches calls by session key. The chat
 // module, threads routes, system routes — anything that previously held a
 // single backend reference — now holds a `RoutingBackend` instead.
-//
-// In Phase 0 only the OpenClaw backend is wired up. Pi / Claude Code drop in
-// later via the same factory.
 
 import type { AgentBackend, AgentBackendEvents, AgentBackendKind, BackendConnectionStatus } from '@sovereign/core'
 import type { SessionsRegistry, ThreadSessionRecord } from '@sovereign/primitives'
@@ -52,7 +49,7 @@ export interface RoutingBackend {
   registry: SessionsRegistry
 }
 
-const ALL_KINDS: AgentBackendKind[] = ['openclaw', 'pi', 'claude-code']
+const ALL_KINDS: AgentBackendKind[] = ['pi', 'claude-code']
 
 export function createBackend(config: MultiBackendConfig): RoutingBackend {
   if (!config.enabled.includes(config.default)) {
@@ -72,26 +69,12 @@ export function createBackend(config: MultiBackendConfig): RoutingBackend {
    *   1) Registry lookup — explicit bindings always win.
    *   2) Configured default — `SOVEREIGN_DEFAULT_BACKEND` is the user's
    *      authoritative choice for unbound `agent:*` keys.
-   *   3) Legacy OpenClaw shortcut — historically `agent:main:*` keys were
-   *      OpenClaw-exclusive and many existing threads have no registry
-   *      record. Only honour this when OpenClaw is enabled AND nothing
-   *      above resolved, so flipping the default to claude-code actually
-   *      reroutes those threads instead of silently sticking on OpenClaw.
    */
   function resolveBackend(sessionKey: string): AgentBackend {
     const record = config.registry.getBySession(sessionKey) ?? config.registry.getByThread(sessionKey)
     if (record) {
       const inst = instances.get(record.backendKind)
       if (inst) return inst.backend
-    }
-    // Configured default wins for unbound keys regardless of prefix shape.
-    const def = instances.get(config.default)
-    if (def) return def.backend
-    // Last-resort legacy fallback: an `agent:*` key with no registry record
-    // and no enabled default backend lands on OpenClaw if it's enabled.
-    if (sessionKey.startsWith('agent:')) {
-      const oc = instances.get('openclaw')
-      if (oc) return oc.backend
     }
     return defaultBackend()
   }

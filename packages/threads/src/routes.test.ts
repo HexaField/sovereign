@@ -28,7 +28,7 @@ function createStubBackend(initial: Record<string, SessionMeta> = {}): AgentBack
   const noopAsync = async () => {}
 
   const backend: AgentBackend = {
-    kind: 'openclaw',
+    kind: 'claude-code',
     connect: noopAsync,
     disconnect: noopAsync,
     status: () => 'connected',

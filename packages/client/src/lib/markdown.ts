@@ -97,7 +97,7 @@ async function loadWorkspaceFiles(): Promise<void> {
       }
     }
 
-    // Also load OpenClaw workspace files (membranes, memory, etc.)
+    // Also load workspace files (membranes, memory, etc.)
     try {
       const wsRes = await fetch('/api/files/workspace')
       if (wsRes.ok) {
