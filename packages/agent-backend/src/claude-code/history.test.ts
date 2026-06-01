@@ -97,10 +97,17 @@ describe('claude-code/history', () => {
   })
 
   describe('parseClaudeCodeTurns', () => {
-    it('strips a [Cron: …] prefix from user content', () => {
-      const turns = parseClaudeCodeTurns([{ role: 'user', content: '[Cron: hello] do the thing', timestamp: 1 }])
-      const userTurn = turns.find((t) => t.role === 'user')
-      expect(userTurn?.content).toBe('do the thing')
+    it('classifies a [Cron: …] user turn as a cron-fired system card', () => {
+      const turns = parseClaudeCodeTurns([
+        { role: 'user', content: '[Cron: hello @ 2026-06-01T09:00:00Z] do the thing', timestamp: 1 }
+      ])
+      expect(turns).toHaveLength(1)
+      const t = turns[0]
+      expect(t.role).toBe('system')
+      expect(t.content).toBe('do the thing')
+      expect(t.kind?.variant).toBe('cron-fired')
+      expect(t.kind?.label).toBe('Cron: hello')
+      expect(t.kind?.firedAt).toBe(Date.UTC(2026, 5, 1, 9, 0, 0))
     })
 
     it('keeps assistant turns intact', () => {

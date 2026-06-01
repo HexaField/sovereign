@@ -1,16 +1,17 @@
 // Claude Code session JSONL reader. The on-disk format is one JSON object per
 // line, each with `type: 'user' | 'assistant' | 'system'` and a nested
 // `message` object whose shape matches Anthropic's message format. We
-// normalize each line into the shape `parseTurns` consumes and then run it
-// through the generic shared parser with Claude-Code-specific filters.
+// normalize each line into the shape `parseTurns` consumes, run it through
+// the generic shared parser, then hand every turn to `classifyClaudeCodeTurn`
+// — the single place Claude Code envelope grammars (cron, task-notification,
+// invoke, compaction, error) are decoded.
 
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ParsedTurn } from '@sovereign/core'
 import { parseTurns as parseTurnsGeneric, stripTimestamp } from '@sovereign/primitives'
 import { readAllMessages as sharedReadAll, readRecentMessages as sharedReadRecent } from '@sovereign/primitives'
-
-const SOVEREIGN_CRON_PREFIX_RE = /^\[Cron:[^\]]*\]\s*/
+import { classifyClaudeCodeTurn } from './classify.js'
 
 /**
  * Normalize one JSONL entry from a Claude Code session file into the message
@@ -92,23 +93,19 @@ export function normalizeClaudeCodeEntry(entry: any): any | null {
   return null
 }
 
-/** Strip a Sovereign-injected `[Cron: …]` prefix from rendered user turns. */
-function stripCronEnvelope(text: string): string {
-  return text.replace(SOVEREIGN_CRON_PREFIX_RE, '').trim()
-}
-
-/** Apply Claude Code-specific filters on top of the shared parser. */
+/** Apply Claude Code-specific classification on top of the shared parser. */
 export function parseClaudeCodeTurns(messages: any[]): ParsedTurn[] {
-  return parseTurnsGeneric(messages, {
-    stripUserEnvelope: stripCronEnvelope,
+  const turns = parseTurnsGeneric(messages, {
     shouldKeepTurn: (turn) => {
       const text = (turn.content ?? '').trim()
       if (!text) return true
-      // Drop any leading `[Cron: …]` chip lines from older transcripts.
+      // Drop legacy bare cron chips with no body — they carry no signal once
+      // the envelope is decoded by the classifier.
       if (text === '[Cron]' || text === 'Cron') return false
       return true
     }
   })
+  return turns.map(classifyClaudeCodeTurn)
 }
 
 /** Read all messages from a Claude Code session JSONL file. */

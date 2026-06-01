@@ -42,6 +42,27 @@ export interface WorkItem {
 }
 
 /**
+ * Backend-classified discriminator for system-style turns.
+ *
+ * Each backend adapter is responsible for tagging system/envelope turns with
+ * a `TurnKind` so the UI can render the right card variant without knowing
+ * the backend-specific envelope grammar. `variant` is the canonical kind,
+ * `label` is what the card header shows, and `firedAt` / `payload` carry
+ * structured fields extracted from the envelope (cron schedule time,
+ * task-notification fields, sdk-invoke arguments, etc.).
+ */
+export type TurnKindVariant = 'cron-fired' | 'task-notification' | 'sdk-invoke' | 'compaction' | 'agent-error'
+
+export interface TurnKind {
+  variant: TurnKindVariant
+  label: string
+  /** Wall-clock time the envelope was issued (cron fire time, notification time). */
+  firedAt?: number
+  /** Structured fields extracted from the envelope. */
+  payload?: Record<string, unknown>
+}
+
+/**
  * A complete conversation turn with role, content, timestamp, work items, and thinking blocks.
  */
 export interface ParsedTurn {
@@ -55,6 +76,12 @@ export interface ParsedTurn {
   sendFailed?: boolean
   /** True while the agent is actively producing this turn */
   streaming?: boolean
+  /**
+   * Backend-attached classification for system/envelope turns. When present,
+   * the UI renders this turn as an expandable card (header from `label`,
+   * timestamp from `firedAt`) instead of a normal user/assistant bubble.
+   */
+  kind?: TurnKind
 }
 
 /**
