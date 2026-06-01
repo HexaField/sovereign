@@ -61,59 +61,26 @@ export function stripDirectives(text: string): string {
 
 /**
  * Optional hooks supplied by a backend-specific parser.
- * Default implementations are no-ops so a vanilla backend gets generic behavior.
+ *
+ * The generic parser stays envelope-agnostic — it merges assistant rounds,
+ * pairs tool calls with results, and emits one `ParsedTurn` per user/assistant
+ * boundary. Backend-specific envelope decoding (Claude Code cron prefix,
+ * `<task-notification>`, etc.) belongs in the adapter's classifier and runs
+ * as a post-pass on the returned turns.
  */
 export interface ParseTurnsOptions {
-  /**
-   * Return a system-turn replacement for `text`, or `null` if `text` is not
-   * a system-injected (out-of-band) user message. Backends use this to
-   * filter their own internal/system markers.
-   *
-   * When `preserveWithEmbeddedUser` is true and `extractEmbeddedUser` also
-   * returns a value, the parser emits BOTH a system turn (with `systemContent`)
-   * AND a user turn (with the embedded text). Used for compaction-style
-   * rehydration messages where the system part is the prior-context summary
-   * and the embedded part is the user's actual next message. When the flag
-   * is omitted/false (the default), the embedded user takes precedence and
-   * the system part is discarded — matching the original behavior used for
-   * envelopes whose system part is throwaway noise.
-   */
-  classifySystemInjected?(text: string): { systemContent: string; preserveWithEmbeddedUser?: boolean } | null
-
-  /**
-   * Given an injected `text`, return the embedded user message that should be
-   * surfaced (if any). Used for cases like a backend that wraps user text in
-   * a `Sender (untrusted metadata):` header after a system prefix.
-   */
-  extractEmbeddedUser?(text: string): string | null
-
-  /**
-   * Strip backend-specific envelope from a user message after generic stripping
-   * has already been applied. Default: identity.
-   */
-  stripUserEnvelope?(text: string): string
-
   /**
    * Final filter pass — return false to drop a turn from the output. Default
    * keeps everything.
    */
   shouldKeepTurn?(turn: ParsedTurn): boolean
-
-  /** Names of tool calls that should be hidden from work items — e.g. yield-to-parent style tools. */
-  hiddenToolNames?: Set<string>
 }
-
-const DEFAULT_HIDDEN_TOOL_NAMES = new Set<string>()
 
 /**
  * Parse raw backend messages into ParsedTurn[].
  * Generic enough for any backend; supply ParseTurnsOptions for backend-specific noise.
  */
 export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): ParsedTurn[] {
-  const hiddenTools = options.hiddenToolNames ?? DEFAULT_HIDDEN_TOOL_NAMES
-  const classifySystem = options.classifySystemInjected ?? (() => null)
-  const extractEmbedded = options.extractEmbeddedUser ?? (() => null)
-  const stripEnvelope = options.stripUserEnvelope ?? ((t: string) => t)
   const shouldKeep = options.shouldKeepTurn ?? (() => true)
 
   const turns: ParsedTurn[] = []
@@ -168,7 +135,6 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
           currentWork.push({ type: 'thinking', output: raw, timestamp: m.timestamp ?? 0 })
         }
       } else if (block.type === 'toolCall') {
-        if (hiddenTools.has(block.name)) continue
         currentWork.push({
           type: 'tool_call',
           name: block.name ?? 'tool',
@@ -177,7 +143,6 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
           timestamp: m.timestamp ?? 0
         })
       } else if (block.type === 'tool_use') {
-        if (hiddenTools.has(block.name)) continue
         currentWork.push({
           type: 'tool_call',
           name: block.name ?? 'tool',
@@ -223,55 +188,11 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
       flushAssistantRound()
 
       const text = extractText(m.content) ?? ''
-      const stripped = stripTimestamp(text)
-      const cleaned = stripDirectives(stripped)
-
-      const systemReplacement = classifySystem(text)
-      if (systemReplacement) {
-        const embeddedUser = extractEmbedded(text)
-        if (embeddedUser) {
-          const userCleaned = stripDirectives(stripTimestamp(embeddedUser))
-          // When the classifier asks to keep the system part (compaction
-          // rehydration etc.), push it before the embedded user turn.
-          if (systemReplacement.preserveWithEmbeddedUser) {
-            turns.push({
-              role: 'system',
-              content: systemReplacement.systemContent,
-              timestamp: m.timestamp ?? 0,
-              workItems: [],
-              thinkingBlocks: []
-            })
-          }
-          if (userCleaned) {
-            lastUserTurn = {
-              role: 'user',
-              content: userCleaned,
-              timestamp: m.timestamp ?? 0,
-              workItems: [],
-              thinkingBlocks: []
-            }
-          } else {
-            lastUserTurn = null
-          }
-        } else {
-          turns.push({
-            role: 'system',
-            content: systemReplacement.systemContent,
-            timestamp: m.timestamp ?? 0,
-            workItems: [],
-            thinkingBlocks: []
-          })
-          lastUserTurn = null
-        }
-        continue
-      }
-
-      const userText = stripEnvelope(cleaned)
-      const finalText = stripTimestamp(userText) || userText
+      const cleaned = stripDirectives(stripTimestamp(text))
 
       lastUserTurn = {
         role: 'user',
-        content: finalText,
+        content: cleaned,
         timestamp: m.timestamp ?? 0,
         workItems: [],
         thinkingBlocks: []
@@ -318,10 +239,9 @@ export function parseTurns(messages: any[], options: ParseTurnsOptions = {}): Pa
 
     const text = extractText(m.content)
     if (text) {
-      const systemReplacement = classifySystem(text)
       turns.push({
         role: 'system',
-        content: systemReplacement ? systemReplacement.systemContent : stripDirectives(stripTimestamp(text)),
+        content: stripDirectives(stripTimestamp(text)),
         timestamp: m.timestamp ?? 0,
         workItems: [],
         thinkingBlocks: []

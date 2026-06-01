@@ -6,6 +6,7 @@
 import type { ParsedTurn, WorkItem } from '@sovereign/core'
 import type { BackendEmitter } from '@sovereign/primitives'
 import { stripThinkingBlocks } from '@sovereign/primitives'
+import { classifyClaudeCodeTurn } from './classify.js'
 import type { ClaudeSessionState, ClaudeUsage } from './types.js'
 
 interface ContentBlock {
@@ -177,13 +178,13 @@ export function handleResult(msg: any, state: ClaudeSessionState, emitter: Backe
     .filter(Boolean)
     .join('\n\n')
   const finalContent = joined || resultFallback
-  const turn: ParsedTurn = {
+  const turn: ParsedTurn = classifyClaudeCodeTurn({
     role: 'assistant',
     content: finalContent,
     timestamp: Date.now(),
     workItems: [],
     thinkingBlocks: []
-  }
+  })
   if (turn.content || msg?.subtype === 'error') {
     emitter.emit('chat.turn', { sessionKey: state.sessionKey, turn })
   }
@@ -228,13 +229,13 @@ export function handleCompactBoundary(msg: any, state: ClaudeSessionState, emitt
   else if (trigger) parts.push(`(${trigger})`)
   emitter.emit('chat.turn', {
     sessionKey: state.sessionKey,
-    turn: {
+    turn: classifyClaudeCodeTurn({
       role: 'system',
       content: parts.join(' '),
       timestamp: Date.now(),
       workItems: [],
       thinkingBlocks: []
-    }
+    })
   })
 }
 
