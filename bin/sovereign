@@ -57,6 +57,39 @@ _read_config_json() {
   ' "$config" "$dotpath" "$default" 2>/dev/null || printf '%s' "$default"
 }
 
+_config_check() {
+  # Validate a config.json against the live schema. Prints offending paths to
+  # stderr. Returns 0 valid, 1 invalid, 2 unreadable. Skips (returns 0) when
+  # node or the built validator is unavailable, so it never blocks on its own.
+  local target="${1:-$CONFIG_DIR/config.json}"
+  local mod="$REPO_DIR/packages/config/dist/index.js"
+  if ! command -v node >/dev/null 2>&1; then
+    _warn "node not found — skipping validation of $target"
+    return 0
+  fi
+  if [ ! -f "$mod" ]; then
+    _warn "config validator not built ($mod missing) — run 'sovereign build'; skipping validation"
+    return 0
+  fi
+  if [ ! -f "$target" ]; then
+    _warn "no config at $target — nothing to validate"
+    return 0
+  fi
+  node --input-type=module -e '
+    import { readFileSync } from "node:fs"
+    import { pathToFileURL } from "node:url"
+    const [mod, target] = process.argv.slice(1)
+    const { validate } = await import(pathToFileURL(mod).href)
+    let cfg
+    try { cfg = JSON.parse(readFileSync(target, "utf-8")) }
+    catch (e) { console.error("  cannot read/parse: " + e.message); process.exit(2) }
+    const { valid, errors } = validate(cfg)
+    if (valid) process.exit(0)
+    for (const e of errors) console.error("  " + e)
+    process.exit(1)
+  ' "$mod" "$target"
+}
+
 CONFIG_DIR="${SOVEREIGN_CONFIG_DIR:-$HOME/.sovereign}"
 DATA_DIR="${SOVEREIGN_DATA_DIR:-$CONFIG_DIR/data}"
 LOG_DIR="$DATA_DIR/logs"
@@ -495,6 +528,16 @@ case "${1:-help}" in
     cd "$REPO_DIR"
     exec node "$SERVER_ENTRY"
     ;;
+  config-check)
+    target="${2:-$CONFIG_DIR/config.json}"
+    if _config_check "$target"; then
+      _note "config OK: $target"
+    else
+      rc=$?
+      [ "$rc" -eq 2 ] && _die "could not read $target"
+      _die "config failed schema validation: $target (see above)"
+    fi
+    ;;
   migrate)
     shift
     exec "$REPO_DIR/bin/sovereign-migrate.sh" "$@"
@@ -514,6 +557,7 @@ Commands:
   health             Print /health response
   logs [mode]        Tail logs (stdout|stderr|all)
   run                Run in foreground (no daemon)
+  config-check [path] Validate config.json against the live schema
   migrate [flags]    One-shot OpenClaw → Sovereign migration (--dry-run, --yes)
 
   stop, restart, reload, and build snapshot any non-idle agent sessions to

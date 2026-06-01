@@ -5,13 +5,39 @@ import * as path from 'node:path'
 import type { EventBus, ModuleStatus } from '@sovereign/core'
 import type { ConfigStore, SovereignConfig, ConfigChange } from './types.js'
 import { defaults } from './defaults.js'
-import { schema, validate } from './schema.js'
+import { schema, validate, invalidConfigPaths } from './schema.js'
 import { resolveEnvOverrides } from './env.js'
 import { createHistory } from './history.js'
 import { createSecretsStore, SECRET_MASK } from './secrets.js'
 
 function deepClone<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj))
+}
+
+/**
+ * Delete the node addressed by a JSON pointer from a plain object/array tree,
+ * mutating in place. Unknown paths are a no-op. Used to prune individual
+ * schema-invalid keys from the file overlay so the rest survives.
+ */
+function deleteByPath(root: Record<string, unknown>, pointer: string): void {
+  if (!pointer) return
+  const segs = pointer
+    .split('/')
+    .slice(1)
+    .map((s) => s.replace(/~1/g, '/').replace(/~0/g, '~'))
+  let node: unknown = root
+  for (let i = 0; i < segs.length - 1; i++) {
+    if (node === null || typeof node !== 'object') return
+    node = (node as Record<string, unknown>)[segs[i]]
+  }
+  if (node === null || typeof node !== 'object') return
+  const leaf = segs[segs.length - 1]
+  if (Array.isArray(node)) {
+    const idx = Number(leaf)
+    if (Number.isInteger(idx)) node.splice(idx, 1)
+  } else {
+    delete (node as Record<string, unknown>)[leaf]
+  }
 }
 
 function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
@@ -133,11 +159,29 @@ export function createConfigStore(bus: EventBus, configDir: string, dataDir: str
     envOverrides
   ) as unknown as SovereignConfig
 
-  // Validate on startup
-  const startupValidation = validate(config)
+  // Validate on startup. A single stale/obsolete key must not wipe the whole
+  // config (which would silently revert port, workspace root, personality, …).
+  // Prune just the offending paths from the file overlay and re-merge so
+  // defaults backfill the holes; only fall back wholesale as a last resort.
+  let startupValidation = validate(config)
   if (!startupValidation.valid) {
-    console.warn('[config] startup validation failed, falling back to defaults:', startupValidation.errors.join('; '))
-    config = deepClone(defaults)
+    const badPaths = invalidConfigPaths(config)
+    if (badPaths.length > 0) {
+      console.warn('[config] dropping invalid keys and keeping the rest (defaults backfill):', badPaths.join(', '))
+      for (const p of badPaths) deleteByPath(fileConfig, p)
+      config = deepMerge(
+        deepMerge(deepClone(defaults) as unknown as Record<string, unknown>, fileConfig),
+        envOverrides
+      ) as unknown as SovereignConfig
+      startupValidation = validate(config)
+    }
+    if (!startupValidation.valid) {
+      console.warn(
+        '[config] still invalid after pruning, falling back to defaults:',
+        startupValidation.errors.join('; ')
+      )
+      config = deepClone(defaults)
+    }
   }
 
   // Write initial config if file doesn't exist

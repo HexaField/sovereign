@@ -167,6 +167,39 @@ export function validate(config: unknown): { valid: boolean; errors: string[] } 
   return { valid: false, errors }
 }
 
+/**
+ * For an invalid config, return the JSON-pointer paths of the offending nodes —
+ * precise enough to prune just the bad keys and let defaults backfill, instead
+ * of discarding the entire config. Returns [] when the config is valid.
+ *
+ * - `additionalProperties` violations point at the parent (e.g. `/agentBackend`)
+ *   with the offending key in `params.additionalProperty`; we append it so the
+ *   path addresses the dead key itself (`/agentBackend/openclaw`), not the whole
+ *   section.
+ * - Array-item violations carry the index (e.g. `/agentBackend/enabled/0`); we
+ *   trim back to the array key (`/agentBackend/enabled`) so the field is dropped
+ *   wholesale and defaults restore a coherent value rather than a holey array.
+ */
+export function invalidConfigPaths(config: unknown): string[] {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) return []
+  if (validateFn(config)) return []
+  const paths = new Set<string>()
+  for (const e of validateFn.errors ?? []) {
+    if (e.keyword === 'additionalProperties') {
+      const extra = (e.params as { additionalProperty?: string }).additionalProperty
+      if (extra) paths.add(`${e.instancePath}/${extra}`)
+      continue
+    }
+    // Trim a trailing array index (and anything after it) back to the array key.
+    const segs = e.instancePath.split('/')
+    const firstIdx = segs.findIndex((s, i) => i > 0 && /^\d+$/.test(s))
+    paths.add(firstIdx === -1 ? e.instancePath : segs.slice(0, firstIdx).join('/'))
+  }
+  // Drop the empty-string path (whole-document error) — nothing precise to prune.
+  paths.delete('')
+  return [...paths]
+}
+
 export function validateSecrets(secrets: unknown): { valid: boolean; errors: string[] } {
   if (typeof secrets !== 'object' || secrets === null || Array.isArray(secrets)) {
     return { valid: false, errors: ['secrets must be an object'] }
