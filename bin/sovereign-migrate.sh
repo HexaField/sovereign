@@ -165,11 +165,25 @@ try:
 except Exception as e:
     sys.exit(0)
 changed = False
-if c.get("agentBackend", {}).pop("openclaw", None) is not None:
+ab = c.get("agentBackend", {})
+# Drop the dead openclaw sub-block (schema is additionalProperties:false).
+if ab.pop("openclaw", None) is not None:
     changed = True
+# Remap the enum-constrained fields — claude-code is now the only legal value,
+# so leaving these as 'openclaw' would fail schema validation. Deleting the
+# openclaw block alone is necessary but NOT sufficient.
+if ab.get("default") == "openclaw":
+    ab["default"] = "claude-code"
+    changed = True
+if isinstance(ab.get("enabled"), list):
+    remapped = ["claude-code" if x == "openclaw" else x for x in ab["enabled"]]
+    deduped = list(dict.fromkeys(remapped)) or ["claude-code"]
+    if deduped != ab["enabled"]:
+        ab["enabled"] = deduped
+        changed = True
 if changed:
     json.dump(c, open(p, "w"), indent=2)
-    print(f"    cleaned dead agentBackend.openclaw block from config.json")
+    print(f"    cleaned dead agentBackend.openclaw config (block + default/enabled)")
 PY
   fi
   if [ -f "$NEW_DATA/secrets.json" ] && command -v python3 >/dev/null 2>&1; then
@@ -305,6 +319,27 @@ elif [ -e "$dest" ]; then
 else
   _run "mv '$src' '$dest'"
   _note "hoisted config.json → $dest"
+fi
+
+# ── Validate the migrated config against the live schema ────────────────
+# Surface any schema-invalid keys NOW, while the operator is watching — rather
+# than letting the server silently drop them (and revert to defaults for those
+# fields) at boot. The sanitiser above handles the known openclaw keys; this
+# catches anything else the OpenClaw-era config carried that the new schema
+# rejects.
+_step "Validating migrated config against the current schema"
+if [ "$DRY_RUN" -eq 1 ]; then
+  _note "[dry-run] would run 'sovereign config-check $NEW_CONFIG/config.json'"
+elif [ -f "$NEW_CONFIG/config.json" ]; then
+  if "$(dirname "$0")/sovereign" config-check "$NEW_CONFIG/config.json"; then
+    _note "config.json passes schema validation"
+  else
+    _warn "Migrated config.json has schema-invalid keys (listed above)."
+    _warn "At boot the server keeps the valid keys and drops these (defaults backfill)."
+    _confirm "Continue anyway?" || _die "Aborted — fix $NEW_CONFIG/config.json and re-run."
+  fi
+else
+  _note "(no hoisted config.json to validate)"
 fi
 
 # ── Reinstall launchd plist via the canonical template ──────────────────
