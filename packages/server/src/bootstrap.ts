@@ -23,6 +23,8 @@ import { createOrgManager } from '@sovereign/orgs'
 import { createOrgRoutes } from '@sovereign/orgs'
 import { registerOrgsChannel } from '@sovereign/orgs'
 import { getRemotes as getProjectRemotes } from '@sovereign/orgs'
+import { createMembraneManager } from '@sovereign/membranes'
+import { createMembraneRoutes } from '@sovereign/membranes'
 import { createFileService } from '@sovereign/files'
 import { createFileRouter } from '@sovereign/files'
 import { registerFilesChannel } from '@sovereign/files'
@@ -136,6 +138,13 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   app.use('/api', createOrgRoutes(orgManager, authMiddleware))
   registerOrgsChannel(wsHandler, bus)
 
+  // Membranes — social/privacy layer over orgs. Backed by
+  // `<dataDir>/membranes.json` (created lazily on first write). Decouples
+  // "who can see this" (membrane) from "which git provider hosts this"
+  // (org). See `@sovereign/membranes` for the schema.
+  const membraneManager = createMembraneManager(bus, dataDir)
+  app.use('/api', createMembraneRoutes(membraneManager, authMiddleware))
+
   const fileService = createFileService(bus)
   const fileProjectResolver = (projectId: string): string => {
     for (const org of orgManager.listOrgs()) {
@@ -230,8 +239,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     })
   }
   const threadManager = createThreadManager(bus, dataDir)
+  // System threads default to the `personal` membrane. If that membrane
+  // doesn't exist yet (fresh install), membraneId stays undefined and the
+  // UI surfaces the thread as unassigned — harmless.
   for (const label of ['main', 'upgrades', 'v2-app']) {
-    if (!threadManager.get(label)) threadManager.create({ label })
+    if (!threadManager.get(label)) threadManager.create({ label, membraneId: 'personal' })
   }
 
   // Voice / Recordings / Meetings (config-driven URLs; hot-reloadable)
@@ -381,7 +393,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         threadLabel: string
         text: string
       }
-      threadManager.create({ label: threadLabel, orgId: '_global' })
+      threadManager.create({ label: threadLabel, membraneId: 'personal' })
       const sessionKey = `agent:main:thread:${threadKey}`
       try {
         await routingBackend.forSession(sessionKey).sendMessage(sessionKey, text)

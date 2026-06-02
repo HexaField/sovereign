@@ -204,11 +204,7 @@ describe('switchThread', () => {
     setLocation('', '/')
     switchThread('my-thread')
     expect(threadKey()).toBe('my-thread')
-    expect(history.replaceState).toHaveBeenCalledWith(
-      null,
-      '',
-      expect.stringContaining('#thread=my-thread')
-    )
+    expect(history.replaceState).toHaveBeenCalledWith(null, '', expect.stringContaining('#thread=my-thread'))
   })
 })
 
@@ -230,7 +226,7 @@ describe('createThread', () => {
     expect(threadKey()).toBe('new-thread')
   })
 
-  it('sends orgId when active workspace is not _global', async () => {
+  it('sends workspaceIds when active workspace is not _global', async () => {
     setLocation('', '/')
     setActiveOrgIdForThreads('ws1')
     const newThread = mockThread('scoped-thread')
@@ -241,7 +237,24 @@ describe('createThread', () => {
       '/api/threads',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ label: 'Scoped', orgId: 'ws1' })
+        body: JSON.stringify({ label: 'Scoped', workspaceIds: ['ws1'] })
+      })
+    )
+  })
+
+  it('omits workspaceIds when active workspace is _global', async () => {
+    setLocation('', '/')
+    setActiveOrgIdForThreads('_global')
+    const newThread = mockThread('global-thread')
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({ thread: newThread }) })
+
+    await createThread('Global')
+    // workspaceIds key absent (undefined → dropped by JSON.stringify)
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ label: 'Global' })
       })
     )
   })

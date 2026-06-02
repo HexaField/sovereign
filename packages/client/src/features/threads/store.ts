@@ -4,12 +4,20 @@ import type { WsStore } from '../../ws/ws-store.js'
 
 export interface ThreadInfo {
   key: string
-  orgId?: string
+  /** Social/privacy context (see @sovereign/membranes). May be undefined for unassigned threads. */
+  membraneId?: string
+  /** Code contexts attached to the thread; orgIds from @sovereign/orgs. */
+  workspaceIds?: string[]
   entities: { orgId: string; projectId: string; entityType: 'branch' | 'issue' | 'pr'; entityRef: string }[]
   label?: string
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus
+}
+
+/** Convenience accessor — first workspace, or undefined. */
+export function threadPrimaryWorkspace(t: ThreadInfo): string | undefined {
+  return t.workspaceIds?.[0]
 }
 
 export const [threadKey, setThreadKey] = createSignal('main')
@@ -100,10 +108,11 @@ export function switchThread(key: string): void {
 
 export function createThread(label?: string): Promise<void> {
   const orgId = activeOrgIdForThreads()
+  const workspaceIds = orgId && orgId !== '_global' ? [orgId] : undefined
   return fetch('/api/threads', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label, orgId: orgId !== '_global' ? orgId : undefined })
+    body: JSON.stringify({ label, workspaceIds })
   })
     .then((r) => r.json())
     .then((data: any) => {
@@ -117,10 +126,15 @@ export function createThread(label?: string): Promise<void> {
 }
 
 export function moveThread(key: string, orgId: string): Promise<void> {
+  // Move a thread between workspaces. `_global` collapses to an empty
+  // workspace list (no code context); any other orgId becomes the sole
+  // entry. Membrane assignment is preserved — moving across workspaces
+  // doesn't change the social context.
+  const workspaceIds = orgId === '_global' ? [] : [orgId]
   return fetch(`/api/threads/${key}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ orgId })
+    body: JSON.stringify({ workspaceIds })
   })
     .then((r) => r.json())
     .then((data: any) => {

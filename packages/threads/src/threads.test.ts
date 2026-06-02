@@ -73,36 +73,41 @@ describe('ThreadManager', () => {
   })
 
   describe('list with filters', () => {
-    it('filters by orgId — includes threads with no orgId as global', () => {
+    it('filters by workspaceId — matches entity orgId', () => {
       const tm = createThreadManager(bus, dataDir)
-      tm.create({ label: 'global' }) // no entities, no orgId → global
+      tm.create({ label: 'global' }) // no entities, no workspace → global
       tm.create({ entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }] })
       tm.create({ entities: [{ orgId: 'o2', projectId: 'p2', entityType: 'branch', entityRef: 'b' }] })
 
-      // Only threads that match orgId or have entity orgId match are included
-      const filtered = tm.list({ orgId: 'o1' })
+      const filtered = tm.list({ workspaceId: 'o1' })
       expect(filtered).toHaveLength(1)
       expect(filtered.map((t) => t.key)).toContain('o1/p1/branch:a')
     })
 
-    it('filters by orgId — scoped threads only show in their workspace', () => {
+    it('filters by workspaceId — scoped threads only show in their workspace', () => {
       const tm = createThreadManager(bus, dataDir)
-      tm.create({ label: 'ws1-thread', orgId: 'ws1' })
-      tm.create({ label: 'ws2-thread', orgId: 'ws2' })
-      tm.create({ label: 'global-thread' }) // no orgId → global
-      tm.create({ label: 'explicit-global', orgId: '_global' })
+      tm.create({ label: 'ws1-thread', workspaceIds: ['ws1'] })
+      tm.create({ label: 'ws2-thread', workspaceIds: ['ws2'] })
+      tm.create({ label: 'global-thread' }) // no workspace
+      tm.create({ label: 'explicit-global', workspaceIds: [] })
 
-      const ws1 = tm.list({ orgId: 'ws1' })
+      const ws1 = tm.list({ workspaceId: 'ws1' })
       expect(ws1.map((t) => t.key)).toContain('ws1-thread')
-      // Global threads are no longer implicitly included when filtering by orgId
+      // Global threads are not implicitly included when filtering by workspace
       expect(ws1.map((t) => t.key)).not.toContain('global-thread')
       expect(ws1.map((t) => t.key)).not.toContain('explicit-global')
       expect(ws1.map((t) => t.key)).not.toContain('ws2-thread')
 
-      const ws2 = tm.list({ orgId: 'ws2' })
+      const ws2 = tm.list({ workspaceId: 'ws2' })
       expect(ws2.map((t) => t.key)).toContain('ws2-thread')
       expect(ws2.map((t) => t.key)).not.toContain('global-thread')
       expect(ws2.map((t) => t.key)).not.toContain('ws1-thread')
+
+      // `_global` workspaceId filter selects threads with NO workspace and NO entities
+      const global = tm.list({ workspaceId: '_global' }).map((t) => t.key)
+      expect(global).toContain('global-thread')
+      expect(global).toContain('explicit-global')
+      expect(global).not.toContain('ws1-thread')
     })
 
     it('filters by projectId', () => {
@@ -212,5 +217,269 @@ describe('ThreadManager', () => {
     expect(tm.delete('del-me')).toBe(true)
     expect(tm.get('del-me')?.archived).toBe(true)
     expect(tm.delete('nonexistent')).toBe(false)
+  })
+
+  describe('membrane + workspace mapping', () => {
+    it('accepts membraneId and workspaceIds on create', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({
+        label: 'sovereign',
+        membraneId: 'personal',
+        workspaceIds: ['hexafield', 'coasys']
+      })
+      expect(t.membraneId).toBe('personal')
+      expect(t.workspaceIds).toEqual(['hexafield', 'coasys'])
+    })
+
+    it('threads with no membraneId stay unassigned (no orgId fallback)', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'legacy' })
+      expect(t.membraneId).toBeUndefined()
+      expect(t.workspaceIds).toEqual([])
+      // `orgId` field is gone from the type entirely
+      expect((t as any).orgId).toBeUndefined()
+    })
+
+    it('derives workspaceIds from entities[0] when not explicit', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({
+        entities: [{ orgId: 'coasys', projectId: 'ad4m', entityType: 'branch', entityRef: 'main' }]
+      })
+      expect(t.workspaceIds).toEqual(['coasys'])
+    })
+
+    it('filter by membraneId returns only threads in that membrane', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'a', membraneId: 'personal' })
+      tm.create({ label: 'b', membraneId: 'coasys' })
+      tm.create({ label: 'c', membraneId: 'personal' })
+      const inPersonal = tm.list({ membraneId: 'personal' }).map((t) => t.label)
+      expect(inPersonal.sort()).toEqual(['a', 'c'])
+    })
+
+    it('update can set membraneId and workspaceIds', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'x' })
+      const updated = tm.update('x', { membraneId: 'personal', workspaceIds: ['hexafield'] })
+      expect(updated?.membraneId).toBe('personal')
+      expect(updated?.workspaceIds).toEqual(['hexafield'])
+    })
+
+    it('persists membraneId / workspaceIds across reload', () => {
+      const tm1 = createThreadManager(bus, dataDir)
+      tm1.create({ label: 'sovereign', membraneId: 'personal', workspaceIds: ['hexafield'] })
+      const tm2 = createThreadManager(bus, dataDir)
+      const t = tm2.get('sovereign')
+      expect(t?.membraneId).toBe('personal')
+      expect(t?.workspaceIds).toEqual(['hexafield'])
+    })
+  })
+
+  // ────────────────────────────────────────────────────────────────────
+  // §Migration — one-time legacy registry.json → threads.json rewrite.
+  //
+  // Production data shape pre-membranes was
+  //   <dataDir>/threads/registry.json = { threads: [{ orgId, ... }], events }
+  // with every thread carrying an `orgId`. The migration:
+  //   1. Reads membranes.json to build an orgId→membraneId lookup.
+  //   2. Rewrites each thread into the new shape (membraneId derived,
+  //      workspaceIds populated, orgId dropped).
+  //   3. Persists to <dataDir>/threads.json.
+  //   4. Leaves registry.json on disk for rollback safety.
+  describe('one-time legacy migration', () => {
+    function seedLegacy(opts: { dataDir: string; threads: any[]; events?: Record<string, any[]>; membranes?: any[] }) {
+      const threadsDir = path.join(opts.dataDir, 'threads')
+      fs.mkdirSync(threadsDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(threadsDir, 'registry.json'),
+        JSON.stringify({ threads: opts.threads, events: opts.events ?? {} }, null, 2)
+      )
+      if (opts.membranes) {
+        fs.writeFileSync(
+          path.join(opts.dataDir, 'membranes.json'),
+          JSON.stringify({ version: 1, membranes: opts.membranes }, null, 2)
+        )
+      }
+    }
+
+    it('migrates legacy threads into threads.json on first construction', () => {
+      seedLegacy({
+        dataDir,
+        threads: [
+          {
+            key: 'main',
+            label: 'main',
+            orgId: '_global',
+            entities: [],
+            lastActivity: 1,
+            unreadCount: 0,
+            agentStatus: 'idle',
+            createdAt: 1,
+            archived: false
+          },
+          {
+            key: 'ad4m',
+            label: 'ad4m',
+            orgId: 'coasys',
+            entities: [],
+            lastActivity: 2,
+            unreadCount: 0,
+            agentStatus: 'idle',
+            createdAt: 2,
+            archived: false
+          },
+          {
+            key: 'sovereign',
+            label: 'sovereign',
+            orgId: 'hexafield',
+            entities: [],
+            lastActivity: 3,
+            unreadCount: 0,
+            agentStatus: 'idle',
+            createdAt: 3,
+            archived: false
+          }
+        ],
+        membranes: [
+          {
+            id: 'personal',
+            name: 'Personal',
+            visibility: 'private',
+            workspaceIds: ['_global', 'hexafield'],
+            createdAt: '',
+            updatedAt: ''
+          },
+          { id: 'adam', name: 'ADAM', visibility: 'shared', workspaceIds: ['coasys'], createdAt: '', updatedAt: '' }
+        ]
+      })
+
+      const tm = createThreadManager(bus, dataDir)
+
+      // threads.json should now exist with the migrated shape
+      const newFile = path.join(dataDir, 'threads.json')
+      expect(fs.existsSync(newFile)).toBe(true)
+      const persisted = JSON.parse(fs.readFileSync(newFile, 'utf-8'))
+      expect(persisted.version).toBe(1)
+      expect(persisted.threads).toHaveLength(3)
+
+      // Field-level: orgId is gone, membraneId + workspaceIds derived correctly
+      const main = tm.get('main')
+      expect(main?.membraneId).toBe('personal')
+      expect(main?.workspaceIds).toEqual([]) // _global → empty
+      expect((main as any)?.orgId).toBeUndefined()
+
+      const ad4m = tm.get('ad4m')
+      expect(ad4m?.membraneId).toBe('adam')
+      expect(ad4m?.workspaceIds).toEqual(['coasys'])
+
+      const sov = tm.get('sovereign')
+      expect(sov?.membraneId).toBe('personal')
+      expect(sov?.workspaceIds).toEqual(['hexafield'])
+
+      // Legacy registry.json must still exist (rollback safety)
+      expect(fs.existsSync(path.join(dataDir, 'threads', 'registry.json'))).toBe(true)
+    })
+
+    it('leaves membraneId undefined when orgId is absent from any membrane', () => {
+      seedLegacy({
+        dataDir,
+        threads: [
+          {
+            key: 'orphan',
+            label: 'orphan',
+            orgId: 'mysteryorg',
+            entities: [],
+            lastActivity: 1,
+            unreadCount: 0,
+            agentStatus: 'idle',
+            createdAt: 1,
+            archived: false
+          }
+        ],
+        membranes: [
+          {
+            id: 'personal',
+            name: 'Personal',
+            visibility: 'private',
+            workspaceIds: ['_global'],
+            createdAt: '',
+            updatedAt: ''
+          }
+        ]
+      })
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.get('orphan')
+      expect(t?.membraneId).toBeUndefined()
+      expect(t?.workspaceIds).toEqual(['mysteryorg'])
+    })
+
+    it('migrates events from registry.json to threads/events.json', () => {
+      seedLegacy({
+        dataDir,
+        threads: [
+          {
+            key: 'evt',
+            label: 'evt',
+            orgId: '_global',
+            entities: [],
+            lastActivity: 1,
+            unreadCount: 0,
+            agentStatus: 'idle',
+            createdAt: 1,
+            archived: false
+          }
+        ],
+        events: {
+          evt: [{ threadKey: 'evt', event: { foo: 1 }, entityBinding: {} as any, timestamp: 100 }]
+        }
+      })
+      const tm = createThreadManager(bus, dataDir)
+      expect(tm.getEvents('evt')).toHaveLength(1)
+      expect(fs.existsSync(path.join(dataDir, 'threads', 'events.json'))).toBe(true)
+    })
+
+    it('does not re-migrate once threads.json exists', () => {
+      seedLegacy({
+        dataDir,
+        threads: [
+          {
+            key: 'legacy',
+            label: 'legacy',
+            orgId: 'coasys',
+            entities: [],
+            lastActivity: 1,
+            unreadCount: 0,
+            agentStatus: 'idle',
+            createdAt: 1,
+            archived: false
+          }
+        ]
+      })
+      // Pre-populate threads.json with a different set — the migration
+      // path must NOT overwrite this on subsequent construction.
+      fs.writeFileSync(
+        path.join(dataDir, 'threads.json'),
+        JSON.stringify({
+          version: 1,
+          threads: [
+            {
+              key: 'fresh',
+              label: 'fresh',
+              membraneId: 'personal',
+              workspaceIds: [],
+              entities: [],
+              lastActivity: 9,
+              unreadCount: 0,
+              agentStatus: 'idle',
+              createdAt: 9,
+              archived: false
+            }
+          ]
+        })
+      )
+      const tm = createThreadManager(bus, dataDir)
+      expect(tm.get('fresh')).toBeDefined()
+      expect(tm.get('legacy')).toBeUndefined()
+    })
   })
 })

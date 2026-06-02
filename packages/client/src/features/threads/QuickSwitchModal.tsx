@@ -26,7 +26,9 @@ export function QuickSwitchModal() {
     if (!q) return all
     return all.filter((t) => {
       const label = t.label || t.key
-      return fuzzyMatch(q, label) || fuzzyMatch(q, t.orgId || '')
+      const workspace = t.workspaceIds?.[0] ?? ''
+      const membrane = t.membraneId ?? ''
+      return fuzzyMatch(q, label) || fuzzyMatch(q, workspace) || fuzzyMatch(q, membrane)
     })
   }
 
@@ -107,9 +109,9 @@ export function QuickSwitchModal() {
                   onMouseEnter={() => setSelectedIdx(idx())}
                 >
                   <span class="text-sm font-medium">{thread.label || thread.key}</span>
-                  <Show when={thread.orgId}>
+                  <Show when={thread.membraneId || thread.workspaceIds?.[0]}>
                     <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                      {thread.orgId}
+                      {thread.membraneId ?? thread.workspaceIds?.[0]}
                     </span>
                   </Show>
                 </button>

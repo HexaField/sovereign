@@ -39,7 +39,12 @@ export function createDashboardRoutes(opts: DashboardRoutesOptions): Router {
         const orgId = org.id ?? org.orgId
         const orgName = org.name ?? org.orgName ?? orgId
 
-        const orgThreads = allThreads.filter((t) => t.orgId === orgId)
+        // Threads attached to this org: either via workspaceIds, or via an
+        // entity binding whose orgId matches. Post-membrane the legacy
+        // single `orgId` field is gone — workspaces are now a list.
+        const orgThreads = allThreads.filter(
+          (t) => t.workspaceIds.includes(orgId) || t.entities.some((e) => e.orgId === orgId)
+        )
         const threadCount = orgThreads.filter((t) => !t.archived).length
         const activeThreadCount = orgThreads.filter((t) => t.agentStatus !== 'idle' && !t.archived).length
         const unreadThreadCount = orgThreads.filter((t) => t.unreadCount > 0).length
