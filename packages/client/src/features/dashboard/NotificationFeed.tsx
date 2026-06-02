@@ -2,7 +2,7 @@
 // Pure functions exported for testability; SolidJS component uses Tailwind + var(--c-*) tokens
 
 import { setActiveWorkspace } from '../workspace/store'
-import { setActiveView } from '../nav/store'
+import { setActiveView, closeDashboardModal } from '../nav/store'
 import { createSignal, onMount, onCleanup, For, Show } from 'solid-js'
 import { wsStore } from '../../ws/index.js'
 
@@ -69,6 +69,7 @@ export function groupByEntity(notifications: DashboardNotification[]): EntityGro
 export function navigateToNotification(orgId: string, orgName: string): void {
   setActiveWorkspace(orgId, orgName)
   setActiveView('workspace')
+  closeDashboardModal()
 }
 
 export const [notifications, setNotifications] = createSignal<DashboardNotification[]>([])

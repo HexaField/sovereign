@@ -14,42 +14,51 @@ const localStorageMock = {
 }
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
 
-import { activeView, setActiveView, _setActiveView, type NavView } from './store.js'
+import {
+  activeView,
+  setActiveView,
+  _setActiveView,
+  dashboardModalOpen,
+  openDashboardModal,
+  closeDashboardModal,
+  toggleDashboardModal,
+  type NavView
+} from './store.js'
 
 beforeEach(() => {
   localStorageMock.clear()
-  _setActiveView('dashboard')
+  _setActiveView('workspace')
+  closeDashboardModal()
 })
 
 describe('ViewMenu', () => {
   describe('§1.1 — View Menu Dropdown', () => {
-    it('§1.1 — renders a button showing current view label + icon', () => {
-      // ViewMenu component uses activeView() — verify the signal works
-      expect(activeView()).toBe('dashboard')
-    })
-
-    it('§1.1 — opens dropdown menu on click', () => {
-      // Dropdown open/close is local signal state in ViewMenu component
-      // We verify the nav store drives the active view correctly
-      setActiveView('workspace')
+    it('§1.1 — defaults to workspace view (dashboard is now a modal, not a sibling view)', () => {
       expect(activeView()).toBe('workspace')
+      expect(dashboardModalOpen()).toBe(false)
     })
 
-    it('§1.1 — dropdown lists all 5 views: dashboard, workspace, canvas, planning, system', () => {
-      const views: NavView[] = ['dashboard', 'workspace', 'canvas', 'planning', 'system']
+    it('§1.1 — selecting a sibling view (workspace/canvas/planning/system) updates activeView', () => {
+      setActiveView('canvas')
+      expect(activeView()).toBe('canvas')
+    })
+
+    it('§1.1 — selecting Dashboard toggles the modal, not activeView', () => {
+      _setActiveView('workspace')
+      openDashboardModal()
+      // Underlying view is preserved while the modal floats on top.
+      expect(activeView()).toBe('workspace')
+      expect(dashboardModalOpen()).toBe(true)
+      closeDashboardModal()
+      expect(activeView()).toBe('workspace')
+      expect(dashboardModalOpen()).toBe(false)
+    })
+
+    it('§1.1 — sibling views: workspace, canvas, planning, system', () => {
+      const views: NavView[] = ['workspace', 'canvas', 'planning', 'system']
       views.forEach((v) => {
         setActiveView(v)
         expect(activeView()).toBe(v)
-      })
-    })
-
-    it('§1.1 — each item shows icon, label, and keyboard shortcut hint', () => {
-      // Items are defined in ViewMenu component as VIEW_ITEMS constant
-      // Verified by component structure — test that views are all valid
-      const valid: NavView[] = ['dashboard', 'workspace', 'canvas', 'planning', 'system']
-      valid.forEach((v) => {
-        setActiveView(v)
-        expect(valid).toContain(activeView())
       })
     })
 
@@ -63,65 +72,60 @@ describe('ViewMenu', () => {
       expect(true).toBe(true) // Structural test — verified by code review
     })
 
-    it('§1.1 — clicking an item switches views and closes the dropdown', () => {
-      setActiveView('dashboard')
+    it('§1.1 — clicking a sibling view item switches views', () => {
       setActiveView('canvas')
       expect(activeView()).toBe('canvas')
     })
 
-    it('§1.1 — clicking outside closes the dropdown', () => {
-      // Verified by backdrop overlay in ViewMenu component
-      expect(true).toBe(true)
+    it('§1.1 — dashboard modal is independent of activeView (peek-and-return)', () => {
+      setActiveView('planning')
+      openDashboardModal()
+      expect(activeView()).toBe('planning') // underlying view preserved
+      expect(dashboardModalOpen()).toBe(true)
+      closeDashboardModal()
+      // Closing the modal returns to exactly where we were.
+      expect(activeView()).toBe('planning')
+      expect(dashboardModalOpen()).toBe(false)
     })
 
     it('§1.1 — persists current view via URL query params (not localStorage)', () => {
       setActiveView('planning')
-      // The store syncs to URL params via history.replaceState, not localStorage.
-      // In node test env there's no location/history, so we just verify the signal updated.
       expect(activeView()).toBe('planning')
-    })
-
-    it('§1.1 — restores last active view from URL on init', () => {
-      // The store reads from URL params on init (readNavViewFromUrl).
-      // In node test env, falls back to 'dashboard'.
-      _setActiveView('dashboard')
-      expect(activeView()).toBe('dashboard')
-    })
-
-    it('§1.1 — defaults to dashboard if no view previously selected', () => {
-      localStorageMock.clear()
-      _setActiveView('dashboard') // simulates default on fresh load
-      expect(activeView()).toBe('dashboard')
     })
   })
 
   describe('§8 — Keyboard Shortcuts', () => {
-    // Keyboard shortcuts are registered in ViewMenu component onMount
-    // We test the mapping logic: Cmd+N → VIEW_ITEMS[N-1].key
-    const viewMap: NavView[] = ['dashboard', 'workspace', 'canvas', 'planning', 'system']
-
-    it('§8 — Cmd+1 switches to Dashboard', () => {
-      setActiveView(viewMap[0])
-      expect(activeView()).toBe('dashboard')
+    it('§8 — Cmd+1 toggles the dashboard modal', () => {
+      _setActiveView('workspace')
+      expect(dashboardModalOpen()).toBe(false)
+      toggleDashboardModal()
+      expect(dashboardModalOpen()).toBe(true)
+      // Underlying view never changes.
+      expect(activeView()).toBe('workspace')
+      toggleDashboardModal()
+      expect(dashboardModalOpen()).toBe(false)
+      expect(activeView()).toBe('workspace')
     })
 
+    const viewMap: NavView[] = ['workspace', 'canvas', 'planning', 'system']
+
     it('§8 — Cmd+2 switches to Workspace', () => {
-      setActiveView(viewMap[1])
+      setActiveView(viewMap[0])
       expect(activeView()).toBe('workspace')
     })
 
     it('§8 — Cmd+3 switches to Canvas', () => {
-      setActiveView(viewMap[2])
+      setActiveView(viewMap[1])
       expect(activeView()).toBe('canvas')
     })
 
     it('§8 — Cmd+4 switches to Planning', () => {
-      setActiveView(viewMap[3])
+      setActiveView(viewMap[2])
       expect(activeView()).toBe('planning')
     })
 
     it('§8 — Cmd+5 switches to System', () => {
-      setActiveView(viewMap[4])
+      setActiveView(viewMap[3])
       expect(activeView()).toBe('system')
     })
   })

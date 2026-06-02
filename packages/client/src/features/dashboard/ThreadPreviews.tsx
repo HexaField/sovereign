@@ -1,7 +1,7 @@
 // Thread card previews — shows latest threads per workspace with lazy message loading
 import { createSignal, onMount, onCleanup, For, Show } from 'solid-js'
 import { setActiveWorkspace } from '../workspace/store'
-import { setActiveView } from '../nav/store'
+import { setActiveView, closeDashboardModal } from '../nav/store'
 import { switchThread } from '../threads/store'
 
 interface ThreadInfo {
@@ -122,6 +122,7 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
         setActiveWorkspace(props.orgId, props.orgName)
         setActiveView('workspace')
         switchThread(thread.key)
+        closeDashboardModal()
       }
     } catch {
       /* ignore */
@@ -132,6 +133,7 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
     setActiveWorkspace(props.orgId, props.orgName)
     setActiveView('workspace')
     switchThread(threadKey)
+    closeDashboardModal()
   }
 
   return (

@@ -1,8 +1,14 @@
-import { lazy, Switch, Match, onCleanup, onMount, Suspense } from 'solid-js'
+import { lazy, Switch, Match, onCleanup, onMount, Show, Suspense } from 'solid-js'
 import './app.css'
 
 // Nav store
-import { activeView, initNavStore, setActiveView } from './features/nav/store.js'
+import {
+  activeView,
+  initNavStore,
+  setActiveView,
+  dashboardModalOpen,
+  closeDashboardModal
+} from './features/nav/store.js'
 
 // Identity
 import { loadIdentity } from './lib/identity.js'
@@ -78,6 +84,18 @@ export default function App() {
     window.addEventListener('sovereign:open-file', handleOpenFile)
     cleanups.push(() => window.removeEventListener('sovereign:open-file', handleOpenFile))
 
+    // ESC closes the dashboard modal. Lives at App level so it works no
+    // matter which underlying view is focused. Stops propagation so any
+    // view-level ESC handlers don't fire as well.
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && dashboardModalOpen()) {
+        e.stopPropagation()
+        closeDashboardModal()
+      }
+    }
+    document.addEventListener('keydown', handleEsc, true)
+    cleanups.push(() => document.removeEventListener('keydown', handleEsc, true))
+
     const checkInterval = setInterval(() => {
       setConnectionStatus(wsStore.connected() ? 'connected' : 'disconnected')
     }, 1000)
@@ -104,12 +122,9 @@ export default function App() {
     >
       <Header />
 
-      <main class="flex-1 overflow-hidden">
+      <main class="relative flex-1 overflow-hidden">
         <Suspense>
           <Switch>
-            <Match when={activeView() === 'dashboard'}>
-              <DashboardView />
-            </Match>
             <Match when={activeView() === 'workspace'}>
               <WorkspaceView />
             </Match>
@@ -124,6 +139,25 @@ export default function App() {
             </Match>
           </Switch>
         </Suspense>
+
+        {/* Dashboard modal overlay — covers the full page when open,
+            stays mounted *on top of* the underlying view so dismissing
+            it returns the user exactly where they were (same view,
+            same thread, same scroll position). No backdrop dismiss by
+            design — only the ⬡ button or ESC closes it. */}
+        <Show when={dashboardModalOpen()}>
+          <div
+            class="absolute inset-0 z-[150] overflow-hidden"
+            style={{ background: 'var(--c-bg)' }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Dashboard"
+          >
+            <Suspense>
+              <DashboardView />
+            </Suspense>
+          </div>
+        </Show>
       </main>
 
       <SettingsModal />

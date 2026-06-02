@@ -56,12 +56,16 @@ export function activityDotClass(color: ActivityColor): string {
 }
 
 import { setActiveWorkspace } from '../workspace/store'
-import { setActiveView } from '../nav/store'
+import { setActiveView, closeDashboardModal } from '../nav/store'
 import { Show } from 'solid-js'
 
 export function handleCardClick(orgId: string, orgName: string): void {
   setActiveWorkspace(orgId, orgName)
   setActiveView('workspace')
+  // Dashboard is a modal launcher — clicking a workspace navigates *and*
+  // dismisses the overlay so the user lands in the workspace, not back
+  // on the dashboard.
+  closeDashboardModal()
 }
 
 export default function WorkspaceCard(props: { org: OrgSummary; compact?: boolean }) {
@@ -128,7 +132,9 @@ export default function WorkspaceCard(props: { org: OrgSummary; compact?: boolea
           <span class="ml-auto h-2 w-2 animate-pulse rounded-full bg-green-500" title="Agent active" />
         </Show>
         <Show when={props.org.notificationCount > 0}>
-          <span class={`${props.org.hasActiveAgents ? '' : 'ml-auto'} rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-medium text-white`}>
+          <span
+            class={`${props.org.hasActiveAgents ? '' : 'ml-auto'} rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-medium text-white`}
+          >
             {props.org.notificationCount}
           </span>
         </Show>

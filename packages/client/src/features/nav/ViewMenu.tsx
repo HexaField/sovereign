@@ -1,10 +1,21 @@
 import { createSignal, Show, onMount, onCleanup } from 'solid-js'
 import type { JSX } from 'solid-js'
-import { activeView, setActiveView, type NavView } from './store.js'
+import {
+  activeView,
+  setActiveView,
+  dashboardModalOpen,
+  openDashboardModal,
+  toggleDashboardModal,
+  type NavView
+} from './store.js'
 import { DashboardIcon, WorkspaceIcon, CanvasIcon, PlanningIcon, SystemIcon } from '../../ui/icons.js'
 
+// `dashboard` is a pseudo-key — selecting it toggles the modal overlay
+// rather than switching activeView. Kept in the menu for discoverability.
+type ViewKey = NavView | 'dashboard'
+
 interface ViewItem {
-  key: NavView
+  key: ViewKey
   icon: () => JSX.Element
   label: string
   shortcut: string
@@ -21,17 +32,27 @@ const VIEW_ITEMS: ViewItem[] = [
 export default function ViewMenu() {
   const [open, setOpen] = createSignal(false)
 
-  const currentItem = () => VIEW_ITEMS.find((v) => v.key === activeView()) || VIEW_ITEMS[0]
+  // The trigger label reflects what the user is *looking at*. If the
+  // dashboard modal is open it wins over the underlying activeView.
+  const currentItem = () => {
+    if (dashboardModalOpen()) return VIEW_ITEMS[0]
+    return VIEW_ITEMS.find((v) => v.key === activeView()) || VIEW_ITEMS[1]
+  }
 
-  const select = (key: NavView) => {
-    setActiveView(key)
+  const select = (key: ViewKey) => {
+    if (key === 'dashboard') openDashboardModal()
+    else setActiveView(key)
     setOpen(false)
   }
 
   const handleKeydown = (e: KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey) {
       const num = parseInt(e.key)
-      if (num >= 1 && num <= 5) {
+      if (num === 1) {
+        e.preventDefault()
+        toggleDashboardModal()
+        setOpen(false)
+      } else if (num >= 2 && num <= 5) {
         e.preventDefault()
         select(VIEW_ITEMS[num - 1].key)
       }
@@ -50,6 +71,16 @@ export default function ViewMenu() {
       globalThis.removeEventListener('keydown', handleKeydown)
     }
   })
+
+  // An item is "active" in the menu when:
+  //   - it's the dashboard pseudo-entry AND the modal is open, OR
+  //   - it matches activeView AND the modal is NOT open (so workspace/etc
+  //     don't appear active while the modal covers them — only one
+  //     selection should look active at a time).
+  const isActive = (key: ViewKey) => {
+    if (key === 'dashboard') return dashboardModalOpen()
+    return !dashboardModalOpen() && activeView() === key
+  }
 
   return (
     <div class="relative">
@@ -83,15 +114,13 @@ export default function ViewMenu() {
             <button
               class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
               style={{
-                color: activeView() === item.key ? 'var(--c-accent)' : 'var(--c-text)',
-                background: activeView() === item.key ? 'var(--c-hover-bg)' : 'transparent',
+                color: isActive(item.key) ? 'var(--c-accent)' : 'var(--c-text)',
+                background: isActive(item.key) ? 'var(--c-hover-bg)' : 'transparent',
                 border: 'none',
                 cursor: 'pointer'
               }}
               onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.background = activeView() === item.key ? 'var(--c-hover-bg)' : '')
-              }
+              onMouseLeave={(e) => (e.currentTarget.style.background = isActive(item.key) ? 'var(--c-hover-bg)' : '')}
               onClick={() => select(item.key)}
             >
               <span class="flex w-5 items-center justify-center">{item.icon()}</span>
