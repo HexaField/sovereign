@@ -417,6 +417,28 @@ importers:
         specifier: ^7.2.2
         version: 7.2.2
 
+  packages/membranes:
+    dependencies:
+      '@sovereign/core':
+        specifier: workspace:*
+        version: link:../core
+      '@sovereign/primitives':
+        specifier: workspace:*
+        version: link:../primitives
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
+      '@types/supertest':
+        specifier: ^7.2.0
+        version: 7.2.0
+      supertest:
+        specifier: ^7.2.2
+        version: 7.2.2
+
   packages/notifications:
     dependencies:
       '@sovereign/core':
@@ -615,6 +637,9 @@ importers:
       '@sovereign/meetings':
         specifier: workspace:*
         version: link:../meetings
+      '@sovereign/membranes':
+        specifier: workspace:*
+        version: link:../membranes
       '@sovereign/notifications':
         specifier: workspace:*
         version: link:../notifications

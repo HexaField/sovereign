@@ -735,7 +735,7 @@ function WorkspaceHeaderContent() {
                           >
                             Move to…
                           </div>
-                          <For each={orgList().filter((o) => o.id !== t.orgId)}>
+                          <For each={orgList().filter((o) => o.id !== t.workspaceIds?.[0])}>
                             {(org) => (
                               <button
                                 class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
