@@ -10,7 +10,14 @@ import {
   _setDrawerOpen,
   _setSettingsOpen,
   initNavStore,
-  _triggerPopstate
+  _triggerPopstate,
+  activeView,
+  _setActiveView,
+  setActiveView,
+  dashboardModalOpen,
+  openDashboardModal,
+  closeDashboardModal,
+  toggleDashboardModal
 } from './store.js'
 
 describe('§3.5 Nav Store', () => {
@@ -117,6 +124,96 @@ describe('§3.5 Nav Store', () => {
       expect(settingsOpen()).toBe(true)
       setSettingsOpen(false)
       expect(settingsOpen()).toBe(false)
+    })
+  })
+
+  describe('dashboard modal', () => {
+    beforeEach(() => {
+      closeDashboardModal()
+      _setActiveView('workspace')
+    })
+
+    it('defaults to closed', () => {
+      expect(dashboardModalOpen()).toBe(false)
+    })
+
+    it('open / close set the flag', () => {
+      openDashboardModal()
+      expect(dashboardModalOpen()).toBe(true)
+      closeDashboardModal()
+      expect(dashboardModalOpen()).toBe(false)
+    })
+
+    it('toggle flips the flag', () => {
+      toggleDashboardModal()
+      expect(dashboardModalOpen()).toBe(true)
+      toggleDashboardModal()
+      expect(dashboardModalOpen()).toBe(false)
+    })
+
+    // ── The core peek-and-return contract ────────────────────────────
+    //
+    // Opening the dashboard must NOT touch `activeView` (or workspaceId
+    // or threadKey — but those aren't owned by this store). The whole
+    // point of the modal pattern is that dismissing returns the user
+    // exactly where they were.
+    it('does NOT change activeView when opened or closed', () => {
+      _setActiveView('canvas')
+      openDashboardModal()
+      expect(activeView()).toBe('canvas')
+      closeDashboardModal()
+      expect(activeView()).toBe('canvas')
+    })
+
+    it('survives multiple toggles without leaking into activeView', () => {
+      _setActiveView('planning')
+      for (let i = 0; i < 5; i++) toggleDashboardModal()
+      expect(activeView()).toBe('planning')
+    })
+
+    it('writes ?dashboard=open to URL when opened, removes it when closed', () => {
+      const replaceState = vi.fn()
+      globalThis.history.replaceState = replaceState
+      openDashboardModal()
+      expect(replaceState).toHaveBeenCalledWith(null, '', expect.stringContaining('dashboard=open'))
+      replaceState.mockClear()
+      closeDashboardModal()
+      // After close, the URL passed should NOT contain `dashboard=open`.
+      const lastCall = replaceState.mock.calls[replaceState.mock.calls.length - 1]
+      expect(lastCall[2]).not.toContain('dashboard=open')
+    })
+
+    it('legacy ?view=dashboard URL opens the modal on init (with workspace as underlying view)', () => {
+      cleanup()
+      Object.defineProperty(globalThis, 'location', {
+        value: { search: '?view=dashboard', href: 'http://localhost?view=dashboard', hash: '' },
+        writable: true,
+        configurable: true
+      })
+      cleanup = initNavStore()
+      expect(dashboardModalOpen()).toBe(true)
+      expect(activeView()).toBe('workspace')
+    })
+  })
+
+  describe('activeView default + sibling views', () => {
+    it('default activeView is workspace (dashboard is no longer a sibling view)', () => {
+      cleanup()
+      Object.defineProperty(globalThis, 'location', {
+        value: { search: '', href: 'http://localhost', hash: '' },
+        writable: true,
+        configurable: true
+      })
+      cleanup = initNavStore()
+      expect(activeView()).toBe('workspace')
+    })
+
+    it('setActiveView accepts workspace / canvas / planning / system', () => {
+      const views = ['workspace', 'canvas', 'planning', 'system'] as const
+      for (const v of views) {
+        setActiveView(v)
+        expect(activeView()).toBe(v)
+      }
     })
   })
 })

@@ -58,7 +58,7 @@ import NotificationFeed from './NotificationFeed'
 import { ActivityFeed } from './ActivityFeed'
 import ThreadPreviews from './ThreadPreviews'
 import { createSignal, onMount, onCleanup, Show, For } from 'solid-js'
-import { setActiveView } from '../nav/store'
+import { setActiveView, closeDashboardModal } from '../nav/store'
 
 export const [connectionState, setConnectionState] = createSignal<ConnectionState>('connected')
 export const [agentBackendStatus, setAgentBackendStatus] = createSignal('online')
@@ -151,7 +151,10 @@ export function DashboardView() {
           <button
             class="flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors hover:brightness-110"
             style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
-            onClick={() => setActiveView('planning')}
+            onClick={() => {
+              setActiveView('planning')
+              closeDashboardModal()
+            }}
           >
             <span>📋</span> Planning
           </button>
