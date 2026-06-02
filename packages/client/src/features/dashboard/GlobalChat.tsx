@@ -3,7 +3,7 @@
 
 import { createSignal, onMount } from 'solid-js'
 import { setActiveWorkspace } from '../workspace/store.js'
-import { setActiveView } from '../nav/store.js'
+import { setActiveView, closeDashboardModal } from '../nav/store.js'
 
 export const GLOBAL_CHAT_MESSAGE_LIMIT = 5
 export const GLOBAL_CHAT_TRUNCATE_LENGTH = 120
@@ -20,6 +20,7 @@ export function formatRole(role: string): string {
 export function navigateToGlobalChat(): void {
   setActiveWorkspace('_global', 'Global')
   setActiveView('workspace')
+  closeDashboardModal()
 }
 
 interface PreviewMessage {
