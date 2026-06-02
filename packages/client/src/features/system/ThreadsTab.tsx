@@ -17,9 +17,17 @@ interface GatewaySession {
   kind?: string
   lastActivity?: number
   agentStatus?: string
-  orgId?: string
+  /** Membrane this thread belongs to (post-migration). */
+  membraneId?: string
+  /** Workspaces (orgIds) this thread is attached to. First entry is the primary. */
+  workspaceIds?: string[]
   isRegistered?: boolean
   entities?: EntityBinding[]
+}
+
+/** First workspace, or '_global' if none — for display + assign-target logic. */
+function primaryWorkspace(s: GatewaySession): string {
+  return s.workspaceIds?.[0] ?? '_global'
 }
 
 interface OrgInfo {
@@ -59,8 +67,8 @@ const ThreadsTab: Component = () => {
 
   onMount(load)
 
-  const unassigned = () => sessions().filter((s) => !s.orgId || s.orgId === '_global')
-  const assigned = () => sessions().filter((s) => s.orgId && s.orgId !== '_global')
+  const unassigned = () => sessions().filter((s) => !s.workspaceIds || s.workspaceIds.length === 0)
+  const assigned = () => sessions().filter((s) => (s.workspaceIds?.length ?? 0) > 0)
 
   const orgName = (orgId: string) => {
     if (!orgId || orgId === '_global') return 'Global'
@@ -70,18 +78,19 @@ const ThreadsTab: Component = () => {
 
   const assignSession = async (fullKey: string, shortKey: string, orgId: string) => {
     setMoving(fullKey)
+    const workspaceIds = orgId === '_global' ? [] : [orgId]
     try {
       const res = await fetch(`/api/threads/${shortKey}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orgId })
+        body: JSON.stringify({ workspaceIds })
       })
       if (!res.ok) {
         // Thread might not exist locally yet — create it
         const createRes = await fetch('/api/threads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: shortKey, orgId, label: shortKey })
+          body: JSON.stringify({ key: shortKey, workspaceIds, label: shortKey })
         })
         if (!createRes.ok) throw new Error(`HTTP ${createRes.status}`)
       }
@@ -159,7 +168,8 @@ const ThreadsTab: Component = () => {
             </div>
           </Show>
           <div class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-            {s.orgId && s.orgId !== '_global' ? `${orgName(s.orgId!)} · ` : ''}
+            {primaryWorkspace(s) !== '_global' ? `${orgName(primaryWorkspace(s))} · ` : ''}
+            {s.membraneId ? `${s.membraneId} · ` : ''}
             {s.key !== displayLabel(s) ? `${s.key} · ` : ''}
             {lastActive(s)}
           </div>
@@ -204,7 +214,7 @@ const ThreadsTab: Component = () => {
             >
               <option value="">Move to…</option>
               <option value="_global">Global (unassign)</option>
-              <For each={orgs().filter((o) => o.orgId !== '_global' && o.orgId !== s.orgId)}>
+              <For each={orgs().filter((o) => o.orgId !== '_global' && o.orgId !== primaryWorkspace(s))}>
                 {(org) => <option value={org.orgId}>{org.name}</option>}
               </For>
             </select>

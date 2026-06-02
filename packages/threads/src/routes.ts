@@ -79,8 +79,12 @@ export function createThreadRoutes(
   }
 
   router.get('/api/threads', async (req, res) => {
+    // Accept both `orgId` (legacy wire alias) and `workspaceId` / `membraneId`
+    // as filter params. `orgId` is translated to `workspaceId` server-side.
     const filter: Record<string, unknown> = {}
-    if (req.query.orgId) filter.orgId = req.query.orgId
+    if (req.query.workspaceId) filter.workspaceId = req.query.workspaceId
+    else if (req.query.orgId) filter.workspaceId = req.query.orgId
+    if (req.query.membraneId) filter.membraneId = req.query.membraneId
     if (req.query.projectId) filter.projectId = req.query.projectId
     if (req.query.active) filter.active = req.query.active === 'true'
     const threads = threadManager.list(Object.keys(filter).length > 0 ? (filter as never) : undefined)
@@ -118,8 +122,19 @@ export function createThreadRoutes(
   })
 
   router.post('/api/threads', async (req, res) => {
-    const { label, entities, orgId, backend: backendKindRaw, cwd } = req.body ?? {}
-    const thread = threadManager.create({ label, entities, orgId })
+    const {
+      label,
+      entities,
+      orgId: legacyOrgId,
+      workspaceIds: bodyWorkspaceIds,
+      membraneId: bodyMembraneId,
+      backend: backendKindRaw,
+      cwd
+    } = req.body ?? {}
+    // Translate legacy `orgId` body field into the new shape. Explicit
+    // `workspaceIds` and `membraneId` always win.
+    const workspaceIds = bodyWorkspaceIds ?? (legacyOrgId && legacyOrgId !== '_global' ? [legacyOrgId] : undefined)
+    const thread = threadManager.create({ label, entities, workspaceIds, membraneId: bodyMembraneId })
     const backendKind = backendKindRaw as AgentBackendKind | undefined
     // Optional: pre-bind the thread to a specific backend (e.g. 'claude-code')
     // so the routing layer picks the right adapter on the first message.
@@ -128,13 +143,15 @@ export function createThreadRoutes(
       const targetBackend = routing.forKind(backendKind)
       if (targetBackend) {
         try {
-          // The adapter's own registry callback persists the binding
-          // (including backendSessionId + backendSessionFile + orgId/cwd).
+          // The adapter's own registry callback persists the binding.
+          // Pass `orgId` for backend-side bookkeeping (separate concern from
+          // thread.workspaceIds — backends still use orgId to scope cwd etc).
+          const sessionOrgId = legacyOrgId ?? (workspaceIds && workspaceIds.length > 0 ? workspaceIds[0] : undefined)
           await targetBackend.createSession(label, {
             threadKey: thread.key,
             kind: 'thread',
             ...(typeof cwd === 'string' && cwd ? { cwd } : {}),
-            ...(orgId ? { orgId } : {})
+            ...(sessionOrgId ? { orgId: sessionOrgId } : {})
           } as never)
         } catch (err: any) {
           console.error(`[threads] failed to bind thread "${thread.key}" to backend "${backendKind}":`, err.message)
@@ -151,8 +168,18 @@ export function createThreadRoutes(
   })
 
   router.patch('/api/threads/:key', (req, res) => {
-    const { label, orgId } = req.body
-    const thread = threadManager.update(req.params.key, { label, orgId })
+    const { label, orgId: legacyOrgId, workspaceIds: bodyWorkspaceIds, membraneId } = req.body
+    // Translate legacy `orgId` body field. Empty/`_global` → empty array
+    // so a PATCH with `orgId: '_global'` actually moves a thread to global.
+    const workspaceIds =
+      bodyWorkspaceIds !== undefined
+        ? bodyWorkspaceIds
+        : legacyOrgId !== undefined
+          ? legacyOrgId === '_global'
+            ? []
+            : [legacyOrgId]
+          : undefined
+    const thread = threadManager.update(req.params.key, { label, membraneId, workspaceIds })
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
     res.json({ thread })
   })
@@ -500,7 +527,8 @@ export function createThreadRoutes(
         kind: string
         label: string
         lastActivity?: number
-        orgId?: string
+        membraneId?: string
+        workspaceIds?: string[]
         localLabel?: string
         isRegistered: boolean
       }> = []
@@ -526,7 +554,8 @@ export function createThreadRoutes(
               kind: s.kind,
               label: s.label || shortKey,
               lastActivity: s.lastActivity,
-              orgId: local?.orgId,
+              membraneId: local?.membraneId,
+              workspaceIds: local?.workspaceIds,
               localLabel: local?.label,
               isRegistered: !!local
             })

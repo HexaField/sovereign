@@ -29,6 +29,7 @@
     "@sovereign/git": "workspace:*",
     "@sovereign/issues": "workspace:*",
     "@sovereign/meetings": "workspace:*",
+    "@sovereign/membranes": "workspace:*",
     "@sovereign/notifications": "workspace:*",
     "@sovereign/orgs": "workspace:*",
     "@sovereign/planning": "workspace:*",
