@@ -20,6 +20,9 @@ import {
   setSettingsOpen,
   activeSystemTab,
   setActiveSystemTab,
+  dashboardModalOpen,
+  toggleDashboardModal,
+  openDashboardModal,
   type NavView,
   type SystemTabId
 } from '../nav/store.js'
@@ -902,8 +905,11 @@ function SystemHeaderContent() {
 }
 
 // ── Top-level views for menu ─────────────────────────────────────────
-
-const topLevelViews: Array<{ view: NavView; label: string; icon: () => any; shortcut: string }> = [
+//
+// `dashboard` is a pseudo-entry — selecting it toggles the modal overlay
+// (see `selectView`) rather than switching the underlying view. It is
+// kept in the menu for discoverability and to preserve the ⌘1 shortcut.
+const topLevelViews: Array<{ view: NavView | 'dashboard'; label: string; icon: () => any; shortcut: string }> = [
   { view: 'dashboard', label: 'Dashboard', icon: () => <DashboardIcon class="h-4 w-4" />, shortcut: '⌘1' },
   { view: 'workspace', label: 'Workspace', icon: () => <WorkspaceIcon class="h-4 w-4" />, shortcut: '⌘2' },
   { view: 'canvas', label: 'Canvas', icon: () => <CanvasIcon class="h-4 w-4" />, shortcut: '⌘3' },
@@ -954,8 +960,15 @@ export function Header() {
 
   const totalBadge = createMemo(() => warningCount())
 
-  const selectView = (view: NavView) => {
-    setActiveView(view)
+  const selectView = (view: NavView | 'dashboard') => {
+    if (view === 'dashboard') {
+      // Dashboard is an overlay, not a sibling view — leave activeView alone.
+      // The menu-button affordance is "open the dashboard"; closing happens
+      // via the ⬡ button, ESC, or in-modal navigation.
+      openDashboardModal()
+    } else {
+      setActiveView(view)
+    }
     setMenuOpen(false)
   }
 
@@ -964,26 +977,32 @@ export function Header() {
       class="safe-top z-[100] flex shrink-0 items-center gap-2 px-4 py-2"
       style={{ 'border-bottom': '1px solid var(--c-border)', background: 'var(--c-bg-raised)' }}
     >
-      {/* Left: Agent icon — always navigates to dashboard */}
-      <button class="shrink-0 cursor-pointer text-xl" onClick={() => setActiveView('dashboard')} title="Dashboard">
+      {/* Left: Agent icon — toggles the dashboard modal overlay. */}
+      <button
+        class="shrink-0 cursor-pointer text-xl"
+        onClick={toggleDashboardModal}
+        title={dashboardModalOpen() ? 'Close dashboard' : 'Open dashboard'}
+      >
         {agentIcon()}
       </button>
 
-      {/* Center: View-specific content */}
+      {/* Center: header content reflects what the user is *looking at*.
+          When the dashboard modal is open it covers the page, so the
+          dashboard header takes precedence over the underlying view's. */}
       <div class="min-w-0 flex-1 px-2">
-        <Show when={activeView() === 'dashboard'}>
+        <Show when={dashboardModalOpen()}>
           <DashboardHeaderContent />
         </Show>
-        <Show when={activeView() === 'workspace'}>
+        <Show when={!dashboardModalOpen() && activeView() === 'workspace'}>
           <WorkspaceHeaderContent />
         </Show>
-        <Show when={activeView() === 'canvas'}>
+        <Show when={!dashboardModalOpen() && activeView() === 'canvas'}>
           <CanvasHeaderContent />
         </Show>
-        <Show when={activeView() === 'planning'}>
+        <Show when={!dashboardModalOpen() && activeView() === 'planning'}>
           <PlanningHeaderContent />
         </Show>
-        <Show when={activeView() === 'system'}>
+        <Show when={!dashboardModalOpen() && activeView() === 'system'}>
           <SystemHeaderContent />
         </Show>
       </div>
@@ -1066,26 +1085,32 @@ export function Header() {
               class="absolute top-full right-0 z-[200] mt-1 w-52 overflow-hidden rounded-lg shadow-lg"
               style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
             >
-              {topLevelViews.map((item) => (
-                <button
-                  class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
-                  style={{
-                    color: activeView() === item.view ? 'var(--c-accent)' : 'var(--c-text)',
-                    background: activeView() === item.view ? 'var(--c-hover-bg)' : undefined
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.background = activeView() === item.view ? 'var(--c-hover-bg)' : '')
-                  }
-                  onClick={() => selectView(item.view)}
-                >
-                  <span class="flex w-5 items-center justify-center">{item.icon()}</span>
-                  <span class="flex-1">{item.label}</span>
-                  <span class="hidden text-[10px] sm:inline" style={{ color: 'var(--c-text-muted)' }}>
-                    {item.shortcut}
-                  </span>
-                </button>
-              ))}
+              {topLevelViews.map((item) => {
+                // Dashboard's "active" state tracks the modal, not activeView,
+                // since opening the dashboard doesn't change the underlying view.
+                const isActive = () =>
+                  item.view === 'dashboard'
+                    ? dashboardModalOpen()
+                    : (activeView() as NavView | 'dashboard') === item.view
+                return (
+                  <button
+                    class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"
+                    style={{
+                      color: isActive() ? 'var(--c-accent)' : 'var(--c-text)',
+                      background: isActive() ? 'var(--c-hover-bg)' : undefined
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = isActive() ? 'var(--c-hover-bg)' : '')}
+                    onClick={() => selectView(item.view)}
+                  >
+                    <span class="flex w-5 items-center justify-center">{item.icon()}</span>
+                    <span class="flex-1">{item.label}</span>
+                    <span class="hidden text-[10px] sm:inline" style={{ color: 'var(--c-text-muted)' }}>
+                      {item.shortcut}
+                    </span>
+                  </button>
+                )
+              })}
               <div style={{ 'border-top': '1px solid var(--c-border)' }}>
                 <button
                   class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"

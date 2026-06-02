@@ -17,7 +17,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 
 import { handleShortcut, VIEW_SHORTCUTS } from './useKeyboardShortcuts.js'
-import { activeView, _setActiveView } from '../features/nav/store.js'
+import { activeView, _setActiveView, dashboardModalOpen, closeDashboardModal } from '../features/nav/store.js'
 import { chatExpanded, setChatExpanded, sidebarCollapsed, setSidebarCollapsed } from '../features/workspace/store.js'
 
 function makeKeyEvent(key: string, metaKey = true, shiftKey = false): KeyboardEvent {
@@ -38,16 +38,31 @@ function makeKeyEvent(key: string, metaKey = true, shiftKey = false): KeyboardEv
 }
 
 beforeEach(() => {
-  _setActiveView('dashboard')
+  _setActiveView('workspace')
+  closeDashboardModal()
   setChatExpanded(false)
   setSidebarCollapsed(false)
 })
 
 describe('§8 Keyboard Shortcuts', () => {
-  it('Cmd+1..5 switches views', () => {
-    const views = ['dashboard', 'workspace', 'canvas', 'planning', 'system'] as const
+  it('Cmd+1 toggles the dashboard modal (without changing activeView)', () => {
+    expect(dashboardModalOpen()).toBe(false)
+    const e1 = makeKeyEvent('1')
+    expect(handleShortcut(e1)).toBe(true)
+    expect(e1.defaultPrevented).toBe(true)
+    expect(dashboardModalOpen()).toBe(true)
+    expect(activeView()).toBe('workspace') // underlying view preserved
+    const e2 = makeKeyEvent('1')
+    expect(handleShortcut(e2)).toBe(true)
+    expect(dashboardModalOpen()).toBe(false)
+    expect(activeView()).toBe('workspace')
+  })
+
+  it('Cmd+2..5 switches the underlying view', () => {
+    const views = ['workspace', 'canvas', 'planning', 'system'] as const
     for (let i = 0; i < views.length; i++) {
-      const e = makeKeyEvent(String(i + 1))
+      const key = String(i + 2)
+      const e = makeKeyEvent(key)
       const consumed = handleShortcut(e)
       expect(consumed).toBe(true)
       expect(activeView()).toBe(views[i])
@@ -82,7 +97,8 @@ describe('§8 Keyboard Shortcuts', () => {
     expect(handleShortcut(e)).toBe(false)
   })
 
-  it('VIEW_SHORTCUTS maps 1-5 to views', () => {
-    expect(Object.keys(VIEW_SHORTCUTS)).toEqual(['1', '2', '3', '4', '5'])
+  it('VIEW_SHORTCUTS maps 2-5 to sibling views (1 is dashboard-modal toggle, handled separately)', () => {
+    expect(Object.keys(VIEW_SHORTCUTS)).toEqual(['2', '3', '4', '5'])
+    expect(VIEW_SHORTCUTS['1']).toBeUndefined()
   })
 })
