@@ -19,7 +19,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsdown",
     "check": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
