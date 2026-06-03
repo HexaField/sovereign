@@ -93,6 +93,9 @@ importers:
       '@sovereign/meetings':
         specifier: workspace:*
         version: link:../meetings
+      '@sovereign/membranes':
+        specifier: workspace:*
+        version: link:../membranes
       '@sovereign/notifications':
         specifier: workspace:*
         version: link:../notifications
@@ -108,6 +111,9 @@ importers:
       '@sovereign/scheduler':
         specifier: workspace:*
         version: link:../scheduler
+      '@sovereign/threads':
+        specifier: workspace:*
+        version: link:../threads
       ws:
         specifier: ^8.19.0
         version: 8.19.0
