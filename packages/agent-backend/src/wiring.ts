@@ -18,6 +18,8 @@ import { buildSovereignMcpDeps } from './mcp-deps.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
+import type { MembraneManager } from '@sovereign/membranes'
+import type { ThreadManager } from '@sovereign/threads'
 import type { PlanningService } from '@sovereign/planning'
 import type { IssueTracker } from '@sovereign/issues'
 import type { MeetingsService } from '@sovereign/meetings'
@@ -33,6 +35,16 @@ export interface AgentBackendWiringInput {
   configStore: ConfigStore
   scheduler: Scheduler
   orgManager: OrgManager
+  /**
+   * Optional. When provided alongside `threadManager`, each Claude Code
+   * session gets the membrane's `CONTEXT.md` appended to the SDK's
+   * preset system prompt. Missing manager (or missing thread/membrane)
+   * is a silent no-op — sessions still run with just the global
+   * personality.
+   */
+  membraneManager?: MembraneManager
+  /** Optional. Used together with `membraneManager` to resolve session → thread → membrane. */
+  threadManager?: ThreadManager
   planningService: PlanningService
   issueTracker: IssueTracker
   meetingsService: MeetingsService
@@ -74,6 +86,44 @@ function makeToolPolicy(orgManager: OrgManager) {
   }
 }
 
+/**
+ * Sovereign session keys take the form `agent:main:thread:<key>` for
+ * threads and `agent:main:main` for the main "ambient" session. Inverse
+ * of `deriveSessionKey` — kept local because nothing else needs it.
+ */
+function sessionKeyToThreadKey(sessionKey: string): string | undefined {
+  if (sessionKey === 'agent:main:main') return 'main'
+  const prefix = 'agent:main:thread:'
+  if (sessionKey.startsWith(prefix)) return sessionKey.slice(prefix.length)
+  // Subagent / cron sessions don't have a 1:1 thread mapping — they
+  // inherit context from their parent at spawn time, so we don't need
+  // to resolve membrane context for them here.
+  return undefined
+}
+
+/**
+ * Build the per-session system-prompt-append resolver from the membrane
+ * + thread managers. Returns `undefined` (= no manager wiring) when
+ * either input is missing, so the wiring is safe to call even when the
+ * membrane layer isn't enabled.
+ *
+ * Exported for unit testing. Production wiring uses it internally.
+ */
+export function makeMembraneAppendResolver(
+  membraneManager: MembraneManager | undefined,
+  threadManager: ThreadManager | undefined
+): ((sessionKey: string) => string | undefined) | undefined {
+  if (!membraneManager || !threadManager) return undefined
+  return (sessionKey: string): string | undefined => {
+    const threadKey = sessionKeyToThreadKey(sessionKey)
+    if (!threadKey) return undefined
+    const thread = threadManager.get(threadKey)
+    if (!thread?.membraneId) return undefined
+    const ctx = membraneManager.renderContext(thread.membraneId)
+    return ctx ?? undefined
+  }
+}
+
 export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWiringResult {
   const {
     bus,
@@ -81,6 +131,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     configStore,
     scheduler,
     orgManager,
+    membraneManager,
+    threadManager,
     planningService,
     issueTracker,
     meetingsService,
@@ -140,7 +192,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
             }
           },
           toolPolicy: makeToolPolicy(orgManager),
-          activeSessions
+          activeSessions,
+          resolveAppendSystemPrompt: makeMembraneAppendResolver(membraneManager, threadManager)
         })
         claudeCodeBackend = cc
         return cc
