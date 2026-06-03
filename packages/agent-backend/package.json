@@ -26,11 +26,13 @@
     "@sovereign/core": "workspace:*",
     "@sovereign/issues": "workspace:*",
     "@sovereign/meetings": "workspace:*",
+    "@sovereign/membranes": "workspace:*",
     "@sovereign/notifications": "workspace:*",
     "@sovereign/orgs": "workspace:*",
     "@sovereign/planning": "workspace:*",
     "@sovereign/primitives": "workspace:*",
     "@sovereign/scheduler": "workspace:*",
+    "@sovereign/threads": "workspace:*",
     "ws": "^8.19.0",
     "zod": "^4.3.5"
   },

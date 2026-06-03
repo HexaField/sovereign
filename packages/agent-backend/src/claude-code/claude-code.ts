@@ -132,6 +132,15 @@ export interface ClaudeCodeBackendDeps {
    * Optional for tests.
    */
   activeSessions?: ActiveSessions
+  /**
+   * Per-session system-prompt append. Called once when a session loop
+   * starts; the returned text is layered on top of Claude Code's preset
+   * system prompt (which already covers the global `~/.claude/CLAUDE.md`).
+   * Sovereign uses this to inject membrane-scoped context — see
+   * `@sovereign/membranes`. Returning `undefined` leaves the SDK call
+   * untouched (no `systemPrompt` override). Safe to omit.
+   */
+  resolveAppendSystemPrompt?: (sessionKey: string) => string | undefined
   /** Override sdkQuery for tests; defaults to the SDK's query(). */
   sdkQuery?: typeof sdkQuery
 }
@@ -739,6 +748,11 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     state.abortController = abort
 
     const resumeExisting = state.sessionFile && fs.existsSync(state.sessionFile)
+    // Per-session membrane context (CONTEXT.md for the membrane this
+    // session's thread belongs to). Layered on top of Claude Code's
+    // preset prompt via `systemPrompt.append` — preserves the default
+    // ~/.claude/CLAUDE.md loading; only ADDS the membrane prelude.
+    const membraneAppend = deps?.resolveAppendSystemPrompt?.(state.sessionKey)
     const sdkOptions: SdkOptions = {
       cwd: state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
@@ -750,6 +764,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
+      ...(membraneAppend ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: membraneAppend } } : {}),
       stderr: (line: string) => console.error(`[claude-code cli] ${line}`)
     } as SdkOptions
 

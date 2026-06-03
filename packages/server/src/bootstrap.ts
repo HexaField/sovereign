@@ -334,6 +334,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     configStore,
     scheduler,
     orgManager,
+    membraneManager,
+    threadManager,
     planningService,
     issueTracker,
     meetingsService,

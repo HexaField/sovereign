@@ -6,7 +6,7 @@ import express from 'express'
 import request from 'supertest'
 import { createEventBus } from '@sovereign/core'
 import type { BusEvent } from '@sovereign/core'
-import { createMembraneManager, type MembraneManager } from './membranes.js'
+import { createMembraneManager, MEMBRANE_CONTEXT_FILENAME, type MembraneManager } from './membranes.js'
 import { createMembraneStore } from './store.js'
 import { createMembraneRoutes } from './routes.js'
 
@@ -181,6 +181,172 @@ describe('§Membranes — Persistence', () => {
     fs.writeFileSync(file, 'not-json{{{')
     const store = createMembraneStore(dataDir)
     expect(store.read().membranes).toEqual([])
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────
+// §Membranes — Context rendering (CONTEXT.md → appendSystemPrompt)
+//
+// Per-membrane context is the third layer of agent personality. The
+// global personality (~/.claude/CLAUDE.md) covers identity + general
+// principles. Each membrane's CONTEXT.md adds project-specific framing
+// — "what is this membrane about, what are we trying to do here." Read
+// at session creation, passed through to the SDK as appendSystemPrompt.
+//
+// Threads with no membrane (or a membrane without a CONTEXT.md file)
+// silently get no extra context — by design. The global personality
+// alone is sufficient; per-membrane context is opt-in.
+describe('§Membranes — renderContext', () => {
+  function withMembraneDir(): { membraneDir: string; cleanup: () => void } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'membrane-content-'))
+    return { membraneDir: dir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) }
+  }
+
+  it('returns null when the membrane id is unknown', () => {
+    expect(manager.renderContext('does-not-exist')).toBeNull()
+  })
+
+  it('returns null when the membrane has no contentPath', () => {
+    manager.createMembrane({ id: 'x', name: 'X' })
+    expect(manager.renderContext('x')).toBeNull()
+  })
+
+  it('returns null when contentPath exists but CONTEXT.md does not', () => {
+    const { membraneDir, cleanup } = withMembraneDir()
+    try {
+      manager.createMembrane({ id: 'x', name: 'X', contentPath: membraneDir })
+      expect(manager.renderContext('x')).toBeNull()
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('reads CONTEXT.md and returns its contents verbatim', () => {
+    const { membraneDir, cleanup } = withMembraneDir()
+    const body = '# ADAM\n\nWorking on AD4M Layer protocol.\n'
+    try {
+      fs.writeFileSync(path.join(membraneDir, MEMBRANE_CONTEXT_FILENAME), body)
+      manager.createMembrane({ id: 'adam', name: 'ADAM', contentPath: membraneDir })
+      expect(manager.renderContext('adam')).toBe(body)
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('caches by mtime — repeated reads do NOT re-stat-then-read when unchanged', () => {
+    const { membraneDir, cleanup } = withMembraneDir()
+    const file = path.join(membraneDir, MEMBRANE_CONTEXT_FILENAME)
+    try {
+      fs.writeFileSync(file, 'first')
+      // Pin to a whole-second mtime so sub-second precision doesn't
+      // sabotage the restore step below. `fs.utimesSync` rounds to
+      // seconds on macOS so this is the only safe way to compare.
+      const frozen = new Date(Math.floor(Date.now() / 1000) * 1000)
+      fs.utimesSync(file, frozen, frozen)
+
+      manager.createMembrane({ id: 'x', name: 'X', contentPath: membraneDir })
+      const first = manager.renderContext('x')
+
+      // Mutate the file underneath without bumping mtime — cache should
+      // win and we still see the original body.
+      fs.writeFileSync(file, 'second-but-mtime-frozen')
+      fs.utimesSync(file, frozen, frozen) // restore exact mtime
+      expect(manager.renderContext('x')).toBe(first)
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('picks up new file contents when mtime changes', async () => {
+    const { membraneDir, cleanup } = withMembraneDir()
+    const file = path.join(membraneDir, MEMBRANE_CONTEXT_FILENAME)
+    try {
+      fs.writeFileSync(file, 'v1')
+      manager.createMembrane({ id: 'x', name: 'X', contentPath: membraneDir })
+      expect(manager.renderContext('x')).toBe('v1')
+      // Ensure mtime actually advances on filesystems with low-res timestamps.
+      await new Promise((r) => setTimeout(r, 20))
+      fs.writeFileSync(file, 'v2')
+      expect(manager.renderContext('x')).toBe('v2')
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('invalidateContext drops the cached body', () => {
+    const { membraneDir, cleanup } = withMembraneDir()
+    const file = path.join(membraneDir, MEMBRANE_CONTEXT_FILENAME)
+    try {
+      const frozen = new Date(Math.floor(Date.now() / 1000) * 1000)
+      fs.writeFileSync(file, 'v1')
+      fs.utimesSync(file, frozen, frozen)
+      manager.createMembrane({ id: 'x', name: 'X', contentPath: membraneDir })
+      expect(manager.renderContext('x')).toBe('v1')
+      // Mutate the file and freeze mtime — without invalidation, cache wins.
+      fs.writeFileSync(file, 'v2')
+      fs.utimesSync(file, frozen, frozen)
+      manager.invalidateContext('x')
+      expect(manager.renderContext('x')).toBe('v2')
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('invalidateContext() with no arg clears all entries', () => {
+    const a = withMembraneDir()
+    const b = withMembraneDir()
+    try {
+      fs.writeFileSync(path.join(a.membraneDir, MEMBRANE_CONTEXT_FILENAME), 'A')
+      fs.writeFileSync(path.join(b.membraneDir, MEMBRANE_CONTEXT_FILENAME), 'B')
+      manager.createMembrane({ id: 'a', name: 'A', contentPath: a.membraneDir })
+      manager.createMembrane({ id: 'b', name: 'B', contentPath: b.membraneDir })
+      manager.renderContext('a')
+      manager.renderContext('b')
+      manager.invalidateContext()
+      // After clear, both reads still work — just from disk.
+      expect(manager.renderContext('a')).toBe('A')
+      expect(manager.renderContext('b')).toBe('B')
+    } finally {
+      a.cleanup()
+      b.cleanup()
+    }
+  })
+
+  it('membrane.updated bus event invalidates the cached context', async () => {
+    const { membraneDir, cleanup } = withMembraneDir()
+    const file = path.join(membraneDir, MEMBRANE_CONTEXT_FILENAME)
+    try {
+      const frozen = new Date(Math.floor(Date.now() / 1000) * 1000)
+      fs.writeFileSync(file, 'before-rename')
+      fs.utimesSync(file, frozen, frozen)
+      manager.createMembrane({ id: 'x', name: 'X', contentPath: membraneDir })
+      expect(manager.renderContext('x')).toBe('before-rename')
+
+      // Mutate file underneath, freezing mtime so cache would normally win.
+      fs.writeFileSync(file, 'after-rename')
+      fs.utimesSync(file, frozen, frozen)
+
+      // Trigger membrane.updated — cache should drop.
+      manager.updateMembrane('x', { name: 'X (renamed)' })
+      expect(manager.renderContext('x')).toBe('after-rename')
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('membrane.deleted bus event invalidates the cached context', () => {
+    const { membraneDir, cleanup } = withMembraneDir()
+    const file = path.join(membraneDir, MEMBRANE_CONTEXT_FILENAME)
+    try {
+      fs.writeFileSync(file, 'body')
+      manager.createMembrane({ id: 'x', name: 'X', contentPath: membraneDir })
+      manager.renderContext('x')
+      manager.deleteMembrane('x')
+      // After delete, renderContext should return null (unknown id).
+      expect(manager.renderContext('x')).toBeNull()
+    } finally {
+      cleanup()
+    }
   })
 })
 

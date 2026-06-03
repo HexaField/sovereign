@@ -4,9 +4,14 @@
 // via the underlying atomic-write store. Emits `membrane.*` bus events
 // so other modules (chat, threads, UI) can react.
 
+import fs from 'node:fs'
+import path from 'node:path'
 import type { EventBus } from '@sovereign/core'
 import type { Membrane, MembraneCreateInput, MembranePatch, MembranesData } from './types.js'
 import { createMembraneStore, type MembraneStore } from './store.js'
+
+/** File name read from each membrane's `contentPath` for context injection. */
+export const MEMBRANE_CONTEXT_FILENAME = 'CONTEXT.md'
 
 export interface MembraneManager {
   createMembrane(input: MembraneCreateInput): Membrane
@@ -20,6 +25,27 @@ export interface MembraneManager {
 
   addWorkspace(membraneId: string, orgId: string): Membrane
   removeWorkspace(membraneId: string, orgId: string): Membrane
+
+  /**
+   * Resolve the membrane's project context — the contents of
+   * `<contentPath>/CONTEXT.md` — for injection into agent sessions
+   * via the SDK's `appendSystemPrompt` option.
+   *
+   * Returns `null` when:
+   *   - the membrane id is unknown,
+   *   - the membrane has no `contentPath`,
+   *   - or no `CONTEXT.md` exists at that path.
+   *
+   * Result is cached per `(membraneId, mtime)` so repeated calls during
+   * normal session creation don't re-read disk. The cache is invalidated
+   * automatically when the file's mtime changes; an explicit
+   * `invalidateContext(id)` is also available for callers that mutate
+   * the membrane definition itself.
+   */
+  renderContext(membraneId: string): string | null
+
+  /** Drop the cached context for a membrane (or all membranes when omitted). */
+  invalidateContext(membraneId?: string): void
 }
 
 function slugify(input: string): string {
@@ -128,6 +154,61 @@ export function createMembraneManager(bus: EventBus, dataDir: string): MembraneM
     return m
   }
 
+  // ── Context rendering (CONTEXT.md → appendSystemPrompt) ──────────────
+  //
+  // Cache holds the parsed file body keyed by membraneId. Entries store
+  // the mtime they were read at so we can detect on-disk edits cheaply
+  // without watching the filesystem.
+  interface ContextCacheEntry {
+    mtimeMs: number
+    body: string
+  }
+  const contextCache = new Map<string, ContextCacheEntry>()
+
+  const renderContext = (membraneId: string): string | null => {
+    const m = getMembrane(membraneId)
+    if (!m || !m.contentPath) return null
+    const filePath = path.join(m.contentPath, MEMBRANE_CONTEXT_FILENAME)
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(filePath)
+    } catch {
+      // Either the file doesn't exist or the path is unreachable — both
+      // are silent no-ops (the global personality is still loaded).
+      contextCache.delete(membraneId)
+      return null
+    }
+    if (!stat.isFile()) return null
+
+    const cached = contextCache.get(membraneId)
+    if (cached && cached.mtimeMs === stat.mtimeMs) return cached.body
+    try {
+      const body = fs.readFileSync(filePath, 'utf-8')
+      contextCache.set(membraneId, { mtimeMs: stat.mtimeMs, body })
+      return body
+    } catch {
+      contextCache.delete(membraneId)
+      return null
+    }
+  }
+
+  const invalidateContext = (membraneId?: string): void => {
+    if (membraneId === undefined) contextCache.clear()
+    else contextCache.delete(membraneId)
+  }
+
+  // Mutating a membrane definition itself (rename, move contentPath,
+  // delete) invalidates cached context. File-content changes are caught
+  // by the mtime check inside `renderContext` and don't need an event.
+  bus.on('membrane.updated', (e) => {
+    const id = (e.payload as { id?: string })?.id
+    if (id) invalidateContext(id)
+  })
+  bus.on('membrane.deleted', (e) => {
+    const id = (e.payload as { id?: string })?.id
+    if (id) invalidateContext(id)
+  })
+
   return {
     createMembrane,
     updateMembrane,
@@ -136,6 +217,8 @@ export function createMembraneManager(bus: EventBus, dataDir: string): MembraneM
     listMembranes,
     listMembranesForWorkspace,
     addWorkspace,
-    removeWorkspace
+    removeWorkspace,
+    renderContext,
+    invalidateContext
   }
 }
