@@ -26,6 +26,13 @@ PLIST_TEMPLATE="$REPO_DIR/support/com.sovereign.server.plist"
 LAUNCH_SCRIPT="$REPO_DIR/bin/sovereign-launchd.sh"
 TMP_ROOT="${TMPDIR:-/tmp}"
 
+# Independent self-heal watchdog (separate launchd job; see bin/sovereign-watchdog.sh).
+WATCHDOG_LABEL="com.sovereign.watchdog"
+WATCHDOG_TARGET="$LAUNCH_DOMAIN/$WATCHDOG_LABEL"
+WATCHDOG_PLIST_DEST="$HOME/Library/LaunchAgents/${WATCHDOG_LABEL}.plist"
+WATCHDOG_PLIST_TEMPLATE="$REPO_DIR/support/com.sovereign.watchdog.plist"
+WATCHDOG_SCRIPT="$REPO_DIR/bin/sovereign-watchdog.sh"
+
 # Sovereign separates *config* from *data*:
 #   SOVEREIGN_CONFIG_DIR  — user-edited state (just config.json today).
 #                           Defaults to ~/.sovereign. Intended to be
@@ -96,6 +103,10 @@ LOG_DIR="$DATA_DIR/logs"
 STDOUT_LOG="$LOG_DIR/sovereign.stdout.log"
 STDERR_LOG="$LOG_DIR/sovereign.stderr.log"
 PID_FILE="$DATA_DIR/sovereign.pid"
+WATCHDOG_LOG="$LOG_DIR/watchdog.log"
+# Pause sentinel: written by `stop`, removed by `start`/`restart`. While present
+# the watchdog leaves the service down (intentional stop / maintenance).
+WATCHDOG_PAUSE_FILE="$DATA_DIR/watchdog.paused"
 HOST_VALUE="$(_read_config_json server.host 127.0.0.1)"
 PORT_VALUE="$(_read_config_json server.port 5801)"
 TLS_VALUE="$(_read_config_json server.tls.enabled false)"
@@ -137,6 +148,57 @@ _service_pid() {
   elif [ -f "$PID_FILE" ]; then
     cat "$PID_FILE"
   fi
+}
+
+_server_pids() {
+  # PIDs of every process running the built server entry. Matched on the
+  # absolute path, so it can't catch this CLI or the watchdog script (their
+  # argv don't contain it). Empty output when none are running.
+  pgrep -f "$SERVER_ENTRY" 2>/dev/null || true
+}
+
+_reap_orphans() {
+  # Terminate stray server processes — leftover instances that survived a
+  # bootout (e.g. wedged and ignored launchd's SIGTERM) and reparented to PID 1.
+  # They race the real instance on the data dir, so they must die before a fresh
+  # one starts. Pass the launchd-managed PID as $1 to preserve it.
+  local keep="${1:-}"
+  local pids pid alive waited
+  pids="$(_server_pids)"
+  [ -n "$pids" ] || return 0
+
+  local targets
+  targets=""
+  for pid in $pids; do
+    case "$pid" in (*[!0-9]*|"") continue ;; esac
+    [ -n "$keep" ] && [ "$pid" = "$keep" ] && continue
+    [ "$pid" = "$$" ] && continue
+    targets="$targets $pid"
+  done
+  targets="${targets# }"
+  [ -n "$targets" ] || return 0
+
+  _note "Reaping stray server process(es): $targets"
+  for pid in $targets; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  # Grace period for graceful exit, then SIGKILL anything still alive.
+  waited=0
+  while [ "$waited" -lt 10 ]; do
+    alive=0
+    for pid in $targets; do
+      kill -0 "$pid" 2>/dev/null && alive=1
+    done
+    [ "$alive" -eq 0 ] && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  for pid in $targets; do
+    if kill -0 "$pid" 2>/dev/null; then
+      _warn "Stray server pid $pid ignored SIGTERM; sending SIGKILL"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
 }
 
 _healthcheck() {
@@ -224,10 +286,47 @@ _bootout_service() {
   if _is_launchd_loaded; then
     launchctl bootout "$LAUNCH_TARGET" >/dev/null 2>&1 || launchctl bootout "$LAUNCH_DOMAIN" "$PLIST_DEST" >/dev/null 2>&1 || true
   fi
+  # launchd's bootout SIGTERMs the job, but a wedged process can ignore it and
+  # linger as a PID-1 orphan (the 2026-06-04 outage). Guarantee nothing survives.
+  _reap_orphans
 }
 
 _kickstart_service() {
   launchctl kickstart -k "$LAUNCH_TARGET"
+}
+
+# ── Watchdog (independent self-heal job) ────────────────────────────────────
+_install_watchdog_plist() {
+  mkdir -p "$(dirname "$WATCHDOG_PLIST_DEST")"
+  sed -e "s|REPO_DIR_PLACEHOLDER|${REPO_DIR}|g" \
+      -e "s|WATCHDOG_SCRIPT_PLACEHOLDER|${WATCHDOG_SCRIPT}|g" \
+      -e "s|WATCHDOG_LOG_PLACEHOLDER|${WATCHDOG_LOG}|g" \
+      -e "s|CONFIG_DIR_PLACEHOLDER|${CONFIG_DIR}|g" \
+      -e "s|DATA_DIR_PLACEHOLDER|${DATA_DIR}|g" \
+      "$WATCHDOG_PLIST_TEMPLATE" > "$WATCHDOG_PLIST_DEST"
+}
+
+_is_watchdog_loaded() {
+  launchctl list | awk '{print $3}' | grep -Fxq "$WATCHDOG_LABEL"
+}
+
+_bootout_watchdog() {
+  if _is_watchdog_loaded; then
+    launchctl bootout "$WATCHDOG_TARGET" >/dev/null 2>&1 || launchctl bootout "$LAUNCH_DOMAIN" "$WATCHDOG_PLIST_DEST" >/dev/null 2>&1 || true
+  fi
+}
+
+# Install the watchdog plist and make sure it's loaded. Idempotent — safe to
+# call from start/restart on every invocation.
+_ensure_watchdog() {
+  _is_macos || return 0
+  _install_watchdog_plist
+  if _is_watchdog_loaded; then
+    return 0
+  fi
+  _note "Bootstrapping self-heal watchdog (health check every 60s)"
+  launchctl bootstrap "$LAUNCH_DOMAIN" "$WATCHDOG_PLIST_DEST" 2>/dev/null \
+    || _warn "Watchdog bootstrap failed; run 'sovereign watchdog start' to retry"
 }
 
 _start_launchd_service() {
@@ -236,11 +335,13 @@ _start_launchd_service() {
   if _is_launchd_loaded; then
     _note "Service already loaded; verifying health"
     if ! _wait_for_health 5; then
-      _warn "Loaded service is not healthy; kickstarting it"
+      _warn "Loaded service is not healthy; reaping duplicates and kickstarting"
+      _reap_orphans "$(_service_pid)"
       _kickstart_service
     fi
   else
     _note "Starting Sovereign via launchd"
+    _reap_orphans
     _bootstrap_service
   fi
   if _wait_for_health 20; then
@@ -266,9 +367,11 @@ _restart_launchd_service() {
   _install_plist
   if _is_launchd_loaded; then
     _note "Restarting Sovereign via launchd kickstart"
+    _reap_orphans "$(_service_pid)"
     _kickstart_service
   else
     _note "Service not loaded; bootstrapping"
+    _reap_orphans
     _bootstrap_service
   fi
   if _wait_for_health 20; then
@@ -481,27 +584,37 @@ case "${1:-help}" in
   install)
     _is_macos || _die "install is only needed on macOS"
     _install_plist
-    _note "Installed plist at $PLIST_DEST"
+    _install_watchdog_plist
+    _note "Installed plists at $PLIST_DEST and $WATCHDOG_PLIST_DEST"
     ;;
   start)
+    # Clear the pause sentinel first so the watchdog treats this as the intended
+    # up-state again.
+    rm -f "$WATCHDOG_PAUSE_FILE"
     if _is_macos; then
       _start_launchd_service
+      _ensure_watchdog
     else
       _start_non_macos
     fi
     ;;
   stop)
     _notice_active_agents stop
+    # Mark this as an intentional stop so the watchdog won't restart it.
+    : > "$WATCHDOG_PAUSE_FILE"
     if _is_macos; then
       _stop_launchd_service
     else
       _stop_non_macos
     fi
+    _note "Watchdog paused ($WATCHDOG_PAUSE_FILE) — 'sovereign start' to resume self-heal"
     ;;
   restart|reload)
     _notice_active_agents restart
+    rm -f "$WATCHDOG_PAUSE_FILE"
     if _is_macos; then
       _restart_launchd_service
+      _ensure_watchdog
     else
       _stop_non_macos
       _start_non_macos
@@ -538,6 +651,42 @@ case "${1:-help}" in
       _die "config failed schema validation: $target (see above)"
     fi
     ;;
+  watchdog)
+    _is_macos || _die "watchdog is only available on macOS"
+    case "${2:-status}" in
+      install)
+        _install_watchdog_plist
+        _note "Installed watchdog plist at $WATCHDOG_PLIST_DEST"
+        ;;
+      start|enable)
+        _ensure_watchdog
+        _is_watchdog_loaded && _note "Watchdog loaded"
+        ;;
+      stop|disable)
+        _bootout_watchdog
+        _note "Watchdog stopped (not loaded)"
+        ;;
+      status)
+        if _is_watchdog_loaded; then
+          _note "Watchdog: loaded"
+        else
+          _note "Watchdog: not loaded"
+        fi
+        if [ -f "$WATCHDOG_PAUSE_FILE" ]; then
+          _note "Pause sentinel SET ($WATCHDOG_PAUSE_FILE) — watchdog will not heal until 'sovereign start'"
+        else
+          _note "Pause sentinel clear — watchdog will heal on health failure"
+        fi
+        if [ -f "$WATCHDOG_LOG" ]; then
+          echo "--- recent watchdog log ---"
+          tail -n 15 "$WATCHDOG_LOG"
+        fi
+        ;;
+      *)
+        _die "Unknown watchdog subcommand: ${2:-} (use install|start|stop|status)"
+        ;;
+    esac
+    ;;
   migrate)
     shift
     exec "$REPO_DIR/bin/sovereign-migrate.sh" "$@"
@@ -558,10 +707,16 @@ Commands:
   logs [mode]        Tail logs (stdout|stderr|all)
   run                Run in foreground (no daemon)
   config-check [path] Validate config.json against the live schema
+  watchdog [sub]     Self-heal watchdog: install|start|stop|status (default status)
   migrate [flags]    One-shot OpenClaw → Sovereign migration (--dry-run, --yes)
 
   stop, restart, reload, and build snapshot any non-idle agent sessions to
   active-sessions.json and auto-resume them on next start.
+
+  start/restart also install + load an independent launchd watchdog
+  (com.sovereign.watchdog) that health-checks every 60s and recovers the server
+  even if its own launchd job has been unloaded. `stop` pauses the watchdog so it
+  won't fight an intentional stop; `start` resumes it.
 
 Configuration (lives in {CONFIG_DIR}/config.json; managed via /api/config):
   server.host        Bind address (default: localhost)
