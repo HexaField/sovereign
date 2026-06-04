@@ -1,7 +1,7 @@
 // Claude Code adapter — internal types. All public surface is re-exported
 // through `./index.ts`.
 
-import type { AgentStatus, BackendConnectionStatus } from '@sovereign/core'
+import type { AgentStatus, BackendConnectionStatus, ReasoningEffort } from '@sovereign/core'
 
 /** Configuration accepted by `createClaudeCodeBackend`. */
 export interface ClaudeCodeConfig {
@@ -77,6 +77,8 @@ export interface ClaudeSessionState {
   cwd: string
   /** Model alias / id in effect for the next prompt. */
   model: string | null
+  /** Reasoning effort forwarded to the SDK's `options.effort`. */
+  effort: ReasoningEffort
   /** Status mirror used to short-circuit duplicate emits. */
   agentStatus: AgentStatus
   /** Optional label persisted to registry. */
@@ -110,6 +112,10 @@ export interface ClaudeSessionState {
   liveQuery?: {
     setModel(model?: string): Promise<void>
     interrupt(): Promise<void>
+    /** Mid-session settings merge. Used to switch reasoning effort live; not all
+     *  values are reachable this way — `max` only takes effect at session start.
+     *  Optional because the SDK build may not expose it. */
+    setSettings?(settings: Record<string, unknown>): Promise<void>
   }
 }
 
