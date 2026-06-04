@@ -90,10 +90,22 @@ fi
 
 # Sovereign must be stopped — running services hold open file handles + would
 # clobber the rewrites when they sync state to disk.
+SOVEREIGN_CLI="$(dirname "$0")/sovereign"
+REPO_SERVER_ENTRY="$(cd "$(dirname "$0")/.." && pwd)/packages/server/dist/index.js"
 if launchctl list 2>/dev/null | awk '{print $3}' | grep -Fxq "com.sovereign.server"; then
   _warn "Sovereign launchd service is still loaded."
-  _confirm "Stop it now? (recommended)" && _run "sovereign stop"
-  _confirm "Proceed with Sovereign still running?" || _die "Aborted — run 'sovereign stop' first."
+  _confirm "Stop it now? (recommended)" && _run "'$SOVEREIGN_CLI' stop"
+fi
+
+# A live server writing to the data dir mid-copy corrupts the migration. `stop`
+# now reaps orphans (incl. a wedged process that ignored SIGTERM — the 2026-06-04
+# outage), but assert nothing survived before we touch any data. No escape hatch:
+# migrating under a live writer is never safe.
+if [ "$DRY_RUN" -ne 1 ]; then
+  STRAY="$(pgrep -f "$REPO_SERVER_ENTRY" 2>/dev/null || true)"
+  if [ -n "$STRAY" ]; then
+    _die "Sovereign server still running (pids: $STRAY). Run 'sovereign stop' and retry — refusing to migrate under a live writer."
+  fi
 fi
 
 _note "OK — old workspace at $OLD_WORKSPACE ($(du -sh "$OLD_WORKSPACE" 2>/dev/null | awk '{print $1}'))"
@@ -347,10 +359,13 @@ fi
 # bin/sovereign install re-templates from support/com.sovereign.server.plist
 # using the current CONFIG_DIR / DATA_DIR defaults, so a sed-rewrite of the
 # live plist would miss the new env var entirely.
-_step "Reinstalling launchd plist with new config + data dir env vars"
+_step "Reinstalling launchd plists with new config + data dir env vars"
 if [ ! -f "$PLIST" ]; then
   _warn "Plist not found at $PLIST — installing fresh"
 fi
+# `sovereign install` lays down BOTH the server plist and the self-heal watchdog
+# plist (com.sovereign.watchdog). The watchdog is bootstrapped on the next
+# `sovereign start`.
 _run "SOVEREIGN_CONFIG_DIR='$NEW_CONFIG' SOVEREIGN_DATA_DIR='$NEW_DATA' '$(dirname "$0")/sovereign' install"
 
 # ── Summary ─────────────────────────────────────────────────────────────
@@ -367,13 +382,15 @@ cat <<EOF
 Original ~/.openclaw/ is untouched. Rollback at any time:
     cp $BACKUP_DIR/plist.original $PLIST
     cp $BACKUP_DIR/claude-CLAUDE.md.original $GLOBAL_CLAUDE_MD   # if present
+    sovereign watchdog stop    # so it doesn't re-heal the rolled-back service
     sovereign start
 
 Next steps:
     1. Inspect / adjust:  the "personality" block in $NEW_CONFIG/config.json
     2. Start the new service:  sovereign start
-       (the personality compiler will rewrite ~/.claude/CLAUDE.md on boot)
+       (this bootstraps the self-heal watchdog and rewrites ~/.claude/CLAUDE.md)
     3. Verify in the UI:  https://localhost:5801/
-    4. After 24-48h stable, run with --prune to delete originals (see migration guide).
+    4. Confirm the watchdog:  sovereign watchdog status
+    5. After 24-48h stable, run with --prune to delete originals (see migration guide).
 
 EOF
