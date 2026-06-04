@@ -107,7 +107,11 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
         message: payload.prompt as string,
         text: payload.prompt as string
       },
-      schedule: j.schedule.kind === 'oneshot' ? { kind: 'at', at: j.schedule.at } : { kind: j.schedule.kind },
+      // Pass schedule through verbatim. The previous projection silently
+      // dropped `expr` / `tz` / `everyMs` and renamed `oneshot` → `at`, which
+      // broke cron_list introspection AND the cleanup route's
+      // `kind === 'oneshot'` filter (scheduler/routes.ts:151).
+      schedule: { ...j.schedule },
       deleteAfterRun: j.schedule.kind === 'oneshot'
     }
   }
