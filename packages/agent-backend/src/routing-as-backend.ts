@@ -9,11 +9,13 @@ import type {
   BackendCapabilities,
   ContextBudget,
   ParsedTurn,
+  ReasoningEffort,
   SessionKind,
   SessionMeta,
   SessionSummary,
   SubagentSummary
 } from '@sovereign/core'
+import { DEFAULT_REASONING_EFFORT } from '@sovereign/core'
 import type { RoutingBackend } from './factory.js'
 
 /**
@@ -97,6 +99,18 @@ export function routingAsBackend(routing: RoutingBackend): AgentBackend {
     },
     async listAvailableModels() {
       return await def().listAvailableModels()
+    },
+    async setSessionEffort(sessionKey, effort) {
+      const b = forSession(sessionKey)
+      if (!b.setSessionEffort) return
+      await b.setSessionEffort(sessionKey, effort)
+    },
+    async listAvailableEfforts(): Promise<{ efforts: ReasoningEffort[]; defaultEffort: ReasoningEffort }> {
+      const d = def()
+      if (!d.listAvailableEfforts) {
+        return { efforts: [], defaultEffort: DEFAULT_REASONING_EFFORT }
+      }
+      return await d.listAvailableEfforts()
     },
     async getContextBudget(sessionKey): Promise<ContextBudget | null> {
       return await forSession(sessionKey).getContextBudget(sessionKey)
