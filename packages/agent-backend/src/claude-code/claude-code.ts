@@ -595,12 +595,16 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       const inp = input as Extract<HookInput, { hook_event_name: 'SubagentStart' }>
       const childKey = `${SUBAGENT_SESSION_PREFIX}${inp.agent_id}`
       internal.subagentToParent.set(inp.agent_id, parentKey)
-      ensureSessionState({
+      const child = ensureSessionState({
         sessionKey: childKey,
         backendSessionId: inp.agent_id,
         parentSessionKey: parentKey,
         label: inp.agent_type
       })
+      // Mark the child as working — `listSessions` returns this status verbatim,
+      // and `/api/threads/active-subagents` filters on it. Without this flip,
+      // every live subagent shows up as 'idle' and gets filtered out.
+      child.agentStatus = 'working'
       deps.registry?.upsertSession({
         sessionKey: childKey,
         backendSessionId: inp.agent_id,
@@ -608,13 +612,18 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         parentSessionKey: parentKey,
         label: inp.agent_type
       })
+      parent.liveSubagents.add(inp.agent_id)
+      // Persist BOTH parent (its liveSubagents Set just changed) and child
+      // (its status just flipped). Without this, the next restart loses the
+      // tracking even though the records exist on disk.
+      persistState(parent)
+      persistState(child)
       emitter.emit('subagent.spawned', {
         parentKey,
         childKey,
         task: inp.agent_type,
         label: inp.agent_type
       })
-      parent.liveSubagents.add(inp.agent_id)
       return { continue: true }
     }
     const onSubagentStop = async (input: HookInput) => {
@@ -628,6 +637,10 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       const childKey = `${SUBAGENT_SESSION_PREFIX}${inp.agent_id}`
       const parent = internal.sessions.get(parentKey)
       parent?.liveSubagents.delete(inp.agent_id)
+      const child = internal.sessions.get(childKey)
+      if (child) child.agentStatus = 'idle'
+      if (parent) persistState(parent)
+      if (child) persistState(child)
       emitter.emit('subagent.completed', {
         parentKey,
         childKey,
@@ -972,11 +985,49 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     return parseClaudeCodeTurns(messages)
   }
 
+  /**
+   * Resolve the on-disk JSONL for a subagent. The SDK writes subagent files
+   * at a nested layout under the parent's session dir:
+   *
+   *   <projectsDir>/<parent_session_id>/subagents/agent-<agent_id>.jsonl
+   *
+   * Returns null when the file or the parent linkage isn't available. Called
+   * from `sessionFilePath` only when the top-level lookup misses.
+   */
+  function findSubagentSessionFile(
+    childBackendSessionId: string,
+    parentBackendSessionId: string,
+    sessionCwd: string
+  ): string | null {
+    const candidate = path.join(
+      projectsDirForCwd(agentDir, sessionCwd),
+      parentBackendSessionId,
+      'subagents',
+      `agent-${childBackendSessionId}.jsonl`
+    )
+    return fs.existsSync(candidate) ? candidate : null
+  }
+
   function sessionFilePath(sessionKey: string): string | null {
     const state = internal.sessions.get(sessionKey)
+    // For subagents we must NOT trust `state.sessionFile` — `ensureSessionState`
+    // pre-stamps it with the top-level path (`<projectsDir>/<id>.jsonl`), but
+    // the SDK actually writes subagent JSONLs nested under the parent. Probe
+    // the nested layout first when we have a parent linkage.
+    if (state?.parentSessionKey && state?.backendSessionId) {
+      const parent = internal.sessions.get(state.parentSessionKey)
+      if (parent?.backendSessionId) {
+        const nested = findSubagentSessionFile(state.backendSessionId, parent.backendSessionId, parent.cwd ?? state.cwd)
+        if (nested) return nested
+      }
+    }
+    // For non-subagent sessions the pre-stamped path is authoritative even
+    // before the SDK has written the JSONL — callers (tests, history routes)
+    // rely on this to compute where to write or where the file will be.
     if (state?.sessionFile) return state.sessionFile
     if (state?.backendSessionId) {
-      return findSessionFile(projectsDirForCwd(agentDir, state.cwd), state.backendSessionId)
+      const topLevel = findSessionFile(projectsDirForCwd(agentDir, state.cwd), state.backendSessionId)
+      if (topLevel) return topLevel
     }
     // Cold-resume path: no in-memory state yet (post-restart, history fetched
     // before any sendMessage). Fall back to the persisted registry record.
@@ -984,7 +1035,21 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     if (existing?.backendSessionFile) return existing.backendSessionFile
     if (existing?.backendSessionId) {
       const sessionCwd = existing.cwd ?? cwd
-      return findSessionFile(projectsDirForCwd(agentDir, sessionCwd), existing.backendSessionId)
+      const topLevel = findSessionFile(projectsDirForCwd(agentDir, sessionCwd), existing.backendSessionId)
+      if (topLevel) return topLevel
+      // Cold-resume subagent fallback — look up the parent in the registry
+      // and probe the same nested layout.
+      if (existing.parentSessionKey) {
+        const parentRec = deps.registry?.lookupSession?.(existing.parentSessionKey)
+        if (parentRec?.backendSessionId) {
+          const nested = findSubagentSessionFile(
+            existing.backendSessionId,
+            parentRec.backendSessionId,
+            parentRec.cwd ?? sessionCwd
+          )
+          if (nested) return nested
+        }
+      }
     }
     return null
   }

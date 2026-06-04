@@ -103,6 +103,111 @@ export function createThreadRoutes(
     res.json({ threads: merged })
   })
 
+  // Static-path GETs must be registered BEFORE `/api/threads/:key` (Express
+  // matches in registration order; `:key` would otherwise eat
+  // "active-subagents" / "gateway-sessions" and return 404 Thread not found).
+
+  // Bulk active subagents grouped by parent thread.
+  router.get('/api/threads/active-subagents', async (_req, res) => {
+    try {
+      const routing = opts?.backend
+      if (!routing || !('all' in routing)) {
+        res.json({ subagents: {} })
+        return
+      }
+      const result: Record<string, Array<{ sessionKey: string; label: string; status: string; task: string }>> = {}
+      for (const inst of (routing as RoutingBackend).all()) {
+        let subagentSessions: SessionSummary[] = []
+        try {
+          subagentSessions = await inst.backend.listSessions({ kind: 'subagent' })
+        } catch {
+          continue
+        }
+        for (const s of subagentSessions) {
+          const status = s.agentStatus || 'done'
+          const isActive = status === 'running' || status === 'working' || status === 'thinking'
+          if (!isActive) continue
+          if (!s.parentKey) continue
+          let threadKey = 'main'
+          if (s.parentKey === 'agent:main:main') threadKey = 'main'
+          else if (s.parentKey.startsWith('agent:main:thread:'))
+            threadKey = s.parentKey.replace('agent:main:thread:', '')
+          else if (s.parentKey.includes(':subagent:')) threadKey = s.parentKey
+          if (!result[threadKey]) result[threadKey] = []
+          result[threadKey].push({
+            sessionKey: s.key,
+            label: s.label || s.key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
+            status: status === 'running' ? 'working' : status,
+            task: s.task || s.label || ''
+          })
+        }
+      }
+      res.json({ subagents: result })
+    } catch {
+      res.status(500).json({ error: 'Failed to list subagents' })
+    }
+  })
+
+  // Runtime sessions endpoint — aggregates main/thread sessions from every
+  // enabled backend and merges with the local thread registry.
+  router.get('/api/threads/gateway-sessions', async (_req, res) => {
+    try {
+      const localThreads = threadManager.list() as any[]
+      const localMap = new Map(localThreads.map((t) => [t.key, t]))
+      for (const t of localThreads) {
+        if (t.key === 'main') localMap.set('agent:main:main', t)
+        else if (!t.key.startsWith('agent:')) localMap.set(`agent:main:thread:${t.key}`, t)
+      }
+
+      const merged: Array<{
+        key: string
+        shortKey: string
+        kind: string
+        label: string
+        lastActivity?: number
+        membraneId?: string
+        workspaceIds?: string[]
+        localLabel?: string
+        isRegistered: boolean
+      }> = []
+
+      const routing = opts?.backend
+      if (routing && 'all' in routing) {
+        for (const inst of (routing as RoutingBackend).all()) {
+          let sessions: SessionSummary[] = []
+          try {
+            sessions = await inst.backend.listSessions()
+          } catch {
+            continue
+          }
+          for (const s of sessions) {
+            if (s.kind !== 'main' && s.kind !== 'thread') continue
+            let shortKey = s.key
+            if (shortKey.startsWith('agent:main:')) shortKey = shortKey.slice('agent:main:'.length)
+            if (shortKey.startsWith('thread:')) shortKey = shortKey.slice('thread:'.length)
+            const local = localMap.get(s.key) || localMap.get(shortKey)
+            merged.push({
+              key: s.key,
+              shortKey,
+              kind: s.kind,
+              label: s.label || shortKey,
+              lastActivity: s.lastActivity,
+              membraneId: local?.membraneId,
+              workspaceIds: local?.workspaceIds,
+              localLabel: local?.label,
+              isRegistered: !!local
+            })
+          }
+        }
+      }
+
+      res.json({ sessions: merged })
+    } catch (err: any) {
+      console.error('Failed to list sessions:', err.message)
+      res.status(500).json({ error: 'Failed to list sessions' })
+    }
+  })
+
   router.get('/api/threads/:key/messages', (req, res) => {
     const events = threadManager.getEvents(req.params.key, {
       limit: Number(req.query.limit) || 50,
@@ -461,47 +566,6 @@ export function createThreadRoutes(
     }
   })
 
-  // Bulk active subagents grouped by parent thread
-  router.get('/api/threads/active-subagents', async (_req, res) => {
-    try {
-      const routing = opts?.backend
-      if (!routing || !('all' in routing)) {
-        res.json({ subagents: {} })
-        return
-      }
-      const result: Record<string, Array<{ sessionKey: string; label: string; status: string; task: string }>> = {}
-      for (const inst of (routing as RoutingBackend).all()) {
-        let subagentSessions: SessionSummary[] = []
-        try {
-          subagentSessions = await inst.backend.listSessions({ kind: 'subagent' })
-        } catch {
-          continue
-        }
-        for (const s of subagentSessions) {
-          const status = s.agentStatus || 'done'
-          const isActive = status === 'running' || status === 'working' || status === 'thinking'
-          if (!isActive) continue
-          if (!s.parentKey) continue
-          let threadKey = 'main'
-          if (s.parentKey === 'agent:main:main') threadKey = 'main'
-          else if (s.parentKey.startsWith('agent:main:thread:'))
-            threadKey = s.parentKey.replace('agent:main:thread:', '')
-          else if (s.parentKey.includes(':subagent:')) threadKey = s.parentKey
-          if (!result[threadKey]) result[threadKey] = []
-          result[threadKey].push({
-            sessionKey: s.key,
-            label: s.label || s.key.split(':subagent:')[1]?.slice(0, 8) || 'Subagent',
-            status: status === 'running' ? 'working' : status,
-            task: s.task || s.label || ''
-          })
-        }
-      }
-      res.json({ subagents: result })
-    } catch {
-      res.status(500).json({ error: 'Failed to list subagents' })
-    }
-  })
-
   // Subagent listing — children of a thread, aggregated across enabled backends.
   router.get('/api/threads/:key/subagents', async (req, res) => {
     try {
@@ -558,66 +622,6 @@ export function createThreadRoutes(
     } catch (err: any) {
       console.error('Failed to get subagent history:', err.message)
       res.status(500).json({ error: 'Failed to get history' })
-    }
-  })
-
-  // Runtime sessions endpoint — aggregates main/thread sessions from every
-  // enabled backend and merges with the local thread registry.
-  router.get('/api/threads/gateway-sessions', async (_req, res) => {
-    try {
-      const localThreads = threadManager.list() as any[]
-      const localMap = new Map(localThreads.map((t) => [t.key, t]))
-      for (const t of localThreads) {
-        if (t.key === 'main') localMap.set('agent:main:main', t)
-        else if (!t.key.startsWith('agent:')) localMap.set(`agent:main:thread:${t.key}`, t)
-      }
-
-      const merged: Array<{
-        key: string
-        shortKey: string
-        kind: string
-        label: string
-        lastActivity?: number
-        membraneId?: string
-        workspaceIds?: string[]
-        localLabel?: string
-        isRegistered: boolean
-      }> = []
-
-      const routing = opts?.backend
-      if (routing && 'all' in routing) {
-        for (const inst of (routing as RoutingBackend).all()) {
-          let sessions: SessionSummary[] = []
-          try {
-            sessions = await inst.backend.listSessions()
-          } catch {
-            continue
-          }
-          for (const s of sessions) {
-            if (s.kind !== 'main' && s.kind !== 'thread') continue
-            let shortKey = s.key
-            if (shortKey.startsWith('agent:main:')) shortKey = shortKey.slice('agent:main:'.length)
-            if (shortKey.startsWith('thread:')) shortKey = shortKey.slice('thread:'.length)
-            const local = localMap.get(s.key) || localMap.get(shortKey)
-            merged.push({
-              key: s.key,
-              shortKey,
-              kind: s.kind,
-              label: s.label || shortKey,
-              lastActivity: s.lastActivity,
-              membraneId: local?.membraneId,
-              workspaceIds: local?.workspaceIds,
-              localLabel: local?.label,
-              isRegistered: !!local
-            })
-          }
-        }
-      }
-
-      res.json({ sessions: merged })
-    } catch (err: any) {
-      console.error('Failed to list sessions:', err.message)
-      res.status(500).json({ error: 'Failed to list sessions' })
     }
   })
 
