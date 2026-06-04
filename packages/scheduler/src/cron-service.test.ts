@@ -118,4 +118,109 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     expect(out[0].sessionKey).toBe('agent:main:thread:t2')
     scheduler.destroy()
   })
+
+  /**
+   * Regression suite for the schedule-projection bug.
+   *
+   * Pre-fix: `sovereignJobToCronJob` projected schedule as
+   *   `j.schedule.kind === 'oneshot' ? { kind: 'at', at } : { kind: j.schedule.kind }`
+   * which silently dropped `expr` / `tz` / `everyMs` for non-oneshot schedules
+   * and renamed the oneshot kind to 'at'.
+   *
+   * Real-world impact: `mcp__sovereign__cron_list` returned schedules with no
+   * discriminator fields, breaking any consumer that needed to introspect or
+   * re-emit them (including the cleanup route at scheduler/routes.ts:151 which
+   * filters on `kind === 'oneshot'`).
+   *
+   * Post-fix: the projection passes the schedule through verbatim, preserving
+   * all discriminated-union fields and using consistent kind names
+   * (`oneshot` / `interval` / `cron`) end-to-end.
+   */
+  describe('list() schedule projection — preserve discriminated-union fields', () => {
+    it('preserves expr + tz for a kind=cron job', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 60000)
+      const service = createCronService({ routing, scheduler, bus })
+      service.createUserMessageCron({
+        threadKey: 't-cron',
+        schedule: { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' },
+        prompt: 'every 5 min',
+        label: 'cron-job'
+      })
+      const out = await service.list(true)
+      const job = out.find((j) => j.sessionKey === 'agent:main:thread:t-cron')
+      expect(job).toBeDefined()
+      expect(job!.schedule).toMatchObject({ kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' })
+      scheduler.destroy()
+    })
+
+    it('preserves everyMs for a kind=interval job', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 60000)
+      const service = createCronService({ routing, scheduler, bus })
+      service.createUserMessageCron({
+        threadKey: 't-interval',
+        schedule: { kind: 'interval', everyMs: 60000 },
+        prompt: 'every minute',
+        label: 'interval-job'
+      })
+      const out = await service.list(true)
+      const job = out.find((j) => j.sessionKey === 'agent:main:thread:t-interval')
+      expect(job).toBeDefined()
+      // The reported bug: schedule round-tripped as `{kind:'interval'}` with
+      // `everyMs` dropped. Post-fix the field is preserved.
+      expect(job!.schedule).toMatchObject({ kind: 'interval', everyMs: 60000 })
+      scheduler.destroy()
+    })
+
+    it('preserves at + uses kind="oneshot" (not "at") for a kind=oneshot job', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 60000)
+      const service = createCronService({ routing, scheduler, bus })
+      const fireAt = new Date(Date.now() + 60000).toISOString()
+      service.createUserMessageCron({
+        threadKey: 't-oneshot',
+        schedule: { kind: 'oneshot', at: fireAt },
+        prompt: 'in a minute',
+        label: 'oneshot-job'
+      })
+      const out = await service.list(true)
+      const job = out.find((j) => j.sessionKey === 'agent:main:thread:t-oneshot')
+      expect(job).toBeDefined()
+      // Pre-fix output was `{kind:'at', at}` — the discriminator was renamed,
+      // breaking the cleanup path that filters on `kind === 'oneshot'`.
+      // Post-fix kind is consistent with the input shape.
+      expect(job!.schedule).toMatchObject({ kind: 'oneshot', at: fireAt })
+      scheduler.destroy()
+    })
+
+    it('round-trip: schedule shape from list() matches what was passed to createUserMessageCron', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 60000)
+      const service = createCronService({ routing, scheduler, bus })
+      const inputs = [
+        { threadKey: 'r-cron', schedule: { kind: 'cron' as const, expr: '0 9 * * *', tz: 'Australia/Melbourne' } },
+        { threadKey: 'r-interval', schedule: { kind: 'interval' as const, everyMs: 30000 } },
+        {
+          threadKey: 'r-oneshot',
+          schedule: { kind: 'oneshot' as const, at: new Date(Date.now() + 120000).toISOString() }
+        }
+      ]
+      for (const input of inputs) {
+        service.createUserMessageCron({ ...input, prompt: 'p', label: input.threadKey })
+      }
+      const out = await service.list(true)
+      for (const input of inputs) {
+        const job = out.find((j) => j.sessionKey === `agent:main:thread:${input.threadKey}`)
+        expect(job, `missing projected job for ${input.threadKey}`).toBeDefined()
+        // Every field on the input schedule must be present on the projection,
+        // with identical values. Catches both "dropped fields" and "renamed
+        // kind" regressions in one assertion per input.
+        for (const [k, v] of Object.entries(input.schedule)) {
+          expect((job!.schedule as Record<string, unknown>)[k], `${input.threadKey}.schedule.${k}`).toEqual(v)
+        }
+      }
+      scheduler.destroy()
+    })
+  })
 })

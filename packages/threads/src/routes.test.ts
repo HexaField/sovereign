@@ -167,3 +167,116 @@ describe('Thread Routes — Model Switching', () => {
     expect(res.status).toBe(404)
   })
 })
+
+/**
+ * Subagent-listing routes must be registered BEFORE `/api/threads/:key`
+ * (Express matches in registration order; `:key` would otherwise eat
+ * the literal segment "active-subagents" / "gateway-sessions" and return
+ * "Thread not found").
+ */
+describe('Thread Routes — Subagent Listing (route-order regression)', () => {
+  let app: ReturnType<typeof express>
+  let dataDir: string
+  let tm: ThreadManager
+  let backend: AgentBackend
+
+  /**
+   * Helper: build a RoutingBackend-shaped object that wraps a single backend
+   * so the route's `('all' in routing)` check passes.
+   */
+  function asRouting(b: AgentBackend) {
+    return {
+      all: () => [{ kind: 'claude-code' as const, backend: b }],
+      default: () => b,
+      forSession: () => b,
+      forKind: () => b,
+      connectAll: async () => {},
+      disconnectAll: async () => {}
+    }
+  }
+
+  beforeEach(() => {
+    dataDir = makeTmpDir()
+    const bus = createEventBus(dataDir)
+    tm = createThreadManager(bus, dataDir)
+    backend = createStubBackend()
+    app = express()
+    app.use(express.json())
+    app.use(createThreadRoutes(tm, forwardHandler as any, { backend: asRouting(backend) as any }))
+  })
+
+  it('GET /api/threads/active-subagents is NOT shadowed by /api/threads/:key (returns 200, not 404)', async () => {
+    // Pre-fix: GET /api/threads/active-subagents matched `/api/threads/:key`
+    // (registered earlier in routes.ts:114) with key="active-subagents",
+    // threadManager.get(key) returned undefined → 404 "Thread not found".
+    // Post-fix: the static route is registered first and serves a JSON body.
+    const res = await request(app).get('/api/threads/active-subagents')
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveProperty('subagents')
+    // 404 body would have been `{ error: 'Thread not found' }` — explicitly
+    // assert that error field is absent so a future regression of the route
+    // order surfaces here.
+    expect(res.body.error).toBeUndefined()
+  })
+
+  it('GET /api/threads/gateway-sessions is NOT shadowed by /api/threads/:key (returns 200, not 404)', async () => {
+    const res = await request(app).get('/api/threads/gateway-sessions')
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveProperty('sessions')
+    expect(res.body.error).toBeUndefined()
+  })
+
+  it('GET /api/threads/active-subagents groups live subagents by parent thread', async () => {
+    // Two live subagents under different parents + one idle (must be filtered out).
+    ;(backend as any).listSessions = async (filter?: { kind?: string }) => {
+      if (filter?.kind !== 'subagent') return []
+      return [
+        {
+          key: 'agent:main:subagent:abc',
+          backendSessionId: 'abc',
+          kind: 'subagent',
+          label: 'Explore',
+          lastActivity: Date.now(),
+          agentStatus: 'working',
+          parentKey: 'agent:main:thread:neural-nets'
+        },
+        {
+          key: 'agent:main:subagent:def',
+          backendSessionId: 'def',
+          kind: 'subagent',
+          label: 'general-purpose',
+          lastActivity: Date.now(),
+          agentStatus: 'working',
+          parentKey: 'agent:main:main'
+        },
+        {
+          key: 'agent:main:subagent:ghi',
+          backendSessionId: 'ghi',
+          kind: 'subagent',
+          label: 'general-purpose',
+          lastActivity: Date.now(),
+          agentStatus: 'idle', // must be filtered out
+          parentKey: 'agent:main:thread:neural-nets'
+        }
+      ]
+    }
+    const res = await request(app).get('/api/threads/active-subagents')
+    expect(res.status).toBe(200)
+    expect(res.body.subagents).toBeDefined()
+    expect(res.body.subagents['neural-nets']).toHaveLength(1)
+    expect(res.body.subagents['neural-nets'][0]).toMatchObject({
+      sessionKey: 'agent:main:subagent:abc',
+      label: 'Explore',
+      status: 'working'
+    })
+    expect(res.body.subagents['main']).toHaveLength(1)
+    expect(res.body.subagents['main'][0]).toMatchObject({ label: 'general-purpose' })
+  })
+
+  it('GET /api/threads/active-subagents returns empty map when no subagents are live', async () => {
+    ;(backend as any).listSessions = async () => []
+    const res = await request(app).get('/api/threads/active-subagents')
+    expect(res.status).toBe(200)
+    expect(res.body.subagents).toEqual({})
+  })
+})
