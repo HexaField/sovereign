@@ -173,6 +173,20 @@ export interface SubagentSummary {
 }
 
 /**
+ * Reasoning effort level. Mirrors the Claude Agent SDK `EffortLevel` —
+ * `'low' | 'medium' | 'high' | 'xhigh' | 'max'` — and is forwarded to the
+ * SDK as `options.effort`. `xhigh` is Opus-4.7 only and falls back to `high`
+ * on other models; `max` is "select models only" and falls back where
+ * unsupported.
+ */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/** Highest level we expose. Used as the new-thread default. */
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'max'
+
+/**
  * Per-session metadata — used by the session-info panel and model switching UIs.
  */
 export interface SessionMeta {
@@ -185,6 +199,8 @@ export interface SessionMeta {
   outputTokens?: number | null
   compactionCount?: number | null
   thinkingLevel?: string | null
+  /** Reasoning effort forwarded to the SDK's `options.effort`. */
+  reasoningEffort?: ReasoningEffort | null
   task?: string | null
   label?: string | null
   parentKey?: string | null
@@ -235,6 +251,8 @@ export interface CreateSessionOptions {
   cwd?: string
   model?: { provider: string; model: string }
   thinkingLevel?: string
+  /** Reasoning effort forwarded to the SDK. */
+  reasoningEffort?: ReasoningEffort
   systemPromptOverride?: string
 }
 
@@ -307,6 +325,10 @@ export interface AgentBackend {
   setSessionModel(sessionKey: string, provider: string, model: string): Promise<void>
   /** List models available to this backend. */
   listAvailableModels(): Promise<{ models: string[]; defaultModel: string | null }>
+  /** Update the reasoning effort bound to a session. Optional — backends that don't expose effort no-op. */
+  setSessionEffort?(sessionKey: string, effort: ReasoningEffort): Promise<void>
+  /** List reasoning-effort levels available to this backend. */
+  listAvailableEfforts?(): Promise<{ efforts: ReasoningEffort[]; defaultEffort: ReasoningEffort }>
   /** Get the context-budget report for a session. */
   getContextBudget(sessionKey: string): Promise<ContextBudget | null>
 

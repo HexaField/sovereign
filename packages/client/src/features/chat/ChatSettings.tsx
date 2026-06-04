@@ -14,6 +14,7 @@ interface ThreadInfo {
   outputTokens: number
   compactionCount: number
   thinkingLevel: string | null
+  reasoningEffort: string | null
   agentStatus: string
   sessionKey: string | null
 }
@@ -75,6 +76,10 @@ export function ChatSettingsButton() {
   const [defaultModel, setDefaultModel] = createSignal<string | null>(null)
   const [selectedModel, setSelectedModel] = createSignal<string>('')
   const [modelSaving, setModelSaving] = createSignal(false)
+  const [availableEfforts, setAvailableEfforts] = createSignal<string[]>([])
+  const [defaultEffort, setDefaultEffort] = createSignal<string | null>(null)
+  const [selectedEffort, setSelectedEffort] = createSignal<string>('')
+  const [effortSaving, setEffortSaving] = createSignal(false)
   const [actionFeedback, setActionFeedback] = createSignal('')
   const [cronManagerOpen, setCronManagerOpen] = createSignal(false)
   const [watchedNeighbourhoods, setWatchedNeighbourhoods] = createSignal<WatchEntry[]>([])
@@ -90,21 +95,29 @@ export function ChatSettingsButton() {
     if (!key) return
     setLoading(true)
     try {
-      // Fetch session info + models in parallel — don't let crons block the menu
-      const [infoRes, modelsRes] = await Promise.all([
+      // Fetch session info + models + efforts in parallel — don't let crons block the menu
+      const [infoRes, modelsRes, effortsRes] = await Promise.all([
         fetch(`/api/threads/${encodeURIComponent(key)}/session-info`),
-        fetch('/api/models')
+        fetch('/api/models'),
+        fetch('/api/efforts')
       ])
       if (infoRes.ok) {
         const data = await infoRes.json()
         setInfo(data)
         const current = data.modelProvider && data.model ? `${data.modelProvider}/${data.model}` : (data.model ?? '')
         setSelectedModel(current)
+        setSelectedEffort(data.reasoningEffort ?? '')
       }
       if (modelsRes.ok) {
         const data = await modelsRes.json()
         setAvailableModels(data.models ?? [])
         setDefaultModel(data.defaultModel ?? null)
+      }
+      if (effortsRes.ok) {
+        const data = await effortsRes.json()
+        setAvailableEfforts(data.efforts ?? [])
+        setDefaultEffort(data.defaultEffort ?? null)
+        if (!selectedEffort() && data.defaultEffort) setSelectedEffort(data.defaultEffort)
       }
     } catch {
       /* ignore */
@@ -168,6 +181,29 @@ export function ChatSettingsButton() {
       setActionFeedback('Failed')
     }
     setModelSaving(false)
+    setTimeout(() => setActionFeedback(''), 2000)
+  }
+
+  const handleEffortSwitch = async (effort: string) => {
+    const key = threadKey()
+    if (!key || !effort) return
+    setEffortSaving(true)
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/effort`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ effort })
+      })
+      if (res.ok) {
+        setSelectedEffort(effort)
+        setActionFeedback('Reasoning effort updated')
+      } else {
+        setActionFeedback('Failed to update effort')
+      }
+    } catch {
+      setActionFeedback('Failed')
+    }
+    setEffortSaving(false)
     setTimeout(() => setActionFeedback(''), 2000)
   }
 
@@ -364,6 +400,40 @@ export function ChatSettingsButton() {
                         </select>
                       </Show>
                     </div>
+
+                    {/* Reasoning Effort Selector */}
+                    <Show when={availableEfforts().length > 0}>
+                      <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                        <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                          Reasoning
+                        </span>
+                        <select
+                          class="rounded-md text-xs font-medium"
+                          style={{
+                            background: 'var(--c-bg)',
+                            border: '1px solid var(--c-border)',
+                            color: 'var(--c-text)',
+                            'max-width': '170px',
+                            padding: '2px 6px',
+                            cursor: 'pointer',
+                            opacity: effortSaving() ? '0.5' : '1',
+                            'border-radius': '9999px'
+                          }}
+                          value={selectedEffort()}
+                          disabled={effortSaving()}
+                          onChange={(e) => handleEffortSwitch(e.currentTarget.value)}
+                        >
+                          <For each={availableEfforts()}>
+                            {(eff) => (
+                              <option value={eff} selected={eff === selectedEffort()}>
+                                {eff}
+                                {eff === defaultEffort() ? ' (default)' : ''}
+                              </option>
+                            )}
+                          </For>
+                        </select>
+                      </div>
+                    </Show>
 
                     {/* Feedback */}
                     <Show when={actionFeedback()}>
