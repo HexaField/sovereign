@@ -426,3 +426,363 @@ describe('claude-code/createClaudeCodeBackend', () => {
     expect(turns[1].content).toBe('hi back')
   })
 })
+
+/**
+ * Capturing stub: same shape as `stubSdkQuery` but exposes the options object
+ * passed to `query()` so tests can invoke registered hooks (SubagentStart,
+ * SubagentStop, etc.) without needing a real SDK.
+ */
+function capturingSdkQuery() {
+  const captured: { options: any | null; sessionId: string | null } = { options: null, sessionId: null }
+  const factory = (args: any) => {
+    captured.options = args?.options ?? null
+    captured.sessionId = args?.options?.sessionId ?? args?.options?.resume ?? null
+    const generator = (async function* () {
+      // Hold open just long enough for the session loop to register hooks;
+      // tests that need the loop to terminate can override per-call.
+      yield {
+        type: 'system',
+        subtype: 'init',
+        session_id: captured.sessionId,
+        cwd: args?.options?.cwd,
+        tools: [],
+        mcp_servers: [],
+        model: 'opus',
+        permissionMode: 'bypassPermissions',
+        apiKeySource: 'none'
+      }
+    })()
+    return Object.assign(generator, {
+      interrupt: vi.fn(async () => {}),
+      setPermissionMode: vi.fn(async () => {}),
+      setModel: vi.fn(async () => {}),
+      setMaxTurns: vi.fn(async () => {}),
+      setMaxThinkingTokens: vi.fn(async () => {}),
+      mcpServerStatus: vi.fn(async () => []),
+      supportedCommands: vi.fn(async () => []),
+      supportedModels: vi.fn(async () => []),
+      close: vi.fn(() => {})
+    })
+  }
+  ;(factory as any).captured = captured
+  return factory as any
+}
+
+/**
+ * Pull a single hook callback out of the captured options. Mirrors the shape
+ * `buildHooks()` returns in claude-code.ts: `{ <EventName>: [{ hooks: [fn] }] }`.
+ */
+function getHook(options: any, eventName: string): (input: any) => Promise<{ continue: boolean }> {
+  const matchers = options?.hooks?.[eventName]
+  if (!matchers || matchers.length === 0) throw new Error(`no hook registered for ${eventName}`)
+  const fn = matchers[0]?.hooks?.[0]
+  if (typeof fn !== 'function') throw new Error(`hook for ${eventName} is not a function`)
+  return fn
+}
+
+describe('claude-code/SubagentStart + SubagentStop tracking', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  /**
+   * Helper: spin up a session and wait for `query()` to be called so we have
+   * the captured options. Returns the parent session key + the captured stub.
+   */
+  async function spinUpSession() {
+    const stub = capturingSdkQuery()
+    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stub })
+    await backend.createSession('parent', { threadKey: 'parent' })
+    // Send a message to trigger startSessionLoop → query() invocation.
+    backend.sendMessage('agent:main:thread:parent', 'hello').catch(() => {
+      /* The stub yields once and ends; sendMessage may reject when the iterator
+         completes. That's fine for our purposes — we only need the hooks. */
+    })
+    // Yield so the session loop runs and query() is called synchronously.
+    for (let i = 0; i < 20 && !stub.captured.options; i++) {
+      await new Promise((r) => setImmediate(r))
+    }
+    if (!stub.captured.options) throw new Error('query() was never invoked by the stub')
+    return { backend, stub, parentKey: 'agent:main:thread:parent', parentSessionId: stub.captured.sessionId as string }
+  }
+
+  it('SubagentStart flips the child agentStatus to "working" (was "idle" before the fix)', async () => {
+    const { backend, stub, parentSessionId } = await spinUpSession()
+    const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+
+    await onSubagentStart({
+      hook_event_name: 'SubagentStart',
+      session_id: parentSessionId, // SDK fires from parent's context
+      agent_id: 'child-abc',
+      agent_type: 'general-purpose'
+    })
+
+    // The child should now appear in listSessions, and listSessions reads
+    // state.agentStatus verbatim — the value the /active-subagents route
+    // filters on. Pre-fix: 'idle' (default). Post-fix: 'working'.
+    const subagents = await backend.listSessions({ kind: 'subagent' })
+    const child = subagents.find((s) => s.key === 'agent:main:subagent:child-abc')
+    expect(child).toBeDefined()
+    expect(child!.agentStatus).toBe('working')
+    expect(child!.parentKey).toBe('agent:main:thread:parent')
+    expect(child!.label).toBe('general-purpose')
+  })
+
+  it('SubagentStop flips the child agentStatus back to "idle"', async () => {
+    const { backend, stub, parentSessionId } = await spinUpSession()
+    const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+    const onSubagentStop = getHook(stub.captured.options, 'SubagentStop')
+
+    await onSubagentStart({
+      hook_event_name: 'SubagentStart',
+      session_id: parentSessionId,
+      agent_id: 'child-xyz',
+      agent_type: 'Explore'
+    })
+    await onSubagentStop({
+      hook_event_name: 'SubagentStop',
+      session_id: parentSessionId,
+      agent_id: 'child-xyz',
+      last_assistant_message: 'done'
+    })
+
+    const subagents = await backend.listSessions({ kind: 'subagent' })
+    const child = subagents.find((s) => s.key === 'agent:main:subagent:child-xyz')
+    expect(child).toBeDefined()
+    expect(child!.agentStatus).toBe('idle')
+  })
+
+  it('SubagentStart persists the parent state with liveSubagents populated', async () => {
+    const { backend, stub, parentSessionId } = await spinUpSession()
+    const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+
+    await onSubagentStart({
+      hook_event_name: 'SubagentStart',
+      session_id: parentSessionId,
+      agent_id: 'live-child-1',
+      agent_type: 'general-purpose'
+    })
+
+    // Flush the write-through store synchronously so the test can read disk.
+    ;(backend as any).flushState?.()
+
+    // Persisted state file path mirrors what `createWriteThroughStore` writes.
+    const stateFile = join(dataDir, 'agent-backend', 'claude-code-state', 'agent%3Amain%3Athread%3Aparent.json')
+    const raw = require('node:fs').readFileSync(stateFile, 'utf-8')
+    const persisted = JSON.parse(raw)
+    expect(persisted.data.liveSubagents).toContain('live-child-1')
+  })
+
+  it('SubagentStop removes the agent_id from the parent.liveSubagents persisted set', async () => {
+    const { backend, stub, parentSessionId } = await spinUpSession()
+    const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+    const onSubagentStop = getHook(stub.captured.options, 'SubagentStop')
+
+    await onSubagentStart({
+      hook_event_name: 'SubagentStart',
+      session_id: parentSessionId,
+      agent_id: 'live-child-2',
+      agent_type: 'general-purpose'
+    })
+    await onSubagentStop({
+      hook_event_name: 'SubagentStop',
+      session_id: parentSessionId,
+      agent_id: 'live-child-2',
+      last_assistant_message: 'done'
+    })
+
+    ;(backend as any).flushState?.()
+
+    const stateFile = join(dataDir, 'agent-backend', 'claude-code-state', 'agent%3Amain%3Athread%3Aparent.json')
+    const raw = require('node:fs').readFileSync(stateFile, 'utf-8')
+    const persisted = JSON.parse(raw)
+    expect(persisted.data.liveSubagents ?? []).not.toContain('live-child-2')
+  })
+
+  it('subagent.spawned event carries the parent key + agent_type as label', async () => {
+    const { backend, stub, parentSessionId } = await spinUpSession()
+    const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+
+    const spawnEvents: any[] = []
+    backend.on('subagent.spawned', (data) => spawnEvents.push(data))
+
+    await onSubagentStart({
+      hook_event_name: 'SubagentStart',
+      session_id: parentSessionId,
+      agent_id: 'child-event-1',
+      agent_type: 'Explore'
+    })
+
+    expect(spawnEvents).toHaveLength(1)
+    expect(spawnEvents[0]).toMatchObject({
+      parentKey: 'agent:main:thread:parent',
+      childKey: 'agent:main:subagent:child-event-1',
+      label: 'Explore'
+    })
+  })
+
+  /**
+   * Regression for "subagents appear in the dropdown but their threads are
+   * empty when clicked."
+   *
+   * The SDK writes subagent JSONLs at a NESTED path:
+   *   <projectsDir>/<parent_session_id>/subagents/agent-<agent_id>.jsonl
+   *
+   * Pre-fix `sessionFilePath` looked only at the top-level layout
+   *   <projectsDir>/<sessionId>.jsonl
+   * so `getHistory(<subagentKey>)` resolved to null and the UI rendered
+   * an empty turn list.
+   */
+  describe('subagent history resolution (nested JSONL layout)', () => {
+    /**
+     * Write a fake parent + subagent JSONL pair into the on-disk layout the
+     * SDK actually uses. Returns the parent backendSessionId + the subagent's
+     * backendSessionId so the test can address them.
+     */
+    function writeSdkSessionLayout(opts: { agentDir: string; cwd: string; parentId: string; subId: string }): void {
+      const fs = require('node:fs') as typeof import('node:fs')
+      const path = require('node:path') as typeof import('node:path')
+      // Mirror path-encoding.ts:encodeCwdToProjectDir — replace BOTH `/` AND `.`
+      // with `-` (so `/var/folders/...sov-cc-cwd-XXXX` → `-var-folders-...-sov-cc-cwd-XXXX`).
+      const encoded = path.resolve(opts.cwd).replace(/[/.]/g, '-')
+      const projectsDir = path.join(opts.agentDir, 'projects', encoded)
+      fs.mkdirSync(projectsDir, { recursive: true })
+      // Parent JSONL — top-level, sibling of the subagents/ subdir.
+      fs.writeFileSync(
+        path.join(projectsDir, `${opts.parentId}.jsonl`),
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'parent prompt' } }) + '\n'
+      )
+      // Subagent JSONL — nested under <parentId>/subagents/agent-<subId>.jsonl.
+      const subDir = path.join(projectsDir, opts.parentId, 'subagents')
+      fs.mkdirSync(subDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(subDir, `agent-${opts.subId}.jsonl`),
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'sub task' } }) +
+          '\n' +
+          JSON.stringify({
+            type: 'assistant',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'sub reply' }] }
+          }) +
+          '\n'
+      )
+    }
+
+    it('SubagentStart records the child + getHistory returns turns from the nested SDK path', async () => {
+      const { backend, stub, parentSessionId } = await spinUpSession()
+
+      // The parent's backend session id (the UUID the SDK assigned to its
+      // sessionId option) — the parent JSONL lives next to a subagents/
+      // subdir keyed by that id.
+      writeSdkSessionLayout({
+        agentDir: join(dataDir, 'agent'),
+        cwd,
+        parentId: parentSessionId,
+        subId: 'nested-sub-1'
+      })
+
+      const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+      await onSubagentStart({
+        hook_event_name: 'SubagentStart',
+        session_id: parentSessionId,
+        agent_id: 'nested-sub-1',
+        agent_type: 'general-purpose'
+      })
+
+      // Pre-fix this returns `{turns: [], hasMore: false}` because
+      // sessionFilePath() couldn't locate the nested file.
+      const { turns } = await backend.getHistory('agent:main:subagent:nested-sub-1')
+      expect(turns.map((t) => t.role)).toEqual(['user', 'assistant'])
+      expect(turns[1].content).toBe('sub reply')
+    })
+
+    it('getSessionFilePath returns the nested subagent JSONL path', async () => {
+      const { backend, stub, parentSessionId } = await spinUpSession()
+      writeSdkSessionLayout({
+        agentDir: join(dataDir, 'agent'),
+        cwd,
+        parentId: parentSessionId,
+        subId: 'nested-sub-2'
+      })
+      const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+      await onSubagentStart({
+        hook_event_name: 'SubagentStart',
+        session_id: parentSessionId,
+        agent_id: 'nested-sub-2',
+        agent_type: 'Explore'
+      })
+
+      const filePath = backend.getSessionFilePath!('agent:main:subagent:nested-sub-2')
+      expect(filePath).toBeTruthy()
+      // Filename must match the SDK's `agent-<id>.jsonl` convention nested
+      // under `<parentId>/subagents/`.
+      expect(filePath).toContain(`${parentSessionId}/subagents/agent-nested-sub-2.jsonl`)
+    })
+
+    it('cold-resume (no in-memory state) still resolves a subagent JSONL via the registry', async () => {
+      // Walk through a SubagentStart hook so the registry persists the
+      // subagent record, then tear down + recreate the backend to simulate
+      // a daemon restart with no in-memory sessions map.
+      const upserts: any[] = []
+      const records = new Map<string, any>()
+      const stub = capturingSdkQuery()
+      const backend = createClaudeCodeBackend(
+        { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+        {
+          sdkQuery: stub,
+          registry: {
+            upsertSession(r) {
+              upserts.push(r)
+              records.set(r.sessionKey, r)
+            },
+            lookupSession: (sk) => records.get(sk) ?? null
+          }
+        }
+      )
+      await backend.createSession('parent', { threadKey: 'parent' })
+      backend.sendMessage('agent:main:thread:parent', 'hello').catch(() => {})
+      for (let i = 0; i < 20 && !stub.captured.options; i++) await new Promise((r) => setImmediate(r))
+      const parentSessionId = stub.captured.sessionId as string
+
+      writeSdkSessionLayout({
+        agentDir: join(dataDir, 'agent'),
+        cwd,
+        parentId: parentSessionId,
+        subId: 'cold-sub'
+      })
+      const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+      await onSubagentStart({
+        hook_event_name: 'SubagentStart',
+        session_id: parentSessionId,
+        agent_id: 'cold-sub',
+        agent_type: 'general-purpose'
+      })
+
+      // Simulate restart: build a fresh backend that has only the registry
+      // records, no in-memory sessions map.
+      const stub2 = capturingSdkQuery()
+      const cold = createClaudeCodeBackend(
+        { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+        {
+          sdkQuery: stub2,
+          registry: {
+            upsertSession(r) {
+              records.set(r.sessionKey, r)
+            },
+            lookupSession: (sk) => records.get(sk) ?? null
+          }
+        }
+      )
+      const filePath = cold.getSessionFilePath!('agent:main:subagent:cold-sub')
+      expect(filePath).toBeTruthy()
+      expect(filePath).toContain(`${parentSessionId}/subagents/agent-cold-sub.jsonl`)
+    })
+  })
+})

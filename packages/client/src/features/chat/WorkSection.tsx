@@ -912,8 +912,11 @@ function CronDetail(props: { input: Record<string, unknown>; result?: string }) 
     const s = j.schedule as Record<string, unknown> | undefined
     if (!s) return ''
     if (s.kind === 'cron') return `cron: ${str(s.expr)}`
-    if (s.kind === 'every') return `every ${Math.round(Number(s.everyMs) / 60000)}m`
-    if (s.kind === 'at') return `at ${str(s.at)}`
+    // `interval` is the canonical kind name; tolerate the legacy `every`
+    // alias that older payloads may still carry until cleaned up.
+    if (s.kind === 'interval' || s.kind === 'every') return `every ${Math.round(Number(s.everyMs) / 60000)}m`
+    // `oneshot` is the canonical kind; tolerate legacy `at`.
+    if (s.kind === 'oneshot' || s.kind === 'at') return `at ${str(s.at)}`
     return ''
   }
   const payload = () => {
