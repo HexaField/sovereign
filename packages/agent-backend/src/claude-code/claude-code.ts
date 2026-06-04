@@ -24,6 +24,7 @@ import type {
   BackendConnectionStatus,
   ContextBudget,
   ParsedTurn,
+  ReasoningEffort,
   SessionKind,
   SessionMeta,
   SessionSummary,
@@ -31,6 +32,7 @@ import type {
   SubagentSummary,
   WorkItem
 } from '@sovereign/core'
+import { DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from '@sovereign/core'
 
 import { createBackendEmitter, createWriteThroughFile, createWriteThroughStore } from '@sovereign/primitives'
 import type { WriteThroughFile, WriteThroughStore } from '@sovereign/primitives'
@@ -104,6 +106,7 @@ export interface ClaudeCodeBackendDeps {
       orgId?: string
       cwd?: string
       model?: string
+      effort?: ReasoningEffort
     }): void
     /**
      * Look up a previously-persisted session by canonical key. Used on lazy
@@ -118,6 +121,7 @@ export interface ClaudeCodeBackendDeps {
       orgId?: string
       cwd?: string
       model?: string
+      effort?: ReasoningEffort
     } | null
   }
   /**
@@ -153,6 +157,7 @@ interface PersistedClaudeSessionState {
   backendSessionId: string
   cwd: string
   model: string | null
+  effort?: ReasoningEffort
   agentStatus: ClaudeSessionState['agentStatus']
   label?: string
   parentSessionKey?: string
@@ -254,6 +259,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       backendSessionId: state.backendSessionId,
       cwd: state.cwd,
       model: state.model,
+      effort: state.effort,
       agentStatus: state.agentStatus,
       label: state.label,
       parentSessionKey: state.parentSessionKey,
@@ -273,6 +279,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         backendSessionId: value.backendSessionId,
         cwd: value.cwd,
         model: value.model,
+        effort: value.effort ?? DEFAULT_REASONING_EFFORT,
         agentStatus: value.agentStatus,
         label: value.label,
         parentSessionKey: value.parentSessionKey,
@@ -410,6 +417,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     backendSessionId: string
     cwd?: string
     model?: string
+    effort?: ReasoningEffort
     label?: string
     parentSessionKey?: string
   }): ClaudeSessionState {
@@ -421,6 +429,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       backendSessionId: opts.backendSessionId,
       cwd: opts.cwd ?? cwd,
       model: opts.model ?? defaultModel,
+      effort: opts.effort ?? DEFAULT_REASONING_EFFORT,
       agentStatus: 'idle',
       label: opts.label,
       parentSessionKey: opts.parentSessionKey,
@@ -445,7 +454,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       parentSessionKey: state.parentSessionKey,
       orgId,
       cwd: state.cwd,
-      model: state.model ?? undefined
+      model: state.model ?? undefined,
+      effort: state.effort
     })
   }
 
@@ -758,6 +768,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
       abortController: abort,
       model: state.model ?? undefined,
+      effort: state.effort,
       allowedTools: defaultTools,
       mcpServers,
       hooks: buildHooks(),
@@ -841,6 +852,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       kind?: SessionKind
       parentSessionKey?: string
       model?: { provider: string; model: string }
+      reasoningEffort?: ReasoningEffort
       orgId?: string
     }
   ) {
@@ -855,6 +867,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       backendSessionId,
       cwd: opts?.cwd,
       model: opts?.model?.model,
+      effort: opts?.reasoningEffort,
       label,
       parentSessionKey: opts?.parentSessionKey
     })
@@ -889,6 +902,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         backendSessionId,
         cwd: existing?.cwd,
         model: existing?.model,
+        effort: existing?.effort,
         label: existing?.label,
         parentSessionKey: existing?.parentSessionKey
       })
@@ -1103,6 +1117,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       outputTokens: state.lastUsage?.outputTokens ?? 0,
       compactionCount: 0,
       thinkingLevel: null,
+      reasoningEffort: state.effort,
       task: null,
       label: state.label ?? null,
       parentKey: state.parentSessionKey ?? null
@@ -1149,6 +1164,41 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     return {
       models: KNOWN_MODELS.map((m) => `${PROVIDER}/${m}`),
       defaultModel: defaultModel ? `${PROVIDER}/${bareModelName(defaultModel)}` : null
+    }
+  }
+
+  async function setSessionEffort(sessionKey: string, effort: ReasoningEffort) {
+    if (!REASONING_EFFORTS.includes(effort)) {
+      throw new Error(`claude-code: unknown reasoning effort "${effort}"`)
+    }
+    const state = internal.sessions.get(sessionKey)
+    if (!state) return
+    state.effort = effort
+    // Persist so the choice survives a Sovereign restart.
+    const existing = deps.registry?.lookupSession?.(sessionKey)
+    if (existing) {
+      const threadKey = sessionKey.startsWith('agent:main:thread:')
+        ? sessionKey.slice('agent:main:thread:'.length)
+        : sessionKey
+      persistRegistry(state, threadKey, existing.orgId)
+    }
+    persistState(state)
+    // Best-effort mid-session apply. The SDK only honours `low|medium|high|xhigh`
+    // via setSettings — `max` takes effect on the next session loop.
+    if (state.liveQuery?.setSettings && effort !== 'max') {
+      try {
+        await state.liveQuery.setSettings({ effortLevel: effort })
+      } catch {
+        /* SDK may not expose setSettings in this build; the change still
+           takes effect when a new session loop starts. */
+      }
+    }
+  }
+
+  async function listAvailableEfforts() {
+    return {
+      efforts: [...REASONING_EFFORTS] as ReasoningEffort[],
+      defaultEffort: DEFAULT_REASONING_EFFORT
     }
   }
 
@@ -1234,6 +1284,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     getSessionMeta,
     setSessionModel,
     listAvailableModels,
+    setSessionEffort,
+    listAvailableEfforts,
     getContextBudget,
     spawnSubagent,
     getSessionFilePath,

@@ -187,7 +187,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
                 parentSessionKey: existing.parentSessionKey,
                 orgId: existing.orgId,
                 cwd: existing.cwd,
-                model: existing.model
+                model: existing.model,
+                effort: existing.effort
               }
             }
           },

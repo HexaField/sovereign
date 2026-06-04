@@ -320,6 +320,7 @@ export function createThreadRoutes(
         outputTokens: meta?.outputTokens ?? 0,
         compactionCount: meta?.compactionCount ?? 0,
         thinkingLevel: meta?.thinkingLevel ?? null,
+        reasoningEffort: meta?.reasoningEffort ?? null,
         agentStatus: thread.agentStatus ?? 'idle',
         sessionKey
       })
@@ -333,6 +334,7 @@ export function createThreadRoutes(
         outputTokens: 0,
         compactionCount: 0,
         thinkingLevel: null,
+        reasoningEffort: null,
         agentStatus: thread.agentStatus ?? 'idle',
         sessionKey: null
       })
@@ -365,6 +367,55 @@ export function createThreadRoutes(
       res.json(result)
     } catch {
       res.json({ models: [], defaultModel: null })
+    }
+  })
+
+  router.get('/api/efforts', async (_req, res) => {
+    try {
+      const backend = defaultBackend()
+      if (!backend || !backend.listAvailableEfforts) {
+        return res.json({ efforts: [], defaultEffort: null })
+      }
+      const result = await backend.listAvailableEfforts()
+      res.json(result)
+    } catch {
+      res.json({ efforts: [], defaultEffort: null })
+    }
+  })
+
+  router.patch('/api/threads/:key/effort', async (req, res) => {
+    const threadKey = req.params.key
+    const { effort } = req.body ?? {}
+    if (!effort) return res.status(400).json({ error: 'effort required' })
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    try {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      const backend = backendForSession(sessionKey)
+      if (!backend) return res.status(500).json({ error: 'No backend available' })
+      if (!backend.setSessionEffort) return res.status(400).json({ error: 'Backend does not support reasoning effort' })
+      await backend.setSessionEffort(sessionKey, effort)
+      res.json({ success: true, effort, thread })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to update effort', detail: (err as Error).message })
+    }
+  })
+
+  router.post('/api/threads/switch-effort', async (req, res) => {
+    const { sessionKey, effort } = req.body ?? {}
+    if (!sessionKey) return res.status(400).json({ error: 'sessionKey required' })
+    if (!effort) return res.status(400).json({ error: 'effort required' })
+    const thread = threadManager.get(sessionKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    try {
+      const derivedKey = opts?.chatModule?.getSessionKeyForThread(sessionKey) ?? deriveSessionKey(sessionKey)
+      const backend = backendForSession(derivedKey)
+      if (!backend) return res.status(500).json({ error: 'No backend available' })
+      if (!backend.setSessionEffort) return res.status(400).json({ error: 'Backend does not support reasoning effort' })
+      await backend.setSessionEffort(derivedKey, effort)
+      res.json({ success: true, effort, thread })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to update effort', detail: (err as Error).message })
     }
   })
 

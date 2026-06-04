@@ -7,7 +7,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import type { AgentBackendKind } from '@sovereign/core'
+import type { AgentBackendKind, ReasoningEffort } from '@sovereign/core'
 
 export interface ThreadSessionRecord {
   threadKey: string
@@ -29,6 +29,8 @@ export interface ThreadSessionRecord {
   cwd?: string
   /** Backend-specific model id last selected for this session. */
   model?: string
+  /** Reasoning effort last selected for this session. */
+  effort?: ReasoningEffort
 }
 
 export interface SessionsRegistry {
@@ -128,6 +130,7 @@ export function createSessionsRegistry(dataDir: string, options: Options = {}): 
         orgId: input.orgId ?? existing?.orgId,
         cwd: input.cwd ?? existing?.cwd,
         model: input.model ?? existing?.model,
+        effort: input.effort ?? existing?.effort,
         createdAt: existing?.createdAt ?? input.createdAt ?? now,
         updatedAt: now
       }

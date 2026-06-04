@@ -9,6 +9,7 @@ function makeState(): ClaudeSessionState {
     backendSessionId: 'sess-1',
     cwd: '/tmp',
     model: 'opus',
+    effort: 'max',
     agentStatus: 'idle',
     liveSubagents: new Set(),
     streamLastLength: 0,
