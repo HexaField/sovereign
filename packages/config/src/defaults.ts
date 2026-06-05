@@ -67,5 +67,10 @@ export const defaults: SovereignConfig = {
     sourceDir: '',
     files: [],
     separator: '\n\n---\n\n'
+  },
+  seed: {
+    membraneId: 'personal',
+    membraneName: 'Personal',
+    threadLabel: 'Main'
   }
 }

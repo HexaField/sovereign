@@ -174,8 +174,10 @@ export function setChatPanelWidth(v: number): void {
   writeStorage(wsKey(currentOrgId(), 'chatPanelWidth'), v)
 }
 
-// §3.5 — Active thread key for right panel
-export const [activeThreadKey, setActiveThreadKey] = createSignal('main')
+// §3.5 — Active thread key for right panel. Empty = no thread selected; the
+// live selection is driven by the threads store (it picks the most-recent
+// thread on load). No thread label is assumed to exist.
+export const [activeThreadKey, setActiveThreadKey] = createSignal('')
 
 // §3.6 — Open file tabs in main content
 export interface OpenFileTab {
