@@ -205,10 +205,20 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   }
   const query = deps.sdkQuery ?? sdkQuery
   const mcpServers: Record<string, any> = { ...config.mcpServers }
-  // Prefer the HTTP-registered 'sovereign' entry (survives server restarts) over
-  // the in-process injection. Only fall back to in-process if no HTTP entry exists.
-  if (deps.sovereignMcpServer && !mcpServers['sovereign']) {
-    mcpServers.sovereign = deps.sovereignMcpServer
+  // Three layers of preference, highest first:
+  //   1. Whatever the caller already wired in `config.mcpServers.sovereign`.
+  //   2. `SOVEREIGN_MCP_HTTP_URL` — the standalone sidecar daemon. Has its own
+  //      lifecycle (com.sovereign.mcp.plist) so a Sovereign rebuild doesn't
+  //      tear it down; SDK reconnects automatically.
+  //   3. The in-process `McpSdkServerConfigWithInstance` injection — fallback
+  //      when no sidecar is configured. Bound to this process's lifetime.
+  if (!mcpServers['sovereign']) {
+    const sidecarUrl = process.env.SOVEREIGN_MCP_HTTP_URL?.trim()
+    if (sidecarUrl) {
+      mcpServers.sovereign = { type: 'http', url: sidecarUrl }
+    } else if (deps.sovereignMcpServer) {
+      mcpServers.sovereign = deps.sovereignMcpServer
+    }
   }
 
   // Workspace-local seed files — best-effort, never fatal. The global
@@ -661,6 +671,19 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       const state = stateForHook(input)
       if (!state) return { continue: true }
       emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: false })
+      // MCP rehydration: compact tears down the SDK's deferred-tool catalog
+      // for any MCP server that didn't re-register itself. Forcing
+      // `setMcpServers(mcpServers)` makes the SDK redo `tools/list` against
+      // every configured server — recovers `mcp__sovereign__*` tools after
+      // both auto-compact and manual `/compact`.
+      // See plans/claude-code-mcp-rehydration-bug.md for the bug history.
+      try {
+        await state.liveQuery?.setMcpServers?.(mcpServers)
+      } catch (err) {
+        // SDK builds without setMcpServers will throw or be undefined.
+        // Best-effort — the next session loop start re-registers anyway.
+        console.error('[claude-code] PostCompact MCP rehydration failed:', (err as Error)?.message ?? err)
+      }
       return { continue: true }
     }
     const onStop = async (input: HookInput) => {

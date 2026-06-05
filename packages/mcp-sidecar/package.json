@@ -1,0 +1,35 @@
+{
+  "name": "@sovereign/mcp-sidecar",
+  "version": "1.0.0",
+  "description": "Standalone MCP server daemon that forwards Sovereign tool calls to the main daemon over HTTP. Decouples MCP lifecycle from the Sovereign launchd service so the SDK's tool catalog survives daemon restarts.",
+  "license": "MIT",
+  "author": "Josh Field",
+  "bin": {
+    "sovereign-mcp": "bin/sovereign-mcp.mjs"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc --noEmit",
+    "start": "node bin/sovereign-mcp.mjs",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.150",
+    "@modelcontextprotocol/sdk": "^1.4.0",
+    "express": "^5.2.1",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  }
+}
