@@ -788,3 +788,87 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
     })
   })
 })
+
+/**
+ * Integration tests covering the "system config with specific overrides"
+ * design — see the top-of-file comment in claude-code.ts. These verify
+ * that the SDK options Sovereign hands to `query()` correctly defer to
+ * the user's Claude Code config (loaded by the CLI subprocess via
+ * `settingSources`) while preserving the specific overrides Sovereign
+ * needs (state-tracking hooks, sovereign MCP, scheduling redirect,
+ * bypass-permissions).
+ */
+describe('claude-code/system-config-with-overrides wiring', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  /** Spin up a backend and drive the session loop just long enough that
+   *  `query()` runs and captures its options. */
+  async function captureOptions() {
+    const stub = capturingSdkQuery()
+    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stub })
+    await backend.createSession('parent', { threadKey: 'parent' })
+    backend.sendMessage('parent', 'hello').catch(() => {
+      /* expected: the stub's iterator ends, sendMessage rejects */
+    })
+    for (let i = 0; i < 20 && !stub.captured.options; i++) {
+      await new Promise((r) => setImmediate(r))
+    }
+    if (!stub.captured.options) throw new Error('query() was never invoked by the stub')
+    return stub.captured.options
+  }
+
+  it("passes settingSources: ['user', 'project', 'local'] so the CLI loads system config", async () => {
+    const options = await captureOptions()
+    expect(options.settingSources).toEqual(['user', 'project', 'local'])
+  })
+
+  it('keeps the specific Sovereign overrides intact alongside system config', async () => {
+    const options = await captureOptions()
+    // The Sovereign-specific overrides documented in the design comment:
+    expect(options.permissionMode).toBe('bypassPermissions')
+    expect(options.allowDangerouslySkipPermissions).toBe(true)
+    // The systemPrompt preset is what enables CLAUDE.md walk-up; Sovereign
+    // does NOT replace it with a hand-rolled prompt.
+    if (options.systemPrompt !== undefined) {
+      expect(options.systemPrompt).toMatchObject({ type: 'preset', preset: 'claude_code' })
+    }
+  })
+
+  it('registers exactly one Sovereign matcher for every hook event (no double-wrap)', async () => {
+    const options = await captureOptions()
+    const expectedEvents = [
+      'SessionStart',
+      'UserPromptSubmit',
+      'PreToolUse',
+      'PostToolUse',
+      'PostToolUseFailure',
+      'SubagentStart',
+      'SubagentStop',
+      'PreCompact',
+      'PostCompact',
+      'Stop',
+      'SessionEnd',
+      'Notification'
+    ]
+    for (const event of expectedEvents) {
+      const matchers = options.hooks?.[event]
+      expect(matchers, `missing hook for ${event}`).toBeDefined()
+      // Exactly one Sovereign matcher per event — settings.json hooks
+      // (e.g. cozempic) are fired by the CLI subprocess from disk, not
+      // wrapped programmatically here, so they must not appear in the
+      // matcher list (that would double-fire each shell command).
+      expect(matchers!.length, `${event} should have exactly 1 Sovereign matcher`).toBe(1)
+      expect(typeof matchers![0]?.hooks?.[0]).toBe('function')
+    }
+  })
+})
