@@ -502,7 +502,7 @@ export function ThreadDrawer(props: ThreadDrawerProps) {
     const all = props.threads()
     const filtered = filterThreads(all, search())
     if (showHidden()) return filtered
-    return filtered.filter((t) => !hiddenKeys().includes(t.key))
+    return filtered.filter((t) => !hiddenKeys().includes(t.id))
   })
 
   const grouped = createMemo(() => groupThreadsByWorkspace(visibleThreads()))
@@ -653,22 +653,22 @@ export function ThreadDrawer(props: ThreadDrawerProps) {
                   </Show>
                   <For each={threads}>
                     {(thread) => {
-                      const isHidden = () => hiddenKeys().includes(thread.key)
-                      const isExpanded = () => expandedThreads().has(thread.key)
+                      const isHidden = () => hiddenKeys().includes(thread.id)
+                      const isExpanded = () => expandedThreads().has(thread.id)
                       return (
                         <div
                           class="flex cursor-pointer items-center gap-2 px-4 py-2"
                           style={{
                             background:
-                              props.activeKey() === thread.key
+                              props.activeKey() === thread.id
                                 ? 'var(--c-bg-active, color-mix(in srgb, var(--c-accent) 15%, transparent))'
                                 : 'transparent',
                             opacity: isHidden() ? '0.5' : '1'
                           }}
-                          onClick={() => props.onSwitchThread(thread.key)}
+                          onClick={() => props.onSwitchThread(thread.id)}
                           onContextMenu={(e) => {
                             e.preventDefault()
-                            hideThread(thread.key)
+                            hideThread(thread.id)
                           }}
                         >
                           <Show when={thread.entities?.length > 0}>
@@ -687,7 +687,7 @@ export function ThreadDrawer(props: ThreadDrawerProps) {
                                 style={{ color: 'var(--c-accent)' }}
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  toggleExpand(thread.key)
+                                  toggleExpand(thread.id)
                                 }}
                               >
                                 +{thread.entities.length - 1}
@@ -717,7 +717,7 @@ export function ThreadDrawer(props: ThreadDrawerProps) {
                               style={{ color: 'var(--c-accent)' }}
                               onClick={(e) => {
                                 e.stopPropagation()
-                                unhideThread(thread.key)
+                                unhideThread(thread.id)
                               }}
                             >
                               Unhide

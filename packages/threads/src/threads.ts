@@ -1,34 +1,27 @@
-// Threads — Thread Registry, auto-creation, entity management
+// Threads — Registry, auto-creation, entity management.
 //
-// Storage layout (post-membrane migration):
+// Identity model (post-UUID refactor):
+//   - Every thread has a UUID `id` (primary key, used everywhere internally)
+//   - `label` is the human-readable display name (mutable, not unique)
+//   - The OpenClaw "key" / "main" concepts are GONE — there is no special
+//     singleton root thread. New users see an empty thread list.
 //
-//   <dataDir>/threads.json          - thread metadata, new shape
-//   <dataDir>/threads/events.json   - per-thread event log
-//   <dataDir>/threads/registry.json - LEGACY. Read once at boot if
-//                                     threads.json doesn't exist, then
-//                                     superseded. Left on disk for
-//                                     rollback safety, never re-written.
-//
-// Each `ThreadInfo` holds `membraneId` (the social/privacy context, see
-// @sovereign/membranes) and `workspaceIds` (the code contexts attached
-// to the thread). The legacy `orgId` field has been removed; on first
-// boot the migration below reads it, infers `membraneId` via
-// `membranes.json`, and persists the new shape.
+// Storage:
+//   <dataDir>/threads.json          v2 — { version: 2, threads: ThreadInfo[] }
+//   <dataDir>/threads/events.json   per-thread event log keyed by thread.id
+//   <dataDir>/threads/registry.json LEGACY pre-membrane file; read once on
+//                                   cold boot if threads.json is missing.
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { EventBus } from '@sovereign/core'
 import type { ThreadInfo, EntityBinding, ThreadEvent, ThreadFilter, ThreadManager, EntityType } from './types.js'
 
-function entityKey(entity: EntityBinding): string {
-  return `${entity.orgId}/${entity.projectId}/${entity.entityType}:${entity.entityRef}`
-}
+const SCHEMA_VERSION = 2
 
-function generateThreadKey(entities?: EntityBinding[], label?: string): string {
-  if (entities && entities.length > 0) {
-    return entityKey(entities[0])
-  }
-  return label ?? `thread-${Date.now()}`
+function entityRefKey(entity: EntityBinding): string {
+  return `${entity.orgId}/${entity.projectId}/${entity.entityType}:${entity.entityRef}`
 }
 
 function atomicWrite(filePath: string, data: string): void {
@@ -40,9 +33,9 @@ function atomicWrite(filePath: string, data: string): void {
 }
 
 /**
- * Build `orgId → membraneId` lookup from `<dataDir>/membranes.json`.
- * First membrane that contains the orgId in its `workspaceIds` wins —
- * deterministic, source order preserved.
+ * Build `orgId → membraneId` lookup from `<dataDir>/membranes.json` for the
+ * membrane-inference fallback during the legacy migration. First membrane
+ * that contains the orgId in its `workspaceIds` wins.
  */
 function buildOrgToMembraneMap(dataDir: string): Map<string, string> {
   const file = path.join(dataDir, 'membranes.json')
@@ -63,29 +56,38 @@ function buildOrgToMembraneMap(dataDir: string): Map<string, string> {
 }
 
 /**
- * Take a legacy thread record (with `orgId`) and return the new shape.
+ * Take any legacy thread record (v1 with `key`, or pre-membrane with
+ * `orgId`) and project it onto the v2 shape (id + label, no key).
  *
- * Mapping rules:
- *   - `orgId === '_global'` or undefined → `workspaceIds = []` (global)
- *   - any other orgId → `workspaceIds = [orgId]`
- *   - `membraneId` resolved via the orgId→membrane lookup; if no match,
- *     leave undefined (UI shows under "Unassigned" / personal default).
+ * - If the input already has `id`, treat as v2 — pass-through.
+ * - Otherwise mint a UUID and use the old `key` as the initial `label`.
+ *
+ * Note: the canonical one-shot migration lives at
+ * `bin/sovereign-migrate-threads.mjs` and re-keys every dependent file
+ * (sessions registry, claude-code-state, scheduler payloads). This
+ * in-process fallback exists so a developer can drop a v1 file into a
+ * fresh data dir and have something usable. For real installs, run the
+ * external migration once.
  */
-function migrateLegacyThread(t: any, orgToMembrane: Map<string, string>): ThreadInfo {
-  const legacyOrgId: string | undefined = t.orgId
-  const workspaceIds: string[] = !legacyOrgId || legacyOrgId === '_global' ? [] : [legacyOrgId]
-  const membraneId: string | undefined = t.membraneId ?? (legacyOrgId ? orgToMembrane.get(legacyOrgId) : undefined)
+function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
+  const legacyOrgId: string | undefined = raw.orgId
+  const workspaceIds: string[] = Array.isArray(raw.workspaceIds)
+    ? raw.workspaceIds
+    : !legacyOrgId || legacyOrgId === '_global'
+      ? []
+      : [legacyOrgId]
+  const membraneId: string | undefined = raw.membraneId ?? (legacyOrgId ? orgToMembrane.get(legacyOrgId) : undefined)
   return {
-    key: t.key,
+    id: raw.id ?? randomUUID(),
+    label: raw.label ?? raw.key ?? 'untitled',
     membraneId,
-    workspaceIds: Array.isArray(t.workspaceIds) ? t.workspaceIds : workspaceIds,
-    entities: t.entities ?? [],
-    label: t.label,
-    lastActivity: t.lastActivity ?? Date.now(),
-    unreadCount: t.unreadCount ?? 0,
-    agentStatus: t.agentStatus ?? 'idle',
-    createdAt: t.createdAt ?? Date.now(),
-    archived: !!t.archived
+    workspaceIds,
+    entities: raw.entities ?? [],
+    lastActivity: raw.lastActivity ?? Date.now(),
+    unreadCount: raw.unreadCount ?? 0,
+    agentStatus: raw.agentStatus ?? 'idle',
+    createdAt: raw.createdAt ?? Date.now(),
+    archived: !!raw.archived
   }
 }
 
@@ -94,32 +96,28 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
   const eventsPath = path.join(dataDir, 'threads', 'events.json')
   const legacyRegistryPath = path.join(dataDir, 'threads', 'registry.json')
 
+  /** Primary store, keyed by Thread.id (UUID). */
   const threads = new Map<string, ThreadInfo>()
+  /** Per-thread events, keyed by Thread.id. */
   const events = new Map<string, ThreadEvent[]>()
 
   // ── Load threads ────────────────────────────────────────────────────
-  //
-  // Order of precedence:
-  //   1. threads.json (new shape, post-migration)
-  //   2. legacy registry.json (one-time migration into threads.json)
-  //   3. empty (fresh install)
   if (fs.existsSync(threadsPath)) {
     try {
       const data = JSON.parse(fs.readFileSync(threadsPath, 'utf-8'))
       const orgMap = buildOrgToMembraneMap(dataDir)
-      let normaliseCount = 0
-      for (const t of data.threads ?? []) {
-        // Defensive: a hand-edited threads.json may still have orgId. Normalise.
-        if (t && Object.prototype.hasOwnProperty.call(t, 'orgId')) normaliseCount++
-        threads.set(t.key, migrateLegacyThread(t, orgMap))
+      let recoveryCount = 0
+      for (const raw of data.threads ?? []) {
+        const projected = projectToV2(raw, orgMap)
+        // Defensive: any record without an `id` is v1; count the recovery so
+        // we can disk-rewrite once.
+        if (!raw?.id) recoveryCount++
+        threads.set(projected.id, projected)
       }
-      // If any record carried a legacy `orgId`, rewrite the file once so
-      // subsequent reads start clean. The in-memory state was already
-      // normalised by `migrateLegacyThread`, so this is just disk hygiene.
-      if (normaliseCount > 0) {
+      if (recoveryCount > 0) {
         persistThreadsImmediate()
         // eslint-disable-next-line no-console
-        console.log(`[threads] normalised ${normaliseCount} threads (stripped legacy orgId field) in ${threadsPath}`)
+        console.log(`[threads] in-process recovery: minted UUIDs for ${recoveryCount} legacy records → ${threadsPath}`)
       }
     } catch {
       /* fresh start */
@@ -129,8 +127,9 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       const orgMap = buildOrgToMembraneMap(dataDir)
       const legacy = JSON.parse(fs.readFileSync(legacyRegistryPath, 'utf-8'))
       let migrated = 0
-      for (const t of legacy.threads ?? []) {
-        threads.set(t.key, migrateLegacyThread(t, orgMap))
+      for (const raw of legacy.threads ?? []) {
+        const projected = projectToV2(raw, orgMap)
+        threads.set(projected.id, projected)
         migrated++
       }
       if (migrated > 0) {
@@ -144,15 +143,12 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     }
   }
 
-  // ── Load events ─────────────────────────────────────────────────────
-  //
-  // Prefer the new split file. Fall back to legacy `registry.json.events`
-  // for a single boot, then persist into the new file on first event write.
+  // ── Load events (keyed by Thread.id) ────────────────────────────────
   if (fs.existsSync(eventsPath)) {
     try {
       const data = JSON.parse(fs.readFileSync(eventsPath, 'utf-8'))
-      for (const [k, v] of Object.entries(data)) {
-        if (Array.isArray(v)) events.set(k, v as ThreadEvent[])
+      for (const [id, v] of Object.entries(data)) {
+        if (Array.isArray(v)) events.set(id, v as ThreadEvent[])
       }
     } catch {
       /* ignore */
@@ -162,7 +158,10 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       const legacy = JSON.parse(fs.readFileSync(legacyRegistryPath, 'utf-8'))
       if (legacy.events && typeof legacy.events === 'object') {
         for (const [k, v] of Object.entries(legacy.events)) {
-          if (Array.isArray(v)) events.set(k, v as ThreadEvent[])
+          // Legacy event keys may be `<key>`; try to resolve via label.
+          const thread = [...threads.values()].find((t) => t.label === k)
+          const id = thread?.id ?? k
+          if (Array.isArray(v)) events.set(id, v as ThreadEvent[])
         }
         persistEventsImmediate()
       }
@@ -172,57 +171,64 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
   }
 
   function persistThreadsImmediate(): void {
-    atomicWrite(threadsPath, JSON.stringify({ version: 1, threads: [...threads.values()] }, null, 2))
+    atomicWrite(threadsPath, JSON.stringify({ version: SCHEMA_VERSION, threads: [...threads.values()] }, null, 2))
   }
 
   function persistEventsImmediate(): void {
     atomicWrite(eventsPath, JSON.stringify(Object.fromEntries(events), null, 2))
   }
 
-  function persist(): void {
-    persistThreadsImmediate()
-  }
-
-  function persistEvents(): void {
-    persistEventsImmediate()
-  }
+  // ── Public API ──────────────────────────────────────────────────────
 
   function create(opts: {
-    label?: string
+    label: string
     entities?: EntityBinding[]
     membraneId?: string
     workspaceIds?: string[]
   }): ThreadInfo {
-    const key = generateThreadKey(opts.entities, opts.label)
-    if (threads.has(key)) return threads.get(key)!
-
-    // If no explicit workspaceIds but entities are bound, derive the
-    // workspace from the first entity's orgId — a sensible default that
-    // matches the pre-membrane behaviour.
+    if (!opts.label?.trim()) {
+      throw new Error('ThreadManager.create: label is required (UUID model — labels carry the display name)')
+    }
+    // If the caller bound the thread to entities but didn't pre-pick a
+    // workspace, default to the first entity's orgId — preserves the
+    // pre-refactor auto-association behaviour.
     const derivedWorkspaceIds =
       opts.workspaceIds ?? (opts.entities && opts.entities.length > 0 ? [opts.entities[0].orgId] : [])
 
     const now = Date.now()
     const thread: ThreadInfo = {
-      key,
+      id: randomUUID(),
+      label: opts.label.trim(),
       membraneId: opts.membraneId,
       workspaceIds: derivedWorkspaceIds,
       entities: opts.entities ?? [],
-      label: opts.label,
       lastActivity: now,
       unreadCount: 0,
       agentStatus: 'idle',
       createdAt: now,
       archived: false
     }
-    threads.set(key, thread)
-    persist()
-    bus.emit({ type: 'thread.created', timestamp: new Date().toISOString(), source: 'threads', payload: { thread } })
+    threads.set(thread.id, thread)
+    persistThreadsImmediate()
+    bus.emit({
+      type: 'thread.created',
+      timestamp: new Date().toISOString(),
+      source: 'threads',
+      payload: { thread }
+    })
     return thread
   }
 
-  function get(key: string): ThreadInfo | undefined {
-    return threads.get(key)
+  function get(id: string): ThreadInfo | undefined {
+    return threads.get(id)
+  }
+
+  function getByLabel(label: string): ThreadInfo | undefined {
+    return [...threads.values()].find((t) => t.label === label)
+  }
+
+  function resolve(idOrLabel: string): ThreadInfo | undefined {
+    return threads.get(idOrLabel) ?? getByLabel(idOrLabel)
   }
 
   function list(filter?: ThreadFilter): ThreadInfo[] {
@@ -231,9 +237,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       if (filter.workspaceId !== undefined) {
         const w = filter.workspaceId
         results = results.filter((t) => {
-          if (w === '_global') {
-            return t.workspaceIds.length === 0 && t.entities.length === 0
-          }
+          if (w === '_global') return t.workspaceIds.length === 0 && t.entities.length === 0
           return t.workspaceIds.includes(w) || t.entities.some((e) => e.orgId === w)
         })
       }
@@ -248,74 +252,74 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
   }
 
   function update(
-    key: string,
+    id: string,
     patch: { label?: string; membraneId?: string; workspaceIds?: string[] }
   ): ThreadInfo | undefined {
-    const thread = threads.get(key)
+    const thread = threads.get(id)
     if (!thread) return undefined
     if (patch.label !== undefined) thread.label = patch.label
     if (patch.membraneId !== undefined) thread.membraneId = patch.membraneId
     if (patch.workspaceIds !== undefined) thread.workspaceIds = patch.workspaceIds
     thread.lastActivity = Date.now()
-    persist()
+    persistThreadsImmediate()
     bus.emit({
       type: 'thread.updated',
       timestamp: new Date().toISOString(),
       source: 'threads',
-      payload: { threadKey: key, patch }
+      payload: { threadId: id, patch }
     })
     return thread
   }
 
-  function del(key: string): boolean {
-    const thread = threads.get(key)
+  function del(id: string): boolean {
+    const thread = threads.get(id)
     if (!thread) return false
     thread.archived = true
-    persist()
+    persistThreadsImmediate()
     bus.emit({
       type: 'thread.deleted',
       timestamp: new Date().toISOString(),
       source: 'threads',
-      payload: { threadKey: key }
+      payload: { threadId: id }
     })
     return true
   }
 
-  function addEntity(key: string, entity: EntityBinding): ThreadInfo | undefined {
-    const thread = threads.get(key)
+  function addEntity(id: string, entity: EntityBinding): ThreadInfo | undefined {
+    const thread = threads.get(id)
     if (!thread) return undefined
-    const exists = thread.entities.some((e) => entityKey(e) === entityKey(entity))
+    const exists = thread.entities.some((e) => entityRefKey(e) === entityRefKey(entity))
     if (!exists) {
       thread.entities.push(entity)
       thread.lastActivity = Date.now()
-      persist()
+      persistThreadsImmediate()
       bus.emit({
         type: 'thread.entity.added',
         timestamp: new Date().toISOString(),
         source: 'threads',
-        payload: { threadKey: key, entity }
+        payload: { threadId: id, entity }
       })
     }
     return thread
   }
 
-  function removeEntity(key: string, entityType: EntityType, entityRef: string): ThreadInfo | undefined {
-    const thread = threads.get(key)
+  function removeEntity(id: string, entityType: EntityType, entityRef: string): ThreadInfo | undefined {
+    const thread = threads.get(id)
     if (!thread) return undefined
     thread.entities = thread.entities.filter((e) => !(e.entityType === entityType && e.entityRef === entityRef))
     thread.lastActivity = Date.now()
-    persist()
+    persistThreadsImmediate()
     bus.emit({
       type: 'thread.entity.removed',
       timestamp: new Date().toISOString(),
       source: 'threads',
-      payload: { threadKey: key, entityType, entityRef }
+      payload: { threadId: id, entityType, entityRef }
     })
     return thread
   }
 
-  function getEntities(key: string): EntityBinding[] {
-    return threads.get(key)?.entities ?? []
+  function getEntities(id: string): EntityBinding[] {
+    return threads.get(id)?.entities ?? []
   }
 
   function getThreadsForEntity(entity: EntityBinding): ThreadInfo[] {
@@ -330,58 +334,64 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     )
   }
 
-  function addEvent(key: string, event: ThreadEvent): void {
-    if (!events.has(key)) events.set(key, [])
-    events.get(key)!.push(event)
-    const thread = threads.get(key)
+  function addEvent(id: string, event: ThreadEvent): void {
+    if (!events.has(id)) events.set(id, [])
+    events.get(id)!.push(event)
+    const thread = threads.get(id)
     if (thread) {
       thread.lastActivity = event.timestamp
-      persist()
+      persistThreadsImmediate()
     }
-    persistEvents()
+    persistEventsImmediate()
   }
 
-  function touch(key: string): void {
-    const thread = threads.get(key)
+  function touch(id: string): void {
+    const thread = threads.get(id)
     if (thread) {
       thread.lastActivity = Date.now()
-      persist()
+      persistThreadsImmediate()
     }
   }
 
-  function getEvents(key: string, opts?: { limit?: number; offset?: number; since?: number }): ThreadEvent[] {
-    let evts = events.get(key) ?? []
+  function getEvents(id: string, opts?: { limit?: number; offset?: number; since?: number }): ThreadEvent[] {
+    let evts = events.get(id) ?? []
     if (opts?.since) evts = evts.filter((e) => e.timestamp >= opts.since!)
     const offset = opts?.offset ?? 0
     const limit = opts?.limit ?? 50
     return evts.slice(offset, offset + limit)
   }
 
-  // Auto-create threads on bus events
+  // Auto-create threads on bus events. Each gets a UUID; the label is derived
+  // from the entity reference so the UI shows something meaningful.
   bus.on('worktree.created', (event) => {
     const p = event.payload as { orgId: string; projectId: string; branch: string }
     const entity: EntityBinding = { orgId: p.orgId, projectId: p.projectId, entityType: 'branch', entityRef: p.branch }
-    const existing = getThreadsForEntity(entity)
-    if (existing.length === 0) create({ entities: [entity] })
+    if (getThreadsForEntity(entity).length === 0) {
+      create({ label: `${p.projectId}/${p.branch}`, entities: [entity] })
+    }
   })
 
   bus.on('issue.created', (event) => {
     const p = event.payload as { orgId: string; projectId: string; issueId: string }
     const entity: EntityBinding = { orgId: p.orgId, projectId: p.projectId, entityType: 'issue', entityRef: p.issueId }
-    const existing = getThreadsForEntity(entity)
-    if (existing.length === 0) create({ entities: [entity] })
+    if (getThreadsForEntity(entity).length === 0) {
+      create({ label: `${p.projectId}#${p.issueId}`, entities: [entity] })
+    }
   })
 
   bus.on('review.created', (event) => {
     const p = event.payload as { orgId: string; projectId: string; prId: string }
     const entity: EntityBinding = { orgId: p.orgId, projectId: p.projectId, entityType: 'pr', entityRef: p.prId }
-    const existing = getThreadsForEntity(entity)
-    if (existing.length === 0) create({ entities: [entity] })
+    if (getThreadsForEntity(entity).length === 0) {
+      create({ label: `${p.projectId} PR ${p.prId}`, entities: [entity] })
+    }
   })
 
   return {
     create,
     get,
+    getByLabel,
+    resolve,
     update,
     list,
     delete: del,

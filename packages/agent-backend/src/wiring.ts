@@ -95,13 +95,16 @@ function makeToolPolicy(orgManager: OrgManager) {
  * of `deriveSessionKey` — kept local because nothing else needs it.
  */
 function sessionKeyToThreadKey(sessionKey: string): string | undefined {
+  // Bare-UUID scheme: a thread session's key IS the Thread.id. Legacy
+  // compound forms are coerced for safety. Subagent sessions resolve to a
+  // non-thread id, so `threadManager.get()` simply misses and no membrane
+  // context is injected for them — which is the desired behaviour.
+  if (!sessionKey) return undefined
   if (sessionKey === 'agent:main:main') return 'main'
+  if (sessionKey.startsWith('agent:main:subagent:')) return undefined
   const prefix = 'agent:main:thread:'
   if (sessionKey.startsWith(prefix)) return sessionKey.slice(prefix.length)
-  // Subagent / cron sessions don't have a 1:1 thread mapping — they
-  // inherit context from their parent at spawn time, so we don't need
-  // to resolve membrane context for them here.
-  return undefined
+  return sessionKey
 }
 
 /**

@@ -10,7 +10,7 @@ export function truncatePreview(text: string, lines: number = 3): string {
 }
 
 export function filterAvailableThreads(threads: ThreadInfo[], currentKey: string, query: string): ThreadInfo[] {
-  const available = threads.filter((t) => t.key !== currentKey)
+  const available = threads.filter((t) => t.id !== currentKey)
   return filterThreads(available, query)
 }
 
@@ -88,10 +88,10 @@ export function ForwardDialog(props: ForwardDialogProps) {
                   <div
                     class="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm"
                     style={{
-                      background: selectedKey() === thread.key ? 'var(--c-bg-active)' : 'transparent',
+                      background: selectedKey() === thread.id ? 'var(--c-bg-active)' : 'transparent',
                       color: 'var(--c-text)'
                     }}
-                    onClick={() => setSelectedKey(thread.key)}
+                    onClick={() => setSelectedKey(thread.id)}
                   >
                     <Show when={thread.entities?.length > 0}>
                       <span>{getEntityIcon(thread.entities[0].entityType)}</span>

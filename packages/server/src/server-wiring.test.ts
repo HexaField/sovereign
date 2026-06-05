@@ -135,7 +135,7 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
       const bus = createMockBus()
       const tm = createThreadManager(bus, '/tmp/test-wiring-threads')
       const thread = tm.create({ label: 'test' })
-      expect(thread.key).toBeTruthy()
+      expect(thread.id).toBeTruthy()
     })
   })
 

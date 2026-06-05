@@ -9,52 +9,37 @@ import {
 } from './ThreadDrawer.js'
 import { getEntityIcon, formatRelativeTime } from './helpers.js'
 import type { ThreadInfo } from './store.js'
+import { makeThread } from './test-factory.js'
 
 const mockThreads: ThreadInfo[] = [
-  { key: 'main', entities: [], label: 'Main', lastActivity: Date.now(), unreadCount: 0, agentStatus: 'idle' as any },
-  {
-    key: 'feat',
+  makeThread({ id: 'main', label: 'Main' }),
+  makeThread({
+    id: 'feat',
     entities: [{ orgId: 'o', projectId: 'p', entityType: 'branch', entityRef: 'feat/login' }],
-    label: undefined,
     lastActivity: Date.now() - 60000,
-    unreadCount: 3,
-    agentStatus: 'idle' as any
-  },
-  {
-    key: 'iss',
+    unreadCount: 3
+  }),
+  makeThread({
+    id: 'iss',
     entities: [{ orgId: 'o', projectId: 'p', entityType: 'issue', entityRef: '#42 Fix bug' }],
-    label: undefined,
-    lastActivity: Date.now() - 120000,
-    unreadCount: 0,
-    agentStatus: 'idle' as any
-  },
-  {
-    key: 'pr1',
+    lastActivity: Date.now() - 120000
+  }),
+  makeThread({
+    id: 'pr1',
     entities: [{ orgId: 'o', projectId: 'p', entityType: 'pr', entityRef: '#99 Add feature' }],
-    label: undefined,
     lastActivity: Date.now() - 180000,
-    unreadCount: 1,
-    agentStatus: 'idle' as any
-  },
-  {
-    key: 'multi',
+    unreadCount: 1
+  }),
+  makeThread({
+    id: 'multi',
+    label: 'Multi',
     entities: [
       { orgId: 'o', projectId: 'p', entityType: 'branch', entityRef: 'main' },
       { orgId: 'o', projectId: 'p', entityType: 'issue', entityRef: '#10 Related' }
     ],
-    label: 'Multi',
-    lastActivity: Date.now() - 5000,
-    unreadCount: 0,
-    agentStatus: 'idle' as any
-  },
-  {
-    key: 'custom',
-    entities: [],
-    label: 'My Custom Thread',
-    lastActivity: Date.now() - 300000,
-    unreadCount: 0,
-    agentStatus: 'idle' as any
-  }
+    lastActivity: Date.now() - 5000
+  }),
+  makeThread({ id: 'custom', label: 'My Custom Thread', lastActivity: Date.now() - 300000 })
 ]
 
 // Mock localStorage
@@ -101,17 +86,17 @@ describe('§5.3 ThreadDrawer', () => {
     it('shows display name derived from primary entity — branch name for branches', () => {
       const result = filterThreads(mockThreads, 'feat/login')
       expect(result.length).toBe(1)
-      expect(result[0].key).toBe('feat')
+      expect(result[0].id).toBe('feat')
     })
     it('shows display name derived from primary entity — issue title + number for issues', () => {
       const result = filterThreads(mockThreads, '#42')
       expect(result.length).toBe(1)
-      expect(result[0].key).toBe('iss')
+      expect(result[0].id).toBe('iss')
     })
     it('shows display name derived from primary entity — PR title + number for PRs', () => {
       const result = filterThreads(mockThreads, '#99')
       expect(result.length).toBe(1)
-      expect(result[0].key).toBe('pr1')
+      expect(result[0].id).toBe('pr1')
     })
     it('shows label for global threads', () => {
       const result = filterThreads(mockThreads, 'My Custom')
@@ -137,13 +122,13 @@ describe('§5.3 ThreadDrawer', () => {
       expect(noUnread.length).toBeGreaterThan(0)
     })
     it('shows secondary "+N" indicator when multiple entities are bound', () => {
-      const multi = mockThreads.find((t) => t.key === 'multi')!
+      const multi = mockThreads.find((t) => t.id === 'multi')!
       expect(multi.entities.length).toBe(2)
       // Component shows +1 for this thread
     })
     it('expands to show all bound entities when +N indicator is clicked', () => {
       // Verified structurally — toggleExpand toggles expanded set
-      const multi = mockThreads.find((t) => t.key === 'multi')!
+      const multi = mockThreads.find((t) => t.id === 'multi')!
       expect(multi.entities.length).toBeGreaterThan(1)
     })
   })
@@ -173,8 +158,8 @@ describe('§5.3 ThreadDrawer', () => {
     it('hides hidden threads from the list', () => {
       setHiddenThreads(['main'])
       const hidden = getHiddenThreads()
-      const visible = mockThreads.filter((t) => !hidden.includes(t.key))
-      expect(visible.find((t) => t.key === 'main')).toBeUndefined()
+      const visible = mockThreads.filter((t) => !hidden.includes(t.id))
+      expect(visible.find((t) => t.id === 'main')).toBeUndefined()
     })
     it('provides "Show hidden" toggle at bottom of drawer', () => {
       // Component renders show/hide toggle button
@@ -219,12 +204,12 @@ describe('§5.3 ThreadDrawer', () => {
     it('filters threads by entity ref (case-insensitive substring match)', () => {
       const result = filterThreads(mockThreads, 'login')
       expect(result.length).toBe(1)
-      expect(result[0].key).toBe('feat')
+      expect(result[0].id).toBe('feat')
     })
     it('filters threads by label (case-insensitive substring match)', () => {
       const result = filterThreads(mockThreads, 'custom')
       expect(result.length).toBe(1)
-      expect(result[0].key).toBe('custom')
+      expect(result[0].id).toBe('custom')
     })
   })
 })

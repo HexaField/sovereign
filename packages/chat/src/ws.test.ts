@@ -30,7 +30,7 @@ function createMockChatModule(): ChatModule {
     handleHistory: vi.fn(async () => {}),
     handleFullHistory: vi.fn(async () => {}),
     handleSessionSwitch: vi.fn(async () => {}),
-    handleSessionCreate: vi.fn(async () => ({ threadKey: 't1', sessionKey: 's1' })),
+    handleSessionCreate: vi.fn(async () => ({ threadId: 't1', sessionKey: 's1' })),
     getSessionKeyForThread: vi.fn(() => undefined),
     getThreadKeyForSession: vi.fn(() => undefined),
     loadMapping: vi.fn(),

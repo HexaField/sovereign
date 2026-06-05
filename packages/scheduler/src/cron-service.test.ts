@@ -36,7 +36,7 @@ function makeStubBackend(sends: Array<{ sessionKey: string; text: string }>): Ag
     },
     abort: async () => {},
     switchSession: async () => {},
-    createSession: async () => 'agent:main:thread:t1',
+    createSession: async () => 't1',
     getHistory: async () => ({ turns: [], hasMore: false }),
     getFullHistory: async () => [],
     on: emitter.on,
@@ -97,7 +97,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     await new Promise((r) => setTimeout(r, 10))
 
     expect(sends).toHaveLength(1)
-    expect(sends[0].sessionKey).toBe('agent:main:thread:t1')
+    expect(sends[0].sessionKey).toBe('t1')
     expect(sends[0].text).toContain('[Cron: now-cron]')
     expect(sends[0].text).toContain('now please')
     scheduler.destroy()
@@ -115,7 +115,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     })
     const out = await service.list(true)
     expect(out.length).toBeGreaterThanOrEqual(1)
-    expect(out[0].sessionKey).toBe('agent:main:thread:t2')
+    expect(out[0].sessionKey).toBe('t2')
     scheduler.destroy()
   })
 
@@ -148,7 +148,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
         label: 'cron-job'
       })
       const out = await service.list(true)
-      const job = out.find((j) => j.sessionKey === 'agent:main:thread:t-cron')
+      const job = out.find((j) => j.sessionKey === 't-cron')
       expect(job).toBeDefined()
       expect(job!.schedule).toMatchObject({ kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' })
       scheduler.destroy()
@@ -165,7 +165,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
         label: 'interval-job'
       })
       const out = await service.list(true)
-      const job = out.find((j) => j.sessionKey === 'agent:main:thread:t-interval')
+      const job = out.find((j) => j.sessionKey === 't-interval')
       expect(job).toBeDefined()
       // The reported bug: schedule round-tripped as `{kind:'interval'}` with
       // `everyMs` dropped. Post-fix the field is preserved.
@@ -185,7 +185,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
         label: 'oneshot-job'
       })
       const out = await service.list(true)
-      const job = out.find((j) => j.sessionKey === 'agent:main:thread:t-oneshot')
+      const job = out.find((j) => j.sessionKey === 't-oneshot')
       expect(job).toBeDefined()
       // Pre-fix output was `{kind:'at', at}` — the discriminator was renamed,
       // breaking the cleanup path that filters on `kind === 'oneshot'`.
@@ -211,7 +211,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
       }
       const out = await service.list(true)
       for (const input of inputs) {
-        const job = out.find((j) => j.sessionKey === `agent:main:thread:${input.threadKey}`)
+        const job = out.find((j) => j.sessionKey === `${input.threadKey}`)
         expect(job, `missing projected job for ${input.threadKey}`).toBeDefined()
         // Every field on the input schedule must be present on the projection,
         // with identical values. Catches both "dropped fields" and "renamed

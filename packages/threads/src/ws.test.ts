@@ -92,7 +92,7 @@ describe('Threads WS Channel', () => {
 
   it('MUST scope by { orgId, projectId } — client subscribed with scope only receives matching events', () => {
     const entity = { orgId: 'org1', projectId: 'proj1', entityType: 'issue' as const, entityRef: '5' }
-    tm.create({ entities: [entity] })
+    tm.create({ label: 'test-thread', entities: [entity] })
     const found = ws.broadcasts.find((b) => {
       const msg = b.msg as Record<string, unknown>
       const payload = msg.payload as Record<string, unknown>

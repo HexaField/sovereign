@@ -1,25 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { truncatePreview, filterAvailableThreads } from './ForwardDialog.js'
 import type { ThreadInfo } from './store.js'
+import { makeThread } from './test-factory.js'
 
 const mockThreads: ThreadInfo[] = [
-  { key: 'main', entities: [], label: 'Main', lastActivity: Date.now(), unreadCount: 0, agentStatus: 'idle' as any },
-  {
-    key: 'feat',
-    entities: [{ orgId: 'o', projectId: 'p', entityType: 'branch', entityRef: 'feat/login' }],
-    label: undefined,
-    lastActivity: Date.now(),
-    unreadCount: 0,
-    agentStatus: 'idle' as any
-  },
-  {
-    key: 'iss',
-    entities: [{ orgId: 'o', projectId: 'p', entityType: 'issue', entityRef: '#42 Fix bug' }],
-    label: undefined,
-    lastActivity: Date.now(),
-    unreadCount: 0,
-    agentStatus: 'idle' as any
-  }
+  makeThread({ id: 'main', label: 'Main' }),
+  makeThread({ id: 'feat', entities: [{ orgId: 'o', projectId: 'p', entityType: 'branch', entityRef: 'feat/login' }] }),
+  makeThread({ id: 'iss', entities: [{ orgId: 'o', projectId: 'p', entityType: 'issue', entityRef: '#42 Fix bug' }] })
 ]
 
 describe('§5.4 ForwardDialog', () => {
@@ -42,11 +29,11 @@ describe('§5.4 ForwardDialog', () => {
     it('supports search/filter in thread picker', () => {
       const result = filterAvailableThreads(mockThreads, 'main', 'login')
       expect(result.length).toBe(1)
-      expect(result[0].key).toBe('feat')
+      expect(result[0].id).toBe('feat')
     })
     it('excludes the current thread from the list', () => {
       const result = filterAvailableThreads(mockThreads, 'feat', '')
-      expect(result.find((t) => t.key === 'feat')).toBeUndefined()
+      expect(result.find((t) => t.id === 'feat')).toBeUndefined()
       expect(result.length).toBe(2)
     })
   })
@@ -99,24 +86,15 @@ describe('§5.4 ForwardDialog', () => {
   describe('cross-workspace', () => {
     it('supports forwarding from a thread in project A to a thread in project B', () => {
       const threads: ThreadInfo[] = [
-        {
-          key: 'a',
-          entities: [{ orgId: 'org1', projectId: 'p1', entityType: 'branch', entityRef: 'main' }],
-          lastActivity: Date.now(),
-          unreadCount: 0,
-          agentStatus: 'idle' as any
-        },
-        {
-          key: 'b',
-          entities: [{ orgId: 'org2', projectId: 'p2', entityType: 'branch', entityRef: 'dev' }],
-          lastActivity: Date.now(),
-          unreadCount: 0,
-          agentStatus: 'idle' as any
-        }
+        makeThread({
+          id: 'a',
+          entities: [{ orgId: 'org1', projectId: 'p1', entityType: 'branch', entityRef: 'main' }]
+        }),
+        makeThread({ id: 'b', entities: [{ orgId: 'org2', projectId: 'p2', entityType: 'branch', entityRef: 'dev' }] })
       ]
       const result = filterAvailableThreads(threads, 'a', '')
       expect(result.length).toBe(1)
-      expect(result[0].key).toBe('b')
+      expect(result[0].id).toBe('b')
     })
   })
 

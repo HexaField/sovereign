@@ -80,22 +80,27 @@ function createMockThreadManager(): ThreadManager {
   let counter = 0
   const threads = new Map<string, any>()
   return {
-    create: vi.fn((opts?: { label?: string; entities?: any[] }) => {
-      const key = `thread-${++counter}`
+    create: vi.fn((opts: { label: string; entities?: any[] }) => {
+      const id = `thread-${++counter}`
       const thread = {
-        key,
-        entities: opts?.entities ?? [],
-        label: opts?.label,
+        id,
+        label: opts.label,
+        entities: opts.entities ?? [],
+        workspaceIds: [],
         lastActivity: Date.now(),
         unreadCount: 0,
         agentStatus: 'idle' as const,
         createdAt: Date.now(),
         archived: false
       }
-      threads.set(key, thread)
+      threads.set(id, thread)
       return thread
     }),
-    get: vi.fn((key: string) => threads.get(key)),
+    get: vi.fn((id: string) => threads.get(id)),
+    getByLabel: vi.fn((label: string) => [...threads.values()].find((t) => t.label === label)),
+    resolve: vi.fn(
+      (idOrLabel: string) => threads.get(idOrLabel) ?? [...threads.values()].find((t) => t.label === idOrLabel)
+    ),
     list: vi.fn(() => [...threads.values()]),
     delete: vi.fn(() => true),
     addEntity: vi.fn(() => undefined),
@@ -160,15 +165,28 @@ describe('§2.4 Chat Module (Server)', () => {
 
   it('MUST proxy chat.send to backend.sendMessage(sessionKey, text, attachments)', async () => {
     // First create a session mapping
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
-    await chatModule.handleSend(threadKey, 'hello')
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleSend(threadId, 'hello')
     expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'hello')
   })
 
+  // Regression: in the bare-UUID model the client/cron may address a thread by
+  // a label or a stale `#thread=<label>` hash. handleSend + resolveSessionKey
+  // MUST resolve that to the canonical thread id, or the message routes to a
+  // non-existent session and silently never reaches the agent.
+  it('MUST resolve a thread LABEL to the canonical id when sending', async () => {
+    const t = threadManager.create({ label: 'neural-nets' })
+    await chatModule.handleSend('neural-nets', 'hi') // addressed by LABEL
+    // Routed to the canonical id's session — not the raw label.
+    expect(backend.sendMessage).toHaveBeenCalledWith(t.id, 'hi')
+    // And label/id resolve to the same session key.
+    expect(chatModule.resolveSessionKey('neural-nets')).toBe(chatModule.resolveSessionKey(t.id))
+  })
+
   it('MUST deduplicate rapid identical user sends (server-side)', async () => {
-    const { threadKey } = await chatModule.handleSessionCreate()
-    await chatModule.handleSend(threadKey, 'duplicate')
-    await chatModule.handleSend(threadKey, 'duplicate')
+    const { threadId } = await chatModule.handleSessionCreate()
+    await chatModule.handleSend(threadId, 'duplicate')
+    await chatModule.handleSend(threadId, 'duplicate')
 
     // Only one backend send (second is deduped)
     expect(backend.sendMessage).toHaveBeenCalledTimes(1)
@@ -177,141 +195,142 @@ describe('§2.4 Chat Module (Server)', () => {
   })
 
   it('MUST proxy chat.abort to backend.abort(sessionKey)', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
-    await chatModule.handleAbort(threadKey)
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleAbort(threadId)
     expect(backend.abort).toHaveBeenCalledWith(sessionKey)
   })
 
   it('MUST proxy chat.history to backend.getHistory(sessionKey) and respond with chat.session.info', async () => {
     const turns: ParsedTurn[] = [{ role: 'user', content: 'hi', timestamp: 1, workItems: [], thinkingBlocks: [] }]
     ;(backend.getHistory as ReturnType<typeof vi.fn>).mockResolvedValue({ turns, hasMore: false })
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
-    await chatModule.handleHistory(threadKey, 'device-1')
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleHistory(threadId, 'device-1')
     expect(backend.getHistory).toHaveBeenCalledWith(sessionKey)
     expect(wsHandler.sendTo).toHaveBeenCalledWith(
       'device-1',
       expect.objectContaining({
         type: 'chat.session.info',
-        threadKey,
+        threadId,
         history: turns
       })
     )
   })
 
   it('MUST proxy chat.session.switch to backend.switchSession(sessionKey)', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
-    await chatModule.handleSessionSwitch(threadKey)
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleSessionSwitch(threadId)
     expect(backend.switchSession).toHaveBeenCalledWith(sessionKey)
   })
 
   it('MUST proxy chat.session.create to backend — creates thread and derives session key', async () => {
     const result = await chatModule.handleSessionCreate('test-label')
     expect(threadManager.create).toHaveBeenCalledWith({ label: 'test-label' })
-    expect(result.threadKey).toBeTruthy()
+    expect(result.threadId).toBeTruthy()
     expect(result.sessionKey).toBeTruthy()
-    // Session key should be derived, not from backend.createSession
-    expect(result.sessionKey).toMatch(/^agent:main:thread:/)
+    // Bare-UUID scheme: the session key IS the bare thread id (derived,
+    // not returned from backend.createSession).
+    expect(result.sessionKey).toBe(result.threadId)
   })
 
   it('MUST proxy chat.stream events to subscribed clients via WS', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     emitBackendEvent(backend, 'chat.stream', { sessionKey, text: 'hello' })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.stream', text: 'hello', threadKey })
+      expect.objectContaining({ type: 'chat.stream', text: 'hello', threadId })
     )
   })
 
   it('MUST proxy chat.turn events to subscribed clients via WS', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     const turn: ParsedTurn = { role: 'assistant', content: 'hi', timestamp: 1, workItems: [], thinkingBlocks: [] }
     emitBackendEvent(backend, 'chat.turn', { sessionKey, turn })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.turn', threadKey })
+      expect.objectContaining({ type: 'chat.turn', threadId })
     )
   })
 
   it('MUST proxy chat.status events to subscribed clients via WS', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'working' })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.status', threadKey, status: 'working' })
+      expect.objectContaining({ type: 'chat.status', threadId, status: 'working' })
     )
   })
 
   it('MUST proxy chat.work events to subscribed clients via WS', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     const work = { type: 'tool_call' as const, name: 'test', timestamp: 1 }
     emitBackendEvent(backend, 'chat.work', { sessionKey, work })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.work', threadKey })
+      expect.objectContaining({ type: 'chat.work', threadId })
     )
   })
 
   it('MUST proxy chat.compacting events to subscribed clients via WS', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     emitBackendEvent(backend, 'chat.compacting', { sessionKey, active: true })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.compacting', threadKey, active: true })
+      expect.objectContaining({ type: 'chat.compacting', threadId, active: true })
     )
   })
 
   it('MUST proxy chat.error events to subscribed clients via WS', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     emitBackendEvent(backend, 'chat.error', { sessionKey, error: 'boom' })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.error', threadKey, error: 'boom' })
+      expect.objectContaining({ type: 'chat.error', threadId, error: 'boom' })
     )
   })
 
   it('MUST proxy chat.session.info events to subscribed clients via WS', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     emitBackendEvent(backend, 'session.info', { sessionKey, history: [] })
     expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
       'chat',
-      expect.objectContaining({ type: 'chat.session.info', threadKey })
+      expect.objectContaining({ type: 'chat.session.info', threadId })
     )
   })
 
-  it('MUST respect Phase 3 WS scoping — client subscribed with threadKey scope only receives events for that thread', async () => {
+  it('MUST respect Phase 3 WS scoping — client subscribed with threadId scope only receives events for that thread', async () => {
     const result1 = await chatModule.handleSessionCreate()
     const result2 = await chatModule.handleSessionCreate()
     emitBackendEvent(backend, 'chat.stream', { sessionKey: result1.sessionKey, text: 'for-1' })
     emitBackendEvent(backend, 'chat.stream', { sessionKey: result2.sessionKey, text: 'for-2' })
-    // Each broadcast should include the correct threadKey in the message
+    // Each broadcast should include the correct threadId in the message
     const calls = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
     const call1 = calls.find((c: unknown[]) => (c[1] as WsMessage).text === 'for-1')
     const call2 = calls.find((c: unknown[]) => (c[1] as WsMessage).text === 'for-2')
-    expect((call1![1] as any).threadKey).toBe(result1.threadKey)
-    expect((call2![1] as any).threadKey).toBe(result2.threadKey)
+    expect((call1![1] as any).threadId).toBe(result1.threadId)
+    expect((call2![1] as any).threadId).toBe(result2.threadId)
   })
 
   it('MUST emit chat.message.sent bus event when a user sends a message', async () => {
-    const { threadKey } = await chatModule.handleSessionCreate()
-    await chatModule.handleSend(threadKey, 'hello world')
+    const { threadId } = await chatModule.handleSessionCreate()
+    await chatModule.handleSend(threadId, 'hello world')
     expect(bus.emit).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'chat.message.sent',
         source: 'chat',
-        payload: expect.objectContaining({ threadKey, text: 'hello world' })
+        payload: expect.objectContaining({ threadId, text: 'hello world' })
       })
     )
   })
 
   it('MUST emit chat.turn.completed bus event when the agent completes a turn', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     const turn: ParsedTurn = { role: 'assistant', content: 'done', timestamp: 1, workItems: [], thinkingBlocks: [] }
     emitBackendEvent(backend, 'chat.turn', { sessionKey, turn })
     expect(bus.emit).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'chat.turn.completed',
         source: 'chat',
-        payload: expect.objectContaining({ threadKey, turn })
+        payload: expect.objectContaining({ threadId, turn })
       })
     )
   })
@@ -320,32 +339,32 @@ describe('§2.4 Chat Module (Server)', () => {
     const result = await chatModule.handleSessionCreate('my-thread')
     expect(threadManager.create).toHaveBeenCalledWith({ label: 'my-thread' })
     expect(result.sessionKey).toBeTruthy()
-    expect(chatModule.getSessionKeyForThread(result.threadKey)).toBe(result.sessionKey)
+    expect(chatModule.getSessionKeyForThread(result.threadId)).toBe(result.sessionKey)
   })
 
   it('MUST look up backend session key for given thread key on chat.session.switch', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
-    await chatModule.handleSessionSwitch(threadKey)
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleSessionSwitch(threadId)
     expect(backend.switchSession).toHaveBeenCalledWith(sessionKey)
   })
 
   it('MUST persist session mapping to {dataDir}/chat/session-map.json using atomic write', async () => {
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     const mapPath = path.join(dataDir, 'chat', 'session-map.json')
     expect(fs.existsSync(mapPath)).toBe(true)
     const data = JSON.parse(fs.readFileSync(mapPath, 'utf-8'))
-    expect(data[threadKey]).toBe(sessionKey)
+    expect(data[threadId]).toBe(sessionKey)
     // Ensure no .tmp file left behind (atomic rename)
     expect(fs.existsSync(mapPath + '.tmp')).toBe(false)
   })
 
   it('MUST restore session mapping from disk on server restart', async () => {
     // Create a mapping with first module
-    const { threadKey, sessionKey } = await chatModule.handleSessionCreate()
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
 
     // Create a new module instance (simulating restart)
     const newModule = createChatModule(bus, backend, threadManager, { dataDir, wsHandler })
-    expect(newModule.getSessionKeyForThread(threadKey)).toBe(sessionKey)
+    expect(newModule.getSessionKeyForThread(threadId)).toBe(sessionKey)
   })
 
   // --- Phase 6 review fix todos ---
@@ -354,24 +373,24 @@ describe('§2.4 Chat Module (Server)', () => {
     // Verify the chat module calls threadManager.create() which returns a ThreadInfo
     const result = await chatModule.handleSessionCreate('test')
     expect(threadManager.create).toHaveBeenCalledWith({ label: 'test' })
-    expect(result.threadKey).toMatch(/^thread-/)
+    expect(result.threadId).toMatch(/^thread-/)
   })
 
   it('MUST import ThreadManager from threads module instead of defining a local interface', async () => {
     // This is a structural test - the fact that we pass a ThreadManager with create/get and it works
     // proves the chat module uses the real interface
     const result = await chatModule.handleSessionCreate()
-    expect(result.threadKey).toBeTruthy()
+    expect(result.threadId).toBeTruthy()
     expect(result.sessionKey).toBeTruthy()
   })
 
-  it('MUST handle case where threadKey has no session mapping (auto-create session)', async () => {
-    // Send to a threadKey that has no mapping - should auto-derive a session key
+  it('MUST handle case where threadId has no session mapping (auto-create session)', async () => {
+    // Send to a threadId that has no mapping - should auto-derive a session key
     await chatModule.handleSend('unknown-thread', 'hello')
     expect(backend.sendMessage).toHaveBeenCalled()
     // After auto-derive, the mapping should exist
     expect(chatModule.getSessionKeyForThread('unknown-thread')).toBeTruthy()
-    expect(chatModule.getSessionKeyForThread('unknown-thread')).toMatch(/^agent:main:thread:unknown-thread$/)
+    expect(chatModule.getSessionKeyForThread('unknown-thread')).toBe('unknown-thread')
   })
 
   it('MUST track and untrack SSE clients correctly', () => {

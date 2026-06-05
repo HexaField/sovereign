@@ -46,16 +46,14 @@ import {
   initThreadStore,
   _triggerPopstate
 } from './store.js'
-import type { ThreadInfo } from './store.js'
+import { makeThread } from './test-factory.js'
 
-function mockThread(key: string, orgId = '_global'): ThreadInfo {
-  return {
-    key,
+function mockThread(id: string, orgId = '_global'): ReturnType<typeof makeThread> {
+  return makeThread({
+    id,
     entities: [{ orgId, projectId: 'p1', entityType: 'branch', entityRef: 'main' }],
-    lastActivity: Date.now(),
-    unreadCount: 0,
-    agentStatus: 'idle'
-  }
+    lastActivity: Date.now()
+  })
 }
 
 function createMockWs() {
@@ -104,16 +102,44 @@ describe('fetchThreadsForOrg', () => {
     await vi.waitFor(() => expect(threads().length).toBe(1))
 
     expect(mockFetch).toHaveBeenCalledWith('/api/threads?orgId=org1')
-    expect(threads()[0].key).toBe('t1')
+    expect(threads()[0].id).toBe('t1')
   })
 
-  it('filters out threads without keys', async () => {
-    const data = { threads: [{ key: '', entities: [] }, mockThread('valid')] }
+  it('filters out threads without ids', async () => {
+    const data = { threads: [{ id: '', entities: [] }, mockThread('valid')] }
     mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
 
     fetchThreadsForOrg('org1')
     await vi.waitFor(() => expect(threads().length).toBe(1))
-    expect(threads()[0].key).toBe('valid')
+    expect(threads()[0].id).toBe('valid')
+  })
+
+  // Regression: the client carried its own `key`-based ThreadInfo and filtered
+  // the list on `t.key`. After the server moved to canonical `{ id, label }`,
+  // every thread was filtered out → empty dropdown. Ingest a raw id-keyed
+  // server record (no `key`) and assert it surfaces with its label intact.
+  it('ingests canonical id-keyed server threads (no legacy `key`)', async () => {
+    const data = {
+      threads: [
+        {
+          id: 'uuid-sovereign',
+          label: 'sovereign',
+          entities: [],
+          workspaceIds: [],
+          lastActivity: 0,
+          unreadCount: 0,
+          agentStatus: 'idle',
+          createdAt: 0,
+          archived: false
+        }
+      ]
+    }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    fetchThreadsForOrg('org1')
+    await vi.waitFor(() => expect(threads().length).toBe(1))
+    expect(threads()[0].id).toBe('uuid-sovereign')
+    expect(threads()[0].label).toBe('sovereign')
   })
 
   it('uses activeOrgIdForThreads when no arg provided', async () => {
@@ -222,7 +248,7 @@ describe('createThread', () => {
         body: JSON.stringify({ label: 'My Thread' })
       })
     )
-    expect(threads()).toContainEqual(expect.objectContaining({ key: 'new-thread' }))
+    expect(threads()).toContainEqual(expect.objectContaining({ id: 'new-thread' }))
     expect(threadKey()).toBe('new-thread')
   })
 
@@ -319,11 +345,11 @@ describe('initThreadStore', () => {
     const cleanup = initThreadStore(ws as any)
 
     ws._emit('thread.created', { payload: { thread: mockThread('ws-new') } })
-    expect(threads()).toContainEqual(expect.objectContaining({ key: 'ws-new' }))
+    expect(threads()).toContainEqual(expect.objectContaining({ id: 'ws-new' }))
 
     // Duplicate should not add
     ws._emit('thread.created', { payload: { thread: mockThread('ws-new') } })
-    expect(threads().filter((t) => t.key === 'ws-new')).toHaveLength(1)
+    expect(threads().filter((t) => t.id === 'ws-new')).toHaveLength(1)
     cleanup()
   })
 
@@ -334,7 +360,7 @@ describe('initThreadStore', () => {
 
     setThreads([mockThread('t1')])
     ws._emit('thread.updated', { payload: { thread: { ...mockThread('t1'), unreadCount: 5 } } })
-    expect(threads().find((t) => t.key === 't1')?.unreadCount).toBe(5)
+    expect(threads().find((t) => t.id === 't1')?.unreadCount).toBe(5)
     cleanup()
   })
 
@@ -344,8 +370,8 @@ describe('initThreadStore', () => {
     const cleanup = initThreadStore(ws as any)
 
     setThreads([mockThread('t1')])
-    ws._emit('thread.status', { payload: { key: 't1', agentStatus: 'working', unreadCount: 3 } })
-    const t = threads().find((t) => t.key === 't1')
+    ws._emit('thread.status', { payload: { threadId: 't1', agentStatus: 'working', unreadCount: 3 } })
+    const t = threads().find((t) => t.id === 't1')
     expect(t?.agentStatus).toBe('working')
     expect(t?.unreadCount).toBe(3)
     cleanup()

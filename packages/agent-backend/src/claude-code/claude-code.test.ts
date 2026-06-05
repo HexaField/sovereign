@@ -84,7 +84,7 @@ describe('claude-code/createClaudeCodeBackend', () => {
       )
       await backend.createSession('t', { threadKey: 'org-bound', orgId: 'my-org', cwd: otherCwd } as never)
       expect(upserts[0]).toMatchObject({
-        sessionKey: 'agent:main:thread:org-bound',
+        sessionKey: 'org-bound',
         orgId: 'my-org',
         cwd: otherCwd
       })
@@ -139,7 +139,7 @@ describe('claude-code/createClaudeCodeBackend', () => {
     const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery })
     await backend.createSession('t', { threadKey: 'wakeup-test' })
     // Drive a send to register the hooks with the SDK (capturedHooks gets populated).
-    backend.sendMessage('agent:main:thread:wakeup-test', 'go').catch(() => {})
+    backend.sendMessage('wakeup-test', 'go').catch(() => {})
     // Yield to the event loop so sdkQuery is invoked.
     await new Promise((r) => setTimeout(r, 10))
     expect(capturedHooks).not.toBeNull()
@@ -284,7 +284,7 @@ describe('claude-code/createClaudeCodeBackend', () => {
     }
     const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery })
     await backend.createSession('t', { threadKey: 'cronlist-test' })
-    backend.sendMessage('agent:main:thread:cronlist-test', 'go').catch(() => {})
+    backend.sendMessage('cronlist-test', 'go').catch(() => {})
     await new Promise((r) => setTimeout(r, 10))
     const preToolUse = capturedHooks.PreToolUse[0].hooks[0]
     const out = await preToolUse({
@@ -309,9 +309,9 @@ describe('claude-code/createClaudeCodeBackend', () => {
       }
     )
     const key = await backend.createSession('My thread', { threadKey: 't1' })
-    expect(key).toBe('agent:main:thread:t1')
+    expect(key).toBe('t1')
     expect(upserts).toHaveLength(1)
-    expect(upserts[0].sessionKey).toBe('agent:main:thread:t1')
+    expect(upserts[0].sessionKey).toBe('t1')
     expect(upserts[0].threadKey).toBe('t1')
     expect(upserts[0].backendSessionId).toBeDefined()
     expect(upserts[0].backendSessionFile).toMatch(/agent\/projects\//)
@@ -327,7 +327,7 @@ describe('claude-code/createClaudeCodeBackend', () => {
     backend.on('chat.status', (d) => status.push(d.status))
 
     await backend.createSession('t', { threadKey: 'x' })
-    await backend.sendMessage('agent:main:thread:x', 'go')
+    await backend.sendMessage('x', 'go')
     expect(status[0]).toBe('working')
   })
 
@@ -350,13 +350,13 @@ describe('claude-code/createClaudeCodeBackend', () => {
       { sdkQuery: sdk }
     )
     await backend.createSession('t', { threadKey: 't1' })
-    await backend.sendMessage('agent:main:thread:t1', 'go')
+    await backend.sendMessage('t1', 'go')
     // Wait one tick so the async iteration completes
     await new Promise((r) => setTimeout(r, 0))
 
-    const meta = await backend.getSessionMeta('agent:main:thread:t1')
+    const meta = await backend.getSessionMeta('t1')
     expect(meta).toMatchObject({
-      sessionKey: 'agent:main:thread:t1',
+      sessionKey: 't1',
       model: 'opus',
       modelProvider: 'anthropic'
     })
@@ -389,13 +389,15 @@ describe('claude-code/createClaudeCodeBackend', () => {
       { sdkQuery: stubSdkQuery() }
     )
     await backend.createSession('t', { threadKey: 'p' })
-    await expect(backend.setSessionModel('agent:main:thread:p', 'openai', 'gpt-5')).rejects.toThrow(/anthropic/)
+    await expect(backend.setSessionModel('p', 'openai', 'gpt-5')).rejects.toThrow(/anthropic/)
   })
 
   it('writes personality files into cwd on construction', () => {
     createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stubSdkQuery() })
+    // Sovereign no longer writes a workspace-root CLAUDE.md (the global one
+    // at ~/.claude/CLAUDE.md is owned by the personality compiler). Only the
+    // layered-context file + default subagent template are seeded into cwd.
     const expected = [
-      join(cwd, 'CLAUDE.md'),
       join(cwd, '.claude', 'CLAUDE.md'),
       join(cwd, '.claude', 'agents', 'sovereign-default-subagent.md')
     ]
@@ -408,7 +410,7 @@ describe('claude-code/createClaudeCodeBackend', () => {
     const agentDir = join(dataDir, 'agent')
     const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir }, { sdkQuery: stubSdkQuery() })
     await backend.createSession('t', { threadKey: 'hist' })
-    const file = backend.getSessionFilePath!('agent:main:thread:hist')
+    const file = backend.getSessionFilePath!('hist')
     expect(file).toBeTruthy()
     mkdirSync(join(file!, '..'), { recursive: true })
     writeFileSync(
@@ -421,7 +423,7 @@ describe('claude-code/createClaudeCodeBackend', () => {
         }) +
         '\n'
     )
-    const { turns } = await backend.getHistory('agent:main:thread:hist')
+    const { turns } = await backend.getHistory('hist')
     expect(turns.map((t) => t.role)).toEqual(['user', 'assistant'])
     expect(turns[1].content).toBe('hi back')
   })
@@ -502,7 +504,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
     const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stub })
     await backend.createSession('parent', { threadKey: 'parent' })
     // Send a message to trigger startSessionLoop → query() invocation.
-    backend.sendMessage('agent:main:thread:parent', 'hello').catch(() => {
+    backend.sendMessage('parent', 'hello').catch(() => {
       /* The stub yields once and ends; sendMessage may reject when the iterator
          completes. That's fine for our purposes — we only need the hooks. */
     })
@@ -511,7 +513,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
       await new Promise((r) => setImmediate(r))
     }
     if (!stub.captured.options) throw new Error('query() was never invoked by the stub')
-    return { backend, stub, parentKey: 'agent:main:thread:parent', parentSessionId: stub.captured.sessionId as string }
+    return { backend, stub, parentKey: 'parent', parentSessionId: stub.captured.sessionId as string }
   }
 
   it('SubagentStart flips the child agentStatus to "working" (was "idle" before the fix)', async () => {
@@ -529,10 +531,10 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
     // state.agentStatus verbatim — the value the /active-subagents route
     // filters on. Pre-fix: 'idle' (default). Post-fix: 'working'.
     const subagents = await backend.listSessions({ kind: 'subagent' })
-    const child = subagents.find((s) => s.key === 'agent:main:subagent:child-abc')
+    const child = subagents.find((s) => s.key === 'child-abc')
     expect(child).toBeDefined()
     expect(child!.agentStatus).toBe('working')
-    expect(child!.parentKey).toBe('agent:main:thread:parent')
+    expect(child!.parentKey).toBe('parent')
     expect(child!.label).toBe('general-purpose')
   })
 
@@ -555,7 +557,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
     })
 
     const subagents = await backend.listSessions({ kind: 'subagent' })
-    const child = subagents.find((s) => s.key === 'agent:main:subagent:child-xyz')
+    const child = subagents.find((s) => s.key === 'child-xyz')
     expect(child).toBeDefined()
     expect(child!.agentStatus).toBe('idle')
   })
@@ -575,7 +577,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
     ;(backend as any).flushState?.()
 
     // Persisted state file path mirrors what `createWriteThroughStore` writes.
-    const stateFile = join(dataDir, 'agent-backend', 'claude-code-state', 'agent%3Amain%3Athread%3Aparent.json')
+    const stateFile = join(dataDir, 'agent-backend', 'claude-code-state', 'parent.json')
     const raw = require('node:fs').readFileSync(stateFile, 'utf-8')
     const persisted = JSON.parse(raw)
     expect(persisted.data.liveSubagents).toContain('live-child-1')
@@ -601,7 +603,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
 
     ;(backend as any).flushState?.()
 
-    const stateFile = join(dataDir, 'agent-backend', 'claude-code-state', 'agent%3Amain%3Athread%3Aparent.json')
+    const stateFile = join(dataDir, 'agent-backend', 'claude-code-state', 'parent.json')
     const raw = require('node:fs').readFileSync(stateFile, 'utf-8')
     const persisted = JSON.parse(raw)
     expect(persisted.data.liveSubagents ?? []).not.toContain('live-child-2')
@@ -623,8 +625,8 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
 
     expect(spawnEvents).toHaveLength(1)
     expect(spawnEvents[0]).toMatchObject({
-      parentKey: 'agent:main:thread:parent',
-      childKey: 'agent:main:subagent:child-event-1',
+      parentKey: 'parent',
+      childKey: 'child-event-1',
       label: 'Explore'
     })
   })
@@ -698,7 +700,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
 
       // Pre-fix this returns `{turns: [], hasMore: false}` because
       // sessionFilePath() couldn't locate the nested file.
-      const { turns } = await backend.getHistory('agent:main:subagent:nested-sub-1')
+      const { turns } = await backend.getHistory('nested-sub-1')
       expect(turns.map((t) => t.role)).toEqual(['user', 'assistant'])
       expect(turns[1].content).toBe('sub reply')
     })
@@ -719,7 +721,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
         agent_type: 'Explore'
       })
 
-      const filePath = backend.getSessionFilePath!('agent:main:subagent:nested-sub-2')
+      const filePath = backend.getSessionFilePath!('nested-sub-2')
       expect(filePath).toBeTruthy()
       // Filename must match the SDK's `agent-<id>.jsonl` convention nested
       // under `<parentId>/subagents/`.
@@ -747,7 +749,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
         }
       )
       await backend.createSession('parent', { threadKey: 'parent' })
-      backend.sendMessage('agent:main:thread:parent', 'hello').catch(() => {})
+      backend.sendMessage('parent', 'hello').catch(() => {})
       for (let i = 0; i < 20 && !stub.captured.options; i++) await new Promise((r) => setImmediate(r))
       const parentSessionId = stub.captured.sessionId as string
 
@@ -780,7 +782,7 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
           }
         }
       )
-      const filePath = cold.getSessionFilePath!('agent:main:subagent:cold-sub')
+      const filePath = cold.getSessionFilePath!('cold-sub')
       expect(filePath).toBeTruthy()
       expect(filePath).toContain(`${parentSessionId}/subagents/agent-cold-sub.jsonl`)
     })

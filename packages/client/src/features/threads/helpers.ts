@@ -1,3 +1,4 @@
+import type { EntityType } from '@sovereign/core'
 import type { ThreadInfo } from './store.js'
 
 export function getThreadDisplayName(thread: ThreadInfo): string {
@@ -17,7 +18,7 @@ export function getThreadDisplayName(thread: ThreadInfo): string {
   }
 }
 
-export function getEntityIcon(entityType: 'branch' | 'issue' | 'pr'): string {
+export function getEntityIcon(entityType: EntityType): string {
   switch (entityType) {
     case 'branch':
       return '🌿'
@@ -25,6 +26,8 @@ export function getEntityIcon(entityType: 'branch' | 'issue' | 'pr'): string {
       return 'ticket'
     case 'pr':
       return 'branch'
+    case 'file':
+      return '📄'
     default:
       return ''
   }

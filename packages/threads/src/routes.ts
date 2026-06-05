@@ -95,7 +95,7 @@ export function createThreadRoutes(
     const activityMap = await collectActivityMap(opts?.backend)
 
     const merged = threads.map((t) => {
-      const freshTs = activityMap.get(t.key) ?? t.lastActivity
+      const freshTs = activityMap.get(t.id) ?? t.lastActivity
       return { ...t, lastActivity: freshTs }
     })
     merged.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
@@ -128,11 +128,15 @@ export function createThreadRoutes(
           const isActive = status === 'running' || status === 'working' || status === 'thinking'
           if (!isActive) continue
           if (!s.parentKey) continue
-          let threadKey = 'main'
+          // Bare-UUID scheme: parentKey is the parent thread's id (or, for
+          // nested subagents, the parent subagent's bare id). Coerce any
+          // lingering legacy compound form to bare.
+          let threadKey = s.parentKey
           if (s.parentKey === 'agent:main:main') threadKey = 'main'
           else if (s.parentKey.startsWith('agent:main:thread:'))
             threadKey = s.parentKey.replace('agent:main:thread:', '')
-          else if (s.parentKey.includes(':subagent:')) threadKey = s.parentKey
+          else if (s.parentKey.startsWith('agent:main:subagent:'))
+            threadKey = s.parentKey.replace('agent:main:subagent:', '')
           if (!result[threadKey]) result[threadKey] = []
           result[threadKey].push({
             sessionKey: s.key,
@@ -153,10 +157,14 @@ export function createThreadRoutes(
   router.get('/api/threads/gateway-sessions', async (_req, res) => {
     try {
       const localThreads = threadManager.list() as any[]
-      const localMap = new Map(localThreads.map((t) => [t.key, t]))
+      // Build a lookup keyed by BOTH the bare UUID and the thread's label.
+      // The session listing from each backend may report either form for
+      // historic data (canonical key was `agent:main:thread:<key>` where
+      // `<key>` was the label-or-key; we accept either at the join here).
+      const localMap = new Map<string, any>()
       for (const t of localThreads) {
-        if (t.key === 'main') localMap.set('agent:main:main', t)
-        else if (!t.key.startsWith('agent:')) localMap.set(`agent:main:thread:${t.key}`, t)
+        localMap.set(t.id, t)
+        if (t.label) localMap.set(t.label, t)
       }
 
       const merged: Array<{
@@ -253,13 +261,13 @@ export function createThreadRoutes(
           // thread.workspaceIds — backends still use orgId to scope cwd etc).
           const sessionOrgId = legacyOrgId ?? (workspaceIds && workspaceIds.length > 0 ? workspaceIds[0] : undefined)
           await targetBackend.createSession(label, {
-            threadKey: thread.key,
+            threadId: thread.id,
             kind: 'thread',
             ...(typeof cwd === 'string' && cwd ? { cwd } : {}),
             ...(sessionOrgId ? { orgId: sessionOrgId } : {})
           } as never)
         } catch (err: any) {
-          console.error(`[threads] failed to bind thread "${thread.key}" to backend "${backendKind}":`, err.message)
+          console.error(`[threads] failed to bind thread "${thread.id}" to backend "${backendKind}":`, err.message)
         }
       }
     }
@@ -657,71 +665,45 @@ export function createThreadRoutes(
     }
   })
 
-  // Session tree — returns thread hierarchy for the ThreadDrawer
+  // Session tree — flat list of threads at top level (no special "main"
+  // root any more), each with their subagents as children. Returned as an
+  // array so the UI renders the drawer with N independent threads.
   router.get('/api/sessions/tree', async (_req, res) => {
     const threads = threadManager.list()
     const now = Date.now()
 
     interface SessionNode {
-      key: string
-      fullKey: string
-      kind: 'main' | 'thread' | 'cron' | 'cron-run' | 'subagent' | 'event-agent'
+      id: string
+      kind: 'thread' | 'subagent' | 'cron' | 'cron-run' | 'event-agent'
       label: string
-      parentKey: string | null
+      parentId: string | null
       updatedAt: number
       totalTokens: number
       children: SessionNode[]
     }
 
-    // Overlay per-backend activity timestamps so labels read "5m ago" instead
-    // of "stale since thread creation". Same map drives both mainNode and
-    // child threads — keyed by both short and canonical forms.
     const activityMap = await collectActivityMap(opts?.backend)
 
-    const mainNode: SessionNode = {
-      key: 'main',
-      fullKey: 'agent:main:main',
-      kind: 'main',
-      label: 'Main',
-      parentKey: null,
-      updatedAt: activityMap.get('main') ?? activityMap.get('agent:main:main') ?? 0,
-      totalTokens: 0,
-      children: []
-    }
-
+    /** Index by thread UUID so subagent attachment is O(1). */
     const threadNodes = new Map<string, SessionNode>()
-    // CRITICAL: main is a valid parent for subagents (parentSessionKey ===
-    // 'agent:main:main' in Claude Code's SubagentStart hook). Without this
-    // entry, main-session subagents silently fall off the tree.
-    threadNodes.set('agent:main:main', mainNode)
-    threadNodes.set('main', mainNode)
 
+    const topLevel: SessionNode[] = []
     for (const t of threads) {
-      const kind = t.key.startsWith('cron:')
-        ? ('cron' as const)
-        : t.key.startsWith('subagent:')
-          ? ('subagent' as const)
-          : ('thread' as const)
-      const fullSessionKey = t.key.startsWith('agent:') ? t.key : `agent:main:thread:${t.key}`
-      const overlayTs = activityMap.get(t.key) ?? activityMap.get(fullSessionKey) ?? 0
+      const overlayTs = activityMap.get(t.id) ?? 0
       const node: SessionNode = {
-        key: t.key,
-        fullKey: fullSessionKey,
-        kind,
-        label: t.label || t.key,
-        parentKey: 'main',
+        id: t.id,
+        kind: 'thread',
+        label: t.label,
+        parentId: null,
         updatedAt: Math.max(overlayTs, t.lastActivity ?? 0, t.createdAt ?? 0) || now,
         totalTokens: 0,
         children: []
       }
-      mainNode.children.push(node)
-      threadNodes.set(fullSessionKey, node)
-      threadNodes.set(t.key, node)
+      topLevel.push(node)
+      threadNodes.set(t.id, node)
     }
 
-    // Attach subagents under their parents. Iterate EVERY enabled backend so
-    // subagents from any backend appear; the previous `defaultBackend()`-only
-    // call dropped subagents from non-default backends.
+    // Attach subagents under their parent threads.
     try {
       const routing = opts?.backend
       const instances: AgentBackend[] =
@@ -732,7 +714,6 @@ export function createThreadRoutes(
             : []
 
       const allSubagents: SubagentSummary[] = []
-      const parentMap = new Map<string, string>() // childKey -> parentKey
       const subagentSessions: SessionSummary[] = []
       for (const inst of instances) {
         try {
@@ -746,83 +727,44 @@ export function createThreadRoutes(
           /* ignore */
         }
       }
+      // childId → parentId (both UUIDs in the new model).
+      const parentMap = new Map<string, string>()
       for (const s of subagentSessions) {
         if (s.parentKey) parentMap.set(s.key, s.parentKey)
       }
-
       for (const sub of allSubagents) {
-        const sk = sub.sessionKey
-        const parentSessionKey = parentMap.get(sk)
-        if (!parentSessionKey) continue
-        const parentNode = threadNodes.get(parentSessionKey)
+        const parentId = parentMap.get(sub.sessionKey)
+        if (!parentId) continue
+        const parentNode = threadNodes.get(parentId)
         if (!parentNode) continue
-
-        const shortKey = sk.replace(/^agent:main:/, '')
-        const alreadyInTree = mainNode.children.some((c) => c.key === shortKey || c.fullKey === sk)
-        if (alreadyInTree) {
-          const idx = mainNode.children.findIndex((c) => c.key === shortKey || c.fullKey === sk)
-          if (idx >= 0) {
-            const [moved] = mainNode.children.splice(idx, 1)
-            moved.parentKey = parentNode.key
-            parentNode.children.push(moved)
-          }
-          continue
-        }
-
-        const updatedAt = sub.lastActivity ?? activityMap.get(sk) ?? now
-        const label = sub.label ?? shortKey
-        const subNode: SessionNode = {
-          key: shortKey,
-          fullKey: sk,
+        const updatedAt = sub.lastActivity ?? activityMap.get(sub.sessionKey) ?? now
+        parentNode.children.push({
+          id: sub.sessionKey,
           kind: 'subagent',
-          label,
-          parentKey: parentNode.key,
+          label: sub.label ?? sub.sessionKey.slice(0, 8),
+          parentId: parentNode.id,
           updatedAt,
           totalTokens: 0,
           children: []
-        }
-        parentNode.children.push(subNode)
+        })
       }
     } catch {
       /* backend unavailable — flat tree only */
     }
 
-    // Now that children are attached, lift mainNode's timestamp to reflect
-    // its freshest child so it sorts correctly in the drawer.
-    if (mainNode.children.length > 0) {
-      mainNode.updatedAt = Math.max(mainNode.updatedAt, ...mainNode.children.map((c) => c.updatedAt))
-    }
-    if (mainNode.updatedAt === 0) mainNode.updatedAt = now
-
-    mainNode.children.sort((a, b) => b.updatedAt - a.updatedAt)
-    for (const child of mainNode.children) {
-      if (child.children.length > 0) {
-        child.children.sort((a, b) => b.updatedAt - a.updatedAt)
-      }
+    // Sort: threads by activity, subagents within each thread by activity.
+    topLevel.sort((a, b) => b.updatedAt - a.updatedAt)
+    for (const node of topLevel) {
+      if (node.children.length > 0) node.children.sort((a, b) => b.updatedAt - a.updatedAt)
     }
 
+    // Trim stale subagents (>24h since their parent's latest activity).
     const DAY_MS = 24 * 60 * 60 * 1000
-    const parentLatest = mainNode.children.length > 0 ? mainNode.children[0].updatedAt : now
-    mainNode.children = mainNode.children.filter((child) => {
-      if (child.kind === 'subagent') {
-        const childAge = parentLatest - child.updatedAt
-        return childAge < DAY_MS
-      }
-      return true
-    })
-    for (const child of mainNode.children) {
-      if (child.children.length > 0) {
-        child.children = child.children.filter((sub) => {
-          if (sub.kind === 'subagent') {
-            const subAge = now - sub.updatedAt
-            return subAge < DAY_MS
-          }
-          return true
-        })
-      }
+    for (const node of topLevel) {
+      node.children = node.children.filter((sub) => now - sub.updatedAt < DAY_MS)
     }
 
-    res.json({ tree: [mainNode] })
+    res.json({ tree: topLevel })
   })
 
   return router

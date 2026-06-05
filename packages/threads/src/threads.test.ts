@@ -41,7 +41,7 @@ describe('ThreadManager', () => {
   it('creates a thread with label', () => {
     const tm = createThreadManager(bus, dataDir)
     const t = tm.create({ label: 'test-thread' })
-    expect(t.key).toBe('test-thread')
+    expect(t.label).toBe('test-thread')
     expect(t.archived).toBe(false)
     expect(bus.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'thread.created' }))
   })
@@ -50,14 +50,45 @@ describe('ThreadManager', () => {
     const tm = createThreadManager(bus, dataDir)
     const t1 = tm.create({ label: 'dup' })
     const t2 = tm.create({ label: 'dup' })
-    expect(t1).toBe(t2)
+    expect(t1.id).not.toBe(t2.id)
+    expect(t1.label).toBe(t2.label)
   })
 
-  it('creates thread keyed by entity', () => {
+  // Regression: bootstrap.ts seeded system threads with `if (!tm.get(label))`.
+  // `get()` is keyed by UUID, so it never matched a human label — every boot
+  // minted a fresh duplicate of 'main'/'upgrades'/'v2-app'. Lock in the
+  // get-vs-getByLabel contract that caused it.
+  it('get() is UUID-keyed and never resolves a label (the seed-duplication footgun)', () => {
+    const tm = createThreadManager(bus, dataDir)
+    const t = tm.create({ label: 'main' })
+    expect(tm.get('main')).toBeUndefined() // ← the bug: get(label) is always undefined
+    expect(tm.get(t.id)?.label).toBe('main')
+    expect(tm.getByLabel('main')?.id).toBe(t.id)
+    expect(tm.resolve('main')?.id).toBe(t.id)
+  })
+
+  it('idempotent system-thread seeding (getByLabel) does not duplicate across boots', () => {
+    const seed = (tm: ReturnType<typeof createThreadManager>) => {
+      for (const label of ['main', 'upgrades', 'v2-app']) {
+        if (!tm.getByLabel(label)) tm.create({ label, membraneId: 'personal' })
+      }
+    }
+    const tm = createThreadManager(bus, dataDir)
+    seed(tm)
+    seed(tm) // a second "boot" in the same process must be a no-op
+    expect(tm.list().filter((t) => t.label === 'main')).toHaveLength(1)
+    expect(tm.list().filter((t) => ['main', 'upgrades', 'v2-app'].includes(t.label))).toHaveLength(3)
+    // Cold restart: a fresh manager loading the same dataDir must also not dup.
+    const tm2 = createThreadManager(createMockBus(), dataDir)
+    seed(tm2)
+    expect(tm2.list().filter((t) => t.label === 'main')).toHaveLength(1)
+  })
+
+  it('creates thread with entities bound at construction', () => {
     const tm = createThreadManager(bus, dataDir)
     const entity = { orgId: 'o1', projectId: 'p1', entityType: 'branch' as const, entityRef: 'main' }
-    const t = tm.create({ entities: [entity] })
-    expect(t.key).toBe('o1/p1/branch:main')
+    const t = tm.create({ label: 'o1/p1/branch:main', entities: [entity] })
+    expect(t.label).toBe('o1/p1/branch:main')
     expect(t.entities).toHaveLength(1)
   })
 
@@ -67,21 +98,27 @@ describe('ThreadManager', () => {
 
     const bus2 = createMockBus()
     const tm2 = createThreadManager(bus2, dataDir)
-    const t = tm2.get('persisted')
+    const t = tm2.resolve('persisted')
     expect(t).toBeDefined()
-    expect(t!.key).toBe('persisted')
+    expect(t!.label).toBe('persisted')
   })
 
   describe('list with filters', () => {
     it('filters by workspaceId — matches entity orgId', () => {
       const tm = createThreadManager(bus, dataDir)
       tm.create({ label: 'global' }) // no entities, no workspace → global
-      tm.create({ entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }] })
-      tm.create({ entities: [{ orgId: 'o2', projectId: 'p2', entityType: 'branch', entityRef: 'b' }] })
+      tm.create({
+        label: 'o1/p1/branch:a',
+        entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }]
+      })
+      tm.create({
+        label: 'o2/p2/branch:b',
+        entities: [{ orgId: 'o2', projectId: 'p2', entityType: 'branch', entityRef: 'b' }]
+      })
 
       const filtered = tm.list({ workspaceId: 'o1' })
       expect(filtered).toHaveLength(1)
-      expect(filtered.map((t) => t.key)).toContain('o1/p1/branch:a')
+      expect(filtered.map((t) => t.label)).toContain('o1/p1/branch:a')
     })
 
     it('filters by workspaceId — scoped threads only show in their workspace', () => {
@@ -92,19 +129,19 @@ describe('ThreadManager', () => {
       tm.create({ label: 'explicit-global', workspaceIds: [] })
 
       const ws1 = tm.list({ workspaceId: 'ws1' })
-      expect(ws1.map((t) => t.key)).toContain('ws1-thread')
+      expect(ws1.map((t) => t.label)).toContain('ws1-thread')
       // Global threads are not implicitly included when filtering by workspace
-      expect(ws1.map((t) => t.key)).not.toContain('global-thread')
-      expect(ws1.map((t) => t.key)).not.toContain('explicit-global')
-      expect(ws1.map((t) => t.key)).not.toContain('ws2-thread')
+      expect(ws1.map((t) => t.label)).not.toContain('global-thread')
+      expect(ws1.map((t) => t.label)).not.toContain('explicit-global')
+      expect(ws1.map((t) => t.label)).not.toContain('ws2-thread')
 
       const ws2 = tm.list({ workspaceId: 'ws2' })
-      expect(ws2.map((t) => t.key)).toContain('ws2-thread')
-      expect(ws2.map((t) => t.key)).not.toContain('global-thread')
-      expect(ws2.map((t) => t.key)).not.toContain('ws1-thread')
+      expect(ws2.map((t) => t.label)).toContain('ws2-thread')
+      expect(ws2.map((t) => t.label)).not.toContain('global-thread')
+      expect(ws2.map((t) => t.label)).not.toContain('ws1-thread')
 
       // `_global` workspaceId filter selects threads with NO workspace and NO entities
-      const global = tm.list({ workspaceId: '_global' }).map((t) => t.key)
+      const global = tm.list({ workspaceId: '_global' }).map((t) => t.label)
       expect(global).toContain('global-thread')
       expect(global).toContain('explicit-global')
       expect(global).not.toContain('ws1-thread')
@@ -112,8 +149,14 @@ describe('ThreadManager', () => {
 
     it('filters by projectId', () => {
       const tm = createThreadManager(bus, dataDir)
-      tm.create({ entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }] })
-      tm.create({ entities: [{ orgId: 'o1', projectId: 'p2', entityType: 'branch', entityRef: 'b' }] })
+      tm.create({
+        label: 'o1/p1/branch:a',
+        entities: [{ orgId: 'o1', projectId: 'p1', entityType: 'branch', entityRef: 'a' }]
+      })
+      tm.create({
+        label: 'o1/p2/branch:b',
+        entities: [{ orgId: 'o1', projectId: 'p2', entityType: 'branch', entityRef: 'b' }]
+      })
 
       const filtered = tm.list({ projectId: 'p1' })
       expect(filtered).toHaveLength(1)
@@ -123,18 +166,18 @@ describe('ThreadManager', () => {
       const tm = createThreadManager(bus, dataDir)
       tm.create({ label: 'active' })
       tm.create({ label: 'to-archive' })
-      tm.delete('to-archive')
+      tm.delete(tm.resolve('to-archive')!.id)
 
       const active = tm.list({ active: true })
       expect(active).toHaveLength(1)
-      expect(active[0].key).toBe('active')
+      expect(active[0].label).toBe('active')
     })
 
     it('filters by archived flag', () => {
       const tm = createThreadManager(bus, dataDir)
       tm.create({ label: 'a' })
       tm.create({ label: 'b' })
-      tm.delete('b')
+      tm.delete(tm.resolve('b')!.id)
 
       expect(tm.list({ archived: true })).toHaveLength(1)
       expect(tm.list({ archived: false })).toHaveLength(1)
@@ -147,26 +190,26 @@ describe('ThreadManager', () => {
       tm.create({ label: 'ent-test' })
       const entity = { orgId: 'o', projectId: 'p', entityType: 'issue' as const, entityRef: '42' }
 
-      tm.addEntity('ent-test', entity)
-      expect(tm.getEntities('ent-test')).toHaveLength(1)
+      tm.addEntity(tm.resolve('ent-test')!.id, entity)
+      expect(tm.getEntities(tm.resolve('ent-test')!.id)).toHaveLength(1)
 
       // Duplicate add is idempotent
-      tm.addEntity('ent-test', entity)
-      expect(tm.getEntities('ent-test')).toHaveLength(1)
+      tm.addEntity(tm.resolve('ent-test')!.id, entity)
+      expect(tm.getEntities(tm.resolve('ent-test')!.id)).toHaveLength(1)
 
-      tm.removeEntity('ent-test', 'issue', '42')
-      expect(tm.getEntities('ent-test')).toHaveLength(0)
+      tm.removeEntity(tm.resolve('ent-test')!.id, 'issue', '42')
+      expect(tm.getEntities(tm.resolve('ent-test')!.id)).toHaveLength(0)
     })
 
     it('getThreadsForEntity finds matching threads', () => {
       const tm = createThreadManager(bus, dataDir)
       const entity = { orgId: 'o', projectId: 'p', entityType: 'branch' as const, entityRef: 'feat' }
-      tm.create({ entities: [entity] })
+      tm.create({ label: 'o/p/branch:feat', entities: [entity] })
       tm.create({ label: 'other' })
 
       const found = tm.getThreadsForEntity(entity)
       expect(found).toHaveLength(1)
-      expect(found[0].key).toBe('o/p/branch:feat')
+      expect(found[0].label).toBe('o/p/branch:feat')
     })
   })
 
@@ -174,49 +217,55 @@ describe('ThreadManager', () => {
     it('stores and retrieves thread events', () => {
       const tm = createThreadManager(bus, dataDir)
       tm.create({ label: 'evt' })
-      tm.addEvent('evt', { type: 'message', timestamp: 1000, data: { text: 'hello' } } as any)
-      tm.addEvent('evt', { type: 'message', timestamp: 2000, data: { text: 'world' } } as any)
+      tm.addEvent(tm.resolve('evt')!.id, { type: 'message', timestamp: 1000, data: { text: 'hello' } } as any)
+      tm.addEvent(tm.resolve('evt')!.id, { type: 'message', timestamp: 2000, data: { text: 'world' } } as any)
 
-      expect(tm.getEvents('evt')).toHaveLength(2)
-      expect(tm.getEvents('evt', { since: 1500 })).toHaveLength(1)
-      expect(tm.getEvents('evt', { limit: 1 })).toHaveLength(1)
-      expect(tm.getEvents('evt', { offset: 1 })).toHaveLength(1)
+      expect(tm.getEvents(tm.resolve('evt')!.id)).toHaveLength(2)
+      expect(tm.getEvents(tm.resolve('evt')!.id, { since: 1500 })).toHaveLength(1)
+      expect(tm.getEvents(tm.resolve('evt')!.id, { limit: 1 })).toHaveLength(1)
+      expect(tm.getEvents(tm.resolve('evt')!.id, { offset: 1 })).toHaveLength(1)
     })
   })
 
+  // Auto-created threads are looked up via their entity binding (the
+  // canonical way; labels are descriptive, not addressable).
   describe('auto-creation from bus events', () => {
     it('creates thread on worktree.created', () => {
       const tm = createThreadManager(bus, dataDir)
       bus._emit('worktree.created', { orgId: 'o', projectId: 'p', branch: 'feature' })
-      expect(tm.get('o/p/branch:feature')).toBeDefined()
+      const entity = { orgId: 'o', projectId: 'p', entityType: 'branch' as const, entityRef: 'feature' }
+      expect(tm.getThreadsForEntity(entity)).toHaveLength(1)
     })
 
     it('creates thread on issue.created', () => {
       const tm = createThreadManager(bus, dataDir)
       bus._emit('issue.created', { orgId: 'o', projectId: 'p', issueId: '99' })
-      expect(tm.get('o/p/issue:99')).toBeDefined()
+      const entity = { orgId: 'o', projectId: 'p', entityType: 'issue' as const, entityRef: '99' }
+      expect(tm.getThreadsForEntity(entity)).toHaveLength(1)
     })
 
     it('creates thread on review.created', () => {
       const tm = createThreadManager(bus, dataDir)
       bus._emit('review.created', { orgId: 'o', projectId: 'p', prId: '7' })
-      expect(tm.get('o/p/pr:7')).toBeDefined()
+      const entity = { orgId: 'o', projectId: 'p', entityType: 'pr' as const, entityRef: '7' }
+      expect(tm.getThreadsForEntity(entity)).toHaveLength(1)
     })
 
     it('does not duplicate auto-created threads', () => {
       const tm = createThreadManager(bus, dataDir)
       bus._emit('worktree.created', { orgId: 'o', projectId: 'p', branch: 'f' })
       bus._emit('worktree.created', { orgId: 'o', projectId: 'p', branch: 'f' })
-      expect(tm.list().filter((t) => t.key === 'o/p/branch:f')).toHaveLength(1)
+      const entity = { orgId: 'o', projectId: 'p', entityType: 'branch' as const, entityRef: 'f' }
+      expect(tm.getThreadsForEntity(entity)).toHaveLength(1)
     })
   })
 
   it('delete marks as archived', () => {
     const tm = createThreadManager(bus, dataDir)
     tm.create({ label: 'del-me' })
-    expect(tm.delete('del-me')).toBe(true)
-    expect(tm.get('del-me')?.archived).toBe(true)
-    expect(tm.delete('nonexistent')).toBe(false)
+    expect(tm.delete(tm.resolve('del-me')!.id)).toBe(true)
+    expect(tm.resolve('del-me')?.archived).toBe(true)
+    expect(tm.delete('nonexistent-id')).toBe(false)
   })
 
   describe('membrane + workspace mapping', () => {
@@ -243,6 +292,7 @@ describe('ThreadManager', () => {
     it('derives workspaceIds from entities[0] when not explicit', () => {
       const tm = createThreadManager(bus, dataDir)
       const t = tm.create({
+        label: 'ad4m/main',
         entities: [{ orgId: 'coasys', projectId: 'ad4m', entityType: 'branch', entityRef: 'main' }]
       })
       expect(t.workspaceIds).toEqual(['coasys'])
@@ -260,7 +310,7 @@ describe('ThreadManager', () => {
     it('update can set membraneId and workspaceIds', () => {
       const tm = createThreadManager(bus, dataDir)
       tm.create({ label: 'x' })
-      const updated = tm.update('x', { membraneId: 'personal', workspaceIds: ['hexafield'] })
+      const updated = tm.update(tm.resolve('x')!.id, { membraneId: 'personal', workspaceIds: ['hexafield'] })
       expect(updated?.membraneId).toBe('personal')
       expect(updated?.workspaceIds).toEqual(['hexafield'])
     })
@@ -269,7 +319,7 @@ describe('ThreadManager', () => {
       const tm1 = createThreadManager(bus, dataDir)
       tm1.create({ label: 'sovereign', membraneId: 'personal', workspaceIds: ['hexafield'] })
       const tm2 = createThreadManager(bus, dataDir)
-      const t = tm2.get('sovereign')
+      const t = tm2.resolve('sovereign')
       expect(t?.membraneId).toBe('personal')
       expect(t?.workspaceIds).toEqual(['hexafield'])
     })
@@ -359,20 +409,20 @@ describe('ThreadManager', () => {
       const newFile = path.join(dataDir, 'threads.json')
       expect(fs.existsSync(newFile)).toBe(true)
       const persisted = JSON.parse(fs.readFileSync(newFile, 'utf-8'))
-      expect(persisted.version).toBe(1)
+      expect(persisted.version).toBe(2)
       expect(persisted.threads).toHaveLength(3)
 
       // Field-level: orgId is gone, membraneId + workspaceIds derived correctly
-      const main = tm.get('main')
+      const main = tm.resolve('main')
       expect(main?.membraneId).toBe('personal')
       expect(main?.workspaceIds).toEqual([]) // _global → empty
       expect((main as any)?.orgId).toBeUndefined()
 
-      const ad4m = tm.get('ad4m')
+      const ad4m = tm.resolve('ad4m')
       expect(ad4m?.membraneId).toBe('adam')
       expect(ad4m?.workspaceIds).toEqual(['coasys'])
 
-      const sov = tm.get('sovereign')
+      const sov = tm.resolve('sovereign')
       expect(sov?.membraneId).toBe('personal')
       expect(sov?.workspaceIds).toEqual(['hexafield'])
 
@@ -408,7 +458,7 @@ describe('ThreadManager', () => {
         ]
       })
       const tm = createThreadManager(bus, dataDir)
-      const t = tm.get('orphan')
+      const t = tm.resolve('orphan')
       expect(t?.membraneId).toBeUndefined()
       expect(t?.workspaceIds).toEqual(['mysteryorg'])
     })
@@ -430,11 +480,11 @@ describe('ThreadManager', () => {
           }
         ],
         events: {
-          evt: [{ threadKey: 'evt', event: { foo: 1 }, entityBinding: {} as any, timestamp: 100 }]
+          evt: [{ threadId: 'evt', event: { foo: 1 }, entityBinding: {} as any, timestamp: 100 }]
         }
       })
       const tm = createThreadManager(bus, dataDir)
-      expect(tm.getEvents('evt')).toHaveLength(1)
+      expect(tm.getEvents(tm.resolve('evt')!.id)).toHaveLength(1)
       expect(fs.existsSync(path.join(dataDir, 'threads', 'events.json'))).toBe(true)
     })
 
@@ -478,8 +528,8 @@ describe('ThreadManager', () => {
         })
       )
       const tm = createThreadManager(bus, dataDir)
-      expect(tm.get('fresh')).toBeDefined()
-      expect(tm.get('legacy')).toBeUndefined()
+      expect(tm.resolve('fresh')).toBeDefined()
+      expect(tm.resolve('legacy')).toBeUndefined()
     })
   })
 })

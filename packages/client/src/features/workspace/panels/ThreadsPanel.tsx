@@ -102,13 +102,13 @@ const ThreadsPanel: Component = () => {
             <button
               class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs transition-colors"
               style={{
-                background: threadKey() === t.key ? 'var(--c-accent)' : 'transparent',
-                color: threadKey() === t.key ? '#fff' : 'var(--c-text)'
+                background: threadKey() === t.id ? 'var(--c-accent)' : 'transparent',
+                color: threadKey() === t.id ? '#fff' : 'var(--c-text)'
               }}
-              onClick={() => switchThread(t.key)}
+              onClick={() => switchThread(t.id)}
             >
               {statusDot(t.agentStatus)}
-              <span class="flex-1 truncate">{t.label ?? t.key}</span>
+              <span class="flex-1 truncate">{t.label ?? t.id}</span>
               <Show when={t.unreadCount > 0}>
                 <span
                   class="flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
