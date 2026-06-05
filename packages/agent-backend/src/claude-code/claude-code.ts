@@ -3,18 +3,26 @@
 // tools, compaction events, and history all flow through the SDK; the
 // adapter translates them to Sovereign's event bus.
 //
-// Design intent: defer to the user's Claude Code system configuration —
-// settings.json, ~/.claude/CLAUDE.md, plugins, MCP servers — and override
-// only the specific things Sovereign needs (its state-tracking hooks,
-// the `sovereign` MCP server, scheduling-tool redirect, bypass-permissions
-// for trusted local execution). A Sovereign-hosted thread should behave
-// the same as a direct `claude` CLI / VS Code session unless Sovereign
-// has a specific reason to differ. The CLI subprocess loads user / project
-// / local settings.json (including their hooks) natively via the
-// `settingSources` option below; Sovereign's hooks register alongside
-// them at the SDK matcher level so both fire per event.
+// Design intent: Sovereign owns the context surface end-to-end.
+//
+// - `settingSources: ['user', 'local']` — loads user-level (~/.claude/
+//   settings.json: plugins, MCP servers, user hooks) and local-level
+//   (.claude/settings.local.json) but DROPS the project-level source.
+//   The project source is the only legitimate source of CLAUDE.md walk-up
+//   per the SDK, but it also pulled in `<cwd>/.claude/settings.json` —
+//   which cozempic's installer mirrors from the user file, producing
+//   duplicate hook matchers (one per source) and double-firing every
+//   shell command per event. Dropping `'project'` eliminates that
+//   duplication at its source.
+// - Global `~/.claude/CLAUDE.md` is loaded explicitly by Sovereign and
+//   prepended to the membrane append below, so Hex's compiled personality
+//   still reaches every session even with the project source disabled.
+// - Sovereign-specific overrides retained: state-tracking hooks,
+//   `sovereign` MCP server, scheduling-tool redirect, bypass-permissions
+//   for trusted local execution.
 
 import path from 'node:path'
+import os from 'node:os'
 import fs from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk'
@@ -72,6 +80,22 @@ const DEFAULT_CONTEXT_WINDOW = 200000
 /** Strip a leading "anthropic/" if present so callers can pass either form. */
 function bareModelName(model: string): string {
   return model.startsWith(`${PROVIDER}/`) ? model.slice(PROVIDER.length + 1) : model
+}
+
+/**
+ * Read the user's global Claude Code personality file
+ * (`~/.claude/CLAUDE.md`). Sovereign's personality compiler writes here.
+ * Loaded explicitly because `settingSources` drops the `'project'` source
+ * that would normally trigger the SDK's CLAUDE.md walk-up. Returns empty
+ * string when the file is missing or unreadable — the SDK's preset prompt
+ * still works without it.
+ */
+function readGlobalPersonality(): string {
+  try {
+    return fs.readFileSync(path.join(os.homedir(), '.claude', 'CLAUDE.md'), 'utf8')
+  } catch {
+    return ''
+  }
 }
 
 const SUBAGENT_SESSION_PREFIX = 'agent:main:subagent:'
@@ -822,11 +846,17 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     state.abortController = abort
 
     const resumeExisting = state.sessionFile && fs.existsSync(state.sessionFile)
-    // Per-session membrane context (CONTEXT.md for the membrane this
-    // session's thread belongs to). Layered on top of Claude Code's
-    // preset prompt via `systemPrompt.append` — preserves the default
-    // ~/.claude/CLAUDE.md loading; only ADDS the membrane prelude.
+    // Per-session context. Two layers, both injected via `systemPrompt.append`:
+    //   1. Global personality — `~/.claude/CLAUDE.md` (compiled by the
+    //      Sovereign personality compiler). Loaded by Sovereign here because
+    //      we've dropped the `'project'` setting source (see top comment),
+    //      and the SDK's CLAUDE.md walk-up is gated by that source.
+    //   2. Membrane prelude — per-thread CONTEXT.md resolved by the membrane
+    //      manager, scoped to the thread's membrane id.
+    // Both are joined and appended onto the `claude_code` preset.
+    const globalPersonality = readGlobalPersonality()
     const membraneAppend = deps?.resolveAppendSystemPrompt?.(state.sessionKey)
+    const combinedAppend = [globalPersonality, membraneAppend].filter(Boolean).join('\n\n')
     const sdkOptions: SdkOptions = {
       cwd: state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
@@ -836,16 +866,18 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       allowedTools: defaultTools,
       mcpServers,
       hooks: buildHooks(),
-      // Load all filesystem-backed settings sources (user, project, local)
-      // so Sovereign-hosted sessions pick up the user's Claude Code config
-      // — settings.json, plugins, ~/.claude/CLAUDE.md walk-up — exactly
-      // like a direct CLI session does. This matches the SDK's documented
-      // default; we set it explicitly so the intent is visible in code.
-      settingSources: ['user', 'project', 'local'],
+      // User + local only. Project-level settings deliberately skipped —
+      // cozempic's installer mirrors user hooks into <cwd>/.claude/settings.json,
+      // and loading both causes every cozempic shell command to fire twice
+      // per event. With this list, the project file exists on disk (cozempic
+      // keeps recreating it) but the CLI never reads it. Global CLAUDE.md
+      // is loaded above via `globalPersonality` to compensate for the
+      // CLAUDE.md walk-up that the `'project'` source would have provided.
+      settingSources: ['user', 'local'],
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
-      ...(membraneAppend ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: membraneAppend } } : {}),
+      ...(combinedAppend ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: combinedAppend } } : {}),
       stderr: (line: string) => console.error(`[claude-code cli] ${line}`)
     } as SdkOptions
 
