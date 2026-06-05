@@ -247,7 +247,8 @@ let lastSentTime = 0
  * visual source of truth for in-flight messages.
  */
 export async function sendMessage(text: string, attachments?: File[]): Promise<void> {
-  const threadKey = currentThreadKey?.() ?? 'main'
+  const threadKey = currentThreadKey?.() ?? ''
+  if (!threadKey) return // No thread selected — nothing to send to.
 
   const now = Date.now()
   if (text === lastSentText && now - lastSentTime < 2000 && !attachments?.length) {
@@ -303,14 +304,15 @@ export function retryQueuedMessage(id: string): void {
 }
 
 export function loadOlderMessages(): void {
-  if (!ws || loadingOlder() || !hasOlderMessages()) return
+  const threadKey = currentThreadKey?.() ?? ''
+  if (!ws || loadingOlder() || !hasOlderMessages() || !threadKey) return
   setLoadingOlder(true)
-  const threadKey = currentThreadKey?.() ?? 'main'
   ws.send({ type: 'chat.history.full', threadKey } as any)
 }
 
 export function abortChat(): void {
-  ws?.send({ type: 'chat.abort', threadKey: currentThreadKey?.() ?? 'main' } as any)
+  const threadKey = currentThreadKey?.() ?? ''
+  if (threadKey) ws?.send({ type: 'chat.abort', threadKey } as any)
   clearLiveState()
   suppressLifecycleUntil = Date.now() + 2000
   setAgentStatus('cancelled' as AgentStatus)

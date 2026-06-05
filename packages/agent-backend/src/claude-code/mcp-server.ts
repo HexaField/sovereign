@@ -141,7 +141,7 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
           .string()
           .optional()
           .describe(
-            'Optional. Logical thread key — bare name (e.g. "v2-app") or full `agent:main:thread:<x>` form. When omitted, defaults to the calling thread. Pass `"main"` (or any other thread) to target a different one.'
+            'Optional. Logical thread key — a thread id, or its label. When omitted, defaults to the calling thread. Pass another thread id/label to cross-post into a different thread.'
           ),
         when: z
           .object({

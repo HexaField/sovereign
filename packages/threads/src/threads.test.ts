@@ -67,21 +67,38 @@ describe('ThreadManager', () => {
     expect(tm.resolve('main')?.id).toBe(t.id)
   })
 
-  it('idempotent system-thread seeding (getByLabel) does not duplicate across boots', () => {
-    const seed = (tm: ReturnType<typeof createThreadManager>) => {
-      for (const label of ['main', 'upgrades', 'v2-app']) {
-        if (!tm.getByLabel(label)) tm.create({ label, membraneId: 'personal' })
-      }
-    }
+  // Mirrors the first-boot seed in bootstrap.ts. The runtime makes NO standing
+  // assumptions about which threads exist — it seeds exactly ONE default thread,
+  // and only when the registry is empty. (The old code looped over hard-coded
+  // personal labels ['main','upgrades','v2-app'] and re-minted them every boot.)
+  const seedDefault = (tm: ReturnType<typeof createThreadManager>, label = 'Main') => {
+    if (label && tm.list().length === 0) tm.create({ label, membraneId: 'personal' })
+  }
+
+  it('seeds a single default thread only on an empty registry, idempotently across boots', () => {
     const tm = createThreadManager(bus, dataDir)
-    seed(tm)
-    seed(tm) // a second "boot" in the same process must be a no-op
-    expect(tm.list().filter((t) => t.label === 'main')).toHaveLength(1)
-    expect(tm.list().filter((t) => ['main', 'upgrades', 'v2-app'].includes(t.label))).toHaveLength(3)
-    // Cold restart: a fresh manager loading the same dataDir must also not dup.
+    seedDefault(tm)
+    seedDefault(tm) // second "boot" in-process: registry non-empty → no-op
+    expect(tm.list()).toHaveLength(1)
+    expect(tm.list()[0].label).toBe('Main')
+    // Cold restart: a fresh manager over the same dataDir must not re-seed.
     const tm2 = createThreadManager(createMockBus(), dataDir)
-    seed(tm2)
-    expect(tm2.list().filter((t) => t.label === 'main')).toHaveLength(1)
+    seedDefault(tm2)
+    expect(tm2.list()).toHaveLength(1)
+  })
+
+  it('never seeds a default thread when the user already has threads', () => {
+    const tm = createThreadManager(bus, dataDir)
+    tm.create({ label: 'research' })
+    seedDefault(tm)
+    expect(tm.list()).toHaveLength(1)
+    expect(tm.list().some((t) => t.label === 'Main')).toBe(false)
+  })
+
+  it('opting out (empty default label) seeds nothing', () => {
+    const tm = createThreadManager(bus, dataDir)
+    seedDefault(tm, '')
+    expect(tm.list()).toHaveLength(0)
   })
 
   it('creates thread with entities bound at construction', () => {

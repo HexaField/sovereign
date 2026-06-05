@@ -84,6 +84,24 @@ export interface SovereignConfig {
     /** String inserted between concatenated source bodies. */
     separator: string
   }
+  /**
+   * First-boot seed. The runtime makes NO standing assumptions about which
+   * threads or membranes exist — these values describe the single default
+   * membrane + thread created on a fresh install so the UI is usable out of
+   * the box. Set any field to an empty string to opt out of that piece.
+   *
+   * - `membraneId`/`membraneName`: a default membrane is auto-created on boot
+   *   if `membraneId` is non-empty and no membrane with that id exists yet.
+   *   Empty `membraneId` ⇒ no membrane is created and the seed thread is left
+   *   unassigned.
+   * - `threadLabel`: a single thread with this label is created only when the
+   *   thread registry is completely empty. Empty ⇒ no thread is seeded.
+   */
+  seed: {
+    membraneId: string
+    membraneName: string
+    threadLabel: string
+  }
 }
 
 export interface ConfigChange {
