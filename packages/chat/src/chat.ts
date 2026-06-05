@@ -226,12 +226,28 @@ export function createChatModule(
   // never advanced). The new process has no in-memory ownership of these,
   // so pumpQueue would otherwise skip them forever. Reset to 'queued' and
   // pump each affected thread once.
+  //
+  // Cap at MAX_REQUEUE_ATTEMPTS. Without a cap, a message that keeps timing
+  // out (e.g. SDK resume hanging on a huge JSONL) gets replayed on every
+  // daemon restart — the user observes the same prompt firing 3+ times.
+  // After the cap, mark the message 'failed' so the user can retry or
+  // cancel explicitly from the UI rather than silently looping.
+  const MAX_REQUEUE_ATTEMPTS = 3
   for (const [threadId, items] of messageQueue.getAllQueues()) {
     const head = items[0]
     if (!head || head.status !== 'sending') continue
-    console.log(
-      `[chat] orphaned 'sending' queue head on ${threadId} (${head.id}, attempts=${head.attempts ?? 0}) — requeuing`
-    )
+    const attempts = head.attempts ?? 0
+    if (attempts >= MAX_REQUEUE_ATTEMPTS) {
+      console.log(
+        `[chat] orphaned 'sending' queue head on ${threadId} (${head.id}, attempts=${attempts}) — exceeded max requeue, marking failed`
+      )
+      messageQueue.markFailed(
+        head.id,
+        `Backend did not complete after ${attempts} attempts. Retry or cancel from the UI.`
+      )
+      continue
+    }
+    console.log(`[chat] orphaned 'sending' queue head on ${threadId} (${head.id}, attempts=${attempts}) — requeuing`)
     if (messageQueue.markQueued(head.id)) {
       void pumpQueue(threadId)
     }
@@ -241,9 +257,13 @@ export function createChatModule(
   const recentUserSends = new Map<string, { text: string; ts: number }>()
   const USER_DEDUP_WINDOW_MS = 4000
 
-  // Track when status last changed — for stuck-status recovery
+  // Track when status last changed — for stuck-status recovery.
+  // 30 min covers slow SDK resumes of large JSONLs (the neural-net thread's
+  // ~98 MB session can take several minutes just to rehydrate). A shorter
+  // timeout (5 min was previous default) force-resets to idle mid-resume,
+  // which then races with orphan-reclaim and produces duplicate replays.
   const statusChangedAt = new Map<string, number>()
-  const STUCK_STATUS_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+  const STUCK_STATUS_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 
   // Periodic check: if any thread has been "working" for too long, reset to idle
   setInterval(() => {
