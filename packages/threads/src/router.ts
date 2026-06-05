@@ -63,9 +63,11 @@ export function createEventRouter(bus: EventBus, threadManager: ThreadManager): 
 
       let matchingThreads = threadManager.getThreadsForEntity(entity)
 
-      // Auto-create thread if none exists
+      // Auto-create thread if none exists. Use a stable label derived from
+      // the entity reference so the UI shows something meaningful.
       if (matchingThreads.length === 0) {
-        threadManager.create({ entities: [entity] })
+        const label = `${entity.projectId}/${entity.entityType}:${entity.entityRef}`
+        threadManager.create({ label, entities: [entity] })
         matchingThreads = threadManager.getThreadsForEntity(entity)
       }
 
@@ -73,18 +75,18 @@ export function createEventRouter(bus: EventBus, threadManager: ThreadManager): 
 
       for (const thread of matchingThreads) {
         const threadEvent: ThreadEvent = {
-          threadKey: thread.key,
+          threadId: thread.id,
           event: event,
           entityBinding: entity,
           timestamp: Date.now()
         }
-        threadManager.addEvent(thread.key, threadEvent)
+        threadManager.addEvent(thread.id, threadEvent)
 
         bus.emit({
           type: 'thread.event.routed',
           timestamp: new Date().toISOString(),
           source: 'threads.router',
-          payload: { threadKey: thread.key, event, entityBinding: entity, classification: classification.type }
+          payload: { threadId: thread.id, event, entityBinding: entity, classification: classification.type }
         })
       }
     })

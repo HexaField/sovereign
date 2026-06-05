@@ -6,6 +6,7 @@ export * from './shared.js'
 export * from './transcription.js'
 export * from './cron.js'
 export * from './session-key.js'
+export * from './thread.js'
 
 /**
  * A message in the server-side queue waiting to be sent to the agent.
@@ -18,7 +19,7 @@ export * from './session-key.js'
  */
 export interface QueuedMessage {
   id: string
-  threadKey: string
+  threadId: string
   text: string
   timestamp: number
   status: 'queued' | 'sending' | 'failed'
@@ -33,6 +34,6 @@ export interface QueuedMessage {
  * single source of truth, replacing the previous client-side optimistic queue.
  */
 export interface ChatQueueSnapshot {
-  threadKey: string
+  threadId: string
   items: QueuedMessage[]
 }

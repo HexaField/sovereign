@@ -242,8 +242,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // System threads default to the `personal` membrane. If that membrane
   // doesn't exist yet (fresh install), membraneId stays undefined and the
   // UI surfaces the thread as unassigned — harmless.
+  // Idempotent seed: look up by LABEL (post-UUID refactor, `get()` is keyed by
+  // UUID and would never match a human label — the old bug here minted a fresh
+  // duplicate of each on every boot).
   for (const label of ['main', 'upgrades', 'v2-app']) {
-    if (!threadManager.get(label)) threadManager.create({ label, membraneId: 'personal' })
+    if (!threadManager.getByLabel(label)) threadManager.create({ label, membraneId: 'personal' })
   }
 
   // Voice / Recordings / Meetings (config-driven URLs; hot-reloadable)

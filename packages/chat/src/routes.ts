@@ -31,14 +31,14 @@ function createChatDraftStore(dataDir: string) {
   }
 
   return {
-    get(threadKey: string): string {
-      return cache[threadKey] ?? ''
+    get(threadId: string): string {
+      return cache[threadId] ?? ''
     },
-    set(threadKey: string, text: string): void {
+    set(threadId: string, text: string): void {
       if (text) {
-        cache[threadKey] = text
+        cache[threadId] = text
       } else {
-        delete cache[threadKey]
+        delete cache[threadId]
       }
       save()
     }
@@ -61,9 +61,9 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
   })
 
   router.put('/api/chat/draft', (req, res) => {
-    const { threadKey, text } = req.body ?? {}
-    if (!threadKey) return res.status(400).json({ error: 'threadKey required' })
-    draftStore.set(threadKey, text ?? '')
+    const { threadId, text } = req.body ?? {}
+    if (!threadId) return res.status(400).json({ error: 'threadId required' })
+    draftStore.set(threadId, text ?? '')
     res.json({ ok: true })
   })
 
@@ -94,24 +94,24 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
 
   router.post('/api/chat/send', async (req, res) => {
     try {
-      const { threadKey, message, attachments } = req.body ?? {}
-      if (!threadKey || (!message && !attachments?.length)) {
-        return res.status(400).json({ error: 'threadKey and message are required' })
+      const { threadId, message, attachments } = req.body ?? {}
+      if (!threadId || (!message && !attachments?.length)) {
+        return res.status(400).json({ error: 'threadId and message are required' })
       }
       // Convert base64 attachments to Buffers
       const buffers = attachments?.map((a: string) => Buffer.from(a, 'base64'))
-      await chatModule.handleSend(threadKey, message || '', buffers)
+      await chatModule.handleSend(threadId, message || '', buffers)
       // Return current queue snapshot so HTTP-only clients have a fresh view
       // without waiting for the SSE round-trip.
-      res.json({ success: true, queue: chatModule.getQueueSnapshot(threadKey) })
+      res.json({ success: true, queue: chatModule.getQueueSnapshot(threadId) })
     } catch (err) {
       res.status(500).json({ error: (err as Error).message })
     }
   })
 
   // ── Outbound queue endpoints ─────────────────────────────────────
-  router.get('/api/threads/:threadKey/queue', (req, res) => {
-    res.json({ items: chatModule.getQueueSnapshot(req.params.threadKey) })
+  router.get('/api/threads/:threadId/queue', (req, res) => {
+    res.json({ items: chatModule.getQueueSnapshot(req.params.threadId) })
   })
 
   router.delete('/api/chat/queue/:id', (req, res) => {
@@ -152,12 +152,12 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     }
   }, 30_000)
 
-  router.get('/api/threads/:threadKey/history', async (req, res) => {
-    const threadKey = req.params.threadKey
-    const sessionKey = chatModule.resolveSessionKey(threadKey)
+  router.get('/api/threads/:threadId/history', async (req, res) => {
+    const threadId = req.params.threadId
+    const sessionKey = chatModule.resolveSessionKey(threadId)
 
     // Check response cache first
-    const cached = historyResponseCache.get(threadKey)
+    const cached = historyResponseCache.get(threadId)
     if (cached && Date.now() - cached.timestamp < HISTORY_CACHE_TTL) {
       const json = JSON.stringify(cached.data)
       const etag = `"${crypto.createHash('md5').update(json).digest('hex')}"`
@@ -172,7 +172,7 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     try {
       const result = await backend.getHistory(sessionKey)
       const data = { turns: result.turns, hasMore: result.hasMore }
-      historyResponseCache.set(threadKey, { data, timestamp: Date.now() })
+      historyResponseCache.set(threadId, { data, timestamp: Date.now() })
       const json = JSON.stringify(data)
       const etag = `"${crypto.createHash('md5').update(json).digest('hex')}"`
       if (req.headers['if-none-match'] === etag) {
@@ -187,8 +187,8 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
   })
 
   // ── SSE endpoint for per-thread live event streaming ──────────────────
-  router.get('/api/threads/:threadKey/events', async (req, res) => {
-    const threadKey = req.params.threadKey
+  router.get('/api/threads/:threadId/events', async (req, res) => {
+    const threadId = req.params.threadId
     const emitter = chatModule.chatEvents
 
     // SSE headers
@@ -213,17 +213,17 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     }
 
     // Track this SSE client
-    chatModule.trackSSEClient(threadKey)
+    chatModule.trackSSEClient(threadId)
 
     // Send lightweight initial state immediately (no blocking I/O)
     send('backend-status', { status: backend.status() })
 
     // Always send the current queue snapshot on connect so the client can
     // render queued/sending/failed items without a separate REST round-trip.
-    send('queue', { threadKey, items: chatModule.getQueueSnapshot(threadKey) })
+    send('queue', { threadId, items: chatModule.getQueueSnapshot(threadId) })
 
     // Replay cached live state for in-progress work
-    const live = chatModule.getLiveState(threadKey)
+    const live = chatModule.getLiveState(threadId)
     let activeStatus = live.status
     if (!activeStatus || activeStatus === 'idle') {
       // Check gateway for real agent status — fire-and-forget, don't block SSE
@@ -232,18 +232,18 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
         backendAny
           .listGatewaySessions()
           .then((sessions: any[]) => {
-            const sessionKey = chatModule.resolveSessionKey(threadKey)
+            const sessionKey = chatModule.resolveSessionKey(threadId)
             const match = sessions.find((s: any) => s.key === sessionKey)
             if (match && match.agentStatus && match.agentStatus !== 'idle') {
-              send('status', { status: match.agentStatus, threadKey })
-              chatModule.ensurePolling(threadKey, match.agentStatus)
+              send('status', { status: match.agentStatus, threadId })
+              chatModule.ensurePolling(threadId, match.agentStatus)
             }
           })
           .catch(() => {})
       }
     }
     if (activeStatus && activeStatus !== 'idle') {
-      send('status', { status: activeStatus, threadKey })
+      send('status', { status: activeStatus, threadId })
       if (live.work?.length) {
         // Only replay the latest thinking item (not all accumulated ones)
         let lastThinkingIdx = -1
@@ -256,14 +256,14 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
           const item = live.work[i]
           // Skip all thinking items except the latest
           if (item.type === 'thinking' && i !== lastThinkingIdx) continue
-          send('work', { work: item, threadKey })
+          send('work', { work: item, threadId })
         }
       }
       if (live.streamText) {
-        send('stream', { text: live.streamText, threadKey, replay: true })
+        send('stream', { text: live.streamText, threadId, replay: true })
       }
       // Ensure the JSONL poll is running for this thread
-      chatModule.ensurePolling(threadKey, activeStatus)
+      chatModule.ensurePolling(threadId, activeStatus)
     }
 
     // Subscribe to chat-level events (includes backend events + JSONL-polled work)
@@ -275,7 +275,7 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     }
 
     function forThread(data: Record<string, unknown>): boolean {
-      return data.threadKey === threadKey
+      return data.threadId === threadId
     }
 
     addHandler('chat.status', (data) => {
@@ -289,13 +289,13 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     })
     addHandler('chat.turn', (data) => {
       if (forThread(data)) {
-        historyResponseCache.delete(threadKey) // invalidate cache on new turn
+        historyResponseCache.delete(threadId) // invalidate cache on new turn
         send('turn', data)
       }
     })
     addHandler('chat.message.sent', (data) => {
       if (forThread(data)) {
-        historyResponseCache.delete(threadKey) // invalidate cache when a send is accepted
+        historyResponseCache.delete(threadId) // invalidate cache when a send is accepted
       }
     })
     addHandler('chat.compacting', (data) => {
@@ -324,7 +324,7 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     // Cleanup on disconnect
     req.on('close', () => {
       clearInterval(pingTimer)
-      chatModule.untrackSSEClient(threadKey)
+      chatModule.untrackSSEClient(threadId)
       for (const { event, handler } of handlers) {
         emitter.off(event, handler)
       }
