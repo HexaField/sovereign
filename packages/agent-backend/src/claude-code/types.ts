@@ -116,6 +116,10 @@ export interface ClaudeSessionState {
      *  values are reachable this way — `max` only takes effect at session start.
      *  Optional because the SDK build may not expose it. */
     setSettings?(settings: Record<string, unknown>): Promise<void>
+    /** Replace the active MCP server registration. Called from the PostCompact
+     *  hook to force a fresh `tools/list` against every server so the SDK's
+     *  deferred-tool catalog doesn't go stale across compact events. */
+    setMcpServers?(servers: Record<string, unknown>): Promise<unknown>
   }
 }
 

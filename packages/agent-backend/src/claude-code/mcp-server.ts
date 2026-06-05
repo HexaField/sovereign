@@ -99,16 +99,50 @@ export interface SovereignToolDeps {
 const okText = (text: string) => ({ content: [{ type: 'text' as const, text }] })
 const okJson = (obj: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }] })
 
+/**
+ * Strip the canonical-key prefix so the value matches what
+ * `cron.createUserMessageCron` expects (bare thread name).
+ *
+ *   `agent:main:thread:neural-nets` → `neural-nets`
+ *   `agent:main:main`               → `main`
+ *   `v2-app`                        → `v2-app`  (already bare, untouched)
+ */
+function bareThreadKey(key: string): string {
+  if (key === 'agent:main:main') return 'main'
+  if (key.startsWith('agent:main:thread:')) return key.slice('agent:main:thread:'.length)
+  return key
+}
+
+/**
+ * Resolve the target thread for tools that schedule or send into a thread.
+ * Order of preference: explicit arg → the calling session's thread →
+ * throw with a clear message. Prevents the foot-gun where an agent in
+ * `neural-nets` forgets to pass `threadKey` and the cron silently lands
+ * in `main`.
+ */
+function resolveThreadKey(explicit: string | undefined, deps: SovereignToolDeps): string {
+  if (explicit && explicit.trim()) return explicit.trim()
+  const current = deps.currentSessionKey?.()
+  if (current) return bareThreadKey(current)
+  throw new Error(
+    'cron_create: threadKey is required when no calling session is attributable. ' +
+      'Pass `threadKey` explicitly (e.g. "main") or call from inside an active thread.'
+  )
+}
+
 export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerConfigWithInstance {
   const tools = [
     // ── cron ──────────────────────────────────────────────────────────────
     tool(
       'cron_create',
-      'Schedule a future user-message into a Sovereign thread. The prompt is delivered at fire time as if the user typed it. Use this for reminders, recurring check-ins, follow-ups.',
+      'Schedule a future user-message. Defaults to the CALLING thread when `threadKey` is omitted — i.e. the message is delivered back into the same thread the agent is currently running in. Pass `threadKey` explicitly only to cross-post into a different thread.',
       {
         threadKey: z
           .string()
-          .describe('Logical thread key — bare name (e.g. "main", "v2-app") or full agent:main:thread:<x> form.'),
+          .optional()
+          .describe(
+            'Optional. Logical thread key — bare name (e.g. "v2-app") or full `agent:main:thread:<x>` form. When omitted, defaults to the calling thread. Pass `"main"` (or any other thread) to target a different one.'
+          ),
         when: z
           .object({
             kind: z.enum(['cron', 'interval', 'oneshot']),
@@ -128,13 +162,14 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
         if (sched.kind === 'cron' && !sched.expr) throw new Error('cron_create: kind=cron requires expr')
         if (sched.kind === 'interval' && !sched.everyMs) throw new Error('cron_create: kind=interval requires everyMs')
         if (sched.kind === 'oneshot' && !sched.at) throw new Error('cron_create: kind=oneshot requires at')
+        const resolvedThreadKey = resolveThreadKey(args.threadKey, deps)
         const result = await deps.cron.createUserMessageCron({
-          threadKey: args.threadKey,
+          threadKey: resolvedThreadKey,
           schedule: sched,
           prompt: args.prompt,
           label: args.label
         })
-        return okJson({ id: result.id, schedule: result.schedule, threadKey: args.threadKey })
+        return okJson({ id: result.id, schedule: result.schedule, threadKey: resolvedThreadKey })
       }
     ),
     tool(

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Standalone MCP server daemon. Independent lifecycle from `com.sovereign.server`
+  so a Sovereign rebuild leaves the SDK's MCP tool catalog intact — the SDK sees
+  the same stable URL across daemon bounces and the deferred-tool registry
+  doesn't go stale.
+
+  Placeholders replaced by `bin/sovereign install-mcp` at install time.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sovereign.mcp</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>MCP_LAUNCH_SCRIPT_PLACEHOLDER</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>REPO_DIR_PLACEHOLDER</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SOVEREIGN_URL</key>
+        <string>http://127.0.0.1:5801</string>
+        <key>SOVEREIGN_MCP_PORT</key>
+        <string>5802</string>
+        <key>SOVEREIGN_MCP_HOST</key>
+        <string>127.0.0.1</string>
+        <!-- Uncomment if you want auth on the RPC façade:
+        <key>SOVEREIGN_MCP_RPC_SECRET</key>
+        <string>shared-secret-here</string>
+        -->
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>MCP_STDOUT_LOG_PLACEHOLDER</string>
+    <key>StandardErrorPath</key>
+    <string>MCP_STDERR_LOG_PLACEHOLDER</string>
+</dict>
+</plist>
