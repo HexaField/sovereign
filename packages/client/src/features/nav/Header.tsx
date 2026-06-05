@@ -513,8 +513,8 @@ function WorkspaceHeaderContent() {
     const key = threadKey()
     if (!key) return 'No thread'
     // Check regular threads first
-    const t = threads().find((th) => th.key === key)
-    if (t) return t.label ?? t.key
+    const t = threads().find((th) => th.id === key)
+    if (t) return t.label ?? t.id
     // Check if it's a subagent session key — find label from activeSubagents
     const subs = activeSubagents()
     for (const children of Object.values(subs)) {
@@ -677,7 +677,7 @@ function WorkspaceHeaderContent() {
           >
             <For
               each={threads()
-                .filter((t) => t.key)
+                .filter((t) => t.id)
                 .sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}
             >
               {(t) => (
@@ -685,29 +685,29 @@ function WorkspaceHeaderContent() {
                   <div
                     class="group relative flex w-full items-center text-left text-sm transition-colors"
                     style={{
-                      color: t.key === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
-                      background: t.key === threadKey() ? 'var(--c-hover-bg)' : undefined
+                      color: t.id === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
+                      background: t.id === threadKey() ? 'var(--c-hover-bg)' : undefined
                     }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
                     onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = t.key === threadKey() ? 'var(--c-hover-bg)' : '')
+                      (e.currentTarget.style.background = t.id === threadKey() ? 'var(--c-hover-bg)' : '')
                     }
                   >
                     <a
                       class="flex flex-1 items-center gap-2 px-3 py-2 no-underline"
-                      href={`?view=workspace${ws()?.orgId && ws()?.orgId !== '_global' ? `&workspace=${ws()?.orgId}` : ''}#thread=${t.key}`}
+                      href={`?view=workspace${ws()?.orgId && ws()?.orgId !== '_global' ? `&workspace=${ws()?.orgId}` : ''}#thread=${t.id}`}
                       style={{ color: 'inherit' }}
                       onClick={(e) => {
                         if (e.metaKey || e.ctrlKey) return // let browser open new tab
                         e.preventDefault()
-                        switchThread(t.key)
+                        switchThread(t.id)
                         setThreadPickerOpen(false)
                       }}
                     >
-                      <Show when={t.key === threadKey()}>
+                      <Show when={t.id === threadKey()}>
                         <span class="text-xs">●</span>
                       </Show>
-                      <span class="truncate">{t.label ?? t.key}</span>
+                      <span class="truncate">{t.label ?? t.id}</span>
                       <Show when={t.lastActivity}>
                         <span class="ml-auto shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
                           {relativeTime(t.lastActivity)}
@@ -722,12 +722,12 @@ function WorkspaceHeaderContent() {
                         title="Move to workspace"
                         onClick={(e) => {
                           e.stopPropagation()
-                          setMoveThreadKey(moveThreadKey() === t.key ? null : t.key)
+                          setMoveThreadKey(moveThreadKey() === t.id ? null : t.id)
                         }}
                       >
                         ⇄
                       </button>
-                      <Show when={moveThreadKey() === t.key}>
+                      <Show when={moveThreadKey() === t.id}>
                         <div
                           class="absolute top-0 left-full z-[210] ml-1 min-w-[150px] overflow-hidden rounded-lg shadow-lg"
                           style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
@@ -746,7 +746,7 @@ function WorkspaceHeaderContent() {
                                 onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
                                 onMouseLeave={(e) => (e.currentTarget.style.background = '')}
                                 onClick={() => {
-                                  moveThread(t.key, org.id)
+                                  moveThread(t.id, org.id)
                                   setMoveThreadKey(null)
                                   setThreadPickerOpen(false)
                                 }}
@@ -759,9 +759,9 @@ function WorkspaceHeaderContent() {
                       </Show>
                     </div>
                   </div>
-                  <Show when={(activeSubagents()[t.key] || []).length > 0}>
+                  <Show when={(activeSubagents()[t.id] || []).length > 0}>
                     <SubagentTree
-                      subagents={activeSubagents()[t.key]}
+                      subagents={activeSubagents()[t.id]}
                       allSubagents={activeSubagents()}
                       depth={1}
                       activeKey={threadKey()}

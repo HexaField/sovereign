@@ -42,7 +42,7 @@ function debounceSaveDraftToServer(threadKey: string, text: string): void {
     fetch('/api/chat/draft', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threadKey, text })
+      body: JSON.stringify({ threadId: threadKey, text })
     }).catch(() => {
       /* ignore */
     })
@@ -256,7 +256,7 @@ export async function sendMessage(text: string, attachments?: File[]): Promise<v
   lastSentText = text
   lastSentTime = now
 
-  let body: Record<string, unknown> = { threadKey, message: text }
+  let body: Record<string, unknown> = { threadId: threadKey, message: text }
   if (attachments?.length) {
     const base64Files = await Promise.all(
       attachments.map(async (f) => {

@@ -13,9 +13,9 @@ export function createForwardHandler(bus: EventBus, threadManager: ThreadManager
     targetKey: string,
     message: ForwardedMessage
   ): { success: boolean; error?: string } {
-    const source = threadManager.get(sourceKey)
+    const source = threadManager.resolve(sourceKey)
     if (!source) return { success: false, error: 'Source thread not found' }
-    const target = threadManager.get(targetKey)
+    const target = threadManager.resolve(targetKey)
     if (!target) return { success: false, error: 'Target thread not found' }
 
     bus.emit({

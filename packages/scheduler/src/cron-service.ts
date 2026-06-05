@@ -63,10 +63,13 @@ export function formatCronPrompt(label: string | undefined, prompt: string): str
   return `${tag} ${prompt}`
 }
 
+// Bare-UUID scheme: the routing layer keys sessions by bare Thread.id. Coerce
+// any legacy compound thread key to its bare id before routing a cron fire.
 function canonicalSessionKey(threadKey: string): string {
-  if (threadKey.startsWith('agent:')) return threadKey
-  if (threadKey === 'main') return 'agent:main:main'
-  return `agent:main:thread:${threadKey}`
+  if (threadKey === 'agent:main:main') return 'main'
+  if (threadKey.startsWith('agent:main:thread:')) return threadKey.slice('agent:main:thread:'.length)
+  if (threadKey.startsWith('agent:main:subagent:')) return threadKey.slice('agent:main:subagent:'.length)
+  return threadKey
 }
 
 export interface CronServiceOptions {

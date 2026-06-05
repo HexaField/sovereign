@@ -64,6 +64,23 @@ function bareModelName(model: string): string {
 }
 
 const SUBAGENT_SESSION_PREFIX = 'agent:main:subagent:'
+const THREAD_SESSION_PREFIX = 'agent:main:thread:'
+
+/**
+ * Coerce any session/thread reference to its bare id. Bare-UUID scheme:
+ * threads are keyed by Thread.id (UUID), subagents by the SDK
+ * backendSessionId. Legacy `agent:main:thread:<x>` / `agent:main:subagent:<x>`
+ * / `agent:main:main` compound forms are stripped so lingering legacy callers
+ * — and pre-migration on-disk data read before the one-shot migration runs —
+ * still resolve.
+ */
+function bareId(value: string): string {
+  if (!value) return value
+  if (value.startsWith(THREAD_SESSION_PREFIX)) return value.slice(THREAD_SESSION_PREFIX.length)
+  if (value.startsWith(SUBAGENT_SESSION_PREFIX)) return value.slice(SUBAGENT_SESSION_PREFIX.length)
+  if (value === 'agent:main:main') return 'main'
+  return value
+}
 
 // SDK built-in scheduling tools. These depend on `claude daemon` which we
 // deliberately do not run — their schedules would never fire and would
@@ -319,11 +336,9 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     if (!activeSessions) return
     const reg = deps.registry?.lookupSession?.(state.sessionKey) ?? null
     const threadKey = reg && 'threadKey' in (reg as object) ? (reg as { threadKey?: string }).threadKey : undefined
-    const inferredThreadKey =
-      threadKey ??
-      (state.sessionKey.startsWith('agent:main:thread:')
-        ? state.sessionKey.slice('agent:main:thread:'.length)
-        : state.sessionKey)
+    // Bare-UUID scheme: the sessionKey already IS the thread id. Prefer the
+    // registry's threadKey when present, else fall back to the (bare) key.
+    const inferredThreadKey = threadKey ?? bareId(state.sessionKey)
     const status: 'working' | 'thinking' = state.agentStatus === 'thinking' ? 'thinking' : 'working'
     let lastJsonlSize: number | undefined
     if (state.sessionFile) {
@@ -390,9 +405,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   })
   emitter.on('subagent.spawned', (data) => {
     if (!data.parentKey) return
-    const backendId = data.childKey.startsWith(SUBAGENT_SESSION_PREFIX)
-      ? data.childKey.slice(SUBAGENT_SESSION_PREFIX.length)
-      : data.childKey
+    const backendId = bareId(data.childKey)
     activeSessions?.addSubagent(data.parentKey, {
       agentId: backendId,
       label: data.label,
@@ -401,9 +414,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   })
   emitter.on('subagent.completed', (data) => {
     if (!data.parentKey) return
-    const backendId = data.childKey.startsWith(SUBAGENT_SESSION_PREFIX)
-      ? data.childKey.slice(SUBAGENT_SESSION_PREFIX.length)
-      : data.childKey
+    const backendId = bareId(data.childKey)
     activeSessions?.removeSubagent(data.parentKey, backendId)
   })
 
@@ -412,14 +423,14 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     emitter.emit('backend.status', { status, reason })
   }
 
+  // Bare-UUID identity scheme: a session's canonical key IS its bare id.
+  // Thread sessions are keyed by the Thread.id (UUID); subagents by their
+  // SDK-assigned backendSessionId; an unbound session falls back to its own
+  // backend id.
   function canonicalSessionKey(opts: { kind?: SessionKind; threadKey?: string; backendSessionId: string }): string {
-    if (opts.kind === 'subagent') return `${SUBAGENT_SESSION_PREFIX}${opts.backendSessionId}`
-    if (opts.threadKey) {
-      if (opts.threadKey === 'main') return 'agent:main:main'
-      if (opts.threadKey.startsWith('agent:')) return opts.threadKey
-      return `agent:main:thread:${opts.threadKey}`
-    }
-    return `agent:main:thread:${opts.backendSessionId}`
+    if (opts.kind === 'subagent') return opts.backendSessionId
+    if (opts.threadKey) return bareId(opts.threadKey)
+    return opts.backendSessionId
   }
 
   function ensureSessionState(opts: {
@@ -603,7 +614,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       if (!parent) return { continue: true }
       const parentKey = parent.sessionKey
       const inp = input as Extract<HookInput, { hook_event_name: 'SubagentStart' }>
-      const childKey = `${SUBAGENT_SESSION_PREFIX}${inp.agent_id}`
+      // Bare-UUID scheme: a subagent's canonical key is its SDK agent id.
+      const childKey = inp.agent_id
       internal.subagentToParent.set(inp.agent_id, parentKey)
       const child = ensureSessionState({
         sessionKey: childKey,
@@ -644,7 +656,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       // session_id, which the SDK fires from the parent's context.
       const parentKey = internal.subagentToParent.get(inp.agent_id) ?? stateForHook(input)?.sessionKey
       if (!parentKey) return { continue: true }
-      const childKey = `${SUBAGENT_SESSION_PREFIX}${inp.agent_id}`
+      const childKey = inp.agent_id
       const parent = internal.sessions.get(parentKey)
       parent?.liveSubagents.delete(inp.agent_id)
       const child = internal.sessions.get(childKey)
@@ -946,10 +958,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       // binding immediately so cold restart + history endpoints can find
       // the session JSONL without needing to call sendMessage first.
       if (!existing) {
-        const threadKey = sessionKey.startsWith('agent:main:thread:')
-          ? sessionKey.slice('agent:main:thread:'.length)
-          : sessionKey
-        persistRegistry(state, threadKey)
+        persistRegistry(state, bareId(sessionKey))
       }
     }
     getOrStartSession(state)
@@ -1093,11 +1102,9 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   async function listSessions(filter?: { kind?: SessionKind; parentKey?: string }): Promise<SessionSummary[]> {
     const out: SessionSummary[] = []
     for (const state of internal.sessions.values()) {
-      const kind = state.sessionKey.includes(':subagent:')
-        ? 'subagent'
-        : state.sessionKey.endsWith(':main')
-          ? 'main'
-          : 'thread'
+      // Bare-UUID scheme: the key no longer encodes kind. A session with a
+      // recorded parent is a subagent; everything else is a thread.
+      const kind: SessionKind = state.parentSessionKey ? 'subagent' : 'thread'
       if (filter?.kind && filter.kind !== kind) continue
       if (filter?.parentKey && state.parentSessionKey !== filter.parentKey) continue
       let lastActivity = 0
