@@ -141,6 +141,15 @@ export const schema = {
         separator: { ...stringHot }
       },
       additionalProperties: false
+    },
+    seed: {
+      type: 'object',
+      properties: {
+        membraneId: { ...stringRestart },
+        membraneName: { ...stringRestart },
+        threadLabel: { ...stringRestart }
+      },
+      additionalProperties: false
     }
   },
   additionalProperties: false

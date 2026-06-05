@@ -1086,8 +1086,9 @@ function truncate(s: string, max: number): string {
 
 function shortPath(p: string): string {
   if (!p) return ''
-  const home = '/Users/josh'
-  if (p.startsWith(home)) p = '~' + p.slice(home.length)
+  // Collapse any user's home dir to `~` without assuming a specific username —
+  // matches /Users/<name>/ (macOS) and /home/<name>/ (Linux).
+  p = p.replace(/^\/(?:Users|home)\/[^/]+\//, '~/')
   const parts = p.split('/')
   if (parts.length > 4) return '…/' + parts.slice(-3).join('/')
   return p

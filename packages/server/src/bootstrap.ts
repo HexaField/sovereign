@@ -239,14 +239,22 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     })
   }
   const threadManager = createThreadManager(bus, dataDir)
-  // System threads default to the `personal` membrane. If that membrane
-  // doesn't exist yet (fresh install), membraneId stays undefined and the
-  // UI surfaces the thread as unassigned — harmless.
-  // Idempotent seed: look up by LABEL (post-UUID refactor, `get()` is keyed by
-  // UUID and would never match a human label — the old bug here minted a fresh
-  // duplicate of each on every boot).
-  for (const label of ['main', 'upgrades', 'v2-app']) {
-    if (!threadManager.getByLabel(label)) threadManager.create({ label, membraneId: 'personal' })
+  // First-boot seed (config-driven via `cfg.seed`). The runtime makes NO
+  // standing assumptions about which threads or membranes exist — this just
+  // gives a fresh install one usable thread + its membrane. Both pieces are
+  // opt-out (empty config value) and idempotent:
+  //   • the default membrane is created only if its id is set AND absent;
+  //   • the default thread is created only when the registry is EMPTY, so we
+  //     never re-mint it once the user has threads of their own (and never
+  //     duplicate across boots).
+  if (cfg.seed.membraneId && !membraneManager.getMembrane(cfg.seed.membraneId)) {
+    membraneManager.createMembrane({
+      id: cfg.seed.membraneId,
+      name: cfg.seed.membraneName || cfg.seed.membraneId
+    })
+  }
+  if (cfg.seed.threadLabel && threadManager.list().length === 0) {
+    threadManager.create({ label: cfg.seed.threadLabel, membraneId: cfg.seed.membraneId || undefined })
   }
 
   // Voice / Recordings / Meetings (config-driven URLs; hot-reloadable)
@@ -403,12 +411,19 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         threadLabel: string
         text: string
       }
-      threadManager.create({ label: threadLabel, membraneId: 'personal' })
-      const sessionKey = `agent:main:thread:${threadKey}`
+      // Idempotent: reuse the thread if we already have one (by canonical id
+      // or by label) — never mint a fresh duplicate per inbound message. The
+      // session key is the bare thread UUID (post thread-UUID refactor); the
+      // membrane is the configured default, or unassigned when none is set.
+      const thread =
+        threadManager.resolve(threadKey) ??
+        threadManager.getByLabel(threadLabel) ??
+        threadManager.create({ label: threadLabel, membraneId: cfg.seed.membraneId || undefined })
+      const sessionKey = thread.id
       try {
         await routingBackend.forSession(sessionKey).sendMessage(sessionKey, text)
       } catch (err: unknown) {
-        console.error('[ad4m] thread message injection failed:', threadKey, (err as Error)?.message)
+        console.error('[ad4m] thread message injection failed:', thread.id, (err as Error)?.message)
       }
     })
   }

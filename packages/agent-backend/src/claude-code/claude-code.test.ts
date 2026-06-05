@@ -827,9 +827,9 @@ describe('claude-code/system-config-with-overrides wiring', () => {
     return stub.captured.options
   }
 
-  it("passes settingSources: ['user', 'project', 'local'] so the CLI loads system config", async () => {
+  it("passes settingSources: ['user', 'local'] (project source dropped to avoid duplicate cozempic hooks)", async () => {
     const options = await captureOptions()
-    expect(options.settingSources).toEqual(['user', 'project', 'local'])
+    expect(options.settingSources).toEqual(['user', 'local'])
   })
 
   it('keeps the specific Sovereign overrides intact alongside system config', async () => {
