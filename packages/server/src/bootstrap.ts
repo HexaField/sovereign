@@ -327,7 +327,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     claudeCodeBackend,
     sessionsRegistry,
     activeSessions,
-    createSovereignMcpInstance
+    createSovereignMcpInstance,
+    mcpRpcRouter
   } = wireAgentBackend({
     bus,
     dataDir,
@@ -343,6 +344,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     browserService
   })
   app.use(createSchedulerRoutes(scheduler, cronService))
+  // RPC façade consumed by `@sovereign/mcp-sidecar`. Exposes every MCP tool
+  // at `POST /api/mcp-rpc/:tool`. Mounted unconditionally — auth (when
+  // wanted) is via `SOVEREIGN_MCP_RPC_SECRET` env on the sidecar side.
+  app.use(mcpRpcRouter)
 
   // Sovereign MCP over Streamable HTTP — per-session transport pattern.
   // Each initialize request creates a fresh McpServer + transport pair (session-scoped).

@@ -79,4 +79,75 @@ describe('claude-code/mcp-server', () => {
       }
     }
   })
+
+  /**
+   * Regression for "crons created inside neural-nets all fell into main."
+   *
+   * Pre-fix `threadKey` was required, and any cron the agent forgot to
+   * scope explicitly defaulted to whatever name appeared in the model's
+   * mental model (often "main"). Post-fix the default is the CALLING
+   * thread, resolved via `deps.currentSessionKey()`. Cross-posting still
+   * works when `threadKey` is passed explicitly.
+   */
+  describe('cron_create defaults to the calling thread', () => {
+    /**
+     * Helper: invoke `cron_create` directly via the underlying tool
+     * handler the MCP server registered. We bypass the SDK transport and
+     * read the captured tool definitions off the McpServer instance.
+     */
+    function invokeCronCreate(deps: SovereignToolDeps, args: Record<string, unknown>) {
+      const cfg = createSovereignMcpServer(deps) as any
+      const registered = cfg.instance?._registeredTools ?? cfg.instance?.registeredTools ?? {}
+      const handler = registered.cron_create?.callback ?? registered.cron_create?.handler
+      if (typeof handler !== 'function') {
+        throw new Error('cron_create handler not exposed on the McpServer instance — test plumbing drift')
+      }
+      return handler(args, {})
+    }
+
+    it('uses the current thread (via currentSessionKey) when threadKey is omitted', async () => {
+      const createSpy = vi.fn().mockResolvedValue({ id: 'cron-x', schedule: 'every 60s' })
+      const deps = makeDeps({
+        cron: { createUserMessageCron: createSpy, list: vi.fn(), remove: vi.fn() } as any,
+        currentSessionKey: () => 'agent:main:thread:neural-nets'
+      })
+      await invokeCronCreate(deps, { when: { kind: 'interval', everyMs: 60000 }, prompt: 'tick' })
+      expect(createSpy).toHaveBeenCalledTimes(1)
+      // Verifies the fix: handler resolved the canonical session key to the
+      // bare thread name `neural-nets`, not the prefixed form, and certainly
+      // not `main`.
+      expect(createSpy.mock.calls[0][0].threadKey).toBe('neural-nets')
+    })
+
+    it('honours an explicit threadKey to cross-post into a different thread', async () => {
+      const createSpy = vi.fn().mockResolvedValue({ id: 'cron-y', schedule: 'every 60s' })
+      const deps = makeDeps({
+        cron: { createUserMessageCron: createSpy, list: vi.fn(), remove: vi.fn() } as any,
+        currentSessionKey: () => 'agent:main:thread:neural-nets'
+      })
+      await invokeCronCreate(deps, {
+        threadKey: 'maps',
+        when: { kind: 'oneshot', at: '2099-01-01T00:00:00Z' },
+        prompt: 'cross-post'
+      })
+      expect(createSpy.mock.calls[0][0].threadKey).toBe('maps')
+    })
+
+    it('strips agent:main:main → main when currentSessionKey is the canonical main key', async () => {
+      const createSpy = vi.fn().mockResolvedValue({ id: 'cron-z', schedule: 'every 60s' })
+      const deps = makeDeps({
+        cron: { createUserMessageCron: createSpy, list: vi.fn(), remove: vi.fn() } as any,
+        currentSessionKey: () => 'agent:main:main'
+      })
+      await invokeCronCreate(deps, { when: { kind: 'interval', everyMs: 60000 }, prompt: 'tick' })
+      expect(createSpy.mock.calls[0][0].threadKey).toBe('main')
+    })
+
+    it('throws a clear error when threadKey is omitted AND no calling session is attributable', async () => {
+      const deps = makeDeps({ currentSessionKey: () => undefined })
+      await expect(
+        invokeCronCreate(deps, { when: { kind: 'interval', everyMs: 60000 }, prompt: 'tick' })
+      ).rejects.toThrow(/threadKey is required/)
+    })
+  })
 })
