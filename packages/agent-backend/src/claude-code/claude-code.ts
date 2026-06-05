@@ -2,6 +2,17 @@
 // to host a per-thread session per Sovereign thread. Subagents, hooks, MCP
 // tools, compaction events, and history all flow through the SDK; the
 // adapter translates them to Sovereign's event bus.
+//
+// Design intent: defer to the user's Claude Code system configuration —
+// settings.json, ~/.claude/CLAUDE.md, plugins, MCP servers — and override
+// only the specific things Sovereign needs (its state-tracking hooks,
+// the `sovereign` MCP server, scheduling-tool redirect, bypass-permissions
+// for trusted local execution). A Sovereign-hosted thread should behave
+// the same as a direct `claude` CLI / VS Code session unless Sovereign
+// has a specific reason to differ. The CLI subprocess loads user / project
+// / local settings.json (including their hooks) natively via the
+// `settingSources` option below; Sovereign's hooks register alongside
+// them at the SDK matcher level so both fire per event.
 
 import path from 'node:path'
 import fs from 'node:fs'
@@ -716,6 +727,11 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       return { continue: true }
     }
 
+    // Sovereign's programmatic hooks only — user settings.json hooks
+    // (cozempic, plugin hooks) are fired by the CLI subprocess directly
+    // via `settingSources: ['user', 'project', 'local']`. Wrapping them
+    // programmatically here would double-fire (the CLI runs each shell
+    // command once natively, the wrapper would run it a second time).
     return {
       SessionStart: [{ hooks: [onSessionStart] }],
       UserPromptSubmit: [{ hooks: [onUserPromptSubmit] }],
@@ -820,6 +836,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       allowedTools: defaultTools,
       mcpServers,
       hooks: buildHooks(),
+      // Load all filesystem-backed settings sources (user, project, local)
+      // so Sovereign-hosted sessions pick up the user's Claude Code config
+      // — settings.json, plugins, ~/.claude/CLAUDE.md walk-up — exactly
+      // like a direct CLI session does. This matches the SDK's documented
+      // default; we set it explicitly so the intent is visible in code.
+      settingSources: ['user', 'project', 'local'],
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
