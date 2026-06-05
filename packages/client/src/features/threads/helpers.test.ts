@@ -1,17 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import type { ThreadInfo } from './store.js'
 import { getThreadDisplayName, getEntityIcon, groupThreadsByWorkspace, formatRelativeTime } from './helpers.js'
-
-function makeThread(overrides: Partial<ThreadInfo> = {}): ThreadInfo {
-  return {
-    key: 'test',
-    entities: [],
-    lastActivity: Date.now(),
-    unreadCount: 0,
-    agentStatus: 'idle',
-    ...overrides
-  } as ThreadInfo
-}
+import { makeThread } from './test-factory.js'
 
 describe('§5.5 Thread Helpers', () => {
   it('getThreadDisplayName MUST derive name from primary entity (branch name)', () => {
@@ -49,11 +38,11 @@ describe('§5.5 Thread Helpers', () => {
   it('groupThreadsByWorkspace MUST group by {orgId}/{projectId} key', () => {
     const threads = [
       makeThread({
-        key: 'a',
+        id: 'a',
         entities: [{ orgId: 'org1', projectId: 'proj1', entityType: 'branch', entityRef: 'main' }]
       }),
-      makeThread({ key: 'b', entities: [{ orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '#1' }] }),
-      makeThread({ key: 'c', entities: [{ orgId: 'org2', projectId: 'proj2', entityType: 'pr', entityRef: '#3' }] })
+      makeThread({ id: 'b', entities: [{ orgId: 'org1', projectId: 'proj1', entityType: 'issue', entityRef: '#1' }] }),
+      makeThread({ id: 'c', entities: [{ orgId: 'org2', projectId: 'proj2', entityType: 'pr', entityRef: '#3' }] })
     ]
     const grouped = groupThreadsByWorkspace(threads)
     expect(grouped.get('org1/proj1')?.length).toBe(2)
@@ -61,7 +50,7 @@ describe('§5.5 Thread Helpers', () => {
   })
 
   it('groupThreadsByWorkspace MUST group global threads under "global" key', () => {
-    const threads = [makeThread({ key: 'g1' }), makeThread({ key: 'g2' })]
+    const threads = [makeThread({ id: 'g1' }), makeThread({ id: 'g2' })]
     const grouped = groupThreadsByWorkspace(threads)
     expect(grouped.get('global')?.length).toBe(2)
   })

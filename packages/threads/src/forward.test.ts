@@ -115,10 +115,10 @@ describe('§5.4 Message Forwarding (Server)', () => {
   it('MUST support forwarding across workspaces (project A to project B)', () => {
     const e1 = { orgId: 'org1', projectId: 'projA', entityType: 'issue' as const, entityRef: '1' }
     const e2 = { orgId: 'org1', projectId: 'projB', entityType: 'issue' as const, entityRef: '2' }
-    tm.create({ entities: [e1] })
-    tm.create({ entities: [e2] })
-    const msg = makeMessage({ sourceThread: 'org1/projA/issue:1' })
-    const result = fh.forward('org1/projA/issue:1', 'org1/projB/issue:2', msg)
+    const t1 = tm.create({ label: 'projA-issue-1', entities: [e1] })
+    const t2 = tm.create({ label: 'projB-issue-2', entities: [e2] })
+    const msg = makeMessage({ sourceThread: t1.id })
+    const result = fh.forward(t1.id, t2.id, msg)
     expect(result.success).toBe(true)
   })
 

@@ -34,28 +34,28 @@ export type ChatEventHandler = (data: Record<string, unknown>) => void
 
 export interface ChatModule {
   status(): ModuleStatus
-  handleSend(threadKey: string, text: string, attachments?: Buffer[]): Promise<void>
-  handleAbort(threadKey: string): Promise<void>
-  handleHistory(threadKey: string, deviceId: string): Promise<void>
-  handleFullHistory(threadKey: string, deviceId: string): Promise<void>
-  handleSessionSwitch(threadKey: string): Promise<void>
-  handleSessionCreate(label?: string): Promise<{ threadKey: string; sessionKey: string }>
-  getSessionKeyForThread(threadKey: string): string | undefined
+  handleSend(threadId: string, text: string, attachments?: Buffer[]): Promise<void>
+  handleAbort(threadId: string): Promise<void>
+  handleHistory(threadId: string, deviceId: string): Promise<void>
+  handleFullHistory(threadId: string, deviceId: string): Promise<void>
+  handleSessionSwitch(threadId: string): Promise<void>
+  handleSessionCreate(label?: string): Promise<{ threadId: string; sessionKey: string }>
+  getSessionKeyForThread(threadId: string): string | undefined
   getThreadKeyForSession(sessionKey: string): string | undefined
   loadMapping(): void
-  /** Chat-level event emitter for SSE subscriptions. Events have threadKey resolved. */
+  /** Chat-level event emitter for SSE subscriptions. Events have threadId resolved. */
   chatEvents: EventEmitter
   /** Get cached live state for a thread (for SSE replay on connect) */
-  getLiveState(threadKey: string): { status?: string; work?: any[]; streamText?: string }
+  getLiveState(threadId: string): { status?: string; work?: any[]; streamText?: string }
   /** Ensure the JSONL poll is running for a thread — call when SSE connects */
-  ensurePolling(threadKey: string, forceStatus?: string): void
+  ensurePolling(threadId: string, forceStatus?: string): void
   /** Track SSE client connect/disconnect for a thread */
-  trackSSEClient(threadKey: string): void
-  untrackSSEClient(threadKey: string): void
-  /** Resolve a threadKey to a sessionKey, creating mapping if needed */
-  resolveSessionKey(threadKey: string): string
+  trackSSEClient(threadId: string): void
+  untrackSSEClient(threadId: string): void
+  /** Resolve a threadId to a sessionKey, creating mapping if needed */
+  resolveSessionKey(threadId: string): string
   /** Current snapshot of the server-side outbound queue for a thread. */
-  getQueueSnapshot(threadKey: string): QueuedMessage[]
+  getQueueSnapshot(threadId: string): QueuedMessage[]
   /** Cancel a queued or failed message by id. No-op for in-flight messages. */
   cancelQueued(id: string): boolean
   /** Re-enqueue a previously-failed message, putting it back to head of queue. */
@@ -80,7 +80,7 @@ export function createChatModule(
   const chatEvents = new EventEmitter()
   chatEvents.setMaxListeners(100) // support many SSE connections
 
-  // Bidirectional mapping: threadKey <-> sessionKey
+  // Bidirectional mapping: threadId <-> sessionKey
   const threadToSession = new Map<string, string>()
   const sessionToThread = new Map<string, string>()
 
@@ -124,11 +124,11 @@ export function createChatModule(
   /** Threads with an in-flight send (queue head is in 'sending' status, agent
    * is processing). Used so dispatcher does not double-send while an
    * adapter+agent are mid-turn. */
-  const inFlightByThread = new Map<string, string>() // threadKey -> queue id
+  const inFlightByThread = new Map<string, string>() // threadId -> queue id
 
-  function emitQueueSnapshot(threadKey: string): void {
-    const items = messageQueue.snapshot(threadKey)
-    const payload = { threadKey, items }
+  function emitQueueSnapshot(threadId: string): void {
+    const items = messageQueue.snapshot(threadId)
+    const payload = { threadId, items }
     if (wsHandler) {
       wsHandler.broadcastToChannel('chat', { type: 'chat.queue', ...payload })
     }
@@ -138,23 +138,23 @@ export function createChatModule(
   // Any queue mutation re-broadcasts the affected thread's snapshot. Clients
   // are declarative — they trust whatever they last saw on `chat.queue`.
   messageQueue.onChange((change) => {
-    emitQueueSnapshot(change.threadKey)
+    emitQueueSnapshot(change.threadId)
   })
 
   /** Attempt to send the head of the queue for a thread if no send is
    * already in flight and the head is in 'queued' status. */
-  async function pumpQueue(threadKey: string): Promise<void> {
-    if (inFlightByThread.has(threadKey)) return
-    const head = messageQueue.peek(threadKey)
+  async function pumpQueue(threadId: string): Promise<void> {
+    if (inFlightByThread.has(threadId)) return
+    const head = messageQueue.peek(threadId)
     if (!head || head.status !== 'queued') return
 
-    let sessionKey = threadToSession.get(threadKey)
+    let sessionKey = threadToSession.get(threadId)
     if (!sessionKey) {
-      sessionKey = deriveSessionKey(threadKey)
-      setMapping(threadKey, sessionKey)
+      sessionKey = deriveSessionKey(threadId)
+      setMapping(threadId, sessionKey)
     }
 
-    inFlightByThread.set(threadKey, head.id)
+    inFlightByThread.set(threadId, head.id)
     messageQueue.markSending(head.id)
     // Record the in-flight prompt on the liveness index so Tier 1 resume
     // can correlate the queue head with the active session after a restart.
@@ -164,11 +164,11 @@ export function createChatModule(
       await backend.sendMessage(sessionKey, head.text)
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
-      console.error(`[chat] queue send failed for ${threadKey} (${head.id}): ${errMsg}`)
-      inFlightByThread.delete(threadKey)
+      console.error(`[chat] queue send failed for ${threadId} (${head.id}): ${errMsg}`)
+      inFlightByThread.delete(threadId)
       messageQueue.markFailed(head.id, errMsg)
       // Surface the error to clients via chat.error too — keeps existing UI behaviour.
-      const errorData = { threadKey, error: errMsg, retryAfterMs: 5000 }
+      const errorData = { threadId, error: errMsg, retryAfterMs: 5000 }
       if (wsHandler) {
         wsHandler.broadcastToChannel('chat', { type: 'chat.error', ...errorData })
       }
@@ -186,18 +186,18 @@ export function createChatModule(
       type: 'chat.message.sent',
       timestamp: new Date(sentAt).toISOString(),
       source: 'chat',
-      payload: { threadKey, text: head.text, timestamp: sentAt, queueId: head.id }
+      payload: { threadId, text: head.text, timestamp: sentAt, queueId: head.id }
     })
-    chatEvents.emit('chat.message.sent', { threadKey, text: head.text, timestamp: sentAt, queueId: head.id })
+    chatEvents.emit('chat.message.sent', { threadId, text: head.text, timestamp: sentAt, queueId: head.id })
   }
 
-  function completeInFlight(threadKey: string): void {
-    const id = inFlightByThread.get(threadKey)
+  function completeInFlight(threadId: string): void {
+    const id = inFlightByThread.get(threadId)
     if (!id) return
-    inFlightByThread.delete(threadKey)
+    inFlightByThread.delete(threadId)
     // Only remove if the entry is still in 'sending' (might already have been
     // cancelled / failed elsewhere).
-    const items = messageQueue.getQueue(threadKey)
+    const items = messageQueue.getQueue(threadId)
     const entry = items.find((m) => m.id === id)
     if (entry && entry.status === 'sending') {
       // Synthesize a user chat.turn so clients can promote the queue bubble
@@ -212,13 +212,13 @@ export function createChatModule(
         thinkingBlocks: []
       }
       if (wsHandler) {
-        wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadKey, turn: userTurn })
+        wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn: userTurn })
       }
-      chatEvents.emit('chat.turn', { threadKey, turn: userTurn })
+      chatEvents.emit('chat.turn', { threadId, turn: userTurn })
       messageQueue.removeSent(id)
     }
     // Try to dispatch any following queued message.
-    void pumpQueue(threadKey)
+    void pumpQueue(threadId)
   }
 
   // Reclaim queue heads left in 'sending' state by a previous process (crash
@@ -226,14 +226,14 @@ export function createChatModule(
   // never advanced). The new process has no in-memory ownership of these,
   // so pumpQueue would otherwise skip them forever. Reset to 'queued' and
   // pump each affected thread once.
-  for (const [threadKey, items] of messageQueue.getAllQueues()) {
+  for (const [threadId, items] of messageQueue.getAllQueues()) {
     const head = items[0]
     if (!head || head.status !== 'sending') continue
     console.log(
-      `[chat] orphaned 'sending' queue head on ${threadKey} (${head.id}, attempts=${head.attempts ?? 0}) — requeuing`
+      `[chat] orphaned 'sending' queue head on ${threadId} (${head.id}, attempts=${head.attempts ?? 0}) — requeuing`
     )
     if (messageQueue.markQueued(head.id)) {
-      void pumpQueue(threadKey)
+      void pumpQueue(threadId)
     }
   }
 
@@ -248,34 +248,34 @@ export function createChatModule(
   // Periodic check: if any thread has been "working" for too long, reset to idle
   setInterval(() => {
     const now = Date.now()
-    for (const [threadKey, changedAt] of statusChangedAt) {
-      const status = currentStatus.get(threadKey)
+    for (const [threadId, changedAt] of statusChangedAt) {
+      const status = currentStatus.get(threadId)
       if (status && status !== 'idle' && now - changedAt > STUCK_STATUS_TIMEOUT_MS) {
         console.log(
-          `[chat] stuck status recovery: ${threadKey} was '${status}' for ${Math.round((now - changedAt) / 1000)}s, resetting to idle`
+          `[chat] stuck status recovery: ${threadId} was '${status}' for ${Math.round((now - changedAt) / 1000)}s, resetting to idle`
         )
-        currentStatus.set(threadKey, 'idle')
-        statusChangedAt.set(threadKey, now)
-        persistLiveState(threadKey)
-        stopJsonlPoll(threadKey)
+        currentStatus.set(threadId, 'idle')
+        statusChangedAt.set(threadId, now)
+        persistLiveState(threadId)
+        stopJsonlPoll(threadId)
         // Broadcast the status change to clients
         if (wsHandler) {
-          wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadKey, status: 'idle' })
+          wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadId, status: 'idle' })
         }
-        chatEvents.emit('chat.status', { threadKey, status: 'idle' })
+        chatEvents.emit('chat.status', { threadId, status: 'idle' })
       }
     }
   }, 30_000) // Check every 30s
 
-  function setMapping(threadKey: string, sessionKey: string): void {
-    if (!threadKey || !sessionKey) return // Never store empty mappings
-    threadToSession.set(threadKey, sessionKey)
-    sessionToThread.set(sessionKey, threadKey)
+  function setMapping(threadId: string, sessionKey: string): void {
+    if (!threadId || !sessionKey) return // Never store empty mappings
+    threadToSession.set(threadId, sessionKey)
+    sessionToThread.set(sessionKey, threadId)
     persistMapping()
   }
 
   // --- Live state cache for replay on reconnect ---
-  // Backed by `<dataDir>/chat/live-state/<encodedThreadKey>.json` so resume
+  // Backed by `<dataDir>/chat/live-state/<encodedThreadId>.json` so resume
   // sees the same view as live operation (R1). The in-memory Maps are caches
   // over the file; on boot they're rehydrated from disk.
   const liveStateStore: WriteThroughStore<LiveStateEntry> = createWriteThroughStore<LiveStateEntry>({
@@ -296,18 +296,18 @@ export function createChatModule(
     if (value.statusChangedAt) statusChangedAt.set(key, value.statusChangedAt)
   }
 
-  function persistLiveState(threadKey: string): void {
-    const status = currentStatus.get(threadKey)
-    const work = currentWork.get(threadKey)
-    const streamText = currentStreamText.get(threadKey)
-    const changedAt = statusChangedAt.get(threadKey)
+  function persistLiveState(threadId: string): void {
+    const status = currentStatus.get(threadId)
+    const work = currentWork.get(threadId)
+    const streamText = currentStreamText.get(threadId)
+    const changedAt = statusChangedAt.get(threadId)
     // No active state for this thread — remove the per-thread file so the
     // directory mirrors `currently-non-idle` semantics.
     if (!status && (!work || work.length === 0) && !streamText) {
-      liveStateStore.remove(threadKey)
+      liveStateStore.remove(threadId)
       return
     }
-    liveStateStore.set(threadKey, {
+    liveStateStore.set(threadId, {
       status,
       work,
       streamText,
@@ -329,78 +329,78 @@ export function createChatModule(
   for (const eventName of backendEvents) {
     backend.on(eventName, (data: Record<string, unknown>) => {
       const sessionKey = data.sessionKey as string | undefined
-      const threadKey = sessionKey ? sessionToThread.get(sessionKey) : undefined
+      const threadId = sessionKey ? sessionToThread.get(sessionKey) : undefined
 
       // Cache live state per thread for replay on reconnect
-      if (threadKey) {
+      if (threadId) {
         if (eventName === 'chat.status') {
-          currentStatus.set(threadKey, data.status as string)
-          statusChangedAt.set(threadKey, Date.now())
-          persistLiveState(threadKey)
+          currentStatus.set(threadId, data.status as string)
+          statusChangedAt.set(threadId, Date.now())
+          persistLiveState(threadId)
           if (data.status === 'idle') {
-            stopJsonlPoll(threadKey)
+            stopJsonlPoll(threadId)
             // Agent finished a turn — clear any in-flight queue entry for this
             // thread (we've now seen the result hit our state) and try to send
             // the next queued message.
-            completeInFlight(threadKey)
+            completeInFlight(threadId)
           } else if (data.status === 'working' || data.status === 'thinking') {
             // Start polling JSONL for tool calls since gateway WS doesn't stream them
-            const sessionKey2 = threadToSession.get(threadKey) ?? deriveSessionKey(threadKey)
-            startJsonlPoll(threadKey, sessionKey2)
+            const sessionKey2 = threadToSession.get(threadId) ?? deriveSessionKey(threadId)
+            startJsonlPoll(threadId, sessionKey2)
           }
         } else if (eventName === 'chat.work') {
-          const items = currentWork.get(threadKey) ?? []
+          const items = currentWork.get(threadId) ?? []
           items.push(data.work)
           // Cap accumulated work items to prevent unbounded growth during long agent runs
           if (items.length > 200) items.splice(0, items.length - 200)
-          currentWork.set(threadKey, items)
+          currentWork.set(threadId, items)
           // Clear accumulated stream text when a tool call arrives —
           // the text before the tool call was captured as a thinking item
           if ((data.work as any)?.type === 'tool_call') {
-            currentStreamText.delete(threadKey)
+            currentStreamText.delete(threadId)
           }
-          persistLiveState(threadKey)
+          persistLiveState(threadId)
         } else if (eventName === 'chat.stream') {
-          const prev = currentStreamText.get(threadKey) ?? ''
-          currentStreamText.set(threadKey, prev + (data.text as string))
-          persistLiveState(threadKey)
+          const prev = currentStreamText.get(threadId) ?? ''
+          currentStreamText.set(threadId, prev + (data.text as string))
+          persistLiveState(threadId)
         } else if (eventName === 'chat.turn') {
           // Turn complete — clear cached state and invalidate history cache
-          currentStatus.delete(threadKey)
-          statusChangedAt.delete(threadKey)
-          currentWork.delete(threadKey)
-          currentStreamText.delete(threadKey)
-          persistLiveState(threadKey)
+          currentStatus.delete(threadId)
+          statusChangedAt.delete(threadId)
+          currentWork.delete(threadId)
+          currentStreamText.delete(threadId)
+          persistLiveState(threadId)
           // A turn completing also means we should release any in-flight
           // queue entry for this thread, even if no separate 'idle' status
           // event arrives. Idempotent with the chat.status handler above.
-          completeInFlight(threadKey)
+          completeInFlight(threadId)
         }
       }
 
       // Map WS message type
       const wsType = eventName === 'session.info' ? 'chat.session.info' : eventName
 
-      if (wsHandler && threadKey) {
+      if (wsHandler && threadId) {
         wsHandler.broadcastToChannel('chat', {
           type: wsType,
           ...data,
-          threadKey
+          threadId
         })
       }
 
       // Emit on chat-level emitter for SSE subscribers
-      if (threadKey) {
-        chatEvents.emit(wsType, { ...data, threadKey })
+      if (threadId) {
+        chatEvents.emit(wsType, { ...data, threadId })
       }
 
       // Emit bus event for chat.turn
-      if (eventName === 'chat.turn' && threadKey) {
+      if (eventName === 'chat.turn' && threadId) {
         bus.emit({
           type: 'chat.turn.completed',
           timestamp: new Date().toISOString(),
           source: 'chat',
-          payload: { threadKey, turn: data.turn }
+          payload: { threadId, turn: data.turn }
         })
       }
     })
@@ -413,8 +413,8 @@ export function createChatModule(
   const pollFilePositions = new Map<string, number>() // track file read position
   const pollSeenToolIds = new Map<string, Set<string>>()
   const sseClientCount = new Map<string, number>() // track active SSE clients per thread
-  function startJsonlPoll(threadKey: string, sessionKey: string): void {
-    if (pollTimers.has(threadKey)) return // already polling
+  function startJsonlPoll(threadId: string, sessionKey: string): void {
+    if (pollTimers.has(threadId)) return // already polling
 
     // Resolve the JSONL file path via the backend. Backends that don't expose
     // an on-disk session file skip live polling (they're expected to stream
@@ -425,16 +425,16 @@ export function createChatModule(
     // Start from current file size (only read NEW entries)
     try {
       const stat = fs.statSync(filePath)
-      pollFilePositions.set(threadKey, stat.size)
+      pollFilePositions.set(threadId, stat.size)
     } catch {
       return
     }
-    pollSeenToolIds.set(threadKey, new Set())
+    pollSeenToolIds.set(threadId, new Set())
 
     const timer = setInterval(() => {
       try {
         const stat = fs.statSync(filePath)
-        const lastPos = pollFilePositions.get(threadKey) ?? 0
+        const lastPos = pollFilePositions.get(threadId) ?? 0
         if (stat.size <= lastPos) return // no new data
 
         // Read only the new portion
@@ -442,11 +442,11 @@ export function createChatModule(
         const buf = Buffer.alloc(stat.size - lastPos)
         fs.readSync(fd, buf, 0, buf.length, lastPos)
         fs.closeSync(fd)
-        pollFilePositions.set(threadKey, stat.size)
+        pollFilePositions.set(threadId, stat.size)
 
         const newText = buf.toString('utf-8')
         const lines = newText.split('\n').filter(Boolean)
-        const seen = pollSeenToolIds.get(threadKey)!
+        const seen = pollSeenToolIds.get(threadId)!
 
         let latestThinking: { text: string; timestamp: number } | null = null
         for (const line of lines) {
@@ -485,12 +485,12 @@ export function createChatModule(
                 }
                 // Emit to clients
                 if (wsHandler) {
-                  wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
+                  wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadId, work })
                 }
-                chatEvents.emit('chat.work', { threadKey, work })
-                const items = currentWork.get(threadKey) ?? []
+                chatEvents.emit('chat.work', { threadId, work })
+                const items = currentWork.get(threadId) ?? []
                 items.push(work)
-                currentWork.set(threadKey, items)
+                currentWork.set(threadId, items)
               }
             }
 
@@ -509,12 +509,12 @@ export function createChatModule(
                   timestamp: Date.now()
                 }
                 if (wsHandler) {
-                  wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
+                  wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadId, work })
                 }
-                chatEvents.emit('chat.work', { threadKey, work })
-                const items = currentWork.get(threadKey) ?? []
+                chatEvents.emit('chat.work', { threadId, work })
+                const items = currentWork.get(threadId) ?? []
                 items.push(work)
-                currentWork.set(threadKey, items)
+                currentWork.set(threadId, items)
               }
             }
           } catch {
@@ -530,32 +530,32 @@ export function createChatModule(
             timestamp: latestThinking.timestamp
           }
           if (wsHandler) {
-            wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadKey, work })
+            wsHandler.broadcastToChannel('chat', { type: 'chat.work', threadId, work })
           }
-          chatEvents.emit('chat.work', { threadKey, work })
-          const items = currentWork.get(threadKey) ?? []
+          chatEvents.emit('chat.work', { threadId, work })
+          const items = currentWork.get(threadId) ?? []
           items.push(work)
-          currentWork.set(threadKey, items)
+          currentWork.set(threadId, items)
         }
         // Persist whatever new work items arrived this cycle (R1) — debounced
         // through the live-state store so high-frequency poll bumps coalesce.
-        persistLiveState(threadKey)
+        persistLiveState(threadId)
       } catch {
         /* file read error — ignore */
       }
     }, 2000) // Poll every 2s — balanced between responsiveness and CPU load
 
-    pollTimers.set(threadKey, timer)
+    pollTimers.set(threadId, timer)
   }
 
-  function stopJsonlPoll(threadKey: string): void {
-    const timer = pollTimers.get(threadKey)
+  function stopJsonlPoll(threadId: string): void {
+    const timer = pollTimers.get(threadId)
     if (timer) {
       clearInterval(timer)
-      pollTimers.delete(threadKey)
+      pollTimers.delete(threadId)
     }
-    pollFilePositions.delete(threadKey)
-    pollSeenToolIds.delete(threadKey)
+    pollFilePositions.delete(threadId)
+    pollSeenToolIds.delete(threadId)
   }
 
   // Subagent abstract events: when the backend reports its parent has
@@ -564,12 +564,12 @@ export function createChatModule(
   // thread so the UI clears its "working" indicator.
   backend.on('subagent.spawned', (data) => {
     const parentKey = data.parentKey
-    const threadKey = parentKey ? sessionToThread.get(parentKey) : undefined
-    if (!threadKey) return
+    const threadId = parentKey ? sessionToThread.get(parentKey) : undefined
+    if (!threadId) return
     if (wsHandler) {
-      wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadKey, status: 'idle' })
+      wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadId, status: 'idle' })
     }
-    chatEvents.emit('chat.status', { threadKey, status: 'idle' })
+    chatEvents.emit('chat.status', { threadId, status: 'idle' })
   })
 
   // Also proxy backend.status
@@ -585,51 +585,53 @@ export function createChatModule(
 
   // deriveSessionKey is imported at module level from ./derive-session-key.js
 
-  async function handleSend(threadKey: string, text: string, _attachments?: Buffer[]): Promise<void> {
-    if (!threadKey) return // No thread — don't send
+  async function handleSend(threadIdOrLabel: string, text: string, _attachments?: Buffer[]): Promise<void> {
+    if (!threadIdOrLabel) return // No thread — don't send
+    // Accept a bare UUID or a (legacy/bookmarked) label; route by canonical id.
+    const threadId = threadManager.resolve(threadIdOrLabel)?.id ?? threadIdOrLabel
 
     // Server-side rapid dedup (pre-queue) to prevent accidental duplicate inbound sends
     // (e.g. user double-clicks; client retries an HTTP that already succeeded).
-    const last = recentUserSends.get(threadKey)
+    const last = recentUserSends.get(threadId)
     const now = Date.now()
     if (last && last.text === text && now - last.ts < USER_DEDUP_WINDOW_MS) {
       return
     }
-    recentUserSends.set(threadKey, { text, ts: now })
+    recentUserSends.set(threadId, { text, ts: now })
 
     // Ensure mapping exists up-front so the queue snapshot carries a valid
-    // threadKey even before the dispatcher gets to it.
-    if (!threadToSession.get(threadKey)) {
-      setMapping(threadKey, deriveSessionKey(threadKey))
+    // threadId even before the dispatcher gets to it.
+    if (!threadToSession.get(threadId)) {
+      setMapping(threadId, deriveSessionKey(threadId))
     }
 
     // Enqueue. The queue change listener will broadcast the new snapshot.
     // Then attempt to pump the queue — if the agent is idle this fires
     // immediately; if not, it'll fire when chat.status → 'idle' arrives.
-    messageQueue.enqueue(threadKey, text)
-    await pumpQueue(threadKey)
+    messageQueue.enqueue(threadId, text)
+    await pumpQueue(threadId)
   }
 
-  async function handleAbort(threadKey: string): Promise<void> {
-    const sessionKey = threadToSession.get(threadKey)
+  async function handleAbort(threadId: string): Promise<void> {
+    const sessionKey = threadToSession.get(threadId)
     if (sessionKey) {
       await backend.abort(sessionKey)
     }
     // After abort, the in-flight queue entry (if any) is moot — the agent
     // won't produce a turn for it. Drop it so the user can re-send.
-    const id = inFlightByThread.get(threadKey)
+    const id = inFlightByThread.get(threadId)
     if (id) {
-      inFlightByThread.delete(threadKey)
+      inFlightByThread.delete(threadId)
       messageQueue.removeSent(id)
     }
   }
 
-  async function handleHistory(threadKey: string, deviceId: string): Promise<void> {
-    if (!threadKey) return // No thread selected — nothing to fetch
-    let sessionKey = threadToSession.get(threadKey)
+  async function handleHistory(threadId: string, deviceId: string): Promise<void> {
+    if (!threadId) return // No thread selected — nothing to fetch
+    let sessionKey = threadToSession.get(threadId)
     if (!sessionKey) {
-      sessionKey = deriveSessionKey(threadKey)
-      setMapping(threadKey, sessionKey)
+      sessionKey = deriveSessionKey(threadId)
+      setMapping(threadId, sessionKey)
     }
 
     // Always fetch fresh history from the backend
@@ -644,42 +646,42 @@ export function createChatModule(
     }
 
     if (wsHandler) {
-      wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore })
+      wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadId, sessionKey, history, hasMore })
 
       // Send current backend connection status so the client indicator is accurate
       wsHandler.sendTo(deviceId, { type: 'backend.status', status: backend.status() })
 
       // Replay cached live state so reconnecting clients see in-progress work
-      const status = currentStatus.get(threadKey)
+      const status = currentStatus.get(threadId)
       if (status && status !== 'idle') {
-        wsHandler.sendTo(deviceId, { type: 'chat.status', threadKey, status })
-        const work = currentWork.get(threadKey)
+        wsHandler.sendTo(deviceId, { type: 'chat.status', threadId, status })
+        const work = currentWork.get(threadId)
         if (work?.length) {
           for (const item of work) {
-            wsHandler.sendTo(deviceId, { type: 'chat.work', threadKey, work: item })
+            wsHandler.sendTo(deviceId, { type: 'chat.work', threadId, work: item })
           }
         }
-        const text = currentStreamText.get(threadKey)
+        const text = currentStreamText.get(threadId)
         if (text) {
-          wsHandler.sendTo(deviceId, { type: 'chat.stream', threadKey, text, replay: true })
+          wsHandler.sendTo(deviceId, { type: 'chat.stream', threadId, text, replay: true })
         }
       }
     }
   }
 
-  async function handleSessionSwitch(threadKey: string): Promise<void> {
-    const sessionKey = threadToSession.get(threadKey)
+  async function handleSessionSwitch(threadId: string): Promise<void> {
+    const sessionKey = threadToSession.get(threadId)
     if (sessionKey) {
       await backend.switchSession(sessionKey)
     }
   }
 
-  async function handleFullHistory(threadKey: string, deviceId: string): Promise<void> {
-    if (!threadKey) return
-    let sessionKey = threadToSession.get(threadKey)
+  async function handleFullHistory(threadId: string, deviceId: string): Promise<void> {
+    if (!threadId) return
+    let sessionKey = threadToSession.get(threadId)
     if (!sessionKey) {
-      sessionKey = deriveSessionKey(threadKey)
-      setMapping(threadKey, sessionKey)
+      sessionKey = deriveSessionKey(threadId)
+      setMapping(threadId, sessionKey)
     }
 
     try {
@@ -687,18 +689,20 @@ export function createChatModule(
       const history = await backend.getFullHistory(sessionKey)
       // cache removed
       if (wsHandler) {
-        wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadKey, sessionKey, history, hasMore: false })
+        wsHandler.sendTo(deviceId, { type: 'chat.session.info', threadId, sessionKey, history, hasMore: false })
       }
     } catch {
       // Silently fail — client already has partial history
     }
   }
 
-  async function handleSessionCreate(label?: string): Promise<{ threadKey: string; sessionKey: string }> {
-    const thread = threadManager.create({ label })
-    const sessionKey = deriveSessionKey(thread.key)
-    setMapping(thread.key, sessionKey)
-    return { threadKey: thread.key, sessionKey }
+  async function handleSessionCreate(label?: string): Promise<{ threadId: string; sessionKey: string }> {
+    const thread = threadManager.create({ label: (label ?? '').trim() || 'untitled' })
+    // sessionKey is now an identity wrapper around the UUID; kept in the
+    // return shape for client-side back-compat during the cutover.
+    const sessionKey = deriveSessionKey(thread.id)
+    setMapping(thread.id, sessionKey)
+    return { threadId: thread.id, sessionKey }
   }
 
   return {
@@ -713,44 +717,46 @@ export function createChatModule(
     getThreadKeyForSession: (sk: string) => sessionToThread.get(sk),
     loadMapping,
     chatEvents,
-    getLiveState: (threadKey: string) => ({
-      status: currentStatus.get(threadKey),
-      work: currentWork.get(threadKey),
-      streamText: currentStreamText.get(threadKey)
+    getLiveState: (threadId: string) => ({
+      status: currentStatus.get(threadId),
+      work: currentWork.get(threadId),
+      streamText: currentStreamText.get(threadId)
     }),
     /** Ensure the JSONL poll is running for a thread — call when SSE connects */
-    ensurePolling: (threadKey: string, forceStatus?: string) => {
-      const status = forceStatus ?? currentStatus.get(threadKey)
-      if (status && status !== 'idle' && !pollTimers.has(threadKey) && (sseClientCount.get(threadKey) ?? 0) > 0) {
+    ensurePolling: (threadId: string, forceStatus?: string) => {
+      const status = forceStatus ?? currentStatus.get(threadId)
+      if (status && status !== 'idle' && !pollTimers.has(threadId) && (sseClientCount.get(threadId) ?? 0) > 0) {
         // Also update cached status so the SSE replay works
-        if (forceStatus && !currentStatus.has(threadKey)) {
-          currentStatus.set(threadKey, forceStatus)
+        if (forceStatus && !currentStatus.has(threadId)) {
+          currentStatus.set(threadId, forceStatus)
         }
-        const sessionKey = threadToSession.get(threadKey) ?? deriveSessionKey(threadKey)
-        startJsonlPoll(threadKey, sessionKey)
+        const sessionKey = threadToSession.get(threadId) ?? deriveSessionKey(threadId)
+        startJsonlPoll(threadId, sessionKey)
       }
     },
     /** Track SSE client connect/disconnect for a thread */
-    trackSSEClient: (threadKey: string) => {
-      sseClientCount.set(threadKey, (sseClientCount.get(threadKey) ?? 0) + 1)
+    trackSSEClient: (threadId: string) => {
+      sseClientCount.set(threadId, (sseClientCount.get(threadId) ?? 0) + 1)
     },
-    untrackSSEClient: (threadKey: string) => {
-      const count = (sseClientCount.get(threadKey) ?? 1) - 1
-      sseClientCount.set(threadKey, Math.max(0, count))
+    untrackSSEClient: (threadId: string) => {
+      const count = (sseClientCount.get(threadId) ?? 1) - 1
+      sseClientCount.set(threadId, Math.max(0, count))
       // Stop polling when no SSE clients are listening
       if (count <= 0) {
-        stopJsonlPoll(threadKey)
+        stopJsonlPoll(threadId)
       }
     },
-    resolveSessionKey: (threadKey: string) => {
-      let sk = threadToSession.get(threadKey)
+    resolveSessionKey: (threadIdOrLabel: string) => {
+      // Accept a bare UUID or a (legacy/bookmarked) label; key by canonical id.
+      const threadId = threadManager.resolve(threadIdOrLabel)?.id ?? threadIdOrLabel
+      let sk = threadToSession.get(threadId)
       if (!sk) {
-        sk = deriveSessionKey(threadKey)
-        setMapping(threadKey, sk)
+        sk = deriveSessionKey(threadId)
+        setMapping(threadId, sk)
       }
       return sk
     },
-    getQueueSnapshot: (threadKey: string) => messageQueue.snapshot(threadKey),
+    getQueueSnapshot: (threadId: string) => messageQueue.snapshot(threadId),
     cancelQueued: (id: string) => messageQueue.cancel(id),
     retryQueued: (id: string) => {
       const ok = messageQueue.markQueued(id)

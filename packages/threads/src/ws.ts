@@ -36,8 +36,9 @@ export function registerThreadsWs(
           break
         }
         case 'thread.create': {
+          const label = ((p?.label as string | undefined) ?? '').trim() || 'untitled'
           const thread = threadManager.create({
-            label: p?.label as string | undefined,
+            label,
             entities: p?.entities as never
           })
           wsHandler.broadcastToChannel('threads', { type: 'thread.created', payload: { thread } })

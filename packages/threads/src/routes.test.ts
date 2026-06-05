@@ -101,7 +101,8 @@ describe('Thread Routes — Model Switching', () => {
 
   it('PATCH /api/threads/:key/model updates session model via backend', async () => {
     const thread = tm.create({ label: 'test-thread' })
-    const sessionKey = `agent:main:thread:${thread.key}`
+    // Bare-UUID scheme: the session key IS the bare thread id.
+    const sessionKey = thread.id
     ;(backend as any).__getSessions().set(sessionKey, {
       sessionKey,
       model: 'gpt-4o',
@@ -109,7 +110,7 @@ describe('Thread Routes — Model Switching', () => {
     })
 
     const res = await request(app)
-      .patch(`/api/threads/${encodeURIComponent(thread.key)}/model`)
+      .patch(`/api/threads/${encodeURIComponent(thread.id)}/model`)
       .send({ model: 'github-copilot/claude-opus-4.6' })
 
     expect(res.status).toBe(200)
@@ -123,7 +124,7 @@ describe('Thread Routes — Model Switching', () => {
   it('PATCH /api/threads/:key/model returns 400 without model', async () => {
     const thread = tm.create({ label: 'test' })
     const res = await request(app)
-      .patch(`/api/threads/${encodeURIComponent(thread.key)}/model`)
+      .patch(`/api/threads/${encodeURIComponent(thread.id)}/model`)
       .send({})
     expect(res.status).toBe(400)
   })
@@ -138,7 +139,8 @@ describe('Thread Routes — Model Switching', () => {
   describe('session-info reports backend metadata verbatim', () => {
     it('returns the stored model and provider without rewriting', async () => {
       const thread = tm.create({ label: 'drift-test' })
-      const sessionKey = `agent:main:thread:${thread.key}`
+      // Bare-UUID scheme: the session key IS the bare thread id.
+      const sessionKey = thread.id
       ;(backend as any).__getSessions().set(sessionKey, {
         sessionKey,
         model: 'gpt-5.2-codex',
@@ -146,7 +148,7 @@ describe('Thread Routes — Model Switching', () => {
         totalTokens: 100
       })
 
-      const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.key)}/session-info`)
+      const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.id)}/session-info`)
       expect(res.status).toBe(200)
       expect(res.body.model).toBe('gpt-5.2-codex')
       expect(res.body.modelProvider).toBe('openai')
@@ -155,7 +157,7 @@ describe('Thread Routes — Model Switching', () => {
 
     it('returns null model fields when no session meta is available', async () => {
       const thread = tm.create({ label: 'no-sessions-test' })
-      const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.key)}/session-info`)
+      const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.id)}/session-info`)
       expect(res.status).toBe(200)
       expect(res.body.model).toBeNull()
       expect(res.body.modelProvider).toBeNull()

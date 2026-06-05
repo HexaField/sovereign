@@ -22,7 +22,7 @@ describe('MessageQueue', () => {
       const msg = queue.enqueue('thread-1', 'hello')
       expect(msg.text).toBe('hello')
       expect(msg.status).toBe('queued')
-      expect(msg.threadKey).toBe('thread-1')
+      expect(msg.threadId).toBe('thread-1')
       const peeked = queue.peek('thread-1')
       expect(peeked?.id).toBe(msg.id)
     })
@@ -41,7 +41,7 @@ describe('MessageQueue', () => {
       queue.enqueue('t', 'a')
       const q = queue.getQueue('t')
       expect(q.length).toBe(1)
-      q.push({ id: 'fake', threadKey: 't', text: 'b', timestamp: 0, status: 'queued' })
+      q.push({ id: 'fake', threadId: 't', text: 'b', timestamp: 0, status: 'queued' })
       expect(queue.getQueue('t').length).toBe(1) // original unchanged
     })
 

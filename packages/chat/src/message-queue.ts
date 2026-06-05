@@ -15,7 +15,7 @@ export type { QueuedMessage }
 export type QueueChangeReason = 'enqueued' | 'sending' | 'sent' | 'failed' | 'requeued' | 'cancelled'
 
 export interface QueueChange {
-  threadKey: string
+  threadId: string
   reason: QueueChangeReason
   item?: QueuedMessage
 }
@@ -23,18 +23,18 @@ export interface QueueChange {
 export type QueueChangeListener = (change: QueueChange) => void
 
 export interface MessageQueue {
-  enqueue(threadKey: string, text: string): QueuedMessage & { deduplicated?: boolean }
-  dequeue(threadKey: string): QueuedMessage | undefined
+  enqueue(threadId: string, text: string): QueuedMessage & { deduplicated?: boolean }
+  dequeue(threadId: string): QueuedMessage | undefined
   cancel(id: string): boolean
-  peek(threadKey: string): QueuedMessage | undefined
-  getQueue(threadKey: string): QueuedMessage[]
+  peek(threadId: string): QueuedMessage | undefined
+  getQueue(threadId: string): QueuedMessage[]
   markSending(id: string): boolean
   markQueued(id: string): boolean
   markFailed(id: string, error: string): boolean
   removeSent(id: string): void
   getAllQueues(): Map<string, QueuedMessage[]>
   /** Snapshot of one thread's queue (always a fresh array). */
-  snapshot(threadKey: string): QueuedMessage[]
+  snapshot(threadId: string): QueuedMessage[]
   /** Subscribe to queue-change notifications. Returns unsubscribe. */
   onChange(listener: QueueChangeListener): () => void
 }
@@ -57,7 +57,7 @@ export function createMessageQueue(dataDir: string): MessageQueue {
   }
 
   // Track recently sent messages to prevent re-enqueue of identical text after removal
-  // Key: `${threadKey}\0${text}`, Value: timestamp when sent
+  // Key: `${threadId}\0${text}`, Value: timestamp when sent
   const recentlySent = new Map<string, number>()
   const DEDUP_WINDOW_MS = 5_000 // 5 seconds
 
@@ -77,8 +77,8 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
         if (Array.isArray(data) && data.length > 0) {
-          const threadKey = decodeURIComponent(file.replace(/\.json$/, ''))
-          queues.set(threadKey, data)
+          const threadId = decodeURIComponent(file.replace(/\.json$/, ''))
+          queues.set(threadId, data)
         }
       } catch {
         // Corrupt file — skip
@@ -88,16 +88,16 @@ export function createMessageQueue(dataDir: string): MessageQueue {
     // No directory yet — fine
   }
 
-  function persist(threadKey: string): void {
-    const items = queues.get(threadKey) ?? []
-    const filePath = path.join(queueDir, `${encodeURIComponent(threadKey)}.json`)
+  function persist(threadId: string): void {
+    const items = queues.get(threadId) ?? []
+    const filePath = path.join(queueDir, `${encodeURIComponent(threadId)}.json`)
     if (items.length === 0) {
       try {
         fs.unlinkSync(filePath)
       } catch {
         /* ignore */
       }
-      queues.delete(threadKey)
+      queues.delete(threadId)
       return
     }
     const tmp = filePath + '.tmp'
@@ -105,17 +105,17 @@ export function createMessageQueue(dataDir: string): MessageQueue {
     fs.renameSync(tmp, filePath)
   }
 
-  function findById(id: string): { threadKey: string; index: number } | undefined {
-    for (const [threadKey, items] of queues) {
+  function findById(id: string): { threadId: string; index: number } | undefined {
+    for (const [threadId, items] of queues) {
       const index = items.findIndex((m) => m.id === id)
-      if (index >= 0) return { threadKey, index }
+      if (index >= 0) return { threadId, index }
     }
     return undefined
   }
 
   return {
-    enqueue(threadKey: string, text: string): QueuedMessage & { deduplicated?: boolean } {
-      const items = queues.get(threadKey) ?? []
+    enqueue(threadId: string, text: string): QueuedMessage & { deduplicated?: boolean } {
+      const items = queues.get(threadId) ?? []
 
       // Deduplicate: skip if ANY queued/sending message has identical text
       for (const item of items) {
@@ -126,11 +126,11 @@ export function createMessageQueue(dataDir: string): MessageQueue {
 
       // Deduplicate: skip if same text was recently sent (prevents re-enqueue after removeSent)
       cleanRecentlySent()
-      const dedupKey = `${threadKey}\0${text}`
+      const dedupKey = `${threadId}\0${text}`
       if (recentlySent.has(dedupKey)) {
         return {
           id: 'dedup-recent',
-          threadKey,
+          threadId,
           text,
           timestamp: Date.now(),
           status: 'sending' as const,
@@ -140,96 +140,96 @@ export function createMessageQueue(dataDir: string): MessageQueue {
 
       const msg: QueuedMessage = {
         id: crypto.randomUUID(),
-        threadKey,
+        threadId,
         text,
         timestamp: Date.now(),
         status: 'queued',
         attempts: 0
       }
       items.push(msg)
-      queues.set(threadKey, items)
-      persist(threadKey)
-      notify({ threadKey, reason: 'enqueued', item: { ...msg } })
+      queues.set(threadId, items)
+      persist(threadId)
+      notify({ threadId, reason: 'enqueued', item: { ...msg } })
       return msg
     },
 
-    dequeue(threadKey: string): QueuedMessage | undefined {
-      const items = queues.get(threadKey)
+    dequeue(threadId: string): QueuedMessage | undefined {
+      const items = queues.get(threadId)
       if (!items || items.length === 0) return undefined
       const msg = items.shift()!
-      persist(threadKey)
+      persist(threadId)
       return msg
     },
 
     cancel(id: string): boolean {
       const found = findById(id)
       if (!found) return false
-      const items = queues.get(found.threadKey)!
+      const items = queues.get(found.threadId)!
       const msg = items[found.index]
       // Allow cancelling queued OR failed messages; never tear out an in-flight send.
       if (msg.status === 'sending') return false
       items.splice(found.index, 1)
-      persist(found.threadKey)
-      notify({ threadKey: found.threadKey, reason: 'cancelled', item: { ...msg } })
+      persist(found.threadId)
+      notify({ threadId: found.threadId, reason: 'cancelled', item: { ...msg } })
       return true
     },
 
-    peek(threadKey: string): QueuedMessage | undefined {
-      const items = queues.get(threadKey)
+    peek(threadId: string): QueuedMessage | undefined {
+      const items = queues.get(threadId)
       return items?.[0]
     },
 
-    getQueue(threadKey: string): QueuedMessage[] {
-      return [...(queues.get(threadKey) ?? [])]
+    getQueue(threadId: string): QueuedMessage[] {
+      return [...(queues.get(threadId) ?? [])]
     },
 
     markSending(id: string): boolean {
       const found = findById(id)
       if (!found) return false
-      const items = queues.get(found.threadKey)!
+      const items = queues.get(found.threadId)!
       const msg = items[found.index]
       msg.status = 'sending'
       msg.attempts = (msg.attempts ?? 0) + 1
       delete msg.error
-      persist(found.threadKey)
-      notify({ threadKey: found.threadKey, reason: 'sending', item: { ...msg } })
+      persist(found.threadId)
+      notify({ threadId: found.threadId, reason: 'sending', item: { ...msg } })
       return true
     },
 
     markQueued(id: string): boolean {
       const found = findById(id)
       if (!found) return false
-      const items = queues.get(found.threadKey)!
+      const items = queues.get(found.threadId)!
       const msg = items[found.index]
       msg.status = 'queued'
       delete msg.error
-      persist(found.threadKey)
-      notify({ threadKey: found.threadKey, reason: 'requeued', item: { ...msg } })
+      persist(found.threadId)
+      notify({ threadId: found.threadId, reason: 'requeued', item: { ...msg } })
       return true
     },
 
     markFailed(id: string, error: string): boolean {
       const found = findById(id)
       if (!found) return false
-      const items = queues.get(found.threadKey)!
+      const items = queues.get(found.threadId)!
       const msg = items[found.index]
       msg.status = 'failed'
       msg.error = error
-      persist(found.threadKey)
-      notify({ threadKey: found.threadKey, reason: 'failed', item: { ...msg } })
+      persist(found.threadId)
+      notify({ threadId: found.threadId, reason: 'failed', item: { ...msg } })
       return true
     },
 
     removeSent(id: string): void {
       const found = findById(id)
       if (!found) return
-      const items = queues.get(found.threadKey)!
+      const items = queues.get(found.threadId)!
       const msg = items[found.index]
       // Record in recently-sent cache to prevent immediate re-enqueue of same text
-      recentlySent.set(`${found.threadKey}\0${msg.text}`, Date.now())
+      recentlySent.set(`${found.threadId}\0${msg.text}`, Date.now())
       items.splice(found.index, 1)
-      persist(found.threadKey)
-      notify({ threadKey: found.threadKey, reason: 'sent', item: { ...msg } })
+      persist(found.threadId)
+      notify({ threadId: found.threadId, reason: 'sent', item: { ...msg } })
     },
 
     getAllQueues(): Map<string, QueuedMessage[]> {
@@ -240,8 +240,8 @@ export function createMessageQueue(dataDir: string): MessageQueue {
       return result
     },
 
-    snapshot(threadKey: string): QueuedMessage[] {
-      return (queues.get(threadKey) ?? []).map((m) => ({ ...m }))
+    snapshot(threadId: string): QueuedMessage[] {
+      return (queues.get(threadId) ?? []).map((m) => ({ ...m }))
     },
 
     onChange(listener: QueueChangeListener): () => void {

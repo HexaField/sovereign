@@ -153,14 +153,14 @@ describe('§3.2 Chat Store', () => {
     expect(retryCountdownSeconds()).toBe(0)
   })
 
-  it('sendMessage POSTs to /api/chat/send with threadKey + message', async () => {
+  it('sendMessage POSTs to /api/chat/send with threadId + message', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response)
     await sendMessage('hello')
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/chat/send',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ threadKey: 'main', message: 'hello' })
+        body: JSON.stringify({ threadId: 'main', message: 'hello' })
       })
     )
     // No optimistic turn in `turns()` — the server queue is the source of

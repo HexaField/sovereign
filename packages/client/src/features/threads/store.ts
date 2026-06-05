@@ -1,26 +1,21 @@
 import { createSignal } from 'solid-js'
-import type { AgentStatus } from '@sovereign/core'
+import type { ThreadInfo } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
 
-export interface ThreadInfo {
-  key: string
-  /** Social/privacy context (see @sovereign/membranes). May be undefined for unassigned threads. */
-  membraneId?: string
-  /** Code contexts attached to the thread; orgIds from @sovereign/orgs. */
-  workspaceIds?: string[]
-  entities: { orgId: string; projectId: string; entityType: 'branch' | 'issue' | 'pr'; entityRef: string }[]
-  label?: string
-  lastActivity: number
-  unreadCount: number
-  agentStatus: AgentStatus
-}
+// Single source of truth for the thread shape: the canonical `ThreadInfo`
+// from @sovereign/core (bare UUID `id`, no `key`). Importing it here means a
+// stale `thread.key` access is a compile error rather than a silent runtime
+// "empty dropdown".
+export type { ThreadInfo }
 
 /** Convenience accessor — first workspace, or undefined. */
 export function threadPrimaryWorkspace(t: ThreadInfo): string | undefined {
   return t.workspaceIds?.[0]
 }
 
-export const [threadKey, setThreadKey] = createSignal('main')
+// The thread identifier signal holds the bare UUID `id` (empty until the
+// initial fetch / hash resolves to a real thread).
+export const [threadKey, setThreadKey] = createSignal('')
 export const [threads, setThreads] = createSignal<ThreadInfo[]>([])
 export const [activeOrgIdForThreads, setActiveOrgIdForThreads] = createSignal('_global')
 
@@ -42,7 +37,7 @@ export function fetchThreadsForOrg(orgId?: string): void {
   fetch(url)
     .then((r) => r.json())
     .then((data: any) => {
-      const raw: ThreadInfo[] = (data.threads ?? data ?? []).filter((t: any) => t.key)
+      const raw: ThreadInfo[] = (data.threads ?? data ?? []).filter((t: ThreadInfo) => t.id)
       setThreads(raw)
       // Reconcile: if current threadKey doesn't exist in this workspace's threads,
       // keep it anyway if it looks like a valid thread key (user navigated directly).
@@ -51,10 +46,10 @@ export function fetchThreadsForOrg(orgId?: string): void {
       if (!current) {
         const first = raw[0]
         if (first) {
-          setThreadKey(first.key)
+          setThreadKey(first.id)
           if (typeof history !== 'undefined') {
             const u = new URL(location.href)
-            u.hash = `thread=${first.key}`
+            u.hash = `thread=${first.id}`
             history.replaceState(null, '', u.toString())
           }
         }
@@ -70,15 +65,15 @@ export function switchWorkspaceThreads(orgId: string): void {
   fetch(url)
     .then((r) => r.json())
     .then((data: any) => {
-      const raw: ThreadInfo[] = (data.threads ?? data ?? []).filter((t: any) => t.key)
+      const raw: ThreadInfo[] = (data.threads ?? data ?? []).filter((t: ThreadInfo) => t.id)
       setThreads(raw)
       // Switch to most recent thread (server returns sorted by lastActivity desc)
       const first = raw[0]
       if (first) {
-        setThreadKey(first.key)
+        setThreadKey(first.id)
         if (typeof history !== 'undefined') {
           const u = new URL(location.href)
-          u.hash = `thread=${first.key}`
+          u.hash = `thread=${first.id}`
           history.replaceState(null, '', u.toString())
         }
       } else {
@@ -119,8 +114,8 @@ export function createThread(label?: string): Promise<void> {
       const thread = (data.thread ?? data) as ThreadInfo
       setThreads((prev) => [...prev, thread])
       // Switch to the newly created thread
-      if (thread.key) {
-        switchThread(thread.key)
+      if (thread.id) {
+        switchThread(thread.id)
       }
     })
 }
@@ -139,7 +134,7 @@ export function moveThread(key: string, orgId: string): Promise<void> {
     .then((r) => r.json())
     .then((data: any) => {
       const updated = data.thread as ThreadInfo
-      setThreads((prev) => prev.map((t) => (t.key === key ? updated : t)))
+      setThreads((prev) => prev.map((t) => (t.id === key ? updated : t)))
     })
 }
 
@@ -183,9 +178,9 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
     unsubs.push(
       ws.on('thread.created', (msg: any) => {
         const thread = (msg?.payload?.thread ?? msg) as ThreadInfo
-        if (!thread.key) return // skip malformed threads
+        if (!thread.id) return // skip malformed threads
         setThreads((prev) => {
-          if (prev.some((t) => t.key === thread.key)) return prev
+          if (prev.some((t) => t.id === thread.id)) return prev
           return [...prev, thread]
         })
       })
@@ -193,19 +188,24 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
 
     unsubs.push(
       ws.on('thread.updated', (msg: any) => {
-        const thread = (msg?.payload?.thread ?? msg) as ThreadInfo
-        if (!thread.key) return
-        setThreads((prev) => prev.map((t) => (t.key === thread.key ? { ...t, ...thread } : t)))
+        // Server emits { threadId, patch } for in-place updates (and a full
+        // { thread } for some events) — handle both, keyed by `id`.
+        const p = msg?.payload ?? msg
+        const id = p?.thread?.id ?? p?.threadId ?? p?.id
+        if (!id) return
+        const patch = p?.patch ?? p?.thread ?? p
+        setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
       })
     )
 
     unsubs.push(
       ws.on('thread.status', (msg: any) => {
         const data = msg?.payload ?? msg
-        if (!data.key) return
+        const id = data.threadId ?? data.id
+        if (!id) return
         setThreads((prev) =>
           prev.map((t) =>
-            t.key === data.key
+            t.id === id
               ? {
                   ...t,
                   lastActivity: data.lastActivity ?? t.lastActivity,
