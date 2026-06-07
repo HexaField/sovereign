@@ -20,6 +20,8 @@ import { activeWorkspace, autoSelectProject, openFileTab, setChatExpanded } from
 import { wsStore } from './ws/index.js'
 import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
 import { initThreadStore, threadKey } from './features/threads/store.js'
+import { initPresence } from './features/threads/presence.js'
+import { loadMutes } from './features/threads/mute-store.js'
 import { initChatStore } from './features/chat/store.js'
 import { initCronResultsStore } from './features/crons/CronResultsBanner.js'
 
@@ -73,6 +75,13 @@ export default function App() {
     // Init cron results store for real-time cron run monitoring
     const cleanupCronResults = initCronResultsStore(wsStore)
     cleanups.push(cleanupCronResults)
+
+    // Presence emitter: tell the server which thread this tab has focused so
+    // push notifications + unread badges suppress when the user is already
+    // looking at the thread. Fire-and-forget on the mute load.
+    const cleanupPresence = initPresence(threadKey, wsStore)
+    cleanups.push(cleanupPresence)
+    void loadMutes()
 
     // Listen for sovereign:open-file events from file chips
     const handleOpenFile = (e: Event) => {

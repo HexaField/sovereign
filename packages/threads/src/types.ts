@@ -72,4 +72,9 @@ export interface ThreadManager {
   addEvent(id: string, event: ThreadEvent): void
   touch(id: string): void
   getEvents(id: string, opts?: { limit?: number; offset?: number; since?: number }): ThreadEvent[]
+  /** Increment a thread's `unreadCount`, persist, and broadcast `thread.updated`.
+   *  Returns the new count, or `undefined` if the thread doesn't exist. */
+  markUnreadIncrement(id: string): number | undefined
+  /** Reset `unreadCount` to 0. Returns true iff the count actually changed. */
+  clearUnread(id: string): boolean
 }

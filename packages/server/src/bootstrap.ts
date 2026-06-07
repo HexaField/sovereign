@@ -83,6 +83,13 @@ import { wireBusLogging } from '@sovereign/system'
 import { registerDefaultModules } from '@sovereign/system'
 import { createNotifications } from '@sovereign/notifications'
 import { createNotificationRoutes } from '@sovereign/notifications'
+import {
+  createPresenceTracker,
+  createMuteStore,
+  createThreadPresenceRoutes,
+  registerPresenceWs,
+  wirePresenceOrchestrator
+} from '@sovereign/thread-presence'
 import { createBrowserService } from '@sovereign/browser'
 import { createAd4mService } from '@sovereign/ad4m'
 import { createDashboardRoutes } from './dashboard/routes.js'
@@ -301,7 +308,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const healthHistory = createHealthHistory()
   const eventStream = createEventStream(bus)
   const notificationsModule = createNotifications(bus, dataDir)
-  app.use(createNotificationRoutes(notificationsModule))
+  app.use(createNotificationRoutes(notificationsModule, notificationsModule.pushManager))
   const browserService = createBrowserService(dataDir)
 
   // AD4M integration (optional — only if host configured)
@@ -447,6 +454,32 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   )
   registerThreadsWs(wsHandler as any, threadManager, bus)
 
+  // Thread presence + push orchestration. Listens on the bus for
+  // `chat.turn.completed` and `chat.message.sent`, and on the new `presence`
+  // WS channel for thread.focus / thread.blur. Together: when an agent turn
+  // completes and no device has the thread focused (and the thread isn't
+  // muted), increment `unreadCount` and send a Web Push to every subscribed
+  // device. Any iteration (focus or send) clears unread and asks subscribers
+  // to dismiss matching-tag notifications. See `plans/push-notifications-spec.md`.
+  const presence = createPresenceTracker()
+  const muteStore = createMuteStore(dataDir)
+  app.use(createThreadPresenceRoutes(muteStore))
+  const presenceWs = registerPresenceWs(wsHandler as any, presence, bus, (threadId) => {
+    bus.emit({
+      type: 'thread.focused',
+      timestamp: new Date().toISOString(),
+      source: 'presence',
+      payload: { threadId }
+    })
+  })
+  const presenceOrchestrator = wirePresenceOrchestrator({
+    bus,
+    presence,
+    muteStore,
+    threadManager,
+    push: notificationsModule.pushManager
+  })
+
   // System module + routes
   const systemModule = createSystemModule(bus, dataDir, {
     wsHandler,
@@ -544,6 +577,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       statusAggregator.destroy()
       systemModule.dispose()
       eventStream.dispose()
+      presenceOrchestrator.destroy()
+      presenceWs.destroy()
       notificationsModule.dispose()
       wss.close()
       server.close()
