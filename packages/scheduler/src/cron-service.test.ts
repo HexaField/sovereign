@@ -223,4 +223,65 @@ describe('createCronService — Sovereign-native user-message cron', () => {
       scheduler.destroy()
     })
   })
+
+  // Regression: a fired cron used to call routing.forSession(k).sendMessage(k, t)
+  // directly, bypassing the chat module's queue + WS broadcast. Result: the
+  // cron's user message didn't appear in the open thread until the user
+  // manually refreshed. The new injection hook routes the same call through
+  // `chatModule.handleSend` so the synthetic user chat.turn + queue events
+  // fire live.
+  describe('chat injection on fire', () => {
+    it('routes through injectChatMessage when provided, NOT through routing.sendMessage', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 50)
+      const sends: Array<{ sessionKey: string; text: string }> = []
+      const injected: Array<{ threadId: string; text: string; kind?: string }> = []
+      const backend = makeStubBackend(sends)
+      const service = createCronService({
+        routing: stubRouter(backend),
+        scheduler,
+        bus,
+        injectChatMessage: async (threadId, text, opts) => {
+          injected.push({ threadId, text, kind: opts?.kind })
+        }
+      })
+      service.createUserMessageCron({
+        threadKey: 'inject-thread',
+        schedule: { kind: 'oneshot', at: new Date(Date.now() - 1000).toISOString() },
+        prompt: 'hello from cron',
+        label: 'L'
+      })
+      scheduler.tick()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(injected.length).toBe(1)
+      expect(injected[0].threadId).toBe('inject-thread')
+      expect(injected[0].text).toContain('hello from cron')
+      // Regression: opts.kind === 'cron' must flow through so the chat
+      // module can synthesize a SYSTEM-role chat.turn (matches what the
+      // SDK persists for `[Cron: …]` inputs — without this the live
+      // bubble briefly renders as a user turn and flips on refresh).
+      expect(injected[0].kind).toBe('cron')
+      expect(sends.length).toBe(0)
+      scheduler.destroy()
+    })
+
+    it('falls back to direct routing.sendMessage when injectChatMessage is omitted', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 50)
+      const sends: Array<{ sessionKey: string; text: string }> = []
+      const backend = makeStubBackend(sends)
+      const service = createCronService({ routing: stubRouter(backend), scheduler, bus })
+      service.createUserMessageCron({
+        threadKey: 'direct-thread',
+        schedule: { kind: 'oneshot', at: new Date(Date.now() - 1000).toISOString() },
+        prompt: 'hello',
+        label: 'L'
+      })
+      scheduler.tick()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(sends.length).toBe(1)
+      expect(sends[0].sessionKey).toBe('direct-thread')
+      scheduler.destroy()
+    })
+  })
 })

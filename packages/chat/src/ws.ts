@@ -15,7 +15,12 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
       'chat.session.info',
       'chat.queue',
       'backend.status',
-      'cron.run.completed'
+      'cron.run.completed',
+      // Subagent lifecycle — clients refetch /api/threads/active-subagents on
+      // any of these so finished children don't pile up in the dropdown.
+      'subagent.spawned',
+      'subagent.completed',
+      'subagent.failed'
     ],
     clientMessages: [
       'chat.send',
