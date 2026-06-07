@@ -32,9 +32,19 @@ const LIVE_STATE_DEBOUNCE_MS = 100
 /** Chat-level event emitter — all chat events (from backend + JSONL polling) flow through here */
 export type ChatEventHandler = (data: Record<string, unknown>) => void
 
+/** Optional knobs for `handleSend` — only used by non-UI senders right now
+ *  (the cron pipeline tags its injected text as a SYSTEM turn so the live
+ *  chat.turn broadcast matches the role the SDK persists for it). UI sends
+ *  omit this and default to `user`. */
+export interface SendOptions {
+  /** Role of the synthetic chat.turn emitted by `completeInFlight` for live
+   *  SSE/WS consumers. Defaults to `'user'`. Crons pass `'system'`. */
+  synthRole?: 'user' | 'system'
+}
+
 export interface ChatModule {
   status(): ModuleStatus
-  handleSend(threadId: string, text: string, attachments?: Buffer[]): Promise<void>
+  handleSend(threadId: string, text: string, attachments?: Buffer[], opts?: SendOptions): Promise<void>
   handleAbort(threadId: string): Promise<void>
   handleHistory(threadId: string, deviceId: string): Promise<void>
   handleFullHistory(threadId: string, deviceId: string): Promise<void>
@@ -200,21 +210,29 @@ export function createChatModule(
     const items = messageQueue.getQueue(threadId)
     const entry = items.find((m) => m.id === id)
     if (entry && entry.status === 'sending') {
-      // Synthesize a user chat.turn so clients can promote the queue bubble
+      // Synthesize a chat.turn so clients can promote the queue bubble
       // into authoritative history without round-tripping for a refetch.
       // Emit BEFORE removeSent so the SSE order is: user turn → queue empty
       // → assistant turn, giving a clean visual handover with no flash.
-      const userTurn = {
-        role: 'user' as const,
+      //
+      // The role matches what the SDK will persist for this input: UI sends
+      // become user turns; cron injections become system turns (the SDK
+      // records `[Cron: …]` inputs as system messages, so emitting a user
+      // turn here would briefly render a user bubble that flips to system
+      // on the next refresh — a confusing mismatch).
+      const synthRole = synthRoleById.get(id) ?? 'user'
+      synthRoleById.delete(id)
+      const turnPayload = {
+        role: synthRole,
         content: entry.text,
         timestamp: entry.timestamp,
         workItems: [],
         thinkingBlocks: []
       }
       if (wsHandler) {
-        wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn: userTurn })
+        wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn: turnPayload })
       }
-      chatEvents.emit('chat.turn', { threadId, turn: userTurn })
+      chatEvents.emit('chat.turn', { threadId, turn: turnPayload })
       messageQueue.removeSent(id)
     }
     // Try to dispatch any following queued message.
@@ -343,7 +361,13 @@ export function createChatModule(
     'chat.work',
     'chat.compacting',
     'chat.error',
-    'session.info'
+    'session.info',
+    // Subagent lifecycle — forwarded so the header dropdown can refetch its
+    // active-subagents list when one finishes (otherwise finished subagents
+    // accumulate visually until the user closes + reopens the dropdown).
+    'subagent.spawned',
+    'subagent.completed',
+    'subagent.failed'
   ]
 
   for (const eventName of backendEvents) {
@@ -395,23 +419,59 @@ export function createChatModule(
           // queue entry for this thread, even if no separate 'idle' status
           // event arrives. Idempotent with the chat.status handler above.
           completeInFlight(threadId)
+          // Refresh the thread's `lastActivity` so the dropdown's "Nm ago"
+          // stays honest without a polling round-trip.
+          try {
+            threadManager.touch(threadId)
+          } catch {
+            /* thread may have been deleted mid-turn */
+          }
+          // Backend SDKs are inconsistent about whether they emit
+          // `chat.status: idle` after the final assistant turn — some only
+          // do it on the next user input, others not at all. Synthesize one
+          // here for assistant turns so the UI converges to idle without
+          // waiting on the backend. User turns (the synthetic ones we
+          // generate for queued sends) must NOT trigger this, or the
+          // "Thinking…" indicator gets stomped the moment the user message
+          // appears.
+          const turnRole = (data.turn as { role?: string } | undefined)?.role
+          if (turnRole === 'assistant') {
+            // Don't re-cache status — the live state map mirrors
+            // currently-non-idle work, and idle is the absence of work.
+            // Replaying an "idle" status on SSE reconnect just churns
+            // the client without telling it anything new.
+            const idleData = { sessionKey, threadId, status: 'idle' }
+            if (wsHandler) {
+              wsHandler.broadcastToChannel('chat', { type: 'chat.status', ...idleData })
+            }
+            chatEvents.emit('chat.status', idleData)
+            stopJsonlPoll(threadId)
+          }
         }
       }
 
       // Map WS message type
       const wsType = eventName === 'session.info' ? 'chat.session.info' : eventName
 
-      if (wsHandler && threadId) {
+      // Subagent lifecycle events carry `parentKey` not `sessionKey`. The
+      // header dropdown's refetch trigger only needs to know "something
+      // changed" — broadcast unconditionally so the client can react even
+      // when the parent thread mapping is missing (e.g. a subagent of a
+      // subagent whose root hasn't been bound).
+      const isSubagentEvent =
+        eventName === 'subagent.spawned' || eventName === 'subagent.completed' || eventName === 'subagent.failed'
+
+      if (wsHandler && (threadId || isSubagentEvent)) {
         wsHandler.broadcastToChannel('chat', {
           type: wsType,
           ...data,
-          threadId
+          ...(threadId ? { threadId } : {})
         })
       }
 
       // Emit on chat-level emitter for SSE subscribers
-      if (threadId) {
-        chatEvents.emit(wsType, { ...data, threadId })
+      if (threadId || isSubagentEvent) {
+        chatEvents.emit(wsType, { ...data, ...(threadId ? { threadId } : {}) })
       }
 
       // Emit bus event for chat.turn
@@ -605,7 +665,19 @@ export function createChatModule(
 
   // deriveSessionKey is imported at module level from ./derive-session-key.js
 
-  async function handleSend(threadIdOrLabel: string, text: string, _attachments?: Buffer[]): Promise<void> {
+  // Per-queue-item synth role. Most sends are user-driven; cron injections
+  // tag their item id here as `'system'` so completeInFlight emits a
+  // matching live chat.turn. Persisted out-of-band (in-memory only) — losing
+  // the map on restart just means a re-queued cron message is rendered as a
+  // user turn one time, which is the original behaviour.
+  const synthRoleById = new Map<string, 'user' | 'system'>()
+
+  async function handleSend(
+    threadIdOrLabel: string,
+    text: string,
+    _attachments?: Buffer[],
+    opts?: SendOptions
+  ): Promise<void> {
     if (!threadIdOrLabel) return // No thread — don't send
     // Accept a bare UUID or a (legacy/bookmarked) label; route by canonical id.
     const threadId = threadManager.resolve(threadIdOrLabel)?.id ?? threadIdOrLabel
@@ -628,7 +700,10 @@ export function createChatModule(
     // Enqueue. The queue change listener will broadcast the new snapshot.
     // Then attempt to pump the queue — if the agent is idle this fires
     // immediately; if not, it'll fire when chat.status → 'idle' arrives.
-    messageQueue.enqueue(threadId, text)
+    const queued = messageQueue.enqueue(threadId, text)
+    if (opts?.synthRole && !queued.deduplicated) {
+      synthRoleById.set(queued.id, opts.synthRole)
+    }
     await pumpQueue(threadId)
   }
 

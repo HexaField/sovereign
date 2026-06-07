@@ -208,7 +208,28 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     }
   })
 
-  cronService = createCronService({ routing: routingBackend, scheduler, bus })
+  // Cron fires call `injectChatMessage` (resolved lazily so bootstrap can
+  // wire `chatModule.handleSend` after this function returns). When unwired,
+  // the service falls back to direct routing — preserves test/CI defaults.
+  // `opts.kind` (e.g. 'cron') flows through so the chat module can emit a
+  // role-correct synthetic chat.turn (system for cron, user otherwise).
+  let chatInjector: ((threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) | undefined
+  cronService = createCronService({
+    routing: routingBackend,
+    scheduler,
+    bus,
+    injectChatMessage: (threadId, text, opts) => {
+      if (chatInjector) return chatInjector(threadId, text, opts)
+      return routingBackend.forSession(threadId).sendMessage(threadId, text)
+    }
+  })
+  // Expose the setter so bootstrap can plug in the chat module after it's
+  // constructed without restructuring the existing return shape.
+  ;(cronService as any).setInjectChatMessage = (
+    fn: ((threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) | undefined
+  ): void => {
+    chatInjector = fn
+  }
 
   return {
     routingBackend,

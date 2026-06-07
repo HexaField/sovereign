@@ -76,6 +76,20 @@ export interface CronServiceOptions {
   routing: RoutingBackend
   scheduler?: Scheduler
   bus?: EventBus
+  /**
+   * Optional injection of a chat-aware send path. When provided, fired crons
+   * route through this instead of `routing.forSession(k).sendMessage(k, t)`
+   * directly, so the chat module's queue + WS event emission (the synthetic
+   * `chat.turn`, `chat.message.sent`, queue updates) all fire — the cron's
+   * message then surfaces live in the open thread without a manual refresh.
+   *
+   * `kind: 'cron'` lets the chat module tag the synthetic chat.turn as a
+   * SYSTEM role so it matches what the SDK persists for `[Cron: …]` inputs
+   * (otherwise the bubble briefly renders as a user turn and flips on
+   * refresh). The default direct-routing path is preserved as a fallback
+   * when no injector is wired in (e.g. unit tests).
+   */
+  injectChatMessage?: (threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>
 }
 
 export function createCronService(opts: CronServiceOptions | RoutingBackend): CronService {
@@ -85,6 +99,7 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
   const routing = config.routing
   const scheduler = config.scheduler
   const bus = config.bus
+  const injectChatMessage = config.injectChatMessage
 
   function listSovereignJobs(): CronJob[] {
     if (!scheduler) return []
@@ -132,7 +147,16 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
       const sessionKey = canonicalSessionKey(threadKey)
       const text = formatCronPrompt(label, prompt)
       try {
-        await routing.forSession(sessionKey).sendMessage(sessionKey, text)
+        if (injectChatMessage) {
+          // Route through the chat module so the live thread sees the cron
+          // message land (queue updates, synthetic chat.turn, SSE/WS
+          // broadcast) — otherwise the message only appears after the user
+          // refreshes the thread. `kind: 'cron'` tags the synthetic turn as
+          // a system role so live and persisted views agree.
+          await injectChatMessage(sessionKey, text, { kind: 'cron' })
+        } else {
+          await routing.forSession(sessionKey).sendMessage(sessionKey, text)
+        }
         bus.emit({
           type: 'scheduler.job.completed',
           timestamp: new Date().toISOString(),
