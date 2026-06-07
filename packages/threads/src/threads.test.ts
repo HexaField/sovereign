@@ -597,4 +597,44 @@ describe('ThreadManager', () => {
       expect(tm2.get(t.id)?.unreadCount).toBe(2)
     })
   })
+
+  describe('touch() emits thread.updated for live dropdown timestamps', () => {
+    // Regression: thread dropdown shows stale `lastActivity` because `touch()`
+    // bumped the in-memory timestamp but never told clients. The header sorts
+    // by lastActivity and renders "Nm ago"; without a broadcast the dropdown
+    // displays whatever was true at the last fetch.
+    it('touch() emits thread.updated so connected clients re-render', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'touched' })
+      const updates: any[] = []
+      bus.on('thread.updated', (e: any) => {
+        updates.push(e)
+      })
+      const before = tm.get(t.id)?.lastActivity ?? 0
+      // Sleep over one ms tick — Date.now() resolution is 1ms.
+      const after = before + 1
+      // Monkey-patch Date.now to force an advancing timestamp without sleep.
+      const realNow = Date.now
+      Date.now = () => after
+      try {
+        tm.touch(t.id)
+      } finally {
+        Date.now = realNow
+      }
+      expect(tm.get(t.id)?.lastActivity).toBe(after)
+      expect(updates.length).toBe(1)
+      const patch = updates[0].payload.patch
+      expect(patch).toEqual({ lastActivity: after })
+    })
+
+    it('touch() on an unknown thread is a no-op (no emit)', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const updates: any[] = []
+      bus.on('thread.updated', (e: any) => {
+        updates.push(e)
+      })
+      tm.touch('does-not-exist')
+      expect(updates.length).toBe(0)
+    })
+  })
 })

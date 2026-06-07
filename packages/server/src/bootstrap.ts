@@ -454,6 +454,19 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   )
   registerThreadsWs(wsHandler as any, threadManager, bus)
 
+  // Now that chatModule exists, wire its `handleSend` as the cron-fire path
+  // so cron messages enter the chat queue + broadcast like any user send.
+  // Without this, the user-message portion of a cron fire only surfaced in
+  // the open thread after a manual refresh.
+  const setInjectChatMessage = (cronService as any).setInjectChatMessage as
+    | ((fn?: (threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) => void)
+    | undefined
+  if (typeof setInjectChatMessage === 'function') {
+    setInjectChatMessage((threadId, text, opts) =>
+      chatModule.handleSend(threadId, text, undefined, { synthRole: opts?.kind === 'cron' ? 'system' : 'user' })
+    )
+  }
+
   // Thread presence + push orchestration. Listens on the bus for
   // `chat.turn.completed` and `chat.message.sent`, and on the new `presence`
   // WS channel for thread.focus / thread.blur. Together: when an agent turn
