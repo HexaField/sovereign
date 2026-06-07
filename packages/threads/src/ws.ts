@@ -67,9 +67,12 @@ export function registerThreadsWs(
     }
   })
 
-  // Broadcast bus events to WS
+  // Broadcast bus events to WS. `thread.updated` covers server-side mutations
+  // like `markUnreadIncrement` / `clearUnread` / `update` — anywhere we want
+  // connected clients to re-render a thread without a manual round-trip.
   const busEvents = [
     'thread.created',
+    'thread.updated',
     'thread.deleted',
     'thread.entity.added',
     'thread.entity.removed',

@@ -28,6 +28,17 @@ export function createNotificationRoutes(notifications: Notifications, pushManag
     res.json({ ok: true })
   })
 
+  // Unsubscribe a device (logout / disable push from the client side)
+  router.post('/api/notifications/push/unsubscribe', (req, res) => {
+    const { deviceId } = (req.body ?? {}) as { deviceId?: string }
+    if (!deviceId) {
+      res.status(400).json({ error: 'deviceId required' })
+      return
+    }
+    pushManager?.unsubscribe(deviceId)
+    res.json({ ok: true })
+  })
+
   router.get('/api/notifications', (req, res) => {
     const { severity, read, limit, offset, groupBy } = req.query as Record<string, string | undefined>
 

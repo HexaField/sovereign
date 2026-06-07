@@ -353,6 +353,48 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     }
   }
 
+  /**
+   * Increment a thread's `unreadCount` by one, persist, and broadcast a
+   * `thread.updated` bus event so connected clients re-render their badge.
+   * Returns the new count, or `undefined` if the thread no longer exists.
+   *
+   * Caller is responsible for the suppression policy (mute state, focus
+   * tracking) — this is the dumb mutator the orchestrator drives once it's
+   * decided a notification is warranted.
+   */
+  function markUnreadIncrement(id: string): number | undefined {
+    const thread = threads.get(id)
+    if (!thread) return undefined
+    thread.unreadCount = (thread.unreadCount ?? 0) + 1
+    persistThreadsImmediate()
+    bus.emit({
+      type: 'thread.updated',
+      timestamp: new Date().toISOString(),
+      source: 'threads',
+      payload: { threadId: id, patch: { unreadCount: thread.unreadCount }, thread }
+    })
+    return thread.unreadCount
+  }
+
+  /**
+   * Reset a thread's `unreadCount` to zero (idempotent; only fires
+   * `thread.updated` when the count actually changes).
+   */
+  function clearUnread(id: string): boolean {
+    const thread = threads.get(id)
+    if (!thread) return false
+    if ((thread.unreadCount ?? 0) === 0) return false
+    thread.unreadCount = 0
+    persistThreadsImmediate()
+    bus.emit({
+      type: 'thread.updated',
+      timestamp: new Date().toISOString(),
+      source: 'threads',
+      payload: { threadId: id, patch: { unreadCount: 0 }, thread }
+    })
+    return true
+  }
+
   function getEvents(id: string, opts?: { limit?: number; offset?: number; since?: number }): ThreadEvent[] {
     let evts = events.get(id) ?? []
     if (opts?.since) evts = evts.filter((e) => e.timestamp >= opts.since!)
@@ -401,6 +443,8 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     getThreadsForEntity,
     addEvent,
     touch,
-    getEvents
+    getEvents,
+    markUnreadIncrement,
+    clearUnread
   }
 }
