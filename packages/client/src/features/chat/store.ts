@@ -4,6 +4,7 @@ import type { ParsedTurn, WorkItem, AgentStatus, QueuedMessage } from '@sovereig
 import type { WsStore } from '../../ws/ws-store.js'
 import { renderMarkdown, stripThinkingBlocks } from '../../lib/markdown.js'
 import { setBackendStatus, type ConnectionStatus } from '../connection/store.js'
+import { mergeFetchedHistory } from './merge-history.js'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
 export const [agentStatus, setAgentStatus] = createSignal<AgentStatus>('idle')
@@ -347,7 +348,11 @@ function connectSSE(threadKey: string): void {
       .then((data) => {
         if (!data) return // 304 response
         if (data.turns?.length) {
-          setTurns(data.turns)
+          // Merge instead of replacing: a just-sent user message that the
+          // backend hasn't flushed to JSONL yet only lives in `turns()`. A
+          // gap-triggered fetchHistory would otherwise wipe it. See
+          // `merge-history.ts` for the rule.
+          setTurns((prev) => mergeFetchedHistory(prev, data.turns))
           setHasOlderMessages(data.hasMore ?? false)
           if (!historyLoaded) {
             historyLoaded = true
@@ -374,12 +379,17 @@ function connectSSE(threadKey: string): void {
       const seq = parseInt(me.lastEventId, 10)
       if (!isNaN(seq)) {
         if (lastSSESeq > 0 && seq > lastSSESeq + 1) {
-          // Gap detected — reconnect to get fresh state
-          console.warn(`[chat] SSE gap: expected ${lastSSESeq + 1}, got ${seq}. Reconnecting...`)
+          // Gap detected — reconcile via fetchHistory but DO NOT drop the
+          // current event. Dropping it caused just-sent user messages to
+          // disappear: the synthesized `turn` event was discarded while the
+          // backend hadn't yet flushed the input to JSONL, so the
+          // reconcile-fetch returned a history without the user message
+          // and `setTurns` wiped it. Letting the event through plus the
+          // merge-aware fetch is belt-and-braces.
+          console.warn(`[chat] SSE gap: expected ${lastSSESeq + 1}, got ${seq}. Reconciling...`)
           lastSSESeq = seq
-          // Fetch fresh history to reconcile
           fetchHistory()
-          return false
+          return true
         }
         lastSSESeq = seq
       }
