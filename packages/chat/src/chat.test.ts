@@ -108,7 +108,24 @@ function createMockThreadManager(): ThreadManager {
     getEntities: vi.fn(() => []),
     getThreadsForEntity: vi.fn(() => []),
     addEvent: vi.fn(),
-    getEvents: vi.fn(() => [])
+    getEvents: vi.fn(() => []),
+    touch: vi.fn((id: string) => {
+      const t = threads.get(id)
+      if (t) t.lastActivity = Date.now()
+    }),
+    markUnreadIncrement: vi.fn((id: string) => {
+      const t = threads.get(id)
+      if (!t) return undefined
+      t.unreadCount += 1
+      return t.unreadCount
+    }),
+    clearUnread: vi.fn((id: string) => {
+      const t = threads.get(id)
+      if (!t) return false
+      if (t.unreadCount === 0) return false
+      t.unreadCount = 0
+      return true
+    })
   } as unknown as ThreadManager
 }
 
@@ -453,5 +470,143 @@ describe('§2.4 Chat Module (Server)', () => {
     expect(live.status).toBeUndefined()
     expect(live.work).toBeUndefined()
     expect(live.streamText).toBeUndefined()
+  })
+
+  // Regression: thread dropdown showed stale "Nm ago" timestamps because each
+  // arriving turn didn't refresh `lastActivity` on the thread record. Touching
+  // the thread on every chat.turn means the dropdown's relative time stays
+  // honest without polling.
+  it('chat.turn from backend MUST touch the thread so lastActivity refreshes', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const touchSpy = threadManager.touch as ReturnType<typeof vi.fn>
+    touchSpy.mockClear()
+    emitBackendEvent(backend, 'chat.turn', {
+      sessionKey,
+      turn: { role: 'assistant', content: 'hello', workItems: [], thinkingBlocks: [], timestamp: Date.now() }
+    } as any)
+    expect(touchSpy).toHaveBeenCalledWith(threadId)
+  })
+
+  // Regression: when the agent emits chat.turn for the assistant but the
+  // backend forgets the chat.status:idle (or the order is reversed), the UI
+  // stays stuck on "Thinking…" and the Stop button stays armed. The chat
+  // module MUST synthesize an idle status broadcast after every assistant
+  // chat.turn so the UI converges to idle.
+  it('after an assistant chat.turn, MUST broadcast chat.status idle for the thread', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const calls = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const before = calls.length
+    emitBackendEvent(backend, 'chat.turn', {
+      sessionKey,
+      turn: { role: 'assistant', content: 'done', workItems: [], thinkingBlocks: [], timestamp: Date.now() }
+    } as any)
+    const newCalls = calls.slice(before)
+    const statusIdle = newCalls.find(
+      ([channel, msg]: any[]) =>
+        channel === 'chat' && msg?.type === 'chat.status' && msg.status === 'idle' && msg.threadId === threadId
+    )
+    expect(statusIdle).toBeDefined()
+  })
+
+  // Regression: cron messages persisted as `system` role in the JSONL but the
+  // chat module synthesized a `user` chat.turn for live consumers. The bubble
+  // would render as a user turn live, then flip to a system "[Scheduled Result]"
+  // bubble on the next refresh. Threading `synthRole` through handleSend lets
+  // the cron path emit a system turn so live + persisted views agree.
+  it('handleSend with synthRole "system" MUST emit a system chat.turn (not user)', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const broadcasts = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const beforeCount = broadcasts.length
+    await chatModule.handleSend(threadId, '[Cron: probe] do thing', undefined, { synthRole: 'system' })
+    // Force the in-flight queue head to "complete" by emitting an assistant
+    // chat.turn from the backend — that's what triggers completeInFlight and
+    // the synthetic user/system turn broadcast.
+    emitBackendEvent(backend, 'chat.turn', {
+      sessionKey,
+      turn: { role: 'assistant', content: 'ok', workItems: [], thinkingBlocks: [], timestamp: Date.now() }
+    } as any)
+    const syntheticTurns = broadcasts
+      .slice(beforeCount)
+      .filter(([channel, msg]: any[]) => channel === 'chat' && msg?.type === 'chat.turn' && msg.threadId === threadId)
+      .map(([, msg]: any[]) => msg.turn?.role)
+    expect(syntheticTurns).toContain('system')
+    expect(syntheticTurns).not.toContain('user')
+  })
+
+  it('handleSend without synthRole (default) MUST emit a user chat.turn (no regression)', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const broadcasts = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const beforeCount = broadcasts.length
+    await chatModule.handleSend(threadId, 'hello from user')
+    emitBackendEvent(backend, 'chat.turn', {
+      sessionKey,
+      turn: { role: 'assistant', content: 'ok', workItems: [], thinkingBlocks: [], timestamp: Date.now() }
+    } as any)
+    const syntheticTurns = broadcasts
+      .slice(beforeCount)
+      .filter(([channel, msg]: any[]) => channel === 'chat' && msg?.type === 'chat.turn' && msg.threadId === threadId)
+      .map(([, msg]: any[]) => msg.turn?.role)
+    expect(syntheticTurns).toContain('user')
+    expect(syntheticTurns).not.toContain('system')
+  })
+
+  // Regression: finished subagents pile up in the thread dropdown because the
+  // client only refetches /api/threads/active-subagents on dropdown OPEN. WS
+  // forwarding the backend's subagent.* lifecycle events lets the header
+  // refetch on completion, instead of staying stuck on the previous list.
+  it('MUST broadcast subagent.completed from the backend to the chat WS channel', async () => {
+    const calls = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const before = calls.length
+    emitBackendEvent(backend, 'subagent.completed', {
+      parentKey: 'parent-thread-id',
+      childKey: 'child-subagent-id',
+      result: 'ok'
+    } as any)
+    const newCalls = calls.slice(before)
+    const broadcast = newCalls.find(
+      ([channel, msg]: any[]) =>
+        channel === 'chat' && msg?.type === 'subagent.completed' && msg.parentKey === 'parent-thread-id'
+    )
+    expect(broadcast).toBeDefined()
+  })
+
+  it('MUST broadcast subagent.spawned and subagent.failed too', async () => {
+    const calls = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const before = calls.length
+    emitBackendEvent(backend, 'subagent.spawned', {
+      parentKey: 'p',
+      childKey: 'c',
+      task: 't'
+    } as any)
+    emitBackendEvent(backend, 'subagent.failed', {
+      parentKey: 'p',
+      childKey: 'c',
+      error: 'bad'
+    } as any)
+    const newCalls = calls.slice(before)
+    const spawned = newCalls.find(([channel, msg]: any[]) => channel === 'chat' && msg?.type === 'subagent.spawned')
+    const failed = newCalls.find(([channel, msg]: any[]) => channel === 'chat' && msg?.type === 'subagent.failed')
+    expect(spawned).toBeDefined()
+    expect(failed).toBeDefined()
+  })
+
+  // User-role chat.turn is the synthetic one chat.ts emits for queued sends —
+  // not a real agent completion. Synthesizing idle here would steal the
+  // "working" indicator the moment the user's bubble lands; only assistant
+  // turns close out the busy state.
+  it('user-role chat.turn must NOT trigger a synthetic idle broadcast', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const calls = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const before = calls.length
+    emitBackendEvent(backend, 'chat.turn', {
+      sessionKey,
+      turn: { role: 'user', content: 'hi', workItems: [], thinkingBlocks: [], timestamp: Date.now() }
+    } as any)
+    const newCalls = calls.slice(before)
+    const statusIdle = newCalls.find(
+      ([channel, msg]: any[]) =>
+        channel === 'chat' && msg?.type === 'chat.status' && msg.status === 'idle' && msg.threadId === threadId
+    )
+    expect(statusIdle).toBeUndefined()
   })
 })

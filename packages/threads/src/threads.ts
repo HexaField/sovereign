@@ -347,10 +347,17 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
 
   function touch(id: string): void {
     const thread = threads.get(id)
-    if (thread) {
-      thread.lastActivity = Date.now()
-      persistThreadsImmediate()
-    }
+    if (!thread) return
+    thread.lastActivity = Date.now()
+    persistThreadsImmediate()
+    // Broadcast so connected clients re-sort the thread dropdown and
+    // re-render "Nm ago" without polling.
+    bus.emit({
+      type: 'thread.updated',
+      timestamp: new Date().toISOString(),
+      source: 'threads',
+      payload: { threadId: id, patch: { lastActivity: thread.lastActivity }, thread }
+    })
   }
 
   /**

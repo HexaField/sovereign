@@ -1,4 +1,5 @@
-import { createMemo, createSignal, Show, For, onCleanup } from 'solid-js'
+import { createMemo, createSignal, Show, For, onCleanup, onMount } from 'solid-js'
+import { wsStore } from '../../ws/index.js'
 import { ContextBudgetModal } from '../system/ContextBudgetModal.js'
 import { agentIcon } from '../../lib/identity.js'
 import { connectionStatus } from '../connection/store.js'
@@ -494,6 +495,36 @@ function WorkspaceHeaderContent() {
       /* ignore */
     }
   }
+
+  // Keep the dropdown's active-subagents list live without polling. The
+  // server forwards subagent.spawned/completed/failed over the `chat` WS
+  // channel; refetch on any of them, debounced so a burst of completions
+  // collapses into one round-trip. Without this, finished subagents pile up
+  // in the dropdown until the user closes + reopens it.
+  let subagentRefetchTimer: ReturnType<typeof setTimeout> | null = null
+  const scheduleSubagentRefetch = () => {
+    if (subagentRefetchTimer) return
+    subagentRefetchTimer = setTimeout(() => {
+      subagentRefetchTimer = null
+      void fetchActiveSubagents()
+    }, 250)
+  }
+
+  onMount(() => {
+    wsStore.subscribe(['chat'])
+    const offSpawned = wsStore.on('subagent.spawned', scheduleSubagentRefetch)
+    const offCompleted = wsStore.on('subagent.completed', scheduleSubagentRefetch)
+    const offFailed = wsStore.on('subagent.failed', scheduleSubagentRefetch)
+    // Prime the cache once on mount so the dropdown shows the truth even if
+    // the user opens it before any lifecycle event has fired.
+    void fetchActiveSubagents()
+    onCleanup(() => {
+      offSpawned()
+      offCompleted()
+      offFailed()
+      if (subagentRefetchTimer) clearTimeout(subagentRefetchTimer)
+    })
+  })
 
   const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
 
