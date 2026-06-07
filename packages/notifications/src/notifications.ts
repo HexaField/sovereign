@@ -25,6 +25,9 @@ export interface Notifications {
   pushSubscribe(deviceId: string, subscription: PushSubscription): void
   pushUnsubscribe(deviceId: string): void
   dispose(): void
+  /** Push subscription manager — exposed so bootstrap can wire it into the
+   *  presence orchestrator (sendAll on thread-turn completion / clear). */
+  pushManager: PushManager
   /** Exposed for testing */
   _store: NotificationStore
   _ruleEngine: RuleEngine
@@ -47,7 +50,7 @@ export const createNotifications = (bus: EventBus, dataDir: string, config?: Not
 
   const store = createNotificationStore(dataDir)
   const ruleEngine = createRuleEngine(dataDir)
-  const pushManager = createPushManager()
+  const pushManager = createPushManager(dataDir)
 
   let notifications: Notification[] = store.readAll()
 
@@ -191,6 +194,7 @@ export const createNotifications = (bus: EventBus, dataDir: string, config?: Not
     pushSubscribe,
     pushUnsubscribe,
     dispose,
+    pushManager,
     _store: store,
     _ruleEngine: ruleEngine,
     _pushManager: pushManager

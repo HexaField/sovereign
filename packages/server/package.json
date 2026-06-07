@@ -40,6 +40,7 @@
     "@sovereign/scheduler": "workspace:*",
     "@sovereign/system": "workspace:*",
     "@sovereign/terminal": "workspace:*",
+    "@sovereign/thread-presence": "workspace:*",
     "@sovereign/threads": "workspace:*",
     "@sovereign/voice": "workspace:*",
     "@sovereign/worktrees": "workspace:*",

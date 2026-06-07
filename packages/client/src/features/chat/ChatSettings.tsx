@@ -4,6 +4,7 @@ import { Portal } from 'solid-js/web'
 import { threadKey } from '../threads/store.js'
 import { agentStatus, abortChat } from './store.js'
 import { CronManagerModal } from '../crons/CronManagerModal.js'
+import { isThreadMuted, setThreadMute } from '../threads/mute-store.js'
 
 interface ThreadInfo {
   model: string | null
@@ -434,6 +435,46 @@ export function ChatSettingsButton() {
                         </select>
                       </div>
                     </Show>
+
+                    {/* Notifications mute toggle for THIS thread */}
+                    <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                      <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                        Notifications
+                      </span>
+                      <button
+                        type="button"
+                        title={isThreadMuted(threadKey()) ? 'Muted — click to unmute' : 'Mute this thread'}
+                        aria-label={
+                          isThreadMuted(threadKey()) ? 'Unmute thread notifications' : 'Mute thread notifications'
+                        }
+                        onClick={() => {
+                          const id = threadKey()
+                          if (id) void setThreadMute(id, !isThreadMuted(id))
+                        }}
+                        class="flex cursor-pointer items-center justify-center rounded-full border transition-colors"
+                        style={{
+                          width: '24px',
+                          height: '24px',
+                          background: isThreadMuted(threadKey()) ? 'var(--c-accent)' : 'var(--c-bg)',
+                          'border-color': isThreadMuted(threadKey()) ? 'var(--c-accent)' : 'var(--c-border)',
+                          color: isThreadMuted(threadKey()) ? '#fff' : 'var(--c-text-muted)'
+                        }}
+                      >
+                        <Show
+                          when={isThreadMuted(threadKey())}
+                          fallback={
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                              <path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6V11a6 6 0 1 0-12 0v5l-2 2v1h16v-1l-2-2z" />
+                            </svg>
+                          }
+                        >
+                          {/* Bell with diagonal slash → muted */}
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6V11a6 6 0 0 0-10.39-4.09L18 16zm-1.41 4.66L19.78 18 4.22 2.44 2.81 3.85l3.6 3.6A5.96 5.96 0 0 0 6 11v5l-2 2v1h13.59z" />
+                          </svg>
+                        </Show>
+                      </button>
+                    </div>
 
                     {/* Feedback */}
                     <Show when={actionFeedback()}>
