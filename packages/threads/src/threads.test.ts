@@ -549,4 +549,52 @@ describe('ThreadManager', () => {
       expect(tm.resolve('legacy')).toBeUndefined()
     })
   })
+
+  describe('unread counter', () => {
+    it('markUnreadIncrement bumps the count and emits thread.updated', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'unread-test' })
+      const updates: any[] = []
+      bus.on('thread.updated', (e: any) => {
+        updates.push(e)
+      })
+      expect(tm.markUnreadIncrement(t.id)).toBe(1)
+      expect(tm.markUnreadIncrement(t.id)).toBe(2)
+      expect(tm.get(t.id)?.unreadCount).toBe(2)
+      expect(updates.length).toBe(2)
+      expect(updates[1].payload.patch).toEqual({ unreadCount: 2 })
+    })
+
+    it('clearUnread zeros the count and emits thread.updated only when changed', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'unread-clear' })
+      tm.markUnreadIncrement(t.id)
+      const updates: any[] = []
+      bus.on('thread.updated', (e: any) => {
+        updates.push(e)
+      })
+      expect(tm.clearUnread(t.id)).toBe(true)
+      expect(tm.get(t.id)?.unreadCount).toBe(0)
+      expect(updates.length).toBe(1)
+      // Already zero — should NOT re-emit
+      expect(tm.clearUnread(t.id)).toBe(false)
+      expect(updates.length).toBe(1)
+    })
+
+    it('returns undefined / false for an unknown thread', () => {
+      const tm = createThreadManager(bus, dataDir)
+      expect(tm.markUnreadIncrement('bogus')).toBeUndefined()
+      expect(tm.clearUnread('bogus')).toBe(false)
+    })
+
+    it('persists unreadCount across instances', () => {
+      const tm1 = createThreadManager(bus, dataDir)
+      const t = tm1.create({ label: 'persist' })
+      tm1.markUnreadIncrement(t.id)
+      tm1.markUnreadIncrement(t.id)
+
+      const tm2 = createThreadManager(bus, dataDir)
+      expect(tm2.get(t.id)?.unreadCount).toBe(2)
+    })
+  })
 })
