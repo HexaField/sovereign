@@ -3,6 +3,7 @@ import type { Component } from 'solid-js'
 import { activeWorkspace } from '../store.js'
 import { wsStore } from '../../../ws/index.js'
 import { AlertCircleIcon, AlertIcon, WarningIcon, InfoIcon } from '../../../ui/icons.js'
+import { formatRelativeTime as _formatRelativeTime } from '../../../lib/format.js'
 
 export type NotificationPriority = 'info' | 'warning' | 'error' | 'critical'
 
@@ -20,13 +21,7 @@ export interface NotificationItem {
 }
 
 export function formatRelativeTime(ts: number): string {
-  const diff = Date.now() - ts
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.floor(hours / 24)}d ago`
+  return _formatRelativeTime(ts)
 }
 
 const PRIORITY_ORDER: Record<NotificationPriority, number> = {
