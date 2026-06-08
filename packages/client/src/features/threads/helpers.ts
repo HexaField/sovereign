@@ -1,5 +1,6 @@
 import type { EntityType } from '@sovereign/core'
 import type { ThreadInfo } from './store.js'
+export { formatRelativeTime } from '../../lib/format.js'
 
 export function getThreadDisplayName(thread: ThreadInfo): string {
   if (!thread.entities || thread.entities.length === 0) {
@@ -49,39 +50,4 @@ export function groupThreadsByWorkspace(threads: ThreadInfo[]): Map<string, Thre
     }
   }
   return map
-}
-
-export function formatRelativeTime(timestamp: number): string {
-  const now = Date.now()
-  const diff = now - timestamp
-  const seconds = Math.floor(diff / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-
-  if (seconds < 60) return 'Just now'
-  if (minutes < 60) return `${minutes}m ago`
-
-  // Check calendar days before falling back to hours
-  const date = new Date(timestamp)
-  const today = new Date(now)
-  const yesterday = new Date(now)
-  yesterday.setDate(today.getDate() - 1)
-
-  const isToday =
-    date.getFullYear() === today.getFullYear() &&
-    date.getMonth() === today.getMonth() &&
-    date.getDate() === today.getDate()
-
-  if (isToday) return `${hours}h ago`
-
-  const isYesterday =
-    date.getFullYear() === yesterday.getFullYear() &&
-    date.getMonth() === yesterday.getMonth() &&
-    date.getDate() === yesterday.getDate()
-
-  if (isYesterday) return 'Yesterday'
-
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  return `${dayNames[date.getDay()]}, ${monthNames[date.getMonth()]} ${date.getDate()}`
 }
