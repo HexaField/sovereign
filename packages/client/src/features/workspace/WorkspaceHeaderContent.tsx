@@ -371,6 +371,9 @@ export function WorkspaceHeaderContent() {
     >
   >({})
 
+  // Ticks every 60s so relative-time strings re-compute even when thread data is unchanged.
+  const [nowTick, setNowTick] = createSignal(Date.now())
+
   const fetchActiveSubagents = async () => {
     try {
       const res = await fetch('/api/threads/active-subagents')
@@ -396,11 +399,24 @@ export function WorkspaceHeaderContent() {
     const offCompleted = wsStore.on('subagent.completed', scheduleSubagentRefetch)
     const offFailed = wsStore.on('subagent.failed', scheduleSubagentRefetch)
     void fetchActiveSubagents()
+
+    // Clock tick for relative-time display — every 60s.
+    const clockInterval = setInterval(() => setNowTick(Date.now()), 60_000)
+
+    // Fallback poll while dropdown is open: WS events cover spawned/completed/failed
+    // but not mid-lifecycle status transitions. Poll every 10s so status never drifts
+    // more than one interval behind reality.
+    const pollInterval = setInterval(() => {
+      if (threadPickerOpen()) void fetchActiveSubagents()
+    }, 10_000)
+
     onCleanup(() => {
       offSpawned()
       offCompleted()
       offFailed()
       if (subagentRefetchTimer) clearTimeout(subagentRefetchTimer)
+      clearInterval(clockInterval)
+      clearInterval(pollInterval)
     })
   })
 
@@ -612,7 +628,7 @@ export function WorkspaceHeaderContent() {
                       <span class="truncate">{t.label ?? t.id}</span>
                       <Show when={t.lastActivity}>
                         <span class="ml-auto shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                          {t.lastActivity ? formatRelativeTime(t.lastActivity) : ''}
+                          {t.lastActivity ? formatRelativeTime(t.lastActivity, nowTick()) : ''}
                         </span>
                       </Show>
                     </a>

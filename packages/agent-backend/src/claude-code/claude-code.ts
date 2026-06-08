@@ -342,10 +342,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         cwd: value.cwd,
         model: value.model,
         effort: value.effort ?? DEFAULT_REASONING_EFFORT,
-        agentStatus: value.agentStatus,
+        // Reset any non-idle status on restart — nothing is actually running.
+        // The resume orchestrator re-activates sessions that need to continue.
+        agentStatus: 'idle',
         label: value.label,
         parentSessionKey: value.parentSessionKey,
-        liveSubagents: new Set(value.liveSubagents),
+        liveSubagents: new Set(), // cleared on restart — nothing survives the process boundary
         streamLastLength: value.streamLastLength,
         thinkingAccum: value.thinkingAccum,
         textAccum: value.textAccum,
