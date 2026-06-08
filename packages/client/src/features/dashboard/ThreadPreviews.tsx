@@ -3,6 +3,7 @@ import { createSignal, onMount, onCleanup, For, Show } from 'solid-js'
 import { setActiveWorkspace } from '../workspace/store'
 import { setActiveView, closeDashboardModal } from '../nav/store'
 import { switchThread } from '../threads/store'
+import { formatRelativeTime } from '../../lib/format.js'
 
 interface ThreadInfo {
   key: string
@@ -17,13 +18,9 @@ interface PreviewEntry {
   text: string
 }
 
-function formatRelativeTime(ts: number | null): string {
+function formatActivity(ts: number | null): string {
   if (!ts) return ''
-  const diff = Date.now() - ts
-  if (diff < 60_000) return 'just now'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  return `${Math.floor(diff / 86_400_000)}d ago`
+  return formatRelativeTime(ts)
 }
 
 function isActive(status: string): boolean {
@@ -177,7 +174,7 @@ export default function ThreadPreviews(props: { orgId: string; orgName: string }
                     {thread.label || thread.key}
                   </span>
                   <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                    {formatRelativeTime(thread.lastActivity)}
+                    {formatActivity(thread.lastActivity)}
                   </span>
                 </div>
 

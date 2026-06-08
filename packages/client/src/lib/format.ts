@@ -17,20 +17,34 @@ export function formatTimestamp(ts: number): string {
   return `${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${pad2(d.getDate())} at ${time}`
 }
 
-export function formatRelativeTime(ts: number): string {
-  const now = Date.now()
+export function formatRelativeTime(ts: number, _now?: number): string {
+  const now = _now ?? Date.now()
   const diff = now - ts
+  const seconds = Math.floor(diff / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
 
-  if (diff < 60_000) return 'Just now'
-
-  const minutes = Math.floor(diff / 60_000)
+  if (seconds < 60) return 'Just now'
   if (minutes < 60) return `${minutes}m ago`
 
-  const hours = Math.floor(diff / 3_600_000)
-  if (hours < 24) return `${hours}h ago`
+  const date = new Date(ts)
+  const today = new Date(now)
+  const yesterday = new Date(now)
+  yesterday.setDate(today.getDate() - 1)
 
-  const days = Math.floor(diff / 86_400_000)
-  if (days === 1) return 'Yesterday'
+  const isToday =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
 
-  return `${days}d ago`
+  if (isToday) return `${hours}h ago`
+
+  const isYesterday =
+    date.getFullYear() === yesterday.getFullYear() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getDate() === yesterday.getDate()
+
+  if (isYesterday) return 'Yesterday'
+
+  return `${DAYS[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()}`
 }
