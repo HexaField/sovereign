@@ -95,7 +95,7 @@ export function createThreadRoutes(
     const activityMap = await collectActivityMap(opts?.backend)
 
     const merged = threads.map((t) => {
-      const freshTs = activityMap.get(t.id) ?? t.lastActivity
+      const freshTs = Math.max(activityMap.get(t.id) ?? 0, t.lastActivity ?? 0) || t.lastActivity
       return { ...t, lastActivity: freshTs }
     })
     merged.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))
