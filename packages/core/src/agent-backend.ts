@@ -204,6 +204,10 @@ export interface SessionMeta {
   task?: string | null
   label?: string | null
   parentKey?: string | null
+  /** Backend-specific session UUID (e.g. Claude Code JSONL UUID). */
+  backendSessionId?: string | null
+  /** Absolute path to the backend session file (e.g. Claude Code JSONL). */
+  backendSessionFile?: string | null
 }
 
 /**

@@ -4,16 +4,11 @@
 import { type Component } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
 import { activeSystemTab } from '../nav/store.js'
-import OverviewTab from './OverviewTab'
-import ArchitectureTab from './ArchitectureTab'
-import LogsTab from './LogsTab'
-import HealthTab from './HealthTab'
+import StatusTab from './StatusTab'
+import AgentsTab from './AgentsTab'
+import ActivityTab from './ActivityTab'
 import ConfigTab from './ConfigTab'
-import DevicesTab from './DevicesTab'
 import JobsTab from './JobsTab'
-import EventStreamTab from './EventStreamTab'
-import ThreadsTab from './ThreadsTab'
-import FlowGraph from './FlowGraph'
 
 export type { SystemTabId } from '../nav/store.js'
 export { activeSystemTab, setActiveSystemTab } from '../nav/store.js'
@@ -25,16 +20,11 @@ export interface SystemTab {
 }
 
 export const SYSTEM_TABS: SystemTab[] = [
-  { id: 'overview', label: 'Overview', component: OverviewTab },
-  { id: 'architecture', label: 'Architecture', component: ArchitectureTab },
-  { id: 'logs', label: 'Logs', component: LogsTab },
-  { id: 'health', label: 'Health', component: HealthTab },
+  { id: 'status', label: 'Status', component: StatusTab },
+  { id: 'agents', label: 'Agents', component: AgentsTab },
+  { id: 'activity', label: 'Activity', component: ActivityTab },
   { id: 'config', label: 'Config', component: ConfigTab },
-  { id: 'devices', label: 'Devices', component: DevicesTab },
-  { id: 'jobs', label: 'Jobs', component: JobsTab },
-  { id: 'events', label: 'Events', component: EventStreamTab },
-  { id: 'threads', label: 'Threads', component: ThreadsTab },
-  { id: 'flow', label: 'Flow', component: FlowGraph }
+  { id: 'jobs', label: 'Jobs', component: JobsTab }
 ]
 
 const SystemView: Component = () => {
