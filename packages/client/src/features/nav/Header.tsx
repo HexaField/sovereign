@@ -51,29 +51,13 @@ export function getViewModeLabel(mode: string): string {
 }
 
 // ── System tabs definition ───────────────────────────────────────────
-const SYSTEM_TAB_IDS: SystemTabId[] = [
-  'overview',
-  'architecture',
-  'logs',
-  'health',
-  'config',
-  'devices',
-  'jobs',
-  'events',
-  'threads',
-  'flow'
-]
+const SYSTEM_TAB_IDS: SystemTabId[] = ['status', 'agents', 'activity', 'config', 'jobs']
 const SYSTEM_TAB_LABELS: Record<SystemTabId, string> = {
-  overview: 'Overview',
-  architecture: 'Architecture',
-  logs: 'Logs',
-  health: 'Health',
+  status: 'Status',
+  agents: 'Agents',
+  activity: 'Activity',
   config: 'Config',
-  devices: 'Devices',
-  jobs: 'Jobs',
-  events: 'Events',
-  threads: 'Threads',
-  flow: 'Flow'
+  jobs: 'Jobs'
 }
 
 // ── Planning mode icons ──────────────────────────────────────────────

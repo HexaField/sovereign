@@ -69,11 +69,11 @@ describe('§P.1 Architecture View', () => {
     })
   })
 
-  // §P.1.2 System Flow Graph
-  describe('§P.1.2 System Flow Graph', () => {
-    it('§P.1.2 FlowGraph component exists', async () => {
-      const src = fs.readFileSync(path.resolve(__dirname, '../features/system/FlowGraph.tsx'), 'utf-8')
-      expect(src).toContain('FlowGraph')
+  // §P.1.2 Activity Tab
+  describe('§P.1.2 Activity Tab', () => {
+    it('§P.1.2 ActivityTab component exists', async () => {
+      const src = fs.readFileSync(path.resolve(__dirname, '../features/system/ActivityTab.tsx'), 'utf-8')
+      expect(src).toContain('ActivityTab')
     })
   })
 

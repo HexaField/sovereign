@@ -7,12 +7,6 @@ import { createLogger } from './logger.js'
 import type { LogsChannel } from './ws.js'
 
 export function wireBusLogging(bus: EventBus, logsChannel: LogsChannel): void {
-  const sysLogger = createLogger(logsChannel, 'bus')
-  bus.on('*', (event) => {
-    if (event.type === 'log.entry') return
-    sysLogger.debug(`${event.type}`, { metadata: { source: event.source } })
-  })
-
   const moduleLogger = createLogger(logsChannel, 'modules')
 
   bus.on('issue.created', (event) => {

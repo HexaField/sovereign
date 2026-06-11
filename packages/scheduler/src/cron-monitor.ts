@@ -58,8 +58,6 @@ export function createCronMonitor(options: CronMonitorOptions) {
       const newRuns = entries.filter((e: CronRunEntry) => e.ts > lastSeenRunTs)
       if (newRuns.length === 0) return
 
-      console.log(`[cron-monitor] Found ${newRuns.length} new run(s) since ${lastSeenRunTs}`)
-
       const maxTs = Math.max(...newRuns.map((e: CronRunEntry) => e.ts))
       lastSeenRunTs = maxTs
 
