@@ -1271,7 +1271,9 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       reasoningEffort: state.effort,
       task: null,
       label: state.label ?? null,
-      parentKey: state.parentSessionKey ?? null
+      parentKey: state.parentSessionKey ?? null,
+      backendSessionId: state.backendSessionId ?? null,
+      backendSessionFile: state.sessionFile ?? null
     }
   }
 
