@@ -1,5 +1,7 @@
 // System REST endpoints: GET /api/system/architecture, GET /api/system/health, GET /api/system/logs
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { Router } from 'express'
 import type { SystemModule } from './system.js'
 import type { LogsChannel } from './ws.js'
@@ -9,6 +11,13 @@ import type { RoutingBackend, ActiveSessions } from '@sovereign/agent-backend'
 import type { ContextBudget, EventBus } from '@sovereign/core'
 import type { EventStream } from './event-stream.js'
 import type { WsHandler } from '@sovereign/primitives'
+
+export interface PersonalityInfo {
+  compiledAt: number | null
+  size: number
+  watcherActive: boolean
+  outputPath: string
+}
 
 export interface SystemRoutesOptions {
   system: SystemModule
@@ -25,6 +34,12 @@ export interface SystemRoutesOptions {
   bus?: EventBus
   /** Identity accessor — overrides the static default for /api/system/identity. */
   getIdentity?: () => { agentName: string; agentIcon: string }
+  /** Personality compiler info — drives /api/system/personality. */
+  getPersonalityInfo?: () => PersonalityInfo | null
+  /** Thread meta accessor for enriching agents/active response. */
+  getThreadMeta?: (key: string) => { label?: string; membraneId?: string } | null
+  /** Push manager for subscription status endpoint. */
+  pushManager?: { allSubscriptions(): { size: number }; getVapidPublicKey?(): string | null }
 }
 
 function mockContextBudget(): ContextBudget {
@@ -125,22 +140,78 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
     res.json({ snapshots: healthHistory.getSnapshots(windowMs) })
   })
 
-  // Active-agent census, served from the file-backed `active-sessions.json`
-  // (R9). Adapters write through to it on every status transition, so the
-  // endpoint is just a serialiser.
+  // Active-agent census — enriched with label + membraneId from thread registry.
   router.get('/api/system/agents/active', (_req, res) => {
     if (!activeSessions) {
       res.json({ count: 0, sessions: [] })
       return
     }
-    const sessions = activeSessions.list().map((e) => ({
-      key: e.sessionKey,
-      kind: e.sessionKey.includes(':subagent:') ? 'subagent' : 'thread',
-      agentStatus: e.agentStatus,
-      backendKind: e.backendKind,
-      lastActivity: e.lastTransitionAt
-    }))
+    const getThreadMeta = 'getThreadMeta' in opts ? (opts as SystemRoutesOptions).getThreadMeta : null
+    const sessions = activeSessions.list().map((e) => {
+      const meta = getThreadMeta?.(e.threadKey) ?? null
+      return {
+        key: e.sessionKey,
+        threadKey: e.threadKey,
+        kind: e.sessionKey.includes(':subagent:') ? 'subagent' : 'thread',
+        agentStatus: e.agentStatus,
+        backendKind: e.backendKind,
+        lastActivity: e.lastTransitionAt,
+        label: meta?.label ?? e.threadKey,
+        membraneId: meta?.membraneId ?? null
+      }
+    })
     res.json({ count: sessions.length, sessions })
+  })
+
+  // Personality compiler info — CLAUDE.md stat + watcher state.
+  router.get('/api/system/personality', (_req, res) => {
+    const getPersonalityInfo = 'getPersonalityInfo' in opts ? (opts as SystemRoutesOptions).getPersonalityInfo : null
+    if (getPersonalityInfo) {
+      res.json(getPersonalityInfo() ?? { compiledAt: null, size: 0, watcherActive: false, outputPath: '' })
+      return
+    }
+    // Fallback: stat the default output path directly
+    const outputPath = path.join(process.env.HOME ?? '', '.claude', 'CLAUDE.md')
+    try {
+      const stat = fs.statSync(outputPath)
+      res.json({ compiledAt: stat.mtimeMs, size: stat.size, watcherActive: false, outputPath })
+    } catch {
+      res.json({ compiledAt: null, size: 0, watcherActive: false, outputPath })
+    }
+  })
+
+  // Hooks summary — reads ~/.claude/settings.json and returns hook event names + counts.
+  router.get('/api/system/hooks', (_req, res) => {
+    const settingsPath = path.join(process.env.HOME ?? '', '.claude', 'settings.json')
+    try {
+      const raw = fs.readFileSync(settingsPath, 'utf-8')
+      const settings = JSON.parse(raw) as Record<string, unknown>
+      const hooks = settings.hooks as Record<string, { hooks?: unknown[] }> | undefined
+      if (!hooks || typeof hooks !== 'object') {
+        res.json({ events: [] })
+        return
+      }
+      const events = Object.entries(hooks).map(([event, val]) => ({
+        event,
+        count: Array.isArray(val?.hooks) ? val.hooks.length : 0
+      }))
+      res.json({ events, total: events.reduce((s, e) => s + e.count, 0) })
+    } catch {
+      res.json({ events: [], total: 0 })
+    }
+  })
+
+  // Push notification subscription status.
+  router.get('/api/system/push-status', (_req, res) => {
+    const pm = 'pushManager' in opts ? (opts as SystemRoutesOptions).pushManager : null
+    if (!pm) {
+      res.json({ subscriptionCount: 0, vapidConfigured: false })
+      return
+    }
+    res.json({
+      subscriptionCount: pm.allSubscriptions().size,
+      vapidConfigured: typeof pm.getVapidPublicKey === 'function' ? pm.getVapidPublicKey() !== null : false
+    })
   })
 
   // Device identity endpoint — aggregates across all enabled backends.

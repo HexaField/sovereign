@@ -502,6 +502,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       defaultModel: configStore.get<string>('models.default') || null
     })
   })
+  let personalityWatcherActive = !!personalityCompiler
   app.use(
     createSystemRoutes({
       system: systemModule,
@@ -515,7 +516,25 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       getIdentity: () => ({
         agentName: configStore.get<string>('identity.agentName'),
         agentIcon: configStore.get<string>('identity.agentIcon')
-      })
+      }),
+      getPersonalityInfo: () => {
+        const outputPath = path.join(process.env.HOME ?? '', '.claude', 'CLAUDE.md')
+        try {
+          const stat = fs.statSync(outputPath)
+          return { compiledAt: stat.mtimeMs, size: stat.size, watcherActive: personalityWatcherActive, outputPath }
+        } catch {
+          return { compiledAt: null, size: 0, watcherActive: personalityWatcherActive, outputPath }
+        }
+      },
+      getThreadMeta: (key: string) => {
+        const t = threadManager.get(key)
+        if (!t) return null
+        return { label: t.label, membraneId: t.membraneId }
+      },
+      pushManager: {
+        allSubscriptions: () => notificationsModule.pushManager.allSubscriptions(),
+        getVapidPublicKey: () => notificationsModule.pushManager.getVapidPublicKey()
+      }
     })
   )
   registerEventsChannel(wsHandler, eventStream)
@@ -585,6 +604,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       activeSessions.flush()
       claudeCodeBackend?.flushState()
       chatModule.flushState()
+      personalityWatcherActive = false
       personalityCompiler?.stop()
       browserService.dispose().catch(() => {})
       statusAggregator.destroy()

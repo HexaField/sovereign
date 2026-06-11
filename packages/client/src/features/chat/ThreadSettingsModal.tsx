@@ -24,6 +24,11 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
+interface CozempicHealth {
+  healthy: boolean | null
+  reason: string | null
+}
+
 export default function ThreadSettingsModal(props: { onClose: () => void }) {
   const [info, setInfo] = createSignal<SessionInfo | null>(null)
   const [loading, setLoading] = createSignal(true)
@@ -36,6 +41,8 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
   const [defaultEffort, setDefaultEffort] = createSignal<string | null>(null)
   const [selectedEffort, setSelectedEffort] = createSignal<string>('')
   const [effortSaving, setEffortSaving] = createSignal(false)
+  const [cozempicHealth, setCozempicHealth] = createSignal<CozempicHealth | null>(null)
+  const [cozempicRestoring, setCozempicRestoring] = createSignal(false)
 
   onMount(async () => {
     const key = threadKey()
@@ -73,7 +80,43 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
       /* ignore */
     }
     setLoading(false)
+
+    // Fetch cozempic health independently — non-blocking
+    try {
+      const healthRes = await fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-health`)
+      if (healthRes.ok) setCozempicHealth(await healthRes.json())
+    } catch {
+      /* ignore */
+    }
   })
+
+  const handleCozempicRestore = async () => {
+    const key = threadKey()
+    if (!key) return
+    setCozempicRestoring(true)
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-restore`, { method: 'POST' })
+      const data = await res.json()
+      if (res.ok && data.ok) {
+        setActionFeedback('Cozempic guard restored')
+        // Re-check health after a moment
+        setTimeout(async () => {
+          try {
+            const healthRes = await fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-health`)
+            if (healthRes.ok) setCozempicHealth(await healthRes.json())
+          } catch {
+            /* ignore */
+          }
+        }, 1500)
+      } else {
+        setActionFeedback(data.message ?? 'Restore failed')
+      }
+    } catch {
+      setActionFeedback('Restore failed')
+    }
+    setCozempicRestoring(false)
+    setTimeout(() => setActionFeedback(''), 3000)
+  }
 
   const handleClearLock = async () => {
     const key = threadKey()
@@ -341,6 +384,47 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
                     {i().agentStatus}
                   </span>
                 </div>
+
+                {/* Cozempic health */}
+                <Show when={cozempicHealth() !== null && cozempicHealth()?.healthy === false}>
+                  <div
+                    class="flex items-start gap-2 rounded-lg p-2.5"
+                    style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}
+                  >
+                    <div class="mt-0.5 shrink-0" style={{ color: '#ef4444' }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2L4 6v6c0 5.25 3.5 10.15 8 11.5C16.5 22.15 20 17.25 20 12V6l-8-4zm0 5c.55 0 1 .45 1 1v4c0 .55-.45 1-1 1s-1-.45-1-1V8c0-.55.45-1 1-1zm0 8c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z" />
+                      </svg>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-xs font-semibold" style={{ color: '#ef4444' }}>
+                        Cozempic guard inactive
+                      </div>
+                      <div class="mt-0.5 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                        {cozempicHealth()?.reason === 'context-bloat'
+                          ? 'Context bloat prevented pruning. Run /compact first, then restore.'
+                          : cozempicHealth()?.reason === 'no-session'
+                            ? 'No active session — start a conversation first.'
+                            : 'Guard process not running.'}
+                      </div>
+                      <Show when={cozempicHealth()?.reason !== 'no-session'}>
+                        <button
+                          class="mt-1.5 cursor-pointer rounded px-2 py-1 text-[10px] font-medium transition-colors"
+                          style={{
+                            background: cozempicRestoring() ? 'rgba(239,68,68,0.1)' : '#ef4444',
+                            color: 'white',
+                            border: 'none',
+                            opacity: cozempicRestoring() ? '0.6' : '1'
+                          }}
+                          disabled={cozempicRestoring()}
+                          onClick={handleCozempicRestore}
+                        >
+                          {cozempicRestoring() ? 'Restoring…' : 'Restore guard'}
+                        </button>
+                      </Show>
+                    </div>
+                  </div>
+                </Show>
               </div>
             )}
           </Show>

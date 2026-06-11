@@ -1,5 +1,7 @@
 // Threads — REST API endpoints
 
+import fs from 'node:fs'
+import { execFile } from 'node:child_process'
 import { Router } from 'express'
 import type { ThreadManager } from './types.js'
 import type { ForwardHandler } from './forward.js'
@@ -451,6 +453,87 @@ export function createThreadRoutes(
         agentStatus: thread.agentStatus ?? 'idle',
         sessionKey: null
       })
+    }
+  })
+
+  router.get('/api/threads/:key/cozempic-health', async (_req, res) => {
+    const threadKey = _req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    try {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      const backend = backendForSession(sessionKey)
+      const meta = backend ? await backend.getSessionMeta(sessionKey) : null
+      const backendSessionId = meta?.backendSessionId
+
+      if (!backendSessionId) {
+        return res.json({ healthy: null, reason: 'no-session' })
+      }
+
+      const short = backendSessionId.substring(0, 12)
+      const pidFile = `/tmp/cozempic_guard_${short}.pid`
+      let healthy = false
+      let reason: string | null = null
+
+      try {
+        const pidStr = fs.readFileSync(pidFile, 'utf-8').trim()
+        const pid = parseInt(pidStr, 10)
+        if (pid > 0) {
+          process.kill(pid, 0)
+          healthy = true
+        } else {
+          reason = 'invalid-pid'
+        }
+      } catch (e: unknown) {
+        const code = (e as NodeJS.ErrnoException).code
+        if (code === 'ENOENT') reason = 'no-pid-file'
+        else if (code === 'ESRCH') reason = 'guard-exited'
+        else reason = 'unknown'
+      }
+
+      if (!healthy) {
+        const logFile = `/tmp/cozempic_guard_${short}.log`
+        try {
+          const log = fs.readFileSync(logFile, 'utf-8')
+          if (log.includes('Guard powerless')) reason = 'context-bloat'
+        } catch {
+          /* log may not exist */
+        }
+      }
+
+      res.json({ healthy, reason, backendSessionId, backendSessionFile: meta?.backendSessionFile ?? null })
+    } catch {
+      res.json({ healthy: null, reason: 'error' })
+    }
+  })
+
+  router.post('/api/threads/:key/cozempic-restore', async (_req, res) => {
+    const threadKey = _req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    try {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      const backend = backendForSession(sessionKey)
+      const meta = backend ? await backend.getSessionMeta(sessionKey) : null
+      const { backendSessionId, backendSessionFile } = meta ?? {}
+
+      if (!backendSessionId || !backendSessionFile) {
+        return res.status(400).json({ ok: false, message: 'No active session for this thread' })
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        execFile('cozempic', ['guard', '--daemon', '--session', backendSessionFile], { timeout: 10_000 }, (err) => {
+          if (err) reject(err)
+          else resolve()
+        })
+      })
+
+      res.json({ ok: true, message: 'Cozempic guard spawned' })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      res.status(500).json({ ok: false, message: msg })
     }
   })
 
