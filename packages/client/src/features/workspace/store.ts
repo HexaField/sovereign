@@ -140,6 +140,7 @@ export function isMobileWidth(): boolean {
 // §7.4 — Mobile file panel persistence
 export const [lastOpenFilePath, _setLastOpenFilePath] = createSignal<string | null>(null)
 export const [mobileFileShowTree, _setMobileFileShowTree] = createSignal(true)
+export const [persistedExpandedDirs, _setPersistedExpandedDirs] = createSignal<string[]>([])
 
 export function setLastOpenFilePath(v: string | null): void {
   _setLastOpenFilePath(v)
@@ -149,6 +150,11 @@ export function setLastOpenFilePath(v: string | null): void {
 export function setMobileFileShowTree(v: boolean): void {
   _setMobileFileShowTree(v)
   writeStorage(wsKey(currentOrgId(), 'mobileFileShowTree'), v)
+}
+
+export function setPersistedExpandedDirs(dirs: string[]): void {
+  _setPersistedExpandedDirs(dirs)
+  writeStorage(wsKey(currentOrgId(), 'expandedDirs'), dirs)
 }
 
 // §3.2 — Expand chat mode
@@ -339,8 +345,11 @@ function restoreWorkspacePanelState(orgId: string): void {
   if (SIDEBAR_TABS.some((t) => t.key === tab)) {
     _setActiveSidebarTab(tab as SidebarTab)
   }
-  _setLastOpenFilePath(readStorage<string | null>(wsKey(orgId, 'lastOpenFilePath'), null))
+  _setLastOpenFilePath(
+    readStorage<string | null>(wsKey(orgId, 'lastOpenFilePath'), null, (v) => (v === 'null' ? null : v))
+  )
   _setMobileFileShowTree(readStorage(wsKey(orgId, 'mobileFileShowTree'), true))
+  _setPersistedExpandedDirs(readStorage<string[]>(wsKey(orgId, 'expandedDirs'), []))
 }
 
 export function setActiveProject(projectId: string, projectName?: string): void {
