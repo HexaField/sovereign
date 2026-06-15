@@ -14,7 +14,13 @@ import {
 import { loadIdentity } from './lib/identity.js'
 
 // Workspace auto-init
-import { activeWorkspace, autoSelectProject, openFileTab, setChatExpanded } from './features/workspace/store.js'
+import {
+  activeWorkspace,
+  autoSelectProject,
+  openFileTab,
+  setChatExpanded,
+  setLastOpenFilePath
+} from './features/workspace/store.js'
 
 // WS + connection stores
 import { wsStore } from './ws/index.js'
@@ -87,6 +93,7 @@ export default function App() {
     const handleOpenFile = (e: Event) => {
       const { path } = (e as CustomEvent).detail
       setChatExpanded(false)
+      setLastOpenFilePath(path)
       openFileTab(path, '_workspace')
       setActiveView('workspace')
     }

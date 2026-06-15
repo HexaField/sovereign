@@ -157,8 +157,56 @@ function buildFilenameRe(): RegExp | null {
 
 /** Wrap detected file paths and workspace filenames in clickable chips */
 function injectFileChips(html: string): string {
+  let result = html
+
+  // Phase 0: markdown links [label](path) → <a href="path">label</a>
+  // Also handles [label](file:///path) file:// URIs.
+  // Explicit markdown links are always chipped when they resolve to a local path
+  // (author intent is unambiguous). Unknown external hrefs stay as <a> links.
+  result = result.replace(/<a\s+href="([^"]*)"(?:[^>]*)>([\s\S]*?)<\/a>/gi, (match, href: string, inner: string) => {
+    // Skip external + mailto + anchor links
+    if (/^(https?|mailto|ftp):\/\//i.test(href) || href.startsWith('#')) return match
+
+    // Decode any percent-encoded characters (marked may encode spaces etc.)
+    let filePath: string
+    try {
+      filePath = decodeURIComponent(href)
+    } catch {
+      filePath = href
+    }
+
+    // Strip file:// scheme variants
+    if (filePath.startsWith('file:///'))
+      filePath = filePath.slice(7) // file:///abs → /abs
+    else if (filePath.startsWith('file://localhost/'))
+      filePath = filePath.slice(16) // file://localhost/abs → /abs
+    else if (filePath.startsWith('file://')) filePath = filePath.slice(7) // file://abs (malformed but seen)
+
+    // Strip inner HTML tags for display text
+    const displayText = inner.replace(/<[^>]+>/g, '').trim() || filePath.split('/').pop() || filePath
+
+    // Absolute path — chip unconditionally (explicit link intent; /api/files/read handles any path).
+    // Prefer the cached display name if we have it, but don't require it.
+    if (filePath.startsWith('/')) {
+      const relPath = absoluteToRelative.get(filePath)
+      return makeChip(filePath, displayText || relPath || filePath.split('/').pop() || filePath)
+    }
+
+    // Relative path (e.g. membranes/personal/CONTEXT.md)
+    if (workspaceFilePaths.has(filePath)) {
+      return makeChip(workspaceFilePaths.get(filePath)!, displayText)
+    }
+
+    // Bare filename with no directory component
+    if (!filePath.includes('/') && workspaceFilePaths.has(filePath)) {
+      return makeChip(workspaceFilePaths.get(filePath)!, displayText)
+    }
+
+    return match
+  })
+
   // Phase 1: absolute paths — only chip if file exists in workspace cache
-  let result = html.replace(
+  result = result.replace(
     /(<(?:a|code|pre)[^>]*>[\s\S]*?<\/(?:a|code|pre)>)|(?<![="'(])(\/([\w.+-]+\/)*[\w.+-]+\.\w{1,10})(?![="')\w])/gi,
     (match, tag, path) => {
       if (tag) return tag
