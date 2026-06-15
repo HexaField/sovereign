@@ -108,7 +108,12 @@ function MarkdownContentInternal(props: { text: string }) {
       wrapper.appendChild(btn)
     })
   })
-  return <div ref={ref} />
+  return (
+    <div
+      ref={ref}
+      class="[&_a]:text-[var(--c-accent)] [&_a]:underline [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-[var(--c-accent)] [&_blockquote]:pl-3 [&_blockquote]:text-[var(--c-text-muted)] [&_blockquote]:italic [&_em]:italic [&_h1]:mt-1 [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1.5 [&_h3]:text-base [&_h3]:font-semibold [&_h4]:mt-2 [&_h4]:mb-1 [&_h4]:text-sm [&_h4]:font-semibold [&_h5]:mt-2 [&_h5]:mb-1 [&_h5]:text-sm [&_h5]:font-medium [&_h6]:mt-2 [&_h6]:mb-1 [&_h6]:text-xs [&_h6]:font-medium [&_hr]:my-3 [&_hr]:border-[var(--c-border)] [&_li]:mb-0.5 [&_li>ol]:mt-1 [&_li>ul]:mt-1 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_p]:leading-relaxed [&_strong]:font-semibold [&_table]:mb-2 [&_table]:w-full [&_table]:text-xs [&_td]:border [&_td]:border-[var(--c-border)] [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-[var(--c-border)] [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&>p:last-child]:mb-0"
+    />
+  )
 }
 
 // ── Context menu item ────────────────────────────────────────────────

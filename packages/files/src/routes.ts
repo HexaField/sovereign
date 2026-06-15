@@ -118,6 +118,56 @@ export function createFileRouter(
     }
   }) as RequestHandler)
 
+  // GET /api/files/read?path=... — read any absolute path (no project restriction; local-only tool)
+  router.get('/read', (async (req, res) => {
+    const filePath = req.query.path as string
+    if (!filePath) {
+      res.status(400).json({ error: 'path parameter required' })
+      return
+    }
+    const resolved = nodePath.resolve(filePath)
+    try {
+      const stat = await fs.stat(resolved)
+      if (!stat.isFile()) {
+        res.status(400).json({ error: 'Not a file' })
+        return
+      }
+      const ext = nodePath.extname(resolved).toLowerCase()
+      const BINARY_EXTS = new Set([
+        '.png',
+        '.jpg',
+        '.jpeg',
+        '.gif',
+        '.webp',
+        '.ico',
+        '.bmp',
+        '.woff',
+        '.woff2',
+        '.ttf',
+        '.pdf',
+        '.zip',
+        '.gz',
+        '.mp3',
+        '.mp4',
+        '.webm'
+      ])
+      const binary = BINARY_EXTS.has(ext)
+      const buffer = await fs.readFile(resolved)
+      const content = binary ? buffer.toString('base64') : buffer.toString('utf-8')
+      res.json({
+        content,
+        path: resolved,
+        extension: ext.slice(1),
+        size: stat.size,
+        encoding: binary ? 'base64' : 'utf-8'
+      })
+    } catch (err: any) {
+      if (err.code === 'ENOENT') res.status(404).json({ error: 'File not found' })
+      else if (err.code === 'EACCES') res.status(403).json({ error: 'Permission denied' })
+      else res.status(500).json({ error: err.message })
+    }
+  }) as RequestHandler)
+
   // GET /api/files/workspace/read?path=... — read a workspace file by absolute path
   router.get('/workspace/read', (async (req, res) => {
     if (!sovereignWorkspace) {

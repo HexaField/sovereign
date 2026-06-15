@@ -12,7 +12,9 @@ import {
   lastOpenFilePath,
   setLastOpenFilePath,
   mobileFileShowTree,
-  setMobileFileShowTree
+  setMobileFileShowTree,
+  persistedExpandedDirs,
+  setPersistedExpandedDirs
 } from '../store.js'
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -112,6 +114,12 @@ async function fetchSubtree(projectPath: string, dirPath: string): Promise<FileN
 
 async function fetchFile(projectPath: string, filePath: string): Promise<FileData> {
   const res = await fetch(`/api/files?path=${encodeURIComponent(filePath)}&project=${encodeURIComponent(projectPath)}`)
+  if (!res.ok) throw new Error(`Failed to load file: ${res.statusText}`)
+  return res.json()
+}
+
+async function fetchFileAbsolute(filePath: string): Promise<FileData> {
+  const res = await fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`)
   if (!res.ok) throw new Error(`Failed to load file: ${res.statusText}`)
   return res.json()
 }
@@ -310,7 +318,7 @@ const FilePanel: Component = () => {
   // ── State ──
   const [orgPath, setOrgPath] = createSignal<string | null>(null)
   const [treeData, setTreeData] = createSignal<FileNode[]>([])
-  const [expandedDirs, setExpandedDirs] = createSignal<Set<string>>(new Set())
+  const [expandedDirs, setExpandedDirs] = createSignal<Set<string>>(new Set(persistedExpandedDirs()))
   const [activeFilePath, setActiveFilePath] = createSignal<string | null>(lastOpenFilePath())
   const [fileData, setFileData] = createSignal<FileData | null>(null)
   const [mode, setMode] = createSignal<FileMode>('view')
@@ -384,6 +392,7 @@ const FilePanel: Component = () => {
       }
     }
     setExpandedDirs(s)
+    setPersistedExpandedDirs([...s])
   }
 
   function mergeChildren(nodes: FileNode[], targetPath: string, children: FileNode[]): FileNode[] {
@@ -402,7 +411,8 @@ const FilePanel: Component = () => {
   // ── File operations ──
   const openFile = async (filePath: string) => {
     const path = orgPath()
-    if (!path) return
+    const isAbsolute = filePath.startsWith('/')
+    if (!isAbsolute && !path) return
     setLoading(true)
     setError(null)
     setActiveFilePath(filePath)
@@ -414,7 +424,7 @@ const FilePanel: Component = () => {
     setDrawerOpen(false)
 
     try {
-      const data = await fetchFile(path, filePath)
+      const data = isAbsolute ? await fetchFileAbsolute(filePath) : await fetchFile(path!, filePath)
       setFileData(data)
       setEditorContent(data.content)
 
@@ -544,20 +554,27 @@ const FilePanel: Component = () => {
     document.addEventListener('click', closeCtxMenu)
     const stored = lastOpenFilePath()
     if (stored && !mobileFileShowTree()) {
-      const path = orgPath()
-      if (path) {
+      const isAbsolute = stored.startsWith('/')
+      if (isAbsolute || orgPath()) {
         openFile(stored)
       }
     }
   })
 
-  // Auto-load persisted file when orgPath resolves (it's async)
+  // Load lastOpenFilePath whenever it changes (covers: restore on mount, file chip open, workspace switch)
   createEffect(() => {
-    const path = orgPath()
     const stored = lastOpenFilePath()
-    if (path && stored && !fileData() && !loading()) {
+    if (!stored || loading()) return
+    if (activeFilePath() === stored) return // already showing this file
+    const isAbsolute = stored.startsWith('/')
+    if (isAbsolute || orgPath()) {
       openFile(stored)
     }
+  })
+
+  // Sync expandedDirs from store when workspace changes (store is updated by restoreWorkspacePanelState)
+  createEffect(() => {
+    setExpandedDirs(new Set(persistedExpandedDirs()))
   })
   onCleanup(() => {
     if (monacoEditor) monacoEditor.dispose()
@@ -657,16 +674,36 @@ const FilePanel: Component = () => {
               background: 'transparent'
             }}
             onClick={() => {
-              const path = orgPath()
               const fp = activeFilePath()
-              if (!path || !fp) return
-              const url = `/api/files/raw?project=${encodeURIComponent(path)}&path=${encodeURIComponent(fp)}&download=1`
-              const a = document.createElement('a')
-              a.href = url
-              a.download = fileName(fp)
-              document.body.appendChild(a)
-              a.click()
-              document.body.removeChild(a)
+              if (!fp) return
+              const name = fileName(fp)
+              const fd = fileData()
+              const isAbsolute = fp.startsWith('/')
+              if (isAbsolute && fd) {
+                // Already have the content — download as blob (avoids project-path restriction)
+                const mime = fd.encoding === 'base64' ? 'application/octet-stream' : 'text/plain'
+                const content =
+                  fd.encoding === 'base64' ? Uint8Array.from(atob(fd.content), (c) => c.charCodeAt(0)) : fd.content
+                const blob = new Blob([content], { type: mime })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = name
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
+              } else {
+                const path = orgPath()
+                if (!path) return
+                const url = `/api/files/raw?project=${encodeURIComponent(path)}&path=${encodeURIComponent(fp)}&download=1`
+                const a = document.createElement('a')
+                a.href = url
+                a.download = name
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+              }
             }}
             title="Download file"
           >
