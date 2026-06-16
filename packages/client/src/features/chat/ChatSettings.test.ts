@@ -69,6 +69,103 @@ describe('ChatSettings — Model Selector', () => {
     })
   })
 
+  describe('two-axis catalog (family + version)', () => {
+    interface CatalogEntry {
+      id: string
+      provider: string
+      family: string
+      familyLabel: string
+      version: string | null
+      versionLabel: string
+    }
+    const catalog: CatalogEntry[] = [
+      {
+        id: 'anthropic/opus',
+        provider: 'anthropic',
+        family: 'opus',
+        familyLabel: 'Opus',
+        version: null,
+        versionLabel: 'Latest'
+      },
+      {
+        id: 'anthropic/claude-opus-4-7',
+        provider: 'anthropic',
+        family: 'opus',
+        familyLabel: 'Opus',
+        version: '4.7',
+        versionLabel: '4.7'
+      },
+      {
+        id: 'anthropic/claude-opus-4-6',
+        provider: 'anthropic',
+        family: 'opus',
+        familyLabel: 'Opus',
+        version: '4.6',
+        versionLabel: '4.6'
+      },
+      {
+        id: 'anthropic/sonnet',
+        provider: 'anthropic',
+        family: 'sonnet',
+        familyLabel: 'Sonnet',
+        version: null,
+        versionLabel: 'Latest'
+      },
+      {
+        id: 'anthropic/claude-sonnet-4-6',
+        provider: 'anthropic',
+        family: 'sonnet',
+        familyLabel: 'Sonnet',
+        version: '4.6',
+        versionLabel: '4.6'
+      }
+    ]
+
+    // Mirrors the component's derived helpers.
+    const familyOf = (id: string) => {
+      const entry = catalog.find((e) => e.id === id)
+      if (entry) return entry.family
+      const m = /claude-(opus|sonnet|haiku)/.exec(id)
+      return m ? m[1] : ''
+    }
+    const versionsFor = (family: string) => catalog.filter((e) => e.family === family)
+    const familyDefaultId = (family: string, defaultModel: string) => {
+      const entries = versionsFor(family)
+      const def = entries.find((e) => e.id === defaultModel)
+      const latest = entries.find((e) => e.version === null)
+      return (def ?? latest ?? entries[0]).id
+    }
+
+    it('derives the family of a version-pinned id', () => {
+      expect(familyOf('anthropic/claude-opus-4-6')).toBe('opus')
+      expect(familyOf('anthropic/sonnet')).toBe('sonnet')
+    })
+
+    it('infers family for a model not present in the catalog', () => {
+      expect(familyOf('anthropic/claude-opus-4-9')).toBe('opus')
+    })
+
+    it('lists only the selected family versions', () => {
+      expect(versionsFor('opus').map((e) => e.versionLabel)).toEqual(['Latest', '4.7', '4.6'])
+      expect(versionsFor('sonnet')).toHaveLength(2)
+    })
+
+    it('switching family picks the global default when in that family', () => {
+      expect(familyDefaultId('opus', 'anthropic/claude-opus-4-6')).toBe('anthropic/claude-opus-4-6')
+    })
+
+    it('switching to a different family falls back to its Latest alias', () => {
+      // Default is an opus pin; switching to sonnet has no matching default → Latest.
+      expect(familyDefaultId('sonnet', 'anthropic/claude-opus-4-6')).toBe('anthropic/sonnet')
+    })
+
+    it('version option marks the default and shows version labels', () => {
+      const defaultModel = 'anthropic/claude-opus-4-6'
+      const labels = versionsFor('opus').map((v) => `${v.versionLabel}${v.id === defaultModel ? ' (default)' : ''}`)
+      expect(labels).toEqual(['Latest', '4.7', '4.6 (default)'])
+    })
+  })
+
   describe('fetch parallelism', () => {
     it('fetches session-info and models in parallel via Promise.all', () => {
       // Validates the fetch pattern used in the component
