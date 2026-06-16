@@ -59,8 +59,7 @@ export const createEventBus = (dataDir: string): EventBus => {
     eventHistory.push(event)
     if (eventHistory.length > MAX_HISTORY) eventHistory.shift()
 
-    // Log to disk (but not bus.error to avoid noise — actually spec says every event)
-    logger.log(event)
+    if (event.type !== 'log.entry') logger.log(event)
 
     for (const sub of subscribers) {
       if (!matchPattern(event.type, sub.pattern)) continue
