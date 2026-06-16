@@ -9,6 +9,7 @@ const IGNORE_PATTERNS = [
   'node_modules',
   '.DS_Store',
   '.sovereign-data',
+  'data',
   'dist',
   'build',
   '.next',
