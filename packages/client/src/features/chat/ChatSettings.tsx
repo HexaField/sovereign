@@ -6,6 +6,15 @@ import { agentStatus, abortChat } from './store.js'
 import { CronManagerModal } from '../crons/CronManagerModal.js'
 import { isThreadMuted, setThreadMute } from '../threads/mute-store.js'
 
+interface ModelCatalogEntry {
+  id: string
+  provider: string
+  family: string
+  familyLabel: string
+  version: string | null
+  versionLabel: string
+}
+
 interface ThreadInfo {
   model: string | null
   modelProvider: string | null
@@ -74,6 +83,7 @@ export function ChatSettingsButton() {
   const [crons, setCrons] = createSignal<CronJob[]>([])
   const [loading, setLoading] = createSignal(false)
   const [availableModels, setAvailableModels] = createSignal<string[]>([])
+  const [modelCatalog, setModelCatalog] = createSignal<ModelCatalogEntry[]>([])
   const [defaultModel, setDefaultModel] = createSignal<string | null>(null)
   const [selectedModel, setSelectedModel] = createSignal<string>('')
   const [modelSaving, setModelSaving] = createSignal(false)
@@ -112,6 +122,7 @@ export function ChatSettingsButton() {
       if (modelsRes.ok) {
         const data = await modelsRes.json()
         setAvailableModels(data.models ?? [])
+        setModelCatalog(data.catalog ?? [])
         setDefaultModel(data.defaultModel ?? null)
       }
       if (effortsRes.ok) {
@@ -160,6 +171,47 @@ export function ChatSettingsButton() {
     } catch {
       /* AD4M not connected — section hidden */
     }
+  }
+
+  // ── Two-axis model selection (family + version) ──────────────────────
+  // The catalog buckets ids by family (Opus / Sonnet / Haiku) and version
+  // (a "Latest" alias, or a pinned release like 4.6). Selecting a family
+  // jumps to that family's default; selecting a version pins it.
+  const catalogEntry = (id: string) => modelCatalog().find((e) => e.id === id)
+
+  // Distinct families, in catalog order.
+  const families = () => {
+    const seen = new Set<string>()
+    const out: { family: string; familyLabel: string }[] = []
+    for (const e of modelCatalog()) {
+      if (!seen.has(e.family)) {
+        seen.add(e.family)
+        out.push({ family: e.family, familyLabel: e.familyLabel })
+      }
+    }
+    return out
+  }
+
+  // Family of the current selection — from the catalog when known, else
+  // inferred from the id so a custom/pinned model still resolves a family.
+  const selectedFamily = () => {
+    const entry = catalogEntry(selectedModel())
+    if (entry) return entry.family
+    const m = /claude-(opus|sonnet|haiku)/.exec(selectedModel())
+    if (m) return m[1]
+    return families()[0]?.family ?? ''
+  }
+
+  const versionsForFamily = (family: string) => modelCatalog().filter((e) => e.family === family)
+
+  // When switching families, prefer the global default if it's in that family,
+  // otherwise the "Latest" alias, otherwise the family's first entry.
+  const handleFamilyChange = (family: string) => {
+    const entries = versionsForFamily(family)
+    if (entries.length === 0) return
+    const def = entries.find((e) => e.id === defaultModel())
+    const latest = entries.find((e) => e.version === null)
+    void handleModelSwitch((def ?? latest ?? entries[0]).id)
   }
 
   const handleModelSwitch = async (model: string) => {
@@ -346,28 +398,72 @@ export function ChatSettingsButton() {
               <Show when={!loading() && info()}>
                 {(i) => (
                   <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
-                    {/* Model Selector */}
-                    <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
-                      <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                        Model
-                      </span>
-                      <Show
-                        when={availableModels().length > 0}
-                        fallback={
-                          <span
-                            class="text-xs font-medium"
-                            style={{
-                              color: 'var(--c-text)',
-                              background: 'var(--c-bg)',
-                              padding: '1px 8px',
-                              'border-radius': '9999px',
-                              border: '1px solid var(--c-border)'
-                            }}
-                          >
-                            {selectedModel() || i().model || 'Unknown'}
+                    {/* Model Selector — two axes when a catalog is available:
+                        family (Opus/Sonnet/Haiku) + version (Latest / pinned). */}
+                    <Show
+                      when={modelCatalog().length > 0}
+                      fallback={
+                        <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                          <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                            Model
                           </span>
-                        }
-                      >
+                          <Show
+                            when={availableModels().length > 0}
+                            fallback={
+                              <span
+                                class="text-xs font-medium"
+                                style={{
+                                  color: 'var(--c-text)',
+                                  background: 'var(--c-bg)',
+                                  padding: '1px 8px',
+                                  'border-radius': '9999px',
+                                  border: '1px solid var(--c-border)'
+                                }}
+                              >
+                                {selectedModel() || i().model || 'Unknown'}
+                              </span>
+                            }
+                          >
+                            <select
+                              class="rounded-md text-xs font-medium"
+                              style={{
+                                background: 'var(--c-bg)',
+                                border: '1px solid var(--c-border)',
+                                color: 'var(--c-text)',
+                                'max-width': '170px',
+                                padding: '2px 6px',
+                                cursor: 'pointer',
+                                opacity: modelSaving() ? '0.5' : '1',
+                                'border-radius': '9999px'
+                              }}
+                              value={selectedModel()}
+                              disabled={modelSaving()}
+                              onChange={(e) => handleModelSwitch(e.currentTarget.value)}
+                            >
+                              <For each={availableModels()}>
+                                {(m) => (
+                                  <option value={m} selected={m === selectedModel()}>
+                                    {m.includes('/') ? m.split('/').pop() : m}
+                                    {m === defaultModel() ? ' (default)' : ''}
+                                  </option>
+                                )}
+                              </For>
+                              <Show when={selectedModel() && !availableModels().includes(selectedModel())}>
+                                <option value={selectedModel()} selected>
+                                  {selectedModel().includes('/') ? selectedModel().split('/').pop() : selectedModel()}{' '}
+                                  (current)
+                                </option>
+                              </Show>
+                            </select>
+                          </Show>
+                        </div>
+                      }
+                    >
+                      {/* Family */}
+                      <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                        <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                          Model
+                        </span>
                         <select
                           class="rounded-md text-xs font-medium"
                           style={{
@@ -380,27 +476,65 @@ export function ChatSettingsButton() {
                             opacity: modelSaving() ? '0.5' : '1',
                             'border-radius': '9999px'
                           }}
-                          value={selectedModel()}
+                          value={selectedFamily()}
                           disabled={modelSaving()}
-                          onChange={(e) => handleModelSwitch(e.currentTarget.value)}
+                          onChange={(e) => handleFamilyChange(e.currentTarget.value)}
                         >
-                          <For each={availableModels()}>
-                            {(m) => (
-                              <option value={m} selected={m === selectedModel()}>
-                                {m.includes('/') ? m.split('/').pop() : m}
-                                {m === defaultModel() ? ' (default)' : ''}
+                          <For each={families()}>
+                            {(f) => (
+                              <option value={f.family} selected={f.family === selectedFamily()}>
+                                {f.familyLabel}
                               </option>
                             )}
                           </For>
-                          <Show when={selectedModel() && !availableModels().includes(selectedModel())}>
-                            <option value={selectedModel()} selected>
-                              {selectedModel().includes('/') ? selectedModel().split('/').pop() : selectedModel()}{' '}
-                              (current)
-                            </option>
-                          </Show>
                         </select>
+                      </div>
+
+                      {/* Version — pinned release within the selected family */}
+                      <Show when={versionsForFamily(selectedFamily()).length > 1}>
+                        <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                          <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                            Version
+                          </span>
+                          <select
+                            class="rounded-md text-xs font-medium"
+                            style={{
+                              background: 'var(--c-bg)',
+                              border: '1px solid var(--c-border)',
+                              color: 'var(--c-text)',
+                              'max-width': '170px',
+                              padding: '2px 6px',
+                              cursor: 'pointer',
+                              opacity: modelSaving() ? '0.5' : '1',
+                              'border-radius': '9999px'
+                            }}
+                            value={selectedModel()}
+                            disabled={modelSaving()}
+                            onChange={(e) => handleModelSwitch(e.currentTarget.value)}
+                          >
+                            <For each={versionsForFamily(selectedFamily())}>
+                              {(v) => (
+                                <option value={v.id} selected={v.id === selectedModel()}>
+                                  {v.versionLabel}
+                                  {v.id === defaultModel() ? ' (default)' : ''}
+                                </option>
+                              )}
+                            </For>
+                            <Show
+                              when={
+                                selectedModel() &&
+                                !versionsForFamily(selectedFamily()).some((v) => v.id === selectedModel())
+                              }
+                            >
+                              <option value={selectedModel()} selected>
+                                {selectedModel().includes('/') ? selectedModel().split('/').pop() : selectedModel()}{' '}
+                                (current)
+                              </option>
+                            </Show>
+                          </select>
+                        </div>
                       </Show>
-                    </div>
+                    </Show>
 
                     {/* Reasoning Effort Selector */}
                     <Show when={availableEfforts().length > 0}>

@@ -380,7 +380,47 @@ describe('claude-code/createClaudeCodeBackend', () => {
     // the dropdown options.
     expect(out.models).toContain('anthropic/opus')
     expect(out.models).toContain('anthropic/sonnet')
+    // Version-pinned ids are offered alongside the bare "latest" aliases.
+    expect(out.models).toContain('anthropic/claude-opus-4-6')
     expect(out.defaultModel).toBe('anthropic/sonnet')
+  })
+
+  it('exposes a family/version catalog and defaults to Opus 4.6', async () => {
+    // No defaultModel configured → falls back to the verified-active pin.
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      { sdkQuery: stubSdkQuery() }
+    )
+    const out = await backend.listAvailableModels()
+    expect(out.defaultModel).toBe('anthropic/claude-opus-4-6')
+
+    const catalog = out.catalog ?? []
+    // Catalog carries the metadata the UI buckets into a two-axis picker.
+    const opus46 = catalog.find((e) => e.id === 'anthropic/claude-opus-4-6')
+    expect(opus46).toMatchObject({ provider: 'anthropic', family: 'opus', familyLabel: 'Opus', version: '4.6' })
+    // Each family has a bare "latest" alias (version === null).
+    const opusLatest = catalog.find((e) => e.id === 'anthropic/opus')
+    expect(opusLatest?.version).toBeNull()
+    expect(catalog.map((e) => e.family)).toContain('sonnet')
+    expect(catalog.map((e) => e.family)).toContain('haiku')
+  })
+
+  it('resolves a version-pinned id to its family context window', async () => {
+    // Family-keyed config (opus) must still apply to a pinned id (claude-opus-4-6).
+    const backend = createClaudeCodeBackend(
+      {
+        dataDir,
+        cwd,
+        agentDir: join(dataDir, 'agent'),
+        defaultModel: 'claude-opus-4-6',
+        modelContextWindows: { opus: 555000 }
+      },
+      { sdkQuery: stubSdkQuery() }
+    )
+    await backend.createSession('t', { threadKey: 'cw' })
+    const meta = await backend.getSessionMeta('cw')
+    expect(meta?.model).toBe('claude-opus-4-6')
+    expect(meta?.contextTokens).toBe(555000)
   })
 
   it('setSessionModel rejects non-anthropic providers', async () => {

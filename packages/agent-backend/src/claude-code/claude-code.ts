@@ -42,6 +42,7 @@ import type {
   BackendCapabilities,
   BackendConnectionStatus,
   ContextBudget,
+  ModelCatalogEntry,
   ParsedTurn,
   ReasoningEffort,
   SessionKind,
@@ -72,14 +73,84 @@ import type { ActiveSessions } from '../active-sessions.js'
 const KIND: AgentBackendKind = 'claude-code'
 
 const DEFAULT_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'LS']
-const DEFAULT_MODEL_FALLBACK = 'opus'
-const KNOWN_MODELS = ['opus', 'sonnet', 'haiku', 'opusplan']
 const PROVIDER = 'anthropic'
 const DEFAULT_CONTEXT_WINDOW = 200000
+
+/**
+ * Curated Anthropic model catalog, grouped by family. Each family exposes a
+ * bare "latest" alias (`opus` — resolved to the provider's current pin) plus
+ * version-pinned ids (`claude-opus-4-6`) so a thread can be held on a specific
+ * release. The bundled `@anthropic-ai/claude-agent-sdk` accepts both forms and
+ * passes them through to the model endpoint unchanged.
+ *
+ * Verified against the installed SDK build (0.3.150), whose distribution
+ * references `claude-opus-4-6` (its most-referenced current model),
+ * `claude-opus-4-7`, `claude-opus-4-5`, and `claude-sonnet-4-6`. Opus 4.6 is
+ * an active, supported model and is Sovereign's default.
+ */
+interface CatalogFamily {
+  family: string
+  familyLabel: string
+  versions: Array<{ id: string; version: string | null; versionLabel: string }>
+}
+
+const MODEL_CATALOG: CatalogFamily[] = [
+  {
+    family: 'opus',
+    familyLabel: 'Opus',
+    versions: [
+      { id: 'opus', version: null, versionLabel: 'Latest' },
+      { id: 'claude-opus-4-8', version: '4.8', versionLabel: '4.8' },
+      { id: 'claude-opus-4-7', version: '4.7', versionLabel: '4.7' },
+      { id: 'claude-opus-4-6', version: '4.6', versionLabel: '4.6' },
+      { id: 'claude-opus-4-5', version: '4.5', versionLabel: '4.5' }
+    ]
+  },
+  {
+    family: 'sonnet',
+    familyLabel: 'Sonnet',
+    versions: [
+      { id: 'sonnet', version: null, versionLabel: 'Latest' },
+      { id: 'claude-sonnet-4-6', version: '4.6', versionLabel: '4.6' },
+      { id: 'claude-sonnet-4-5', version: '4.5', versionLabel: '4.5' }
+    ]
+  },
+  {
+    family: 'haiku',
+    familyLabel: 'Haiku',
+    versions: [
+      { id: 'haiku', version: null, versionLabel: 'Latest' },
+      { id: 'claude-haiku-4-5', version: '4.5', versionLabel: '4.5' }
+    ]
+  },
+  {
+    family: 'opusplan',
+    familyLabel: 'Opus Plan',
+    versions: [{ id: 'opusplan', version: null, versionLabel: 'Default' }]
+  }
+]
+
+/** Default model when none is configured per-session. Opus 4.6 (verified active). */
+const DEFAULT_MODEL_FALLBACK = 'claude-opus-4-6'
 
 /** Strip a leading "anthropic/" if present so callers can pass either form. */
 function bareModelName(model: string): string {
   return model.startsWith(`${PROVIDER}/`) ? model.slice(PROVIDER.length + 1) : model
+}
+
+/**
+ * Resolve a model id/alias to its catalog family (`opus`, `sonnet`, …) so
+ * family-keyed config (e.g. `modelContextWindows.opus`) keeps applying to
+ * version-pinned ids like `claude-opus-4-6`. Falls back to a prefix match for
+ * ids not in the catalog.
+ */
+function familyForModel(model: string | null | undefined): string | null {
+  if (!model) return null
+  const bare = bareModelName(model)
+  const inCatalog = MODEL_CATALOG.find((c) => c.versions.some((v) => v.id === bare))
+  if (inCatalog) return inCatalog.family
+  const m = /^claude-(opus|sonnet|haiku)/.exec(bare)
+  return m ? m[1] : null
 }
 
 /**
@@ -253,7 +324,13 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   function contextWindowFor(model: string | null | undefined): number {
     if (!model) return DEFAULT_CONTEXT_WINDOW
     const bare = bareModelName(model)
-    return modelContextWindows[bare] ?? modelContextWindows[model] ?? DEFAULT_CONTEXT_WINDOW
+    const family = familyForModel(bare)
+    return (
+      modelContextWindows[bare] ??
+      (family ? modelContextWindows[family] : undefined) ??
+      modelContextWindows[model] ??
+      DEFAULT_CONTEXT_WINDOW
+    )
   }
   const query = deps.sdkQuery ?? sdkQuery
   const mcpServers: Record<string, any> = { ...config.mcpServers }
@@ -1314,9 +1391,20 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     // `getSessionMeta` (`${modelProvider}/${model}`) only lines up with the
     // dropdown options when these are prefixed too — otherwise the current
     // model never appears as the selected option.
+    const catalog: ModelCatalogEntry[] = MODEL_CATALOG.flatMap((c) =>
+      c.versions.map((v) => ({
+        id: `${PROVIDER}/${v.id}`,
+        provider: PROVIDER,
+        family: c.family,
+        familyLabel: c.familyLabel,
+        version: v.version,
+        versionLabel: v.versionLabel
+      }))
+    )
     return {
-      models: KNOWN_MODELS.map((m) => `${PROVIDER}/${m}`),
-      defaultModel: defaultModel ? `${PROVIDER}/${bareModelName(defaultModel)}` : null
+      models: catalog.map((e) => e.id),
+      defaultModel: defaultModel ? `${PROVIDER}/${bareModelName(defaultModel)}` : null,
+      catalog
     }
   }
 

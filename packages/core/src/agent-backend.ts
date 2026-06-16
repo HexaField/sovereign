@@ -187,6 +187,28 @@ export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', '
 export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'max'
 
 /**
+ * One selectable model in the backend's curated catalog. Lets the UI offer a
+ * two-axis picker — model *family* (Opus / Sonnet / Haiku) and *version*
+ * (a "Latest" alias, or a pinned release like `4.6`) — instead of a single
+ * flat list. `id` is the provider-qualified string passed back to
+ * `setSessionModel` (e.g. `anthropic/claude-opus-4-6` or `anthropic/opus`).
+ */
+export interface ModelCatalogEntry {
+  /** Provider-qualified id used for selection + PATCH. */
+  id: string
+  /** Provider, e.g. `anthropic`. */
+  provider: string
+  /** Family/group key used to bucket versions, e.g. `opus`. */
+  family: string
+  /** Human label for the family, e.g. `Opus`. */
+  familyLabel: string
+  /** Pinned version within the family (e.g. `4.6`), or `null` for the "latest" alias. */
+  version: string | null
+  /** Display label for the version option, e.g. `Latest` or `4.6`. */
+  versionLabel: string
+}
+
+/**
  * Per-session metadata — used by the session-info panel and model switching UIs.
  */
 export interface SessionMeta {
@@ -327,8 +349,16 @@ export interface AgentBackend {
   getSessionMeta(sessionKey: string): Promise<SessionMeta | null>
   /** Update the model bound to a session. */
   setSessionModel(sessionKey: string, provider: string, model: string): Promise<void>
-  /** List models available to this backend. */
-  listAvailableModels(): Promise<{ models: string[]; defaultModel: string | null }>
+  /**
+   * List models available to this backend. `models` is the flat list of
+   * provider-qualified ids (back-compat); `catalog`, when present, carries the
+   * structured family/version metadata the UI uses to render a two-axis picker.
+   */
+  listAvailableModels(): Promise<{
+    models: string[]
+    defaultModel: string | null
+    catalog?: ModelCatalogEntry[]
+  }>
   /** Update the reasoning effort bound to a session. Optional — backends that don't expose effort no-op. */
   setSessionEffort?(sessionKey: string, effort: ReasoningEffort): Promise<void>
   /** List reasoning-effort levels available to this backend. */
