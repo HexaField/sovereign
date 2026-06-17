@@ -2,6 +2,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
 import { Router } from 'express'
 import type { SystemModule } from './system.js'
 import type { LogsChannel } from './ws.js'
@@ -295,6 +296,135 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
         : 'ok'
 
     res.json({ status: overallStatus, checks, timestamp: new Date().toISOString() })
+  })
+
+  // ── Environment sensors ────────────────────────────────────────────────
+
+  let cachedTemp: { zones: Array<{ name: string; type: string; tempC: number }>; timestamp: string } | null = null
+  let tempCacheTime = 0
+
+  router.get('/api/system/temperature', async (_req, res) => {
+    const now = Date.now()
+    if (cachedTemp && now - tempCacheTime < 30_000) {
+      res.json(cachedTemp)
+      return
+    }
+    try {
+      const thermalBase = '/sys/class/thermal/'
+      if (!fs.existsSync(thermalBase)) {
+        const result = { zones: [], timestamp: new Date().toISOString() }
+        cachedTemp = result
+        tempCacheTime = now
+        res.json(result)
+        return
+      }
+      const entries = fs.readdirSync(thermalBase).filter((d) => d.startsWith('thermal_zone'))
+      const zones: Array<{ name: string; type: string; tempC: number }> = []
+      for (const entry of entries) {
+        try {
+          const tempRaw = fs.readFileSync(path.join(thermalBase, entry, 'temp'), 'utf-8').trim()
+          const typeRaw = fs.readFileSync(path.join(thermalBase, entry, 'type'), 'utf-8').trim()
+          zones.push({ name: entry, type: typeRaw, tempC: Number(tempRaw) / 1000 })
+        } catch {
+          // Skip unreadable zones
+        }
+      }
+      const result = { zones, timestamp: new Date().toISOString() }
+      cachedTemp = result
+      tempCacheTime = now
+      res.json(result)
+    } catch {
+      res.json({ zones: [], timestamp: new Date().toISOString() })
+    }
+  })
+
+  let cachedTailscale: Record<string, unknown> | null = null
+  let tailscaleCacheTime = 0
+
+  router.get('/api/system/tailscale', async (_req, res) => {
+    const now = Date.now()
+    if (cachedTailscale && now - tailscaleCacheTime < 30_000) {
+      res.json(cachedTailscale)
+      return
+    }
+    try {
+      const raw: string = await new Promise((resolve, reject) => {
+        const proc = execFile('tailscale', ['status', '--json'], { timeout: 5000 }, (err, stdout) => {
+          if (err) reject(err)
+          else resolve(stdout)
+        })
+        proc.stdin?.end()
+      })
+      const data = JSON.parse(raw)
+      const selfNode = data.Self ?? {}
+      const self = {
+        hostname: selfNode.HostName ?? '',
+        os: selfNode.OS ?? '',
+        online: true,
+        tailscaleIPs: selfNode.TailscaleIPs ?? [],
+        relay: selfNode.Relay ?? ''
+      }
+      const peerMap = data.Peer ?? {}
+      const peers = Object.values(peerMap).map((p: any) => ({
+        hostname: p.HostName ?? '',
+        os: p.OS ?? '',
+        online: p.Online ?? false,
+        tailscaleIPs: p.TailscaleIPs ?? [],
+        lastSeen: p.LastSeen ?? null,
+        relay: p.Relay ?? ''
+      }))
+      const result = { self, peers, timestamp: new Date().toISOString() }
+      cachedTailscale = result
+      tailscaleCacheTime = now
+      res.json(result)
+    } catch {
+      const result = { self: null, peers: [], error: 'tailscale not available', timestamp: new Date().toISOString() }
+      cachedTailscale = result
+      tailscaleCacheTime = now
+      res.json(result)
+    }
+  })
+
+  let cachedWeather: Record<string, unknown> | null = null
+  let weatherCacheTime = 0
+
+  router.get('/api/system/weather', async (_req, res) => {
+    const now = Date.now()
+    if (cachedWeather && now - weatherCacheTime < 900_000) {
+      res.json(cachedWeather)
+      return
+    }
+    try {
+      const resp = await fetch('https://wttr.in/Melbourne?format=j1', { signal: AbortSignal.timeout(5000) })
+      const data = (await resp.json()) as any
+      const current = data.current_condition?.[0] ?? {}
+      const weather = data.weather ?? []
+      const result = {
+        location: 'Melbourne',
+        tempC: Number(current.temp_C ?? 0),
+        feelsLikeC: Number(current.FeelsLikeC ?? 0),
+        humidity: Number(current.humidity ?? 0),
+        windKph: Number(current.windspeedKmph ?? 0),
+        windDir: current.winddir16Point ?? '',
+        condition: current.weatherDesc?.[0]?.value ?? '',
+        icon: current.weatherCode ?? '',
+        forecast: weather.slice(0, 3).map((day: any) => ({
+          date: day.date ?? '',
+          maxC: Number(day.maxtempC ?? 0),
+          minC: Number(day.mintempC ?? 0),
+          condition: day.hourly?.[0]?.weatherDesc?.[0]?.value ?? ''
+        })),
+        timestamp: new Date().toISOString()
+      }
+      cachedWeather = result
+      weatherCacheTime = now
+      res.json(result)
+    } catch {
+      const result = { error: 'weather unavailable', timestamp: new Date().toISOString() }
+      cachedWeather = result
+      weatherCacheTime = now
+      res.json(result)
+    }
   })
 
   // ── Event stream ──────────────────────────────────────────────────────
