@@ -276,6 +276,18 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
       message: `Uptime: ${health.connection.uptime}s`
     })
 
+    if (health.services?.mcp) {
+      const mcp = health.services.mcp
+      checks.push({
+        name: 'mcp_sidecar',
+        status: mcp.status === 'ok' ? 'ok' : mcp.status === 'unknown' ? 'warning' : 'error',
+        message:
+          mcp.status === 'ok'
+            ? `MCP sidecar: ${mcp.sessions} session(s), ${mcp.tools} tool(s)`
+            : `MCP sidecar: ${mcp.status}`
+      })
+    }
+
     const overallStatus = checks.some((c) => c.status === 'error')
       ? 'error'
       : checks.some((c) => c.status === 'warning')
