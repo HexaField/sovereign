@@ -1,6 +1,6 @@
-import { createMemo, createSignal, Show, For, onCleanup } from 'solid-js'
+import { createMemo, createSignal, Show, For, onMount, onCleanup } from 'solid-js'
 import { agentIcon } from '../../lib/identity.js'
-import { connectionStatus } from '../connection/store.js'
+import { HealthPopover, overallHealth, initHealthPolling } from '../connection/HealthPopover.js'
 import {
   DashboardIcon,
   WorkspaceIcon,
@@ -153,23 +153,28 @@ const topLevelViews: Array<{ view: NavView | 'dashboard'; label: string; icon: (
 export function Header() {
   const [menuOpen, setMenuOpen] = createSignal(false)
   const [warningCount, setWarningCount] = createSignal(0)
+  const [healthOpen, setHealthOpen] = createSignal(false)
+  let healthDotRef: HTMLButtonElement | undefined
 
   const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
 
+  onMount(() => {
+    const cleanup = initHealthPolling()
+    onCleanup(cleanup)
+  })
+
   const statusStyle = createMemo(() => {
-    const s = connectionStatus()
-    if (s === 'connected') return { background: 'rgba(74,255,138,0.1)', color: '#4aff8a' }
-    if (s === 'error' || s === 'disconnected') return { background: 'rgba(255,74,106,0.1)', color: 'var(--c-danger)' }
-    return { background: 'var(--c-hover-bg-strong)', color: 'var(--c-text-muted)' }
+    const h = overallHealth()
+    if (h === 'ok') return { background: 'rgba(74,255,138,0.1)', color: '#4aff8a' }
+    if (h === 'error') return { background: 'rgba(255,74,106,0.1)', color: 'var(--c-danger)' }
+    return { background: 'rgba(245,158,11,0.1)', color: 'var(--c-amber, #f59e0b)' }
   })
 
   const statusLabel = createMemo(() => {
-    const s = connectionStatus()
-    if (s === 'connecting') return 'connecting…'
-    if (s === 'authenticating') return 'authenticating…'
-    if (s === 'connected') return 'connected'
-    if (s === 'disconnected') return 'disconnected'
-    return 'error'
+    const h = overallHealth()
+    if (h === 'ok') return 'all services healthy'
+    if (h === 'degraded') return 'service degraded — click for details'
+    return 'service error — click for details'
   })
 
   async function loadWarningCount(): Promise<void> {
@@ -237,12 +242,17 @@ export function Header() {
         </Show>
       </div>
 
-      {/* Status dot */}
-      <span
-        class="inline-block h-2 w-2 shrink-0 rounded-full"
-        style={{ background: statusStyle().color }}
+      {/* Status dot — clickable to show health popover */}
+      <button
+        ref={healthDotRef}
+        class="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent transition-all"
+        style={{ background: statusStyle().background }}
+        onClick={() => setHealthOpen(!healthOpen())}
         title={statusLabel()}
-      />
+      >
+        <span class="inline-block h-2 w-2 rounded-full" style={{ background: statusStyle().color }} />
+      </button>
+      <HealthPopover open={healthOpen()} onClose={() => setHealthOpen(false)} anchorRef={healthDotRef} />
 
       {/* Hamburger menu */}
       <div class="relative">

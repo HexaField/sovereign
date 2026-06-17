@@ -12,6 +12,12 @@ export interface ModuleInfo {
   publishes: string[]
 }
 
+export interface McpServiceHealth {
+  status: 'ok' | 'down' | 'unknown'
+  sessions: number
+  tools: number
+}
+
 export interface HealthInfo {
   connection: { wsStatus: string; agentBackend: string; uptime: number }
   resources: {
@@ -20,6 +26,9 @@ export interface HealthInfo {
   }
   jobs: { active: number; lastStatus: string; nextRun: string | null }
   errors: { countLastHour: number; recent: Array<{ message: string; timestamp: string }> }
+  services?: {
+    mcp: McpServiceHealth
+  }
 }
 
 export interface ArchitectureData {
@@ -55,6 +64,8 @@ export interface SystemModuleOptions {
   getAgentBackendStatus?: () => string
   /** Optional accessor for the curated models list + default. Falls back to {models:[], defaultModel:null}. */
   getModelConfig?: () => { models: string[]; defaultModel: string | null }
+  /** URL to poll for MCP sidecar health (e.g. http://127.0.0.1:5802/api/mcp/health). */
+  mcpHealthUrl?: string
 }
 
 let cachedDiskUsage = { used: 0, total: 0 }
@@ -88,6 +99,29 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
   const registeredModules: ModuleInfo[] = []
   const healthIntervalMs = options?.healthIntervalMs ?? 10_000
   const wsHandler = options?.wsHandler
+  const mcpHealthUrl = options?.mcpHealthUrl
+
+  // Cached MCP sidecar health — updated on the same periodic interval as system health.
+  let cachedMcpHealth: McpServiceHealth = { status: 'unknown', sessions: 0, tools: 0 }
+
+  async function pollMcpHealth(): Promise<void> {
+    if (!mcpHealthUrl) return
+    try {
+      const res = await fetch(mcpHealthUrl, { signal: AbortSignal.timeout(2000) })
+      if (res.ok) {
+        const data = (await res.json()) as { ok?: boolean; sovereign?: string; sessions?: number; tools?: number }
+        cachedMcpHealth = {
+          status: data.ok ? 'ok' : 'down',
+          sessions: data.sessions ?? 0,
+          tools: data.tools ?? 0
+        }
+      } else {
+        cachedMcpHealth = { status: 'down', sessions: 0, tools: 0 }
+      }
+    } catch {
+      cachedMcpHealth = { status: 'down', sessions: 0, tools: 0 }
+    }
+  }
 
   // Register WS system channel if wsHandler provided
   if (wsHandler) {
@@ -152,7 +186,7 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
     const uptimeMs = Date.now() - startTime
     const mem = process.memoryUsage()
     const totalMem = os.totalmem()
-    return {
+    const health: HealthInfo = {
       connection: {
         wsStatus: `${wsHandler?.getConnectedDevices().length ?? 0} clients`,
         agentBackend: options?.getAgentBackendStatus?.() ?? 'disconnected',
@@ -165,12 +199,23 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
       jobs: { active: 0, lastStatus: 'idle', nextRun: null },
       errors: { countLastHour: 0, recent: [] }
     }
+    if (mcpHealthUrl) {
+      health.services = { mcp: cachedMcpHealth }
+    }
+    return health
   }
 
   const status = () => ({ healthy: true })
 
+  // Kick off initial MCP health poll (non-blocking)
+  void pollMcpHealth()
+
   // Periodic health emission
   const healthInterval = setInterval(() => {
+    // Poll MCP sidecar before emitting health (fire-and-forget — the cached
+    // value is used even if the fetch is still in-flight on the first tick).
+    void pollMcpHealth()
+
     const health = getHealth()
     bus.emit({
       type: 'system.health.updated',
