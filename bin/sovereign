@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# Sovereign service CLI — guarded builds, launchd lifecycle, health checks, and logs.
+# Sovereign service CLI — guarded builds, service lifecycle, health checks, and logs.
+# Supports macOS launchd, Linux systemd (user units), and a PID-file fallback.
 #
 # Usage:
-#   sovereign install            Install/update the launchd plist
+#   sovereign install            Install/update the service definition
 #   sovereign start              Start the service
 #   sovereign stop               Stop the service
 #   sovereign restart            Restart the service and verify health
 #   sovereign reload             Alias for restart
-#   sovereign status             Show launchd + health status
+#   sovereign status             Show service + health status
 #   sovereign build              Run guarded check/build; reload if running
 #   sovereign health             Query HTTP health endpoint
 #   sovereign logs [stdout|stderr|all]
@@ -126,6 +127,12 @@ _is_macos() {
   [[ "$(uname -s)" == "Darwin" ]]
 }
 
+_is_linux_systemd() {
+  [[ "$(uname -s)" == "Linux" ]] && systemctl --user cat sovereign.service &>/dev/null
+}
+
+SYSTEMD_UNIT="sovereign.service"
+
 _launchctl_print() {
   launchctl print "$LAUNCH_TARGET" 2>/dev/null
 }
@@ -137,6 +144,8 @@ _is_launchd_loaded() {
 _is_running() {
   if _is_macos; then
     _is_launchd_loaded
+  elif _is_linux_systemd; then
+    systemctl --user is-active --quiet "$SYSTEMD_UNIT" 2>/dev/null
   else
     [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
   fi
@@ -145,6 +154,8 @@ _is_running() {
 _service_pid() {
   if _is_macos; then
     _launchctl_print | awk '/pid = / { print $3; exit }'
+  elif _is_linux_systemd; then
+    systemctl --user show --property=MainPID --value "$SYSTEMD_UNIT" 2>/dev/null | grep -v '^0$'
   elif [ -f "$PID_FILE" ]; then
     cat "$PID_FILE"
   fi
@@ -383,7 +394,50 @@ _restart_launchd_service() {
   fi
 }
 
-_start_non_macos() {
+_start_systemd() {
+  [ -f "$SERVER_ENTRY" ] || _die "Server not built. Run: sovereign build"
+  if systemctl --user is-active --quiet "$SYSTEMD_UNIT" 2>/dev/null; then
+    _note "Service already active; verifying health"
+    if ! _wait_for_health 5; then
+      _warn "Active service is not healthy; restarting"
+      systemctl --user restart "$SYSTEMD_UNIT"
+    fi
+  else
+    _note "Starting Sovereign via systemd"
+    systemctl --user start "$SYSTEMD_UNIT"
+  fi
+  if _wait_for_health 20; then
+    _note "Sovereign healthy at $HEALTH_URL"
+  else
+    systemctl --user status "$SYSTEMD_UNIT" --no-pager || true
+    _warn "Service failed health verification after start"
+    return 1
+  fi
+}
+
+_stop_systemd() {
+  if systemctl --user is-active --quiet "$SYSTEMD_UNIT" 2>/dev/null; then
+    _note "Stopping Sovereign via systemd"
+    systemctl --user stop "$SYSTEMD_UNIT"
+  else
+    _note "Service not active"
+  fi
+}
+
+_restart_systemd() {
+  [ -f "$SERVER_ENTRY" ] || _die "Server not built. Run: sovereign build"
+  _note "Restarting Sovereign via systemd"
+  systemctl --user restart "$SYSTEMD_UNIT"
+  if _wait_for_health 20; then
+    _note "Sovereign healthy at $HEALTH_URL"
+  else
+    systemctl --user status "$SYSTEMD_UNIT" --no-pager || true
+    _warn "Service failed health verification after restart"
+    return 1
+  fi
+}
+
+_start_pidfile() {
   if _is_running; then
     _die "Already running"
   fi
@@ -402,7 +456,7 @@ _start_non_macos() {
   fi
 }
 
-_stop_non_macos() {
+_stop_pidfile() {
   if ! _is_running; then
     _note "Not running"
     rm -f "$PID_FILE"
@@ -495,26 +549,30 @@ _guarded_build() {
 
   if [ "$build_ok" -eq 1 ] && [ "$was_running" -eq 1 ]; then
     _note "Reloading running service"
+    local reload_ok=0
     if _is_macos; then
-      if _restart_launchd_service; then
-        _cleanup_backup
-        return 0
-      fi
+      _restart_launchd_service && reload_ok=1
+    elif _is_linux_systemd; then
+      _restart_systemd && reload_ok=1
     else
-      _stop_non_macos
-      if _start_non_macos; then
-        _cleanup_backup
-        return 0
-      fi
+      _stop_pidfile
+      _start_pidfile && reload_ok=1
+    fi
+
+    if [ "$reload_ok" -eq 1 ]; then
+      _cleanup_backup
+      return 0
     fi
 
     _warn "Reload failed health verification; restoring previous build artifacts"
     _restore_artifacts
     if _is_macos; then
       _restart_launchd_service || _die "Rollback failed; inspect $STDERR_LOG"
+    elif _is_linux_systemd; then
+      _restart_systemd || _die "Rollback failed; inspect $STDERR_LOG"
     else
-      _stop_non_macos || true
-      _start_non_macos || _die "Rollback failed; inspect $STDERR_LOG"
+      _stop_pidfile || true
+      _start_pidfile || _die "Rollback failed; inspect $STDERR_LOG"
     fi
     _cleanup_backup
     _die "Reload failed; rolled back to last known-good build"
@@ -529,11 +587,17 @@ _guarded_build() {
 }
 
 _show_status() {
-  echo "Label: $PLIST_LABEL"
+  if _is_macos; then
+    echo "Backend: launchd ($PLIST_LABEL)"
+    echo "Plist: $PLIST_DEST"
+  elif _is_linux_systemd; then
+    echo "Backend: systemd ($SYSTEMD_UNIT)"
+  else
+    echo "Backend: pidfile ($PID_FILE)"
+  fi
   echo "Repo: $REPO_DIR"
   echo "Config: $CONFIG_DIR"
   echo "Data: $DATA_DIR"
-  echo "Plist: $PLIST_DEST"
   echo "Stdout: $STDOUT_LOG"
   echo "Stderr: $STDERR_LOG"
   echo "Health: $HEALTH_URL"
@@ -582,32 +646,40 @@ _tail_logs() {
 
 case "${1:-help}" in
   install)
-    _is_macos || _die "install is only needed on macOS"
-    _install_plist
-    _install_watchdog_plist
-    _note "Installed plists at $PLIST_DEST and $WATCHDOG_PLIST_DEST"
+    if _is_macos; then
+      _install_plist
+      _install_watchdog_plist
+      _note "Installed plists at $PLIST_DEST and $WATCHDOG_PLIST_DEST"
+    elif _is_linux_systemd; then
+      _note "systemd unit already installed; use 'systemctl --user daemon-reload' after editing"
+    else
+      _die "install is only needed on macOS (launchd) or Linux (systemd)"
+    fi
     ;;
   start)
-    # Clear the pause sentinel first so the watchdog treats this as the intended
-    # up-state again.
     rm -f "$WATCHDOG_PAUSE_FILE"
     if _is_macos; then
       _start_launchd_service
       _ensure_watchdog
+    elif _is_linux_systemd; then
+      _start_systemd
     else
-      _start_non_macos
+      _start_pidfile
     fi
     ;;
   stop)
     _notice_active_agents stop
-    # Mark this as an intentional stop so the watchdog won't restart it.
     : > "$WATCHDOG_PAUSE_FILE"
     if _is_macos; then
       _stop_launchd_service
+    elif _is_linux_systemd; then
+      _stop_systemd
     else
-      _stop_non_macos
+      _stop_pidfile
     fi
-    _note "Watchdog paused ($WATCHDOG_PAUSE_FILE) — 'sovereign start' to resume self-heal"
+    if _is_macos; then
+      _note "Watchdog paused ($WATCHDOG_PAUSE_FILE) — 'sovereign start' to resume self-heal"
+    fi
     ;;
   restart|reload)
     _notice_active_agents restart
@@ -615,9 +687,11 @@ case "${1:-help}" in
     if _is_macos; then
       _restart_launchd_service
       _ensure_watchdog
+    elif _is_linux_systemd; then
+      _restart_systemd
     else
-      _stop_non_macos
-      _start_non_macos
+      _stop_pidfile
+      _start_pidfile
     fi
     ;;
   status)
@@ -696,27 +770,32 @@ case "${1:-help}" in
 Usage: sovereign <command>
 
 Commands:
-  install            Install/update the launchd plist (macOS)
+  install            Install/update the service definition (macOS launchd)
   start              Start the background service
   stop               Stop the background service
   restart            Restart the service and verify health
   reload             Alias for restart
-  status             Show launchd + HTTP health state
+  status             Show service + HTTP health state
   build              Guarded check/build; reload only after success
   health             Print /health response
   logs [mode]        Tail logs (stdout|stderr|all)
   run                Run in foreground (no daemon)
   config-check [path] Validate config.json against the live schema
-  watchdog [sub]     Self-heal watchdog: install|start|stop|status (default status)
+  watchdog [sub]     Self-heal watchdog: install|start|stop|status (macOS only)
   migrate [flags]    One-shot OpenClaw → Sovereign migration (--dry-run, --yes)
+
+Service backends (auto-detected):
+  macOS              launchd (com.sovereign.server LaunchAgent)
+  Linux + systemd    systemd user unit (sovereign.service)
+  Other              PID-file + nohup fallback
 
   stop, restart, reload, and build snapshot any non-idle agent sessions to
   active-sessions.json and auto-resume them on next start.
 
-  start/restart also install + load an independent launchd watchdog
+  On macOS, start/restart also install + load an independent launchd watchdog
   (com.sovereign.watchdog) that health-checks every 60s and recovers the server
-  even if its own launchd job has been unloaded. `stop` pauses the watchdog so it
-  won't fight an intentional stop; `start` resumes it.
+  even if its own launchd job has been unloaded. On Linux, systemd's Restart=
+  directive handles this natively.
 
 Configuration (lives in {CONFIG_DIR}/config.json; managed via /api/config):
   server.host        Bind address (default: localhost)
