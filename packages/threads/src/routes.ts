@@ -524,7 +524,8 @@ export function createThreadRoutes(
       }
 
       await new Promise<void>((resolve, reject) => {
-        execFile('cozempic', ['guard', '--daemon', '--session', backendSessionFile], { timeout: 10_000 }, (err) => {
+        const args = ['guard', '--daemon', '--session', backendSessionFile, '--claude-pid', String(process.pid)]
+        execFile('cozempic', args, { timeout: 10_000 }, (err) => {
           if (err) reject(err)
           else resolve()
         })
