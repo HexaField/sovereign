@@ -55,3 +55,21 @@ export function ensureDefaultSubagentFile(cwd: string): void {
   if (fs.existsSync(filePath)) return
   fs.writeFileSync(filePath, SUBAGENT_TEMPLATE)
 }
+
+/**
+ * Ensure AD4M skill is available to Claude Code via symlink.
+ *
+ * If `~/.sovereign/skills/ad4m` exists and `~/.claude/skills/ad4m` does not,
+ * creates a symlink so Claude Code discovers the skill automatically. Called
+ * only when AD4M integration is configured.
+ */
+export function ensureAd4mSkill(): void {
+  const home = process.env.HOME ?? ''
+  if (!home) return
+  const source = path.join(home, '.sovereign', 'skills', 'ad4m')
+  const target = path.join(home, '.claude', 'skills', 'ad4m')
+  if (!fs.existsSync(source)) return
+  if (fs.existsSync(target)) return
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.symlinkSync(source, target)
+}

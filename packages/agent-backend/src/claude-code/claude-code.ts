@@ -65,7 +65,7 @@ import {
 } from './history.js'
 import { dispatchSdkMessage } from './events.js'
 import { defaultAgentDir, projectsDirForCwd, sessionJsonlPath } from './path-encoding.js'
-import { ensureDefaultSubagentFile, ensureLayeredContextFile } from './personality.js'
+import { ensureAd4mSkill, ensureDefaultSubagentFile, ensureLayeredContextFile } from './personality.js'
 import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, ToolPolicy } from './types.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
@@ -358,6 +358,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     fs.mkdirSync(cwd, { recursive: true })
     ensureLayeredContextFile(cwd)
     ensureDefaultSubagentFile(cwd)
+    if (mcpServers['ad4m']) ensureAd4mSkill()
   } catch {
     /* user may have a read-only cwd in tests */
   }
