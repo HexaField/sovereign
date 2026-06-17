@@ -173,6 +173,7 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
           style={{
             background: 'var(--c-bg-raised)',
             'border-color': 'var(--c-border)',
+            color: 'var(--c-text)',
             top: '44px',
             right: '48px'
           }}
