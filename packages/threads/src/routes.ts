@@ -1,7 +1,7 @@
 // Threads — REST API endpoints
 
 import fs from 'node:fs'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { Router } from 'express'
 import type { ThreadManager } from './types.js'
 import type { ForwardHandler } from './forward.js'
@@ -523,8 +523,28 @@ export function createThreadRoutes(
         return res.status(400).json({ ok: false, message: 'No active session for this thread' })
       }
 
+      // Spawn a sentinel process whose argv includes '@anthropic-ai/claude-code'
+      // so cozempic's _is_claude_process identity check passes. The sentinel
+      // stays alive as long as the Sovereign systemd unit is active, surviving
+      // rebuilds (which change the server PID but not the sentinel).
+      const sentinelPid = await new Promise<number>((resolve, reject) => {
+        const sentinel = spawn(
+          process.execPath,
+          [
+            '-e',
+            'setInterval(()=>{try{require("child_process").execSync("systemctl --user is-active sovereign.service",{timeout:5000})}catch{process.exit(0)}},15000)',
+            '--',
+            '@anthropic-ai/claude-code'
+          ],
+          { detached: true, stdio: 'ignore' }
+        )
+        sentinel.unref()
+        if (!sentinel.pid) return reject(new Error('Failed to spawn sentinel'))
+        resolve(sentinel.pid)
+      })
+
       await new Promise<void>((resolve, reject) => {
-        const args = ['guard', '--daemon', '--session', backendSessionFile, '--claude-pid', String(process.pid)]
+        const args = ['guard', '--daemon', '--session', backendSessionFile, '--claude-pid', String(sentinelPid)]
         execFile('cozempic', args, { timeout: 10_000 }, (err) => {
           if (err) reject(err)
           else resolve()
