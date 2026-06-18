@@ -50,6 +50,8 @@ Real-time architecture view showing every module, its subscriptions, and event f
 
 A native agent core built on the Claude Agent SDK — no external bridge. Durable session store, multi-agent orchestration, an in-process cron scheduler, and a Sovereign MCP server that exposes workspace tools (sessions, agents, planning, meetings, orgs, notifications) to the agent. Entity events trigger autonomous agent work; notification events surface for user response. Sessions resume automatically after a restart, and a personality compiler assembles the agent's system prompt from per-concern Markdown source files.
 
+For the repo-specific cutover plan, see [`specs/openclaw-to-zeroclaw-migration.md`](specs/openclaw-to-zeroclaw-migration.md).
+
 ## Architecture
 
 TypeScript monorepo. A SolidJS client and an Express server compose a set of self-contained domain packages, each wired into a typed event bus. Modules export a `create*`/`register*` factory and a `status()` — nothing else. The event bus is the only integration surface.
