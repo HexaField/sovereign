@@ -7,31 +7,20 @@ export function registerFilesChannel(ws: WsHandler, bus: EventBus): void {
     clientMessages: []
   })
 
-  bus.on('file.created', (event) => {
-    const p = event.payload as Record<string, string>
-    ws.broadcastToChannel(
-      'files',
-      {
-        type: 'file.changed',
-        ...p,
-        kind: 'created',
-        timestamp: new Date().toISOString()
-      },
-      { projectId: p.projectId }
-    )
-  })
-
-  bus.on('file.deleted', (event) => {
-    const p = event.payload as Record<string, string>
-    ws.broadcastToChannel(
-      'files',
-      {
-        type: 'file.changed',
-        ...p,
-        kind: 'deleted',
-        timestamp: new Date().toISOString()
-      },
-      { projectId: p.projectId }
-    )
-  })
+  for (const busEvent of ['file.created', 'file.changed', 'file.deleted'] as const) {
+    bus.on(busEvent, (event) => {
+      const p = event.payload as Record<string, string>
+      const kind = busEvent === 'file.created' ? 'created' : busEvent === 'file.deleted' ? 'deleted' : 'modified'
+      ws.broadcastToChannel(
+        'files',
+        {
+          type: 'file.changed',
+          ...p,
+          kind,
+          timestamp: new Date().toISOString()
+        },
+        { projectId: p.projectId }
+      )
+    })
+  }
 }
