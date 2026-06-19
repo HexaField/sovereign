@@ -41,14 +41,6 @@ interface FileData {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function syncFileToUrl(filePath: string | null): void {
-  if (typeof history === 'undefined' || typeof location === 'undefined') return
-  const url = new URL(location.href)
-  if (filePath) url.searchParams.set('file', filePath)
-  else url.searchParams.delete('file')
-  history.replaceState(null, '', url.toString())
-}
-
 const IMAGE_EXTENSIONS = new Set(['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'])
 
 function getExt(path: string): string {
@@ -426,7 +418,6 @@ const FilePanel: Component = () => {
     setError(null)
     setActiveFilePath(filePath)
     setLastOpenFilePath(filePath)
-    syncFileToUrl(filePath)
     setMode('view')
     setDirty(false)
 
@@ -563,9 +554,7 @@ const FilePanel: Component = () => {
   onMount(() => {
     document.addEventListener('click', closeCtxMenu)
 
-    // Restore file from URL search params first, then fall back to localStorage
-    const urlFile = new URLSearchParams(location.search).get('file')
-    const stored = urlFile || lastOpenFilePath()
+    const stored = lastOpenFilePath()
     if (stored && !mobileFileShowTree()) {
       const isAbsolute = stored.startsWith('/')
       if (isAbsolute || orgPath()) {
@@ -585,7 +574,6 @@ const FilePanel: Component = () => {
           setFileData(null)
           setActiveFilePath(null)
           setLastOpenFilePath(null)
-          syncFileToUrl(null)
         } else if (!dirty()) {
           openFile(active)
         }
