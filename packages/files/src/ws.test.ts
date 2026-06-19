@@ -75,6 +75,31 @@ describe('Files WS Channel', () => {
     expect(fileMsg.kind).toBe('deleted')
   })
 
+  it('bridges file.changed bus event to file.changed WS message with kind=modified', () => {
+    const bus = createEventBus(tmpDir())
+    const ws = createWsHandler(bus)
+    registerFilesChannel(ws, bus)
+
+    const client = mockWs()
+    ws.handleConnection(client, 'device-1')
+    ;(client.on as ReturnType<typeof vi.fn>).mock.calls.find((c: unknown[]) => c[0] === 'message')?.[1](
+      JSON.stringify({ type: 'subscribe', channels: ['files'], scope: { projectId: 'proj-1' } })
+    )
+
+    bus.emit({
+      type: 'file.changed',
+      timestamp: new Date().toISOString(),
+      source: 'files',
+      payload: { projectId: 'proj-1', filePath: '/baz.txt' }
+    })
+
+    const calls = (client.send as ReturnType<typeof vi.fn>).mock.calls
+    const msgs = calls.map((c: unknown[]) => JSON.parse(c[0] as string))
+    const fileMsg = msgs.find((m: Record<string, unknown>) => m.type === 'file.changed')
+    expect(fileMsg).toBeDefined()
+    expect(fileMsg.kind).toBe('modified')
+  })
+
   it('scopes messages by projectId', () => {
     const bus = createEventBus(tmpDir())
     const ws = createWsHandler(bus)

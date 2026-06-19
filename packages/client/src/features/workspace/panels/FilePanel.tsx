@@ -16,6 +16,7 @@ import {
   persistedExpandedDirs,
   setPersistedExpandedDirs
 } from '../store.js'
+import { wsStore } from '../../../ws/index.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -39,6 +40,14 @@ interface FileData {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+function syncFileToUrl(filePath: string | null): void {
+  if (typeof history === 'undefined' || typeof location === 'undefined') return
+  const url = new URL(location.href)
+  if (filePath) url.searchParams.set('file', filePath)
+  else url.searchParams.delete('file')
+  history.replaceState(null, '', url.toString())
+}
 
 const IMAGE_EXTENSIONS = new Set(['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'])
 
@@ -417,6 +426,7 @@ const FilePanel: Component = () => {
     setError(null)
     setActiveFilePath(filePath)
     setLastOpenFilePath(filePath)
+    syncFileToUrl(filePath)
     setMode('view')
     setDirty(false)
 
@@ -549,16 +559,43 @@ const FilePanel: Component = () => {
     setTreeData(nodes)
   }
 
-  // ── Restore persisted file on mount ──
+  // ── Restore persisted file on mount + subscribe to file changes ──
   onMount(() => {
     document.addEventListener('click', closeCtxMenu)
-    const stored = lastOpenFilePath()
+
+    // Restore file from URL search params first, then fall back to localStorage
+    const urlFile = new URLSearchParams(location.search).get('file')
+    const stored = urlFile || lastOpenFilePath()
     if (stored && !mobileFileShowTree()) {
       const isAbsolute = stored.startsWith('/')
       if (isAbsolute || orgPath()) {
         openFile(stored)
       }
     }
+
+    wsStore.subscribe(['files'])
+    const offChanged = wsStore.on('file.changed', (msg: any) => {
+      const changedPath = msg.path || msg.fullPath
+      if (!changedPath) return
+      const active = activeFilePath()
+      if (!active) return
+      const activeFull = active.startsWith('/') ? active : orgPath() ? `${orgPath()}/${active}` : null
+      if (changedPath === active || changedPath === activeFull || msg.fullPath === activeFull) {
+        if (msg.kind === 'deleted') {
+          setFileData(null)
+          setActiveFilePath(null)
+          setLastOpenFilePath(null)
+          syncFileToUrl(null)
+        } else if (!dirty()) {
+          openFile(active)
+        }
+      }
+      refreshTree()
+    })
+    onCleanup(() => {
+      offChanged()
+      wsStore.unsubscribe(['files'])
+    })
   })
 
   // Load lastOpenFilePath whenever it changes (covers: restore on mount, file chip open, workspace switch)
