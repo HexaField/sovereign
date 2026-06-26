@@ -33,11 +33,46 @@ interface SessionState {
   refMap: Map<string, string>
 }
 
-const DEFAULT_CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+const CHROME_CANDIDATES = [
+  process.env.CHROME_PATH,
+  // Linux
+  '/usr/bin/chromium-browser',
+  '/usr/bin/chromium',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/google-chrome',
+  // macOS
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  // Playwright cache (Linux)
+  ...(() => {
+    try {
+      const base = path.join(process.env.HOME ?? '', '.cache', 'ms-playwright')
+      return fs.existsSync(base)
+        ? fs
+            .readdirSync(base)
+            .filter((d) => d.startsWith('chromium-'))
+            .sort()
+            .reverse()
+            .map((d) => path.join(base, d, 'chrome-linux64', 'chrome'))
+        : []
+    } catch {
+      return []
+    }
+  })()
+].filter(Boolean) as string[]
+
+function findChrome(): string {
+  for (const candidate of CHROME_CANDIDATES) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  throw new Error(
+    `browser: no Chrome/Chromium binary found. Searched:\n${CHROME_CANDIDATES.join('\n')}\nSet CHROME_PATH to override.`
+  )
+}
+
 const DEFAULT_MAX_SESSIONS = 4
 
 export function createBrowserService(dataDir: string, config: BrowserManagerConfig = {}): BrowserService {
-  const executablePath = config.executablePath ?? DEFAULT_CHROME_PATH
+  const executablePath = config.executablePath ?? findChrome()
   const maxSessions = config.maxSessions ?? DEFAULT_MAX_SESSIONS
   const userDataRoot = config.userDataRoot ?? path.join(dataDir, 'browser', 'profiles')
 
