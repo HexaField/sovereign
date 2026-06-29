@@ -1,0 +1,32 @@
+{
+  "name": "@sovereign/presence",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "Josh Field",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@coasys/ad4m": "workspace:*",
+    "@sovereign/ad4m": "workspace:*",
+    "@sovereign/core": "workspace:*",
+    "@sovereign/primitives": "workspace:*",
+    "@sovereign/threads": "workspace:*",
+    "@sovereign/voice": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.9"
+  }
+}

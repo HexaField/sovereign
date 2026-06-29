@@ -109,6 +109,17 @@ export function createThreadRoutes(
   // matches in registration order; `:key` would otherwise eat
   // "active-subagents" / "gateway-sessions" and return 404 Thread not found).
 
+  // Presence threads lookup — clients (voice, ambient surfaces) use this
+  // to find the two role-flagged threads. `internal` is the ambient inbound
+  // target; `gateway` is the user's primary text-chat surface. Either may be
+  // null if not yet provisioned. See plans/presence-thread-spec.md.
+  router.get('/api/threads/presence', (_req, res) => {
+    res.json({
+      internal: threadManager.getPresenceThread('internal') ?? null,
+      gateway: threadManager.getPresenceThread('gateway') ?? null
+    })
+  })
+
   // Bulk active subagents grouped by parent thread.
   router.get('/api/threads/active-subagents', async (_req, res) => {
     try {
@@ -245,13 +256,25 @@ export function createThreadRoutes(
       membraneId: bodyMembraneId,
       backend: backendKindRaw,
       contextWindow: bodyContextWindow,
+      presence: bodyPresence,
       cwd
     } = req.body ?? {}
-    // Translate legacy `orgId` body field into the new shape. Explicit
-    // `workspaceIds` and `membraneId` always win.
     const workspaceIds = bodyWorkspaceIds ?? (legacyOrgId && legacyOrgId !== '_global' ? [legacyOrgId] : undefined)
     const contextWindow = typeof bodyContextWindow === 'number' && bodyContextWindow > 0 ? bodyContextWindow : undefined
-    const thread = threadManager.create({ label, entities, workspaceIds, membraneId: bodyMembraneId, contextWindow })
+    const presenceRole = bodyPresence === 'internal' || bodyPresence === 'gateway' ? bodyPresence : undefined
+    let thread
+    try {
+      thread = threadManager.create({
+        label,
+        entities,
+        workspaceIds,
+        membraneId: bodyMembraneId,
+        contextWindow,
+        ...(presenceRole ? { presence: presenceRole } : {})
+      })
+    } catch (err) {
+      return res.status(400).json({ error: (err as Error).message })
+    }
     const backendKind = backendKindRaw as AgentBackendKind | undefined
     // Optional: pre-bind the thread to a specific backend (e.g. 'claude-code')
     // so the routing layer picks the right adapter on the first message.
@@ -291,7 +314,8 @@ export function createThreadRoutes(
       orgId: legacyOrgId,
       workspaceIds: bodyWorkspaceIds,
       membraneId,
-      contextWindow: bodyContextWindow
+      contextWindow: bodyContextWindow,
+      presence: bodyPresence
     } = req.body
     // Translate legacy `orgId` body field. Empty/`_global` → empty array
     // so a PATCH with `orgId: '_global'` actually moves a thread to global.
@@ -309,12 +333,30 @@ export function createThreadRoutes(
           ? bodyContextWindow
           : undefined
         : undefined
-    const thread = threadManager.update(req.params.key, {
-      label,
-      membraneId,
-      workspaceIds,
-      ...(bodyContextWindow !== undefined ? { contextWindow } : {})
-    })
+    // Translate the wire form for `presence` into the ThreadManager patch.
+    //   undefined   → don't touch
+    //   null/false  → clear role
+    //   'internal' | 'gateway' → set role
+    const presencePatch: { presence?: 'internal' | 'gateway' | null } =
+      bodyPresence === undefined
+        ? {}
+        : bodyPresence === null || bodyPresence === false
+          ? { presence: null }
+          : bodyPresence === 'internal' || bodyPresence === 'gateway'
+            ? { presence: bodyPresence }
+            : {}
+    let thread
+    try {
+      thread = threadManager.update(req.params.key, {
+        label,
+        membraneId,
+        workspaceIds,
+        ...(bodyContextWindow !== undefined ? { contextWindow } : {}),
+        ...presencePatch
+      })
+    } catch (err) {
+      return res.status(400).json({ error: (err as Error).message })
+    }
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
     res.json({ thread })
   })

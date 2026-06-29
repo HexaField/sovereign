@@ -23,6 +23,16 @@ import {
 } from './store.js'
 import { escapeHtml } from '../../lib/markdown.js'
 import { sendMessage } from '../chat/store.js'
+import { getPresenceInternalThreadId } from '../threads/presence-helper.js'
+import { threadKey } from '../threads/store.js'
+
+function getCurrentDeviceId(): string | undefined {
+  try {
+    return (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
+  } catch {
+    return undefined
+  }
+}
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export function getVoiceButtonStyle(state: string): { border: string; animation: string } {
@@ -134,7 +144,17 @@ export function VoiceView() {
       setVoiceTranscriptHtml(`<span style="color:var(--c-text)">You:</span> ` + escapeHtml(text))
       setVoiceState('processing')
       setVoiceStatusText('Thinking…')
-      sendMessage(text)
+      // Route to the presence-internal thread when no specific thread is
+      // focused — ambient voice = ambient agent. When the user is on the
+      // gateway thread (or any other thread), voice goes there like any
+      // other chat. See plans/presence-thread-spec.md (R7).
+      const focusedThread = threadKey()
+      const targetThread = focusedThread || (await getPresenceInternalThreadId())
+      const deviceId = getCurrentDeviceId()
+      sendMessage(text, undefined, {
+        ...(targetThread ? { threadId: targetThread } : {}),
+        origin: { modality: 'voice', ...(deviceId ? { deviceId } : {}) }
+      })
     } catch (e) {
       setVoiceState('idle')
       setVoiceStatusText('Error: ' + (e instanceof Error ? e.message : String(e)))

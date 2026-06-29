@@ -247,8 +247,12 @@ let lastSentTime = 0
  * No optimistic turn lives in `turns()` — the queue snapshot IS the
  * visual source of truth for in-flight messages.
  */
-export async function sendMessage(text: string, attachments?: File[]): Promise<void> {
-  const threadKey = currentThreadKey?.() ?? ''
+export async function sendMessage(
+  text: string,
+  attachments?: File[],
+  opts?: { threadId?: string; origin?: import('@sovereign/core').MessageOrigin }
+): Promise<void> {
+  const threadKey = opts?.threadId ?? currentThreadKey?.() ?? ''
   if (!threadKey) return // No thread selected — nothing to send to.
 
   const now = Date.now()
@@ -259,6 +263,7 @@ export async function sendMessage(text: string, attachments?: File[]): Promise<v
   lastSentTime = now
 
   let body: Record<string, unknown> = { threadId: threadKey, message: text }
+  if (opts?.origin) body.origin = opts.origin
   if (attachments?.length) {
     const base64Files = await Promise.all(
       attachments.map(async (f) => {

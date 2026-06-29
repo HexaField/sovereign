@@ -56,6 +56,7 @@ export interface ThreadManager {
     membraneId?: string
     workspaceIds?: string[]
     contextWindow?: number
+    presence?: 'internal' | 'gateway'
   }): ThreadInfo
   /** Get by UUID. */
   get(id: string): ThreadInfo | undefined
@@ -70,8 +71,18 @@ export interface ThreadManager {
   resolve(idOrLabel: string): ThreadInfo | undefined
   update(
     id: string,
-    patch: { label?: string; membraneId?: string; workspaceIds?: string[]; contextWindow?: number }
+    patch: {
+      label?: string
+      membraneId?: string
+      workspaceIds?: string[]
+      contextWindow?: number
+      /** Set to `'internal'` or `'gateway'` to assign a role; pass `null` to clear. */
+      presence?: 'internal' | 'gateway' | null
+    }
   ): ThreadInfo | undefined
+  /** Returns the single thread carrying the given presence role, or null when
+   *  none exists. At most one thread per role; see `plans/presence-thread-spec.md`. */
+  getPresenceThread(role: 'internal' | 'gateway'): ThreadInfo | null
   list(filter?: ThreadFilter): ThreadInfo[]
   delete(id: string): boolean
   addEntity(id: string, entity: EntityBinding): ThreadInfo | undefined

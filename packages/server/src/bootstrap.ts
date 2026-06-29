@@ -92,6 +92,7 @@ import {
 } from '@sovereign/thread-presence'
 import { createBrowserService } from '@sovereign/browser'
 import { createAd4mService } from '@sovereign/ad4m'
+import { createPresenceModule, createAd4mPoster } from '@sovereign/presence'
 import { createDashboardRoutes } from './dashboard/routes.js'
 import { createMeetingsService } from '@sovereign/meetings'
 import { createSpeakerService } from '@sovereign/meetings'
@@ -337,6 +338,70 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     total: number
   } | null = null
 
+  // Presence module — owns the two presence threads (internal +
+  // gateway), the response tools, watch list, and digest service. Wired
+  // before the agent backend so its tools can be registered into the MCP
+  // server. The chat handles are swapped in after createChatModule below
+  // (deferred, holder pattern). See plans/presence-thread-spec.md.
+  const presenceDataDir = path.join(dataDir, 'presence')
+  const chatHandleHolder: {
+    postAssistantTurn(threadId: string, content: string): void
+    sendToThread(threadId: string, text: string, origin: import('@sovereign/core').MessageOrigin): Promise<void>
+  } = {
+    postAssistantTurn(threadId) {
+      console.warn(`[presence] chat sender not yet wired — dropping turn for ${threadId}`)
+    },
+    async sendToThread(threadId) {
+      console.warn(`[presence] chat sender not yet wired — dropping inbound for ${threadId}`)
+    }
+  }
+  const presenceModule = createPresenceModule({
+    bus,
+    threadManager,
+    dataDir: presenceDataDir,
+    voice: voiceModule,
+    ws: {
+      sendBinaryTo: (deviceId: string, channel: string, payload: Buffer) =>
+        (wsHandler as any).sendBinaryTo?.(deviceId, channel, payload) ?? false,
+      sendTo: (deviceId: string, payload: Record<string, unknown>) =>
+        (wsHandler as any).sendTo?.(deviceId, payload) ?? false
+    },
+    ad4m: ad4mService ? createAd4mPoster(ad4mService.client()) : undefined,
+    chat: {
+      postAssistantTurn: (t: string, c: string) => chatHandleHolder.postAssistantTurn(t, c),
+      sendToThread: (t, text, origin) => chatHandleHolder.sendToThread(t, text, origin)
+    },
+    autoCreate: true,
+    internalLabel: 'presence-internal',
+    gatewayLabel: 'presence',
+    autoCreateMembraneId: cfg.seed?.membraneId || 'personal'
+  })
+  const presenceMcpDeps = {
+    internalThreadId: () => presenceModule.internalThreadId(),
+    gatewayThreadId: () => presenceModule.gatewayThreadId(),
+    watch: {
+      add: (threadId: string, reason?: string) => presenceModule.watchStore.add(threadId, reason),
+      remove: (threadId: string) => presenceModule.watchStore.remove(threadId),
+      list: () => presenceModule.watchStore.list()
+    },
+    tools: presenceModule.tools,
+    forwardToInternal: (text: string, opts?: { deviceId?: string }) => presenceModule.forwardToInternal(text, opts),
+    internalHistory: async (limit?: number) => {
+      const id = presenceModule.internalThreadId()
+      if (!id) return { turns: [] }
+      try {
+        const { turns } = await routingBackend.forSession(id).getHistory(id)
+        const sliced = turns.slice(-(limit ?? 20))
+        return { turns: sliced.map((t: any) => ({ role: t.role, content: t.content })) }
+      } catch {
+        return { turns: [] }
+      }
+    },
+    resolveThreadId: (idOrLabel: string) => threadManager.resolve(idOrLabel)?.id
+  }
+  const presencePersonalityFile = path.join(process.env.HOME ?? '', '.sovereign', 'PRESENCE.md')
+  const presenceMemoryFile = path.join(process.env.HOME ?? '', '.sovereign', 'PRESENCE_MEMORY.md')
+
   // Agent backend (the only construction cycle)
   const {
     routingBackend,
@@ -359,7 +424,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     issueTracker,
     meetingsService,
     notificationsModule,
-    browserService
+    browserService,
+    presence: presenceMcpDeps,
+    presencePersonalityFile,
+    presenceMemoryFile
   })
   app.use(createSchedulerRoutes(scheduler, cronService))
   // RPC façade consumed by `@sovereign/mcp-sidecar`. Exposes every MCP tool
@@ -410,39 +478,82 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     console.log('[sovereign] MCP HTTP endpoint ready at /api/mcp')
   }
 
-  // AD4M → thread injection (after routingBackend and threadManager are available)
-  if (ad4mService) {
-    bus.on('ad4m.thread.message', async (event) => {
-      const { threadKey, threadLabel, text } = event.payload as {
-        threadKey: string
-        threadLabel: string
-        text: string
-      }
-      // Idempotent: reuse the thread if we already have one (by canonical id
-      // or by label) — never mint a fresh duplicate per inbound message. The
-      // session key is the bare thread UUID (post thread-UUID refactor); the
-      // membrane is the configured default, or unassigned when none is set.
-      const thread =
-        threadManager.resolve(threadKey) ??
-        threadManager.getByLabel(threadLabel) ??
-        threadManager.create({ label: threadLabel, membraneId: cfg.seed.membraneId || undefined })
-      const sessionKey = thread.id
-      try {
-        await routingBackend.forSession(sessionKey).sendMessage(sessionKey, text)
-      } catch (err: unknown) {
-        console.error('[ad4m] thread message injection failed:', thread.id, (err as Error)?.message)
-      }
-    })
-  }
-
   // Chat + threads (after routing/cron exist)
   const chatModule = createChatModule(bus, backend, threadManager, {
     dataDir,
     wsHandler,
     activeSessions: {
       setInFlight: (sessionKey, info) => activeSessions.setInFlight(sessionKey, info)
+    },
+    presence: {
+      takeDigest: () => presenceModule.digest.take()
     }
   })
+
+  // Wire the deferred chat handles now that chatModule exists.
+  //   • postAssistantTurn — used by `presence_reply_text`. Broadcasts an
+  //     assistant turn on the chat WS channel. Non-persistent (the SDK's
+  //     JSONL isn't touched); presence replies are visible to
+  //     currently-connected clients only.
+  //   • sendToThread — used by gateway → internal forwarding
+  //     (`presence_internal_send`) and any other surface that wants to
+  //     drop a user-typed message into Hex's internal stream with an
+  //     explicit origin.
+  // See R5 + R7.
+  chatHandleHolder.postAssistantTurn = (threadId, content) => {
+    const turn = {
+      role: 'assistant' as const,
+      content,
+      timestamp: Date.now(),
+      workItems: [],
+      thinkingBlocks: []
+    }
+    ;(wsHandler as any).broadcastToChannel?.('chat', { type: 'chat.turn', threadId, turn })
+    chatModule.chatEvents.emit('chat.turn', { threadId, turn })
+  }
+  chatHandleHolder.sendToThread = async (threadId, text, origin) => {
+    await chatModule.handleSend(threadId, text, undefined, { origin })
+  }
+
+  // AD4M → presence-internal thread injection. Mentions land on the
+  // long-lived internal thread with origin metadata so the agent can choose
+  // to reply via `presence_reply_ad4m`. The waker emits per-perspective info
+  // in `event.payload.context` for the origin envelope. See R7.
+  if (ad4mService) {
+    bus.on('ad4m.thread.message', async (event) => {
+      const { text, context } = event.payload as {
+        threadKey: string
+        threadLabel: string
+        text: string
+        context?: {
+          perspectiveUuid: string
+          channelAddress?: string
+          messageAddress: string
+          body?: string
+        }
+      }
+      const internalId = presenceModule.internalThreadId()
+      if (!internalId) {
+        console.warn('[ad4m] no presence-internal thread configured — dropping mention')
+        return
+      }
+      const origin: import('@sovereign/core').MessageOrigin = {
+        modality: 'ad4m',
+        ad4m: context
+          ? {
+              perspectiveUuid: context.perspectiveUuid,
+              channelAddress: context.channelAddress ?? '',
+              messageAddress: context.messageAddress
+            }
+          : { perspectiveUuid: '', channelAddress: '', messageAddress: '' }
+      }
+      try {
+        await chatModule.handleSend(internalId, text, undefined, { origin })
+      } catch (err: unknown) {
+        console.error('[ad4m] presence-internal thread message injection failed:', (err as Error)?.message)
+      }
+    })
+  }
   registerChatWs(wsHandler, chatModule)
   app.use(createChatRoutes(chatModule, backend, dataDir))
   app.use(

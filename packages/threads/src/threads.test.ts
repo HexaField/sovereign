@@ -637,4 +637,79 @@ describe('ThreadManager', () => {
       expect(updates.length).toBe(0)
     })
   })
+
+  describe('presence roles (R1)', () => {
+    it('getPresenceThread(role) returns null when no thread carries that role', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'normal' })
+      expect(tm.getPresenceThread('internal')).toBeNull()
+      expect(tm.getPresenceThread('gateway')).toBeNull()
+    })
+
+    it("create({ presence: 'internal' }) flags the thread", () => {
+      const tm = createThreadManager(bus, dataDir)
+      const internal = tm.create({ label: 'presence-internal', presence: 'internal' })
+      expect(internal.presence).toBe('internal')
+      expect(tm.getPresenceThread('internal')?.id).toBe(internal.id)
+      expect(tm.getPresenceThread('gateway')).toBeNull()
+    })
+
+    it('allows ONE internal AND ONE gateway thread to coexist', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const internal = tm.create({ label: 'presence-internal', presence: 'internal' })
+      const gateway = tm.create({ label: 'presence', presence: 'gateway' })
+      expect(tm.getPresenceThread('internal')?.id).toBe(internal.id)
+      expect(tm.getPresenceThread('gateway')?.id).toBe(gateway.id)
+    })
+
+    it('throws when a SECOND thread of the same role is created', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'first-internal', presence: 'internal' })
+      expect(() => tm.create({ label: 'second-internal', presence: 'internal' })).toThrow(/already exists/)
+    })
+
+    it("update({ presence: 'gateway' }) promotes a normal thread", () => {
+      const tm = createThreadManager(bus, dataDir)
+      const normal = tm.create({ label: 'normal' })
+      const updated = tm.update(normal.id, { presence: 'gateway' })
+      expect(updated?.presence).toBe('gateway')
+      expect(tm.getPresenceThread('gateway')?.id).toBe(normal.id)
+    })
+
+    it('update({ presence: <role> }) refuses when a different thread already holds that role', () => {
+      const tm = createThreadManager(bus, dataDir)
+      tm.create({ label: 'first', presence: 'internal' })
+      const other = tm.create({ label: 'other' })
+      expect(() => tm.update(other.id, { presence: 'internal' })).toThrow(/already carries/)
+    })
+
+    it('update({ presence: null }) clears the role', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const p = tm.create({ label: 'presence-internal', presence: 'internal' })
+      tm.update(p.id, { presence: null })
+      expect(tm.get(p.id)?.presence).toBeUndefined()
+      expect(tm.getPresenceThread('internal')).toBeNull()
+    })
+
+    it('migrates legacy `presence: true` on load to `presence: "internal"`', () => {
+      const legacyPath = path.join(dataDir, 'threads.json')
+      const legacyThread = {
+        id: 'legacy-id-1',
+        label: 'presence',
+        membraneId: 'personal',
+        workspaceIds: [],
+        entities: [],
+        presence: true,
+        lastActivity: 0,
+        unreadCount: 0,
+        agentStatus: 'idle',
+        createdAt: 0,
+        archived: false
+      }
+      fs.writeFileSync(legacyPath, JSON.stringify({ threads: [legacyThread] }))
+      const tm = createThreadManager(bus, dataDir)
+      expect(tm.get('legacy-id-1')?.presence).toBe('internal')
+      expect(tm.getPresenceThread('internal')?.id).toBe('legacy-id-1')
+    })
+  })
 })

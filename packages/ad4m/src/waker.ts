@@ -173,8 +173,19 @@ function emitBusEvent(bus: EventBus, type: string, payload: unknown) {
   bus.emit({ type, source: 'ad4m', timestamp: new Date().toISOString(), payload })
 }
 
-function emitThreadMessage(bus: EventBus, threadKey: string, threadLabel: string, text: string) {
-  emitBusEvent(bus, 'ad4m.thread.message', { threadKey, threadLabel, text })
+function emitThreadMessage(
+  bus: EventBus,
+  threadKey: string,
+  threadLabel: string,
+  text: string,
+  context?: {
+    perspectiveUuid: string
+    channelAddress?: string
+    messageAddress: string
+    body?: string
+  }
+) {
+  emitBusEvent(bus, 'ad4m.thread.message', { threadKey, threadLabel, text, context })
 }
 
 // ── Persistence ────────────────────────────────────────────────────────────────
@@ -385,7 +396,12 @@ export function startWaker(
               : `[AD4M] @${authorShort} mentioned you${parentPart}`
 
             emitBusEvent(bus, 'ad4m.perspective.mention', { uuid, msgAddr, parents, body })
-            emitThreadMessage(bus, entry.threadKey, entry.label, text)
+            emitThreadMessage(bus, entry.threadKey, entry.label, text, {
+              perspectiveUuid: uuid,
+              channelAddress: parents[0],
+              messageAddress: msgAddr,
+              body: body ?? undefined
+            })
           }
 
           persistState()

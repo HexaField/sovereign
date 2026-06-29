@@ -7,6 +7,7 @@ export * from './transcription.js'
 export * from './cron.js'
 export * from './session-key.js'
 export * from './thread.js'
+export * from './message-origin.js'
 
 /**
  * A message in the server-side queue waiting to be sent to the agent.
@@ -26,6 +27,10 @@ export interface QueuedMessage {
   error?: string
   /** Number of send attempts so far (0 = never tried). */
   attempts?: number
+  /** How this message arrived (voice, AD4M mention, webhook, etc.).
+   *  Used by the presence thread to choose a reply tool; absent on normal
+   *  text sends. See `plans/presence-thread-spec.md`. */
+  origin?: import('./message-origin.js').MessageOrigin
 }
 
 /**

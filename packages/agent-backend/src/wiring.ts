@@ -2,6 +2,7 @@
 // the Sovereign MCP server, the cron service, and the per-org tool policy —
 // returning concrete refs the entry point binds to chat/threads/scheduler.
 
+import fs from 'node:fs'
 import type { EventBus, AgentBackendKind } from '@sovereign/core'
 import type { ConfigStore } from '@sovereign/config'
 import { createBackend } from './factory.js'
@@ -51,6 +52,15 @@ export interface AgentBackendWiringInput {
   meetingsService: MeetingsService
   notificationsModule: Notifications
   browserService: BrowserService
+  /** Presence-thread integration. When set, the seven presence_* MCP tools
+   *  are registered. Sourced from `@sovereign/presence`. */
+  presence?: import('./claude-code/mcp-server.js').PresenceMcpDeps
+  /** Path to PRESENCE.md — appended to the session prompt for the presence
+   *  thread only. */
+  presencePersonalityFile?: string
+  /** Path to PRESENCE_MEMORY.md — appended to the session prompt for the
+   *  presence thread only. */
+  presenceMemoryFile?: string
 }
 
 export interface AgentBackendWiringResult {
@@ -130,6 +140,50 @@ export function makeMembraneAppendResolver(
   }
 }
 
+/**
+ * Wraps the membrane append resolver so that, for the **internal** presence
+ * session, PRESENCE.md and PRESENCE_MEMORY.md are layered on top of the
+ * membrane context. The gateway session does NOT get these — it's a normal
+ * text agent. See plans/presence-thread-spec.md (R3).
+ */
+export function makePresenceAwareAppendResolver(
+  membraneManager: MembraneManager | undefined,
+  threadManager: ThreadManager | undefined,
+  presence: {
+    internalThreadId(): string | null
+    personalityFile?: string
+    memoryFile?: string
+  }
+): ((sessionKey: string) => string | undefined) | undefined {
+  const base = makeMembraneAppendResolver(membraneManager, threadManager)
+  return (sessionKey: string): string | undefined => {
+    const parts: string[] = []
+    const baseAppend = base?.(sessionKey)
+    if (baseAppend) parts.push(baseAppend)
+    const threadKey = sessionKeyToThreadKey(sessionKey)
+    const internalId = presence.internalThreadId()
+    if (threadKey && internalId && threadKey === internalId) {
+      if (presence.personalityFile) {
+        try {
+          const txt = fs.readFileSync(presence.personalityFile, 'utf-8').trim()
+          if (txt) parts.push(txt)
+        } catch {
+          /* missing — skip silently */
+        }
+      }
+      if (presence.memoryFile) {
+        try {
+          const txt = fs.readFileSync(presence.memoryFile, 'utf-8').trim()
+          if (txt) parts.push(`# Presence memory\n\n${txt}`)
+        } catch {
+          /* missing — skip silently */
+        }
+      }
+    }
+    return parts.length > 0 ? parts.join('\n\n') : undefined
+  }
+}
+
 export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWiringResult {
   const {
     bus,
@@ -164,7 +218,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     meetingsService,
     notificationsModule,
     browserService,
-    getClaudeCodeBackend: () => claudeCodeBackend
+    getClaudeCodeBackend: () => claudeCodeBackend,
+    ...(input.presence ? { presence: input.presence } : {})
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 
@@ -201,7 +256,11 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
           },
           toolPolicy: makeToolPolicy(orgManager),
           activeSessions,
-          resolveAppendSystemPrompt: makeMembraneAppendResolver(membraneManager, threadManager)
+          resolveAppendSystemPrompt: makePresenceAwareAppendResolver(membraneManager, threadManager, {
+            internalThreadId: () => input.presence?.internalThreadId() ?? null,
+            personalityFile: input.presencePersonalityFile,
+            memoryFile: input.presenceMemoryFile
+          })
         })
         claudeCodeBackend = cc
         return cc

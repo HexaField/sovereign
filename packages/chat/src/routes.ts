@@ -94,13 +94,13 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
 
   router.post('/api/chat/send', async (req, res) => {
     try {
-      const { threadId, message, attachments } = req.body ?? {}
+      const { threadId, message, attachments, origin } = req.body ?? {}
       if (!threadId || (!message && !attachments?.length)) {
         return res.status(400).json({ error: 'threadId and message are required' })
       }
       // Convert base64 attachments to Buffers
       const buffers = attachments?.map((a: string) => Buffer.from(a, 'base64'))
-      await chatModule.handleSend(threadId, message || '', buffers)
+      await chatModule.handleSend(threadId, message || '', buffers, origin ? { origin } : undefined)
       // Return current queue snapshot so HTTP-only clients have a fresh view
       // without waiting for the SSE round-trip.
       res.json({ success: true, queue: chatModule.getQueueSnapshot(threadId) })

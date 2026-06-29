@@ -83,6 +83,15 @@ function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
     membraneId,
     workspaceIds,
     entities: raw.entities ?? [],
+    contextWindow: typeof raw.contextWindow === 'number' && raw.contextWindow > 0 ? raw.contextWindow : undefined,
+    // Migrate legacy `presence: true` (boolean) → `presence: 'internal'`.
+    // String roles pass through untouched; anything else is dropped.
+    presence:
+      raw.presence === true
+        ? 'internal'
+        : raw.presence === 'internal' || raw.presence === 'gateway'
+          ? raw.presence
+          : undefined,
     lastActivity: raw.lastActivity ?? Date.now(),
     unreadCount: raw.unreadCount ?? 0,
     agentStatus: raw.agentStatus ?? 'idle',
@@ -186,13 +195,20 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     membraneId?: string
     workspaceIds?: string[]
     contextWindow?: number
+    presence?: 'internal' | 'gateway'
   }): ThreadInfo {
     if (!opts.label?.trim()) {
       throw new Error('ThreadManager.create: label is required (UUID model — labels carry the display name)')
     }
-    // If the caller bound the thread to entities but didn't pre-pick a
-    // workspace, default to the first entity's orgId — preserves the
-    // pre-refactor auto-association behaviour.
+    if (opts.presence) {
+      // At-most-one thread per presence role. See plans/presence-thread-spec.md (R1).
+      const existing = [...threads.values()].find((t) => t.presence === opts.presence && !t.archived)
+      if (existing) {
+        throw new Error(
+          `ThreadManager.create: a '${opts.presence}' presence thread already exists (${existing.id}). Update the existing one or clear its presence role first.`
+        )
+      }
+    }
     const derivedWorkspaceIds =
       opts.workspaceIds ?? (opts.entities && opts.entities.length > 0 ? [opts.entities[0].orgId] : [])
 
@@ -204,6 +220,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       workspaceIds: derivedWorkspaceIds,
       entities: opts.entities ?? [],
       contextWindow: opts.contextWindow,
+      presence: opts.presence,
       lastActivity: now,
       unreadCount: 0,
       agentStatus: 'idle',
@@ -255,7 +272,13 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
 
   function update(
     id: string,
-    patch: { label?: string; membraneId?: string; workspaceIds?: string[]; contextWindow?: number }
+    patch: {
+      label?: string
+      membraneId?: string
+      workspaceIds?: string[]
+      contextWindow?: number
+      presence?: 'internal' | 'gateway' | null
+    }
   ): ThreadInfo | undefined {
     const thread = threads.get(id)
     if (!thread) return undefined
@@ -263,6 +286,20 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     if (patch.membraneId !== undefined) thread.membraneId = patch.membraneId
     if (patch.workspaceIds !== undefined) thread.workspaceIds = patch.workspaceIds
     if (patch.contextWindow !== undefined) thread.contextWindow = patch.contextWindow
+    if (patch.presence !== undefined) {
+      if (patch.presence === null) {
+        delete thread.presence
+      } else {
+        const role = patch.presence
+        const conflicting = [...threads.values()].find((t) => t.presence === role && !t.archived && t.id !== id)
+        if (conflicting) {
+          throw new Error(
+            `ThreadManager.update: cannot set presence='${role}' — thread ${conflicting.id} already carries that role.`
+          )
+        }
+        thread.presence = role
+      }
+    }
     thread.lastActivity = Date.now()
     persistThreadsImmediate()
     bus.emit({
@@ -439,6 +476,13 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     }
   })
 
+  function getPresenceThread(role: 'internal' | 'gateway'): ThreadInfo | null {
+    for (const t of threads.values()) {
+      if (t.presence === role && !t.archived) return t
+    }
+    return null
+  }
+
   return {
     create,
     get,
@@ -455,6 +499,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     touch,
     getEvents,
     markUnreadIncrement,
-    clearUnread
+    clearUnread,
+    getPresenceThread
   }
 }
