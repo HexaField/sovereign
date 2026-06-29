@@ -48,6 +48,9 @@ export interface ThreadInfo {
    */
   workspaceIds: string[]
   entities: EntityBinding[]
+  /** Context window size in tokens. When set above the default (200k),
+   *  the backend enables the 1M-context beta. Unset = model default. */
+  contextWindow?: number
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus
