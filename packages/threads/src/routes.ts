@@ -244,12 +244,14 @@ export function createThreadRoutes(
       workspaceIds: bodyWorkspaceIds,
       membraneId: bodyMembraneId,
       backend: backendKindRaw,
+      contextWindow: bodyContextWindow,
       cwd
     } = req.body ?? {}
     // Translate legacy `orgId` body field into the new shape. Explicit
     // `workspaceIds` and `membraneId` always win.
     const workspaceIds = bodyWorkspaceIds ?? (legacyOrgId && legacyOrgId !== '_global' ? [legacyOrgId] : undefined)
-    const thread = threadManager.create({ label, entities, workspaceIds, membraneId: bodyMembraneId })
+    const contextWindow = typeof bodyContextWindow === 'number' && bodyContextWindow > 0 ? bodyContextWindow : undefined
+    const thread = threadManager.create({ label, entities, workspaceIds, membraneId: bodyMembraneId, contextWindow })
     const backendKind = backendKindRaw as AgentBackendKind | undefined
     // Optional: pre-bind the thread to a specific backend (e.g. 'claude-code')
     // so the routing layer picks the right adapter on the first message.
@@ -266,7 +268,8 @@ export function createThreadRoutes(
             threadId: thread.id,
             kind: 'thread',
             ...(typeof cwd === 'string' && cwd ? { cwd } : {}),
-            ...(sessionOrgId ? { orgId: sessionOrgId } : {})
+            ...(sessionOrgId ? { orgId: sessionOrgId } : {}),
+            ...(contextWindow ? { contextWindow } : {})
           } as never)
         } catch (err: any) {
           console.error(`[threads] failed to bind thread "${thread.id}" to backend "${backendKind}":`, err.message)
@@ -283,7 +286,13 @@ export function createThreadRoutes(
   })
 
   router.patch('/api/threads/:key', (req, res) => {
-    const { label, orgId: legacyOrgId, workspaceIds: bodyWorkspaceIds, membraneId } = req.body
+    const {
+      label,
+      orgId: legacyOrgId,
+      workspaceIds: bodyWorkspaceIds,
+      membraneId,
+      contextWindow: bodyContextWindow
+    } = req.body
     // Translate legacy `orgId` body field. Empty/`_global` → empty array
     // so a PATCH with `orgId: '_global'` actually moves a thread to global.
     const workspaceIds =
@@ -294,7 +303,18 @@ export function createThreadRoutes(
             ? []
             : [legacyOrgId]
           : undefined
-    const thread = threadManager.update(req.params.key, { label, membraneId, workspaceIds })
+    const contextWindow =
+      bodyContextWindow !== undefined
+        ? typeof bodyContextWindow === 'number' && bodyContextWindow > 0
+          ? bodyContextWindow
+          : undefined
+        : undefined
+    const thread = threadManager.update(req.params.key, {
+      label,
+      membraneId,
+      workspaceIds,
+      ...(bodyContextWindow !== undefined ? { contextWindow } : {})
+    })
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
     res.json({ thread })
   })
@@ -598,6 +618,25 @@ export function createThreadRoutes(
     } catch {
       res.json({ efforts: [], defaultEffort: null })
     }
+  })
+
+  router.patch('/api/threads/:key/context-window', async (req, res) => {
+    const threadKey = req.params.key
+    const { contextWindow } = req.body ?? {}
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    const value = typeof contextWindow === 'number' && contextWindow > 0 ? contextWindow : undefined
+    threadManager.update(threadKey, { contextWindow: value })
+    try {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      const backend = backendForSession(sessionKey)
+      if (backend?.setSessionContextWindow) {
+        await backend.setSessionContextWindow(sessionKey, value)
+      }
+    } catch {
+      /* best-effort — session may not exist yet */
+    }
+    res.json({ success: true, contextWindow: value, thread: { ...thread, contextWindow: value } })
   })
 
   router.patch('/api/threads/:key/effort', async (req, res) => {

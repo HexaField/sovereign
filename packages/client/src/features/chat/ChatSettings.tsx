@@ -91,6 +91,8 @@ export function ChatSettingsButton() {
   const [defaultEffort, setDefaultEffort] = createSignal<string | null>(null)
   const [selectedEffort, setSelectedEffort] = createSignal<string>('')
   const [effortSaving, setEffortSaving] = createSignal(false)
+  const [contextWindowSize, setContextWindowSize] = createSignal<number | undefined>(undefined)
+  const [contextWindowSaving, setContextWindowSaving] = createSignal(false)
   const [actionFeedback, setActionFeedback] = createSignal('')
   const [cronManagerOpen, setCronManagerOpen] = createSignal(false)
   const [watchedNeighbourhoods, setWatchedNeighbourhoods] = createSignal<WatchEntry[]>([])
@@ -107,10 +109,11 @@ export function ChatSettingsButton() {
     setLoading(true)
     try {
       // Fetch session info + models + efforts in parallel — don't let crons block the menu
-      const [infoRes, modelsRes, effortsRes] = await Promise.all([
+      const [infoRes, modelsRes, effortsRes, threadRes] = await Promise.all([
         fetch(`/api/threads/${encodeURIComponent(key)}/session-info`),
         fetch('/api/models'),
-        fetch('/api/efforts')
+        fetch('/api/efforts'),
+        fetch(`/api/threads/${encodeURIComponent(key)}`)
       ])
       if (infoRes.ok) {
         const data = await infoRes.json()
@@ -130,6 +133,10 @@ export function ChatSettingsButton() {
         setAvailableEfforts(data.efforts ?? [])
         setDefaultEffort(data.defaultEffort ?? null)
         if (!selectedEffort() && data.defaultEffort) setSelectedEffort(data.defaultEffort)
+      }
+      if (threadRes.ok) {
+        const data = await threadRes.json()
+        setContextWindowSize(data.thread?.contextWindow)
       }
     } catch {
       /* ignore */
@@ -235,6 +242,30 @@ export function ChatSettingsButton() {
     }
     setModelSaving(false)
     setTimeout(() => setActionFeedback(''), 2000)
+  }
+
+  const handleContextWindowSwitch = async (value: string) => {
+    const key = threadKey()
+    if (!key) return
+    setContextWindowSaving(true)
+    const contextWindow = value === '1000000' ? 1000000 : null
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/context-window`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contextWindow })
+      })
+      if (res.ok) {
+        setContextWindowSize(contextWindow ?? undefined)
+        setActionFeedback(contextWindow ? 'Extended context — takes effect next session' : 'Context reset to default')
+      } else {
+        setActionFeedback('Failed to update context window')
+      }
+    } catch {
+      setActionFeedback('Failed')
+    }
+    setContextWindowSaving(false)
+    setTimeout(() => setActionFeedback(''), 3000)
   }
 
   const handleEffortSwitch = async (effort: string) => {
@@ -569,6 +600,32 @@ export function ChatSettingsButton() {
                         </select>
                       </div>
                     </Show>
+
+                    {/* Context Window Selector */}
+                    <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                      <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                        Context
+                      </span>
+                      <select
+                        class="rounded-md text-xs font-medium"
+                        style={{
+                          background: 'var(--c-bg)',
+                          border: '1px solid var(--c-border)',
+                          color: 'var(--c-text)',
+                          'max-width': '170px',
+                          padding: '2px 6px',
+                          cursor: 'pointer',
+                          opacity: contextWindowSaving() ? '0.5' : '1',
+                          'border-radius': '9999px'
+                        }}
+                        value={contextWindowSize() === 1000000 ? '1000000' : '200000'}
+                        disabled={contextWindowSaving()}
+                        onChange={(e) => handleContextWindowSwitch(e.currentTarget.value)}
+                      >
+                        <option value="200000">200K (default)</option>
+                        <option value="1000000">1M (extended)</option>
+                      </select>
+                    </div>
 
                     {/* Notifications mute toggle for THIS thread */}
                     <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>

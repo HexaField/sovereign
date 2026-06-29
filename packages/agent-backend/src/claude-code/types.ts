@@ -79,6 +79,8 @@ export interface ClaudeSessionState {
   model: string | null
   /** Reasoning effort forwarded to the SDK's `options.effort`. */
   effort: ReasoningEffort
+  /** Per-session context window override. Values above DEFAULT_CONTEXT_WINDOW enable the 1M beta. */
+  contextWindow?: number
   /** Status mirror used to short-circuit duplicate emits. */
   agentStatus: AgentStatus
   /** Optional label persisted to registry. */
