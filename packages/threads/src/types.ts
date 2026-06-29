@@ -50,7 +50,13 @@ export interface ThreadManager {
    * Create a new thread. `label` is required (no more "the key IS the label").
    * Returns the freshly minted record including its UUID `id`.
    */
-  create(opts: { label: string; entities?: EntityBinding[]; membraneId?: string; workspaceIds?: string[] }): ThreadInfo
+  create(opts: {
+    label: string
+    entities?: EntityBinding[]
+    membraneId?: string
+    workspaceIds?: string[]
+    contextWindow?: number
+  }): ThreadInfo
   /** Get by UUID. */
   get(id: string): ThreadInfo | undefined
   /** Get by display label. Returns the first match; labels are not unique. */
@@ -62,7 +68,10 @@ export interface ThreadManager {
    * scattered through callers.
    */
   resolve(idOrLabel: string): ThreadInfo | undefined
-  update(id: string, patch: { label?: string; membraneId?: string; workspaceIds?: string[] }): ThreadInfo | undefined
+  update(
+    id: string,
+    patch: { label?: string; membraneId?: string; workspaceIds?: string[]; contextWindow?: number }
+  ): ThreadInfo | undefined
   list(filter?: ThreadFilter): ThreadInfo[]
   delete(id: string): boolean
   addEntity(id: string, entity: EntityBinding): ThreadInfo | undefined

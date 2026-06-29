@@ -33,7 +33,8 @@ import type {
   HookEvent,
   HookInput,
   HookCallbackMatcher,
-  McpSdkServerConfigWithInstance
+  McpSdkServerConfigWithInstance,
+  SdkBeta
 } from '@anthropic-ai/claude-agent-sdk'
 
 import type {
@@ -230,6 +231,7 @@ export interface ClaudeCodeBackendDeps {
       cwd?: string
       model?: string
       effort?: ReasoningEffort
+      contextWindow?: number
     }): void
     /**
      * Look up a previously-persisted session by canonical key. Used on lazy
@@ -245,6 +247,7 @@ export interface ClaudeCodeBackendDeps {
       cwd?: string
       model?: string
       effort?: ReasoningEffort
+      contextWindow?: number
     } | null
   }
   /**
@@ -281,6 +284,7 @@ interface PersistedClaudeSessionState {
   cwd: string
   model: string | null
   effort?: ReasoningEffort
+  contextWindow?: number
   agentStatus: ClaudeSessionState['agentStatus']
   label?: string
   parentSessionKey?: string
@@ -400,6 +404,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       cwd: state.cwd,
       model: state.model,
       effort: state.effort,
+      contextWindow: state.contextWindow,
       agentStatus: state.agentStatus,
       label: state.label,
       parentSessionKey: state.parentSessionKey,
@@ -420,6 +425,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         cwd: value.cwd,
         model: value.model,
         effort: value.effort ?? DEFAULT_REASONING_EFFORT,
+        contextWindow: value.contextWindow,
         // Reset any non-idle status on restart — nothing is actually running.
         // The resume orchestrator re-activates sessions that need to continue.
         agentStatus: 'idle',
@@ -554,6 +560,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     cwd?: string
     model?: string
     effort?: ReasoningEffort
+    contextWindow?: number
     label?: string
     parentSessionKey?: string
   }): ClaudeSessionState {
@@ -566,6 +573,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       cwd: opts.cwd ?? cwd,
       model: opts.model ?? defaultModel,
       effort: opts.effort ?? DEFAULT_REASONING_EFFORT,
+      contextWindow: opts.contextWindow,
       agentStatus: 'idle',
       label: opts.label,
       parentSessionKey: opts.parentSessionKey,
@@ -591,7 +599,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       orgId,
       cwd: state.cwd,
       model: state.model ?? undefined,
-      effort: state.effort
+      effort: state.effort,
+      contextWindow: state.contextWindow
     })
   }
 
@@ -937,12 +946,15 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     const globalPersonality = readGlobalPersonality()
     const membraneAppend = deps?.resolveAppendSystemPrompt?.(state.sessionKey)
     const combinedAppend = [globalPersonality, membraneAppend].filter(Boolean).join('\n\n')
+    const effectiveContextWindow = state.contextWindow ?? contextWindowFor(state.model)
+    const betas: SdkBeta[] = effectiveContextWindow > DEFAULT_CONTEXT_WINDOW ? ['context-1m-2025-08-07'] : []
     const sdkOptions: SdkOptions = {
       cwd: state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
       abortController: abort,
       model: state.model ?? undefined,
       effort: state.effort,
+      ...(betas.length > 0 ? { betas } : {}),
       allowedTools: defaultTools,
       mcpServers,
       hooks: buildHooks(),
@@ -1035,6 +1047,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       parentSessionKey?: string
       model?: { provider: string; model: string }
       reasoningEffort?: ReasoningEffort
+      contextWindow?: number
       orgId?: string
     }
   ) {
@@ -1050,6 +1063,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       cwd: opts?.cwd,
       model: opts?.model?.model,
       effort: opts?.reasoningEffort,
+      contextWindow: opts?.contextWindow,
       label,
       parentSessionKey: opts?.parentSessionKey
     })
@@ -1085,6 +1099,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         cwd: existing?.cwd,
         model: existing?.model,
         effort: existing?.effort,
+        contextWindow: existing?.contextWindow,
         label: existing?.label,
         parentSessionKey: existing?.parentSessionKey
       })
@@ -1340,7 +1355,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       sessionKey,
       model: state.model,
       modelProvider: PROVIDER,
-      contextTokens: contextWindowFor(state.model),
+      contextTokens: state.contextWindow ?? contextWindowFor(state.model),
       totalTokens: filled,
       inputTokens,
       outputTokens: state.lastUsage?.outputTokens ?? 0,
@@ -1437,6 +1452,20 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     }
   }
 
+  async function setSessionContextWindow(sessionKey: string, contextWindow: number | undefined) {
+    const state = internal.sessions.get(sessionKey)
+    if (!state) return
+    state.contextWindow = contextWindow
+    const existing = deps.registry?.lookupSession?.(sessionKey)
+    if (existing) {
+      const threadKey = sessionKey.startsWith('agent:main:thread:')
+        ? sessionKey.slice('agent:main:thread:'.length)
+        : sessionKey
+      persistRegistry(state, threadKey, existing.orgId)
+    }
+    persistState(state)
+  }
+
   async function listAvailableEfforts() {
     return {
       efforts: [...REASONING_EFFORTS] as ReasoningEffort[],
@@ -1527,6 +1556,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     setSessionModel,
     listAvailableModels,
     setSessionEffort,
+    setSessionContextWindow,
     listAvailableEfforts,
     getContextBudget,
     spawnSubagent,

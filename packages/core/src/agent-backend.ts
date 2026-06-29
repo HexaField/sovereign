@@ -279,6 +279,8 @@ export interface CreateSessionOptions {
   thinkingLevel?: string
   /** Reasoning effort forwarded to the SDK. */
   reasoningEffort?: ReasoningEffort
+  /** Context window size in tokens. Values above 200k enable the 1M-context beta. */
+  contextWindow?: number
   systemPromptOverride?: string
 }
 
@@ -361,6 +363,8 @@ export interface AgentBackend {
   }>
   /** Update the reasoning effort bound to a session. Optional — backends that don't expose effort no-op. */
   setSessionEffort?(sessionKey: string, effort: ReasoningEffort): Promise<void>
+  /** Update the context window size for a session. Takes effect on next session start. */
+  setSessionContextWindow?(sessionKey: string, contextWindow: number | undefined): Promise<void>
   /** List reasoning-effort levels available to this backend. */
   listAvailableEfforts?(): Promise<{ efforts: ReasoningEffort[]; defaultEffort: ReasoningEffort }>
   /** Get the context-budget report for a session. */
