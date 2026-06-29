@@ -185,6 +185,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     entities?: EntityBinding[]
     membraneId?: string
     workspaceIds?: string[]
+    contextWindow?: number
   }): ThreadInfo {
     if (!opts.label?.trim()) {
       throw new Error('ThreadManager.create: label is required (UUID model — labels carry the display name)')
@@ -202,6 +203,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       membraneId: opts.membraneId,
       workspaceIds: derivedWorkspaceIds,
       entities: opts.entities ?? [],
+      contextWindow: opts.contextWindow,
       lastActivity: now,
       unreadCount: 0,
       agentStatus: 'idle',
@@ -253,13 +255,14 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
 
   function update(
     id: string,
-    patch: { label?: string; membraneId?: string; workspaceIds?: string[] }
+    patch: { label?: string; membraneId?: string; workspaceIds?: string[]; contextWindow?: number }
   ): ThreadInfo | undefined {
     const thread = threads.get(id)
     if (!thread) return undefined
     if (patch.label !== undefined) thread.label = patch.label
     if (patch.membraneId !== undefined) thread.membraneId = patch.membraneId
     if (patch.workspaceIds !== undefined) thread.workspaceIds = patch.workspaceIds
+    if (patch.contextWindow !== undefined) thread.contextWindow = patch.contextWindow
     thread.lastActivity = Date.now()
     persistThreadsImmediate()
     bus.emit({

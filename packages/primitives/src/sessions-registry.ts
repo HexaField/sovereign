@@ -31,6 +31,8 @@ export interface ThreadSessionRecord {
   model?: string
   /** Reasoning effort last selected for this session. */
   effort?: ReasoningEffort
+  /** Per-session context window size in tokens. Values above 200k enable the 1M beta. */
+  contextWindow?: number
 }
 
 export interface SessionsRegistry {
@@ -131,6 +133,7 @@ export function createSessionsRegistry(dataDir: string, options: Options = {}): 
         cwd: input.cwd ?? existing?.cwd,
         model: input.model ?? existing?.model,
         effort: input.effort ?? existing?.effort,
+        contextWindow: input.contextWindow ?? existing?.contextWindow,
         createdAt: existing?.createdAt ?? input.createdAt ?? now,
         updatedAt: now
       }
