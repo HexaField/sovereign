@@ -38,6 +38,10 @@ Entity-bound chat threads: every thread can be associated with a branch, issue, 
 
 Voice as a first-class workspace modality. Speech-to-text input, text-to-speech responses, voice mode toggle. Device-scoped audio — TTS plays only on the device that sent the voice request; text and all other state syncs across every connected device in real time. Conversational post-processing strips code and formatting from agent responses before speaking them.
 
+### Presence
+
+A paired ambient-agent surface, formed of two long-lived threads. The **internal** thread is the agent's stream-of-consciousness — voice transcriptions, AD4M mentions, and watched-thread digests land here as origin-tagged inbound. Assistant turns are never auto-pushed; the agent reaches out only via explicit MCP tools: `presence_reply_voice` (TTS to the originating device), `presence_reply_ad4m` (reply into the originating channel), `presence_reply_text` (post into the user-facing gateway). The **gateway** thread is the user's primary text-chat surface with the agent, with `presence_internal_send` / `presence_internal_history` to forward to and read from the internal stream. The internal session loads `PRESENCE.md` + `PRESENCE_MEMORY.md` for personality and persistent memory across compactions. A passive watch list summarises selected threads into a one-line digest prepended to the next internal inbound — zero cost when idle. Full design in [plans/presence-thread-spec.md](plans/presence-thread-spec.md).
+
 ### Recordings & Meetings
 
 Meeting model with speaker diarization, transcription, and summarisation. Action items and decisions feed into workspace context and memory. External meeting import (Zoom, Otter.ai, Google Meet). Searchable meeting history with speaker timeline.
@@ -63,8 +67,9 @@ packages/
 ├── agent-backend/  Native Claude Code agent core, MCP server, session resume
 ├── primitives/  Session registry and shared low-level utilities
 └── orgs · files · git · worktrees · diff · issues · review · radicle ·
-    planning · drafts · threads · chat · voice · recordings · meetings ·
-    notifications · scheduler · terminal · system · browser · auth · ad4m
+    planning · drafts · threads · chat · voice · presence · recordings ·
+    meetings · notifications · scheduler · terminal · system · browser ·
+    auth · ad4m
 ```
 
 ## Quick Start
