@@ -3,7 +3,7 @@
 // MCP tool wires into the underlying services.
 
 import { randomUUID } from 'node:crypto'
-import type { SovereignToolDeps } from './claude-code/index.js'
+import type { PresenceMcpDeps, SovereignToolDeps } from './claude-code/mcp-server.js'
 import type { ClaudeCodeBackend } from './claude-code/index.js'
 import type { RoutingBackend } from './factory.js'
 import type { CronService } from '@sovereign/scheduler'
@@ -27,6 +27,9 @@ export interface SovereignMcpDepsInput {
   browserService: BrowserService
   /** Resolver for the currently-active Claude Code session key (optional). */
   getClaudeCodeBackend?: () => ClaudeCodeBackend | undefined
+  /** Presence-thread integration. When set, registers the seven presence_*
+   *  MCP tools. Sourced from `@sovereign/presence` in bootstrap. */
+  presence?: PresenceMcpDeps
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -192,6 +195,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     },
     currentSessionKey() {
       return getClaudeCodeBackend?.()?.getActiveSessionKey()
-    }
+    },
+    ...(input.presence ? { presence: input.presence } : {})
   }
 }

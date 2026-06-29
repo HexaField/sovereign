@@ -3,7 +3,15 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { EventEmitter } from 'node:events'
-import type { EventBus, ModuleStatus, AgentBackend, AgentBackendEvents, QueuedMessage } from '@sovereign/core'
+import type {
+  EventBus,
+  ModuleStatus,
+  AgentBackend,
+  AgentBackendEvents,
+  QueuedMessage,
+  MessageOrigin
+} from '@sovereign/core'
+import { renderOriginTag } from '@sovereign/core'
 import type { WsHandler } from '@sovereign/primitives'
 import { createWriteThroughStore, type WriteThroughStore } from '@sovereign/primitives'
 import type { ThreadManager } from '@sovereign/threads'
@@ -16,6 +24,18 @@ import type { WorkItem } from '@sovereign/core'
  * is structurally compatible. */
 export interface ChatActiveSessionsHook {
   setInFlight(sessionKey: string, info: { queueId: string; promptText: string }): void
+}
+
+/** Presence integration hook. The chat module calls into this just before
+ *  delivering an inbound user message to the presence thread; the presence
+ *  module returns its accumulated watched-thread digest (or null) and
+ *  clears its buffer atomically. Optional — wired by bootstrap when the
+ *  presence package is enabled. See plans/presence-thread-spec.md (R6). */
+export interface ChatPresenceHook {
+  /** Returns the accumulated digest as a single block of text ready to be
+   *  prepended to the user message. Clears the buffer after returning.
+   *  Return null/undefined when there's nothing to deliver. */
+  takeDigest?(): string | null | undefined
 }
 
 /** Persisted live state per thread (R1). */
@@ -40,6 +60,10 @@ export interface SendOptions {
   /** Role of the synthetic chat.turn emitted by `completeInFlight` for live
    *  SSE/WS consumers. Defaults to `'user'`. Crons pass `'system'`. */
   synthRole?: 'user' | 'system'
+  /** How this message arrived — voice, AD4M, webhook, etc. Persisted on the
+   *  queue and made visible to the agent via a `[presence:inbound …]`
+   *  envelope when the target is the presence thread. */
+  origin?: MessageOrigin
 }
 
 export interface ChatModule {
@@ -80,11 +104,17 @@ export function createChatModule(
   bus: EventBus,
   backend: AgentBackend,
   threadManager: ThreadManager,
-  options?: { dataDir?: string; wsHandler?: WsHandler; activeSessions?: ChatActiveSessionsHook }
+  options?: {
+    dataDir?: string
+    wsHandler?: WsHandler
+    activeSessions?: ChatActiveSessionsHook
+    presence?: ChatPresenceHook
+  }
 ): ChatModule {
   const dataDir = options?.dataDir ?? '.'
   const wsHandler = options?.wsHandler
   const activeSessionsHook = options?.activeSessions
+  const presenceHook = options?.presence
 
   // Chat-level event emitter — SSE endpoint subscribes to this
   const chatEvents = new EventEmitter()
@@ -170,8 +200,28 @@ export function createChatModule(
     // can correlate the queue head with the active session after a restart.
     activeSessionsHook?.setInFlight(sessionKey, { queueId: head.id, promptText: head.text })
 
+    // For the INTERNAL presence thread, wrap the user message in a
+    // `[presence:inbound …]` envelope (so the agent sees the origin) and
+    // prepend any accumulated watched-thread digest. Both hooks default to
+    // no-op when presence isn't wired. The gateway thread is a normal chat
+    // surface and gets no envelope/digest. See plans/presence-thread-spec.md
+    // (R2, R6).
+    let textToSend = head.text
+    const isInternal = presenceHook && threadManager.get(threadId)?.presence === 'internal'
+    if (isInternal) {
+      const parts: string[] = []
+      const digest = presenceHook!.takeDigest?.()
+      if (digest) parts.push(digest)
+      if (head.origin) {
+        parts.push(`[presence:inbound ${renderOriginTag(head.origin)}]\n${head.text}`)
+      } else {
+        parts.push(head.text)
+      }
+      textToSend = parts.join('\n\n')
+    }
+
     try {
-      await backend.sendMessage(sessionKey, head.text)
+      await backend.sendMessage(sessionKey, textToSend)
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error(`[chat] queue send failed for ${threadId} (${head.id}): ${errMsg}`)
@@ -700,9 +750,18 @@ export function createChatModule(
     // Enqueue. The queue change listener will broadcast the new snapshot.
     // Then attempt to pump the queue — if the agent is idle this fires
     // immediately; if not, it'll fire when chat.status → 'idle' arrives.
-    const queued = messageQueue.enqueue(threadId, text)
+    const queued = messageQueue.enqueue(threadId, text, opts?.origin ? { origin: opts.origin } : undefined)
     if (opts?.synthRole && !queued.deduplicated) {
       synthRoleById.set(queued.id, opts.synthRole)
+    }
+    if (opts?.origin && !queued.deduplicated) {
+      // Notify presence-aware consumers (last-origin tracker, etc.).
+      bus.emit({
+        type: 'chat.message.origin',
+        timestamp: new Date().toISOString(),
+        source: 'chat',
+        payload: { threadId, origin: opts.origin, queueId: queued.id }
+      })
     }
     await pumpQueue(threadId)
   }
