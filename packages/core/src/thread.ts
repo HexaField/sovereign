@@ -51,6 +51,17 @@ export interface ThreadInfo {
   /** Context window size in tokens. When set above the default (200k),
    *  the backend enables the 1M-context beta. Unset = model default. */
   contextWindow?: number
+  /** Role this thread plays in the presence system.
+   *    - `'internal'`  Agent's stream-of-consciousness. Receives ambient
+   *                    inbound (voice, AD4M, watched-thread digests).
+   *                    Carries PRESENCE.md + PRESENCE_MEMORY.md. Has the
+   *                    `presence_reply_*` + `presence_watch_*` tools.
+   *                    NOT push-notified.
+   *    - `'gateway'`   User's text-chat surface. Normal Claude Code thread
+   *                    with its own session. Has the `presence_internal_*`
+   *                    tools to forward to / read internal state.
+   *  At most one thread carries each role. See `plans/presence-thread-spec.md`. */
+  presence?: 'internal' | 'gateway'
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus
