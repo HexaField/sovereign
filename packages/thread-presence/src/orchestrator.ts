@@ -16,7 +16,14 @@ export interface OrchestratorDeps {
   presence: { isThreadFocused(threadId: string): boolean }
   muteStore: { isMuted(threadId: string): boolean }
   threadManager: {
-    get(id: string): { id: string; label: string; unreadCount: number } | undefined
+    get(id: string):
+      | {
+          id: string
+          label: string
+          unreadCount: number
+          presence?: 'internal' | 'gateway'
+        }
+      | undefined
     markUnreadIncrement(id: string): number | undefined
     clearUnread(id: string): boolean
   }
@@ -85,6 +92,14 @@ export async function handleTurnCompleted(
   }
   if (deps.muteStore.isMuted(threadId)) {
     return { pushed: false, bumped: false, reason: 'muted' }
+  }
+  // The internal presence thread is stream-of-consciousness — its assistant
+  // turns are never auto-pushed. External delivery happens only via explicit
+  // presence_reply_* tools. The gateway thread, by contrast, IS a normal
+  // user-facing chat surface and gets normal push notifications. See
+  // plans/presence-thread-spec.md (R4).
+  if (thread.presence === 'internal') {
+    return { pushed: false, bumped: false, reason: 'presence-internal' }
   }
   if (deps.presence.isThreadFocused(threadId)) {
     return { pushed: false, bumped: false, reason: 'focused' }

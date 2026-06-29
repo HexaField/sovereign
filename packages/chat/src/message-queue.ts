@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import type { QueuedMessage } from '@sovereign/core'
+import type { QueuedMessage, MessageOrigin } from '@sovereign/core'
 
 export type { QueuedMessage }
 
@@ -23,7 +23,7 @@ export interface QueueChange {
 export type QueueChangeListener = (change: QueueChange) => void
 
 export interface MessageQueue {
-  enqueue(threadId: string, text: string): QueuedMessage & { deduplicated?: boolean }
+  enqueue(threadId: string, text: string, opts?: { origin?: MessageOrigin }): QueuedMessage & { deduplicated?: boolean }
   dequeue(threadId: string): QueuedMessage | undefined
   cancel(id: string): boolean
   peek(threadId: string): QueuedMessage | undefined
@@ -114,7 +114,11 @@ export function createMessageQueue(dataDir: string): MessageQueue {
   }
 
   return {
-    enqueue(threadId: string, text: string): QueuedMessage & { deduplicated?: boolean } {
+    enqueue(
+      threadId: string,
+      text: string,
+      opts?: { origin?: MessageOrigin }
+    ): QueuedMessage & { deduplicated?: boolean } {
       const items = queues.get(threadId) ?? []
 
       // Deduplicate: skip if ANY queued/sending message has identical text
@@ -144,7 +148,8 @@ export function createMessageQueue(dataDir: string): MessageQueue {
         text,
         timestamp: Date.now(),
         status: 'queued',
-        attempts: 0
+        attempts: 0,
+        ...(opts?.origin ? { origin: opts.origin } : {})
       }
       items.push(msg)
       queues.set(threadId, items)

@@ -33,6 +33,7 @@
     "@sovereign/notifications": "workspace:*",
     "@sovereign/orgs": "workspace:*",
     "@sovereign/planning": "workspace:*",
+    "@sovereign/presence": "workspace:*",
     "@sovereign/primitives": "workspace:*",
     "@sovereign/radicle": "workspace:*",
     "@sovereign/recordings": "workspace:*",
