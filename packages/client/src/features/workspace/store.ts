@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import { switchWorkspaceThreads } from '../threads/store.js'
+import { fetchThreadsForOrg, setActiveOrgIdForThreads, switchWorkspaceThreads } from '../threads/store.js'
 import { syncViewToUrl, activeView } from '../nav/store.js'
 
 export interface WorkspaceContext {
@@ -332,6 +332,47 @@ export function setActiveWorkspace(orgId: string, orgName?: string): void {
   syncViewToUrl(activeView(), orgId)
   restoreWorkspacePanelState(orgId)
   switchWorkspaceThreads(orgId)
+}
+
+/**
+ * Switch the active workspace to match the workspace a thread belongs to,
+ * without disturbing the current threadKey. Used by the App-level coordinator
+ * effect that keeps the dropdown in sync when navigation originates from the
+ * dashboard thread list, a notification click, or a hash change — paths that
+ * update threadKey directly without going through the dropdown.
+ *
+ * Unlike setActiveWorkspace, this does NOT call switchWorkspaceThreads (which
+ * would auto-pick the first thread and clobber the target). It refreshes the
+ * thread list via fetchThreadsForOrg, which only auto-picks when threadKey is
+ * empty.
+ */
+export function syncWorkspaceForThread(orgId: string, orgName?: string): void {
+  const current = activeWorkspace()
+  if (current?.orgId === orgId) return
+  const ctx: WorkspaceContext = {
+    orgId,
+    orgName: orgName || orgId,
+    activeProjectId: null,
+    activeProjectName: null
+  }
+  _setActiveWorkspace(ctx)
+  saveToStorage(ctx)
+  syncViewToUrl(activeView(), orgId)
+  restoreWorkspacePanelState(orgId)
+  setActiveOrgIdForThreads(orgId)
+  fetchThreadsForOrg(orgId)
+  // Resolve the org name lazily so the dropdown label matches the picker.
+  if (!orgName && orgId !== '_global') {
+    void fetch(`/api/orgs/${encodeURIComponent(orgId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((org: { id: string; name: string } | null) => {
+        if (!org?.name) return
+        const now = activeWorkspace()
+        if (now?.orgId !== orgId) return
+        _setActiveWorkspace({ ...now, orgName: org.name })
+      })
+      .catch(() => {})
+  }
 }
 
 /** Restore all per-workspace panel state from localStorage */

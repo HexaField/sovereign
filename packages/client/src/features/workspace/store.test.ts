@@ -15,13 +15,16 @@ const localStorageMock = {
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
 
 vi.mock('../threads/store.js', () => ({
-  switchWorkspaceThreads: vi.fn()
+  switchWorkspaceThreads: vi.fn(),
+  setActiveOrgIdForThreads: vi.fn(),
+  fetchThreadsForOrg: vi.fn()
 }))
 
 import {
   activeWorkspace,
   setActiveWorkspace,
   setActiveProject,
+  syncWorkspaceForThread,
   _setActiveWorkspace,
   _resetWorkspaceStore,
   activeMobileTab,
@@ -40,7 +43,7 @@ import {
   sidebarCollapsed,
   chatCollapsed
 } from './store.js'
-import { switchWorkspaceThreads } from '../threads/store.js'
+import { switchWorkspaceThreads, fetchThreadsForOrg, setActiveOrgIdForThreads } from '../threads/store.js'
 
 beforeEach(() => {
   localStorageMock.clear()
@@ -135,6 +138,45 @@ describe('Workspace Store', () => {
       expect(activeWorkspace()!.activeProjectId).toBe('proj-1')
       setActiveWorkspace('org-b', 'B')
       expect(activeWorkspace()!.activeProjectId).toBeNull()
+    })
+
+    describe('syncWorkspaceForThread', () => {
+      beforeEach(() => {
+        vi.mocked(switchWorkspaceThreads).mockClear()
+        vi.mocked(fetchThreadsForOrg).mockClear()
+        vi.mocked(setActiveOrgIdForThreads).mockClear()
+        // Reset fetch mock for the org-name lookup.
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(() => Promise.resolve({ ok: false, json: () => Promise.resolve(null) }))
+        )
+      })
+
+      it('switches workspace without calling switchWorkspaceThreads (would clobber the target thread)', () => {
+        setActiveWorkspace('org-a', 'A')
+        vi.mocked(switchWorkspaceThreads).mockClear()
+        syncWorkspaceForThread('org-b', 'B')
+        expect(activeWorkspace()!.orgId).toBe('org-b')
+        expect(switchWorkspaceThreads).not.toHaveBeenCalled()
+        expect(fetchThreadsForOrg).toHaveBeenCalledWith('org-b')
+        expect(setActiveOrgIdForThreads).toHaveBeenCalledWith('org-b')
+      })
+
+      it('is a no-op when the workspace already matches', () => {
+        setActiveWorkspace('org-a', 'A')
+        vi.mocked(fetchThreadsForOrg).mockClear()
+        vi.mocked(setActiveOrgIdForThreads).mockClear()
+        syncWorkspaceForThread('org-a', 'A')
+        expect(fetchThreadsForOrg).not.toHaveBeenCalled()
+        expect(setActiveOrgIdForThreads).not.toHaveBeenCalled()
+      })
+
+      it('uses orgId as fallback name when orgName omitted', () => {
+        setActiveWorkspace('org-a', 'A')
+        syncWorkspaceForThread('org-b')
+        expect(activeWorkspace()!.orgId).toBe('org-b')
+        expect(activeWorkspace()!.orgName).toBe('org-b')
+      })
     })
 
     it('§0.2 — panel state persists per workspace and restores on switch', () => {
