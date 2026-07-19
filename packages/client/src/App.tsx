@@ -1,4 +1,5 @@
-import { lazy, Switch, Match, onCleanup, onMount, Show, Suspense } from 'solid-js'
+import { createEffect, lazy, Switch, Match, onCleanup, onMount, Show, Suspense } from 'solid-js'
+import type { ThreadInfo } from '@sovereign/core'
 import './app.css'
 
 // Nav store
@@ -19,13 +20,14 @@ import {
   autoSelectProject,
   openFileTab,
   setChatExpanded,
-  setLastOpenFilePath
+  setLastOpenFilePath,
+  syncWorkspaceForThread
 } from './features/workspace/store.js'
 
 // WS + connection stores
 import { wsStore } from './ws/index.js'
 import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
-import { initThreadStore, threadKey } from './features/threads/store.js'
+import { initThreadStore, threadKey, threads, threadPrimaryWorkspace } from './features/threads/store.js'
 import { initPresence } from './features/threads/presence.js'
 import { loadMutes } from './features/threads/mute-store.js'
 import { initChatStore } from './features/chat/store.js'
@@ -73,6 +75,35 @@ export default function App() {
 
     const cleanupThreads = initThreadStore(wsStore, activeWorkspace()?.orgId)
     cleanups.push(cleanupThreads)
+
+    // Keep the workspace/membrane dropdown in sync with the active thread.
+    // Direct threadKey changes (dashboard ThreadList click, service-worker
+    // notification hash assignment, back/forward navigation) don't go through
+    // the workspace dropdown, so without this coordinator the dropdown stays
+    // pinned to the previous workspace while the thread UUID moves.
+    let lastSyncedThreadId: string | null = null
+    createEffect(() => {
+      const key = threadKey()
+      if (!key || key === lastSyncedThreadId) return
+      lastSyncedThreadId = key
+      const local = threads().find((t) => t.id === key)
+      const applyFrom = (t: ThreadInfo): void => {
+        const target = threadPrimaryWorkspace(t) ?? '_global'
+        if (target !== activeWorkspace()?.orgId) syncWorkspaceForThread(target)
+      }
+      if (local) {
+        applyFrom(local)
+        return
+      }
+      // Thread lives in a different workspace than the one currently loaded —
+      // fetch its metadata so we can resolve the target workspace.
+      fetch(`/api/threads/${encodeURIComponent(key)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { thread?: ThreadInfo } | null) => {
+          if (data?.thread && threadKey() === key) applyFrom(data.thread)
+        })
+        .catch(() => {})
+    })
 
     // Init chat store at app level so dashboard GlobalChat has data on fresh load
     const cleanupChat = initChatStore(threadKey, wsStore)

@@ -21,6 +21,7 @@ export const [activeOrgIdForThreads, setActiveOrgIdForThreads] = createSignal('_
 
 let ws: WsStore | null = null
 let popstateHandler: ((e: PopStateEvent) => void) | null = null
+let hashchangeHandler: ((e: HashChangeEvent) => void) | null = null
 
 function readThreadFromHash(): string {
   if (typeof location === 'undefined') return ''
@@ -163,10 +164,15 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
   // Read initial thread from hash
   setThreadKey(readThreadFromHash())
 
-  // Listen for popstate
+  // Listen for popstate (back/forward) AND hashchange (programmatic hash
+  // assignments — e.g. the service worker forwarding a notification click to
+  // `window.location.hash = 'thread=…'`). Both funnel through readThreadFromHash
+  // so downstream signals stay consistent.
   popstateHandler = () => setThreadKey(readThreadFromHash())
+  hashchangeHandler = () => setThreadKey(readThreadFromHash())
   if (typeof globalThis.addEventListener === 'function') {
     globalThis.addEventListener('popstate', popstateHandler)
+    globalThis.addEventListener('hashchange', hashchangeHandler)
   }
 
   const unsubs: Array<() => void> = []
@@ -224,8 +230,9 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
 
   return () => {
     unsubs.forEach((u) => u())
-    if (popstateHandler && typeof globalThis.removeEventListener === 'function') {
-      globalThis.removeEventListener('popstate', popstateHandler)
+    if (typeof globalThis.removeEventListener === 'function') {
+      if (popstateHandler) globalThis.removeEventListener('popstate', popstateHandler)
+      if (hashchangeHandler) globalThis.removeEventListener('hashchange', hashchangeHandler)
     }
   }
 }

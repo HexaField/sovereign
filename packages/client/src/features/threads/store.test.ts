@@ -398,4 +398,28 @@ describe('initThreadStore', () => {
     expect(threadKey()).toBe('popped')
     cleanup()
   })
+
+  it('responds to hashchange events (SW notification click updates threadKey)', () => {
+    setLocation('')
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    // Capture the hashchange handler that initThreadStore installs.
+    const listeners = new Map<string, EventListener>()
+    const origAdd = globalThis.addEventListener
+    const origRemove = globalThis.removeEventListener
+    globalThis.addEventListener = ((type: string, fn: EventListener) => {
+      listeners.set(type, fn)
+    }) as typeof globalThis.addEventListener
+    globalThis.removeEventListener = (() => {}) as typeof globalThis.removeEventListener
+
+    const cleanup = initThreadStore()
+    setLocation('#thread=via-hash')
+    const handler = listeners.get('hashchange')
+    expect(handler).toBeDefined()
+    handler!(new Event('hashchange'))
+    expect(threadKey()).toBe('via-hash')
+
+    cleanup()
+    globalThis.addEventListener = origAdd
+    globalThis.removeEventListener = origRemove
+  })
 })
