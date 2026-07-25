@@ -1,13 +1,22 @@
-import { createSignal, createMemo, onMount, onCleanup, Show } from 'solid-js'
+import { createSignal, createMemo, onMount, onCleanup, Show, For } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import { connectionStatus, wsStatus, backendStatus } from './store.js'
 import { threadKey } from '../threads/store.js'
 import { wsStore } from '../../ws/index.js'
+import { ExternalLinkIcon } from '../../ui/icons.js'
 
 export interface McpHealth {
   status: 'ok' | 'down' | 'unknown'
   sessions: number
   tools: number
+}
+
+export interface ExternalServiceHealth {
+  name: string
+  label: string
+  port: number
+  path: string
+  status: 'ok' | 'down' | 'unknown'
 }
 
 export interface CozempicHealth {
@@ -18,6 +27,7 @@ export interface CozempicHealth {
 export type OverallHealth = 'ok' | 'degraded' | 'error'
 
 const [mcpHealth, setMcpHealth] = createSignal<McpHealth>({ status: 'unknown', sessions: 0, tools: 0 })
+const [externalHealth, setExternalHealth] = createSignal<ExternalServiceHealth[]>([])
 const [cozempicHealth, setCozempicHealth] = createSignal<CozempicHealth>({ healthy: null, reason: null })
 const [cozempicRestoring, setCozempicRestoring] = createSignal(false)
 
@@ -28,10 +38,15 @@ export const overallHealth = (): OverallHealth => {
   const mcp = mcpHealth()
   if (mcp.status === 'down') return 'error'
 
+  // Any external service being down degrades overall health but does not
+  // hard-error — the Sovereign UI is still usable when AD4M or WE is offline.
+  const ext = externalHealth()
+  const anyExtDown = ext.some((s) => s.status === 'down')
+
   const coz = cozempicHealth()
   if (coz.healthy === false) return 'degraded'
 
-  if (conn === 'connecting' || conn === 'authenticating' || mcp.status === 'unknown') return 'degraded'
+  if (conn === 'connecting' || conn === 'authenticating' || mcp.status === 'unknown' || anyExtDown) return 'degraded'
   return 'ok'
 }
 
@@ -40,8 +55,9 @@ export function initHealthPolling(): () => void {
 
   wsStore.subscribe(['system'])
   const offHealth = wsStore.on('system.health', (msg: Record<string, unknown>) => {
-    const services = msg.services as { mcp?: McpHealth } | undefined
+    const services = msg.services as { mcp?: McpHealth; external?: ExternalServiceHealth[] } | undefined
     if (services?.mcp) setMcpHealth(services.mcp)
+    if (Array.isArray(services?.external)) setExternalHealth(services.external)
   })
 
   function pollCozempic() {
@@ -74,6 +90,8 @@ function StatusRow(props: {
   label: string
   status: 'ok' | 'warning' | 'error' | 'unknown'
   detail: string
+  port?: number | string
+  openUrl?: string
   action?: { label: string; onClick: () => void; loading?: boolean }
 }) {
   const dotColor = () => {
@@ -85,7 +103,32 @@ function StatusRow(props: {
     <div class="flex items-center gap-2 py-1.5">
       <span class="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: dotColor() }} />
       <span class="flex-1 text-xs font-medium">{props.label}</span>
+      <Show when={props.port !== undefined}>
+        <span
+          class="rounded px-1 py-0.5 font-mono text-[10px]"
+          style={{ background: 'var(--c-hover-bg)', color: 'var(--c-text-muted)' }}
+          title="port"
+        >
+          :{props.port}
+        </span>
+      </Show>
       <span class="text-xs opacity-60">{props.detail}</span>
+      <Show when={props.openUrl}>
+        {(url) => (
+          <a
+            class="ml-0.5 inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded transition-colors"
+            style={{ color: 'var(--c-accent)' }}
+            href={url()}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ${props.label} in new tab (${url()})`}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <ExternalLinkIcon class="h-3 w-3" />
+          </a>
+        )}
+      </Show>
       <Show when={props.action}>
         {(act) => (
           <button
@@ -102,6 +145,19 @@ function StatusRow(props: {
   )
 }
 
+/**
+ * Build the outward-facing URL for an external service. External services live
+ * on the same host as Sovereign (adjacent Docker containers / systemd units on
+ * the primary host) — the browser reaches them via `hostname:port`. Force plain HTTP:
+ * these run behind Tailscale, not TLS, so honouring the outer `window.location.protocol`
+ * would break the link when Sovereign is fronted by HTTPS.
+ */
+export function buildOpenUrl(port: number, path: string, hostname?: string): string {
+  const host = hostname ?? (typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1')
+  const p = path.startsWith('/') ? path : `/${path}`
+  return `http://${host}:${port}${p}`
+}
+
 export function HealthPopover(props: { open: boolean; onClose: () => void; anchorRef?: HTMLElement }) {
   let popoverRef: HTMLDivElement | undefined
 
@@ -114,6 +170,15 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
   onMount(() => document.addEventListener('mousedown', handleClickOutside))
   onCleanup(() => document.removeEventListener('mousedown', handleClickOutside))
 
+  // Sovereign's own origin port — whatever the browser reached us on. Empty
+  // for default ports (80/443), in which case we omit the port badge entirely.
+  const sovereignPort = createMemo(() => {
+    if (typeof window === 'undefined') return undefined
+    const p = window.location.port
+    if (p) return p
+    return window.location.protocol === 'https:' ? '443' : '80'
+  })
+
   const connRow = createMemo(() => {
     const ws = wsStatus()
     const backend = backendStatus()
@@ -124,10 +189,21 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
 
   const mcpRow = createMemo(() => {
     const h = mcpHealth()
-    if (h.status === 'ok') return { status: 'ok' as const, detail: `${h.sessions} session(s), ${h.tools} tools` }
+    if (h.status === 'ok') return { status: 'ok' as const, detail: `${h.sessions} sess · ${h.tools} tools` }
     if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'checking...' }
     return { status: 'error' as const, detail: 'unreachable' }
   })
+
+  const externalRowStatus = (s: 'ok' | 'down' | 'unknown'): 'ok' | 'error' | 'unknown' => {
+    if (s === 'ok') return 'ok'
+    if (s === 'unknown') return 'unknown'
+    return 'error'
+  }
+  const externalRowDetail = (s: 'ok' | 'down' | 'unknown'): string => {
+    if (s === 'ok') return 'reachable'
+    if (s === 'unknown') return 'checking...'
+    return 'unreachable'
+  }
 
   const cozRow = createMemo(() => {
     const h = cozempicHealth()
@@ -169,7 +245,7 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
       <Portal>
         <div
           ref={popoverRef}
-          class="fixed z-[999] w-64 rounded-lg border p-3 shadow-lg"
+          class="fixed z-[999] w-80 rounded-lg border p-3 shadow-lg"
           style={{
             background: 'var(--c-bg-raised)',
             'border-color': 'var(--c-border)',
@@ -179,8 +255,10 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
           }}
         >
           <div class="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Service Health</div>
+          {/* Health rows render in order: Sovereign origin, MCP sidecar, per-thread Cozempic guard,
+              then any externally-configured LAN services (AD4M dapp, WE launcher, …). */}
           <div class="divide-y" style={{ 'border-color': 'var(--c-border)' }}>
-            <StatusRow label="Connection" status={connRow().status} detail={connRow().detail} />
+            <StatusRow label="Sovereign" status={connRow().status} detail={connRow().detail} port={sovereignPort()} />
             <StatusRow label="MCP Sidecar" status={mcpRow().status} detail={mcpRow().detail} />
             <StatusRow
               label="Cozempic"
@@ -192,6 +270,17 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
                   : undefined
               }
             />
+            <For each={externalHealth()}>
+              {(svc) => (
+                <StatusRow
+                  label={svc.label}
+                  status={externalRowStatus(svc.status)}
+                  detail={externalRowDetail(svc.status)}
+                  port={svc.port}
+                  openUrl={buildOpenUrl(svc.port, svc.path)}
+                />
+              )}
+            </For>
           </div>
         </div>
       </Portal>
