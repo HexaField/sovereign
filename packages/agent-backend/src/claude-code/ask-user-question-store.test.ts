@@ -102,4 +102,36 @@ describe('AskUserQuestionStore', () => {
     const all = store.listPending().map((e) => e.toolCallId)
     expect(all).toEqual(['tool-1', 'tool-2', 'tool-3'])
   })
+
+  it('routes each concurrent submit to only its own outstanding promise', async () => {
+    const store = createAskUserQuestionStore()
+    const p1 = store.register('thread-x', 'tool-1', sampleInput)
+    const p2 = store.register('thread-x', 'tool-2', sampleInput)
+    const p3 = store.register('thread-y', 'tool-3', sampleInput)
+    await Promise.resolve()
+
+    // Submit tool-2 first — only p2 should resolve; the other two stay pending.
+    store.submit('tool-2', { questions: sampleInput.questions, answers: { 'Ship it?': 'No' } })
+    const r2 = await p2
+    expect(r2.answers).toEqual({ 'Ship it?': 'No' })
+    expect(
+      store
+        .listPending()
+        .map((e) => e.toolCallId)
+        .sort()
+    ).toEqual(['tool-1', 'tool-3'])
+
+    store.submit('tool-3', { questions: sampleInput.questions, answers: { 'Ship it?': 'Yes' } })
+    const r3 = await p3
+    expect(r3.answers).toEqual({ 'Ship it?': 'Yes' })
+    expect(store.listPending().map((e) => e.toolCallId)).toEqual(['tool-1'])
+
+    // p1 is still hanging until we submit — assert it hasn't resolved by racing
+    // against a small timer.
+    const pending = await Promise.race([p1, new Promise((r) => setTimeout(() => r('timeout'), 20))])
+    expect(pending).toBe('timeout')
+
+    store.submit('tool-1', { questions: sampleInput.questions, answers: { 'Ship it?': 'Yes' } })
+    await expect(p1).resolves.toBeDefined()
+  })
 })
