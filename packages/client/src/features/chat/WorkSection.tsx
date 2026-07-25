@@ -251,6 +251,7 @@ export function WorkSection(props: { work: WorkItem[] }) {
           memorySave: 'write',
           heartbeat: 'heart',
           compaction: 'broom',
+          hook: 'gear',
           subagentContext: 'split',
           runtimeContext: 'gear',
           generic: 'list'
@@ -261,11 +262,12 @@ export function WorkSection(props: { work: WorkItem[] }) {
           memorySave: 'Memory Checkpoint',
           heartbeat: 'Heartbeat',
           compaction: 'Context Compacted',
+          hook: 'Hook',
           subagentContext: 'Subagent Task',
           runtimeContext: 'Runtime Context',
           generic: 'System'
         }
-        return { icon: resolveIcon(icons[sk] || 'list'), text: labels[sk] || 'System' }
+        return { icon: resolveIcon(icons[sk] || 'list'), text: w.name || labels[sk] || 'System' }
       }
       if (w.type === 'thinking') return { icon: resolveIcon('thought'), text: (w.output || w.input || '').slice(0, 60) }
     }
@@ -325,48 +327,82 @@ export function WorkSection(props: { work: WorkItem[] }) {
                 return <ThoughtRow text={w.output || w.input || ''} />
               }
               if (w.type === 'system_event') {
-                const sk = w.icon || 'generic'
-                const iconMap: Record<string, string> = {
-                  nudge: 'pin',
-                  supervisor: 'worker',
-                  memorySave: 'write',
-                  heartbeat: 'heart',
-                  compaction: 'broom',
-                  subagentContext: 'split',
-                  runtimeContext: 'gear',
-                  generic: 'list'
-                }
-                const labelMap: Record<string, string> = {
-                  nudge: 'System Nudge',
-                  supervisor: 'Supervisor',
-                  memorySave: 'Memory Checkpoint',
-                  heartbeat: 'Heartbeat',
-                  compaction: 'Context Compacted',
-                  subagentContext: 'Subagent Task',
-                  runtimeContext: 'Runtime Context',
-                  generic: 'System'
-                }
-                const icon = iconMap[sk] || 'list'
-                const baseLabel = labelMap[sk] || 'System'
-                const detail = sk === 'supervisor' ? `: ${(w.output || '').slice(0, 80)}` : ''
-                return (
-                  <div
-                    class="px-3 py-2 text-xs"
-                    style={{
-                      background: 'var(--c-work-body-bg)',
-                      'border-bottom': '1px solid var(--c-border)',
-                      color: 'var(--c-text-muted)'
-                    }}
-                  >
-                    {icon} {baseLabel}
-                    {detail}
-                  </div>
-                )
+                return <SystemEventRow item={w} />
               }
               // Orphaned toolResult
               return <ToolResultContent name={w.name || 'tool'} content={w.output} />
             }}
           </For>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+// ── System event row (compaction chip, hook stdout, memory nudges, …) ───
+// Shape mirrors ToolPairRow so folded compaction/hook items feel like any
+// other tool call in the collapsible list. `name` carries the pre-formatted
+// label (e.g. "⚙️ Compacted (366,035 → 7,644 tokens, manual)" or
+// "Hook: SessionStart · startup"); `output` holds the multi-line body that
+// expands on click. `icon` is a short key mapped to an ICON_MAP entry.
+const SYSTEM_EVENT_ICON: Record<string, string> = {
+  nudge: 'pin',
+  supervisor: 'worker',
+  memorySave: 'write',
+  heartbeat: 'heart',
+  compaction: 'broom',
+  hook: 'gear',
+  subagentContext: 'split',
+  runtimeContext: 'gear',
+  generic: 'list'
+}
+const SYSTEM_EVENT_DEFAULT_LABEL: Record<string, string> = {
+  nudge: 'System Nudge',
+  supervisor: 'Supervisor',
+  memorySave: 'Memory Checkpoint',
+  heartbeat: 'Heartbeat',
+  compaction: 'Context Compacted',
+  hook: 'Hook',
+  subagentContext: 'Subagent Task',
+  runtimeContext: 'Runtime Context',
+  generic: 'System'
+}
+function SystemEventRow(props: { item: WorkItem }) {
+  const [expanded, setExpanded] = createSignal(false)
+  const iconKey = () => SYSTEM_EVENT_ICON[props.item.icon || 'generic'] || 'list'
+  const label = () => props.item.name || SYSTEM_EVENT_DEFAULT_LABEL[props.item.icon || 'generic'] || 'System'
+  const body = () => (props.item.output || '').trim()
+  const hasBody = () => body().length > 0
+
+  return (
+    <div style={{ 'border-bottom': '1px solid var(--c-border)' }}>
+      <div
+        class="flex items-center gap-2 px-3 py-1.5 text-xs select-none"
+        classList={{ 'cursor-pointer': hasBody(), 'cursor-default': !hasBody() }}
+        style={{ background: 'var(--c-work-body-bg)', color: 'var(--c-text-muted)' }}
+        onClick={() => hasBody() && setExpanded(!expanded())}
+      >
+        <span class="shrink-0">{resolveIcon(iconKey())}</span>
+        <span class="min-w-0 flex-1 truncate text-[11px]" style={{ color: 'var(--c-text)' }}>
+          {label()}
+        </span>
+        <Show when={hasBody()}>
+          <span
+            class="ml-1 shrink-0 text-[8px] transition-transform duration-200"
+            classList={{ 'rotate-90': expanded() }}
+          >
+            ▶
+          </span>
+        </Show>
+      </div>
+      <Show when={expanded() && hasBody()}>
+        <div class="px-3 pb-2 text-xs" style={{ background: 'var(--c-work-body-bg)' }}>
+          <div
+            class="max-h-[300px] overflow-y-auto rounded p-2 font-mono text-[11px] leading-relaxed break-all whitespace-pre-wrap"
+            style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--c-text-muted)' }}
+          >
+            {body()}
+          </div>
         </div>
       </Show>
     </div>

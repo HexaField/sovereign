@@ -11,6 +11,7 @@ import path from 'node:path'
 import type { ParsedTurn } from '@sovereign/core'
 import { parseTurns as parseTurnsGeneric, stripTimestamp } from '@sovereign/primitives'
 import { readAllMessages as sharedReadAll, readRecentMessages as sharedReadRecent } from '@sovereign/primitives'
+import { foldSystemEventsIntoWork } from '@sovereign/core'
 import { classifyClaudeCodeTurn } from './classify.js'
 
 /**
@@ -63,6 +64,40 @@ export function normalizeClaudeCodeEntry(entry: any): any | null {
       stopReason: entry.message.stop_reason
     }
   }
+  // Hook lifecycle attachments — the CLI records shell-hook stdout as
+  // `type: 'attachment'` entries with `attachment.type === 'hook_success'`
+  // (or `hook_cancelled` / `hook_system_message` / `hook_additional_context`).
+  // These are how cozempic guard messages, SessionStart plugin hooks, and any
+  // other user-configured shell hook surface into the transcript. Fold them
+  // through the shared classifier so the client can render them as system_event
+  // rows inside the neighbouring tool-call list rather than dropping them.
+  if (entry.type === 'attachment' && entry.attachment) {
+    const att = entry.attachment
+    const attType = att.type
+    if (
+      attType === 'hook_success' ||
+      attType === 'hook_cancelled' ||
+      attType === 'hook_system_message' ||
+      attType === 'hook_additional_context'
+    ) {
+      const stdout = (att.stdout ?? att.content ?? '').toString().trim()
+      const stderr = (att.stderr ?? '').toString().trim()
+      // Nothing to render if the hook produced no output at all — skip so we
+      // don't clutter the transcript with empty rows.
+      if (!stdout && !stderr) return null
+      const hookEvent = att.hookEvent ?? 'Hook'
+      const hookName = (att.hookName ?? '').replace(/^.*:/, '').trim()
+      const marker = hookName ? `🪝 ${hookEvent} · ${hookName}` : `🪝 ${hookEvent}`
+      const body = stderr && !stdout ? `[stderr] ${stderr}` : stderr ? `${stdout}\n[stderr] ${stderr}` : stdout
+      return {
+        role: 'system',
+        content: `${marker}\n${body}`,
+        timestamp
+      }
+    }
+    // Any other attachment type — keep the existing skip behaviour.
+    return null
+  }
   if (entry.type === 'system' && (entry.subtype === 'compact_boundary' || entry.subtype === 'compaction')) {
     // The SDK writes compaction metadata under `compactMetadata` (camelCase)
     // with `preTokens` / `postTokens`. Tolerate `compact_metadata` /
@@ -105,7 +140,11 @@ export function parseClaudeCodeTurns(messages: any[]): ParsedTurn[] {
       return true
     }
   })
-  return turns.map(classifyClaudeCodeTurn)
+  // Classify each turn, then fold framing system turns (compaction, hook
+  // output) into the workItems of the neighbouring assistant turn so the
+  // client renders them as tool-call rows inside the existing collapsible
+  // list rather than as standalone bubbles between turns.
+  return foldSystemEventsIntoWork(turns.map(classifyClaudeCodeTurn))
 }
 
 /** Read all messages from a Claude Code session JSONL file. */
