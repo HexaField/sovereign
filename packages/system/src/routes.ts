@@ -142,9 +142,13 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   })
 
   // Active-agent census — enriched with label + membraneId from thread registry.
+  // `pendingToolAwait` surfaces the (currently AskUserQuestion-only) hook-await
+  // state so the CLI's build/stop notice can accurately describe what will
+  // happen on restart, rather than promising a "resume" that doesn't apply
+  // when the SDK is mid-tool.
   router.get('/api/system/agents/active', (_req, res) => {
     if (!activeSessions) {
-      res.json({ count: 0, sessions: [] })
+      res.json({ count: 0, pendingToolAwait: 0, sessions: [] })
       return
     }
     const getThreadMeta = 'getThreadMeta' in opts ? (opts as SystemRoutesOptions).getThreadMeta : null
@@ -158,10 +162,12 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
         backendKind: e.backendKind,
         lastActivity: e.lastTransitionAt,
         label: meta?.label ?? e.threadKey,
-        membraneId: meta?.membraneId ?? null
+        membraneId: meta?.membraneId ?? null,
+        pendingToolAwait: e.pendingToolAwait ?? null
       }
     })
-    res.json({ count: sessions.length, sessions })
+    const pendingToolAwait = sessions.filter((s) => s.pendingToolAwait).length
+    res.json({ count: sessions.length, pendingToolAwait, sessions })
   })
 
   // Personality compiler info — CLAUDE.md stat + watcher state.
