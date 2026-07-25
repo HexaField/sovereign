@@ -117,6 +117,28 @@ export const schema = {
       },
       additionalProperties: false
     },
+    services: {
+      type: 'object',
+      properties: {
+        external: {
+          type: 'array',
+          'x-reload': 'restart',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              label: { type: 'string' },
+              healthUrl: { type: 'string' },
+              port: { type: 'number', minimum: 1, maximum: 65535 },
+              path: { type: 'string' }
+            },
+            required: ['name', 'healthUrl', 'port'],
+            additionalProperties: false
+          }
+        }
+      },
+      additionalProperties: false
+    },
     identity: {
       type: 'object',
       properties: {

@@ -55,6 +55,9 @@ export const defaults: SovereignConfig = {
   meetings: {
     summarizeUrl: ''
   },
+  services: {
+    external: []
+  },
   identity: {
     agentName: 'Sovereign',
     agentIcon: '⬡'

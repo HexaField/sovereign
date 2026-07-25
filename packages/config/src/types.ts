@@ -58,6 +58,22 @@ export interface SovereignConfig {
   meetings: {
     summarizeUrl: string
   }
+  /**
+   * Adjacent LAN/tailnet services (e.g. AD4M dapp launcher, WE web launcher)
+   * that Sovereign should surface in the Service Health dropdown. Each entry
+   * is polled server-side via `healthUrl`; the browser constructs the outward
+   * URL as `http://{window.location.hostname}:{port}{path}` for the "open in
+   * new tab" button. Plain HTTP — these live behind Tailscale, not TLS.
+   */
+  services: {
+    external: Array<{
+      name: string
+      label?: string
+      healthUrl: string
+      port: number
+      path?: string
+    }>
+  }
   identity: {
     agentName: string
     agentIcon: string

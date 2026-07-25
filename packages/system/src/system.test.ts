@@ -94,6 +94,30 @@ describe('System Module', () => {
       customSystem.dispose()
     })
 
+    it('§9.2 — external services surface as services.external with cached shape', async () => {
+      system.dispose()
+      const customSystem = createSystemModule(bus, dataDir, {
+        externalServices: [
+          { name: 'ad4m', label: 'AD4M', healthUrl: 'http://127.0.0.1:1/', port: 8180, path: '/' },
+          { name: 'we', healthUrl: 'http://127.0.0.1:2/', port: 13010 }
+        ]
+      })
+      const health = customSystem.getHealth()
+      expect(health.services?.external).toHaveLength(2)
+      const ad4m = health.services!.external!.find((s) => s.name === 'ad4m')!
+      expect(ad4m.label).toBe('AD4M')
+      expect(ad4m.port).toBe(8180)
+      expect(ad4m.path).toBe('/')
+      // First tick before poll completes → 'unknown'; ad4m/we are unreachable
+      // in the test env so the polled result will settle to 'down'. Both are
+      // acceptable here — we just care about shape stability.
+      expect(['unknown', 'down']).toContain(ad4m.status)
+      const we = health.services!.external!.find((s) => s.name === 'we')!
+      expect(we.label).toBe('we') // defaults to name when label omitted
+      expect(we.path).toBe('/') // defaults to '/' when path omitted
+      customSystem.dispose()
+    })
+
     it('§9.2 — aggregates module status() functions for health data', () => {
       system.registerModule({ name: 'orgs', status: 'healthy', subscribes: [], publishes: ['org.created'] })
       system.registerModule({ name: 'threads', status: 'degraded', subscribes: ['org.*'], publishes: [] })

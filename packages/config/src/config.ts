@@ -11,6 +11,10 @@ import { createHistory } from './history.js'
 import { createSecretsStore, SECRET_MASK } from './secrets.js'
 
 function deepClone<T>(obj: T): T {
+  // JSON.stringify(undefined) returns undefined (not the string "undefined"),
+  // which then crashes JSON.parse. Preserve the sentinel instead — callers
+  // asking for an unknown config path should get undefined back, not throw.
+  if (obj === undefined) return undefined as T
   return JSON.parse(JSON.stringify(obj))
 }
 

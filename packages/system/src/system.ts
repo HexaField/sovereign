@@ -18,6 +18,20 @@ export interface McpServiceHealth {
   tools: number
 }
 
+/**
+ * Health snapshot for an external service (AD4M executor, WE launcher, …)
+ * that the browser can open in a new tab. `port` and `path` describe how to
+ * construct the outward URL (protocol is always http — these are LAN/tailnet
+ * plain-HTTP services fronted by Tailscale, not the Sovereign origin).
+ */
+export interface ExternalServiceHealth {
+  name: string
+  label: string
+  port: number
+  path: string
+  status: 'ok' | 'down' | 'unknown'
+}
+
 export interface HealthInfo {
   connection: { wsStatus: string; agentBackend: string; uptime: number }
   resources: {
@@ -27,7 +41,8 @@ export interface HealthInfo {
   jobs: { active: number; lastStatus: string; nextRun: string | null }
   errors: { countLastHour: number; recent: Array<{ message: string; timestamp: string }> }
   services?: {
-    mcp: McpServiceHealth
+    mcp?: McpServiceHealth
+    external?: ExternalServiceHealth[]
   }
 }
 
@@ -66,6 +81,19 @@ export interface SystemModuleOptions {
   getModelConfig?: () => { models: string[]; defaultModel: string | null }
   /** URL to poll for MCP sidecar health (e.g. http://127.0.0.1:5802/api/mcp/health). */
   mcpHealthUrl?: string
+  /**
+   * External services to include in health rollups. Each entry is polled on
+   * the same interval as MCP. `healthUrl` is server-side (typically localhost)
+   * for reachability; `port` + `path` are what the browser uses to open the
+   * service in a new tab, resolved against `window.location.hostname`.
+   */
+  externalServices?: Array<{
+    name: string
+    label?: string
+    healthUrl: string
+    port: number
+    path?: string
+  }>
 }
 
 let cachedDiskUsage = { used: 0, total: 0 }
@@ -100,9 +128,23 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
   const healthIntervalMs = options?.healthIntervalMs ?? 10_000
   const wsHandler = options?.wsHandler
   const mcpHealthUrl = options?.mcpHealthUrl
+  const externalServiceDefs = (options?.externalServices ?? []).map((s) => ({
+    name: s.name,
+    label: s.label ?? s.name,
+    healthUrl: s.healthUrl,
+    port: s.port,
+    path: s.path ?? '/'
+  }))
 
   // Cached MCP sidecar health — updated on the same periodic interval as system health.
   let cachedMcpHealth: McpServiceHealth = { status: 'unknown', sessions: 0, tools: 0 }
+  // Cached external service health, keyed by name.
+  const cachedExternalHealth = new Map<string, ExternalServiceHealth>(
+    externalServiceDefs.map((s) => [
+      s.name,
+      { name: s.name, label: s.label, port: s.port, path: s.path, status: 'unknown' as const }
+    ])
+  )
 
   async function pollMcpHealth(): Promise<void> {
     if (!mcpHealthUrl) return
@@ -121,6 +163,30 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
     } catch {
       cachedMcpHealth = { status: 'down', sessions: 0, tools: 0 }
     }
+  }
+
+  async function pollExternalHealth(): Promise<void> {
+    if (externalServiceDefs.length === 0) return
+    await Promise.all(
+      externalServiceDefs.map(async (svc) => {
+        let status: 'ok' | 'down' = 'down'
+        try {
+          // Any HTTP response (even 400/404) means the socket accepted the
+          // connection — the service is up. Only network errors/timeout mean down.
+          await fetch(svc.healthUrl, { signal: AbortSignal.timeout(2000), method: 'GET' })
+          status = 'ok'
+        } catch {
+          status = 'down'
+        }
+        cachedExternalHealth.set(svc.name, {
+          name: svc.name,
+          label: svc.label,
+          port: svc.port,
+          path: svc.path,
+          status
+        })
+      })
+    )
   }
 
   // Register WS system channel if wsHandler provided
@@ -199,22 +265,27 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
       jobs: { active: 0, lastStatus: 'idle', nextRun: null },
       errors: { countLastHour: 0, recent: [] }
     }
-    if (mcpHealthUrl) {
-      health.services = { mcp: cachedMcpHealth }
+    if (mcpHealthUrl || externalServiceDefs.length > 0) {
+      health.services = {}
+      if (mcpHealthUrl) health.services.mcp = cachedMcpHealth
+      if (externalServiceDefs.length > 0) {
+        health.services.external = externalServiceDefs.map((s) => cachedExternalHealth.get(s.name)!)
+      }
     }
     return health
   }
 
   const status = () => ({ healthy: true })
 
-  // Kick off initial MCP health poll (non-blocking)
+  // Kick off initial polls (non-blocking)
   void pollMcpHealth()
+  void pollExternalHealth()
 
   // Periodic health emission
   const healthInterval = setInterval(() => {
-    // Poll MCP sidecar before emitting health (fire-and-forget — the cached
-    // value is used even if the fetch is still in-flight on the first tick).
+    // Fire-and-forget — cached values are used even if fetches are in-flight.
     void pollMcpHealth()
+    void pollExternalHealth()
 
     const health = getHealth()
     bus.emit({

@@ -607,6 +607,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // System module + routes
   const mcpBaseUrl = process.env.SOVEREIGN_MCP_HTTP_URL
   const mcpHealthUrl = mcpBaseUrl ? mcpBaseUrl.replace(/\/api\/mcp$/, '/api/mcp/health') : undefined
+  const externalServices = configStore.get<SovereignConfig['services']['external']>('services.external') ?? []
   const systemModule = createSystemModule(bus, dataDir, {
     wsHandler,
     getAgentBackendStatus: () => backend.status(),
@@ -614,7 +615,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       models: configStore.get<string[]>('models.available'),
       defaultModel: configStore.get<string>('models.default') || null
     }),
-    mcpHealthUrl
+    mcpHealthUrl,
+    externalServices
   })
   let personalityWatcherActive = !!personalityCompiler
   app.use(
