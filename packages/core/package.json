@@ -11,11 +11,17 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./fold-system-events": {
+      "types": "./src/fold-system-events.ts",
+      "development": "./src/fold-system-events.ts",
+      "default": "./dist/fold-system-events.js"
     }
   },
   "publishConfig": {
     "exports": {
-      ".": "./dist/index.js"
+      ".": "./dist/index.js",
+      "./fold-system-events": "./dist/fold-system-events.js"
     },
     "main": "dist/index.js",
     "types": "dist/index.d.ts"
