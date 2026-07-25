@@ -55,6 +55,40 @@ describe('createActiveSessions', () => {
     expect(got.inFlightPromptText).toBe('hello')
   })
 
+  it('setPendingToolAwait / clearPendingToolAwait round-trip persists to disk', () => {
+    const as = createActiveSessions({ dataDir: tmpDir })
+    as.upsert({
+      sessionKey: 's',
+      threadKey: 't',
+      backendKind: 'claude-code',
+      backendSessionId: 'u',
+      agentStatus: 'working',
+      lastTransitionAt: 0
+    })
+
+    as.setPendingToolAwait('s', { toolName: 'AskUserQuestion', toolCallId: 'tool-1' })
+    const set = as.get('s')!
+    expect(set.pendingToolAwait?.toolName).toBe('AskUserQuestion')
+    expect(set.pendingToolAwait?.toolCallId).toBe('tool-1')
+    expect(typeof set.pendingToolAwait?.startedAt).toBe('number')
+
+    // A fresh instance on the same dataDir must see the marker.
+    const rehydrated = createActiveSessions({ dataDir: tmpDir })
+    expect(rehydrated.get('s')?.pendingToolAwait?.toolCallId).toBe('tool-1')
+
+    as.clearPendingToolAwait('s')
+    expect(as.get('s')?.pendingToolAwait).toBeUndefined()
+    // Idempotent — a second clear on an empty marker is a no-op.
+    as.clearPendingToolAwait('s')
+    expect(as.get('s')?.pendingToolAwait).toBeUndefined()
+  })
+
+  it('setPendingToolAwait on unknown sessionKey is a no-op', () => {
+    const as = createActiveSessions({ dataDir: tmpDir })
+    as.setPendingToolAwait('does-not-exist', { toolName: 'AskUserQuestion', toolCallId: 'x' })
+    expect(as.list()).toHaveLength(0)
+  })
+
   it('subagent add/remove preserves uniqueness', () => {
     const as = createActiveSessions({ dataDir: tmpDir })
     as.upsert({

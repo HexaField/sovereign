@@ -122,7 +122,7 @@ describe('resumeActiveSessions', () => {
     expect(active.list()).toHaveLength(0)
   })
 
-  it('Tier 3: auto-continues a session with no in-flight queue head', async () => {
+  it('Tier 3: auto-continues a session that had an inFlight prompt but no live queue head', async () => {
     const active = createActiveSessions({ dataDir: tmpDir })
     active.upsert({
       sessionKey: 'agent:main:thread:foo',
@@ -130,7 +130,11 @@ describe('resumeActiveSessions', () => {
       backendKind: 'claude-code',
       backendSessionId: 'uuid',
       agentStatus: 'working',
-      lastTransitionAt: Date.now()
+      lastTransitionAt: Date.now(),
+      // Proof there was a user message in flight — without this the resume
+      // orchestrator falls through to passthrough (no fabrication when we
+      // don't know what to continue).
+      inFlightPromptText: 'the user prompt'
     })
     const { deps, sendContinuation, replayQueueHead } = makeOrchestratorDeps({ activeSessions: active })
     const report = await resumeActiveSessions(deps)
@@ -140,6 +144,55 @@ describe('resumeActiveSessions', () => {
       '[Resumed after server restart. Continue from where you left off.]'
     )
     expect(replayQueueHead).not.toHaveBeenCalled()
+  })
+
+  it('passthrough: leaves a working session alone when there is no in-flight evidence', async () => {
+    const active = createActiveSessions({ dataDir: tmpDir })
+    active.upsert({
+      sessionKey: 'agent:main:thread:foo',
+      threadKey: 'foo',
+      backendKind: 'claude-code',
+      backendSessionId: 'uuid',
+      agentStatus: 'working',
+      lastTransitionAt: Date.now()
+      // no inFlightQueueId, no inFlightPromptText, no pendingToolAwait
+    })
+    const { deps, sendContinuation, replayQueueHead } = makeOrchestratorDeps({ activeSessions: active })
+    const report = await resumeActiveSessions(deps)
+    expect(report.counts.passthrough).toBe(1)
+    expect(report.counts.tier3).toBe(0)
+    // The whole point: no stray user message injected — SDK resume owns it.
+    expect(sendContinuation).not.toHaveBeenCalled()
+    expect(replayQueueHead).not.toHaveBeenCalled()
+    // Entry stays so the natural status flow can update or remove it.
+    expect(active.list()).toHaveLength(1)
+  })
+
+  it('tool-await: skips continuation for a session the PreToolUse hook was holding open', async () => {
+    const active = createActiveSessions({ dataDir: tmpDir })
+    active.upsert({
+      sessionKey: 'agent:main:thread:foo',
+      threadKey: 'foo',
+      backendKind: 'claude-code',
+      backendSessionId: 'uuid',
+      agentStatus: 'working',
+      lastTransitionAt: Date.now(),
+      pendingToolAwait: {
+        toolName: 'AskUserQuestion',
+        toolCallId: 'tool-abc',
+        startedAt: Date.now()
+      }
+    })
+    const { deps, sendContinuation, replayQueueHead } = makeOrchestratorDeps({ activeSessions: active })
+    const report = await resumeActiveSessions(deps)
+    expect(report.counts.toolAwait).toBe(1)
+    expect(report.counts.tier3).toBe(0)
+    expect(sendContinuation).not.toHaveBeenCalled()
+    expect(replayQueueHead).not.toHaveBeenCalled()
+    // The entry stays so the hook re-fire on session resume can refresh it.
+    expect(active.list()).toHaveLength(1)
+    // Reason includes the tool name so operators can grep the resume log.
+    expect(report.outcomes[0].reason).toContain('AskUserQuestion')
   })
 
   it('invalidates entries whose backend session file is gone, with subagent fan-out', async () => {
@@ -174,7 +227,8 @@ describe('resumeActiveSessions', () => {
       backendKind: 'claude-code',
       backendSessionId: 'uuid',
       agentStatus: 'working',
-      lastTransitionAt: Date.now()
+      lastTransitionAt: Date.now(),
+      inFlightPromptText: 'the user prompt'
     })
     const { deps, emitted } = makeOrchestratorDeps({ activeSessions: active })
     await resumeActiveSessions(deps)

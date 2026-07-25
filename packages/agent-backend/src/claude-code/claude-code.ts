@@ -691,6 +691,19 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
               if (!parent) break
               anchorKey = parent
             }
+            // Persist the hook-await on the liveness snapshot so a boot-time
+            // resume can distinguish "working because holding a tool_result"
+            // from "working because draining a queued user message" and skip
+            // its Tier 3 auto-continue accordingly. Set on the anchor session
+            // (which is the sessionKey the resume orchestrator will see) and
+            // cleared unconditionally in `finally`. The SDK re-fires the
+            // tool_use on session resume, so no rehydration of the store's
+            // in-memory promise is needed — the fresh hook invocation
+            // registers a new pending entry with the same tool_use_id.
+            activeSessions?.setPendingToolAwait(anchorKey, {
+              toolName: 'AskUserQuestion',
+              toolCallId
+            })
             try {
               const result = await deps.askUserQuestionStore.register(anchorKey, toolCallId, {
                 questions: questions as any
@@ -713,6 +726,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
                   permissionDecisionReason: `AskUserQuestion aborted by Sovereign: ${message}`
                 }
               }
+            } finally {
+              activeSessions?.clearPendingToolAwait(anchorKey)
             }
           }
         }

@@ -225,22 +225,42 @@ _healthcheck() {
 # Sovereign snapshots active threads to disk continuously (active-sessions.json)
 # and auto-resumes them on restart, so destructive lifecycle commands no longer
 # need to refuse when sessions are working. We still report what's about to be
-# snapshotted so the operator knows what'll resume. Fail-open: if the API is
-# unreachable, just skip the notice.
+# snapshotted so the operator knows what'll resume.
+#
+# The message distinguishes two resume paths so the promise matches reality:
+# - queue-driven working state → server replays the in-flight queue head
+#   (Tier 1) or auto-continues from the recorded prompt (Tier 3)
+# - hook-await working state (currently only AskUserQuestion) → the SDK
+#   re-fires the tool_use on session resume and Sovereign's hook re-registers
+#   the pending entry; the user re-answers the question card
+#
+# Fail-open: if the API is unreachable, just skip the notice.
 AGENTS_URL="${HEALTH_SCHEME}://127.0.0.1:${PORT_VALUE}/api/system/agents/active"
 
 _active_agents_json() {
   curl --silent --show-error --fail --max-time 3 --insecure "$AGENTS_URL" 2>/dev/null
 }
 
-_active_agents_count() {
-  local json
-  json="$(_active_agents_json)" || { printf '0'; return 0; }
-  [ -n "$json" ] || { printf '0'; return 0; }
+# Reads $1 JSON and prints "<count> <pendingToolAwait>" — two integers.
+# Falls back gracefully when node isn't on PATH.
+_active_agents_summary() {
+  local json="$1"
+  [ -n "$json" ] || { printf '0 0'; return 0; }
   if command -v node >/dev/null 2>&1; then
-    printf '%s' "$json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).count||0))}catch{process.stdout.write("0")}})' 2>/dev/null || printf '0'
+    printf '%s' "$json" | node -e '
+      let s=""
+      process.stdin.on("data",d=>s+=d).on("end",()=>{
+        try {
+          const o = JSON.parse(s)
+          process.stdout.write(`${o.count||0} ${o.pendingToolAwait||0}`)
+        } catch { process.stdout.write("0 0") }
+      })
+    ' 2>/dev/null || printf '0 0'
   else
-    printf '%s' "$json" | grep -oE '"count":[0-9]+' | head -1 | sed 's/"count"://' || printf '0'
+    local count await
+    count=$(printf '%s' "$json" | grep -oE '"count":[0-9]+' | head -1 | sed 's/"count"://')
+    await=$(printf '%s' "$json" | grep -oE '"pendingToolAwait":[0-9]+' | head -1 | sed 's/"pendingToolAwait"://')
+    printf '%s %s' "${count:-0}" "${await:-0}"
   fi
 }
 
@@ -252,16 +272,23 @@ _notice_active_agents() {
   if ! _is_running; then
     return 0
   fi
-  local count
-  count="$(_active_agents_count)"
-  count="${count:-0}"
-  if ! [[ "$count" =~ ^[0-9]+$ ]]; then
-    count=0
-  fi
+  local json summary count await
+  json="$(_active_agents_json)" || return 0
+  summary="$(_active_agents_summary "$json")"
+  count="${summary% *}"
+  await="${summary#* }"
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  [[ "$await" =~ ^[0-9]+$ ]] || await=0
   if [ "$count" = "0" ]; then
     return 0
   fi
-  _note "$count active session(s) — will snapshot and resume on next start."
+  if [ "$await" -gt 0 ] && [ "$await" = "$count" ]; then
+    _note "$count session(s) waiting for user input — question card(s) will re-open on restart."
+  elif [ "$await" -gt 0 ]; then
+    _note "$count active session(s) ($await waiting for user input) — queue sessions resume, question cards re-open."
+  else
+    _note "$count active session(s) — SDK will resume from where it left off."
+  fi
 }
 
 _wait_for_health() {
