@@ -22,6 +22,8 @@ export type {
 } from './active-sessions.js'
 export { resumeActiveSessions } from './resume.js'
 export type { ResumeOrchestratorOptions, ResumeOutcome, ResumeReport } from './resume.js'
+export { drainActiveSessions, countDraining } from './drain-active-sessions.js'
+export type { DrainOptions, DrainResult } from './drain-active-sessions.js'
 
 // Re-export the canonical interface types from core so consumers only need a
 // single import.

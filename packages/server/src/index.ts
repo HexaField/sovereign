@@ -120,14 +120,44 @@ function releaseLock(): void {
 }
 acquireLock()
 
-const { shutdown } = bootstrapServer({ app, server, wss, bus, dataDir, configStore })
+const { shutdown, shutdownGraceful } = bootstrapServer({ app, server, wss, bus, dataDir, configStore })
 
-function shutdownWithLock() {
-  try {
-    shutdown()
-  } finally {
-    releaseLock()
+// Drain in-flight turns before actually shutting down so a `bin/sovereign
+// build`-triggered restart preserves the "conversation in progress" state
+// instead of severing an LLM turn mid-stream. Cap comes from the env var
+// (matches systemd's `TimeoutStopSec`) so operators can widen it for a slow
+// tool call without hunting through source. The second signal short-circuits
+// straight to the hard shutdown so an impatient operator (Ctrl-C twice) can
+// still bail out.
+const SHUTDOWN_TIMEOUT_MS = Number(process.env.SOVEREIGN_SHUTDOWN_TIMEOUT_MS ?? 120_000)
+let shuttingDown = false
+function shutdownWithLock(): void {
+  if (shuttingDown) {
+    console.warn('[server] second signal received — forcing hard shutdown')
+    try {
+      shutdown()
+    } finally {
+      releaseLock()
+      process.exit(0)
+    }
+    return
   }
+  shuttingDown = true
+  shutdownGraceful(SHUTDOWN_TIMEOUT_MS)
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[server] shutdownGraceful failed:', msg)
+      try {
+        shutdown()
+      } catch {
+        /* already torn down */
+      }
+    })
+    .finally(() => {
+      releaseLock()
+      // Give the event loop one tick so log lines flush.
+      setImmediate(() => process.exit(0))
+    })
 }
 
 process.on('SIGTERM', shutdownWithLock)
