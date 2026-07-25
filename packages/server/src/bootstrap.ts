@@ -56,7 +56,7 @@ import { createDraftStore } from '@sovereign/drafts'
 import { createDraftRouter } from '@sovereign/drafts'
 import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
-import { resumeActiveSessions } from '@sovereign/agent-backend'
+import { resumeActiveSessions, drainActiveSessions } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
 import { createChatRoutes } from '@sovereign/chat'
@@ -116,6 +116,13 @@ export interface BootstrapInput {
 
 export interface BootstrapResult {
   shutdown: () => void
+  /**
+   * Drain in-flight LLM turns (except AskUserQuestion-style tool-await
+   * sessions, which never resolve on their own) before invoking `shutdown()`.
+   * `timeoutMs` caps the wait. Returns the actual drain duration and how
+   * many sessions were still working at the cap.
+   */
+  shutdownGraceful: (timeoutMs?: number) => Promise<{ drainedMs: number; leftWorking: number }>
 }
 
 const authMiddleware = (_req: any, _res: any, next: any) => next()
@@ -750,6 +757,35 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       notificationsModule.dispose()
       wss.close()
       server.close()
+    },
+    /**
+     * Graceful shutdown for rebuilds: waits for every non-tool-await session
+     * to drain to `idle` before invoking the hard `shutdown()`. This turns a
+     * rebuild into "current turns complete → server restarts → sessions
+     * resume from the same JSONL position" instead of "SIGTERM interrupts
+     * whatever the SDK was in the middle of."
+     *
+     * A session is considered draining when its snapshot has
+     * `agentStatus ∈ {'working','thinking'}` AND no `pendingToolAwait`
+     * marker — the latter never resolves on its own (the user has to submit
+     * an answer), and the resume orchestrator's tool-await short-circuit
+     * already restores those cleanly.
+     *
+     * `timeoutMs` caps the wait; anything still working at the cap gets its
+     * state snapshotted (like today) and resume tiers on the next boot fill
+     * in the gap. Defaults align with the systemd unit's `TimeoutStopSec`.
+     */
+    async shutdownGraceful(timeoutMs = 120_000): Promise<{ drainedMs: number; leftWorking: number }> {
+      const { drainedMs, leftWorking } = await drainActiveSessions({
+        activeSessions,
+        timeoutMs,
+        log: (msg) => console.log(`[shutdown] ${msg}`)
+      })
+      // Fall through to the standard shutdown — same disk flushes, same
+      // subsystem teardown. Snapshotting after the drain means the resume
+      // orchestrator sees the most accurate state possible.
+      this.shutdown()
+      return { drainedMs, leftWorking }
     }
   }
 }
