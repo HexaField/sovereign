@@ -11,6 +11,11 @@ export interface McpHealth {
   tools: number
 }
 
+export interface SembleHealth {
+  status: 'ok' | 'down' | 'unknown'
+  version: string
+}
+
 export interface ExternalServiceHealth {
   name: string
   label: string
@@ -27,6 +32,7 @@ export interface CozempicHealth {
 export type OverallHealth = 'ok' | 'degraded' | 'error'
 
 const [mcpHealth, setMcpHealth] = createSignal<McpHealth>({ status: 'unknown', sessions: 0, tools: 0 })
+const [sembleHealth, setSembleHealth] = createSignal<SembleHealth>({ status: 'unknown', version: '' })
 const [externalHealth, setExternalHealth] = createSignal<ExternalServiceHealth[]>([])
 const [cozempicHealth, setCozempicHealth] = createSignal<CozempicHealth>({ healthy: null, reason: null })
 const [cozempicRestoring, setCozempicRestoring] = createSignal(false)
@@ -43,10 +49,20 @@ export const overallHealth = (): OverallHealth => {
   const ext = externalHealth()
   const anyExtDown = ext.some((s) => s.status === 'down')
 
+  // Semble is an auxiliary code-search tool; missing degrades but doesn't error.
+  const semble = sembleHealth()
+
   const coz = cozempicHealth()
   if (coz.healthy === false) return 'degraded'
 
-  if (conn === 'connecting' || conn === 'authenticating' || mcp.status === 'unknown' || anyExtDown) return 'degraded'
+  if (
+    conn === 'connecting' ||
+    conn === 'authenticating' ||
+    mcp.status === 'unknown' ||
+    semble.status === 'down' ||
+    anyExtDown
+  )
+    return 'degraded'
   return 'ok'
 }
 
@@ -55,8 +71,11 @@ export function initHealthPolling(): () => void {
 
   wsStore.subscribe(['system'])
   const offHealth = wsStore.on('system.health', (msg: Record<string, unknown>) => {
-    const services = msg.services as { mcp?: McpHealth; external?: ExternalServiceHealth[] } | undefined
+    const services = msg.services as
+      | { mcp?: McpHealth; semble?: SembleHealth; external?: ExternalServiceHealth[] }
+      | undefined
     if (services?.mcp) setMcpHealth(services.mcp)
+    if (services?.semble) setSembleHealth(services.semble)
     if (Array.isArray(services?.external)) setExternalHealth(services.external)
   })
 
@@ -194,6 +213,14 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
     return { status: 'error' as const, detail: 'unreachable' }
   })
 
+  const sembleRow = createMemo(() => {
+    const h = sembleHealth()
+    if (h.status === 'ok') return { status: 'ok' as const, detail: h.version ? `v${h.version}` : 'available' }
+    if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'checking...' }
+    // `uv tool install semble` is the standard fix — surfaced in the tooltip.
+    return { status: 'error' as const, detail: 'not installed' }
+  })
+
   const externalRowStatus = (s: 'ok' | 'down' | 'unknown'): 'ok' | 'error' | 'unknown' => {
     if (s === 'ok') return 'ok'
     if (s === 'unknown') return 'unknown'
@@ -260,6 +287,7 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
           <div class="divide-y" style={{ 'border-color': 'var(--c-border)' }}>
             <StatusRow label="Sovereign" status={connRow().status} detail={connRow().detail} port={sovereignPort()} />
             <StatusRow label="MCP Sidecar" status={mcpRow().status} detail={mcpRow().detail} />
+            <StatusRow label="Semble" status={sembleRow().status} detail={sembleRow().detail} />
             <StatusRow
               label="Cozempic"
               status={cozRow().status}

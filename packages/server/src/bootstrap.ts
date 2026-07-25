@@ -616,7 +616,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       defaultModel: configStore.get<string>('models.default') || null
     }),
     mcpHealthUrl,
-    externalServices
+    externalServices,
+    // Honour SEMBLE_BIN for non-standard installs; empty string opts out.
+    sembleBin: process.env.SEMBLE_BIN ?? 'semble'
   })
   let personalityWatcherActive = !!personalityCompiler
   app.use(

@@ -41,6 +41,25 @@ export function claudeCodeConfigFromStore(configStore: ConfigStore, dataDir: str
     }
   }
 
+  // Inject semble MCP so every Sovereign-spawned session has code search via
+  // mcp__semble__search / mcp__semble__find_related without relying on the
+  // user's ~/.claude.json (which the SDK's settingSources may not surface).
+  // Opt out with SEMBLE_MCP=off; override the launch command with SEMBLE_MCP_CMD.
+  const sembleOff = (process.env.SEMBLE_MCP ?? '').trim().toLowerCase() === 'off'
+  if (!sembleOff) {
+    const cmd = (process.env.SEMBLE_MCP_CMD ?? '').trim()
+    if (cmd) {
+      const parts = cmd.split(/\s+/)
+      mcpServers['semble'] = { type: 'stdio', command: parts[0], args: parts.slice(1) }
+    } else {
+      mcpServers['semble'] = {
+        type: 'stdio',
+        command: 'uvx',
+        args: ['--from', 'semble[mcp]', 'semble']
+      }
+    }
+  }
+
   const cwd =
     configStore.get<string>('agentBackend.claudeCode.cwd')?.trim() ||
     configStore.get<string>('workspace.root')?.trim() ||
