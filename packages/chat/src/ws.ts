@@ -20,7 +20,13 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule): vo
       // any of these so finished children don't pile up in the dropdown.
       'subagent.spawned',
       'subagent.completed',
-      'subagent.failed'
+      'subagent.failed',
+      // AskUserQuestion lifecycle — drives the inline question card. `pending`
+      // fires when the SDK invokes the tool and the store registers it;
+      // `answered` when the user submits (or `aborted` on cancel/error).
+      'question.pending',
+      'question.answered',
+      'question.aborted'
     ],
     clientMessages: [
       'chat.send',

@@ -10,6 +10,7 @@ import { mergeFetchedHistory } from './merge-history.js'
 // breaks the browser bundle. The fold helper lives in its own file with zero
 // node deps — import it directly.
 import { absorbFoldableTurn } from '@sovereign/core/fold-system-events'
+import { initQuestionsStore } from './questions-store.js'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
 export const [agentStatus, setAgentStatus] = createSignal<AgentStatus>('idle')
@@ -583,9 +584,15 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // Subscribe to WS for sending messages + features that still use WS
   ws.subscribe(['chat'])
 
+  // Per-thread teardown for the questions store — refreshed on every thread
+  // switch so we drop stale WS handlers + pending questions from the previous
+  // thread before subscribing to the new one.
+  let questionsTeardown: (() => void) | null = null
+
   if (_threadKey()) {
     connectSSE(_threadKey())
     loadDraft(_threadKey())
+    if (ws) questionsTeardown = initQuestionsStore(_threadKey(), ws)
   }
 
   let prevThreadKey = _threadKey()
@@ -597,9 +604,12 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
       prevThreadKey = key
       resetState()
       loadDraft(key)
+      questionsTeardown?.()
+      questionsTeardown = null
       if (key) {
         connectSSE(key)
         ws?.send({ type: 'chat.session.switch', threadKey: key } as any)
+        if (ws) questionsTeardown = initQuestionsStore(key, ws)
       } else {
         disconnectSSE()
       }
@@ -658,6 +668,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
 
   return () => {
     unsubs.forEach((u) => u())
+    questionsTeardown?.()
     disconnectSSE()
     ws?.unsubscribe(['chat'])
     chatInitialized = false

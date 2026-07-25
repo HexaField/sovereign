@@ -411,7 +411,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     sessionsRegistry,
     activeSessions,
     createSovereignMcpInstance,
-    mcpRpcRouter
+    mcpRpcRouter,
+    askUserQuestionStore
   } = wireAgentBackend({
     bus,
     dataDir,
@@ -560,9 +561,25 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     createThreadRoutes(threadManager, createForwardHandler(bus, threadManager), {
       chatModule,
       backend: routingBackend,
-      cronService
+      cronService,
+      askUserQuestionStore
     })
   )
+  // Forward AskUserQuestion lifecycle events from the bus to the chat WS
+  // channel so every connected client learns of new pending questions +
+  // submissions in real time. The chat.work / chat.turn round-trip handles
+  // the tool_result surface separately (the SDK echoes the answer JSON as a
+  // user-role tool_result once the hook resolves), so these events are just
+  // for the inline question card's own pending → answered transition.
+  for (const evt of ['question.pending', 'question.answered', 'question.aborted'] as const) {
+    bus.on(evt, (e: { timestamp: string; payload?: unknown }) => {
+      wsHandler.broadcastToChannel('chat', {
+        type: evt,
+        timestamp: e.timestamp,
+        ...((e.payload ?? {}) as Record<string, unknown>)
+      })
+    })
+  }
   registerThreadsWs(wsHandler as any, threadManager, bus)
 
   // Now that chatModule exists, wire its `handleSend` as the cron-fire path

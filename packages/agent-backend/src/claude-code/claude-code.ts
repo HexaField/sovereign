@@ -273,6 +273,14 @@ export interface ClaudeCodeBackendDeps {
   resolveAppendSystemPrompt?: (sessionKey: string) => string | undefined
   /** Override sdkQuery for tests; defaults to the SDK's query(). */
   sdkQuery?: typeof sdkQuery
+  /**
+   * Pending-question registry for Claude Code's built-in `AskUserQuestion`
+   * tool. When present, the PreToolUse hook holds AskUserQuestion calls open
+   * until the user submits answers through Sovereign's UI, then returns the
+   * answers as the tool_result. When absent, calls fall through to the SDK's
+   * default (which auto-errors with "Answer questions?").
+   */
+  askUserQuestionStore?: import('./ask-user-question-store.js').AskUserQuestionStore
 }
 
 /** Persisted slice of `ClaudeSessionState` — everything serialisable. Live OS
@@ -654,6 +662,47 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
               `Use ${target} instead — it schedules through Sovereign's own ` +
               `scheduler which fires the prompt back into this thread via the ` +
               `standard message queue (observable, cancellable, durable).${threadKeyHint}`
+          }
+        }
+      }
+
+      // AskUserQuestion — hold the SDK until the user submits answers, then
+      // return them as the tool result. The SDK's built-in behaviour is to
+      // auto-fail this tool with `is_error:true, content:"Answer questions?"`
+      // when no interactive TUI is attached; intercepting here converts it
+      // into a first-class Sovereign UI interaction with the answers flowing
+      // back through the same `permissionDecision: 'deny'` channel the SDK
+      // already surfaces to the model.
+      if (inp.tool_name === 'AskUserQuestion' && deps.askUserQuestionStore) {
+        const toolCallId = (inp as { tool_use_id?: string }).tool_use_id
+        const sk = state?.sessionKey
+        if (toolCallId && sk) {
+          const rawInput = (inp.tool_input ?? {}) as { questions?: unknown }
+          const questions = Array.isArray(rawInput.questions) ? rawInput.questions : []
+          if (questions.length > 0) {
+            try {
+              const result = await deps.askUserQuestionStore.register(sk, toolCallId, {
+                questions: questions as any
+              })
+              return {
+                continue: true,
+                hookSpecificOutput: {
+                  hookEventName: 'PreToolUse' as const,
+                  permissionDecision: 'deny' as const,
+                  permissionDecisionReason: JSON.stringify(result)
+                }
+              }
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err)
+              return {
+                continue: true,
+                hookSpecificOutput: {
+                  hookEventName: 'PreToolUse' as const,
+                  permissionDecision: 'deny' as const,
+                  permissionDecisionReason: `AskUserQuestion aborted by Sovereign: ${message}`
+                }
+              }
+            }
           }
         }
       }

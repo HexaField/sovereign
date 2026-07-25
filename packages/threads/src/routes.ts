@@ -50,6 +50,29 @@ async function collectActivityMap(b: RoutingBackend | AgentBackend | undefined):
   return merged
 }
 
+/**
+ * Minimal AskUserQuestion store surface consumed by the pending/submit routes.
+ * The concrete store lives in `@sovereign/agent-backend`; declaring the shape
+ * inline here avoids a threads→agent-backend dependency cycle.
+ */
+export interface AskUserQuestionRouteStore {
+  submit(
+    toolCallId: string,
+    answers: {
+      questions: unknown[]
+      answers: Record<string, string>
+      annotations?: Record<string, { custom?: boolean; notes?: string }>
+    }
+  ): boolean
+  abort(toolCallId: string, reason?: string): void
+  listPending(threadId?: string): Array<{
+    toolCallId: string
+    threadId: string
+    input: { questions: unknown[] }
+    createdAt: number
+  }>
+}
+
 export function createThreadRoutes(
   threadManager: ThreadManager,
   forwardHandler: ForwardHandler,
@@ -57,6 +80,7 @@ export function createThreadRoutes(
     chatModule?: ThreadSessionBinding
     backend?: RoutingBackend | AgentBackend
     cronService?: CronService
+    askUserQuestionStore?: AskUserQuestionRouteStore
   }
 ): Router {
   const router = Router()
@@ -618,6 +642,55 @@ export function createThreadRoutes(
       const msg = err instanceof Error ? err.message : String(err)
       res.status(500).json({ ok: false, message: msg })
     }
+  })
+
+  // ── AskUserQuestion — pending list + submit ──────────────────────────
+  // Sovereign holds Claude Code `AskUserQuestion` tool calls open in the
+  // agent-backend PreToolUse hook until the user submits answers here. The
+  // pending list is the source of truth for the inline question card the
+  // client renders below the requesting turn. Note the sessionKey → threadKey
+  // resolution: the store keys by sessionKey (which for the primary agent
+  // equals the threadKey via deriveSessionKey); subagent AskUserQuestion calls
+  // would key by the subagent's sessionKey and are surfaced under the parent
+  // thread by resolving through opts.chatModule.
+  router.get('/api/threads/:key/questions/pending', (req, res) => {
+    const threadKey = req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    if (!opts?.askUserQuestionStore) return res.json({ pending: [] })
+    const sessionKey = opts.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+    const pending = opts.askUserQuestionStore.listPending(sessionKey)
+    res.json({ pending })
+  })
+
+  router.post('/api/threads/:key/questions/:toolCallId/answer', (req, res) => {
+    const threadKey = req.params.key
+    const toolCallId = req.params.toolCallId
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    if (!opts?.askUserQuestionStore) return res.status(503).json({ error: 'AskUserQuestion store not wired' })
+    const body = (req.body ?? {}) as {
+      questions?: unknown[]
+      answers?: Record<string, string>
+      annotations?: Record<string, { custom?: boolean; notes?: string }>
+    }
+    if (!Array.isArray(body.questions) || typeof body.answers !== 'object' || body.answers === null) {
+      return res.status(400).json({ error: 'Body must include {questions, answers}' })
+    }
+    const ok = opts.askUserQuestionStore.submit(toolCallId, {
+      questions: body.questions,
+      answers: body.answers,
+      annotations: body.annotations
+    })
+    if (!ok) return res.status(404).json({ error: 'No pending question with that tool_use_id' })
+    res.json({ ok: true })
+  })
+
+  router.delete('/api/threads/:key/questions/:toolCallId', (req, res) => {
+    const toolCallId = req.params.toolCallId
+    if (!opts?.askUserQuestionStore) return res.status(503).json({ error: 'AskUserQuestion store not wired' })
+    opts.askUserQuestionStore.abort(toolCallId, 'user cancelled')
+    res.json({ ok: true })
   })
 
   router.post('/api/threads/clear-lock', (req, res) => {

@@ -15,3 +15,5 @@ export {
 } from './history.js'
 export { encodeCwdToProjectDir, defaultAgentDir, sessionJsonlPath, projectsDirForCwd } from './path-encoding.js'
 export type { ClaudeCodeConfig, ClaudeSessionState } from './types.js'
+export { createAskUserQuestionStore } from './ask-user-question-store.js'
+export type { AskUserQuestionStore } from './ask-user-question-store.js'
