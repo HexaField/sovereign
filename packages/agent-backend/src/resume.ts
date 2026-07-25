@@ -41,7 +41,7 @@ const DEFAULT_CONTINUATION_MARKER = '[Resumed after server restart. Continue fro
 export interface ResumeOutcome {
   sessionKey: string
   threadKey: string
-  tier: 1 | 2 | 3 | 'invalidated' | 'tool-await' | 'passthrough'
+  tier: 1 | 2 | 3 | 'invalidated' | 'tool-await'
   reason: string
 }
 
@@ -55,16 +55,13 @@ export interface ResumeReport {
     /** Sessions the PreToolUse hook was holding open when we shut down.
      *  Left to the SDK's own tool re-fire on session resume. */
     toolAwait: number
-    /** Sessions with `working` status but no evidence of an in-flight user
-     *  prompt or tool-await — SDK session resume handles them naturally. */
-    passthrough: number
   }
 }
 
 export async function resumeActiveSessions(opts: ResumeOrchestratorOptions): Promise<ResumeReport> {
   const marker = opts.continuationMarker ?? DEFAULT_CONTINUATION_MARKER
   const outcomes: ResumeOutcome[] = []
-  const counts = { tier1: 0, tier2: 0, tier3: 0, invalidated: 0, toolAwait: 0, passthrough: 0 }
+  const counts = { tier1: 0, tier2: 0, tier3: 0, invalidated: 0, toolAwait: 0 }
 
   const entries = opts.activeSessions.list()
   if (entries.length === 0) return { outcomes, counts }
@@ -90,7 +87,6 @@ export async function resumeActiveSessions(opts: ResumeOrchestratorOptions): Pro
     else if (outcome.tier === 2) counts.tier2++
     else if (outcome.tier === 3) counts.tier3++
     else if (outcome.tier === 'tool-await') counts.toolAwait++
-    else if (outcome.tier === 'passthrough') counts.passthrough++
     else counts.invalidated++
   }
 
@@ -180,26 +176,17 @@ async function resolveOne(args: ResolveOneArgs): Promise<ResumeOutcome> {
     }
   }
 
-  // ── Tier 3 — Auto-continue, gated by evidence of an in-flight prompt ──
-  // Historically fired unconditionally as a safety net, but for sessions
-  // whose `working` state came from a mid-tool situation with no queue
-  // record, injecting `[Resumed…]` produces a spurious user turn on top
-  // of the SDK's own tool re-fire. Only fabricate a continuation when
-  // we have concrete evidence a user message was in flight
-  // (`inFlightPromptText` was set). Otherwise the SDK's session resume
-  // is the right authority — leave the entry alone and let the natural
-  // re-emission of the current turn's blocks flow through.
-  if (entry.inFlightPromptText) {
-    await Promise.resolve(args.sendContinuation(entry.threadKey, args.marker))
-    return { sessionKey: entry.sessionKey, threadKey: entry.threadKey, tier: 3, reason: 'auto-continue' }
-  }
-
-  return {
-    sessionKey: entry.sessionKey,
-    threadKey: entry.threadKey,
-    tier: 'passthrough',
-    reason: 'no-inflight-no-tool-await'
-  }
+  // ── Tier 3 — Auto-continue (always-on safety net) ──
+  // Fires for every non-tool-await, non-Tier-1/2 case. The SDK's session
+  // resume does NOT naturally kick a mid-turn assistant reply back into
+  // motion — it rehydrates the transcript and then waits for the next
+  // user message. Without this nudge, a session that was mid-text or
+  // mid-non-AskUserQuestion-tool at shutdown just sits idle waiting for
+  // input the user has no reason to type. The AskUserQuestion case is
+  // already handled by the tool-await short-circuit above, so this
+  // won't duplicate the question card re-fire.
+  await Promise.resolve(args.sendContinuation(entry.threadKey, args.marker))
+  return { sessionKey: entry.sessionKey, threadKey: entry.threadKey, tier: 3, reason: 'auto-continue' }
 }
 
 /** Emit synthetic `subagent.completed` for the parent's tracked children when
