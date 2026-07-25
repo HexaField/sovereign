@@ -94,6 +94,25 @@ describe('System Module', () => {
       customSystem.dispose()
     })
 
+    it('§9.2 — semble surfaces on services.semble with status + version fields', () => {
+      system.dispose()
+      // Point at a binary that definitely doesn't exist so the probe fails
+      // deterministically — we assert shape, not resolvability.
+      const customSystem = createSystemModule(bus, dataDir, { sembleBin: '/nonexistent/semble' })
+      const health = customSystem.getHealth()
+      expect(health.services?.semble).toBeDefined()
+      expect(['ok', 'down', 'unknown']).toContain(health.services!.semble!.status)
+      expect(typeof health.services!.semble!.version).toBe('string')
+      customSystem.dispose()
+    })
+
+    it('§9.2 — sembleBin: "" opts out of the semble health row entirely', () => {
+      system.dispose()
+      const customSystem = createSystemModule(bus, dataDir, { sembleBin: '' })
+      expect(customSystem.getHealth().services).toBeUndefined()
+      customSystem.dispose()
+    })
+
     it('§9.2 — external services surface as services.external with cached shape', async () => {
       system.dispose()
       const customSystem = createSystemModule(bus, dataDir, {
