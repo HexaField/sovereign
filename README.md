@@ -54,6 +54,26 @@ Real-time architecture view showing every module, its subscriptions, and event f
 
 A native agent core built on the Claude Agent SDK — no external bridge. Durable session store, multi-agent orchestration, an in-process cron scheduler, and a Sovereign MCP server that exposes workspace tools (sessions, agents, planning, meetings, orgs, notifications) to the agent. Entity events trigger autonomous agent work; notification events surface for user response. Sessions resume automatically after a restart, and a personality compiler assembles the agent's system prompt from per-concern Markdown source files.
 
+## Integrations
+
+Sovereign is standalone but reaches for a few external services when they're available. Each is optional — if one goes missing, the rest of the system keeps working — and each surfaces in the header's Service Health dropdown so you can see the current state at a glance.
+
+### AD4M
+
+[AD4M](https://github.com/coasys/ad4m) is an agent-centric distributed runtime for perspectives, SHACL-defined subject classes, and Holochain-backed neighbourhoods. Sovereign runs the executor in Docker, injects its MCP endpoint into every agent session as `mcp__ad4m__*` tools, and forwards mentions from joined channels into the presence thread's internal stream. Configure via `ad4m.host` and `ad4m.mcpUrl` in `config.json`; the OAuth token lands in `data/ad4m-token.json` after the first capability request.
+
+### WE (Weave)
+
+[WE](https://github.com/coasys/we) is the web launcher for AD4M-based apps — group creation, app installation, and cross-app data sharing on top of an AD4M executor. Sovereign runs it as a separate service on the same host as the executor so a single tailnet address serves both. Add it to `services.external` in `config.json` alongside AD4M to get a health row and a one-click "open in new tab" button in the dropdown.
+
+### Cozempic
+
+Per-thread memory guard for the Claude Code sessions Sovereign spawns. Watches each session, checkpoints task state on `PreCompact`, and re-injects a distilled digest on `PostCompact` and `SessionStart` so long conversations survive context resets. Registered globally via `~/.claude/settings.json` hooks; Sovereign surfaces guard health per thread (`/api/threads/:key/cozempic-health`) with a Restore action when a guard has crashed or failed to prune.
+
+### Semble
+
+[Semble](https://github.com/MinishLab/semble) is a local semantic code-search index built on a static embedding model — no transformer forward pass at query time, so results return in milliseconds on CPU with no API keys. Install once with `uv tool install semble`; Sovereign injects the MCP into every agent session as `mcp__semble__search` and `mcp__semble__find_related`, replacing most grep+read patterns with a single ranked query that returns only the relevant chunks (~98% fewer tokens on typical searches). Opt out per instance with `SEMBLE_MCP=off`.
+
 ## Architecture
 
 TypeScript monorepo. A SolidJS client and an Express server compose a set of self-contained domain packages, each wired into a typed event bus. Modules export a `create*`/`register*` factory and a `status()` — nothing else. The event bus is the only integration surface.
