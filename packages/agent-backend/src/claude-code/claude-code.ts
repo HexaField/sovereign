@@ -680,8 +680,19 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
           const rawInput = (inp.tool_input ?? {}) as { questions?: unknown }
           const questions = Array.isArray(rawInput.questions) ? rawInput.questions : []
           if (questions.length > 0) {
+            // Walk the parentSessionKey chain up to the top-level thread so
+            // subagent AskUserQuestion calls surface on the parent thread the
+            // user is actually looking at — the subagent's own thread view is
+            // deeply nested and easy to miss. Cap the walk at 8 hops for
+            // safety in case a subagent chain ever cycles.
+            let anchorKey = sk
+            for (let i = 0; i < 8; i++) {
+              const parent = internal.sessions.get(anchorKey)?.parentSessionKey
+              if (!parent) break
+              anchorKey = parent
+            }
             try {
-              const result = await deps.askUserQuestionStore.register(sk, toolCallId, {
+              const result = await deps.askUserQuestionStore.register(anchorKey, toolCallId, {
                 questions: questions as any
               })
               return {

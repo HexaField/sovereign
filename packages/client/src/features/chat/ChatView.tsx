@@ -85,6 +85,35 @@ export interface ChatViewProps {
 }
 
 /**
+ * Pending AskUserQuestion entries whose tool_use_id doesn't appear in any
+ * visible turn's workItems. Two ways this happens:
+ *
+ * 1. **Subagent asked the question**: the tool_call is in the subagent's
+ *    transcript, not the parent's. The server routes the pending entry to
+ *    the parent thread (see `askUserQuestionStore.register` in the
+ *    PreToolUse hook), and this fallback renders it here so the user
+ *    actually sees the question.
+ * 2. **History truncation / cold start**: pending entry primed via REST
+ *    before the tool_call arrives via SSE.
+ *
+ * Once the corresponding tool_call lands in a turn's workItems, that slot
+ * takes over and this fallback stops rendering for that toolCallId.
+ */
+function orphanPendingQuestions(messages: ChatMessage[]): Array<{ toolCallId: string }> {
+  const knownToolCallIds = new Set<string>()
+  for (const m of messages) {
+    for (const w of m.turn.workItems ?? []) {
+      if (w.type === 'tool_call' && isAskUserQuestionToolName(w.name) && w.toolCallId) {
+        knownToolCallIds.add(w.toolCallId)
+      }
+    }
+  }
+  return pendingQuestions()
+    .filter((p) => !knownToolCallIds.has(p.toolCallId))
+    .map((p) => ({ toolCallId: p.toolCallId }))
+}
+
+/**
  * Extract Claude Code `AskUserQuestion` tool calls from a turn's work items.
  * For each call we return whether the paired tool_result already has a parseable
  * Sovereign-formatted answer (historical / just-answered case) — the slot
@@ -464,6 +493,18 @@ export function ChatView(props: ChatViewProps) {
               </Show>
             )
           }}
+        </For>
+
+        {/* ── Orphan pending AskUserQuestion cards ────────────────────
+            Any pending question whose tool_use_id isn't matched by a tool_call
+            in the visible turns' workItems. This is the surface for subagent
+            questions — the tool_call lives in the subagent's transcript, but
+            the store's hook walks the parentSessionKey chain so the pending
+            entry lands on the top-level thread the user is viewing. Also
+            covers post-restart / history-truncation cases where a pending
+            entry has no local anchor. */}
+        <For each={orphanPendingQuestions(props.messages)}>
+          {(entry) => <AskUserQuestionSlot toolCallId={entry.toolCallId} answered={null} threadKey={props.threadKey} />}
         </For>
 
         {/* ── Live streaming section (independent of history turns) ── */}
