@@ -51,7 +51,13 @@ export interface WorkItem {
  * structured fields extracted from the envelope (cron schedule time,
  * task-notification fields, sdk-invoke arguments, etc.).
  */
-export type TurnKindVariant = 'cron-fired' | 'task-notification' | 'sdk-invoke' | 'compaction' | 'agent-error'
+export type TurnKindVariant =
+  | 'cron-fired'
+  | 'task-notification'
+  | 'sdk-invoke'
+  | 'compaction'
+  | 'agent-error'
+  | 'hook-output'
 
 export interface TurnKind {
   variant: TurnKindVariant

@@ -260,56 +260,14 @@ export function MessageBubble(props: MessageBubbleProps) {
 
     const k = kind()
 
-    // Compaction marker — small centered chip with optional summary body.
-    if (k?.variant === 'compaction') {
-      const [summaryOpen, setSummaryOpen] = createSignal(false)
-      const marker = (): string => {
-        const text = content().trim()
-        const blankIdx = text.indexOf('\n\n')
-        return blankIdx === -1 ? text : text.slice(0, blankIdx).trim()
-      }
-      const summary = (): string => {
-        const text = content().trim()
-        const blankIdx = text.indexOf('\n\n')
-        return blankIdx === -1 ? '' : text.slice(blankIdx + 2).trim()
-      }
-      const hasSummary = (): boolean => summary().length > 0
-      return (
-        <div class="my-1 flex w-full flex-col items-center gap-1">
-          <button
-            type="button"
-            class="rounded-full px-3 py-1 text-xs"
-            classList={{ 'cursor-pointer': hasSummary(), 'cursor-default': !hasSummary() }}
-            style={{
-              background: 'var(--c-bg-raised)',
-              color: 'var(--c-text-muted)',
-              border: '1px solid var(--c-border)'
-            }}
-            onClick={() => hasSummary() && setSummaryOpen(!summaryOpen())}
-            aria-expanded={hasSummary() ? summaryOpen() : undefined}
-          >
-            <span>{marker()}</span>
-            <Show when={hasSummary()}>
-              <span class="ml-2 text-[9px]" classList={{ 'rotate-90': summaryOpen() }}>
-                ▶
-              </span>
-            </Show>
-          </button>
-          <Show when={hasSummary() && summaryOpen()}>
-            <div
-              class="w-full max-w-[85%] rounded-lg px-3 py-2 text-xs"
-              style={{
-                background: 'var(--c-bg-raised)',
-                color: 'var(--c-text-muted)',
-                border: '1px solid var(--c-border)'
-              }}
-            >
-              <MarkdownContentInternal text={summary()} />
-            </div>
-          </Show>
-        </div>
-      )
-    }
+    // Compaction and hook-output turns are folded into the preceding assistant
+    // turn's workItems by `absorbFoldableTurn` on the SSE path and
+    // `foldSystemEventsIntoWork` on the history path, so they never reach
+    // MessageBubble as standalone entries. Return null defensively for the
+    // race where a fold couldn't find an anchor (e.g. hooks fired before the
+    // first assistant reply) — the content lives in JSONL for audit and will
+    // fold correctly on the next reload once an assistant turn exists.
+    if (k?.variant === 'compaction' || k?.variant === 'hook-output') return null
 
     // Agent error — red, prominent, not collapsible.
     if (k?.variant === 'agent-error') {

@@ -5,6 +5,7 @@ import type { WsStore } from '../../ws/ws-store.js'
 import { renderMarkdown, stripThinkingBlocks } from '../../lib/markdown.js'
 import { setBackendStatus, type ConnectionStatus } from '../connection/store.js'
 import { mergeFetchedHistory } from './merge-history.js'
+import { absorbFoldableTurn } from '@sovereign/core'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
 export const [agentStatus, setAgentStatus] = createSignal<AgentStatus>('idle')
@@ -481,6 +482,18 @@ function connectSSE(threadKey: string): void {
     if (!checkSeq(e)) return
     const data = JSON.parse((e as MessageEvent).data)
     const turn = data.turn as ParsedTurn
+
+    // Framing system turns (compaction chip, hook lifecycle output) are folded
+    // into the preceding assistant turn's workItems as system_event rows so
+    // they render inside the collapsible tool-call list rather than as a
+    // standalone bubble between turns. If there's no preceding assistant turn
+    // yet (rare — SessionStart hooks firing before the first reply), fall
+    // through to the normal push so the info isn't dropped.
+    const absorbed = absorbFoldableTurn(turn, turns())
+    if (absorbed.absorbed) {
+      setTurns(absorbed.turns)
+      return
+    }
 
     // Only the assistant's turn owns liveWork — never attach the agent's
     // tool calls / thinking to the synthetic user turn, or the UI will

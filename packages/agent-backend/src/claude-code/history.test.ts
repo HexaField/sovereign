@@ -46,6 +46,39 @@ describe('claude-code/history', () => {
       expect(out?.content).toMatch(/auto/)
     })
 
+    it('emits a 🪝 hook-output system turn for a hook_success attachment', () => {
+      const out = normalizeClaudeCodeEntry({
+        type: 'attachment',
+        attachment: {
+          type: 'hook_success',
+          hookName: 'SessionStart:startup',
+          hookEvent: 'SessionStart',
+          stdout: 'Cozempic: guard active\n',
+          stderr: '',
+          exitCode: 0
+        }
+      })
+      expect(out?.role).toBe('system')
+      expect(out?.content).toContain('🪝 SessionStart · startup')
+      expect(out?.content).toContain('Cozempic: guard active')
+    })
+
+    it('returns null for a hook_success attachment with empty stdout/stderr', () => {
+      const out = normalizeClaudeCodeEntry({
+        type: 'attachment',
+        attachment: { type: 'hook_success', hookEvent: 'PostToolUse', stdout: '', stderr: '' }
+      })
+      expect(out).toBeNull()
+    })
+
+    it('surfaces stderr when a hook_success has stderr but no stdout', () => {
+      const out = normalizeClaudeCodeEntry({
+        type: 'attachment',
+        attachment: { type: 'hook_success', hookEvent: 'Stop', stdout: '', stderr: 'warn: x' }
+      })
+      expect(out?.content).toContain('[stderr] warn: x')
+    })
+
     it('emits ⚙️ Compacted with correct trigger from camelCase compactMetadata (SDK shape)', () => {
       const out = normalizeClaudeCodeEntry({
         type: 'system',

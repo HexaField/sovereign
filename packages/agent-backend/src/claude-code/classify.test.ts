@@ -103,6 +103,27 @@ describe('classifyClaudeCodeTurn', () => {
     })
   })
 
+  describe('hook output', () => {
+    it('tags a "🪝 SessionStart · startup\\n…" system turn as hook-output with payload', () => {
+      const out = classifyClaudeCodeTurn(systemTurn('🪝 SessionStart · startup\nCozempic: guard active'))
+      expect(out.role).toBe('system')
+      expect(out.content).toBe('Cozempic: guard active')
+      expect(out.kind?.variant).toBe('hook-output')
+      expect(out.kind?.label).toBe('Hook: SessionStart · startup')
+      expect(out.kind?.payload).toMatchObject({
+        hookEvent: 'SessionStart',
+        hookName: 'startup',
+        stdout: 'Cozempic: guard active'
+      })
+    })
+
+    it('tags hook output without a hook name', () => {
+      const out = classifyClaudeCodeTurn(systemTurn('🪝 PreCompact\nchecked'))
+      expect(out.kind?.variant).toBe('hook-output')
+      expect(out.kind?.label).toBe('Hook: PreCompact')
+    })
+  })
+
   describe('agent error', () => {
     it('tags an "Error: …" system turn', () => {
       const out = classifyClaudeCodeTurn(systemTurn('Error: rate limited'))

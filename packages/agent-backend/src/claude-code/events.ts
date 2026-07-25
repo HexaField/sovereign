@@ -312,6 +312,35 @@ export function handleCompactBoundary(msg: any, state: ClaudeSessionState, emitt
   })
 }
 
+/**
+ * Handle SDK hook lifecycle messages — `hook_response` (final stdout+exit),
+ * `hook_progress` (streaming stdout while long-running hooks run), and
+ * `hook_started` (fire-and-forget notice). Only emit turns when there's
+ * actual stdout to surface; the marker matches what `normalizeClaudeCodeEntry`
+ * uses so `classifyHookOutput` tags them identically for both live and
+ * history-replay paths.
+ */
+export function handleHookMessage(msg: any, state: ClaudeSessionState, emitter: BackendEmitter): void {
+  const stdout = ((msg?.stdout ?? msg?.output ?? '') as string).toString().trim()
+  const stderr = ((msg?.stderr ?? '') as string).toString().trim()
+  if (!stdout && !stderr) return
+  const hookEvent = msg?.hook_event ?? 'Hook'
+  const rawName = (msg?.hook_name ?? '').toString()
+  const hookName = rawName.replace(/^.*:/, '').trim()
+  const marker = hookName ? `🪝 ${hookEvent} · ${hookName}` : `🪝 ${hookEvent}`
+  const body = stderr && !stdout ? `[stderr] ${stderr}` : stderr ? `${stdout}\n[stderr] ${stderr}` : stdout
+  emitter.emit('chat.turn', {
+    sessionKey: state.sessionKey,
+    turn: classifyClaudeCodeTurn({
+      role: 'system',
+      content: `${marker}\n${body}`,
+      timestamp: Date.now(),
+      workItems: [],
+      thinkingBlocks: []
+    })
+  })
+}
+
 /** Handle SDKStatusMessage (subtype 'status') — propagate compacting state. */
 export function handleStatus(msg: any, state: ClaudeSessionState, emitter: BackendEmitter): void {
   if (msg?.status === 'compacting') {
@@ -337,7 +366,9 @@ export function dispatchSdkMessage(msg: any, state: ClaudeSessionState, emitter:
     case 'system':
       if (msg.subtype === 'compact_boundary') handleCompactBoundary(msg, state, emitter)
       else if (msg.subtype === 'status') handleStatus(msg, state, emitter)
-      else if (msg.subtype === 'session_state_changed') {
+      else if (msg.subtype === 'hook_response' || msg.subtype === 'hook_progress' || msg.subtype === 'hook_started') {
+        handleHookMessage(msg, state, emitter)
+      } else if (msg.subtype === 'session_state_changed') {
         if (msg.state === 'idle') setIdle(state, emitter)
         else if (msg.state === 'running') setWorking(state, emitter)
       }

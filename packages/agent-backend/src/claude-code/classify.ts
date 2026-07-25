@@ -142,6 +142,32 @@ function classifyAgentError(content: string): { content: string; kind: TurnKind 
   }
 }
 
+// ── Hook output ──────────────────────────────────────────────────────
+// `normalizeClaudeCodeEntry` and `handleHookMessage` both emit a system turn
+// whose content is `🪝 <hookEvent>[ · <hookName>]\n<stdout>` — the CLI-level
+// shell hooks defined in `~/.claude/settings.json` (cozempic guard, plugin
+// hooks) and the SDK-emitted hook lifecycle messages both funnel through here.
+// The classifier tags them so the client can fold them into workItems as
+// system_event rows in the tool-call list instead of standalone bubbles.
+const HOOK_OUTPUT_RE = /^🪝\s*([A-Za-z][A-Za-z0-9_-]*)(?:\s*·\s*([^\n]+))?\s*\n?([\s\S]*)$/
+
+function classifyHookOutput(content: string): { content: string; kind: TurnKind } | null {
+  const m = content.match(HOOK_OUTPUT_RE)
+  if (!m) return null
+  const hookEvent = m[1]
+  const hookName = (m[2] ?? '').trim()
+  const body = (m[3] ?? '').trim()
+  const label = hookName ? `Hook: ${hookEvent} · ${hookName}` : `Hook: ${hookEvent}`
+  return {
+    content: body,
+    kind: {
+      variant: 'hook-output',
+      label,
+      payload: { hookEvent, hookName, stdout: body }
+    }
+  }
+}
+
 // ── Pipeline ─────────────────────────────────────────────────────────
 
 /**
@@ -155,10 +181,14 @@ function classifyAgentError(content: string): { content: string; kind: TurnKind 
  * case is a plain user message or assistant reply.
  */
 export function classifyClaudeCodeTurn(turn: ParsedTurn): ParsedTurn {
-  // System turns: tag compaction / error so the UI switch can branch on kind.
+  // System turns: tag compaction / hook-output / error so the UI switch can
+  // branch on kind. Order matters here only if envelopes could overlap — they
+  // don't, so any order works.
   if (turn.role === 'system') {
     const compaction = classifyCompaction(turn.content)
     if (compaction) return { ...turn, content: compaction.content, kind: compaction.kind }
+    const hook = classifyHookOutput(turn.content)
+    if (hook) return { ...turn, content: hook.content, kind: hook.kind }
     const err = classifyAgentError(turn.content)
     if (err) return { ...turn, content: err.content, kind: err.kind }
     return turn
