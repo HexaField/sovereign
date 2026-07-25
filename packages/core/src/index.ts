@@ -9,6 +9,7 @@ export * from './session-key.js'
 export * from './thread.js'
 export * from './message-origin.js'
 export { foldSystemEventsIntoWork, absorbFoldableTurn, foldableToWorkItem } from './fold-system-events.js'
+export * from './ask-user-question.js'
 
 /**
  * A message in the server-side queue waiting to be sent to the agent.

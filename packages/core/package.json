@@ -16,12 +16,18 @@
       "types": "./src/fold-system-events.ts",
       "development": "./src/fold-system-events.ts",
       "default": "./dist/fold-system-events.js"
+    },
+    "./ask-user-question": {
+      "types": "./src/ask-user-question.ts",
+      "development": "./src/ask-user-question.ts",
+      "default": "./dist/ask-user-question.js"
     }
   },
   "publishConfig": {
     "exports": {
       ".": "./dist/index.js",
-      "./fold-system-events": "./dist/fold-system-events.js"
+      "./fold-system-events": "./dist/fold-system-events.js",
+      "./ask-user-question": "./dist/ask-user-question.js"
     },
     "main": "dist/index.js",
     "types": "dist/index.d.ts"
