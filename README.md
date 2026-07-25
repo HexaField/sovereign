@@ -60,15 +60,15 @@ Sovereign is standalone but reaches for a few external services when they're ava
 
 ### AD4M
 
-[AD4M](https://github.com/coasys/ad4m) is an agent-centric distributed runtime for perspectives, SHACL-defined subject classes, and Holochain-backed neighbourhoods. Sovereign runs the executor in Docker, injects its MCP endpoint into every agent session as `mcp__ad4m__*` tools, and forwards mentions from joined channels into the presence thread's internal stream. Configure via `ad4m.host` and `ad4m.mcpUrl` in `config.json`; the OAuth token lands in `data/ad4m-token.json` after the first capability request.
+[AD4M](https://github.com/coasys/ad4m) is an agent-centric runtime for semantic peer-to-peer apps, where "agent" covers anything with agency — humans, communities, AIs — and each community chooses its own sync protocol and ontology (both dynamic and evolvable). Sovereign runs the executor in Docker, injects its MCP endpoint into every agent session as `mcp__ad4m__*` tools, and forwards mentions from joined channels into the presence thread's internal stream. Configure via `ad4m.host` and `ad4m.mcpUrl` in `config.json`; the OAuth token lands in `data/ad4m-token.json` after the first capability request.
 
-### WE (Weave)
+### WE
 
-[WE](https://github.com/coasys/we) is the web launcher for AD4M-based apps — group creation, app installation, and cross-app data sharing on top of an AD4M executor. Sovereign runs it as a separate service on the same host as the executor so a single tailnet address serves both. Add it to `services.external` in `config.json` alongside AD4M to get a health row and a one-click "open in new tab" button in the dropdown.
+[WE](https://github.com/coasys/we) is a decentralised application framework and design system built on AD4M — schema-driven UI, a component library, and launchers for web, Electron, and Tauri. Sovereign runs the web launcher as a separate service on the same host as the AD4M executor so a single tailnet address serves both. Add it to `services.external` in `config.json` to get a health row and a one-click "open in new tab" button in the dropdown.
 
 ### Cozempic
 
-Per-thread memory guard for the Claude Code sessions Sovereign spawns. Watches each session, checkpoints task state on `PreCompact`, and re-injects a distilled digest on `PostCompact` and `SessionStart` so long conversations survive context resets. Registered globally via `~/.claude/settings.json` hooks; Sovereign surfaces guard health per thread (`/api/threads/:key/cozempic-health`) with a Restore action when a guard has crashed or failed to prune.
+[Cozempic](https://github.com/Ruya-AI/cozempic) is a context cleaner for Claude Code — a set of composable pruning strategies that strip stale file reads, thinking blocks, duplicate CLAUDE.md injections, and oversized tool outputs while leaving the working conversation intact. Installed globally, its guard daemon auto-starts via the `SessionStart` hook and prunes each session as it grows. Sovereign surfaces guard health per thread (`/api/threads/:key/cozempic-health`) with a Restore action when a guard has crashed or failed to prune.
 
 ### Semble
 
