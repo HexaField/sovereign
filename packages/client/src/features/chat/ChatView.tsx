@@ -1,9 +1,12 @@
 import { createEffect, createSignal, For, Show } from 'solid-js'
-import type { WorkItem, AgentStatus } from '@sovereign/core'
+import type { WorkItem, AgentStatus, AskUserQuestionResult } from '@sovereign/core'
+import { parseAskUserQuestionResult, isAskUserQuestionToolName } from '@sovereign/core/ask-user-question'
 import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
 import { SubagentCard } from './SubagentCard.js'
+import { AskUserQuestionCard } from './AskUserQuestionCard.js'
+import { pendingQuestions, submitAnswers } from './questions-store.js'
 import { CronResultsBanner } from '../crons/CronResultsBanner.js'
 import {
   hasOlderMessages,
@@ -79,6 +82,83 @@ export interface ChatViewProps {
   onAbort: () => void
   threadKey: string
   onViewSubagent?: (sessionKey: string, label: string) => void
+}
+
+/**
+ * Extract Claude Code `AskUserQuestion` tool calls from a turn's work items.
+ * For each call we return whether the paired tool_result already has a parseable
+ * Sovereign-formatted answer (historical / just-answered case) — the slot
+ * component then decides whether to show the form or the summary.
+ */
+function extractAskUserQuestions(
+  workItems: WorkItem[]
+): Array<{ toolCallId: string; answered: AskUserQuestionResult | null }> {
+  const out: Array<{ toolCallId: string; answered: AskUserQuestionResult | null }> = []
+  for (const w of workItems) {
+    if (w.type !== 'tool_call' || !isAskUserQuestionToolName(w.name) || !w.toolCallId) continue
+    const result = workItems.find((r) => r.type === 'tool_result' && r.toolCallId === w.toolCallId)
+    out.push({ toolCallId: w.toolCallId, answered: parseAskUserQuestionResult(result?.output) })
+  }
+  return out
+}
+
+/**
+ * Renders a single question slot. If the tool_result already has a parseable
+ * answer payload, show the read-only summary and skip the pending lookup
+ * (historical view is stable + doesn't need the live pending list). Otherwise
+ * look up the pending entry by toolCallId and render the form.
+ */
+function AskUserQuestionSlot(props: { toolCallId: string; answered: AskUserQuestionResult | null; threadKey: string }) {
+  const [submitting, setSubmitting] = createSignal(false)
+  const [submitError, setSubmitError] = createSignal('')
+  const pending = () => pendingQuestions().find((p) => p.toolCallId === props.toolCallId)
+
+  return (
+    <Show when={!props.answered} fallback={<AskUserQuestionCard mode="answered" result={props.answered!} />}>
+      <Show
+        when={pending()}
+        fallback={
+          <div
+            class="mt-2 max-w-[90%] self-start rounded-2xl border p-3 text-xs"
+            style={{
+              background: 'var(--c-bg-raised)',
+              'border-color': 'var(--c-border)',
+              color: 'var(--c-text-muted)',
+              'font-style': 'italic'
+            }}
+          >
+            Waiting for question payload…
+          </div>
+        }
+      >
+        {(entry) => (
+          <>
+            <AskUserQuestionCard
+              mode="pending"
+              questions={entry().input.questions}
+              submitting={submitting()}
+              onSubmit={async (answers, annotations) => {
+                setSubmitting(true)
+                setSubmitError('')
+                const res = await submitAnswers(props.threadKey, props.toolCallId, {
+                  questions: entry().input.questions,
+                  answers,
+                  annotations
+                })
+                setSubmitting(false)
+                if (!res.ok) setSubmitError(res.error ?? 'Submit failed')
+              }}
+            />
+            <Show when={submitError()}>
+              <div class="ml-2 text-[11px]" style={{ color: '#ef4444' }}>
+                {submitError()}
+              </div>
+            </Show>
+          </>
+        )}
+      </Show>
+    </Show>
+  )
 }
 
 /** Extract subagent spawns from a turn's work items */
@@ -275,8 +355,17 @@ export function ChatView(props: ChatViewProps) {
                   </div>
                 )}
 
-                {/* Work section between user and assistant turns */}
-                {(msg.turn.workItems?.length ?? 0) > 0 && <WorkSection work={msg.turn.workItems} />}
+                {/* Work section between user and assistant turns. Filter
+                    AskUserQuestion pairs out — they render richly below as
+                    interactive cards; showing them raw here would duplicate
+                    the whole question payload as a JSON blob. */}
+                {(() => {
+                  const items = (msg.turn.workItems || []).filter((w) => {
+                    if (!isAskUserQuestionToolName(w.name)) return true
+                    return false
+                  })
+                  return items.length > 0 ? <WorkSection work={items} /> : null
+                })()}
 
                 {/* Subagent task prompt — show as a special collapsible card */}
                 {isSubagentTask() ? (
@@ -294,6 +383,19 @@ export function ChatView(props: ChatViewProps) {
                     sessionKey={spawn.sessionKey}
                     task={spawn.task}
                     onView={(key, label) => props.onViewSubagent?.(key, label)}
+                  />
+                ))}
+
+                {/* AskUserQuestion cards — one per tool_call whose name is
+                    `AskUserQuestion`. Renders as an interactive form while
+                    the server-side hook is still awaiting an answer, and
+                    switches to the read-only summary once a tool_result JSON
+                    lands in the same workItems list. */}
+                {extractAskUserQuestions(msg.turn.workItems || []).map((entry) => (
+                  <AskUserQuestionSlot
+                    toolCallId={entry.toolCallId}
+                    answered={entry.answered}
+                    threadKey={props.threadKey}
                   />
                 ))}
               </>

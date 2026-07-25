@@ -47,9 +47,11 @@ export {
   claudeCodeConfigFromStore,
   createSovereignMcpServer,
   createPersonalityCompiler,
+  createAskUserQuestionStore,
   type ClaudeCodeBackend,
   type SovereignToolDeps,
   type PersonalityCompiler,
   type PersonalityCompilerOptions,
-  type PersonalityManifest
+  type PersonalityManifest,
+  type AskUserQuestionStore
 } from './claude-code/index.js'

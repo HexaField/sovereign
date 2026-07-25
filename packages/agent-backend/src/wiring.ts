@@ -13,7 +13,9 @@ import {
   createClaudeCodeBackend,
   claudeCodeConfigFromStore,
   createSovereignMcpServer,
-  type ClaudeCodeBackend
+  createAskUserQuestionStore,
+  type ClaudeCodeBackend,
+  type AskUserQuestionStore
 } from './claude-code/index.js'
 import { buildSovereignMcpDeps } from './mcp-deps.js'
 import { createMcpRpcRoutes } from './mcp-rpc-routes.js'
@@ -75,6 +77,8 @@ export interface AgentBackendWiringResult {
   createSovereignMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
   /** Express router that exposes every MCP tool as `POST /api/mcp-rpc/:tool` — consumed by `@sovereign/mcp-sidecar`. */
   mcpRpcRouter: import('express').Router
+  /** Registry of pending Claude Code `AskUserQuestion` calls awaiting user submission. */
+  askUserQuestionStore: AskUserQuestionStore
 }
 
 function makeToolPolicy(orgManager: OrgManager) {
@@ -208,6 +212,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
 
   const sessionsRegistry = createSessionsRegistry(dataDir)
   const activeSessions = createActiveSessions({ dataDir })
+  const askUserQuestionStore = createAskUserQuestionStore(bus)
   const sharedMcpDeps = buildSovereignMcpDeps({
     bus,
     routing: new Proxy({} as any, { get: (_t, p) => (routingBackend as any)[p as any] }),
@@ -256,6 +261,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
           },
           toolPolicy: makeToolPolicy(orgManager),
           activeSessions,
+          askUserQuestionStore,
           resolveAppendSystemPrompt: makePresenceAwareAppendResolver(membraneManager, threadManager, {
             internalThreadId: () => input.presence?.internalThreadId() ?? null,
             personalityFile: input.presencePersonalityFile,
@@ -300,6 +306,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     activeSessions,
     sovereignMcpServer,
     createSovereignMcpInstance: () => createSovereignMcpServer(sharedMcpDeps).instance,
-    mcpRpcRouter: createMcpRpcRoutes(sharedMcpDeps)
+    mcpRpcRouter: createMcpRpcRoutes(sharedMcpDeps),
+    askUserQuestionStore
   }
 }
