@@ -41,19 +41,30 @@ const DEFAULT_CONTINUATION_MARKER = '[Resumed after server restart. Continue fro
 export interface ResumeOutcome {
   sessionKey: string
   threadKey: string
-  tier: 1 | 2 | 3 | 'invalidated'
+  tier: 1 | 2 | 3 | 'invalidated' | 'tool-await' | 'passthrough'
   reason: string
 }
 
 export interface ResumeReport {
   outcomes: ResumeOutcome[]
-  counts: { tier1: number; tier2: number; tier3: number; invalidated: number }
+  counts: {
+    tier1: number
+    tier2: number
+    tier3: number
+    invalidated: number
+    /** Sessions the PreToolUse hook was holding open when we shut down.
+     *  Left to the SDK's own tool re-fire on session resume. */
+    toolAwait: number
+    /** Sessions with `working` status but no evidence of an in-flight user
+     *  prompt or tool-await — SDK session resume handles them naturally. */
+    passthrough: number
+  }
 }
 
 export async function resumeActiveSessions(opts: ResumeOrchestratorOptions): Promise<ResumeReport> {
   const marker = opts.continuationMarker ?? DEFAULT_CONTINUATION_MARKER
   const outcomes: ResumeOutcome[] = []
-  const counts = { tier1: 0, tier2: 0, tier3: 0, invalidated: 0 }
+  const counts = { tier1: 0, tier2: 0, tier3: 0, invalidated: 0, toolAwait: 0, passthrough: 0 }
 
   const entries = opts.activeSessions.list()
   if (entries.length === 0) return { outcomes, counts }
@@ -78,6 +89,8 @@ export async function resumeActiveSessions(opts: ResumeOrchestratorOptions): Pro
     if (outcome.tier === 1) counts.tier1++
     else if (outcome.tier === 2) counts.tier2++
     else if (outcome.tier === 3) counts.tier3++
+    else if (outcome.tier === 'tool-await') counts.toolAwait++
+    else if (outcome.tier === 'passthrough') counts.passthrough++
     else counts.invalidated++
   }
 
@@ -122,6 +135,25 @@ async function resolveOne(args: ResolveOneArgs): Promise<ResumeOutcome> {
     }
   }
 
+  // ── Tool-await short-circuit ──────────────────────────────────────
+  // The PreToolUse hook was holding the SDK open (currently
+  // AskUserQuestion) at shutdown. The SDK re-fires the tool_use on
+  // session resume, so a fresh hook invocation will re-register the
+  // pending entry naturally — we must NOT synthesize a continuation
+  // here, or the user gets both a re-opened question card AND a stray
+  // "Resumed after server restart" user message on top of the tool
+  // re-fire. Leave the active-sessions entry in place; when the hook
+  // fires again on resume, `setPendingToolAwait` will refresh it (and
+  // `clearPendingToolAwait` will drop it once the user submits).
+  if (entry.pendingToolAwait) {
+    return {
+      sessionKey: entry.sessionKey,
+      threadKey: entry.threadKey,
+      tier: 'tool-await',
+      reason: `sdk-will-re-fire-${entry.pendingToolAwait.toolName}`
+    }
+  }
+
   // ── Tier 2 — JSONL coherence: did the assistant turn actually complete? ──
   if (
     entry.backendSessionFile &&
@@ -148,9 +180,26 @@ async function resolveOne(args: ResolveOneArgs): Promise<ResumeOutcome> {
     }
   }
 
-  // ── Tier 3 — Auto-continue (always-on per R13). ──
-  await Promise.resolve(args.sendContinuation(entry.threadKey, args.marker))
-  return { sessionKey: entry.sessionKey, threadKey: entry.threadKey, tier: 3, reason: 'auto-continue' }
+  // ── Tier 3 — Auto-continue, gated by evidence of an in-flight prompt ──
+  // Historically fired unconditionally as a safety net, but for sessions
+  // whose `working` state came from a mid-tool situation with no queue
+  // record, injecting `[Resumed…]` produces a spurious user turn on top
+  // of the SDK's own tool re-fire. Only fabricate a continuation when
+  // we have concrete evidence a user message was in flight
+  // (`inFlightPromptText` was set). Otherwise the SDK's session resume
+  // is the right authority — leave the entry alone and let the natural
+  // re-emission of the current turn's blocks flow through.
+  if (entry.inFlightPromptText) {
+    await Promise.resolve(args.sendContinuation(entry.threadKey, args.marker))
+    return { sessionKey: entry.sessionKey, threadKey: entry.threadKey, tier: 3, reason: 'auto-continue' }
+  }
+
+  return {
+    sessionKey: entry.sessionKey,
+    threadKey: entry.threadKey,
+    tier: 'passthrough',
+    reason: 'no-inflight-no-tool-await'
+  }
 }
 
 /** Emit synthetic `subagent.completed` for the parent's tracked children when

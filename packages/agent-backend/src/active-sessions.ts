@@ -40,6 +40,18 @@ export interface ActiveSessionEntry {
   lastJsonlSize?: number
   /** Live subagents spawned by this session. */
   subagents?: ActiveSubagent[]
+  /**
+   * Set while the PreToolUse hook is holding the SDK open awaiting a user
+   * response (currently only `AskUserQuestion`). Distinguishes a "working"
+   * status caused by a hook-await from one caused by an in-flight queue send
+   * — the boot-time resume sweep treats the two very differently. Cleared in
+   * a `finally` around the awaited promise.
+   */
+  pendingToolAwait?: {
+    toolName: string
+    toolCallId: string
+    startedAt: number
+  }
 }
 
 export interface ActiveSessionsSnapshot {
@@ -57,6 +69,16 @@ export interface ActiveSessions {
   get(sessionKey: string): ActiveSessionEntry | undefined
   /** Record that a queued user message is now being processed by `sessionKey`. */
   setInFlight(sessionKey: string, info: { queueId: string; promptText: string }): void
+  /**
+   * Record that a PreToolUse hook is holding the SDK open waiting for user
+   * input. Persisted so a boot-time resume can skip the auto-continue path
+   * for these sessions — the SDK re-fires the underlying tool_use on session
+   * resume, and our hook re-registers the pending entry naturally.
+   * Synchronous.
+   */
+  setPendingToolAwait(sessionKey: string, info: { toolName: string; toolCallId: string }): void
+  /** Clear the pending-tool-await marker set by `setPendingToolAwait`. Synchronous. */
+  clearPendingToolAwait(sessionKey: string): void
   /** Update the JSONL size / lastAssistantMessageAt for a session. Debounced (R5). */
   bumpActivity(sessionKey: string, patch: { lastJsonlSize?: number; lastAssistantMessageAt?: number }): void
   /** Add a subagent record to its parent session. Synchronous. */
@@ -134,6 +156,27 @@ export function createActiveSessions(opts: CreateActiveSessionsOptions): ActiveS
         if (!existing) return
         existing.inFlightQueueId = info.queueId
         existing.inFlightPromptText = info.promptText
+        existing.lastTransitionAt = Date.now()
+      })
+    },
+    setPendingToolAwait(sessionKey, info) {
+      mutateSync((snap) => {
+        const existing = snap[sessionKey]
+        if (!existing) return
+        existing.pendingToolAwait = {
+          toolName: info.toolName,
+          toolCallId: info.toolCallId,
+          startedAt: Date.now()
+        }
+        existing.lastTransitionAt = Date.now()
+      })
+    },
+    clearPendingToolAwait(sessionKey) {
+      mutateSync((snap) => {
+        const existing = snap[sessionKey]
+        if (!existing) return
+        if (!existing.pendingToolAwait) return
+        delete existing.pendingToolAwait
         existing.lastTransitionAt = Date.now()
       })
     },
