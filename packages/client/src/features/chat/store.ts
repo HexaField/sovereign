@@ -5,7 +5,11 @@ import type { WsStore } from '../../ws/ws-store.js'
 import { renderMarkdown, stripThinkingBlocks } from '../../lib/markdown.js'
 import { setBackendStatus, type ConnectionStatus } from '../connection/store.js'
 import { mergeFetchedHistory } from './merge-history.js'
-import { absorbFoldableTurn } from '@sovereign/core'
+// Subpath import: pulling `absorbFoldableTurn` from the top-level
+// `@sovereign/core` entry drags in bus/logger.js, which imports `node:fs` and
+// breaks the browser bundle. The fold helper lives in its own file with zero
+// node deps — import it directly.
+import { absorbFoldableTurn } from '@sovereign/core/fold-system-events'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
 export const [agentStatus, setAgentStatus] = createSignal<AgentStatus>('idle')
