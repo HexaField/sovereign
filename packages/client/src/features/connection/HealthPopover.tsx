@@ -16,6 +16,12 @@ export interface SembleHealth {
   version: string
 }
 
+export interface AgentsCensusHealth {
+  status: 'ok' | 'down' | 'unknown'
+  interactive: number
+  background: number
+}
+
 export interface ExternalServiceHealth {
   name: string
   label: string
@@ -33,6 +39,11 @@ export type OverallHealth = 'ok' | 'degraded' | 'error'
 
 const [mcpHealth, setMcpHealth] = createSignal<McpHealth>({ status: 'unknown', sessions: 0, tools: 0 })
 const [sembleHealth, setSembleHealth] = createSignal<SembleHealth>({ status: 'unknown', version: '' })
+const [agentsHealth, setAgentsHealth] = createSignal<AgentsCensusHealth>({
+  status: 'unknown',
+  interactive: 0,
+  background: 0
+})
 const [externalHealth, setExternalHealth] = createSignal<ExternalServiceHealth[]>([])
 const [cozempicHealth, setCozempicHealth] = createSignal<CozempicHealth>({ healthy: null, reason: null })
 const [cozempicRestoring, setCozempicRestoring] = createSignal(false)
@@ -72,10 +83,16 @@ export function initHealthPolling(): () => void {
   wsStore.subscribe(['system'])
   const offHealth = wsStore.on('system.health', (msg: Record<string, unknown>) => {
     const services = msg.services as
-      | { mcp?: McpHealth; semble?: SembleHealth; external?: ExternalServiceHealth[] }
+      | {
+          mcp?: McpHealth
+          semble?: SembleHealth
+          agents?: AgentsCensusHealth
+          external?: ExternalServiceHealth[]
+        }
       | undefined
     if (services?.mcp) setMcpHealth(services.mcp)
     if (services?.semble) setSembleHealth(services.semble)
+    if (services?.agents) setAgentsHealth(services.agents)
     if (Array.isArray(services?.external)) setExternalHealth(services.external)
   })
 
@@ -221,6 +238,14 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
     return { status: 'error' as const, detail: 'not installed' }
   })
 
+  const agentsRow = createMemo(() => {
+    const h = agentsHealth()
+    if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'checking...' }
+    if (h.status === 'down') return { status: 'unknown' as const, detail: 'unavailable' }
+    const bg = h.background > 0 ? ` · ${h.background} bg` : ''
+    return { status: 'ok' as const, detail: `${h.interactive} session${h.interactive === 1 ? '' : 's'}${bg}` }
+  })
+
   const externalRowStatus = (s: 'ok' | 'down' | 'unknown'): 'ok' | 'error' | 'unknown' => {
     if (s === 'ok') return 'ok'
     if (s === 'unknown') return 'unknown'
@@ -288,6 +313,7 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
             <StatusRow label="Sovereign" status={connRow().status} detail={connRow().detail} port={sovereignPort()} />
             <StatusRow label="MCP Sidecar" status={mcpRow().status} detail={mcpRow().detail} />
             <StatusRow label="Semble" status={sembleRow().status} detail={sembleRow().detail} />
+            <StatusRow label="Agent Sessions" status={agentsRow().status} detail={agentsRow().detail} />
             <StatusRow
               label="Cozempic"
               status={cozRow().status}

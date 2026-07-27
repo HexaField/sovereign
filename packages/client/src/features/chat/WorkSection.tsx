@@ -252,6 +252,7 @@ export function WorkSection(props: { work: WorkItem[] }) {
           heartbeat: 'heart',
           compaction: 'broom',
           hook: 'gear',
+          resumed: 'play',
           subagentContext: 'split',
           runtimeContext: 'gear',
           generic: 'list'
@@ -263,6 +264,7 @@ export function WorkSection(props: { work: WorkItem[] }) {
           heartbeat: 'Heartbeat',
           compaction: 'Context Compacted',
           hook: 'Hook',
+          resumed: 'Resumed after restart',
           subagentContext: 'Subagent Task',
           runtimeContext: 'Runtime Context',
           generic: 'System'
@@ -352,6 +354,7 @@ const SYSTEM_EVENT_ICON: Record<string, string> = {
   heartbeat: 'heart',
   compaction: 'broom',
   hook: 'gear',
+  resumed: 'play',
   subagentContext: 'split',
   runtimeContext: 'gear',
   generic: 'list'
@@ -363,6 +366,7 @@ const SYSTEM_EVENT_DEFAULT_LABEL: Record<string, string> = {
   heartbeat: 'Heartbeat',
   compaction: 'Context Compacted',
   hook: 'Hook',
+  resumed: 'Resumed after restart',
   subagentContext: 'Subagent Task',
   runtimeContext: 'Runtime Context',
   generic: 'System'

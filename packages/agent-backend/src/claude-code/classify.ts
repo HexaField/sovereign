@@ -129,6 +129,24 @@ function classifyCompaction(content: string): { content: string; kind: TurnKind 
   }
 }
 
+// ── Session resume ───────────────────────────────────────────────────
+// The resume orchestrator injects `[Resumed after server restart …]` as a
+// continuation prompt after a rebuild. Sovereign sends it with
+// `synthRole: 'system'` so it never renders as a user bubble, but the SDK
+// still records it as a user message in the JSONL — so history replay has to
+// flip it back. Tagging it `session-resumed` lets the client fold it into the
+// neighbouring assistant turn's work list instead of breaking the transcript.
+const SESSION_RESUMED_RE = /^\[Resumed after server restart\b[^\]]*\]/
+
+function classifySessionResumed(content: string): { content: string; kind: TurnKind } | null {
+  const trimmed = content.trim()
+  if (!SESSION_RESUMED_RE.test(trimmed)) return null
+  return {
+    content: trimmed,
+    kind: { variant: 'session-resumed', label: 'Resumed after restart' }
+  }
+}
+
 // ── Agent error ──────────────────────────────────────────────────────
 // `parseTurns` emits a system turn with content `Error: <message>` when an
 // assistant turn ends with `stop_reason: 'error'`. Tag for the error card.
@@ -189,6 +207,8 @@ export function classifyClaudeCodeTurn(turn: ParsedTurn): ParsedTurn {
     if (compaction) return { ...turn, content: compaction.content, kind: compaction.kind }
     const hook = classifyHookOutput(turn.content)
     if (hook) return { ...turn, content: hook.content, kind: hook.kind }
+    const resumed = classifySessionResumed(turn.content)
+    if (resumed) return { ...turn, content: resumed.content, kind: resumed.kind }
     const err = classifyAgentError(turn.content)
     if (err) return { ...turn, content: err.content, kind: err.kind }
     return turn
@@ -215,6 +235,11 @@ export function classifyClaudeCodeTurn(turn: ParsedTurn): ParsedTurn {
       }
       return { ...turn, role: 'system', content: cron.content, kind: cron.kind }
     }
+
+    // History replay: the SDK persisted the resume prompt as a user message.
+    // Flip it back to system so it folds instead of rendering as a bubble.
+    const resumed = classifySessionResumed(turn.content)
+    if (resumed) return { ...turn, role: 'system', content: resumed.content, kind: resumed.kind }
 
     const notif = classifyTaskNotification(turn.content)
     if (notif) return { ...turn, role: 'system', content: notif.content, kind: notif.kind }

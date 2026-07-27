@@ -38,6 +38,27 @@ export interface ResumeOrchestratorOptions {
 
 const DEFAULT_CONTINUATION_MARKER = '[Resumed after server restart. Continue from where you left off.]'
 
+/** Longest in-flight prompt excerpt embedded in the continuation marker. */
+const RESUME_CONTEXT_MAX_CHARS = 200
+
+/**
+ * Build the continuation prompt for a Tier 3 resume. When the snapshot recorded
+ * what the user had asked (`inFlightPromptText`), quote an excerpt so the model
+ * recovers the task instead of guessing from a bare "continue" — the transcript
+ * it rehydrates ends mid-turn, which is exactly the point where "where you left
+ * off" is ambiguous.
+ *
+ * Callers can still override the whole string via `continuationMarker`; the
+ * `[Resumed after server restart` prefix is what the UI folds on, so any
+ * override should keep it.
+ */
+export function buildContinuationMarker(base: string, inFlightPromptText?: string): string {
+  const prompt = (inFlightPromptText ?? '').trim().replace(/\s+/g, ' ')
+  if (!prompt) return base
+  const excerpt = prompt.length > RESUME_CONTEXT_MAX_CHARS ? `${prompt.slice(0, RESUME_CONTEXT_MAX_CHARS)}…` : prompt
+  return `[Resumed after server restart. You were working on: "${excerpt}". Continue from where you left off.]`
+}
+
 export interface ResumeOutcome {
   sessionKey: string
   threadKey: string
@@ -177,6 +198,8 @@ async function resolveOne(args: ResolveOneArgs): Promise<ResumeOutcome> {
   }
 
   // ── Tier 3 — Auto-continue (always-on safety net) ──
+  // Quote the in-flight prompt when we have it so the model recovers the task
+  // rather than guessing from a transcript that ends mid-turn.
   // Fires for every non-tool-await, non-Tier-1/2 case. The SDK's session
   // resume does NOT naturally kick a mid-turn assistant reply back into
   // motion — it rehydrates the transcript and then waits for the next
@@ -185,7 +208,8 @@ async function resolveOne(args: ResolveOneArgs): Promise<ResumeOutcome> {
   // input the user has no reason to type. The AskUserQuestion case is
   // already handled by the tool-await short-circuit above, so this
   // won't duplicate the question card re-fire.
-  await Promise.resolve(args.sendContinuation(entry.threadKey, args.marker))
+  const marker = buildContinuationMarker(args.marker, entry.inFlightPromptText)
+  await Promise.resolve(args.sendContinuation(entry.threadKey, marker))
   return { sessionKey: entry.sessionKey, threadKey: entry.threadKey, tier: 3, reason: 'auto-continue' }
 }
 

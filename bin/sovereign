@@ -542,8 +542,36 @@ _cleanup_backup() {
 }
 
 _run_checks() {
-  _note "Running type checks + lint"
-  (cd "$REPO_DIR" && pnpm check)
+  # Full `pnpm check` runs `tsc --noEmit` across all ~34 workspace packages.
+  # During iteration only a handful have changed, and the rest were already
+  # type-checked when they last did — so scope tsc to the changed set plus its
+  # dependents (`...[<ref>]` is pnpm's changed-since-ref filter, which walks
+  # the dependency closure for us).
+  #
+  # `oxlint` still runs repo-wide; it's fast enough that scoping it isn't worth
+  # the risk of missing something.
+  #
+  # Escape hatches: SOVEREIGN_FULL_CHECK=1 forces the full sweep, and we fall
+  # back to it automatically when there's no upstream ref to diff against.
+  # `_run_builds` rebuilds every package regardless, so a scoped check can
+  # never leave a stale `dist/` behind — the only thing narrowed is type
+  # checking of packages that haven't changed.
+  if [ -n "${SOVEREIGN_FULL_CHECK:-}" ]; then
+    _note "Running type checks + lint (full — SOVEREIGN_FULL_CHECK set)"
+    (cd "$REPO_DIR" && pnpm check)
+    return
+  fi
+
+  local base
+  base="$(cd "$REPO_DIR" && git merge-base HEAD origin/main 2>/dev/null || true)"
+  if [ -z "$base" ]; then
+    _note "Running type checks + lint (full — no origin/main to diff against)"
+    (cd "$REPO_DIR" && pnpm check)
+    return
+  fi
+
+  _note "Running type checks (changed since ${base:0:8}) + lint"
+  (cd "$REPO_DIR" && pnpm --filter "...[$base]" --if-present check && pnpm exec oxlint)
 }
 
 _run_builds() {

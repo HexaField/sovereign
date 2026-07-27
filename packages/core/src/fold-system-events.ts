@@ -22,10 +22,29 @@
 import type { ParsedTurn, WorkItem } from './agent-backend.js'
 
 /** TurnKind variants that should be folded into workItems rather than rendered as standalone turns. */
-const FOLDED_VARIANTS = new Set(['compaction', 'hook-output'])
+const FOLDED_VARIANTS = new Set(['compaction', 'hook-output', 'session-resumed'])
+
+/**
+ * Prefix of the continuation prompt the resume orchestrator injects after a
+ * restart (see `resumeActiveSessions`). The marker is Sovereign-generated, not
+ * backend-specific, so the pattern lives here in core — the client's live fold
+ * matches on it directly (the synthetic `chat.turn` arrives before any backend
+ * classifier has run), while backend adapters tag it as `session-resumed` for
+ * history replay.
+ */
+const SESSION_RESUMED_RE = /^\[Resumed after server restart\b/
+
+/** True iff `content` is the resume orchestrator's continuation marker. */
+export function isSessionResumedMarker(content: string | undefined): boolean {
+  return !!content && SESSION_RESUMED_RE.test(content.trim())
+}
 
 function isFoldable(turn: ParsedTurn): boolean {
-  return turn.role === 'system' && !!turn.kind && FOLDED_VARIANTS.has(turn.kind.variant)
+  if (turn.role !== 'system') return false
+  if (turn.kind && FOLDED_VARIANTS.has(turn.kind.variant)) return true
+  // Live path: the synthetic turn is broadcast straight from the chat module
+  // with no `kind`, so match the raw marker too.
+  return isSessionResumedMarker(turn.content)
 }
 
 /**
@@ -33,8 +52,10 @@ function isFoldable(turn: ParsedTurn): boolean {
  * original label / body / payload so the client can render icon + detail.
  */
 export function foldableToWorkItem(turn: ParsedTurn): WorkItem {
-  const label = turn.kind?.label ?? 'System'
-  const icon = turn.kind?.variant === 'compaction' ? 'compaction' : 'hook'
+  const resumed = !turn.kind && isSessionResumedMarker(turn.content)
+  const variant = turn.kind?.variant ?? (resumed ? 'session-resumed' : undefined)
+  const label = turn.kind?.label ?? (resumed ? 'Resumed after restart' : 'System')
+  const icon = variant === 'compaction' ? 'compaction' : variant === 'session-resumed' ? 'resumed' : 'hook'
   return {
     type: 'system_event',
     name: label,

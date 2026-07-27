@@ -712,7 +712,12 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         replayQueueHead: (id) => chatModule.retryQueued(id),
         dropQueueHead: (id) => chatModule.cancelQueued(id),
         sendContinuation: async (threadKey, text) => {
-          await chatModule.handleSend(threadKey, text)
+          // `synthRole: 'system'` keeps the resume prompt out of the transcript
+          // as a phantom user message — the user never typed it. The client
+          // folds the resulting system turn into the preceding assistant turn's
+          // work list (see `absorbFoldableTurn`), so a restart shows up as one
+          // unobtrusive row rather than a fake bubble.
+          await chatModule.handleSend(threadKey, text, undefined, { synthRole: 'system' })
         }
       })
         .then((report) => {
