@@ -84,10 +84,11 @@ const DEFAULT_CONTEXT_WINDOW = 200000
  * release. The bundled `@anthropic-ai/claude-agent-sdk` accepts both forms and
  * passes them through to the model endpoint unchanged.
  *
- * Verified against the installed SDK build (0.3.150), whose distribution
- * references `claude-opus-4-6` (its most-referenced current model),
- * `claude-opus-4-7`, `claude-opus-4-5`, and `claude-sonnet-4-6`. Opus 4.6 is
- * an active, supported model and is Sovereign's default.
+ * Naming caveat: the 4-series pins a minor (`claude-opus-4-6`), but the
+ * 5-series drops the suffix entirely — the id is `claude-opus-5`, NOT
+ * `claude-opus-5-0`. Extrapolating the 4-series pattern yields an id the API
+ * rejects with "It may not exist or you may not have access to it". Every id
+ * below was verified live via `claude --model <id> -p …` before being listed.
  */
 interface CatalogFamily {
   family: string
@@ -101,7 +102,7 @@ const MODEL_CATALOG: CatalogFamily[] = [
     familyLabel: 'Opus',
     versions: [
       { id: 'opus', version: null, versionLabel: 'Latest' },
-      { id: 'claude-opus-5-0', version: '5.0', versionLabel: '5.0' },
+      { id: 'claude-opus-5', version: '5', versionLabel: '5' },
       { id: 'claude-opus-4-8', version: '4.8', versionLabel: '4.8' },
       { id: 'claude-opus-4-7', version: '4.7', versionLabel: '4.7' },
       { id: 'claude-opus-4-6', version: '4.6', versionLabel: '4.6' },
@@ -113,6 +114,7 @@ const MODEL_CATALOG: CatalogFamily[] = [
     familyLabel: 'Sonnet',
     versions: [
       { id: 'sonnet', version: null, versionLabel: 'Latest' },
+      { id: 'claude-sonnet-5', version: '5', versionLabel: '5' },
       { id: 'claude-sonnet-4-6', version: '4.6', versionLabel: '4.6' },
       { id: 'claude-sonnet-4-5', version: '4.5', versionLabel: '4.5' }
     ]
