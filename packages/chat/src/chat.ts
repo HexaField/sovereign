@@ -778,6 +778,21 @@ export function createChatModule(
       inFlightByThread.delete(threadId)
       messageQueue.removeSent(id)
     }
+    // Stop means stop everything. Without this, aborting the running turn just
+    // hands control to the next queued message, which starts immediately — the
+    // user presses Stop and the agent carries straight on with the follow-up
+    // they queued. Clear the rest of the thread's queue so a single Stop
+    // actually halts the thread.
+    //
+    // (Claude Code's own wire protocol has an equivalent `cancel_queued` flag
+    // on the interrupt control request, but `Query.interrupt()` in SDK 0.3.220
+    // takes no arguments, so the SDK-side queue isn't reachable from here.
+    // Sovereign's queue is the one that drives `pumpQueue`, so clearing it is
+    // what actually stops the thread.)
+    for (const item of messageQueue.getQueue(threadId)) {
+      if (item.status === 'sending') continue // never tear out an in-flight send
+      messageQueue.cancel(item.id)
+    }
   }
 
   async function handleHistory(threadId: string, deviceId: string): Promise<void> {

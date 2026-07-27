@@ -30,6 +30,21 @@ export interface SembleServiceHealth {
 }
 
 /**
+ * Census of Claude Code sessions as the CLI itself sees them (`claude agents
+ * --json`). This is an independent view of Sovereign's own liveness index:
+ * `interactive` entries are sessions Sovereign spawned, `background` entries
+ * are detached workers. Divergence between this count and
+ * `active-sessions.json` is the signal for a leaked or orphaned process.
+ */
+export interface AgentsCensusHealth {
+  status: 'ok' | 'down' | 'unknown'
+  /** Sessions Sovereign spawned via the SDK. */
+  interactive: number
+  /** Detached background workers (`claude --bg`). */
+  background: number
+}
+
+/**
  * Health snapshot for an external service (AD4M executor, WE launcher, …)
  * that the browser can open in a new tab. `port` and `path` describe how to
  * construct the outward URL (protocol is always http — these are LAN/tailnet
@@ -54,6 +69,7 @@ export interface HealthInfo {
   services?: {
     mcp?: McpServiceHealth
     semble?: SembleServiceHealth
+    agents?: AgentsCensusHealth
     external?: ExternalServiceHealth[]
   }
 }
@@ -98,6 +114,11 @@ export interface SystemModuleOptions {
    * `semble` on PATH. Set to '' to disable the semble health row entirely.
    */
   sembleBin?: string
+  /**
+   * Executable used to probe the Claude Code session census (`claude agents
+   * --json`). Defaults to `claude` on PATH. Set to '' to disable the row.
+   */
+  claudeBin?: string
   /**
    * External services to include in health rollups. Each entry is polled on
    * the same interval as MCP. `healthUrl` is server-side (typically localhost)
@@ -146,6 +167,7 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
   const wsHandler = options?.wsHandler
   const mcpHealthUrl = options?.mcpHealthUrl
   const sembleBin = options?.sembleBin ?? 'semble'
+  const claudeBin = options?.claudeBin ?? 'claude'
   const externalServiceDefs = (options?.externalServices ?? []).map((s) => ({
     name: s.name,
     label: s.label ?? s.name,
@@ -160,6 +182,7 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
   // `-h` (exit 0, sub-100ms) and resolve the installed version once from
   // `uv tool list` at boot — good enough for a status row.
   let cachedSembleHealth: SembleServiceHealth = { status: 'unknown', version: '' }
+  let cachedAgentsHealth: AgentsCensusHealth = { status: 'unknown', interactive: 0, background: 0 }
   const resolvedSembleVersion = (() => {
     if (!sembleBin) return ''
     try {
@@ -211,6 +234,37 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
       }
     } catch {
       cachedSembleHealth = { status: 'down', version: resolvedSembleVersion }
+    }
+  }
+
+  function pollAgentsCensus(): void {
+    if (!claudeBin) {
+      cachedAgentsHealth = { status: 'unknown', interactive: 0, background: 0 }
+      return
+    }
+    try {
+      // `--json` is the documented scripting surface and needs no TTY. The 8s
+      // cap is generous: the CLI may cold-start an on-demand daemon on first
+      // call, which is slower than the steady-state read.
+      const probe = spawnSync(claudeBin, ['agents', '--json'], { encoding: 'utf-8', timeout: 8000 })
+      if (probe.status !== 0 || !probe.stdout) {
+        cachedAgentsHealth = { status: 'down', interactive: 0, background: 0 }
+        return
+      }
+      const parsed = JSON.parse(probe.stdout) as Array<{ kind?: string }>
+      if (!Array.isArray(parsed)) {
+        cachedAgentsHealth = { status: 'down', interactive: 0, background: 0 }
+        return
+      }
+      let interactive = 0
+      let background = 0
+      for (const s of parsed) {
+        if (s?.kind === 'background') background++
+        else interactive++
+      }
+      cachedAgentsHealth = { status: 'ok', interactive, background }
+    } catch {
+      cachedAgentsHealth = { status: 'down', interactive: 0, background: 0 }
     }
   }
 
@@ -314,10 +368,11 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
       jobs: { active: 0, lastStatus: 'idle', nextRun: null },
       errors: { countLastHour: 0, recent: [] }
     }
-    if (mcpHealthUrl || sembleBin || externalServiceDefs.length > 0) {
+    if (mcpHealthUrl || sembleBin || claudeBin || externalServiceDefs.length > 0) {
       health.services = {}
       if (mcpHealthUrl) health.services.mcp = cachedMcpHealth
       if (sembleBin) health.services.semble = cachedSembleHealth
+      if (claudeBin) health.services.agents = cachedAgentsHealth
       if (externalServiceDefs.length > 0) {
         health.services.external = externalServiceDefs.map((s) => cachedExternalHealth.get(s.name)!)
       }
@@ -331,6 +386,7 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
   void pollMcpHealth()
   void pollExternalHealth()
   pollSembleHealth()
+  pollAgentsCensus()
 
   // Periodic health emission
   const healthInterval = setInterval(() => {
@@ -338,6 +394,7 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
     void pollMcpHealth()
     void pollExternalHealth()
     pollSembleHealth()
+    pollAgentsCensus()
 
     const health = getHealth()
     bus.emit({
