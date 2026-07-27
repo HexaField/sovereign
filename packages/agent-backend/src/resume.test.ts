@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createActiveSessions } from './active-sessions.js'
-import { resumeActiveSessions, type ResumeOrchestratorOptions } from './resume.js'
+import { resumeActiveSessions, buildContinuationMarker, type ResumeOrchestratorOptions } from './resume.js'
 
 let tmpDir: string
 
@@ -32,7 +32,8 @@ function makeOrchestratorDeps(over: Partial<ResumeOrchestratorOptions>) {
   const { bus, emitted } = makeBus()
   const replayQueueHead = vi.fn(() => true)
   const dropQueueHead = vi.fn()
-  const sendContinuation = vi.fn(() => Promise.resolve())
+  // Typed args so tests can assert on `.mock.calls[n][1]` (the marker text).
+  const sendContinuation = vi.fn((_threadKey: string, _text: string) => Promise.resolve())
   const getAllQueues = vi.fn(() => new Map<string, Array<{ id: string; status: string; text: string }>>())
   return {
     deps: {
@@ -52,6 +53,30 @@ function makeOrchestratorDeps(over: Partial<ResumeOrchestratorOptions>) {
     getAllQueues
   }
 }
+
+describe('buildContinuationMarker', () => {
+  const BASE = '[Resumed after server restart. Continue from where you left off.]'
+
+  it('returns the bare marker when no in-flight prompt was recorded', () => {
+    expect(buildContinuationMarker(BASE)).toBe(BASE)
+    expect(buildContinuationMarker(BASE, '   ')).toBe(BASE)
+  })
+
+  it('quotes the in-flight prompt so the model recovers the task', () => {
+    const out = buildContinuationMarker(BASE, 'refactor the parser')
+    expect(out).toContain('You were working on: "refactor the parser"')
+    // Prefix must survive — it is what the UI folds on.
+    expect(out.startsWith('[Resumed after server restart')).toBe(true)
+  })
+
+  it('collapses whitespace and truncates long prompts', () => {
+    const long = 'x'.repeat(400)
+    const out = buildContinuationMarker(BASE, `multi\n  line\tprompt ${long}`)
+    expect(out).toContain('multi line prompt')
+    expect(out).toContain('…')
+    expect(out.length).toBeLessThan(320)
+  })
+})
 
 describe('resumeActiveSessions', () => {
   it('is a no-op when no active sessions exist', async () => {
@@ -140,6 +165,24 @@ describe('resumeActiveSessions', () => {
       '[Resumed after server restart. Continue from where you left off.]'
     )
     expect(replayQueueHead).not.toHaveBeenCalled()
+  })
+
+  it('Tier 3 continuation carries the in-flight prompt as context', async () => {
+    const active = createActiveSessions({ dataDir: tmpDir })
+    active.upsert({
+      sessionKey: 'agent:main:thread:foo',
+      threadKey: 'foo',
+      backendKind: 'claude-code',
+      backendSessionId: 'uuid',
+      agentStatus: 'working',
+      lastTransitionAt: Date.now(),
+      inFlightPromptText: 'summarise the AD4M spec'
+    })
+    const { deps, sendContinuation } = makeOrchestratorDeps({ activeSessions: active })
+    await resumeActiveSessions(deps)
+    const [, text] = sendContinuation.mock.calls[0]
+    expect(text).toContain('summarise the AD4M spec')
+    expect(text.startsWith('[Resumed after server restart')).toBe(true)
   })
 
   it('tool-await: skips continuation for a session the PreToolUse hook was holding open', async () => {

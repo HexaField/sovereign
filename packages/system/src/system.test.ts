@@ -108,7 +108,26 @@ describe('System Module', () => {
 
     it('§9.2 — sembleBin: "" opts out of the semble health row entirely', () => {
       system.dispose()
-      const customSystem = createSystemModule(bus, dataDir, { sembleBin: '' })
+      const customSystem = createSystemModule(bus, dataDir, { sembleBin: '', claudeBin: '' })
+      expect(customSystem.getHealth().services).toBeUndefined()
+      customSystem.dispose()
+    })
+
+    it('§9.2 — agents census surfaces on services.agents with counts', () => {
+      system.dispose()
+      // Point at a binary that cannot exist so the probe fails deterministically.
+      const customSystem = createSystemModule(bus, dataDir, { claudeBin: '/nonexistent/claude' })
+      const health = customSystem.getHealth()
+      expect(health.services?.agents).toBeDefined()
+      expect(['ok', 'down', 'unknown']).toContain(health.services!.agents!.status)
+      expect(typeof health.services!.agents!.interactive).toBe('number')
+      expect(typeof health.services!.agents!.background).toBe('number')
+      customSystem.dispose()
+    })
+
+    it('§9.2 — claudeBin: "" opts out of the agents census row', () => {
+      system.dispose()
+      const customSystem = createSystemModule(bus, dataDir, { sembleBin: '', claudeBin: '' })
       expect(customSystem.getHealth().services).toBeUndefined()
       customSystem.dispose()
     })

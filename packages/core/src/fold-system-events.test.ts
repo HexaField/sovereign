@@ -104,6 +104,70 @@ describe('foldSystemEventsIntoWork', () => {
   })
 })
 
+describe('session-resumed folding', () => {
+  const MARKER = '[Resumed after server restart. Continue from where you left off.]'
+
+  function rawResume(ts: number): ParsedTurn {
+    // Live path: chat.ts broadcasts the synthetic turn with no `kind`.
+    return { role: 'system', content: MARKER, timestamp: ts, workItems: [], thinkingBlocks: [] }
+  }
+
+  it('folds an unclassified resume marker (live path) using content match', () => {
+    const out = foldSystemEventsIntoWork([assistant('working', 1), rawResume(2)])
+    expect(out).toHaveLength(1)
+    expect(out[0].workItems[0]).toMatchObject({
+      type: 'system_event',
+      icon: 'resumed',
+      name: 'Resumed after restart'
+    })
+  })
+
+  it('folds a classified session-resumed turn (history path)', () => {
+    const classified: ParsedTurn = {
+      role: 'system',
+      content: MARKER,
+      timestamp: 2,
+      workItems: [],
+      thinkingBlocks: [],
+      kind: { variant: 'session-resumed', label: 'Resumed after restart' }
+    }
+    const out = foldSystemEventsIntoWork([assistant('working', 1), classified])
+    expect(out).toHaveLength(1)
+    expect(out[0].workItems[0].icon).toBe('resumed')
+  })
+
+  it('folds the context-carrying variant of the marker', () => {
+    const withCtx: ParsedTurn = {
+      role: 'system',
+      content:
+        '[Resumed after server restart. You were working on: "fix the parser". Continue from where you left off.]',
+      timestamp: 2,
+      workItems: [],
+      thinkingBlocks: []
+    }
+    const out = foldSystemEventsIntoWork([assistant('working', 1), withCtx])
+    expect(out).toHaveLength(1)
+    expect(out[0].workItems[0].output).toContain('fix the parser')
+  })
+
+  it('absorbFoldableTurn handles the live resume turn', () => {
+    const res = absorbFoldableTurn(rawResume(3), [user('hi', 1), assistant('sure', 2)])
+    expect(res.absorbed).toBe(true)
+  })
+
+  it('does not fold a user turn that merely quotes the marker', () => {
+    const quoted: ParsedTurn = {
+      role: 'user',
+      content: MARKER,
+      timestamp: 2,
+      workItems: [],
+      thinkingBlocks: []
+    }
+    const out = foldSystemEventsIntoWork([assistant('working', 1), quoted])
+    expect(out).toHaveLength(2)
+  })
+})
+
 describe('absorbFoldableTurn', () => {
   it('returns absorbed=true and appends to the last assistant turn', () => {
     const current = [user('hi', 1), assistant('sure', 2)]

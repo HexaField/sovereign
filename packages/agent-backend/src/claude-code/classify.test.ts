@@ -124,6 +124,26 @@ describe('classifyClaudeCodeTurn', () => {
     })
   })
 
+  describe('session resume', () => {
+    it('tags a system-role resume marker', () => {
+      const out = classifyClaudeCodeTurn(
+        systemTurn('[Resumed after server restart. Continue from where you left off.]')
+      )
+      expect(out.role).toBe('system')
+      expect(out.kind?.variant).toBe('session-resumed')
+      expect(out.kind?.label).toBe('Resumed after restart')
+    })
+
+    it('flips the user-role copy the SDK persists back to system (history replay)', () => {
+      const out = classifyClaudeCodeTurn(
+        userTurn('[Resumed after server restart. You were working on: "fix parser". Continue from where you left off.]')
+      )
+      expect(out.role).toBe('system')
+      expect(out.kind?.variant).toBe('session-resumed')
+      expect(out.content).toContain('fix parser')
+    })
+  })
+
   describe('agent error', () => {
     it('tags an "Error: …" system turn', () => {
       const out = classifyClaudeCodeTurn(systemTurn('Error: rate limited'))

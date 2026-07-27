@@ -8,7 +8,12 @@ export * from './cron.js'
 export * from './session-key.js'
 export * from './thread.js'
 export * from './message-origin.js'
-export { foldSystemEventsIntoWork, absorbFoldableTurn, foldableToWorkItem } from './fold-system-events.js'
+export {
+  foldSystemEventsIntoWork,
+  absorbFoldableTurn,
+  foldableToWorkItem,
+  isSessionResumedMarker
+} from './fold-system-events.js'
 export * from './ask-user-question.js'
 
 /**
