@@ -101,6 +101,7 @@ const MODEL_CATALOG: CatalogFamily[] = [
     familyLabel: 'Opus',
     versions: [
       { id: 'opus', version: null, versionLabel: 'Latest' },
+      { id: 'claude-opus-5-0', version: '5.0', versionLabel: '5.0' },
       { id: 'claude-opus-4-8', version: '4.8', versionLabel: '4.8' },
       { id: 'claude-opus-4-7', version: '4.7', versionLabel: '4.7' },
       { id: 'claude-opus-4-6', version: '4.6', versionLabel: '4.6' },
