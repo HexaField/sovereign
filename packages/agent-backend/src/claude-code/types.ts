@@ -113,7 +113,11 @@ export interface ClaudeSessionState {
   /** Handle to the live SDK Query — used to call `setModel`/`interrupt` mid-session. */
   liveQuery?: {
     setModel(model?: string): Promise<void>
-    interrupt(): Promise<void>
+    // SDK 0.3.220 widened the return type from `Promise<void>` to
+    // `Promise<SDKControlInterruptResponse | undefined>`. We ignore the
+    // response payload; `unknown` accepts both shapes without pinning to
+    // internal SDK types.
+    interrupt(): Promise<unknown>
     /** Mid-session settings merge. Used to switch reasoning effort live; not all
      *  values are reachable this way — `max` only takes effect at session start.
      *  Optional because the SDK build may not expose it. */
