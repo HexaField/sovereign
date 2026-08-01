@@ -28,6 +28,7 @@ import { createEventBus } from '@sovereign/core'
 import { createConfigStore } from '@sovereign/config'
 import healthRouter from './routes/health.js'
 import { bootstrapServer } from './bootstrap.js'
+import { createLockfile } from './lockfile.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '../../..')
@@ -87,38 +88,46 @@ const server: http.Server | https.Server = useTls
 const wss = new WebSocketServer({ server, path: '/ws' })
 
 // ── Single-instance lockfile (R17) ──────────────────────────────────────
+// Policy + tests live in ./lockfile.ts; this module only logs the decision.
 const lockPath = path.join(dataDir, '.sovereign.lock')
-function acquireLock(): void {
-  try {
-    const raw = fs.readFileSync(lockPath, 'utf-8')
-    const prev = JSON.parse(raw) as { pid: number; startedAt: number; host: string }
-    if (prev.pid && prev.pid !== process.pid) {
-      try {
-        process.kill(prev.pid, 0) // probe — throws ESRCH if not running
-        console.error(
-          `[lockfile] another Sovereign is running (pid ${prev.pid}, started ${new Date(prev.startedAt).toISOString()}, host ${prev.host}).`
-        )
-        console.error(`[lockfile] Refusing to boot. Stop the other instance or delete ${lockPath} if stale.`)
-        process.exit(1)
-      } catch {
-        console.warn(`[lockfile] stale lock from pid ${prev.pid} — claiming it`)
-      }
-    }
-  } catch {
-    /* no lock yet — fall through */
-  }
-  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now(), host }))
+const lockfile = createLockfile({ lockPath, host })
+const acquired = lockfile.acquire()
+if (acquired.outcome === 'refused') {
+  const { pid, startedAt, host: holderHost } = acquired.previous
+  console.error(
+    `[lockfile] another Sovereign is running (pid ${pid}, started ${new Date(startedAt).toISOString()}, host ${holderHost}).`
+  )
+  console.error(`[lockfile] Refusing to boot. Stop the other instance or delete ${lockPath} if stale.`)
+  process.exit(1)
+} else if (acquired.reason === 'stale-pid') {
+  console.warn(`[lockfile] stale lock from pid ${acquired.previous?.pid} — claiming it`)
+} else if (acquired.reason === 'holder-not-sovereign') {
+  console.warn(`[lockfile] pid ${acquired.previous?.pid} is alive but is not a Sovereign process — claiming stale lock`)
 }
-function releaseLock(): void {
-  try {
-    const raw = fs.readFileSync(lockPath, 'utf-8')
-    const prev = JSON.parse(raw) as { pid: number }
-    if (prev.pid === process.pid) fs.unlinkSync(lockPath)
-  } catch {
-    /* gone — fine */
+const releaseLock = () => lockfile.release()
+
+// Watch our own lock. Losing it while still running means the single-instance
+// guard is disarmed, and nothing else notices — exactly the shape of the
+// 2026-08-01 incident, where a second (system-scope) unit ran
+// `ExecStartPre=/bin/rm -f .sovereign.lock` before every start attempt and
+// quietly deleted this instance's lock ~5 times a minute for 58 hours. Warn on
+// each state change, and re-assert ownership so the guard heals itself.
+let lastOwnership: ReturnType<typeof lockfile.checkOwnership> = 'held'
+const ownershipWatch = setInterval(() => {
+  const state = lockfile.checkOwnership()
+  if (state === lastOwnership) return
+  lastOwnership = state
+  if (state === 'missing') {
+    console.warn(`[lockfile] our lock at ${lockPath} vanished — another process is deleting it. Re-asserting.`)
+    lockfile.acquire()
+    lastOwnership = lockfile.checkOwnership()
+  } else if (state === 'stolen') {
+    console.error(
+      `[lockfile] our lock at ${lockPath} is now held by pid ${lockfile.read()?.pid} — two instances are racing.`
+    )
   }
-}
-acquireLock()
+}, 30_000)
+if (typeof ownershipWatch.unref === 'function') ownershipWatch.unref()
 
 const { shutdown } = bootstrapServer({ app, server, wss, bus, dataDir, configStore })
 
@@ -130,16 +139,37 @@ const { shutdown } = bootstrapServer({ app, server, wss, bus, dataDir, configSto
 // over a drain because a rebuild is often triggered from *inside* an
 // in-flight session (e.g. `bin/sovereign build` run through the agent) —
 // waiting for that session to complete is a self-referential deadlock.
-function shutdownWithLock(): void {
+//
+// MUST call process.exit(). Registering a SIGINT/SIGTERM listener overrides
+// Node's default terminate-on-signal, so without an explicit exit the process
+// survives its own shutdown whenever any handle is still open — and Sovereign
+// always has open handles (Claude Code SDK subprocesses, sockets, intervals).
+// The observed failure: systemd sends SIGINT, the process cleans up but keeps
+// running, systemd gives up tracking it, the process is re-parented to init,
+// and it holds `.sovereign.lock` + :5801 against every subsequent start. That
+// is what produced a 58-hour restart loop.
+let shuttingDown = false
+function shutdownWithLock(signal: string): void {
+  if (shuttingDown) return
+  shuttingDown = true
   try {
     shutdown()
+  } catch (err) {
+    console.error(`[server] shutdown threw during ${signal}:`, err)
   } finally {
     releaseLock()
   }
+  // Give in-flight writes a tick to flush, then exit unconditionally. The
+  // timer is unref'd so it cannot itself keep the loop alive.
+  const t = setTimeout(() => process.exit(0), 250)
+  if (typeof t.unref === 'function') t.unref()
+  // Backstop: if something re-entrant blocks the timer, hard-exit anyway.
+  const hard = setTimeout(() => process.exit(0), 5_000)
+  if (typeof hard.unref === 'function') hard.unref()
 }
 
-process.on('SIGTERM', shutdownWithLock)
-process.on('SIGINT', shutdownWithLock)
+process.on('SIGTERM', () => shutdownWithLock('SIGTERM'))
+process.on('SIGINT', () => shutdownWithLock('SIGINT'))
 process.on('exit', releaseLock)
 
 const clientDist = path.resolve(__dirname, '../../client/dist')
