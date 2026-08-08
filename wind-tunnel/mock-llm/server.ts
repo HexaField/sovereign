@@ -31,6 +31,15 @@ const requestLog: LogEntry[] = []
 interface Script {
   match: (lastUserMessage: string, messages: any[]) => boolean
   respond: (lastUserMessage: string, messages: any[], model: string) => ResponsePlan
+  /** Fire at most once, then fall through (e.g. a tool_use that must not loop
+   *  when the follow-up turn still carries the matching text in its history). */
+  once?: boolean
+  fired?: boolean
+  /** Only fire on turns that actually offer tools. A tool_use reply is
+   *  meaningless on the SDK's auxiliary, tool-less calls (title generation,
+   *  structured-output probes) — and firing there would waste a `once` shot on
+   *  a turn that ignores the tool_use. */
+  needsTools?: boolean
 }
 
 interface ResponsePlan {
@@ -48,9 +57,14 @@ export function addScript(script: Script) {
   scripts.push(script)
 }
 
-function planResponse(userMsg: string, messages: any[], model: string): ResponsePlan {
+function planResponse(userMsg: string, messages: any[], model: string, hasTools: boolean): ResponsePlan {
   for (const s of scripts) {
-    if (s.match(userMsg, messages)) return s.respond(userMsg, messages, model)
+    if (s.once && s.fired) continue
+    if (s.needsTools && !hasTools) continue
+    if (s.match(userMsg, messages)) {
+      s.fired = true
+      return s.respond(userMsg, messages, model)
+    }
   }
   // Default: echo
   return { text: `[mock] echo: ${userMsg}`, stopReason: 'end_turn' }
@@ -178,7 +192,10 @@ const server = http.createServer(async (req, res) => {
         toolUse: body.toolUse,
         stopReason: body.toolUse ? 'tool_use' : 'end_turn',
         delayMs: body.delayMs
-      })
+      }),
+      once: body.once === true,
+      // A tool_use reply only makes sense on a turn that offers tools.
+      needsTools: !!body.toolUse
     })
     res.writeHead(201, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ registered: true }))
@@ -239,7 +256,7 @@ const server = http.createServer(async (req, res) => {
         Connection: 'keep-alive'
       })
 
-      const plan = planResponse(lastUserText, messages, model)
+      const plan = planResponse(lastUserText, messages, model, Array.isArray(body.tools) && body.tools.length > 0)
 
       // Hold the stream open if the script requests a delay.
       // Bail early if the client disconnects (restart mid-stream).
@@ -261,7 +278,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Non-streaming response (rare but handle it)
-    const plan = planResponse(lastUserText, messages, model)
+    const plan = planResponse(lastUserText, messages, model, Array.isArray(body.tools) && body.tools.length > 0)
     const content: any[] = []
     if (plan.text) content.push({ type: 'text', text: plan.text })
     if (plan.toolUse) content.push({ type: 'tool_use', ...plan.toolUse })
