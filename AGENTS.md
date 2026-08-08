@@ -57,6 +57,26 @@ A rebuild severs in-flight agent turns rather than draining them. Draining deadl
 - **Tier 3** — synthesize a continuation message, quoting the in-flight prompt. Always-on: the backend's session resume rehydrates a transcript and then waits for input, so a mid-turn session otherwise sits idle forever.
 - **tool-await** — a `PreToolUse` hook was holding the backend open (currently `AskUserQuestion`). The backend re-fires the tool on resume, so synthesizing a continuation here would duplicate it. Short-circuit instead.
 
+## Presence system
+
+Two long-lived threads form the presence system (`packages/presence/`):
+
+- **`presence-internal`** (`ThreadInfo.presence = 'internal'`) — the agent's stream-of-consciousness. Receives ambient inbound (voice, AD4M, watched-thread digests). The agent speaks externally only via `presence_reply_*` tool calls; silence counts as valid. Carries PRESENCE.md + PRESENCE_MEMORY.md + PRESENCE_KNOWLEDGE.md in its session prompt.
+- **`presence`** (`ThreadInfo.presence = 'gateway'`) — the user's text-chat surface. A normal Claude Code thread. Carries only PRESENCE_KNOWLEDGE.md in its session prompt.
+
+### Prompt layers
+
+`makePresenceAwareAppendResolver` in `packages/agent-backend/src/wiring.ts` controls injection. The internal thread receives personality + memory + knowledge; the gateway thread receives knowledge only; all other threads receive nothing from the presence layer.
+
+### Knowledge graph (AD4M perspective)
+
+Both presence threads maintain a shared knowledge graph in a private AD4M perspective named `hex-knowledge`. The schema, tools, and patterns live in `~/.sovereign/PRESENCE_KNOWLEDGE.md` (injected into both sessions). Two subject classes:
+
+- **Entity** (`hex://Entity`) — durable nodes (person, project, concept, system)
+- **Note** (`hex://Note`) — timestamped knowledge units (observation, decision, fact, preference, insight)
+
+Relationships between entities use raw AD4M links under `hex://` predicates. The agent bootstraps the perspective + models on first session activation via `mcp__ad4m__*` tools.
+
 ## Tests
 
 The root `vitest.config.ts` collects `packages/*/src/**/*.test.ts`. Most packages have no local vitest config, so `pnpm --filter <pkg> test` reports "no test files" for them — that is expected. The repo-root run is the real gate.

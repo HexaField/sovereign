@@ -63,6 +63,10 @@ export interface AgentBackendWiringInput {
   /** Path to PRESENCE_MEMORY.md — appended to the session prompt for the
    *  presence thread only. */
   presenceMemoryFile?: string
+  /** Path to PRESENCE_KNOWLEDGE.md — appended to the session prompt for
+   *  BOTH presence threads (internal + gateway). Carries the AD4M knowledge
+   *  graph schema, tools reference, and usage patterns. */
+  presenceKnowledgeFile?: string
 }
 
 export interface AgentBackendWiringResult {
@@ -145,18 +149,25 @@ export function makeMembraneAppendResolver(
 }
 
 /**
- * Wraps the membrane append resolver so that, for the **internal** presence
- * session, PRESENCE.md and PRESENCE_MEMORY.md are layered on top of the
- * membrane context. The gateway session does NOT get these — it's a normal
- * text agent. See plans/presence-thread-spec.md (R3).
+ * Wraps the membrane append resolver so that presence sessions get extra
+ * prompt layers on top of the membrane context:
+ *
+ *  - **Internal thread** — PRESENCE.md + PRESENCE_MEMORY.md + PRESENCE_KNOWLEDGE.md
+ *  - **Gateway thread**  — PRESENCE_KNOWLEDGE.md only
+ *
+ * The knowledge file carries the AD4M knowledge-graph schema and usage
+ * patterns; both threads need it so either can read/write the graph.
+ * See plans/presence-thread-spec.md (R3).
  */
 export function makePresenceAwareAppendResolver(
   membraneManager: MembraneManager | undefined,
   threadManager: ThreadManager | undefined,
   presence: {
     internalThreadId(): string | null
+    gatewayThreadId(): string | null
     personalityFile?: string
     memoryFile?: string
+    knowledgeFile?: string
   }
 ): ((sessionKey: string) => string | undefined) | undefined {
   const base = makeMembraneAppendResolver(membraneManager, threadManager)
@@ -166,6 +177,9 @@ export function makePresenceAwareAppendResolver(
     if (baseAppend) parts.push(baseAppend)
     const threadKey = sessionKeyToThreadKey(sessionKey)
     const internalId = presence.internalThreadId()
+    const gatewayId = presence.gatewayThreadId()
+
+    // Internal thread gets personality + memory + knowledge.
     if (threadKey && internalId && threadKey === internalId) {
       if (presence.personalityFile) {
         try {
@@ -184,6 +198,20 @@ export function makePresenceAwareAppendResolver(
         }
       }
     }
+
+    // Both presence threads (internal + gateway) get the knowledge layer.
+    const isPresenceThread =
+      threadKey != null &&
+      ((internalId != null && threadKey === internalId) || (gatewayId != null && threadKey === gatewayId))
+    if (isPresenceThread && presence.knowledgeFile) {
+      try {
+        const txt = fs.readFileSync(presence.knowledgeFile, 'utf-8').trim()
+        if (txt) parts.push(txt)
+      } catch {
+        /* missing — skip silently */
+      }
+    }
+
     return parts.length > 0 ? parts.join('\n\n') : undefined
   }
 }
@@ -264,8 +292,10 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
           askUserQuestionStore,
           resolveAppendSystemPrompt: makePresenceAwareAppendResolver(membraneManager, threadManager, {
             internalThreadId: () => input.presence?.internalThreadId() ?? null,
+            gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
             personalityFile: input.presencePersonalityFile,
-            memoryFile: input.presenceMemoryFile
+            memoryFile: input.presenceMemoryFile,
+            knowledgeFile: input.presenceKnowledgeFile
           })
         })
         claudeCodeBackend = cc

@@ -1,5 +1,7 @@
-// Tests for makePresenceAwareAppendResolver — verifies PRESENCE.md and
-// PRESENCE_MEMORY.md are appended only for the presence-thread session.
+// Tests for makePresenceAwareAppendResolver — verifies PRESENCE.md,
+// PRESENCE_MEMORY.md, and PRESENCE_KNOWLEDGE.md are appended to the correct
+// presence-thread sessions (internal gets all three; gateway gets knowledge
+// only; normal threads get nothing).
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import fs from 'node:fs'
@@ -13,12 +15,14 @@ function mkTmp(): string {
 }
 
 const PRESENCE_ID = '11111111-1111-1111-1111-111111111111'
+const GATEWAY_ID = '33333333-3333-3333-3333-333333333333'
 const NORMAL_ID = '22222222-2222-2222-2222-222222222222'
 
 function makeThreadManager(): ThreadManager {
   return {
     get(id: string) {
       if (id === PRESENCE_ID) return { id: PRESENCE_ID, label: 'presence-internal', presence: 'internal' } as any
+      if (id === GATEWAY_ID) return { id: GATEWAY_ID, label: 'presence', presence: 'gateway' } as any
       if (id === NORMAL_ID) return { id: NORMAL_ID, label: 'normal' } as any
       return undefined
     }
@@ -31,27 +35,56 @@ describe('makePresenceAwareAppendResolver', () => {
     dir = mkTmp()
   })
 
-  it('appends presence personality + memory only for the presence session', () => {
+  it('appends presence personality + memory + knowledge for the internal session', () => {
     const personalityFile = path.join(dir, 'PRESENCE.md')
     const memoryFile = path.join(dir, 'PRESENCE_MEMORY.md')
+    const knowledgeFile = path.join(dir, 'PRESENCE_KNOWLEDGE.md')
     fs.writeFileSync(personalityFile, '## presence personality')
     fs.writeFileSync(memoryFile, '## presence memory')
+    fs.writeFileSync(knowledgeFile, '## knowledge graph')
     const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
       internalThreadId: () => PRESENCE_ID,
+      gatewayThreadId: () => GATEWAY_ID,
       personalityFile,
-      memoryFile
+      memoryFile,
+      knowledgeFile
     })
     const presenceText = resolver?.(PRESENCE_ID)
     expect(presenceText).toContain('presence personality')
     expect(presenceText).toContain('presence memory')
-    expect(resolver?.(NORMAL_ID)).toBeUndefined()
+    expect(presenceText).toContain('knowledge graph')
   })
 
-  it('returns undefined when files are missing and thread is not presence', () => {
+  it('appends ONLY knowledge for the gateway session', () => {
+    const personalityFile = path.join(dir, 'PRESENCE.md')
+    const memoryFile = path.join(dir, 'PRESENCE_MEMORY.md')
+    const knowledgeFile = path.join(dir, 'PRESENCE_KNOWLEDGE.md')
+    fs.writeFileSync(personalityFile, '## presence personality')
+    fs.writeFileSync(memoryFile, '## presence memory')
+    fs.writeFileSync(knowledgeFile, '## knowledge graph')
     const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
       internalThreadId: () => PRESENCE_ID,
-      personalityFile: path.join(dir, 'nope.md'),
-      memoryFile: path.join(dir, 'nope2.md')
+      gatewayThreadId: () => GATEWAY_ID,
+      personalityFile,
+      memoryFile,
+      knowledgeFile
+    })
+    const gatewayText = resolver?.(GATEWAY_ID)
+    expect(gatewayText).toContain('knowledge graph')
+    expect(gatewayText).not.toContain('presence personality')
+    expect(gatewayText).not.toContain('presence memory')
+  })
+
+  it('returns undefined for a normal thread', () => {
+    const personalityFile = path.join(dir, 'PRESENCE.md')
+    const knowledgeFile = path.join(dir, 'PRESENCE_KNOWLEDGE.md')
+    fs.writeFileSync(personalityFile, '## presence personality')
+    fs.writeFileSync(knowledgeFile, '## knowledge graph')
+    const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
+      internalThreadId: () => PRESENCE_ID,
+      gatewayThreadId: () => GATEWAY_ID,
+      personalityFile,
+      knowledgeFile
     })
     expect(resolver?.(NORMAL_ID)).toBeUndefined()
   })
@@ -59,8 +92,10 @@ describe('makePresenceAwareAppendResolver', () => {
   it('handles missing presence files silently (no throw)', () => {
     const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
       internalThreadId: () => PRESENCE_ID,
+      gatewayThreadId: () => GATEWAY_ID,
       personalityFile: path.join(dir, 'missing.md'),
-      memoryFile: path.join(dir, 'missing2.md')
+      memoryFile: path.join(dir, 'missing2.md'),
+      knowledgeFile: path.join(dir, 'missing3.md')
     })
     expect(() => resolver?.(PRESENCE_ID)).not.toThrow()
     expect(resolver?.(PRESENCE_ID)).toBeUndefined()
@@ -68,11 +103,27 @@ describe('makePresenceAwareAppendResolver', () => {
 
   it('does NOT append presence files when internalThreadId returns null', () => {
     const personalityFile = path.join(dir, 'PRESENCE.md')
+    const knowledgeFile = path.join(dir, 'PRESENCE_KNOWLEDGE.md')
     fs.writeFileSync(personalityFile, 'X')
+    fs.writeFileSync(knowledgeFile, 'Y')
     const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
       internalThreadId: () => null,
-      personalityFile
+      gatewayThreadId: () => null,
+      personalityFile,
+      knowledgeFile
     })
     expect(resolver?.(PRESENCE_ID)).toBeUndefined()
+  })
+
+  it('appends knowledge to gateway even when internal files are absent', () => {
+    const knowledgeFile = path.join(dir, 'PRESENCE_KNOWLEDGE.md')
+    fs.writeFileSync(knowledgeFile, '## knowledge graph')
+    const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
+      internalThreadId: () => PRESENCE_ID,
+      gatewayThreadId: () => GATEWAY_ID,
+      knowledgeFile
+    })
+    const gatewayText = resolver?.(GATEWAY_ID)
+    expect(gatewayText).toContain('knowledge graph')
   })
 })
