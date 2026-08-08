@@ -1,0 +1,46 @@
+# Sovereign wind-tunnel — docker compose
+#
+# Usage:
+#   docker compose -f wind-tunnel/docker/docker-compose.yml up --build -d
+#   # run scenarios against localhost:5801 + mock on localhost:8900
+#   docker compose -f wind-tunnel/docker/docker-compose.yml down
+
+services:
+  mock-llm:
+    build:
+      context: ../mock-llm
+      dockerfile: ../docker/mock-llm.Dockerfile
+    ports:
+      - "8900:8900"
+    environment:
+      PORT: "8900"
+      MOCK_VERBOSE: "1"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8900/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
+      interval: 1s
+      timeout: 2s
+      retries: 10
+
+  sovereign:
+    build:
+      context: ../../
+      dockerfile: wind-tunnel/docker/sovereign.Dockerfile
+    ports:
+      - "5811:5801"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "5801"
+      ANTHROPIC_API_KEY: "sk-ant-mock-key-wind-tunnel"
+      ANTHROPIC_BASE_URL: "http://mock-llm:8900"
+      SOVEREIGN_CONFIG_DIR: "/data/config"
+      SOVEREIGN_DATA_DIR: "/data/data"
+      # Disable TLS for testing
+      SOVEREIGN_TLS_ENABLED: "false"
+    depends_on:
+      mock-llm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5801/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

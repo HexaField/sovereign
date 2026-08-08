@@ -1,0 +1,9 @@
+# Wind-tunnel docker build context exclusions
+node_modules
+.git
+wind-tunnel/node_modules
+packages/client/dist
+packages/client/node_modules
+*.test.ts
+*.spec.ts
+.DS_Store
