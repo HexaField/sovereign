@@ -717,6 +717,27 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       })
         .then((report) => {
           lastResumeReport = { at: Date.now(), counts: report.counts, total: report.outcomes.length }
+
+          // Auto-start the presence internal thread if it was not resumed.
+          // The presence module creates threads on boot but never starts
+          // sessions. If the resume orchestrator did not pick up an entry
+          // for the internal thread (first boot, crash, entries lost), send
+          // a boot message so the thread has an active session immediately.
+          const internalId = presenceModule.internalThreadId()
+          if (internalId) {
+            const resumed = report.outcomes.some((o) => o.sessionKey === internalId || o.threadKey === internalId)
+            if (!resumed) {
+              const hasSession = activeSessions.get(internalId)
+              if (!hasSession) {
+                console.log(`[presence] auto-starting internal thread ${internalId} (not resumed)`)
+                chatModule
+                  .handleSend(internalId, '[system: presence thread restarted after boot]', undefined, {
+                    synthRole: 'system'
+                  })
+                  .catch((err: any) => console.error('[presence] auto-start failed:', err?.message ?? err))
+              }
+            }
+          }
         })
         .catch((err: any) => console.error('[resume] orchestrator failed:', err?.message ?? err))
     )
