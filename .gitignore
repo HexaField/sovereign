@@ -20,8 +20,3 @@ vendor/coasys/ad4m/core/lib/
 
 # Claude Code project dir — regenerated per session, never committed.
 .claude/
-
-# Only vendor/coasys/ad4m/core is a workspace dependency (@coasys/ad4m). A full
-# vendored ad4m checkout is not part of this repo — keep just core tracked.
-/vendor/coasys/ad4m/*
-!/vendor/coasys/ad4m/core
