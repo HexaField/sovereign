@@ -10,6 +10,7 @@ import { s6Scheduler } from './s6-scheduler.js'
 import { s7WsEvents } from './s7-ws-events.js'
 import { s8ConfigMembranes } from './s8-config-membranes.js'
 import { s9SessionResume } from './s9-session-resume.js'
+import { s10Ad4mWaker } from './s10-ad4m-waker.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -20,5 +21,7 @@ export const ALL_SCENARIOS: Scenario[] = [
   s6Scheduler,
   s7WsEvents,
   s8ConfigMembranes,
-  s9SessionResume
+  s9SessionResume,
+  // Self-skips unless the ad4m lane is active (docker-compose.ad4m.yml).
+  s10Ad4mWaker
 ]

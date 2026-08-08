@@ -1,0 +1,56 @@
+# Sovereign wind-tunnel — ad4m lane overlay.
+#
+# Layered on top of docker-compose.yml to add the AD4M executor path:
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.ad4m.yml up -d
+#
+# Adds a multi-user ad4m node + a one-shot provision step that mints a user +
+# channel perspective and writes the user JWT to a shared dir BEFORE Sovereign
+# boots — so Sovereign's native ad4m waker connects as that same user. The s10
+# scenario then injects a mention on the node and asserts the waker wakes the
+# presence agent AND its presence_reply_ad4m write-back lands back in the channel.
+#
+# The ad4m executor image is external (built by the ad4m repo / ad4m wind
+# tunnel). Set AD4M_EXEC_IMAGE to override; the lane SKIPs if it is absent.
+
+services:
+  ad4m:
+    image: ${AD4M_EXEC_IMAGE:-ad4m-test:latest}
+    environment:
+      ADMIN_CREDENTIAL: "windtunnel-admin"
+      ENABLE_MULTI_USER: "true"
+      ENABLE_MCP: "true"
+      MCP_PORT: "3001"
+      RUN_HOLOCHAIN: "false"
+      AGENT_PASSPHRASE: "windtunnel-pass"
+    ports:
+      # MCP exposed to the host so the s10 scenario can inject + verify.
+      - "14561:3001"
+
+  ad4m-provision:
+    image: node:22-bookworm-slim
+    depends_on:
+      ad4m:
+        condition: service_started
+    volumes:
+      - ../ad4m:/scripts:ro
+      - ../ad4m/.provision:/out
+    environment:
+      ADMIN_CREDENTIAL: "windtunnel-admin"
+      AD4M_EMAIL: "sovereign-wt@agent.local"
+      AD4M_PASSWORD: "sovereign-wt-pass-123"
+      AD4M_CHANNEL: "swt-ad4m://channel"
+    command: ["node", "/scripts/provision.mjs", "http://ad4m:3001", "/out"]
+    restart: "no"
+
+  sovereign:
+    depends_on:
+      mock-llm:
+        condition: service_healthy
+      ad4m-provision:
+        condition: service_completed_successfully
+    volumes:
+      # ad4m-lane config (ad4m.host + agentName Hex) over the baked default,
+      # and the provisioned token dir as the data dir so the waker boots with it.
+      - ../ad4m/config.json:/data/config/config.json:ro
+      - ../ad4m/.provision:/data/data

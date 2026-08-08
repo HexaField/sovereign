@@ -59,6 +59,8 @@ wind-tunnel/
 | s6  | Scheduler CRUD     | Cron job create/list/delete                                  |
 | s7  | WS Events          | Thread lifecycle events propagate to WS clients              |
 | s8  | Config & Membranes | Config endpoint, client config, membrane CRUD                |
+| s9  | Session Resume     | Sessions rehydrate + resume after a restart                  |
+| s10 | AD4M Waker         | Native ad4m waker wakes presence on a mention + reply lands  |
 
 ## Mock LLM
 
@@ -108,6 +110,25 @@ Each scenario receives a `ScenarioContext` with:
 - `mockLlmUrl` — base URL of the mock LLM (for script injection + log queries)
 
 Return a `ScenarioResult` with `passed`, `summary`, `metrics`, and `samples`.
+
+## AD4M Lane
+
+Scenario s10 exercises the full ad4m loop: a neighbourhood @mention wakes Sovereign's native waker, the presence agent runs a turn, and its `presence_reply_ad4m` write-back lands back in the channel. It needs a real ad4m executor, so it runs as an opt-in lane and self-skips otherwise.
+
+```bash
+# Needs an ad4m executor image (default ad4m-test:latest; override with
+# AD4M_EXEC_IMAGE). s10 self-skips if the node is unreachable.
+./wind-tunnel/run.sh --ad4m
+./wind-tunnel/run.sh --ad4m --scenario s10        # just the ad4m lane
+```
+
+The lane overlays `docker/docker-compose.ad4m.yml`, which adds:
+
+- **`ad4m`** — a multi-user ad4m node (MCP + WS-RPC, Holochain off), MCP exposed on host `:14561` so s10 can inject the mention + verify the reply.
+- **`ad4m-provision`** — a one-shot step that signs up a user, mints a channel perspective, and writes the user JWT to a shared dir **before** Sovereign boots (`ad4m/provision.mjs`). Sovereign reads that token, so its waker connects as the same user that owns the perspective.
+- a **`sovereign`** override that mounts `ad4m/config.json` (sets `ad4m.host` + agent name `Hex`) and the provisioned token dir as its data dir.
+
+The provisioned identity is written to `wind-tunnel/ad4m/.provision/` (gitignored) so s10 (on the host) injects + verifies against the exact perspective the waker watches. This mirrors the AD4M wind tunnel's A4 (Sovereign) route, run inside Sovereign's own suite.
 
 ## Native Mode
 

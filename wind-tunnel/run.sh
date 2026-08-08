@@ -20,6 +20,7 @@ COMPOSE_FILE="docker/docker-compose.yml"
 NO_BUILD=false
 KEEP=false
 NATIVE=false
+AD4M=false
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -27,9 +28,23 @@ while [[ $# -gt 0 ]]; do
     --no-build)  NO_BUILD=true; shift ;;
     --keep)      KEEP=true; shift ;;
     --native)    NATIVE=true; shift ;;
+    --ad4m)      AD4M=true; shift ;;
     *)           EXTRA_ARGS+=("$1"); shift ;;
   esac
 done
+
+# ad4m lane: overlay the ad4m node + provision step, and point the s10 scenario
+# at the node's host-exposed MCP. Needs an ad4m executor image (AD4M_EXEC_IMAGE,
+# default ad4m-test:latest); s10 self-skips if the node is unreachable.
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+if [[ "$AD4M" == "true" ]]; then
+  COMPOSE_ARGS+=(-f "docker/docker-compose.ad4m.yml")
+  export AD4M_MCP_URL="${AD4M_MCP_URL:-http://localhost:14561}"
+  export AD4M_PROVISION_FILE="${AD4M_PROVISION_FILE:-$(pwd)/ad4m/.provision/provision.json}"
+  # Fresh manifest per run so a prior lane's state can't leak in.
+  rm -f ad4m/.provision/provision.json ad4m/.provision/ad4m-token.json 2>/dev/null || true
+  mkdir -p ad4m/.provision
+fi
 
 # Install deps if needed
 if [[ ! -d "node_modules" ]]; then
@@ -54,11 +69,11 @@ cleanup() {
   if [[ "$KEEP" == "false" ]]; then
     echo ""
     echo "🧹 Tearing down containers..."
-    docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
+    docker compose "${COMPOSE_ARGS[@]}" down -v --remove-orphans 2>/dev/null || true
   else
     echo ""
     echo "🔒 Keeping containers (--keep). Stop with:"
-    echo "   docker compose -f wind-tunnel/$COMPOSE_FILE down -v"
+    echo "   docker compose ${COMPOSE_ARGS[*]} down -v (from wind-tunnel/)"
   fi
 }
 trap cleanup EXIT
@@ -66,24 +81,24 @@ trap cleanup EXIT
 # Build images
 if [[ "$NO_BUILD" == "false" ]]; then
   echo "🔨 Building Docker images..."
-  docker compose -f "$COMPOSE_FILE" build
+  docker compose "${COMPOSE_ARGS[@]}" build
 fi
 
 # Start services
 echo "🚀 Starting services..."
-docker compose -f "$COMPOSE_FILE" up -d
+docker compose "${COMPOSE_ARGS[@]}" up -d
 
 # Wait for health
 echo "⏳ Waiting for services to become healthy..."
-TIMEOUT=120
+TIMEOUT=$([[ "$AD4M" == "true" ]] && echo 240 || echo 120)
 ELAPSED=0
-while ! docker compose -f "$COMPOSE_FILE" ps --format json 2>/dev/null \
+while ! docker compose "${COMPOSE_ARGS[@]}" ps --format json 2>/dev/null \
     | grep -q '"Health":"healthy".*sovereign'; do
   sleep 1
   ELAPSED=$((ELAPSED + 1))
   if [[ $ELAPSED -ge $TIMEOUT ]]; then
     echo "❌ Sovereign failed to become healthy within ${TIMEOUT}s"
-    docker compose -f "$COMPOSE_FILE" logs sovereign | tail -30
+    docker compose "${COMPOSE_ARGS[@]}" logs sovereign | tail -30
     exit 1
   fi
 done
