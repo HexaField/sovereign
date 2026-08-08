@@ -1,0 +1,24 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5801,
+    "tls": {
+      "enabled": false
+    }
+  },
+  "identity": {
+    "agentName": "Hex",
+    "agentIcon": "H"
+  },
+  "personality": {
+    "enabled": false
+  },
+  "ad4m": {
+    "host": "http://ad4m:12000"
+  },
+  "seed": {
+    "membraneId": "personal",
+    "membraneName": "Personal",
+    "threadLabel": "Main"
+  }
+}
