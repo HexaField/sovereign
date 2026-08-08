@@ -87,6 +87,10 @@ export interface ActiveSessions {
   removeSubagent(sessionKey: string, agentId: string): void
   /** Synchronously flush any pending debounced write. Called from shutdown. */
   flush(): void
+  /** Freeze the store — silently drop all subsequent mutations. Call after
+   *  flush() in the shutdown handler to prevent the async markIdle teardown
+   *  from overwriting the flushed state. */
+  freeze(): void
 }
 
 const SCHEMA_VERSION = 1
@@ -115,13 +119,19 @@ export function createActiveSessions(opts: CreateActiveSessionsOptions): ActiveS
     label: 'active-sessions'
   })
 
+  // After shutdown flush, freeze the store so the async markIdle teardown
+  // cannot overwrite the flushed state on disk.
+  let frozen = false
+
   function mutateSync(fn: (snap: ActiveSessionsSnapshot) => void): void {
+    if (frozen) return
     const next = { ...file.read() }
     fn(next)
     file.updateSync(() => next)
   }
 
   function mutateDebounced(fn: (snap: ActiveSessionsSnapshot) => void): void {
+    if (frozen) return
     const next = { ...file.read() }
     fn(next)
     file.update(() => next)
@@ -209,6 +219,9 @@ export function createActiveSessions(opts: CreateActiveSessionsOptions): ActiveS
     },
     flush() {
       file.flush()
+    },
+    freeze() {
+      frozen = true
     }
   }
 }

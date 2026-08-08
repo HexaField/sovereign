@@ -9,6 +9,8 @@ export interface ScenarioContext {
   mockLlmUrl: string
   /** Base URL of the Sovereign instance. */
   sovereignUrl: string
+  /** Absolute path to the docker-compose.yml used for this run. Null in native mode. */
+  composeFile: string | null
 }
 
 export interface ScenarioResult {
