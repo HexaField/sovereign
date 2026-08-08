@@ -24,6 +24,10 @@ const sovereignUrl = getArg('sovereign-url', 'http://localhost:5811')
 const mockLlmUrl = getArg('mock-llm-url', 'http://localhost:8900')
 const scenarioFilter = getArg('scenario', '')
 const jsonOutput = args.includes('--json')
+const nativeMode = args.includes('--native')
+const composeFile = nativeMode
+  ? null
+  : getArg('compose-file', new URL('../docker/docker-compose.yml', import.meta.url).pathname)
 
 // ── Scenario selection ──────────────────────────────────────────────
 const selectedIds = scenarioFilter ? scenarioFilter.split(',').map((s) => s.trim()) : []
@@ -107,7 +111,8 @@ async function run(): Promise<void> {
       result = await scenario.run({
         client,
         mockLlmUrl,
-        sovereignUrl
+        sovereignUrl,
+        composeFile
       })
     } catch (err: any) {
       error = err?.message ?? String(err)

@@ -9,6 +9,7 @@ import { s5ThreadMessaging } from './s5-thread-messaging.js'
 import { s6Scheduler } from './s6-scheduler.js'
 import { s7WsEvents } from './s7-ws-events.js'
 import { s8ConfigMembranes } from './s8-config-membranes.js'
+import { s9SessionResume } from './s9-session-resume.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -18,5 +19,6 @@ export const ALL_SCENARIOS: Scenario[] = [
   s5ThreadMessaging,
   s6Scheduler,
   s7WsEvents,
-  s8ConfigMembranes
+  s8ConfigMembranes,
+  s9SessionResume
 ]
