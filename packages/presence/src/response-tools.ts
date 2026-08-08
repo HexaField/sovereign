@@ -150,8 +150,12 @@ export function createResponseTools(deps: ResponseToolsDeps): PresenceResponseTo
       if (!threadId) {
         return { delivered: false, threadId: null, reason: 'no-target-thread' }
       }
-      deps.chat.postAssistantTurn(threadId, text)
-      return { delivered: true, threadId }
+      try {
+        deps.chat.postAssistantTurn(threadId, text)
+        return { delivered: true, threadId }
+      } catch (err) {
+        return { delivered: false, threadId, reason: (err as Error)?.message ?? 'post-failed' }
+      }
     },
 
     async reply_webhook(text, opts) {
