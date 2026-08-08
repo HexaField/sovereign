@@ -731,12 +731,16 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       scheduler.destroy()
       terminalManager.dispose()
       cronMonitor.stop()
-      routingBackend.disconnectAll().catch(() => {})
-      // Flush every file-backed cache synchronously so SIGTERM leaves disk
-      // in its latest known-good state (R5). Order matters only in that
-      // active-sessions sees the final transitions from the backend.
-      sessionsRegistry.flush()
+      // Flush active-sessions FIRST, then freeze it so the async teardown
+      // from disconnectAll cannot overwrite the flushed entries on disk.
+      // Without freeze: disconnectAll fires abort → finally block emits
+      // idle → markIdle → remove → sync write, erasing every entry after
+      // the flush already persisted them.
       activeSessions.flush()
+      activeSessions.freeze()
+      routingBackend.disconnectAll().catch(() => {})
+      // Flush remaining file-backed caches synchronously.
+      sessionsRegistry.flush()
       claudeCodeBackend?.flushState()
       chatModule.flushState()
       personalityWatcherActive = false

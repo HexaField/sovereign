@@ -37,6 +37,8 @@ interface ResponsePlan {
   text?: string
   toolUse?: { id: string; name: string; input: Record<string, unknown> }
   stopReason?: 'end_turn' | 'tool_use'
+  /** Hold the SSE stream open for this many ms before sending events. */
+  delayMs?: number
 }
 
 const scripts: Script[] = []
@@ -166,15 +168,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Register script (for dynamic test setup)
+  // Accepts: { pattern, response, toolUse, delayMs }
   if (url.pathname === '/mock/script' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req))
-    // Simple pattern-based script: { pattern: "regex", response: "text" }
     addScript({
       match: (msg) => new RegExp(body.pattern, 'i').test(msg),
       respond: () => ({
         text: body.response ?? body.text,
         toolUse: body.toolUse,
-        stopReason: body.toolUse ? 'tool_use' : 'end_turn'
+        stopReason: body.toolUse ? 'tool_use' : 'end_turn',
+        delayMs: body.delayMs
       })
     })
     res.writeHead(201, { 'Content-Type': 'application/json' })
@@ -237,6 +240,21 @@ const server = http.createServer(async (req, res) => {
       })
 
       const plan = planResponse(lastUserText, messages, model)
+
+      // Hold the stream open if the script requests a delay.
+      // Bail early if the client disconnects (restart mid-stream).
+      if (plan.delayMs && plan.delayMs > 0) {
+        let aborted = false
+        req.on('close', () => {
+          aborted = true
+        })
+        await new Promise<void>((resolve) => setTimeout(resolve, plan.delayMs))
+        if (aborted || res.destroyed) {
+          res.end()
+          return
+        }
+      }
+
       streamResponse(res, plan, model)
       res.end()
       return

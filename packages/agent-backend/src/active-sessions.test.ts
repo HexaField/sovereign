@@ -121,4 +121,33 @@ describe('createActiveSessions', () => {
     const b = createActiveSessions({ dataDir: tmpDir })
     expect(b.get('s')?.lastTransitionAt).toBe(123)
   })
+
+  it('freeze() prevents remove from overwriting flushed state', () => {
+    const as = createActiveSessions({ dataDir: tmpDir })
+    const filePath = path.join(tmpDir, 'agent-backend', 'active-sessions.json')
+
+    as.upsert({
+      sessionKey: 's',
+      threadKey: 't',
+      backendKind: 'claude-code',
+      backendSessionId: 'u',
+      agentStatus: 'working',
+      lastTransitionAt: 0
+    })
+
+    // Simulate shutdown: flush then freeze
+    as.flush()
+    as.freeze()
+
+    // Simulate async markIdle teardown that fires after shutdown returns
+    as.remove('s')
+
+    // The file on disk should still have the entry
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    expect(Object.keys(raw.data)).toContain('s')
+
+    // A fresh instance rehydrating from disk should see the entry
+    const rehydrated = createActiveSessions({ dataDir: tmpDir })
+    expect(rehydrated.get('s')?.threadKey).toBe('t')
+  })
 })
