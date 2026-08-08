@@ -98,6 +98,14 @@ export interface ChatModule {
   messageQueue: MessageQueue
   /** Synchronously flush all file-backed state. Called on shutdown (R5). */
   flushState(): void
+  /**
+   * Inject an assistant turn produced outside the SDK (e.g. by
+   * `presence_reply_text`). Runs the full turn lifecycle: WS broadcast,
+   * chatEvents emit, bus `chat.turn.completed`, `threadManager.touch`,
+   * and idle-status synthesis. The turn lives only in the event stream
+   * — the SDK's session JSONL remains untouched.
+   */
+  injectExternalTurn(threadId: string, content: string): void
 }
 
 export function createChatModule(
@@ -940,6 +948,57 @@ export function createChatModule(
       return true
     },
     messageQueue,
-    flushState: () => liveStateStore.flush()
+    flushState: () => liveStateStore.flush(),
+
+    /**
+     * Inject an assistant turn produced outside the SDK (e.g. by
+     * `presence_reply_text`). Runs the same lifecycle as a backend-sourced
+     * `chat.turn`: WS broadcast, chatEvents emit, bus `chat.turn.completed`,
+     * `threadManager.touch`, and idle-status synthesis.
+     *
+     * The turn is NOT written into the SDK's JSONL (the session owns that
+     * file); it lives only in the WS/SSE stream and the bus event log.
+     * Clients that reconnect after the broadcast miss the turn — this
+     * matches the semantics of a presence reply (transient notification,
+     * not durable conversation history).
+     */
+    injectExternalTurn(threadId: string, content: string): void {
+      const turn = {
+        role: 'assistant' as const,
+        content,
+        timestamp: Date.now(),
+        workItems: [] as unknown[],
+        thinkingBlocks: [] as unknown[]
+      }
+
+      // Broadcast to connected WS clients.
+      if (wsHandler) {
+        wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn })
+      }
+      chatEvents.emit('chat.turn', { threadId, turn })
+
+      // Emit the canonical bus event — triggers push notifications,
+      // digest accumulation, and any other subscriber.
+      bus.emit({
+        type: 'chat.turn.completed',
+        timestamp: new Date().toISOString(),
+        source: 'chat',
+        payload: { threadId, turn }
+      })
+
+      // Update thread activity timestamp.
+      try {
+        threadManager.touch(threadId)
+      } catch {
+        /* thread may have been deleted */
+      }
+
+      // Synthesize an idle status so the UI converges.
+      const idleData = { threadId, status: 'idle' }
+      if (wsHandler) {
+        wsHandler.broadcastToChannel('chat', { type: 'chat.status', ...idleData })
+      }
+      chatEvents.emit('chat.status', idleData)
+    }
   }
 }

@@ -133,8 +133,9 @@ export function createPresenceModule(deps: PresenceModuleDeps): PresenceModule {
   async function forwardToInternal(text: string, opts?: { deviceId?: string }): Promise<{ delivered: boolean }> {
     const id = internalThreadId()
     if (!id) return { delivered: false }
+    if (!deps.chat.sendToThread) return { delivered: false }
     try {
-      await deps.chat.sendToThread?.(id, text, {
+      await deps.chat.sendToThread(id, text, {
         modality: 'text',
         ...(opts?.deviceId ? { deviceId: opts.deviceId } : {})
       })

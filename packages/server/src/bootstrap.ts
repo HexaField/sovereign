@@ -494,25 +494,18 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   })
 
   // Wire the deferred chat handles now that chatModule exists.
-  //   • postAssistantTurn — used by `presence_reply_text`. Broadcasts an
-  //     assistant turn on the chat WS channel. Non-persistent (the SDK's
-  //     JSONL isn't touched); presence replies are visible to
-  //     currently-connected clients only.
+  //   • postAssistantTurn — used by `presence_reply_text`. Delegates to
+  //     chatModule.injectExternalTurn which broadcasts, emits the bus
+  //     event (triggering push notifications + digest), touches the
+  //     thread's lastActivity, and synthesizes idle status. The turn is
+  //     NOT written into the SDK's JSONL (session owns that file).
   //   • sendToThread — used by gateway → internal forwarding
   //     (`presence_internal_send`) and any other surface that wants to
   //     drop a user-typed message into Hex's internal stream with an
   //     explicit origin.
   // See R5 + R7.
   chatHandleHolder.postAssistantTurn = (threadId, content) => {
-    const turn = {
-      role: 'assistant' as const,
-      content,
-      timestamp: Date.now(),
-      workItems: [],
-      thinkingBlocks: []
-    }
-    ;(wsHandler as any).broadcastToChannel?.('chat', { type: 'chat.turn', threadId, turn })
-    chatModule.chatEvents.emit('chat.turn', { threadId, turn })
+    chatModule.injectExternalTurn(threadId, content)
   }
   chatHandleHolder.sendToThread = async (threadId, text, origin) => {
     await chatModule.handleSend(threadId, text, undefined, { origin })
