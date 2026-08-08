@@ -72,6 +72,21 @@ export const s10Ad4mWaker: Scenario = {
       return skip(`skipped — ad4m node unreachable at ${mcpUrl}`)
     }
 
+    // 0. Wait for Sovereign's ad4m client to be connected + the agent DID to
+    //    resolve. A preceding scenario may have restarted the container (s9),
+    //    and the waker's ad4m client reconnects asynchronously — pinning or
+    //    injecting before it is ready would let the first baseline swallow the
+    //    mention (no wake). Poll /api/ad4m/status until it is live.
+    const ready = await waitForAd4mReady(client)
+    metrics.ad4mReady = ready
+    if (!ready)
+      return {
+        passed: false,
+        summary: 'ad4m client never reconnected (status.connected stayed false)',
+        metrics,
+        samples: client.samples
+      }
+
     // 1. Script the mock: any "mentioned you" turn replies via presence_reply_ad4m (once).
     await client.timed('mock-script', () =>
       fetch(`${mockLlmUrl}/mock/script`, {
@@ -164,6 +179,21 @@ export const s10Ad4mWaker: Scenario = {
       samples: client.samples
     }
   }
+}
+
+/** Poll /api/ad4m/status until the ad4m client is connected and the agent DID
+ *  has resolved — survives a container restart earlier in the suite. */
+async function waitForAd4mReady(client: any, tries = 40): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const s = await client.get('/api/ad4m/status')
+      if (s?.connected && s?.did) return true
+    } catch {
+      /* transient — retry */
+    }
+    await new Promise((r) => setTimeout(r, 2000))
+  }
+  return false
 }
 
 /** Wait until no thread reports an in-flight turn (or a timeout), so the

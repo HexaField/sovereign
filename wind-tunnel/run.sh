@@ -36,14 +36,28 @@ done
 # ad4m lane: overlay the ad4m node + provision step, and point the s10 scenario
 # at the node's host-exposed MCP. Needs an ad4m executor image (AD4M_EXEC_IMAGE,
 # default ad4m-test:latest); s10 self-skips if the node is unreachable.
+#
+# The ad4m lane runs s10 by itself by default. s9 restarts the Sovereign
+# container mid-suite; s10's waker then races that reconnect, so the two do not
+# share one Sovereign instance. Run the base suite (s1–s9) via plain ./run.sh,
+# the ad4m lane via ./run.sh --ad4m. Pass an explicit --scenario to override.
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 if [[ "$AD4M" == "true" ]]; then
   COMPOSE_ARGS+=(-f "docker/docker-compose.ad4m.yml")
+  # Default the ad4m lane to s10 unless the caller chose scenarios explicitly.
+  if [[ ! " ${EXTRA_ARGS[*]} " == *" --scenario "* ]]; then
+    EXTRA_ARGS+=(--scenario s10)
+  fi
   export AD4M_MCP_URL="${AD4M_MCP_URL:-http://localhost:14561}"
   export AD4M_PROVISION_FILE="${AD4M_PROVISION_FILE:-$(pwd)/ad4m/.provision/provision.json}"
-  # Fresh manifest per run so a prior lane's state can't leak in.
-  rm -f ad4m/.provision/provision.json ad4m/.provision/ad4m-token.json 2>/dev/null || true
+  # Fresh Sovereign data per run. The bind mount below IS Sovereign's whole
+  # /data/data, so a prior run's sessions + ad4m watch list would otherwise
+  # persist — a stale watched perspective churns 404s after s9's restart and
+  # delays the current mention's detection past s10's window. Clear via a root
+  # container (the provision + sovereign containers write it as root).
   mkdir -p ad4m/.provision
+  docker run --rm -v "$(pwd)/ad4m/.provision:/d" alpine:latest \
+    sh -c 'rm -rf /d/* /d/.[!.]* 2>/dev/null || true' >/dev/null 2>&1 || true
 fi
 
 # Install deps if needed
