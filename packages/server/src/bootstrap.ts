@@ -401,6 +401,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   }
   const presencePersonalityFile = path.join(process.env.HOME ?? '', '.sovereign', 'PRESENCE.md')
   const presenceMemoryFile = path.join(process.env.HOME ?? '', '.sovereign', 'PRESENCE_MEMORY.md')
+  const presenceKnowledgeFile = path.join(process.env.HOME ?? '', '.sovereign', 'PRESENCE_KNOWLEDGE.md')
 
   // Agent backend (the only construction cycle)
   const {
@@ -428,7 +429,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     browserService,
     presence: presenceMcpDeps,
     presencePersonalityFile,
-    presenceMemoryFile
+    presenceMemoryFile,
+    presenceKnowledgeFile
   })
   app.use(createSchedulerRoutes(scheduler, cronService))
   // RPC façade consumed by `@sovereign/mcp-sidecar`. Exposes every MCP tool
