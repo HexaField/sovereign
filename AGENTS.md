@@ -80,3 +80,45 @@ Relationships between entities use raw AD4M links under `hex://` predicates. The
 ## Tests
 
 The root `vitest.config.ts` collects `packages/*/src/**/*.test.ts`. Most packages have no local vitest config, so `pnpm --filter <pkg> test` reports "no test files" for them — that is expected. The repo-root run is the real gate.
+
+## Wind tunnel (`wind-tunnel/`)
+
+End-to-end regression tests against a Dockerised Sovereign instance with a mock Anthropic API. Eight scenarios cover thread CRUD, chat roundtrip (full SDK → mock LLM → WS response), presence threads, thread-to-thread forwarding, scheduler jobs, WebSocket event propagation, and config/membranes.
+
+### Quick start
+
+```bash
+# Docker mode (default) — builds images, runs scenarios, tears down
+./wind-tunnel/run.sh
+
+# Native mode — runs against already-running services
+./wind-tunnel/run.sh --native --sovereign-url http://localhost:5801 --mock-llm-url http://localhost:8900
+
+# Single scenario
+./wind-tunnel/run.sh --scenario s3
+```
+
+### Architecture
+
+- **Mock LLM** (`wind-tunnel/mock-llm/server.ts`) — implements Anthropic `/v1/messages` (SSE streaming) with scripted response support via `POST /mock/script`.
+- **Test client** (`wind-tunnel/src/client.ts`) — HTTP + WebSocket client with `timed()` latency sampling. Unwraps Sovereign's response wrappers (`{ threads: [...] }`, `{ thread: {...} }`, etc.).
+- **Scenarios** (`wind-tunnel/src/scenarios/`) — TypeScript modules implementing the `Scenario` interface.
+
+### API response shapes (gotcha)
+
+Sovereign wraps most REST responses. The wind tunnel client unwraps them:
+
+| Endpoint               | Wire shape                         | Client method returns |
+| ---------------------- | ---------------------------------- | --------------------- |
+| `GET /api/threads`     | `{ threads: [...] }`               | `any[]`               |
+| `POST /api/threads`    | `{ thread: {...} }`                | `any` (thread object) |
+| `GET /api/threads/:id` | `{ thread: {...}, events: [...] }` | `any` (thread object) |
+| `GET /api/crons`       | `{ crons: [...] }`                 | `any[]`               |
+| `GET /api/membranes`   | `{ membranes: [...] }`             | `any[]`               |
+| `GET /api/jobs`        | `[...]`                            | `any[]` (bare array)  |
+
+Thread deletion sets `archived: true` (soft delete). `listThreads()` passes `?active=true` by default to exclude archived threads.
+
+### Docker config
+
+Sovereign runs on port 5801 inside Docker, exposed as 5811 on the host (avoids conflict with the live service). TLS disabled. Personality off. `ANTHROPIC_BASE_URL` points at the mock LLM container.
