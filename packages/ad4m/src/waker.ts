@@ -122,10 +122,15 @@ function buildMentionQuery(identity: AgentIdentity): string {
 
   const conditions = terms.map((t) => `CONTAINS(LCASE(STR(<ad4m://fn/parse_literal>(?target))), "${t}")`).join(' || ')
 
+  // Exclude AD4M proof/ontology metadata (ad4m://ontology/proofKey, .../signature,
+  // …): every authored link carries a proof whose target is the author DID, so a
+  // DID search term otherwise matches all of that metadata — waking on the agent's
+  // own links instead of real @mentions in message bodies.
   return `
     SELECT ?source ?predicate ?target WHERE {
       ?source ?predicate ?target .
       FILTER(isIRI(?source) && isIRI(?predicate))
+      FILTER(!STRSTARTS(STR(?predicate), "ad4m://ontology/"))
       FILTER(${conditions})
     }
   `
@@ -137,12 +142,16 @@ function buildMentionQuery(identity: AgentIdentity): string {
  * Given a message node address, find its parent channels/conversations
  * by querying for things that have it as a child via ad4m://has_child.
  */
-async function resolveParents(client: Ad4mTypedClient, uuid: string, msgAddr: string): Promise<string[]> {
+export async function resolveParents(client: Ad4mTypedClient, uuid: string, msgAddr: string): Promise<string[]> {
   try {
     const query = `SELECT ?source WHERE { ?source <ad4m://has_child> <${msgAddr}> . }`
     const result = (await (client.perspective as any).querySparql(uuid, query)) as any
-    const bindings: any[] = result?.results?.bindings ?? []
-    return bindings.map((b: any) => b?.source?.value as string).filter(Boolean)
+    // AD4M's querySparql returns a FLAT array of rows — `[{ source: "<iri>" }]` —
+    // with the SELECT variable as a direct key. (The mention query above relies on
+    // the same shape.) Accept the W3C `results.bindings` `{ value }` shape too, so
+    // this survives an executor that switches to standard SPARQL-JSON.
+    const rows: any[] = Array.isArray(result) ? result : (result?.results?.bindings ?? [])
+    return rows.map((r: any) => (r?.source?.value ?? r?.source) as string).filter(Boolean)
   } catch {
     return []
   }
@@ -249,6 +258,17 @@ export function startWaker(
   const seenMessages = new Map<string, Set<string>>()
   // Debounce timers per perspective (2 s)
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  // Perspectives baselined this process. Baseline (seed-without-emit) happens
+  // ONCE per perspective — so a reconnect that re-subscribes does NOT re-baseline
+  // and swallow mentions that arrived meanwhile.
+  const baselinedUuids = new Set<string>()
+  // querySparql polling safety-net per perspective. The SDK re-opens the WS on
+  // a drop but does NOT re-register the server-side SPARQL subscription, so the
+  // live push subscription silently dies on reconnect. querySparql is a plain
+  // RPC (WS reconnects lazily for it) and keeps working — polling guarantees
+  // delivery regardless of push-subscription health.
+  const pollTimers = new Map<string, ReturnType<typeof setInterval>>()
+  const MENTION_POLL_INTERVAL_MS = 4000
   let lastClient: Ad4mTypedClient | null = null
   let agentIdentity: AgentIdentity | null = null
 
@@ -299,16 +319,99 @@ export function startWaker(
   }
 
   /**
-   * Subscribe to @mention events for a perspective using a SPARQL live query.
+   * Process a mention-query result — from the live push subscription OR the
+   * querySparql polling safety-net. Deduplicates by message SOURCE address,
+   * debounces (2 s), resolves body + parents, and emits the wake.
+   *
+   * Baselines ONCE per perspective per process: the first observation with no
+   * persisted state seeds the seen-set without emitting (avoids a flood on first
+   * start). Reconnects re-run this but never re-baseline — so a mention that
+   * arrives across a WS reconnect is emitted, not swallowed.
+   */
+  async function processMentionResult(client: Ad4mTypedClient, uuid: string, result: unknown) {
+    if (!Array.isArray(result)) return
+    const entry = userWatches.get(uuid) ?? autoWatches.get(uuid)
+    if (!entry) return
+
+    // Seen-set is kept across reconnects (not reset on re-subscribe).
+    const seen = seenMessages.get(uuid) ?? new Set<string>(persistedSeenMessages[uuid] ?? [])
+    seenMessages.set(uuid, seen)
+
+    if (!baselinedUuids.has(uuid)) {
+      baselinedUuids.add(uuid)
+      const noPriorState = !persistedSeenMessages[uuid] || persistedSeenMessages[uuid].length === 0
+      if (noPriorState) {
+        // First-ever observation with no persisted state → seed without emitting.
+        let count = 0
+        for (const item of result) {
+          const source: string = (item as any)?.source ?? ''
+          if (source && !seen.has(source)) {
+            seen.add(source)
+            count++
+          }
+        }
+        console.log(`[ad4m] waker: baseline seeded for ${uuid} (${count} existing mentions)`)
+        persistState()
+        return
+      }
+      // Had persisted state (restart) → fall through and emit anything new.
+    }
+
+    const newMsgAddrs: string[] = []
+    for (const item of result) {
+      const source: string = (item as any)?.source ?? ''
+      if (source && !seen.has(source)) {
+        newMsgAddrs.push(source)
+        seen.add(source) // mark immediately to prevent duplicates across rapid results
+      }
+    }
+    if (newMsgAddrs.length === 0) return
+    console.log(`[ad4m] waker: ${newMsgAddrs.length} new mention(s) for ${uuid.slice(0, 8)} — emitting`)
+
+    // Debounce: coalesce rapid mentions into a single wake (2 s window)
+    const existing = debounceTimers.get(uuid)
+    if (existing) clearTimeout(existing)
+    debounceTimers.set(
+      uuid,
+      setTimeout(async () => {
+        debounceTimers.delete(uuid)
+        for (const msgAddr of newMsgAddrs) {
+          const body = await resolveChildBody(client, uuid, msgAddr)
+          const parents = await resolveParents(client, uuid, msgAddr)
+
+          const parentPart =
+            parents.length > 0 ? ` (in ${parents.map((p) => p.split('/').pop() ?? p.slice(0, 12)).join(', ')})` : ''
+
+          const authorShort = msgAddr.split('/').pop() ?? msgAddr.slice(0, 12)
+          const text = body
+            ? `[AD4M] @${authorShort} mentioned you${parentPart}: "${body}"`
+            : `[AD4M] @${authorShort} mentioned you${parentPart}`
+
+          emitBusEvent(bus, 'ad4m.perspective.mention', { uuid, msgAddr, parents, body })
+          emitThreadMessage(bus, entry.threadKey, entry.label, text, {
+            perspectiveUuid: uuid,
+            channelAddress: parents[0],
+            messageAddress: msgAddr,
+            body: body ?? undefined
+          })
+        }
+        persistState()
+      }, 2000)
+    )
+  }
+
+  /**
+   * Subscribe to @mention events for a perspective using a SPARQL live query,
+   * backed by a querySparql polling safety-net.
    *
    * Only fires when a new message body contains the agent's DID or profile name(s)
-   * as a substring — no spam from all neighbourhood activity.
+   * as a substring. Deduplicates by message SOURCE address; persists seen
+   * addresses so reconnects/restarts don't re-fire old mentions.
    *
-   * Deduplicates by message SOURCE address (the message node), not the body link.
-   * Persists seen addresses so reconnects don't re-fire old mentions.
-   *
-   * First result from the subscription is treated as baseline (seeds seen set
-   * without emitting) if there is no persisted state for this perspective.
+   * The push subscription gives low latency; the poll guarantees delivery even
+   * when the SDK's WS drops the server-side subscription on reconnect (it does
+   * not re-register it). The poll uses clientManager.getClient() so it survives
+   * client swaps, and is created once per perspective.
    */
   function subscribeToMentions(client: Ad4mTypedClient, uuid: string, identity: AgentIdentity) {
     if (subscribedInSession.has(uuid)) return
@@ -329,85 +432,32 @@ export function startWaker(
         proxies.delete(uuid)
       })
 
-    // Seed seen set from persisted state — avoids re-firing after restart
-    const seen = new Set<string>(persistedSeenMessages[uuid] ?? [])
-    seenMessages.set(uuid, seen)
-    if (seen.size > 0) {
-      console.log(`[ad4m] waker: seeded ${seen.size} seen message(s) for ${uuid}`)
+    if (!seenMessages.has(uuid)) {
+      const seed = new Set<string>(persistedSeenMessages[uuid] ?? [])
+      seenMessages.set(uuid, seed)
+      if (seed.size > 0) console.log(`[ad4m] waker: seeded ${seed.size} seen message(s) for ${uuid}`)
     }
 
-    // True when no persisted data exists — first result is treated as baseline
-    const isFirstRun = !persistedSeenMessages[uuid] || persistedSeenMessages[uuid].length === 0
-    let isBaseline = isFirstRun
-
-    proxy.onResult(async (result: unknown) => {
-      if (!Array.isArray(result)) return
-
-      if (isBaseline) {
-        isBaseline = false
-        // Seed all current matches as seen without emitting — prevents flood on first start
-        let count = 0
-        for (const item of result) {
-          const source: string = (item as any)?.source ?? ''
-          if (source && !seen.has(source)) {
-            seen.add(source)
-            count++
-          }
-        }
-        console.log(`[ad4m] waker: baseline seeded for ${uuid} (${count} existing mentions)`)
-        persistState()
-        return
-      }
-
-      const entry = userWatches.get(uuid) ?? autoWatches.get(uuid)
-      if (!entry) return
-
-      // Find message nodes we haven't seen before
-      const newMsgAddrs: string[] = []
-      for (const item of result) {
-        const source: string = (item as any)?.source ?? ''
-        if (source && !seen.has(source)) {
-          newMsgAddrs.push(source)
-          seen.add(source) // mark immediately to prevent duplicates across rapid results
-        }
-      }
-
-      if (newMsgAddrs.length === 0) return
-
-      // Debounce: coalesce rapid mentions into a single wake (2 s window)
-      const existing = debounceTimers.get(uuid)
-      if (existing) clearTimeout(existing)
-
-      debounceTimers.set(
-        uuid,
-        setTimeout(async () => {
-          debounceTimers.delete(uuid)
-
-          for (const msgAddr of newMsgAddrs) {
-            const body = await resolveChildBody(client, uuid, msgAddr)
-            const parents = await resolveParents(client, uuid, msgAddr)
-
-            const parentPart =
-              parents.length > 0 ? ` (in ${parents.map((p) => p.split('/').pop() ?? p.slice(0, 12)).join(', ')})` : ''
-
-            const authorShort = msgAddr.split('/').pop() ?? msgAddr.slice(0, 12)
-            const text = body
-              ? `[AD4M] @${authorShort} mentioned you${parentPart}: "${body}"`
-              : `[AD4M] @${authorShort} mentioned you${parentPart}`
-
-            emitBusEvent(bus, 'ad4m.perspective.mention', { uuid, msgAddr, parents, body })
-            emitThreadMessage(bus, entry.threadKey, entry.label, text, {
-              perspectiveUuid: uuid,
-              channelAddress: parents[0],
-              messageAddress: msgAddr,
-              body: body ?? undefined
-            })
-          }
-
-          persistState()
-        }, 2000)
-      )
+    proxy.onResult((result: unknown) => {
+      void processMentionResult(client, uuid, result)
     })
+
+    // Polling safety-net — reliable even when the push subscription dies.
+    if (!pollTimers.has(uuid)) {
+      pollTimers.set(
+        uuid,
+        setInterval(async () => {
+          const c = clientManager.getClient()
+          if (!c) return
+          try {
+            const result = await (c.perspective as any).querySparql(uuid, query)
+            await processMentionResult(c, uuid, result)
+          } catch {
+            /* transient — next tick retries */
+          }
+        }, MENTION_POLL_INTERVAL_MS)
+      )
+    }
 
     proxies.set(uuid, proxy)
     console.log(
