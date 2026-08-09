@@ -14,6 +14,8 @@ import { s10Ad4mWaker } from './s10-ad4m-waker.js'
 import { s11ContextFilter } from './s11-context-filter.js'
 import { s12SessionRecycle } from './s12-session-recycle.js'
 import { s13SessionCleanup } from './s13-session-cleanup.js'
+import { s14LocalLlmBackend } from './s14-local-llm-backend.js'
+import { s15SummaryService } from './s15-summary-service.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -31,5 +33,10 @@ export const ALL_SCENARIOS: Scenario[] = [
   // feature endpoints return 404 (pre-implementation baseline).
   s11ContextFilter,
   s12SessionRecycle,
-  s13SessionCleanup
+  s13SessionCleanup,
+  // local-llm-backend.md (plans/) — s14 tests the mock's OpenAI-compatible
+  // surface directly (no real backend to route through yet); s15 self-skips
+  // when the summary service's endpoints return 404 (pre-implementation).
+  s14LocalLlmBackend,
+  s15SummaryService
 ]
