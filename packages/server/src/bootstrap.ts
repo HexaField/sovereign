@@ -14,6 +14,7 @@ import type { WebSocketServer } from 'ws'
 import type { EventBus } from '@sovereign/core'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
+import { createSummaryService, createSummaryRoutes } from '@sovereign/summary'
 import { createScheduler } from '@sovereign/scheduler'
 import { registerSchedulerChannel } from '@sovereign/scheduler'
 import { createSchedulerRoutes } from '@sovereign/scheduler'
@@ -615,6 +616,31 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       })
     })
   }
+  // ── Summary service ──────────────────────────────────────────────────
+  // Maintains rolling per-thread summaries via a local model. Fire-and-
+  // forget — never blocks the main event loop. Disabled by default; the
+  // user enables via config.summary.enabled + a reachable inference URL.
+  const summaryCfg = cfg.summary
+  if (summaryCfg?.enabled) {
+    try {
+      const summaryService = createSummaryService({
+        bus,
+        dataDir,
+        config: {
+          enabled: true,
+          baseUrl: summaryCfg.baseUrl,
+          model: summaryCfg.model,
+          debounceMs: summaryCfg.debounceMs ?? 5000,
+          maxSummaryWords: summaryCfg.maxSummaryWords ?? 200
+        }
+      })
+      summaryService.start()
+      app.use(createSummaryRoutes(summaryService))
+    } catch (err) {
+      console.warn('[bootstrap] summary service failed to start:', (err as Error)?.message)
+    }
+  }
+
   // Forward AskUserQuestion lifecycle events from the bus to the chat WS
   // channel so every connected client learns of new pending questions +
   // submissions in real time. The chat.work / chat.turn round-trip handles

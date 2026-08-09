@@ -17,6 +17,7 @@ import {
   type ClaudeCodeBackend,
   type AskUserQuestionStore
 } from './claude-code/index.js'
+import { createLocalLlmBackend, localLlmConfigFromStore } from './local-llm/index.js'
 import { buildSovereignMcpDeps } from './mcp-deps.js'
 import { createMcpRpcRoutes } from './mcp-rpc-routes.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
@@ -300,6 +301,9 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
         })
         claudeCodeBackend = cc
         return cc
+      },
+      'local-llm': () => {
+        return createLocalLlmBackend(localLlmConfigFromStore(configStore, dataDir), { dataDir })
       }
     }
   })

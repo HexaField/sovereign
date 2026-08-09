@@ -55,3 +55,7 @@ export {
   type PersonalityManifest,
   type AskUserQuestionStore
 } from './claude-code/index.js'
+
+// Local LLM adapter
+export { createLocalLlmBackend, localLlmConfigFromStore } from './local-llm/index.js'
+export type { LocalLlmBackend, LocalLlmConfig } from './local-llm/index.js'

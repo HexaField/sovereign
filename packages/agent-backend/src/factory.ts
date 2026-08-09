@@ -49,7 +49,7 @@ export interface RoutingBackend {
   registry: SessionsRegistry
 }
 
-const ALL_KINDS: AgentBackendKind[] = ['pi', 'claude-code']
+const ALL_KINDS: AgentBackendKind[] = ['pi', 'claude-code', 'local-llm']
 
 export function createBackend(config: MultiBackendConfig): RoutingBackend {
   if (!config.enabled.includes(config.default)) {

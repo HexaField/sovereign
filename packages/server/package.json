@@ -39,6 +39,7 @@
     "@sovereign/recordings": "workspace:*",
     "@sovereign/review": "workspace:*",
     "@sovereign/scheduler": "workspace:*",
+    "@sovereign/summary": "workspace:*",
     "@sovereign/system": "workspace:*",
     "@sovereign/terminal": "workspace:*",
     "@sovereign/thread-presence": "workspace:*",

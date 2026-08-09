@@ -18,7 +18,7 @@ COPY . .
 
 # Install with dev deps (needed for build tooling).
 # Force node-pty rebuild for linux-x64.
-RUN NODE_ENV=development pnpm install --frozen-lockfile && \
+RUN NODE_ENV=development pnpm install --no-frozen-lockfile && \
     cd node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty && \
     npx node-gyp rebuild 2>/dev/null || true
 

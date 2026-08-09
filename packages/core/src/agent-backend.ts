@@ -26,7 +26,7 @@ export type AgentStatus = 'idle' | 'working' | 'thinking'
  * Identifies which concrete backend implementation owns a session/event.
  * Sovereign supports multiple backends concurrently (one per thread).
  */
-export type AgentBackendKind = 'pi' | 'claude-code'
+export type AgentBackendKind = 'pi' | 'claude-code' | 'local-llm'
 
 /**
  * A single unit of agent work: tool call, result, thinking block, or system event.

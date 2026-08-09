@@ -73,10 +73,10 @@ export const schema = {
       properties: {
         enabled: {
           type: 'array',
-          items: { type: 'string', enum: ['claude-code'] },
+          items: { type: 'string', enum: ['claude-code', 'local-llm'] },
           'x-reload': 'restart'
         },
-        default: { type: 'string', enum: ['claude-code'], 'x-reload': 'restart' },
+        default: { type: 'string', enum: ['claude-code', 'local-llm'], 'x-reload': 'restart' },
         claudeCode: {
           type: 'object',
           properties: {
@@ -87,6 +87,26 @@ export const schema = {
               type: 'object',
               additionalProperties: { type: 'number' },
               'x-reload': 'session'
+            }
+          },
+          additionalProperties: false
+        },
+        localLlm: {
+          type: 'object',
+          properties: {
+            baseUrl: { ...stringSession },
+            model: { ...stringSession },
+            contextWindow: { type: 'number', minimum: 1, 'x-reload': 'session' },
+            temperature: { type: 'number', minimum: 0, maximum: 2, 'x-reload': 'hot' },
+            maxTokens: { type: 'number', minimum: 1, 'x-reload': 'hot' },
+            toolCallFormat: { ...stringHot },
+            sandbox: {
+              type: 'object',
+              properties: {
+                allowedCwds: { type: 'array', items: { type: 'string' }, 'x-reload': 'restart' },
+                bashTimeout: { type: 'number', minimum: 0, 'x-reload': 'hot' }
+              },
+              additionalProperties: false
             }
           },
           additionalProperties: false
@@ -207,6 +227,17 @@ export const schema = {
           },
           additionalProperties: false
         }
+      },
+      additionalProperties: false
+    },
+    summary: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean', 'x-reload': 'restart' },
+        baseUrl: { ...stringSession },
+        model: { ...stringSession },
+        debounceMs: { type: 'number', minimum: 0, 'x-reload': 'hot' },
+        maxSummaryWords: { type: 'number', minimum: 1, 'x-reload': 'hot' }
       },
       additionalProperties: false
     }
