@@ -69,12 +69,20 @@ export function claudeCodeConfigFromStore(configStore: ConfigStore, dataDir: str
   const modelContextWindows =
     configStore.get<Record<string, number>>('agentBackend.claudeCode.modelContextWindows') || undefined
 
+  const contextManagement =
+    configStore.get<{
+      filter?: Record<string, unknown>
+      recycle?: Record<string, unknown>
+      cleanup?: Record<string, unknown>
+    }>('contextManagement') ?? undefined
+
   return {
     dataDir,
     cwd,
     agentDir,
     defaultModel,
     modelContextWindows,
-    mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined
+    mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
+    contextManagement
   }
 }

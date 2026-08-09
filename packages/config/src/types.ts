@@ -118,6 +118,44 @@ export interface SovereignConfig {
     membraneName: string
     threadLabel: string
   }
+  /**
+   * Context management — three-layer system that keeps agent sessions lean.
+   * See plans/context-management.md for the full design.
+   */
+  contextManagement: {
+    /** Layer 1: real-time PostToolUse hook trims/deduplicates tool results. */
+    filter: {
+      enabled: boolean
+      /** Tool results above this byte count get trimmed (head + tail). */
+      trimThresholdBytes: number
+      /** Maximum lines kept after trimming. */
+      trimMaxLines: number
+      /** Content blocks at or above this size participate in dedup. */
+      dedupMinBytes: number
+      /** Strip model signature blocks from tool outputs. */
+      stripSignatures: boolean
+    }
+    /** Layer 2: session recycle — interrupt, prune JSONL, resume. */
+    recycle: {
+      enabled: boolean
+      /** Recycle when context exceeds this % of maxTokens. */
+      thresholdPercent: number
+      /** Minimum ms between recycles. */
+      minIntervalMs: number
+      /** Cozempic prescription tier (gentle | standard | aggressive). */
+      prescription: string
+      /** Skip recycle when subagents run in the session. */
+      skipDuringSubagents: boolean
+    }
+    /** Layer 3: between-session JSONL cleanup via cron. */
+    cleanup: {
+      enabled: boolean
+      /** Sessions above this size (MB) get pruned. */
+      maxSessionSizeMB: number
+      /** Cron expression for the cleanup schedule. */
+      schedule: string
+    }
+  }
 }
 
 export interface ConfigChange {

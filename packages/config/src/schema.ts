@@ -172,6 +172,43 @@ export const schema = {
         threadLabel: { ...stringRestart }
       },
       additionalProperties: false
+    },
+    contextManagement: {
+      type: 'object',
+      properties: {
+        filter: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean', 'x-reload': 'hot' },
+            trimThresholdBytes: { type: 'number', minimum: 0, 'x-reload': 'hot' },
+            trimMaxLines: { type: 'number', minimum: 1, 'x-reload': 'hot' },
+            dedupMinBytes: { type: 'number', minimum: 0, 'x-reload': 'hot' },
+            stripSignatures: { type: 'boolean', 'x-reload': 'hot' }
+          },
+          additionalProperties: false
+        },
+        recycle: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean', 'x-reload': 'hot' },
+            thresholdPercent: { type: 'number', minimum: 0, maximum: 100, 'x-reload': 'hot' },
+            minIntervalMs: { type: 'number', minimum: 0, 'x-reload': 'hot' },
+            prescription: { ...stringHot },
+            skipDuringSubagents: { type: 'boolean', 'x-reload': 'hot' }
+          },
+          additionalProperties: false
+        },
+        cleanup: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean', 'x-reload': 'hot' },
+            maxSessionSizeMB: { type: 'number', minimum: 0, 'x-reload': 'hot' },
+            schedule: { ...stringHot }
+          },
+          additionalProperties: false
+        }
+      },
+      additionalProperties: false
     }
   },
   additionalProperties: false

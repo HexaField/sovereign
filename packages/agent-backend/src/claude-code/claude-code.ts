@@ -68,6 +68,8 @@ import { dispatchSdkMessage } from './events.js'
 import { defaultAgentDir, projectsDirForCwd, sessionJsonlPath } from './path-encoding.js'
 import { ensureAd4mSkill, ensureDefaultSubagentFile, ensureLayeredContextFile } from './personality.js'
 import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, ToolPolicy } from './types.js'
+import { createContextFilter } from './context-filter.js'
+import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
 
@@ -578,6 +580,13 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     let state = internal.sessions.get(opts.sessionKey)
     if (state) return state
     const sessionFile = sessionJsonlPath(agentDir, opts.cwd ?? cwd, opts.backendSessionId)
+    // Create a per-session context filter (Layer 1) when filtering enabled.
+    const filterCfg = config.contextManagement?.filter
+    const contextFilter =
+      filterCfg?.enabled !== false
+        ? createContextFilter(filterCfg as Partial<ContextFilterConfig> | undefined)
+        : undefined
+
     state = {
       sessionKey: opts.sessionKey,
       backendSessionId: opts.backendSessionId,
@@ -588,6 +597,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       agentStatus: 'idle',
       label: opts.label,
       parentSessionKey: opts.parentSessionKey,
+      contextFilter,
       liveSubagents: new Set(),
       streamLastLength: 0,
       thinkingAccum: '',
@@ -784,7 +794,18 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     // point.
     const onPostToolUse = async (input: HookInput) => {
       if (input.hook_event_name !== 'PostToolUse') return { continue: true }
-      return { continue: true }
+      const state = stateForHook(input)
+      if (!state?.contextFilter) return { continue: true }
+      const inp = input as Record<string, unknown>
+      const filtered = state.contextFilter.filterToolOutput((inp.tool_name as string) ?? '', inp.tool_response)
+      if (filtered == null) return { continue: true }
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse' as const,
+          updatedToolOutput: filtered
+        }
+      }
     }
     // PostToolUseFailure DOES still emit — the SDK does not always echo a
     // user-role tool_result for failed tools, so the failure hook is the
@@ -1583,6 +1604,178 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     } as ContextBudget
   }
 
+  // ── Layer 2: Session Recycle ───────────────────────────────────────
+  //
+  // Interrupt the live Query, prune the JSONL transcript, then resume
+  // with the smaller file. The session continues with less context.
+
+  async function recycleSession(sessionKey: string): Promise<{
+    preTokens: number
+    postTokens: number
+    reclaimedTokens: number
+    reclaimedBytes: number
+    method: 'cozempic' | 'native'
+  } | null> {
+    const state = internal.sessions.get(sessionKey)
+    if (!state) return null
+    if (!state.liveQuery) return null
+    if (!state.sessionFile || !fs.existsSync(state.sessionFile)) return null
+
+    const recycleCfg = config.contextManagement?.recycle
+    if (recycleCfg?.enabled === false) return null
+
+    // Rate-limit: skip if recycled recently.
+    const minInterval = recycleCfg?.minIntervalMs ?? 300_000
+    if (state.lastRecycleAt && Date.now() - state.lastRecycleAt < minInterval) return null
+
+    // Skip when subagents run (interrupting the parent strands them).
+    if (recycleCfg?.skipDuringSubagents !== false && state.liveSubagents.size > 0) return null
+
+    // 1. Measure pre-recycle size.
+    const preBytes = fs.statSync(state.sessionFile).size
+    const preUsage = computeUsageFromFile(state.sessionFile)
+    const preTokens = preUsage.inputTokens
+
+    // 2. Interrupt the live query (graceful — session stays resumable).
+    emitter.emit('chat.status', { sessionKey, status: 'idle' })
+    try {
+      await state.liveQuery.interrupt()
+    } catch {
+      // Fall through — hard abort as fallback.
+      try {
+        state.abortController?.abort()
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 3. Wait for the iterator to complete (the for-await-of loop in
+    //    startSessionLoop exits cleanly after interrupt).
+    if (state.iteratorDone) {
+      try {
+        await state.iteratorDone
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 4. Reset pump bindings so startSessionLoop can re-create them.
+    state.pushUserMessage = undefined
+    state.endInput = undefined
+    state.abortController = undefined
+    state.liveQuery = undefined
+
+    // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
+    let method: 'cozempic' | 'native' = 'native'
+    const rx = recycleCfg?.prescription ?? 'standard'
+
+    try {
+      const { execFileSync } = await import('node:child_process')
+      execFileSync('cozempic', ['treat', state.backendSessionId, '-rx', rx, '--execute'], {
+        timeout: 30_000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+      method = 'cozempic'
+    } catch {
+      // Cozempic unavailable or failed — native fallback: truncate old
+      // tool_result blocks in the JSONL directly.
+      try {
+        nativePruneJsonl(state.sessionFile)
+      } catch (e) {
+        console.warn('[context-recycle] native prune failed:', e)
+      }
+    }
+
+    // 6. Measure post-recycle size.
+    const postBytes = fs.existsSync(state.sessionFile) ? fs.statSync(state.sessionFile).size : 0
+    const postUsage = computeUsageFromFile(state.sessionFile)
+    const postTokens = postUsage.inputTokens
+
+    // 7. Reset filter dedup state and stamp the recycle time.
+    state.contextFilter?.reset()
+    state.lastRecycleAt = Date.now()
+    state.lastUsage = undefined
+
+    // 8. Resume the session — the next sendMessage triggers
+    //    startSessionLoop which sees the existing sessionFile and
+    //    passes `resume: backendSessionId` to the SDK.
+    persistState(state)
+
+    const result = {
+      preTokens,
+      postTokens,
+      reclaimedTokens: preTokens - postTokens,
+      reclaimedBytes: preBytes - postBytes,
+      method
+    }
+
+    emitter.emit('chat.status', { sessionKey, status: 'idle' })
+    return result
+  }
+
+  /**
+   * Native JSONL pruner — strips large tool_result content blocks from old
+   * entries. Operates line-by-line; replaces tool_result text content over
+   * 1KB with a short stub. Used as a fallback when cozempic isn't available.
+   */
+  function nativePruneJsonl(filePath: string): void {
+    const raw = fs.readFileSync(filePath, 'utf-8')
+    const lines = raw.split('\n')
+    const totalLines = lines.length
+    // Keep the last 30% of entries untouched (recent context).
+    const pruneUpTo = Math.floor(totalLines * 0.7)
+    let changed = false
+
+    for (let i = 0; i < pruneUpTo; i++) {
+      const line = lines[i]
+      if (!line.trim()) continue
+      try {
+        const entry = JSON.parse(line)
+        if (pruneEntryToolResults(entry)) {
+          lines[i] = JSON.stringify(entry)
+          changed = true
+        }
+      } catch {
+        // Not valid JSON — skip.
+      }
+    }
+
+    if (changed) {
+      fs.writeFileSync(filePath, lines.join('\n'), 'utf-8')
+    }
+  }
+
+  /** Mutates a JSONL entry: replaces large tool_result text with stubs.
+   *  Returns true if any replacement happened. */
+  function pruneEntryToolResults(entry: Record<string, unknown>): boolean {
+    let changed = false
+    const content = entry.content
+    if (!Array.isArray(content)) return false
+    for (let i = 0; i < content.length; i++) {
+      const block = content[i]
+      if (typeof block !== 'object' || block === null) continue
+      const b = block as Record<string, unknown>
+      if (b.type !== 'tool_result') continue
+      const inner = b.content
+      if (typeof inner === 'string' && inner.length > 1024) {
+        b.content = `[pruned — ${inner.length} chars removed by context recycle]`
+        changed = true
+      } else if (Array.isArray(inner)) {
+        for (let j = 0; j < inner.length; j++) {
+          const tb = inner[j]
+          if (typeof tb === 'object' && tb !== null && (tb as Record<string, unknown>).type === 'text') {
+            const text = (tb as Record<string, string>).text
+            if (typeof text === 'string' && text.length > 1024) {
+              ;(tb as Record<string, string>).text = `[pruned — ${text.length} chars removed by context recycle]`
+              changed = true
+            }
+          }
+        }
+      }
+    }
+    return changed
+  }
+
   async function spawnSubagent(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string> {
     // The SDK's native Task tool is the canonical path. To synthesize a
     // Sovereign-tracked spawn we send a user-message into the parent
@@ -1637,6 +1830,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     setSessionContextWindow,
     listAvailableEfforts,
     getContextBudget,
+    recycleSession,
     spawnSubagent,
     getSessionFilePath,
     getActivityMap,

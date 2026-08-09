@@ -53,6 +53,21 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     res.json({ status: backend.status() })
   })
 
+  // Context budget for a thread — resolves threadId → sessionKey, then
+  // delegates to backend.getContextBudget(). Used by the wind tunnel's
+  // s12-session-recycle scenario and the UI context bar.
+  router.get('/api/chat/context-budget', async (req, res) => {
+    const threadId = (req.query.threadId as string) ?? ''
+    if (!threadId) return res.status(400).json({ error: 'threadId query param required' })
+    const sessionKey = chatModule.getSessionKeyForThread(threadId) ?? threadId
+    try {
+      const budget = await backend.getContextBudget(sessionKey)
+      res.json(budget ?? { tokens: 0 })
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? 'context budget unavailable' })
+    }
+  })
+
   // ── Chat draft sync endpoints ──────────────────────────────────────
   router.get('/api/chat/draft', (req, res) => {
     const thread = req.query.thread as string
