@@ -18,6 +18,7 @@ import { s14LocalLlmBackend } from './s14-local-llm-backend.js'
 import { s15SummaryService } from './s15-summary-service.js'
 import { s16AutoRecycle } from './s16-auto-recycle.js'
 import { s17BackendMixing } from './s17-backend-mixing.js'
+import { s18LlmBenchmark } from './s18-llm-benchmark.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -44,5 +45,8 @@ export const ALL_SCENARIOS: Scenario[] = [
   // Auto-recycle (Layer 2 auto-trigger) and backend mixing (per-thread
   // backend selection). Both self-skip when their endpoints return 404.
   s16AutoRecycle,
-  s17BackendMixing
+  s17BackendMixing,
+  // LLM benchmark — configurable prompt via SWT_BENCHMARK_PROMPT env var.
+  // Self-skips when the variable has no value or local-llm backend absent.
+  s18LlmBenchmark
 ]
