@@ -26,18 +26,9 @@ export const s13SessionCleanup: Scenario = {
     const { client, mockLlmUrl, sovereignUrl, composeFile } = ctx
     const metrics: Record<string, unknown> = {}
 
-    // 1. Require Docker mode — the size check reads container disk usage via
-    //    docker exec, same pattern as s9.
-    if (!composeFile) {
-      return {
-        passed: false,
-        summary: 'skipped — requires Docker mode (no --native)',
-        metrics,
-        samples: client.samples
-      }
-    }
+    // composeFile always set — Docker-only execution enforced by the runner.
 
-    // 2. Clear mock log and scripts left over from a prior scenario.
+    // 1. Clear mock log and scripts left over from a prior scenario.
     await fetch(`${mockLlmUrl}/mock/scripts`, { method: 'DELETE' })
     await fetch(`${mockLlmUrl}/mock/log`, { method: 'DELETE' })
 

@@ -7,7 +7,10 @@
 #   ./wind-tunnel/run.sh --scenario s1,s3         # run specific scenarios
 #   ./wind-tunnel/run.sh --no-build               # skip docker build
 #   ./wind-tunnel/run.sh --keep                   # keep containers after run
-#   ./wind-tunnel/run.sh --native                 # use already-running services
+#
+# SAFETY: All scenarios run inside Docker containers only.
+# No --native flag exists — removed by design. The wind tunnel
+# MUST NEVER connect to production Sovereign.
 #
 # Environment:
 #   SOVEREIGN_URL   — override sovereign endpoint (default: http://localhost:5811)
@@ -19,7 +22,6 @@ cd "$(dirname "$0")"
 COMPOSE_FILE="docker/docker-compose.yml"
 NO_BUILD=false
 KEEP=false
-NATIVE=false
 AD4M=false
 EXTRA_ARGS=()
 
@@ -27,7 +29,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-build)  NO_BUILD=true; shift ;;
     --keep)      KEEP=true; shift ;;
-    --native)    NATIVE=true; shift ;;
+    --native)    echo "✗ REFUSED — --native removed. The wind tunnel runs in Docker only." >&2; exit 1 ;;
     --ad4m)      AD4M=true; shift ;;
     *)           EXTRA_ARGS+=("$1"); shift ;;
   esac
@@ -66,19 +68,7 @@ if [[ ! -d "node_modules" ]]; then
   npm install --no-audit --no-fund 2>/dev/null
 fi
 
-if [[ "$NATIVE" == "true" ]]; then
-  # Run against already-running services (no Docker)
-  echo "🔗 Native mode — using existing services"
-  SOVEREIGN_URL="${SOVEREIGN_URL:-http://localhost:5811}"
-  MOCK_LLM_URL="${MOCK_LLM_URL:-http://localhost:8900}"
-
-  exec npx tsx src/main.ts \
-    --sovereign-url "$SOVEREIGN_URL" \
-    --mock-llm-url "$MOCK_LLM_URL" \
-    "${EXTRA_ARGS[@]}"
-fi
-
-# Docker mode
+# Docker mode — the only mode.
 cleanup() {
   if [[ "$KEEP" == "false" ]]; then
     echo ""
