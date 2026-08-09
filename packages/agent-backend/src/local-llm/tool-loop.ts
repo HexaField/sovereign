@@ -82,6 +82,49 @@ function parseToolArguments(rawArgs: unknown): { input: Record<string, unknown>;
   return { input: {} }
 }
 
+/** Parse `<tool_call>...</tool_call>` XML tags from model text output.
+ *  Many local models (Qwen3, Llama 3.x, Hermes) emit tool calls as
+ *  structured text rather than populating the OpenAI `tool_calls` array.
+ *  This fallback extracts those calls so the loop works regardless of
+ *  whether the model server does server-side parsing. */
+function parseToolCallsFromText(
+  text: string
+): Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> | undefined {
+  const TAG_RE = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g
+  const calls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = []
+  let match: RegExpExecArray | null
+  while ((match = TAG_RE.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1])
+      if (parsed && typeof parsed.name === 'string') {
+        const args = parsed.arguments ?? parsed.parameters ?? {}
+        calls.push({
+          id: randomUUID(),
+          type: 'function',
+          function: {
+            name: parsed.name,
+            arguments: typeof args === 'string' ? args : JSON.stringify(args)
+          }
+        })
+      }
+    } catch {
+      /* malformed JSON inside tag — skip */
+    }
+  }
+  return calls.length > 0 ? calls : undefined
+}
+
+/** Strip `<think>...</think>` blocks and `<tool_call>` tags from text,
+ *  returning only the user-facing content. Models that do chain-of-thought
+ *  (Qwen3 etc.) wrap reasoning in `<think>` tags — remove those so the
+ *  final answer shown to the user stays clean. */
+function stripModelMetaTags(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>\s*/g, '')
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/g, '')
+    .trim()
+}
+
 export async function runToolLoop(
   sessionKey: string,
   messages: ChatMessage[],
@@ -101,24 +144,33 @@ export async function runToolLoop(
     const choice = response.choices?.[0]
     if (!choice) break
 
+    // Determine tool calls: prefer the structured `tool_calls` array from
+    // the server, but fall back to parsing `<tool_call>` tags from the
+    // text content when the server doesn't do its own extraction.
+    let resolvedToolCalls = choice.message?.tool_calls?.map((tc) => ({
+      ...tc,
+      id: tc.id || randomUUID()
+    }))
+    const rawContent = choice.message?.content ?? null
+
+    if ((!resolvedToolCalls || resolvedToolCalls.length === 0) && rawContent) {
+      resolvedToolCalls = parseToolCallsFromText(rawContent)
+    }
+
+    // Strip thinking/tool_call tags from user-facing content.
+    const cleanContent = rawContent ? stripModelMetaTags(rawContent) : null
+
     const assistantMsg: ChatMessage = {
       role: 'assistant',
-      content: choice.message?.content ?? null,
-      // Normalize missing ids here — on the assistant message itself, not
-      // just the tool-result reply — so a server that omits tool_call.id
-      // still produces a transcript where the assistant's tool_calls[].id
-      // and the matching tool message's tool_call_id always agree. Sending
-      // the model back a tool result whose id doesn't match any tool_call
-      // it just made is invalid per the OpenAI tool-calling contract and
-      // has caused real servers to error or hallucinate on the next turn.
-      tool_calls: choice.message?.tool_calls?.map((tc) => ({ ...tc, id: tc.id || randomUUID() })),
+      content: cleanContent,
+      tool_calls: resolvedToolCalls,
       timestamp: Date.now()
     }
     messages.push(assistantMsg)
 
-    if (assistantMsg.content) {
-      finalContent = assistantMsg.content
-      deps.emit('chat.stream', { sessionKey, text: assistantMsg.content })
+    if (cleanContent) {
+      finalContent = cleanContent
+      deps.emit('chat.stream', { sessionKey, text: cleanContent })
     }
 
     const toolCalls = assistantMsg.tool_calls
