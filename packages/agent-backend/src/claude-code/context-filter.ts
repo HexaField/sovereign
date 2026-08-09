@@ -85,6 +85,105 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
   }
 
   /**
+   * Run the strip → dedup → trim chain on a single text string.
+   * Returns the original reference when nothing changed.
+   */
+  function filterText(text: string): string {
+    let filtered = stripSignatures(text)
+    filtered = dedup(filtered)
+    filtered = trimLargeOutput(filtered)
+    return filtered
+  }
+
+  /**
+   * Extract the primary text field from a structured tool-output object,
+   * filter it, and return the rebuilt object. Returns `null` when the
+   * output requires no modification.
+   *
+   * The SDK's built-in tools each return a typed object (BashOutput,
+   * FileReadOutput, GrepOutput, etc.) — never a bare string. This
+   * function handles each known shape so the filter actually fires.
+   */
+  function filterStructuredOutput(toolName: string, output: Record<string, unknown>): unknown | null {
+    switch (toolName) {
+      // Bash → { stdout: string, stderr: string, ... }
+      case 'Bash': {
+        let changed = false
+        const result = { ...output }
+        if (typeof output.stdout === 'string') {
+          const filtered = filterText(output.stdout as string)
+          if (filtered !== output.stdout) {
+            result.stdout = filtered
+            changed = true
+          }
+        }
+        if (typeof output.stderr === 'string') {
+          const filtered = filterText(output.stderr as string)
+          if (filtered !== output.stderr) {
+            result.stderr = filtered
+            changed = true
+          }
+        }
+        return changed ? result : null
+      }
+
+      // Read → { type: 'text', file: { content: string, ... }, ... }
+      case 'Read': {
+        const file = output.file as Record<string, unknown> | undefined
+        if (output.type !== 'text' || !file || typeof file.content !== 'string') return null
+        const filtered = filterText(file.content as string)
+        if (filtered === file.content) return null
+        return { ...output, file: { ...file, content: filtered } }
+      }
+
+      // Grep → { content?: string, filenames: string[], ... }
+      case 'Grep': {
+        if (typeof output.content !== 'string') return null
+        const filtered = filterText(output.content as string)
+        if (filtered === output.content) return null
+        return { ...output, content: filtered }
+      }
+
+      // Edit / Write → { content?: string, ... }
+      case 'Edit':
+      case 'Write': {
+        if (typeof output.content !== 'string') return null
+        const filtered = filterText(output.content as string)
+        if (filtered === output.content) return null
+        return { ...output, content: filtered }
+      }
+
+      // Agent / Task subagent results → { content: [{ type, text }], ... }
+      case 'Agent':
+      case 'Task': {
+        if (!Array.isArray(output.content)) return null
+        return filterContentArray(output.content as unknown[]) ? { ...output, content: output.content } : null
+      }
+
+      default:
+        return null
+    }
+  }
+
+  /**
+   * Filter an array of content blocks in place. Returns true when at
+   * least one block changed.
+   */
+  function filterContentArray(blocks: unknown[]): boolean {
+    let changed = false
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i] as Record<string, unknown> | null
+      if (!block || block.type !== 'text' || typeof block.text !== 'string') continue
+      const filtered = filterText(block.text as string)
+      if (filtered !== block.text) {
+        blocks[i] = { ...block, text: filtered }
+        changed = true
+      }
+    }
+    return changed
+  }
+
+  /**
    * Process a tool result through the filter chain:
    *   1. Signature strip
    *   2. Dedup
@@ -93,39 +192,24 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
    * Returns `null` when the output requires no modification (caller should
    * NOT set updatedToolOutput in that case — the SDK uses the original).
    */
-  function filterToolOutput(_toolName: string, output: unknown): unknown | null {
+  function filterToolOutput(toolName: string, output: unknown): unknown | null {
     if (!cfg.enabled) return null
 
-    // String output — the common path for Bash, Grep, Read results.
+    // String output — MCP tool results arrive as plain strings.
     if (typeof output === 'string') {
-      let filtered = stripSignatures(output)
-      filtered = dedup(filtered)
-      filtered = trimLargeOutput(filtered)
+      const filtered = filterText(output)
       return filtered !== output ? filtered : null
     }
 
     // Structured content array — `[{ type: 'text', text: '...' }, ...]`
     if (Array.isArray(output)) {
-      let changed = false
-      const mapped = output.map((block: unknown) => {
-        if (
-          typeof block === 'object' &&
-          block !== null &&
-          (block as Record<string, unknown>).type === 'text' &&
-          typeof (block as Record<string, unknown>).text === 'string'
-        ) {
-          const original = (block as Record<string, string>).text
-          let filtered = stripSignatures(original)
-          filtered = dedup(filtered)
-          filtered = trimLargeOutput(filtered)
-          if (filtered !== original) {
-            changed = true
-            return { ...(block as Record<string, unknown>), text: filtered }
-          }
-        }
-        return block
-      })
-      return changed ? mapped : null
+      const copy = [...output]
+      return filterContentArray(copy) ? copy : null
+    }
+
+    // Structured tool-output objects (Bash, Read, Grep, Edit, etc.).
+    if (typeof output === 'object' && output !== null) {
+      return filterStructuredOutput(toolName, output as Record<string, unknown>)
     }
 
     return null

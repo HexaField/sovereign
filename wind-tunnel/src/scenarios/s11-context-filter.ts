@@ -115,22 +115,14 @@ export const s11ContextFilter: Scenario = {
     const actualSize = toolResultText.length
     metrics.actualSize = actualSize
 
-    // 8b. Below threshold — the filter trimmed the result before the
-    //     model saw it.
-    if (actualSize < FILTERED_THRESHOLD_CHARS) {
-      return {
-        passed: true,
-        summary: `context filter trimmed the tool_result — ${actualSize} chars (raw ~${metrics.originalEstimate} bytes)`,
-        metrics,
-        samples: client.samples
-      }
-    }
-
-    // 8c. At or above threshold — filter not active yet. Pass anyway so
-    //     this scenario runs as a baseline measurement pre-implementation.
+    // 8b. The filter must trim the result — below FILTERED_THRESHOLD_CHARS
+    //     means the PostToolUse hook cut the output before the model saw it.
+    const passed = actualSize < FILTERED_THRESHOLD_CHARS
     return {
-      passed: true,
-      summary: `filter not active (baseline measurement) — tool_result ${actualSize} chars, unfiltered from raw ~${metrics.originalEstimate} bytes`,
+      passed,
+      summary: passed
+        ? `context filter trimmed the tool_result — ${actualSize} chars (raw ~${metrics.originalEstimate} bytes)`
+        : `filter did NOT trim — tool_result ${actualSize} chars, raw ~${metrics.originalEstimate} bytes (expected < ${FILTERED_THRESHOLD_CHARS})`,
       metrics,
       samples: client.samples
     }

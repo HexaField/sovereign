@@ -8,5 +8,12 @@
   },
   "personality": {
     "enabled": false
+  },
+  "contextManagement": {
+    "cleanup": {
+      "enabled": true,
+      "maxSessionSizeMB": 0.004,
+      "schedule": "0 4 * * *"
+    }
   }
 }

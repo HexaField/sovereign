@@ -81,6 +81,8 @@ export function createThreadRoutes(
     backend?: RoutingBackend | AgentBackend
     cronService?: CronService
     askUserQuestionStore?: AskUserQuestionRouteStore
+    /** Context management config getter — provides cleanup thresholds. */
+    getContextManagementConfig?: () => { cleanup: { enabled: boolean; maxSessionSizeMB: number; schedule: string } }
   }
 ): Router {
   const router = Router()
@@ -975,15 +977,14 @@ export function createThreadRoutes(
         continue
       }
 
-      // Only prune sessions above the threshold (default 50MB,
-      // but the wind tunnel builds much smaller sessions — prune anything
-      // above 4KB to demonstrate the mechanism).
-      const thresholdBytes = 4096
+      // Prune sessions above the configured threshold (default 50MB).
+      const cleanupCfg = opts?.getContextManagementConfig?.()?.cleanup
+      const thresholdBytes = (cleanupCfg?.maxSessionSizeMB ?? 50) * 1024 * 1024
       if (stat.size < thresholdBytes) continue
 
       try {
         if (backend.recycleSession) {
-          const result = await backend.recycleSession(session.key)
+          const result = await backend.recycleSession(session.key, { force: true })
           if (result) {
             results.push({
               key: session.key,
