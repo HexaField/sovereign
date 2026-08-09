@@ -3,6 +3,8 @@ import { createSignal, onMount, Show, For } from 'solid-js'
 import { abortChat } from '../chat/store.js'
 import { threadKey } from '../threads/store.js'
 import { CloseIcon } from '../../ui/icons.js'
+import { formatBytes } from '../system/HealthTab.js'
+import { formatRelativeTime } from '../../lib/format.js'
 
 interface SessionInfo {
   model: string | null
@@ -24,9 +26,18 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-interface CozempicHealth {
+/** Layer 1/2/3 built-in context-management status for the active thread. */
+interface ContextManagementHealth {
   healthy: boolean | null
-  reason: string | null
+  layer1: {
+    enabled: boolean
+    trimCount: number
+    trimBytesReclaimed: number
+    dedupCount: number
+    dedupBytesReclaimed: number
+  }
+  layer2: { enabled: boolean; lastRecycleAt: number | null; recycleCount: number }
+  layer3: { enabled: boolean }
 }
 
 export default function ThreadSettingsModal(props: { onClose: () => void }) {
@@ -41,8 +52,7 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
   const [defaultEffort, setDefaultEffort] = createSignal<string | null>(null)
   const [selectedEffort, setSelectedEffort] = createSignal<string>('')
   const [effortSaving, setEffortSaving] = createSignal(false)
-  const [cozempicHealth, setCozempicHealth] = createSignal<CozempicHealth | null>(null)
-  const [cozempicRestoring, setCozempicRestoring] = createSignal(false)
+  const [contextHealth, setContextHealth] = createSignal<ContextManagementHealth | null>(null)
 
   onMount(async () => {
     const key = threadKey()
@@ -81,42 +91,14 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
     }
     setLoading(false)
 
-    // Fetch cozempic health independently — non-blocking
+    // Fetch context-management health independently — non-blocking
     try {
-      const healthRes = await fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-health`)
-      if (healthRes.ok) setCozempicHealth(await healthRes.json())
+      const healthRes = await fetch(`/api/threads/${encodeURIComponent(key)}/context-health`)
+      if (healthRes.ok) setContextHealth(await healthRes.json())
     } catch {
       /* ignore */
     }
   })
-
-  const handleCozempicRestore = async () => {
-    const key = threadKey()
-    if (!key) return
-    setCozempicRestoring(true)
-    try {
-      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-restore`, { method: 'POST' })
-      const data = await res.json()
-      if (res.ok && data.ok) {
-        setActionFeedback('Cozempic guard restored')
-        // Re-check health after a moment
-        setTimeout(async () => {
-          try {
-            const healthRes = await fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-health`)
-            if (healthRes.ok) setCozempicHealth(await healthRes.json())
-          } catch {
-            /* ignore */
-          }
-        }, 1500)
-      } else {
-        setActionFeedback(data.message ?? 'Restore failed')
-      }
-    } catch {
-      setActionFeedback('Restore failed')
-    }
-    setCozempicRestoring(false)
-    setTimeout(() => setActionFeedback(''), 3000)
-  }
 
   const handleClearLock = async () => {
     const key = threadKey()
@@ -385,45 +367,51 @@ export default function ThreadSettingsModal(props: { onClose: () => void }) {
                   </span>
                 </div>
 
-                {/* Cozempic health */}
-                <Show when={cozempicHealth() !== null && cozempicHealth()?.healthy === false}>
-                  <div
-                    class="flex items-start gap-2 rounded-lg p-2.5"
-                    style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}
-                  >
-                    <div class="mt-0.5 shrink-0" style={{ color: '#ef4444' }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2L4 6v6c0 5.25 3.5 10.15 8 11.5C16.5 22.15 20 17.25 20 12V6l-8-4zm0 5c.55 0 1 .45 1 1v4c0 .55-.45 1-1 1s-1-.45-1-1V8c0-.55.45-1 1-1zm0 8c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z" />
-                      </svg>
-                    </div>
-                    <div class="min-w-0 flex-1">
-                      <div class="text-xs font-semibold" style={{ color: '#ef4444' }}>
-                        Cozempic guard inactive
+                {/* Context management — Sovereign's built-in Layer 1/2/3 system */}
+                <Show when={contextHealth()}>
+                  {(h) => (
+                    <div
+                      class="rounded-lg p-2.5"
+                      style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
+                    >
+                      <div class="mb-1.5 flex items-center justify-between">
+                        <span class="text-xs font-semibold" style={{ color: 'var(--c-text)' }}>
+                          Context Management
+                        </span>
+                        <Show when={h().healthy === false}>
+                          <span class="text-[10px] font-medium" style={{ color: 'var(--c-warning, #f59e0b)' }}>
+                            layer disabled
+                          </span>
+                        </Show>
                       </div>
-                      <div class="mt-0.5 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                        {cozempicHealth()?.reason === 'context-bloat'
-                          ? 'Context bloat prevented pruning. Run /compact first, then restore.'
-                          : cozempicHealth()?.reason === 'no-session'
-                            ? 'No active session — start a conversation first.'
-                            : 'Guard process not running.'}
+                      <div class="space-y-1 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                        <div class="flex items-center justify-between">
+                          <span>Layer 1 · Filter</span>
+                          <span>
+                            {h().layer1.enabled
+                              ? `${h().layer1.trimCount} trims · ${h().layer1.dedupCount} dedups · ` +
+                                `${formatBytes(h().layer1.trimBytesReclaimed + h().layer1.dedupBytesReclaimed)} reclaimed`
+                              : 'disabled'}
+                          </span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                          <span>Layer 2 · Recycle</span>
+                          <span>
+                            {(() => {
+                              const layer2 = h().layer2
+                              if (!layer2.enabled) return 'disabled'
+                              if (layer2.lastRecycleAt == null) return 'active · none yet'
+                              return `${layer2.recycleCount}x · last ${formatRelativeTime(layer2.lastRecycleAt)}`
+                            })()}
+                          </span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                          <span>Layer 3 · Cleanup</span>
+                          <span>{h().layer3.enabled ? 'scheduled' : 'disabled'}</span>
+                        </div>
                       </div>
-                      <Show when={cozempicHealth()?.reason !== 'no-session'}>
-                        <button
-                          class="mt-1.5 cursor-pointer rounded px-2 py-1 text-[10px] font-medium transition-colors"
-                          style={{
-                            background: cozempicRestoring() ? 'rgba(239,68,68,0.1)' : '#ef4444',
-                            color: 'white',
-                            border: 'none',
-                            opacity: cozempicRestoring() ? '0.6' : '1'
-                          }}
-                          disabled={cozempicRestoring()}
-                          onClick={handleCozempicRestore}
-                        >
-                          {cozempicRestoring() ? 'Restoring…' : 'Restore guard'}
-                        </button>
-                      </Show>
                     </div>
-                  </div>
+                  )}
                 </Show>
               </div>
             )}

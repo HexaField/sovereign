@@ -423,6 +423,49 @@ describe('claude-code/createClaudeCodeBackend', () => {
     expect(meta?.contextTokens).toBe(555000)
   })
 
+  describe('getContextManagementStatus — Service Health "Context Management" row', () => {
+    it('reports zeroed Layer 1 filter stats + Layer 2 recycle state for a fresh session', async () => {
+      const backend = createClaudeCodeBackend(
+        { dataDir, cwd, agentDir: join(dataDir, 'agent'), contextManagement: { filter: { enabled: true } } },
+        { sdkQuery: stubSdkQuery() }
+      )
+      await backend.createSession('t', { threadKey: 'ctx-mgmt-fresh' })
+      const status = await backend.getContextManagementStatus!('ctx-mgmt-fresh')
+      expect(status).toMatchObject({
+        filter: {
+          trimCount: 0,
+          trimBytesReclaimed: 0,
+          dedupCount: 0,
+          dedupBytesReclaimed: 0,
+          signatureStripCount: 0,
+          seenHashes: 0,
+          turnCounter: 0
+        },
+        recycleCount: 0,
+        lastRecycleAt: null
+      })
+    })
+
+    it('reports filter: null with Layer 1 disabled for the session', async () => {
+      const backend = createClaudeCodeBackend(
+        { dataDir, cwd, agentDir: join(dataDir, 'agent'), contextManagement: { filter: { enabled: false } } },
+        { sdkQuery: stubSdkQuery() }
+      )
+      await backend.createSession('t', { threadKey: 'ctx-mgmt-filter-off' })
+      const status = await backend.getContextManagementStatus!('ctx-mgmt-filter-off')
+      expect(status?.filter).toBeNull()
+    })
+
+    it('returns null for a session key the adapter has no live state for', async () => {
+      const backend = createClaudeCodeBackend(
+        { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+        { sdkQuery: stubSdkQuery() }
+      )
+      const status = await backend.getContextManagementStatus!('never-created')
+      expect(status).toBeNull()
+    })
+  })
+
   it('setSessionModel rejects non-anthropic providers', async () => {
     const backend = createClaudeCodeBackend(
       { dataDir, cwd, agentDir: join(dataDir, 'agent') },

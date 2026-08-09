@@ -4,6 +4,7 @@ import { connectionStatus, wsStatus, backendStatus } from './store.js'
 import { threadKey } from '../threads/store.js'
 import { wsStore } from '../../ws/index.js'
 import { ExternalLinkIcon } from '../../ui/icons.js'
+import { formatBytes } from '../system/HealthTab.js'
 
 export interface McpHealth {
   status: 'ok' | 'down' | 'unknown'
@@ -30,12 +31,29 @@ export interface ExternalServiceHealth {
   status: 'ok' | 'down' | 'unknown'
 }
 
-export interface CozempicHealth {
+/** Layer 1/2/3 built-in context-management status — replaces the retired
+ *  Cozempic guard-daemon health check. */
+export interface ContextManagementHealth {
   healthy: boolean | null
-  reason: string | null
+  layer1: {
+    enabled: boolean
+    trimCount: number
+    trimBytesReclaimed: number
+    dedupCount: number
+    dedupBytesReclaimed: number
+  }
+  layer2: { enabled: boolean; lastRecycleAt: number | null; recycleCount: number }
+  layer3: { enabled: boolean }
 }
 
 export type OverallHealth = 'ok' | 'degraded' | 'error'
+
+const CONTEXT_MGMT_HEALTH_UNKNOWN: ContextManagementHealth = {
+  healthy: null,
+  layer1: { enabled: false, trimCount: 0, trimBytesReclaimed: 0, dedupCount: 0, dedupBytesReclaimed: 0 },
+  layer2: { enabled: false, lastRecycleAt: null, recycleCount: 0 },
+  layer3: { enabled: false }
+}
 
 const [mcpHealth, setMcpHealth] = createSignal<McpHealth>({ status: 'unknown', sessions: 0, tools: 0 })
 const [sembleHealth, setSembleHealth] = createSignal<SembleHealth>({ status: 'unknown', version: '' })
@@ -45,8 +63,7 @@ const [agentsHealth, setAgentsHealth] = createSignal<AgentsCensusHealth>({
   background: 0
 })
 const [externalHealth, setExternalHealth] = createSignal<ExternalServiceHealth[]>([])
-const [cozempicHealth, setCozempicHealth] = createSignal<CozempicHealth>({ healthy: null, reason: null })
-const [cozempicRestoring, setCozempicRestoring] = createSignal(false)
+const [contextMgmtHealth, setContextMgmtHealth] = createSignal<ContextManagementHealth>(CONTEXT_MGMT_HEALTH_UNKNOWN)
 
 export const overallHealth = (): OverallHealth => {
   const conn = connectionStatus()
@@ -63,8 +80,8 @@ export const overallHealth = (): OverallHealth => {
   // Semble is an auxiliary code-search tool; missing degrades but doesn't error.
   const semble = sembleHealth()
 
-  const coz = cozempicHealth()
-  if (coz.healthy === false) return 'degraded'
+  const ctxMgmt = contextMgmtHealth()
+  if (ctxMgmt.healthy === false) return 'degraded'
 
   if (
     conn === 'connecting' ||
@@ -78,7 +95,7 @@ export const overallHealth = (): OverallHealth => {
 }
 
 export function initHealthPolling(): () => void {
-  let cozTimer: ReturnType<typeof setInterval> | undefined
+  let ctxMgmtTimer: ReturnType<typeof setInterval> | undefined
 
   wsStore.subscribe(['system'])
   const offHealth = wsStore.on('system.health', (msg: Record<string, unknown>) => {
@@ -96,29 +113,45 @@ export function initHealthPolling(): () => void {
     if (Array.isArray(services?.external)) setExternalHealth(services.external)
   })
 
-  function pollCozempic() {
+  function pollContextHealth() {
     const key = threadKey()
     if (!key) {
-      setCozempicHealth({ healthy: null, reason: null })
+      setContextMgmtHealth(CONTEXT_MGMT_HEALTH_UNKNOWN)
       return
     }
-    fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-health`, {
+    fetch(`/api/threads/${encodeURIComponent(key)}/context-health`, {
       signal: AbortSignal.timeout(3000)
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data) setCozempicHealth({ healthy: data.healthy, reason: data.reason })
+        if (!data) return
+        setContextMgmtHealth({
+          healthy: data.healthy ?? null,
+          layer1: {
+            enabled: !!data.layer1?.enabled,
+            trimCount: data.layer1?.trimCount ?? 0,
+            trimBytesReclaimed: data.layer1?.trimBytesReclaimed ?? 0,
+            dedupCount: data.layer1?.dedupCount ?? 0,
+            dedupBytesReclaimed: data.layer1?.dedupBytesReclaimed ?? 0
+          },
+          layer2: {
+            enabled: !!data.layer2?.enabled,
+            lastRecycleAt: data.layer2?.lastRecycleAt ?? null,
+            recycleCount: data.layer2?.recycleCount ?? 0
+          },
+          layer3: { enabled: !!data.layer3?.enabled }
+        })
       })
       .catch(() => {})
   }
 
-  pollCozempic()
-  cozTimer = setInterval(pollCozempic, 15_000)
+  pollContextHealth()
+  ctxMgmtTimer = setInterval(pollContextHealth, 15_000)
 
   return () => {
     offHealth()
     wsStore.unsubscribe(['system'])
-    if (cozTimer) clearInterval(cozTimer)
+    if (ctxMgmtTimer) clearInterval(ctxMgmtTimer)
   }
 }
 
@@ -129,6 +162,8 @@ function StatusRow(props: {
   port?: number | string
   openUrl?: string
   action?: { label: string; onClick: () => void; loading?: boolean }
+  /** Native tooltip shown on hover — used for rows with more detail than fits inline. */
+  title?: string
 }) {
   const dotColor = () => {
     if (props.status === 'ok') return '#4aff8a'
@@ -136,7 +171,7 @@ function StatusRow(props: {
     return 'var(--c-danger, #ff4a6a)'
   }
   return (
-    <div class="flex items-center gap-2 py-1.5">
+    <div class="flex items-center gap-2 py-1.5" title={props.title}>
       <span class="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: dotColor() }} />
       <span class="flex-1 text-xs font-medium">{props.label}</span>
       <Show when={props.port !== undefined}>
@@ -257,40 +292,30 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
     return 'unreachable'
   }
 
-  const cozRow = createMemo(() => {
-    const h = cozempicHealth()
-    if (h.healthy === null)
-      return { status: 'unknown' as const, detail: h.reason === 'no-session' ? 'no active session' : 'n/a' }
-    if (h.healthy) return { status: 'ok' as const, detail: 'guard active' }
-    const reasons: Record<string, string> = {
-      'guard-exited': 'guard crashed',
-      'no-pid-file': 'not started',
-      'context-bloat': 'context overflow',
-      'invalid-pid': 'invalid state'
-    }
-    return { status: 'error' as const, detail: reasons[h.reason ?? ''] ?? h.reason ?? 'unhealthy' }
+  const ctxMgmtRow = createMemo(() => {
+    const h = contextMgmtHealth()
+    if (h.healthy === null) return { status: 'unknown' as const, detail: 'checking...' }
+    const enabledCount = [h.layer1.enabled, h.layer2.enabled, h.layer3.enabled].filter(Boolean).length
+    if (enabledCount === 3) return { status: 'ok' as const, detail: 'all layers active' }
+    if (enabledCount === 0) return { status: 'error' as const, detail: 'disabled' }
+    return { status: 'warning' as const, detail: `${enabledCount}/3 layers active` }
   })
 
-  async function restoreCozempic() {
-    const key = threadKey()
-    if (!key) return
-    setCozempicRestoring(true)
-    try {
-      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-restore`, { method: 'POST' })
-      if (res.ok) {
-        setTimeout(() => {
-          fetch(`/api/threads/${encodeURIComponent(key)}/cozempic-health`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data) => {
-              if (data) setCozempicHealth({ healthy: data.healthy, reason: data.reason })
-            })
-            .catch(() => {})
-        }, 2000)
-      }
-    } finally {
-      setCozempicRestoring(false)
-    }
-  }
+  // Hover tooltip — trim/dedup counts and reclaim totals don't fit the
+  // single-line detail column, so they surface on hover instead.
+  const ctxMgmtTooltip = createMemo(() => {
+    const h = contextMgmtHealth()
+    const l1 = h.layer1.enabled
+      ? `Layer 1 filter: ${h.layer1.trimCount} trims, ${h.layer1.dedupCount} dedups, ` +
+        `${formatBytes(h.layer1.trimBytesReclaimed + h.layer1.dedupBytesReclaimed)} reclaimed`
+      : 'Layer 1 filter: disabled'
+    const l2 = h.layer2.enabled
+      ? `Layer 2 recycle: ${h.layer2.recycleCount} run${h.layer2.recycleCount === 1 ? '' : 's'}` +
+        (h.layer2.lastRecycleAt ? `, last ${new Date(h.layer2.lastRecycleAt).toLocaleTimeString()}` : '')
+      : 'Layer 2 recycle: disabled'
+    const l3 = h.layer3.enabled ? 'Layer 3 cleanup: scheduled' : 'Layer 3 cleanup: disabled'
+    return [l1, l2, l3].join('\n')
+  })
 
   return (
     <Show when={props.open}>
@@ -307,22 +332,19 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
           }}
         >
           <div class="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Service Health</div>
-          {/* Health rows render in order: Sovereign origin, MCP sidecar, per-thread Cozempic guard,
-              then any externally-configured LAN services (AD4M dapp, WE launcher, …). */}
+          {/* Health rows render in order: Sovereign origin, MCP sidecar, per-thread built-in
+              context management (Layers 1/2/3), then any externally-configured LAN services
+              (AD4M dapp, WE launcher, …). */}
           <div class="divide-y" style={{ 'border-color': 'var(--c-border)' }}>
             <StatusRow label="Sovereign" status={connRow().status} detail={connRow().detail} port={sovereignPort()} />
             <StatusRow label="MCP Sidecar" status={mcpRow().status} detail={mcpRow().detail} />
             <StatusRow label="Semble" status={sembleRow().status} detail={sembleRow().detail} />
             <StatusRow label="Agent Sessions" status={agentsRow().status} detail={agentsRow().detail} />
             <StatusRow
-              label="Cozempic"
-              status={cozRow().status}
-              detail={cozRow().detail}
-              action={
-                cozRow().status === 'error'
-                  ? { label: 'Restore', onClick: restoreCozempic, loading: cozempicRestoring() }
-                  : undefined
-              }
+              label="Context Management"
+              status={ctxMgmtRow().status}
+              detail={ctxMgmtRow().detail}
+              title={ctxMgmtTooltip()}
             />
             <For each={externalHealth()}>
               {(svc) => (

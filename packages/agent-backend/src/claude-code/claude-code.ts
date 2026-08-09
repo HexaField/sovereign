@@ -43,6 +43,7 @@ import type {
   BackendCapabilities,
   BackendConnectionStatus,
   ContextBudget,
+  ContextManagementStatus,
   ModelCatalogEntry,
   ParsedTurn,
   ReasoningEffort,
@@ -447,6 +448,9 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         label: value.label,
         parentSessionKey: value.parentSessionKey,
         lastRecycleAt: value.lastRecycleAt,
+        // Recycle count holds no persisted counterpart — it starts back at 0
+        // every restart, same as the in-memory dedup state it sits beside.
+        recycleCount: 0,
         liveSubagents: new Set(), // cleared on restart — nothing survives the process boundary
         streamLastLength: value.streamLastLength,
         thinkingAccum: value.thinkingAccum,
@@ -601,6 +605,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       label: opts.label,
       parentSessionKey: opts.parentSessionKey,
       contextFilter,
+      recycleCount: 0,
       liveSubagents: new Set(),
       streamLastLength: 0,
       thinkingAccum: '',
@@ -1485,6 +1490,18 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     }
   }
 
+  /** Layer 1 + Layer 2 context-management telemetry for one session. Feeds
+   *  the Sovereign UI's Service Health "Context Management" row. */
+  async function getContextManagementStatus(sessionKey: string): Promise<ContextManagementStatus | null> {
+    const state = internal.sessions.get(sessionKey)
+    if (!state) return null
+    return {
+      filter: state.contextFilter?.stats() ?? null,
+      recycleCount: state.recycleCount ?? 0,
+      lastRecycleAt: state.lastRecycleAt ?? null
+    }
+  }
+
   async function setSessionModel(sessionKey: string, provider: string, model: string) {
     // Accept empty provider as a shortcut for "anthropic" so the UI can pass
     // bare aliases when callers haven't reconciled the prefix yet.
@@ -1780,6 +1797,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     // 7. Reset filter dedup state and stamp the recycle time.
     state.contextFilter?.reset()
     state.lastRecycleAt = Date.now()
+    state.recycleCount = (state.recycleCount ?? 0) + 1
     state.lastUsage = undefined
 
     // 8. Resume the session — the next sendMessage triggers
@@ -1910,6 +1928,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     listSessions,
     listSubagents,
     getSessionMeta,
+    getContextManagementStatus,
     setSessionModel,
     listAvailableModels,
     setSessionEffort,
