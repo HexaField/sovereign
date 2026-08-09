@@ -114,9 +114,6 @@ importers:
       '@sovereign/scheduler':
         specifier: workspace:*
         version: link:../scheduler
-      '@sovereign/summary':
-        specifier: workspace:*
-        version: link:../summary
       '@sovereign/threads':
         specifier: workspace:*
         version: link:../threads
