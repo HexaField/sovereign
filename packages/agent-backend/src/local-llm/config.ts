@@ -18,6 +18,13 @@ export interface LocalLlmConfig {
   temperature: number
   /** Maximum output tokens per completion. */
   maxTokens: number
+  /** Per-completion timeout in ms. At ~20 t/s decode, 32k tokens needs ~27 min.
+   *  Default 600000 (10 min). The old 60s default starved slow models of output. */
+  timeoutMs: number
+  /** Enable model thinking (e.g. Qwen3 `<think>` blocks). When false, passes
+   *  `chat_template_kwargs: { enable_thinking: false }` to the server and adds
+   *  a system prompt instruction. Thinking tokens consume output budget. */
+  thinking: boolean
   /** Tool-call format detection: auto | openai | hermes. Reserved for future prompt-format branching. */
   toolCallFormat: string
   /** Sandbox restrictions applied to every filesystem/shell tool call. */
@@ -35,6 +42,8 @@ interface RawLocalLlmConfig {
   contextWindow?: number
   temperature?: number
   maxTokens?: number
+  timeoutMs?: number
+  thinking?: boolean
   toolCallFormat?: string
   sandbox?: {
     allowedCwds?: string[]
@@ -57,6 +66,8 @@ export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: strin
     contextWindow: cfg.contextWindow ?? 32768,
     temperature: cfg.temperature ?? 0.1,
     maxTokens: cfg.maxTokens ?? 4096,
+    timeoutMs: cfg.timeoutMs ?? 600_000,
+    thinking: cfg.thinking !== false,
     toolCallFormat: cfg.toolCallFormat?.trim() || 'auto',
     sandbox: {
       allowedCwds: cfg.sandbox?.allowedCwds ?? (home ? [path.join(home, 'workspaces')] : []),

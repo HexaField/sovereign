@@ -65,6 +65,10 @@ export interface InferenceClientConfig {
   temperature: number
   maxTokens: number
   timeoutMs?: number
+  /** When false, passes `chat_template_kwargs: { enable_thinking: false }` to
+   *  the server. Saves output tokens on models that do chain-of-thought
+   *  (Qwen3.6, etc.). Default true. */
+  thinking?: boolean
 }
 
 export function createInferenceClient(initialConfig: InferenceClientConfig) {
@@ -86,9 +90,12 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
       body.tools = opts.tools
       body.tool_choice = 'auto'
     }
+    if (state.thinking === false) {
+      body.chat_template_kwargs = { enable_thinking: false }
+    }
 
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), state.timeoutMs ?? 60000)
+    const timer = setTimeout(() => controller.abort(), state.timeoutMs ?? 600_000)
     if (opts?.signal) {
       opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
     }
@@ -126,9 +133,12 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
       body.tools = opts.tools
       body.tool_choice = 'auto'
     }
+    if (state.thinking === false) {
+      body.chat_template_kwargs = { enable_thinking: false }
+    }
 
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), state.timeoutMs ?? 120000)
+    const timer = setTimeout(() => controller.abort(), state.timeoutMs ?? 600_000)
     if (opts?.signal) {
       opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
     }

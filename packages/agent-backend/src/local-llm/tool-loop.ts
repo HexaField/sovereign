@@ -45,14 +45,14 @@ export interface ToolLoopResult {
   toolCallCount: number
 }
 
-const DEFAULT_MAX_ITERATIONS = 20
+const DEFAULT_MAX_ITERATIONS = 50
 
 // Local models typically run with small context windows (32k tokens by
 // default) — an unbounded tool result (e.g. Bash `cat` on a large file) fed
 // straight back into the transcript can blow the window in a single round
 // trip. Cap what goes back to the model; the live `chat.work` event carries
 // the output up to its own (larger) cap for the UI.
-const MAX_TOOL_RESULT_CHARS_FOR_MODEL = 8_000
+const MAX_TOOL_RESULT_CHARS_FOR_MODEL = 48_000
 const MAX_TOOL_RESULT_CHARS_FOR_UI = 4_000
 
 function truncateForModel(text: string): string {

@@ -209,7 +209,9 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
         baseUrl: config.baseUrl,
         model,
         temperature: config.temperature,
-        maxTokens: config.maxTokens
+        maxTokens: config.maxTokens,
+        timeoutMs: config.timeoutMs,
+        thinking: config.thinking
       })
     )
   }
