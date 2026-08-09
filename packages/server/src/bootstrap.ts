@@ -557,9 +557,64 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       chatModule,
       backend: routingBackend,
       cronService,
-      askUserQuestionStore
+      askUserQuestionStore,
+      getContextManagementConfig: () =>
+        configStore.get<SovereignConfig['contextManagement']>('contextManagement') ?? cfg.contextManagement
     })
   )
+
+  // ── Layer 3: scheduled cleanup cron ──────────────────────────────────
+  // Register a system job that sweeps oversized session JSONLs on the
+  // configured schedule (default: daily at 04:00 UTC).
+  const CLEANUP_JOB_KIND = 'system-context-cleanup'
+  const cleanupCfg = cfg.contextManagement?.cleanup
+  if (cleanupCfg?.enabled !== false && cleanupCfg?.schedule && scheduler) {
+    // Remove stale instances from prior boots (hot-reload safe).
+    for (const j of scheduler.list()) {
+      if ((j.payload?.kind as string) === CLEANUP_JOB_KIND) scheduler.remove(j.id)
+    }
+    scheduler.add({
+      name: 'context-cleanup-sweep',
+      schedule: { kind: 'cron', expr: cleanupCfg.schedule, tz: 'UTC' },
+      payload: { kind: CLEANUP_JOB_KIND },
+      enabled: true,
+      tags: ['system']
+    })
+    bus.on('scheduler.job.due', async (event) => {
+      const payload = event.payload as { job?: { id: string; payload?: Record<string, unknown> }; runId?: string }
+      const job = payload.job
+      if (!job || (job.payload?.kind as string) !== CLEANUP_JOB_KIND) return
+      const cmCfg = configStore.get<SovereignConfig['contextManagement']>('contextManagement')
+      const thresholdBytes = (cmCfg?.cleanup?.maxSessionSizeMB ?? 50) * 1024 * 1024
+      const be = routingBackend.default()
+      if (!be?.recycleSession || !be?.listSessions) return
+      const sessions = await be.listSessions()
+      let pruned = 0
+      for (const session of sessions) {
+        const filePath = be.getSessionFilePath?.(session.key)
+        if (!filePath) continue
+        try {
+          const stat = fs.statSync(filePath)
+          if (stat.size < thresholdBytes) continue
+          const result = await be.recycleSession(session.key, { force: true })
+          if (result && result.reclaimedBytes > 0) pruned++
+        } catch {
+          /* skip — session may have ended mid-sweep */
+        }
+      }
+      bus.emit({
+        type: 'scheduler.job.completed',
+        timestamp: new Date().toISOString(),
+        source: 'context-cleanup',
+        payload: {
+          runId: payload.runId,
+          jobId: job.id,
+          jobName: 'context-cleanup-sweep',
+          summary: `pruned ${pruned} session(s)`
+        }
+      })
+    })
+  }
   // Forward AskUserQuestion lifecycle events from the bus to the chat WS
   // channel so every connected client learns of new pending questions +
   // submissions in real time. The chat.work / chat.turn round-trip handles

@@ -382,7 +382,10 @@ export interface AgentBackend {
    * transcript, resume with a smaller context. Returns a summary of reclaimed
    * tokens/bytes, or null if the session has no live query or recycle failed.
    */
-  recycleSession?(sessionKey: string): Promise<{
+  recycleSession?(
+    sessionKey: string,
+    opts?: { force?: boolean }
+  ): Promise<{
     preTokens: number
     postTokens: number
     reclaimedTokens: number

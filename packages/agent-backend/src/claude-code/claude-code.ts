@@ -1609,7 +1609,10 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   // Interrupt the live Query, prune the JSONL transcript, then resume
   // with the smaller file. The session continues with less context.
 
-  async function recycleSession(sessionKey: string): Promise<{
+  async function recycleSession(
+    sessionKey: string,
+    opts?: { force?: boolean }
+  ): Promise<{
     preTokens: number
     postTokens: number
     reclaimedTokens: number
@@ -1638,9 +1641,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     const recycleCfg = config.contextManagement?.recycle
     if (recycleCfg?.enabled === false) return null
 
-    // Rate-limit: skip if recycled recently.
-    const minInterval = recycleCfg?.minIntervalMs ?? 300_000
-    if (state.lastRecycleAt && Date.now() - state.lastRecycleAt < minInterval) return null
+    // Rate-limit: skip if recycled recently (bypass with force flag
+    // for scheduled cleanup sweeps that must prune regardless).
+    if (!opts?.force) {
+      const minInterval = recycleCfg?.minIntervalMs ?? 300_000
+      if (state.lastRecycleAt && Date.now() - state.lastRecycleAt < minInterval) return null
+    }
 
     // Skip when subagents run (interrupting the parent strands them).
     if (recycleCfg?.skipDuringSubagents !== false && state.liveSubagents.size > 0) return null
