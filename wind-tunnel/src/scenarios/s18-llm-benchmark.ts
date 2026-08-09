@@ -5,8 +5,13 @@
 // Skips when the variable has no value.
 //
 // Runs ONLY inside Docker containers (enforced by the runner).
-// Registers a canned architectural response via mock-llm,
-// validates full routing plumbing end-to-end.
+// In default mode: registers a canned response via mock-llm.
+// In benchmark mode (--benchmark): routes to the host's real
+// llama-server via host.docker.internal — Sovereign still runs
+// inside Docker; only the inference call reaches the host.
+//
+// Timeout: SWT_BENCHMARK_TIMEOUT_MS env var (default 30000 for
+// mock, increase for real LLM — e.g. 300000 for 5 minutes).
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
 
@@ -55,6 +60,7 @@ export const s18LlmBenchmark: Scenario = {
   async run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const { client, mockLlmUrl } = ctx
     const metrics: Record<string, unknown> = {}
+    const benchmarkMode = process.env.SWT_BENCHMARK_MODE === '1'
 
     // ── 1. Read prompt from env — skip when absent ───────────────────
     const prompt = process.env.SWT_BENCHMARK_PROMPT
@@ -62,6 +68,7 @@ export const s18LlmBenchmark: Scenario = {
       return skip('skipped — SWT_BENCHMARK_PROMPT not set')
     }
     metrics.promptLength = prompt.length
+    metrics.benchmarkMode = benchmarkMode
 
     // ── 2. Verify local-llm backend exists ──────────────────────────
     let backends: any[] = []
@@ -79,16 +86,18 @@ export const s18LlmBenchmark: Scenario = {
     }
     metrics.backends = backends.map((b: any) => b.kind)
 
-    // ── 3. Register mock response ───────────────────────────────────
-    await fetch(`${mockLlmUrl}/mock/log`, { method: 'DELETE' })
-    await fetch(`${mockLlmUrl}/mock/script`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pattern: '.*',
-        response: MOCK_ARCHITECTURAL_RESPONSE
+    // ── 3. Register mock response (skipped in benchmark mode) ───────
+    if (!benchmarkMode) {
+      await fetch(`${mockLlmUrl}/mock/log`, { method: 'DELETE' })
+      await fetch(`${mockLlmUrl}/mock/script`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pattern: '.*',
+          response: MOCK_ARCHITECTURAL_RESPONSE
+        })
       })
-    })
+    }
 
     // ── 4. Create thread bound to local-llm ─────────────────────────
     let thread: any
@@ -120,9 +129,8 @@ export const s18LlmBenchmark: Scenario = {
     await client.timed('send-message', () => client.sendMessage(thread.id, prompt))
 
     // ── 6. Wait for assistant turn ──────────────────────────────────
-    // The first chat.turn event may echo the user message — drain turns
-    // until one arrives with role === 'assistant'.
-    const turnTimeout = 30_000
+    // Configurable timeout: real LLM generation can take minutes.
+    const turnTimeout = Number(process.env.SWT_BENCHMARK_TIMEOUT_MS || (benchmarkMode ? 300_000 : 30_000))
     let turnContent = ''
     let turnReceived = false
 
@@ -138,7 +146,7 @@ export const s18LlmBenchmark: Scenario = {
             turnContent = msg?.turn?.content ?? ''
             metrics.turnRole = role
             metrics.responseLength = turnContent.length
-            metrics.responsePreview = turnContent.slice(0, 300)
+            metrics.responsePreview = turnContent.slice(0, 500)
             metrics.totalRoundtripMs = Math.round(performance.now() - sendStart)
             return msg
           }
@@ -160,15 +168,17 @@ export const s18LlmBenchmark: Scenario = {
       metrics.gotIdle = drained.some((m) => m.status === 'idle')
     }
 
-    // ── 8. Verify OpenAI-format routing ─────────────────────────────
-    try {
-      const logRes = await fetch(`${mockLlmUrl}/mock/log`)
-      const log = (await logRes.json()) as any[]
-      const openaiHits = log.filter((e: any) => e.format === 'openai')
-      metrics.mockRequestsTotal = log.length
-      metrics.mockRequestsOpenAI = openaiHits.length
-    } catch {
-      metrics.mockLogError = 'failed to fetch'
+    // ── 8. Verify routing (mock mode only) ──────────────────────────
+    if (!benchmarkMode) {
+      try {
+        const logRes = await fetch(`${mockLlmUrl}/mock/log`)
+        const log = (await logRes.json()) as any[]
+        const openaiHits = log.filter((e: any) => e.format === 'openai')
+        metrics.mockRequestsTotal = log.length
+        metrics.mockRequestsOpenAI = openaiHits.length
+      } catch {
+        metrics.mockLogError = 'failed to fetch'
+      }
     }
 
     // ── 9. Verdict ──────────────────────────────────────────────────
@@ -181,9 +191,10 @@ export const s18LlmBenchmark: Scenario = {
       })
     }
 
+    const label = benchmarkMode ? 'real LLM' : 'mock'
     return cleanup({
       passed: true,
-      summary: `benchmark OK — ${turnContent.length} chars, routed through local-llm mock`,
+      summary: `benchmark OK — ${turnContent.length} chars in ${metrics.totalRoundtripMs}ms (${label})`,
       metrics,
       samples: client.samples
     })

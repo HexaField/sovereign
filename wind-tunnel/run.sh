@@ -7,6 +7,7 @@
 #   ./wind-tunnel/run.sh --scenario s1,s3         # run specific scenarios
 #   ./wind-tunnel/run.sh --no-build               # skip docker build
 #   ./wind-tunnel/run.sh --keep                   # keep containers after run
+#   ./wind-tunnel/run.sh --benchmark --scenario s18  # real LLM via host llama-server
 #
 # SAFETY: All scenarios run inside Docker containers only.
 # No --native flag exists — removed by design. The wind tunnel
@@ -23,6 +24,7 @@ COMPOSE_FILE="docker/docker-compose.yml"
 NO_BUILD=false
 KEEP=false
 AD4M=false
+BENCHMARK=false
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -30,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --no-build)  NO_BUILD=true; shift ;;
     --keep)      KEEP=true; shift ;;
     --native)    echo "✗ REFUSED — --native removed. The wind tunnel runs in Docker only." >&2; exit 1 ;;
+    --benchmark) BENCHMARK=true; shift ;;
     --ad4m)      AD4M=true; shift ;;
     *)           EXTRA_ARGS+=("$1"); shift ;;
   esac
@@ -60,6 +63,14 @@ if [[ "$AD4M" == "true" ]]; then
   mkdir -p ad4m/.provision
   docker run --rm -v "$(pwd)/ad4m/.provision:/d" alpine:latest \
     sh -c 'rm -rf /d/* /d/.[!.]* 2>/dev/null || true' >/dev/null 2>&1 || true
+fi
+
+# Benchmark lane: overlay config that routes local-llm to the host's
+# real llama-server (via host.docker.internal). Sovereign still runs
+# inside Docker — only the inference call reaches the host.
+if [[ "$BENCHMARK" == "true" ]]; then
+  COMPOSE_ARGS+=(-f "docker/docker-compose.benchmark.yml")
+  export SWT_BENCHMARK_MODE=1
 fi
 
 # Install deps if needed

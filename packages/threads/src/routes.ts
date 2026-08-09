@@ -319,12 +319,12 @@ export function createThreadRoutes(
           // thread.workspaceIds — backends still use orgId to scope cwd etc).
           const sessionOrgId = legacyOrgId ?? (workspaceIds && workspaceIds.length > 0 ? workspaceIds[0] : undefined)
           await targetBackend.createSession(label, {
-            threadId: thread.id,
+            threadKey: thread.id,
             kind: 'thread',
             ...(typeof cwd === 'string' && cwd ? { cwd } : {}),
             ...(sessionOrgId ? { orgId: sessionOrgId } : {}),
             ...(contextWindow ? { contextWindow } : {})
-          } as never)
+          })
         } catch (err: any) {
           console.error(`[threads] failed to bind thread "${thread.id}" to backend "${backendKind}":`, err.message)
         }
@@ -844,10 +844,10 @@ export function createThreadRoutes(
       // Create a new session on the target backend, bound to this thread.
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
       await targetBackend.createSession(thread.label, {
-        threadId: threadKey,
+        threadKey,
         kind: 'thread',
         ...(thread.contextWindow ? { contextWindow: thread.contextWindow } : {})
-      } as never)
+      })
       // Update the registry binding so future messages route to the new backend.
       routing.bindThread({
         threadKey,
