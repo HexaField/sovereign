@@ -54,6 +54,16 @@ Real-time architecture view showing every module, its subscriptions, and event f
 
 A native agent core built on the Claude Agent SDK — no external bridge. Durable session store, multi-agent orchestration, an in-process cron scheduler, and a Sovereign MCP server that exposes workspace tools (sessions, agents, planning, meetings, orgs, notifications) to the agent. Entity events trigger autonomous agent work; notification events surface for user response. Sessions resume automatically after a restart, and a personality compiler assembles the agent's system prompt from per-concern Markdown source files.
 
+### Context Management
+
+Three-layer context management keeps sessions lean without losing conversation history, powered by [Cozempic](https://github.com/Ruya-AI/cozempic)'s composable pruning strategies. Full design in [plans/context-management.md](plans/context-management.md).
+
+- **Layer 1 — Prevent.** A `PostToolUse` hook intercepts every tool result before it enters the model's context window. Large outputs get trimmed, duplicate content blocks get stubbed, and signature blocks get stripped — all in real time, via the SDK's `updatedToolOutput` field. Targets a 20–40% reduction in per-turn context growth.
+- **Layer 2 — Reclaim.** When accumulated tokens cross a configurable threshold (default 55% of the context window), Sovereign interrupts the SDK Query, shells out to `cozempic treat` for batch pruning of the JSONL transcript, then resumes with the smaller file. Surgical removal of stale tool results replaces the SDK's blunt auto-compaction summariser and runs well before it would trigger.
+- **Layer 3 — Clean.** Automated between-session cleanup via the scheduler: a cron task prunes oversized session transcripts on disk, and (once the alpha API stabilises) a `SessionStore` adapter filters stale entries on resume.
+
+Cozempic provides the pruning engine — 18 battle-tested strategies across three severity tiers (gentle, standard, aggressive) with safety validation, parent-chain relinking, and fallback ladders. Sovereign provides the lifecycle integration — monitoring, threshold triggers, interrupt/resume orchestration, and real-time interception that Cozempic's CLI-oriented guard daemon cannot deliver for SDK-managed sessions.
+
 ## Integrations
 
 Sovereign is standalone but reaches for a few external services when they're available. Each is optional — if one goes missing, the rest of the system keeps working — and each surfaces in the header's Service Health dropdown so you can see the current state at a glance.
@@ -68,7 +78,7 @@ Sovereign is standalone but reaches for a few external services when they're ava
 
 ### Cozempic
 
-[Cozempic](https://github.com/Ruya-AI/cozempic) is a context cleaner for Claude Code — a set of composable pruning strategies that strip stale file reads, thinking blocks, duplicate CLAUDE.md injections, and oversized tool outputs while leaving the working conversation intact. Installed globally, its guard daemon auto-starts via the `SessionStart` hook and prunes each session as it grows. Sovereign surfaces guard health per thread (`/api/threads/:key/cozempic-health`) with a Restore action when a guard has crashed or failed to prune.
+[Cozempic](https://github.com/Ruya-AI/cozempic) provides the pruning engine behind Sovereign's [context management](#context-management) — 18 composable strategies that strip stale file reads, thinking blocks, duplicate CLAUDE.md injections, and oversized tool outputs while preserving the working conversation. Sovereign calls `cozempic treat` as a subprocess during session recycle (Layer 2) rather than relying on the guard daemon, which targets CLI process lifecycles incompatible with SDK-managed sessions. The features that do operate through hooks — digest (behavioural rule extraction), checkpoint/post-compact (state recovery), and doctor (diagnostics) — remain active. Sovereign surfaces Cozempic health per thread (`/api/threads/:key/cozempic-health`) with a Restore action when a guard has stalled.
 
 ### Semble
 
