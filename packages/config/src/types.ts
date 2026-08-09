@@ -30,9 +30,9 @@ export interface SovereignConfig {
   }
   agentBackend: {
     /** Backends to enable on boot. */
-    enabled: 'claude-code'[]
+    enabled: ('claude-code' | 'local-llm')[]
     /** Backend chosen when a session has no recorded kind. */
-    default: 'claude-code'
+    default: 'claude-code' | 'local-llm'
     claudeCode: {
       cwd: string
       agentDir: string
@@ -45,6 +45,40 @@ export interface SovereignConfig {
        */
       modelContextWindows: Record<string, number>
     }
+    /** Local LLM backend — connects to any OpenAI-compatible API. */
+    localLlm: {
+      /** Base URL for the OpenAI-compatible inference server. */
+      baseUrl: string
+      /** Model identifier sent in chat completion requests. */
+      model: string
+      /** Maximum context window in tokens. */
+      contextWindow: number
+      /** Sampling temperature. */
+      temperature: number
+      /** Maximum output tokens per completion. */
+      maxTokens: number
+      /** Tool-call format detection: auto | openai | hermes. */
+      toolCallFormat: string
+      /** Sandbox restrictions for the Bash tool. */
+      sandbox: {
+        /** Directories where Bash commands may execute. */
+        allowedCwds: string[]
+        /** Maximum Bash execution time in ms. */
+        bashTimeout: number
+      }
+    }
+  }
+  /** Running summary service — maintains per-thread rolling summaries via a local model. */
+  summary: {
+    enabled: boolean
+    /** Base URL for the inference server (same format as localLlm.baseUrl). */
+    baseUrl: string
+    /** Model identifier for summary generation. */
+    model: string
+    /** Debounce interval in ms before triggering a summary update. */
+    debounceMs: number
+    /** Maximum words in a summary. */
+    maxSummaryWords: number
   }
   ad4m: {
     /** Empty string means AD4M integration is disabled. */

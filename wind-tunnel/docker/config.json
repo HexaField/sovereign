@@ -15,5 +15,12 @@
       "maxSessionSizeMB": 0.004,
       "schedule": "0 4 * * *"
     }
+  },
+  "summary": {
+    "enabled": true,
+    "baseUrl": "http://mock-llm:8900",
+    "model": "default",
+    "debounceMs": 500,
+    "maxSummaryWords": 100
   }
 }

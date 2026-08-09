@@ -1,0 +1,66 @@
+// Resolve local-llm config from Sovereign's ConfigStore. Mirrors
+// `SovereignConfig['agentBackend']['localLlm']` (see @sovereign/config's
+// types.ts/defaults.ts) — every field here has a matching default there, so
+// `configStore.get('agentBackend.localLlm')` never returns undefined in
+// practice, but each field is still defaulted defensively.
+
+import path from 'node:path'
+import type { ConfigStore } from '@sovereign/config'
+
+export interface LocalLlmConfig {
+  /** Base URL for the OpenAI-compatible inference server (llama.cpp / ollama / vLLM). */
+  baseUrl: string
+  /** Model identifier sent in chat completion requests. */
+  model: string
+  /** Maximum context window in tokens — used for the usage bar, not enforced on the wire. */
+  contextWindow: number
+  /** Sampling temperature. */
+  temperature: number
+  /** Maximum output tokens per completion. */
+  maxTokens: number
+  /** Tool-call format detection: auto | openai | hermes. Reserved for future prompt-format branching. */
+  toolCallFormat: string
+  /** Sandbox restrictions applied to every filesystem/shell tool call. */
+  sandbox: {
+    /** Directories tool calls may touch. Empty array = no restriction. */
+    allowedCwds: string[]
+    /** Maximum ms a Bash command may run before being killed. */
+    bashTimeout: number
+  }
+}
+
+interface RawLocalLlmConfig {
+  baseUrl?: string
+  model?: string
+  contextWindow?: number
+  temperature?: number
+  maxTokens?: number
+  toolCallFormat?: string
+  sandbox?: {
+    allowedCwds?: string[]
+    bashTimeout?: number
+  }
+}
+
+export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: string): LocalLlmConfig {
+  // `dataDir` isn't consumed by this resolver today — the local-llm backend's
+  // own state directory is derived by the caller (see local-llm.ts, which
+  // takes `dataDir` directly) — but it's kept in the signature to match the
+  // other backends' `xConfigFromStore(configStore, dataDir)` shape and because
+  // future config (e.g. a per-install prompt cache path) will likely need it.
+  void dataDir
+  const cfg = configStore.get<RawLocalLlmConfig>('agentBackend.localLlm') ?? {}
+  const home = process.env.HOME ?? ''
+  return {
+    baseUrl: cfg.baseUrl?.trim() || 'http://localhost:8080',
+    model: cfg.model?.trim() || 'default',
+    contextWindow: cfg.contextWindow ?? 32768,
+    temperature: cfg.temperature ?? 0.1,
+    maxTokens: cfg.maxTokens ?? 4096,
+    toolCallFormat: cfg.toolCallFormat?.trim() || 'auto',
+    sandbox: {
+      allowedCwds: cfg.sandbox?.allowedCwds ?? (home ? [path.join(home, 'workspaces')] : []),
+      bashTimeout: cfg.sandbox?.bashTimeout ?? 120000
+    }
+  }
+}

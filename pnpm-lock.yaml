@@ -114,6 +114,9 @@ importers:
       '@sovereign/scheduler':
         specifier: workspace:*
         version: link:../scheduler
+      '@sovereign/summary':
+        specifier: workspace:*
+        version: link:../summary
       '@sovereign/threads':
         specifier: workspace:*
         version: link:../threads
@@ -716,6 +719,9 @@ importers:
       '@sovereign/scheduler':
         specifier: workspace:*
         version: link:../scheduler
+      '@sovereign/summary':
+        specifier: workspace:*
+        version: link:../summary
       '@sovereign/system':
         specifier: workspace:*
         version: link:../system
@@ -807,6 +813,19 @@ importers:
       supertest:
         specifier: ^7.2.2
         version: 7.2.2
+
+  packages/summary:
+    dependencies:
+      '@sovereign/core':
+        specifier: workspace:*
+        version: link:../core
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
 
   packages/system:
     dependencies:

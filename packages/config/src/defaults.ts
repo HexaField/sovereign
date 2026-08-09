@@ -42,7 +42,26 @@ export const defaults: SovereignConfig = {
         haiku: 200000,
         opusplan: 200000
       }
+    },
+    localLlm: {
+      baseUrl: 'http://localhost:8080',
+      model: 'default',
+      contextWindow: 32768,
+      temperature: 0.1,
+      maxTokens: 4096,
+      toolCallFormat: 'auto',
+      sandbox: {
+        allowedCwds: [home ? path.join(home, 'workspaces') : ''],
+        bashTimeout: 120000
+      }
     }
+  },
+  summary: {
+    enabled: false,
+    baseUrl: 'http://localhost:8080',
+    model: 'default',
+    debounceMs: 5000,
+    maxSummaryWords: 200
   },
   ad4m: {
     host: '',
