@@ -50,7 +50,7 @@ export interface MembraneManager {
 
 function slugify(input: string): string {
   return (
-    input
+    (input ?? '')
       .toLowerCase()
       .trim()
       .replace(/[^a-z0-9]+/g, '-')
@@ -79,6 +79,9 @@ export function createMembraneManager(bus: EventBus, dataDir: string): MembraneM
   }
 
   const createMembrane = (input: MembraneCreateInput): Membrane => {
+    if (!input?.name || typeof input.name !== 'string' || input.name.trim() === '') {
+      throw new Error('name is required and must be a non-empty string')
+    }
     const id = input.id ? input.id : ensureUniqueId(slugify(input.name))
     if (getMembrane(id)) throw new Error(`Membrane already exists: ${id}`)
     const m: Membrane = {

@@ -15,6 +15,11 @@ export function createMembraneRoutes(
   })
 
   router.post('/membranes', (req, res) => {
+    const { name } = req.body ?? {}
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      res.status(400).json({ error: 'name is required and must be a non-empty string' })
+      return
+    }
     try {
       const m = manager.createMembrane(req.body)
       res.status(201).json(m)

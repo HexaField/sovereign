@@ -71,6 +71,16 @@ describe('§Membranes — Manager CRUD', () => {
     expect(() => manager.createMembrane({ id: 'personal', name: 'Other' })).toThrow(/already exists/)
   })
 
+  it('throws a clear error instead of crashing when name is missing', () => {
+    // Regression: `slugify(input.name)` used to call `.toLowerCase()` on
+    // `undefined` when `name` was omitted, throwing an opaque TypeError.
+    expect(() => manager.createMembrane({} as any)).toThrow(/name is required/)
+  })
+
+  it('rejects a blank/whitespace-only name', () => {
+    expect(() => manager.createMembrane({ name: '   ' })).toThrow(/name is required/)
+  })
+
   it('dedupes workspaceIds on create', () => {
     const m = manager.createMembrane({ name: 'X', workspaceIds: ['a', 'a', 'b'] })
     expect(m.workspaceIds).toEqual(['a', 'b'])
@@ -411,6 +421,24 @@ describe('§Membranes — REST routes', () => {
     const res = await request(app()).post('/api/membranes').send({ name: 'Personal' })
     expect(res.status).toBe(201)
     expect(res.body.id).toBe('personal')
+  })
+
+  it('POST /api/membranes returns 400 with a clear message when name is missing', async () => {
+    // Regression for wind-tunnel s8: previously crashed with
+    // "Cannot read properties of undefined (reading 'toLowerCase')"
+    // when the body carried no `name` field (e.g. `{ label: ... }`).
+    const res = await request(app())
+      .post('/api/membranes')
+      .send({ label: 'swt-s8-test', description: 'wind tunnel test' })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/name is required/)
+    expect(res.body.error).not.toMatch(/toLowerCase/)
+  })
+
+  it('POST /api/membranes returns 400 when body is empty', async () => {
+    const res = await request(app()).post('/api/membranes').send({})
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/name is required/)
   })
 
   it('PUT /api/membranes/:id updates fields', async () => {
