@@ -1,12 +1,16 @@
 #!/usr/bin/env -S npx tsx
 // Sovereign Wind Tunnel — runner.
 //
+// SAFETY: All scenarios run inside Docker containers only.
+// The runner NEVER connects to production Sovereign.
+// No --native flag exists — removed by design.
+//
 // Usage:
 //   npx tsx src/main.ts                       # run all scenarios
 //   npx tsx src/main.ts --scenario s1         # run one scenario
 //   npx tsx src/main.ts --scenario s1,s3      # run specific scenarios
-//   npx tsx src/main.ts --sovereign-url ...    # custom endpoint
-//   npx tsx src/main.ts --mock-llm-url ...    # custom mock LLM
+//   npx tsx src/main.ts --sovereign-url ...   # custom endpoint (container)
+//   npx tsx src/main.ts --mock-llm-url ...    # custom mock LLM (container)
 
 import { SovereignClient } from './client.js'
 import { ALL_SCENARIOS } from './scenarios/index.js'
@@ -24,10 +28,16 @@ const sovereignUrl = getArg('sovereign-url', 'http://localhost:5811')
 const mockLlmUrl = getArg('mock-llm-url', 'http://localhost:8900')
 const scenarioFilter = getArg('scenario', '')
 const jsonOutput = args.includes('--json')
-const nativeMode = args.includes('--native')
-const composeFile = nativeMode
-  ? null
-  : getArg('compose-file', new URL('../docker/docker-compose.yml', import.meta.url).pathname)
+const composeFile = getArg('compose-file', new URL('../docker/docker-compose.yml', import.meta.url).pathname)
+
+// Hard guard: reject any attempt to point at production Sovereign.
+// Port 5801 serves the live instance on the host.
+if (sovereignUrl.includes(':5801')) {
+  console.error('✗ REFUSED — sovereign-url points at port 5801 (production).')
+  console.error('  The wind tunnel MUST run against isolated Docker containers only.')
+  console.error('  Use ./run.sh (Docker mode) or override --sovereign-url to a container port.')
+  process.exit(1)
+}
 
 // ── Scenario selection ──────────────────────────────────────────────
 const selectedIds = scenarioFilter ? scenarioFilter.split(',').map((s) => s.trim()) : []

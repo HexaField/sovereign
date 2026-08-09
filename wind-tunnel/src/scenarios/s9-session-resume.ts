@@ -39,14 +39,7 @@ export const s9SessionResume: Scenario = {
     const { client, mockLlmUrl, sovereignUrl, composeFile } = ctx
     const metrics: Record<string, unknown> = {}
 
-    if (!composeFile) {
-      return {
-        passed: false,
-        summary: 'skipped — requires Docker mode (no --native)',
-        metrics,
-        samples: client.samples
-      }
-    }
+    // composeFile always set — Docker-only execution enforced by the runner.
 
     // 1. Script a delayed mock response — hold the SSE stream open 8s
     //    so the session stays "working" during the restart.

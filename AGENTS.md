@@ -95,19 +95,23 @@ The root `vitest.config.ts` collects `packages/*/src/**/*.test.ts`. Most package
 
 ## Wind tunnel (`wind-tunnel/`)
 
-End-to-end regression tests against a Dockerised Sovereign instance with a mock Anthropic API. Eight scenarios cover thread CRUD, chat roundtrip (full SDK → mock LLM → WS response), presence threads, thread-to-thread forwarding, scheduler jobs, WebSocket event propagation, and config/membranes.
+End-to-end regression tests against a Dockerised Sovereign instance with a mock Anthropic API. 18 scenarios cover thread CRUD, chat roundtrip (full SDK → mock LLM → WS response), presence threads, thread-to-thread forwarding, scheduler jobs, WebSocket event propagation, config/membranes, context management, backend mixing, and LLM benchmarking.
+
+### Isolation (HARD RULE — NON-NEGOTIABLE)
+
+The wind tunnel runs **only inside Docker containers**. No `--native` mode exists — it was removed. The runner hard-refuses any `--sovereign-url` pointing at port 5801 (production). Scenarios must NEVER interact with the live production Sovereign instance. This rule applies to all agents, all sessions, no exceptions.
 
 ### Quick start
 
 ```bash
-# Docker mode (default) — builds images, runs scenarios, tears down
+# Builds images, runs scenarios, tears down
 ./wind-tunnel/run.sh
-
-# Native mode — runs against already-running services
-./wind-tunnel/run.sh --native --sovereign-url http://localhost:5801 --mock-llm-url http://localhost:8900
 
 # Single scenario
 ./wind-tunnel/run.sh --scenario s3
+
+# LLM benchmark (prompt via env, runs against mock in Docker)
+SWT_BENCHMARK_PROMPT="your prompt" ./wind-tunnel/run.sh --scenario s18
 ```
 
 ### Architecture

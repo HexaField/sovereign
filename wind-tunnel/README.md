@@ -16,9 +16,6 @@ End-to-end regression tests for Sovereign. Runs the full server inside Docker wi
 
 # Skip Docker rebuild:
 ./wind-tunnel/run.sh --no-build
-
-# Run against already-running services (no Docker):
-./wind-tunnel/run.sh --native
 ```
 
 ## Architecture
@@ -130,17 +127,6 @@ The lane overlays `docker/docker-compose.ad4m.yml`, which adds:
 
 The provisioned identity is written to `wind-tunnel/ad4m/.provision/` (gitignored) so s10 (on the host) injects + verifies against the exact perspective the waker watches. This mirrors the AD4M wind tunnel's A4 (Sovereign) route, run inside Sovereign's own suite.
 
-## Native Mode
+## Isolation (HARD RULE)
 
-For development, run services manually and test against them:
-
-```bash
-# Terminal 1: mock LLM
-cd wind-tunnel && npx tsx mock-llm/server.ts
-
-# Terminal 2: Sovereign (with mock LLM)
-ANTHROPIC_BASE_URL=http://localhost:8900 ANTHROPIC_API_KEY=sk-mock bin/sovereign run
-
-# Terminal 3: scenarios
-cd wind-tunnel && ./run.sh --native
-```
+The wind tunnel runs **only inside Docker containers**. No `--native` mode exists. The runner refuses any `--sovereign-url` pointing at port 5801 (production). Scenarios must never interact with the live production Sovereign instance.

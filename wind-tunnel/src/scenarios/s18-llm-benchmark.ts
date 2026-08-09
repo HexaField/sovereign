@@ -4,10 +4,9 @@
 // Prompt source: SWT_BENCHMARK_PROMPT environment variable.
 // Skips when the variable has no value.
 //
-// Docker mode (mock-llm available): registers a canned architectural
-// response and validates routing plumbing end-to-end.
-// Native mode (--native): sends the real prompt to the real LLM and
-// reports actual generation metrics.
+// Runs ONLY inside Docker containers (enforced by the runner).
+// Registers a canned architectural response via mock-llm,
+// validates full routing plumbing end-to-end.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
 
@@ -23,8 +22,7 @@ function is404(err: any): boolean {
 }
 
 /** Structured mock response — exercises the full pipeline with a
- *  substantial multi-section architectural answer.  Only used when
- *  the scenario runs in Docker mode against the mock-llm. */
+ *  substantial multi-section architectural answer. */
 const MOCK_ARCHITECTURAL_RESPONSE = [
   '## Runtime Content Creation System\n\n',
   '### Architecture Overview\n\n',
@@ -57,7 +55,6 @@ export const s18LlmBenchmark: Scenario = {
   async run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const { client, mockLlmUrl } = ctx
     const metrics: Record<string, unknown> = {}
-    const isNative = ctx.composeFile === null
 
     // ── 1. Read prompt from env — skip when absent ───────────────────
     const prompt = process.env.SWT_BENCHMARK_PROMPT
@@ -65,7 +62,6 @@ export const s18LlmBenchmark: Scenario = {
       return skip('skipped — SWT_BENCHMARK_PROMPT not set')
     }
     metrics.promptLength = prompt.length
-    metrics.mode = isNative ? 'native' : 'docker'
 
     // ── 2. Verify local-llm backend exists ──────────────────────────
     let backends: any[] = []
@@ -83,18 +79,16 @@ export const s18LlmBenchmark: Scenario = {
     }
     metrics.backends = backends.map((b: any) => b.kind)
 
-    // ── 3. Docker mode: register mock response ──────────────────────
-    if (!isNative) {
-      await fetch(`${mockLlmUrl}/mock/log`, { method: 'DELETE' })
-      await fetch(`${mockLlmUrl}/mock/script`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pattern: '.*',
-          response: MOCK_ARCHITECTURAL_RESPONSE
-        })
+    // ── 3. Register mock response ───────────────────────────────────
+    await fetch(`${mockLlmUrl}/mock/log`, { method: 'DELETE' })
+    await fetch(`${mockLlmUrl}/mock/script`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pattern: '.*',
+        response: MOCK_ARCHITECTURAL_RESPONSE
       })
-    }
+    })
 
     // ── 4. Create thread bound to local-llm ─────────────────────────
     let thread: any
@@ -126,19 +120,33 @@ export const s18LlmBenchmark: Scenario = {
     await client.timed('send-message', () => client.sendMessage(thread.id, prompt))
 
     // ── 6. Wait for assistant turn ──────────────────────────────────
-    // Native mode uses a generous timeout — real LLM generation on a
-    // complex architectural prompt can take 60–120s+.
-    const turnTimeout = isNative ? 180_000 : 30_000
+    // The first chat.turn event may echo the user message — drain turns
+    // until one arrives with role === 'assistant'.
+    const turnTimeout = 30_000
     let turnContent = ''
     let turnReceived = false
 
     try {
-      const turnMsg = await client.timed('wait-for-turn', () => client.waitForWs('chat.turn', turnTimeout))
-      turnReceived = true
-      turnContent = turnMsg?.turn?.content ?? ''
-      metrics.responseLength = turnContent.length
-      metrics.responsePreview = turnContent.slice(0, 300)
-      metrics.totalRoundtripMs = Math.round(performance.now() - sendStart)
+      const deadline = performance.now() + turnTimeout
+      await client.timed('wait-for-turn', async () => {
+        while (performance.now() < deadline) {
+          const remaining = Math.max(1000, deadline - performance.now())
+          const msg = await client.waitForWs('chat.turn', remaining)
+          const role = msg?.turn?.role ?? msg?.role
+          if (role === 'assistant') {
+            turnReceived = true
+            turnContent = msg?.turn?.content ?? ''
+            metrics.turnRole = role
+            metrics.responseLength = turnContent.length
+            metrics.responsePreview = turnContent.slice(0, 300)
+            metrics.totalRoundtripMs = Math.round(performance.now() - sendStart)
+            return msg
+          }
+          // User turn echo — skip and keep waiting
+          metrics.skippedUserEcho = true
+        }
+        throw new Error(`no assistant turn within ${turnTimeout}ms`)
+      })
     } catch (err: any) {
       metrics.turnError = err?.message
     }
@@ -152,17 +160,15 @@ export const s18LlmBenchmark: Scenario = {
       metrics.gotIdle = drained.some((m) => m.status === 'idle')
     }
 
-    // ── 8. Docker mode: verify OpenAI-format routing ────────────────
-    if (!isNative) {
-      try {
-        const logRes = await fetch(`${mockLlmUrl}/mock/log`)
-        const log = (await logRes.json()) as any[]
-        const openaiHits = log.filter((e: any) => e.format === 'openai')
-        metrics.mockRequestsTotal = log.length
-        metrics.mockRequestsOpenAI = openaiHits.length
-      } catch {
-        metrics.mockLogError = 'failed to fetch'
-      }
+    // ── 8. Verify OpenAI-format routing ─────────────────────────────
+    try {
+      const logRes = await fetch(`${mockLlmUrl}/mock/log`)
+      const log = (await logRes.json()) as any[]
+      const openaiHits = log.filter((e: any) => e.format === 'openai')
+      metrics.mockRequestsTotal = log.length
+      metrics.mockRequestsOpenAI = openaiHits.length
+    } catch {
+      metrics.mockLogError = 'failed to fetch'
     }
 
     // ── 9. Verdict ──────────────────────────────────────────────────
@@ -175,13 +181,9 @@ export const s18LlmBenchmark: Scenario = {
       })
     }
 
-    const summary = isNative
-      ? `benchmark OK — ${turnContent.length} chars in ${metrics.totalRoundtripMs}ms (native LLM)`
-      : `benchmark OK — ${turnContent.length} chars, routed through local-llm mock`
-
     return cleanup({
       passed: true,
-      summary,
+      summary: `benchmark OK — ${turnContent.length} chars, routed through local-llm mock`,
       metrics,
       samples: client.samples
     })
