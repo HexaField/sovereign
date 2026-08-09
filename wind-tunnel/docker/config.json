@@ -23,6 +23,21 @@
       "schedule": "0 4 * * *"
     }
   },
+  "agentBackend": {
+    "enabled": ["claude-code", "local-llm"],
+    "default": "claude-code",
+    "localLlm": {
+      "baseUrl": "http://mock-llm:8900",
+      "model": "default",
+      "contextWindow": 32768,
+      "temperature": 0.1,
+      "maxTokens": 4096,
+      "toolCallFormat": "auto",
+      "sandbox": {
+        "allowedCwds": []
+      }
+    }
+  },
   "summary": {
     "enabled": true,
     "baseUrl": "http://mock-llm:8900",
