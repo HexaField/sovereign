@@ -36,7 +36,10 @@ export interface SovereignToolDeps {
     list(
       parentSessionKey?: string
     ): Promise<Array<{ sessionKey: string; label: string; status: string; task?: string }>>
-    spawn(parentSessionKey: string, opts: { task: string; label?: string }): Promise<{ sessionKey: string }>
+    spawn(
+      parentSessionKey: string,
+      opts: { task: string; label?: string; backend?: string }
+    ): Promise<{ sessionKey: string }>
   }
   notifications: {
     send(opts: { title: string; body?: string; severity?: string; entityId?: string }): { id: string }
@@ -343,16 +346,26 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
     // ── subagents ─────────────────────────────────────────────────────────
     tool(
       'agents_spawn',
-      'Spawn a Sovereign-tracked subagent under the current parent session. Use when the model wants a tracked subagent record (the Task tool is the lighter-weight alternative for ad-hoc work).',
+      'Spawn a Sovereign-tracked subagent under the current parent session. Use when the model wants a tracked subagent record (the Task tool is the lighter-weight alternative for ad-hoc work). Pass `backend` to run the subagent on a different backend (e.g. "local-llm").',
       {
         task: z.string(),
         label: z.string().optional(),
-        parentSessionKey: z.string().optional()
+        parentSessionKey: z.string().optional(),
+        backend: z
+          .string()
+          .optional()
+          .describe(
+            'Backend kind to run the subagent on (e.g. "claude-code", "local-llm"). Defaults to the parent session\'s backend.'
+          )
       },
       async (args) => {
         const parent = args.parentSessionKey ?? deps.currentSessionKey?.()
         if (!parent) throw new Error('agents_spawn: no parent session key available')
-        const result = await deps.agents.spawn(parent, { task: args.task, label: args.label })
+        const result = await deps.agents.spawn(parent, {
+          task: args.task,
+          label: args.label,
+          backend: args.backend
+        })
         return okJson({ sessionKey: result.sessionKey, parentSessionKey: parent })
       }
     ),

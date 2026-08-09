@@ -102,13 +102,13 @@ export function switchThread(key: string): void {
   }
 }
 
-export function createThread(label?: string): Promise<void> {
+export function createThread(label?: string, opts?: { backend?: string }): Promise<void> {
   const orgId = activeOrgIdForThreads()
   const workspaceIds = orgId && orgId !== '_global' ? [orgId] : undefined
   return fetch('/api/threads', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label, workspaceIds })
+    body: JSON.stringify({ label, workspaceIds, ...(opts?.backend ? { backend: opts.backend } : {}) })
   })
     .then((r) => r.json())
     .then((data: any) => {
