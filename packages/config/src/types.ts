@@ -57,6 +57,10 @@ export interface SovereignConfig {
       temperature: number
       /** Maximum output tokens per completion. */
       maxTokens: number
+      /** Per-completion timeout in ms. Default 600000 (10 min). */
+      timeoutMs: number
+      /** Enable model thinking (Qwen3 `<think>` blocks). Default true. */
+      thinking: boolean
       /** Tool-call format detection: auto | openai | hermes. */
       toolCallFormat: string
       /** Sandbox restrictions for the Bash tool. */

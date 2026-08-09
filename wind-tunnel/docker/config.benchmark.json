@@ -29,9 +29,11 @@
     "localLlm": {
       "baseUrl": "http://host.docker.internal:9090",
       "model": "Qwen3.6-35B-A3B-Q4_K_M",
-      "contextWindow": 32768,
+      "contextWindow": 131072,
       "temperature": 0.1,
-      "maxTokens": 4096,
+      "maxTokens": 32768,
+      "timeoutMs": 1800000,
+      "thinking": true,
       "toolCallFormat": "auto",
       "sandbox": {
         "allowedCwds": ["/tmp"]

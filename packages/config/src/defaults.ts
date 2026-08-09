@@ -49,6 +49,8 @@ export const defaults: SovereignConfig = {
       contextWindow: 32768,
       temperature: 0.1,
       maxTokens: 4096,
+      timeoutMs: 600_000,
+      thinking: true,
       toolCallFormat: 'auto',
       sandbox: {
         allowedCwds: [home ? path.join(home, 'workspaces') : ''],

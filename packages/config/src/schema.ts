@@ -99,6 +99,8 @@ export const schema = {
             contextWindow: { type: 'number', minimum: 1, 'x-reload': 'session' },
             temperature: { type: 'number', minimum: 0, maximum: 2, 'x-reload': 'hot' },
             maxTokens: { type: 'number', minimum: 1, 'x-reload': 'hot' },
+            timeoutMs: { type: 'number', minimum: 1000, 'x-reload': 'hot' },
+            thinking: { type: 'boolean', 'x-reload': 'hot' },
             toolCallFormat: { ...stringHot },
             sandbox: {
               type: 'object',

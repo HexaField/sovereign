@@ -25,6 +25,8 @@ function makeConfig(): LocalLlmConfig {
     contextWindow: 8192,
     temperature: 0.1,
     maxTokens: 1024,
+    timeoutMs: 60_000,
+    thinking: true,
     toolCallFormat: 'auto',
     sandbox: { allowedCwds: [tmpDir], bashTimeout: 5000 }
   }
