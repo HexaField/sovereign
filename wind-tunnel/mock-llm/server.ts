@@ -10,8 +10,12 @@
 //   MOCK_VERBOSE  — set to "1" for request logging
 
 import http from 'node:http'
+import https from 'node:https'
+import { execSync } from 'node:child_process'
+import fs from 'node:fs'
 
 const PORT = Number(process.env.PORT ?? 8900)
+const TLS_PORT = Number(process.env.TLS_PORT ?? 443)
 const VERBOSE = process.env.MOCK_VERBOSE === '1'
 
 // ── Request log (for assertions) ────────────────────────────────────
@@ -157,12 +161,61 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 const server = http.createServer(async (req, res) => {
+  // Guard against prematurely-aborted requests (ECONNRESET from SDK
+  // interrupt/abort). Track whether the *response* socket has gone away
+  // — that's the only reliable signal the client disconnected early.
+  // `req.on('close')` fires on every completed request in Node 22 and
+  // must NOT set aborted unconditionally.
+  let aborted = false
+  res.on('close', () => {
+    if (!res.writableFinished) aborted = true
+  })
+  req.on('error', () => {
+    aborted = true
+  })
+
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
 
   // Health
   if (url.pathname === '/health' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ status: 'ok', requests: requestLog.length }))
+    return
+  }
+
+  // ── Claude CLI probe endpoints ──────────────────────────────────────
+  // The claude binary sends HEAD/GET /api/hello to ANTHROPIC_BASE_URL as
+  // a readiness check before making Messages API calls. A 404 here makes
+  // the binary treat the API as unreachable and give up.
+  if (url.pathname === '/api/hello') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    if (req.method === 'HEAD') {
+      res.end()
+      return
+    }
+    res.end(JSON.stringify({ status: 'ok' }))
+    return
+  }
+
+  // OAuth / auth stubs — the claude CLI may probe these on startup.
+  // Return minimal valid responses so the binary proceeds to API calls.
+  if (url.pathname === '/oauth/token' && req.method === 'POST') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ access_token: 'mock-token', token_type: 'bearer', expires_in: 86400 }))
+    return
+  }
+
+  // Auth info / whoami stubs
+  if (url.pathname === '/v1/organizations' || url.pathname === '/api/organizations') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ data: [] }))
+    return
+  }
+
+  // Settings / feature flags
+  if (url.pathname.startsWith('/api/settings') || url.pathname.startsWith('/api/features')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({}))
     return
   }
 
@@ -194,8 +247,11 @@ const server = http.createServer(async (req, res) => {
         delayMs: body.delayMs
       }),
       once: body.once === true,
-      // A tool_use reply only makes sense on a turn that offers tools.
-      needsTools: !!body.toolUse
+      // A tool_use reply makes most sense on a turn that offers tools.
+      // Scenarios can override with explicit `needsTools: false` to force
+      // the script to fire on the SDK's initial (tool-less) request — the
+      // SDK's built-in tools (Bash, Read, etc.) execute regardless.
+      needsTools: body.needsTools !== undefined ? !!body.needsTools : !!body.toolUse
     })
     res.writeHead(201, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ registered: true }))
@@ -212,7 +268,19 @@ const server = http.createServer(async (req, res) => {
 
   // ── Messages API ──────────────────────────────────────────────────
   if (url.pathname === '/v1/messages' && req.method === 'POST') {
-    const bodyStr = await readBody(req)
+    let bodyStr: string
+    try {
+      bodyStr = await readBody(req)
+    } catch {
+      // Client disconnected (ECONNRESET) — nothing to respond to.
+      if (!res.headersSent) res.destroy()
+      return
+    }
+    if (aborted) {
+      if (!res.headersSent) res.destroy()
+      return
+    }
+
     let body: any
     try {
       body = JSON.parse(bodyStr)
@@ -313,16 +381,49 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
-  // Catch-all
-  if (VERBOSE) console.log(`[mock-llm] unhandled: ${req.method} ${url.pathname}`)
+  // Catch-all — always log unhandled routes so we can discover what the
+  // claude CLI probes on startup.
+  console.log(`[mock-llm] unhandled: ${req.method} ${url.pathname}`)
   res.writeHead(404, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ error: 'not found', path: url.pathname }))
 })
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[mock-llm] listening on :${PORT}`)
+  console.log(`[mock-llm] listening on :${PORT} (HTTP)`)
 })
 
+// ── HTTPS listener for Claude CLI phone-home ────────────────────────
+// The claude binary connects to api.anthropic.com:443 for auth/model
+// discovery before making Messages API calls. By running an HTTPS
+// server on port 443, the container's extra_hosts DNS override can
+// route api.anthropic.com here instead of the real API. This lets the
+// binary's startup handshake succeed with mock responses.
+const CERT_DIR = '/tmp/mock-certs'
+try {
+  if (!fs.existsSync(`${CERT_DIR}/key.pem`)) {
+    fs.mkdirSync(CERT_DIR, { recursive: true })
+    execSync(
+      `openssl req -x509 -newkey rsa:2048 -keyout ${CERT_DIR}/key.pem ` +
+        `-out ${CERT_DIR}/cert.pem -days 365 -nodes -subj '/CN=api.anthropic.com' 2>/dev/null`
+    )
+  }
+  const tlsServer = https.createServer(
+    { key: fs.readFileSync(`${CERT_DIR}/key.pem`), cert: fs.readFileSync(`${CERT_DIR}/cert.pem`) },
+    server.listeners('request')[0] as http.RequestListener // reuse the same handler
+  )
+  tlsServer.listen(TLS_PORT, '0.0.0.0', () => {
+    console.log(`[mock-llm] listening on :${TLS_PORT} (HTTPS — Claude CLI phone-home)`)
+  })
+  tlsServer.on('error', (err) => {
+    console.warn(`[mock-llm] HTTPS listener failed (non-fatal): ${err.message}`)
+  })
+} catch (err: any) {
+  console.warn(`[mock-llm] HTTPS setup skipped (openssl unavailable?): ${err.message}`)
+}
+
+process.on('unhandledRejection', (err) => {
+  console.warn('[mock-llm] unhandled rejection (swallowed):', (err as Error)?.message ?? err)
+})
 process.on('SIGTERM', () => {
   server.close()
   process.exit(0)

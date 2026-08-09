@@ -40,8 +40,18 @@ export const s11ContextFilter: Scenario = {
     // 3. Connect WS
     await client.connectWs(['chat'])
 
+    // 3a. Warm up the session — the SDK's first API call for a new
+    //     session may arrive WITHOUT tools. Send a throwaway message to
+    //     force the initialisation cycle.
+    await client.timed('warmup-send', () => client.sendMessage(thread.id, 'warmup — initialise session'))
+    await client.timed('warmup-idle', () => waitForIdleStatus(client, 15000))
+    client.drainWs('chat.status')
+    client.drainWs('chat.turn')
+
     // 4. Register the scripted tool_use — a Bash command whose stdout
     //    stands in for a large tool result (~8.9KB, past the trim threshold).
+    //    `needsTools: true` — fires only when the SDK includes tools in
+    //    the API request (the second request for this turn).
     await client.timed('mock-script', () =>
       fetch(`${mockLlmUrl}/mock/script`, {
         method: 'POST',
@@ -55,17 +65,29 @@ export const s11ContextFilter: Scenario = {
       })
     )
 
+    // Clear the mock log so we only see requests from this turn forward.
+    await fetch(`${mockLlmUrl}/mock/log`, { method: 'DELETE' })
+
     // 5. Send the triggering message
     await client.timed('send-message', () =>
       client.sendMessage(thread.id, 'Please run this command for s11-context-filter test')
     )
 
-    // 6. Wait for the turn to settle back to idle (30s budget; the tool
-    //    round-trip needs a scripted call plus a follow-up model call).
-    const gotIdle = await waitForIdleStatus(client, 30000)
-    metrics.gotIdle = gotIdle
+    // 6. Poll the mock log for a tool_result matching our tool_use_id.
+    //    The SDK's tool round-trip takes two API requests: (1) tool_use
+    //    response fires → SDK executes Bash → (2) follow-up request
+    //    carries the tool_result. We poll the mock log directly instead
+    //    of relying on WS idle events, which can fire prematurely.
+    const toolResultText = await client.timed('poll-tool-result', () =>
+      pollForToolResult(mockLlmUrl, TOOL_USE_ID, 30000)
+    )
+    metrics.toolResultFound = toolResultText != null
+    metrics.originalEstimate = seqByteSize(RAW_COMMAND_LINES)
 
-    // 7. Fetch the mock log
+    // Also wait for the session to settle back to idle.
+    await waitForIdleStatus(client, 10000)
+
+    // Fetch the final mock log for diagnostics.
     let mockLog: unknown[] = []
     try {
       const res = await fetch(`${mockLlmUrl}/mock/log`)
@@ -75,18 +97,12 @@ export const s11ContextFilter: Scenario = {
     }
     metrics.mockRequests = mockLog.length
 
-    // 8-9. Find the tool_result block for our tool call in the request
-    //      history and measure its content length.
-    const toolResultText = findToolResultText(mockLog, TOOL_USE_ID)
-    metrics.toolResultFound = toolResultText != null
-    metrics.originalEstimate = seqByteSize(RAW_COMMAND_LINES)
-
     // Cleanup
     client.disconnectWs()
     await client.deleteThread(thread.id)
 
-    // 11a. Tool execution must round-trip — no tool_result means the
-    //      scripted call never reached (or never returned from) the model.
+    // 8a. Tool execution must round-trip — no tool_result means the
+    //     scripted call never reached (or never returned from) the model.
     if (toolResultText == null) {
       return {
         passed: false,
@@ -99,8 +115,8 @@ export const s11ContextFilter: Scenario = {
     const actualSize = toolResultText.length
     metrics.actualSize = actualSize
 
-    // 11b. Below threshold — the filter trimmed the result before the
-    //      model saw it.
+    // 8b. Below threshold — the filter trimmed the result before the
+    //     model saw it.
     if (actualSize < FILTERED_THRESHOLD_CHARS) {
       return {
         passed: true,
@@ -110,8 +126,8 @@ export const s11ContextFilter: Scenario = {
       }
     }
 
-    // 11c. At or above threshold — filter not active yet. Pass anyway so
-    //      this scenario runs as a baseline measurement pre-implementation.
+    // 8c. At or above threshold — filter not active yet. Pass anyway so
+    //     this scenario runs as a baseline measurement pre-implementation.
     return {
       passed: true,
       summary: `filter not active (baseline measurement) — tool_result ${actualSize} chars, unfiltered from raw ~${metrics.originalEstimate} bytes`,
@@ -137,6 +153,24 @@ async function waitForIdleStatus(client: any, timeoutMs: number): Promise<boolea
     }
   }
   return client.drainWs('chat.status').some((m: any) => m.status === 'idle')
+}
+
+/** Poll the mock log every 500ms for a tool_result matching `toolUseId`.
+ *  Returns the tool_result content text, or null on timeout. */
+async function pollForToolResult(mockLlmUrl: string, toolUseId: string, timeoutMs: number): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${mockLlmUrl}/mock/log`)
+      const log = (await res.json()) as unknown[]
+      const text = findToolResultText(log, toolUseId)
+      if (text != null) return text
+    } catch {
+      /* retry */
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return null
 }
 
 /** Scan the mock request log for a `tool_result` content block matching

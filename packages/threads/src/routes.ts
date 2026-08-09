@@ -988,39 +988,19 @@ export function createThreadRoutes(
             results.push({
               key: session.key,
               sizeBytes: stat.size,
-              pruned: true,
+              pruned: result.reclaimedBytes > 0,
               method: result.method,
               reclaimedBytes: result.reclaimedBytes
             })
           } else {
-            // No live query — try native prune on the file directly.
-            const preBytesLocal = stat.size
-            try {
-              const { execFileSync } = await import('node:child_process')
-              execFileSync(
-                'cozempic',
-                ['treat', session.backendSessionId ?? session.key, '-rx', 'standard', '--execute'],
-                {
-                  timeout: 30_000,
-                  stdio: ['pipe', 'pipe', 'pipe']
-                }
-              )
-              const postBytes = fs.statSync(filePath).size
-              results.push({
-                key: session.key,
-                sizeBytes: preBytesLocal,
-                pruned: postBytes < preBytesLocal,
-                method: 'cozempic',
-                reclaimedBytes: preBytesLocal - postBytes
-              })
-            } catch {
-              results.push({
-                key: session.key,
-                sizeBytes: preBytesLocal,
-                pruned: false,
-                error: 'cozempic unavailable and no live session for native prune'
-              })
-            }
+            // recycleSession returned null — session disabled recycling,
+            // hit rate limit, or had no file. Report as skipped.
+            results.push({
+              key: session.key,
+              sizeBytes: stat.size,
+              pruned: false,
+              error: 'session skipped recycle (rate-limited or disabled)'
+            })
           }
         }
       } catch (err: any) {

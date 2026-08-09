@@ -15,6 +15,9 @@ services:
     environment:
       PORT: "8900"
       MOCK_VERBOSE: "1"
+    networks:
+      windtunnel:
+        ipv4_address: 172.28.0.10
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:8900/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 1s
@@ -36,6 +39,25 @@ services:
       SOVEREIGN_DATA_DIR: "/data/data"
       # Disable TLS for testing
       SOVEREIGN_TLS_ENABLED: "false"
+      # Prevent the Claude CLI from phoning home to Anthropic API for
+      # auth/telemetry/model-list.
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      # Accept mock-llm's self-signed certificate when the claude binary
+      # connects to api.anthropic.com:443 (routed to mock-llm via extra_hosts).
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+      # Disable all telemetry / analytics
+      DO_NOT_TRACK: "1"
+      DISABLE_TELEMETRY: "1"
+      DISABLE_ERROR_REPORTING: "1"
+    # Route the claude binary's phone-home calls (api.anthropic.com:443)
+    # to mock-llm, which runs an HTTPS listener with a self-signed cert.
+    # Without this, the binary hangs trying to reach the real API.
+    extra_hosts:
+      - "api.anthropic.com:172.28.0.10"
+      - "console.anthropic.com:172.28.0.10"
+      - "claude.ai:172.28.0.10"
+    networks:
+      - windtunnel
     depends_on:
       mock-llm:
         condition: service_healthy
@@ -44,3 +66,10 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+networks:
+  windtunnel:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
