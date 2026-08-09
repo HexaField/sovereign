@@ -114,6 +114,9 @@ export interface ClaudeSessionState {
   contextFilter?: import('./context-filter.js').ContextFilter
   /** Wall-clock ms of the last successful recycle (Layer 2 rate-limiting). */
   lastRecycleAt?: number
+  /** Count of Layer 2 recycles completed this process lifetime. In-memory
+   *  only — intentionally not persisted, resets to 0 across a restart. */
+  recycleCount?: number
   /** Abort controller for the in-flight `query()` (if any). */
   abortController?: AbortController
   /** Input-queue write side for streaming input mode. */

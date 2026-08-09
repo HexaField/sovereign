@@ -1,7 +1,6 @@
 // Threads — REST API endpoints
 
 import fs from 'node:fs'
-import { execFile, spawn } from 'node:child_process'
 import { Router } from 'express'
 import type { ThreadManager } from './types.js'
 import type { ForwardHandler } from './forward.js'
@@ -83,8 +82,12 @@ export function createThreadRoutes(
     backend?: RoutingBackend | AgentBackend
     cronService?: CronService
     askUserQuestionStore?: AskUserQuestionRouteStore
-    /** Context management config getter — provides cleanup thresholds. */
-    getContextManagementConfig?: () => { cleanup: { enabled: boolean; maxSessionSizeMB: number; schedule: string } }
+    /** Context management config getter — three-layer enabled flags + cleanup thresholds. */
+    getContextManagementConfig?: () => {
+      filter?: { enabled?: boolean }
+      recycle?: { enabled?: boolean }
+      cleanup?: { enabled?: boolean; maxSessionSizeMB?: number; schedule?: string }
+    }
   }
 ): Router {
   const router = Router()
@@ -548,106 +551,60 @@ export function createThreadRoutes(
     }
   })
 
-  router.get('/api/threads/:key/cozempic-health', async (_req, res) => {
+  // ── Context Management health — Layers 1/2/3 ─────────────────────────
+  // Sovereign's built-in context management (real-time filter, session
+  // recycle, scheduled cleanup) replaced the Cozempic guard daemon. This
+  // reports the three layers' live status for the Service Health dropdown.
+  router.get('/api/threads/:key/context-health', async (_req, res) => {
     const threadKey = _req.params.key
     const thread = threadManager.get(threadKey)
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
 
+    const cmCfg = opts?.getContextManagementConfig?.()
+    const layer1Enabled = cmCfg?.filter?.enabled !== false
+    const layer2Enabled = cmCfg?.recycle?.enabled !== false
+    const layer3Enabled = cmCfg?.cleanup?.enabled !== false
+
+    let filterStats: {
+      trimCount: number
+      trimBytesReclaimed: number
+      dedupCount: number
+      dedupBytesReclaimed: number
+    } | null = null
+    let recycleCount = 0
+    let lastRecycleAt: number | null = null
+
     try {
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
       const backend = backendForSession(sessionKey)
-      const meta = backend ? await backend.getSessionMeta(sessionKey) : null
-      const backendSessionId = meta?.backendSessionId
-
-      if (!backendSessionId) {
-        return res.json({ healthy: null, reason: 'no-session' })
-      }
-
-      const short = backendSessionId.substring(0, 12)
-      const pidFile = `/tmp/cozempic_guard_${short}.pid`
-      let healthy = false
-      let reason: string | null = null
-
-      try {
-        const pidStr = fs.readFileSync(pidFile, 'utf-8').trim()
-        const pid = parseInt(pidStr, 10)
-        if (pid > 0) {
-          process.kill(pid, 0)
-          healthy = true
-        } else {
-          reason = 'invalid-pid'
-        }
-      } catch (e: unknown) {
-        const code = (e as NodeJS.ErrnoException).code
-        if (code === 'ENOENT') reason = 'no-pid-file'
-        else if (code === 'ESRCH') reason = 'guard-exited'
-        else reason = 'unknown'
-      }
-
-      if (!healthy) {
-        const logFile = `/tmp/cozempic_guard_${short}.log`
-        try {
-          const log = fs.readFileSync(logFile, 'utf-8')
-          if (log.includes('Guard powerless')) reason = 'context-bloat'
-        } catch {
-          /* log may not exist */
+      if (backend) {
+        const [meta, status] = await Promise.all([
+          backend.getSessionMeta(sessionKey),
+          backend.getContextManagementStatus?.(sessionKey) ?? Promise.resolve(null)
+        ])
+        lastRecycleAt = meta?.lastRecycleAt ?? null
+        if (status) {
+          recycleCount = status.recycleCount
+          if (status.filter) filterStats = status.filter
         }
       }
-
-      res.json({ healthy, reason, backendSessionId, backendSessionFile: meta?.backendSessionFile ?? null })
     } catch {
-      res.json({ healthy: null, reason: 'error' })
+      // Fall through — the response below still carries the config-derived
+      // enabled flags even when the live session lookup fails.
     }
-  })
 
-  router.post('/api/threads/:key/cozempic-restore', async (_req, res) => {
-    const threadKey = _req.params.key
-    const thread = threadManager.get(threadKey)
-    if (!thread) return res.status(404).json({ error: 'Thread not found' })
-
-    try {
-      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      const backend = backendForSession(sessionKey)
-      const meta = backend ? await backend.getSessionMeta(sessionKey) : null
-      const { backendSessionId, backendSessionFile } = meta ?? {}
-
-      if (!backendSessionId || !backendSessionFile) {
-        return res.status(400).json({ ok: false, message: 'No active session for this thread' })
-      }
-
-      // Spawn a sentinel process whose argv includes '@anthropic-ai/claude-code'
-      // so cozempic's _is_claude_process identity check passes. The sentinel
-      // stays alive as long as the Sovereign systemd unit is active, surviving
-      // rebuilds (which change the server PID but not the sentinel).
-      const sentinelPid = await new Promise<number>((resolve, reject) => {
-        const sentinel = spawn(
-          process.execPath,
-          [
-            '-e',
-            'setInterval(()=>{try{require("child_process").execSync("systemctl --user is-active sovereign.service",{timeout:5000})}catch{process.exit(0)}},15000)',
-            '--',
-            '@anthropic-ai/claude-code'
-          ],
-          { detached: true, stdio: 'ignore' }
-        )
-        sentinel.unref()
-        if (!sentinel.pid) return reject(new Error('Failed to spawn sentinel'))
-        resolve(sentinel.pid)
-      })
-
-      await new Promise<void>((resolve, reject) => {
-        const args = ['guard', '--daemon', '--session', backendSessionFile, '--claude-pid', String(sentinelPid)]
-        execFile('cozempic', args, { timeout: 10_000 }, (err) => {
-          if (err) reject(err)
-          else resolve()
-        })
-      })
-
-      res.json({ ok: true, message: 'Cozempic guard spawned' })
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      res.status(500).json({ ok: false, message: msg })
-    }
+    res.json({
+      healthy: layer1Enabled && layer2Enabled && layer3Enabled,
+      layer1: {
+        enabled: layer1Enabled,
+        trimCount: filterStats?.trimCount ?? 0,
+        trimBytesReclaimed: filterStats?.trimBytesReclaimed ?? 0,
+        dedupCount: filterStats?.dedupCount ?? 0,
+        dedupBytesReclaimed: filterStats?.dedupBytesReclaimed ?? 0
+      },
+      layer2: { enabled: layer2Enabled, lastRecycleAt, recycleCount },
+      layer3: { enabled: layer3Enabled }
+    })
   })
 
   // ── Session Recycle — Layer 2 context management ────────────────────

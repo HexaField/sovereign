@@ -282,3 +282,102 @@ describe('Thread Routes — Subagent Listing (route-order regression)', () => {
     expect(res.body.subagents).toEqual({})
   })
 })
+
+/**
+ * `/api/threads/:key/context-health` replaced the retired Cozempic
+ * guard-daemon health check with Sovereign's built-in Layer 1/2/3 status.
+ */
+describe('Thread Routes — Context Management Health (Layers 1/2/3)', () => {
+  let app: ReturnType<typeof express>
+  let dataDir: string
+  let tm: ThreadManager
+  let backend: AgentBackend
+
+  function setup(
+    getContextManagementConfig?: () => {
+      filter?: { enabled?: boolean }
+      recycle?: { enabled?: boolean }
+      cleanup?: { enabled?: boolean; maxSessionSizeMB?: number; schedule?: string }
+    }
+  ) {
+    dataDir = makeTmpDir()
+    const bus = createEventBus(dataDir)
+    tm = createThreadManager(bus, dataDir)
+    backend = createStubBackend()
+    app = express()
+    app.use(express.json())
+    app.use(createThreadRoutes(tm, forwardHandler as any, { backend, getContextManagementConfig }))
+  }
+
+  it('returns 404 for an unknown thread', async () => {
+    setup()
+    const res = await request(app).get('/api/threads/nonexistent/context-health')
+    expect(res.status).toBe(404)
+  })
+
+  it('defaults every layer to enabled + zeroed stats when no session and no config getter exist', async () => {
+    // Mirrors a brand-new thread: no live backend session yet, and the
+    // stub backend never implements getContextManagementStatus — the route
+    // must fall back to config-derived enabled flags without throwing.
+    setup()
+    const thread = tm.create({ label: 'ctx-health-defaults' })
+    const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.id)}/context-health`)
+    expect(res.status).toBe(200)
+    expect(res.body.healthy).toBe(true)
+    expect(res.body.layer1).toEqual({
+      enabled: true,
+      trimCount: 0,
+      trimBytesReclaimed: 0,
+      dedupCount: 0,
+      dedupBytesReclaimed: 0
+    })
+    expect(res.body.layer2).toEqual({ enabled: true, lastRecycleAt: null, recycleCount: 0 })
+    expect(res.body.layer3).toEqual({ enabled: true })
+  })
+
+  it('reports healthy=false and the specific disabled layer when config disables it', async () => {
+    setup(() => ({ filter: { enabled: false }, recycle: { enabled: true }, cleanup: { enabled: true } }))
+    const thread = tm.create({ label: 'ctx-health-layer1-disabled' })
+    const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.id)}/context-health`)
+    expect(res.status).toBe(200)
+    expect(res.body.healthy).toBe(false)
+    expect(res.body.layer1.enabled).toBe(false)
+    expect(res.body.layer2.enabled).toBe(true)
+    expect(res.body.layer3.enabled).toBe(true)
+  })
+
+  it('surfaces live Layer 1 filter stats + Layer 2 recycle count from the backend', async () => {
+    setup()
+    const thread = tm.create({ label: 'ctx-health-live' })
+    const sessionKey = thread.id
+    const lastRecycleAt = Date.now() - 60_000
+    ;(backend as any).__getSessions().set(sessionKey, { sessionKey, lastRecycleAt })
+    ;(backend as any).getContextManagementStatus = async (key: string) => {
+      expect(key).toBe(sessionKey)
+      return {
+        filter: {
+          trimCount: 4,
+          trimBytesReclaimed: 2048,
+          dedupCount: 2,
+          dedupBytesReclaimed: 512,
+          signatureStripCount: 1,
+          seenHashes: 6,
+          turnCounter: 10
+        },
+        recycleCount: 3,
+        lastRecycleAt
+      }
+    }
+
+    const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.id)}/context-health`)
+    expect(res.status).toBe(200)
+    expect(res.body.layer1).toMatchObject({
+      enabled: true,
+      trimCount: 4,
+      trimBytesReclaimed: 2048,
+      dedupCount: 2,
+      dedupBytesReclaimed: 512
+    })
+    expect(res.body.layer2).toMatchObject({ enabled: true, recycleCount: 3, lastRecycleAt })
+  })
+})

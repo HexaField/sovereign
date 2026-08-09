@@ -308,6 +308,35 @@ export interface SpawnSubagentOptions {
 }
 
 /**
+ * Layer 1 context-filter telemetry — mirrors `ContextFilter.stats()` in the
+ * claude-code adapter. Present only for backends that run a real-time
+ * tool-output filter for the session.
+ */
+export interface ContextFilterStats {
+  trimCount: number
+  trimBytesReclaimed: number
+  dedupCount: number
+  dedupBytesReclaimed: number
+  signatureStripCount: number
+  seenHashes: number
+  turnCounter: number
+}
+
+/**
+ * Snapshot of Sovereign's built-in context management (Layer 1 filter +
+ * Layer 2 recycle) for one session. Backends without native context
+ * management omit `getContextManagementStatus` entirely.
+ */
+export interface ContextManagementStatus {
+  /** Layer 1 filter telemetry, or null when this session runs no filter. */
+  filter: ContextFilterStats | null
+  /** Recycles completed since process start (in-memory only — resets on restart). */
+  recycleCount: number
+  /** Wall-clock ms of the last recycle, or null when the session never recycled. */
+  lastRecycleAt: number | null
+}
+
+/**
  * Declared capabilities of a backend — drives routing and feature toggles.
  */
 export interface BackendCapabilities {
@@ -396,6 +425,13 @@ export interface AgentBackend {
     reclaimedBytes: number
     method: 'cozempic' | 'native'
   } | null>
+
+  /**
+   * OPTIONAL — snapshot of Sovereign's built-in context management (Layer 1
+   * filter telemetry + Layer 2 recycle count) for a session. Returns null
+   * when the backend tracks no live state for the given session key.
+   */
+  getContextManagementStatus?(sessionKey: string): Promise<ContextManagementStatus | null>
 
   /** OPTIONAL — backends that natively support subagents implement this. */
   spawnSubagent?(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string>
