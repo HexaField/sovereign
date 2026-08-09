@@ -10,6 +10,13 @@
     "enabled": false
   },
   "contextManagement": {
+    "recycle": {
+      "enabled": true,
+      "thresholdPercent": 1,
+      "minIntervalMs": 0,
+      "prescription": "standard",
+      "skipDuringSubagents": true
+    },
     "cleanup": {
       "enabled": true,
       "maxSessionSizeMB": 0.004,

@@ -27,6 +27,8 @@ interface ThreadInfo {
   reasoningEffort: string | null
   agentStatus: string
   sessionKey: string | null
+  backendKind: string | null
+  lastRecycleAt: number | null
 }
 
 interface CronJob {
@@ -100,6 +102,9 @@ export function ChatSettingsButton() {
   const [ad4mLoaded, setAd4mLoaded] = createSignal(false)
   const [watchInput, setWatchInput] = createSignal('')
   const [watchSaving, setWatchSaving] = createSignal(false)
+  const [availableBackends, setAvailableBackends] = createSignal<Array<{ kind: string; status: string }>>([])
+  const [currentBackend, setCurrentBackend] = createSignal<string | null>(null)
+  const [backendSaving, setBackendSaving] = createSignal(false)
   let containerRef!: HTMLDivElement
   let dropdownRef!: HTMLDivElement
 
@@ -108,12 +113,13 @@ export function ChatSettingsButton() {
     if (!key) return
     setLoading(true)
     try {
-      // Fetch session info + models + efforts in parallel — don't let crons block the menu
-      const [infoRes, modelsRes, effortsRes, threadRes] = await Promise.all([
+      // Fetch session info + models + efforts + backends in parallel
+      const [infoRes, modelsRes, effortsRes, threadRes, backendsRes] = await Promise.all([
         fetch(`/api/threads/${encodeURIComponent(key)}/session-info`),
         fetch('/api/models'),
         fetch('/api/efforts'),
-        fetch(`/api/threads/${encodeURIComponent(key)}`)
+        fetch(`/api/threads/${encodeURIComponent(key)}`),
+        fetch('/api/backends')
       ])
       if (infoRes.ok) {
         const data = await infoRes.json()
@@ -121,12 +127,18 @@ export function ChatSettingsButton() {
         const current = data.modelProvider && data.model ? `${data.modelProvider}/${data.model}` : (data.model ?? '')
         setSelectedModel(current)
         setSelectedEffort(data.reasoningEffort ?? '')
+        if (data.backendKind) setCurrentBackend(data.backendKind)
       }
       if (modelsRes.ok) {
         const data = await modelsRes.json()
         setAvailableModels(data.models ?? [])
         setModelCatalog(data.catalog ?? [])
         setDefaultModel(data.defaultModel ?? null)
+      }
+      if (backendsRes?.ok) {
+        const data = await backendsRes.json()
+        setAvailableBackends(data.backends ?? [])
+        if (!currentBackend() && data.defaultBackend) setCurrentBackend(data.defaultBackend)
       }
       if (effortsRes.ok) {
         const data = await effortsRes.json()
@@ -241,6 +253,37 @@ export function ChatSettingsButton() {
       setActionFeedback('Failed')
     }
     setModelSaving(false)
+    setTimeout(() => setActionFeedback(''), 2000)
+  }
+
+  const handleBackendSwitch = async (backend: string) => {
+    const key = threadKey()
+    if (!key || !backend) return
+    setBackendSaving(true)
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(key)}/backend`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backend })
+      })
+      if (res.ok) {
+        setCurrentBackend(backend)
+        setActionFeedback('Backend updated')
+        // Re-fetch models for the new backend
+        const modelsRes = await fetch(`/api/models?backend=${encodeURIComponent(backend)}`)
+        if (modelsRes.ok) {
+          const data = await modelsRes.json()
+          setAvailableModels(data.models ?? [])
+          setModelCatalog(data.catalog ?? [])
+          setDefaultModel(data.defaultModel ?? null)
+        }
+      } else {
+        setActionFeedback('Failed to switch backend')
+      }
+    } catch {
+      setActionFeedback('Failed')
+    }
+    setBackendSaving(false)
     setTimeout(() => setActionFeedback(''), 2000)
   }
 
@@ -429,6 +472,38 @@ export function ChatSettingsButton() {
               <Show when={!loading() && info()}>
                 {(i) => (
                   <div style={{ display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
+                    {/* Backend Selector — shown when multiple backends are enabled */}
+                    <Show when={availableBackends().length > 1}>
+                      <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                        <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                          Backend
+                        </span>
+                        <select
+                          class="text-xs"
+                          style={{
+                            background: 'var(--c-bg)',
+                            color: 'var(--c-text)',
+                            border: '1px solid var(--c-border)',
+                            'border-radius': '6px',
+                            padding: '2px 8px',
+                            cursor: backendSaving() ? 'wait' : 'pointer',
+                            opacity: backendSaving() ? '0.6' : '1'
+                          }}
+                          disabled={backendSaving()}
+                          value={currentBackend() ?? ''}
+                          onChange={(e) => void handleBackendSwitch(e.currentTarget.value)}
+                        >
+                          <For each={availableBackends()}>
+                            {(b) => (
+                              <option value={b.kind} selected={b.kind === currentBackend()}>
+                                {b.kind}
+                              </option>
+                            )}
+                          </For>
+                        </select>
+                      </div>
+                    </Show>
+
                     {/* Model Selector — two axes when a catalog is available:
                         family (Opus/Sonnet/Haiku) + version (Latest / pinned). */}
                     <Show

@@ -13,7 +13,7 @@ import type { IssueTracker } from '@sovereign/issues'
 import type { MeetingsService } from '@sovereign/meetings'
 import type { Notifications } from '@sovereign/notifications'
 import type { BrowserService } from '@sovereign/browser'
-import type { EventBus } from '@sovereign/core'
+import type { AgentBackend, AgentBackendKind, EventBus } from '@sovereign/core'
 
 export interface SovereignMcpDepsInput {
   bus: EventBus
@@ -98,7 +98,17 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         return out
       },
       async spawn(parentKey, opts) {
-        const backend = routing.forSession(parentKey)
+        // Cross-backend spawning: when `opts.backend` specifies a different
+        // backend kind, resolve the target backend and spawn there instead
+        // of defaulting to the parent's backend.
+        let backend: AgentBackend
+        if (opts.backend) {
+          const target = routing.forKind(opts.backend as AgentBackendKind)
+          if (!target) throw new Error(`agents_spawn: backend "${opts.backend}" not enabled`)
+          backend = target
+        } else {
+          backend = routing.forSession(parentKey)
+        }
         if (!backend.spawnSubagent) throw new Error('agents_spawn: backend does not support subagent spawn')
         const childKey = await backend.spawnSubagent(parentKey, { task: opts.task, label: opts.label })
         return { sessionKey: childKey }

@@ -55,6 +55,12 @@ export interface LocalLlmBackendDeps {
   dataDir: string
   /** Override the inference client used by every session (tests). Defaults to a real HTTP client per session. */
   inferenceClient?: InferenceClient
+  /** Optional shared sessions registry — mirrors session bindings into the
+   *  Sovereign-wide registry so the routing layer resolves local-llm sessions. */
+  registry?: {
+    upsertSession(record: Record<string, unknown>): void
+    lookupSession(sessionKey: string): unknown | null
+  }
 }
 
 function defaultSystemPrompt(cwd: string): string {
@@ -460,6 +466,16 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
       contextWindow: opts?.contextWindow,
       systemPromptOverride: opts?.systemPromptOverride
     })
+    // Mirror the session binding into the shared registry so the routing
+    // layer resolves this session to local-llm on future lookups.
+    deps.registry?.upsertSession({
+      sessionKey,
+      threadKey: opts?.threadKey ?? sessionKey,
+      backendKind: KIND,
+      label,
+      cwd: opts?.cwd,
+      model: opts?.model?.model
+    })
     const history = await getFullHistory(sessionKey)
     emitter.emit('session.info', { sessionKey, label, history })
     return sessionKey
@@ -535,7 +551,9 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
       label: state.label ?? null,
       parentKey: state.parentSessionKey ?? null,
       backendSessionId: state.backendSessionId,
-      backendSessionFile: sessionFilePath(sessionKey)
+      backendSessionFile: sessionFilePath(sessionKey),
+      lastRecycleAt: state.lastRecycleAt ?? null,
+      backendKind: KIND
     }
   }
 

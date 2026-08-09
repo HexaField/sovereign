@@ -237,6 +237,10 @@ export interface SessionMeta {
   backendSessionId?: string | null
   /** Absolute path to the backend session file (e.g. Claude Code JSONL). */
   backendSessionFile?: string | null
+  /** Wall-clock ms of the last context recycle (Layer 2). Null when never recycled. */
+  lastRecycleAt?: number | null
+  /** Which backend kind owns this session. */
+  backendKind?: AgentBackendKind | null
 }
 
 /**

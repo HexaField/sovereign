@@ -303,7 +303,19 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
         return cc
       },
       'local-llm': () => {
-        return createLocalLlmBackend(localLlmConfigFromStore(configStore, dataDir), { dataDir })
+        return createLocalLlmBackend(localLlmConfigFromStore(configStore, dataDir), {
+          dataDir,
+          registry: {
+            upsertSession(record: Record<string, unknown>) {
+              sessionsRegistry.upsert({ ...record, backendKind: 'local-llm' } as never)
+            },
+            lookupSession(sessionKey: string) {
+              const existing = sessionsRegistry.getBySession(sessionKey)
+              if (!existing || existing.backendKind !== 'local-llm') return null
+              return existing
+            }
+          }
+        })
       }
     }
   })

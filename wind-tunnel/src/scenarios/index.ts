@@ -16,6 +16,8 @@ import { s12SessionRecycle } from './s12-session-recycle.js'
 import { s13SessionCleanup } from './s13-session-cleanup.js'
 import { s14LocalLlmBackend } from './s14-local-llm-backend.js'
 import { s15SummaryService } from './s15-summary-service.js'
+import { s16AutoRecycle } from './s16-auto-recycle.js'
+import { s17BackendMixing } from './s17-backend-mixing.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -38,5 +40,9 @@ export const ALL_SCENARIOS: Scenario[] = [
   // surface directly (no real backend to route through yet); s15 self-skips
   // when the summary service's endpoints return 404 (pre-implementation).
   s14LocalLlmBackend,
-  s15SummaryService
+  s15SummaryService,
+  // Auto-recycle (Layer 2 auto-trigger) and backend mixing (per-thread
+  // backend selection). Both self-skip when their endpoints return 404.
+  s16AutoRecycle,
+  s17BackendMixing
 ]

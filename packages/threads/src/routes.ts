@@ -525,6 +525,8 @@ export function createThreadRoutes(
         thinkingLevel: meta?.thinkingLevel ?? null,
         reasoningEffort: meta?.reasoningEffort ?? null,
         agentStatus: thread.agentStatus ?? 'idle',
+        lastRecycleAt: meta?.lastRecycleAt ?? null,
+        backendKind: meta?.backendKind ?? null,
         sessionKey
       })
     } catch {
@@ -737,15 +739,40 @@ export function createThreadRoutes(
     res.json({ success: true, thread })
   })
 
-  router.get('/api/models', async (_req, res) => {
+  router.get('/api/models', async (req, res) => {
     try {
-      const backend = defaultBackend()
+      // Accept ?backend=<kind> to query models from a specific backend.
+      // Falls back to the default backend when omitted (back-compat).
+      const backendKind = req.query.backend as AgentBackendKind | undefined
+      let backend: AgentBackend | undefined
+      if (backendKind && opts?.backend && 'forKind' in opts.backend) {
+        backend = (opts.backend as RoutingBackend).forKind(backendKind)
+      }
+      if (!backend) backend = defaultBackend()
       if (!backend) return res.json({ models: [], defaultModel: null })
       const result = await backend.listAvailableModels()
       res.json(result)
     } catch {
       res.json({ models: [], defaultModel: null })
     }
+  })
+
+  // ── Backend listing — enabled backends + connection status ──────────
+  router.get('/api/backends', (_req, res) => {
+    if (!opts?.backend || !('all' in opts.backend)) {
+      return res.json({ backends: [], defaultBackend: null })
+    }
+    const routing = opts.backend as RoutingBackend
+    const all = routing.all()
+    const def = routing.default()
+    res.json({
+      backends: all.map((inst) => ({
+        kind: inst.kind,
+        status: inst.backend.status(),
+        capabilities: inst.backend.capabilities()
+      })),
+      defaultBackend: def?.kind ?? null
+    })
   })
 
   router.get('/api/efforts', async (_req, res) => {
@@ -834,6 +861,43 @@ export function createThreadRoutes(
       res.json({ success: true, model, thread })
     } catch (err) {
       res.status(500).json({ error: 'Failed to update model', detail: (err as Error).message })
+    }
+  })
+
+  // ── Backend switch — rebind a thread to a different backend ─────────
+  router.patch('/api/threads/:key/backend', async (req, res) => {
+    const threadKey = req.params.key
+    const { backend: newKind } = req.body ?? {}
+    if (!newKind) return res.status(400).json({ error: 'backend required' })
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    if (!opts?.backend || !('forKind' in opts.backend)) {
+      return res.status(500).json({ error: 'No routing backend available' })
+    }
+    const routing = opts.backend as RoutingBackend
+    const targetBackend = routing.forKind(newKind as AgentBackendKind)
+    if (!targetBackend) {
+      return res.status(400).json({ error: `Backend "${newKind}" not enabled` })
+    }
+
+    try {
+      // Create a new session on the target backend, bound to this thread.
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+      await targetBackend.createSession(thread.label, {
+        threadId: threadKey,
+        kind: 'thread',
+        ...(thread.contextWindow ? { contextWindow: thread.contextWindow } : {})
+      } as never)
+      // Update the registry binding so future messages route to the new backend.
+      routing.bindThread({
+        threadKey,
+        sessionKey,
+        backendKind: newKind as AgentBackendKind
+      })
+      res.json({ success: true, backend: newKind, thread })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to switch backend', detail: (err as Error).message })
     }
   })
 

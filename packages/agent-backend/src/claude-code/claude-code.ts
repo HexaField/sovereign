@@ -1085,11 +1085,13 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     state.liveQuery = q
 
     state.iteratorDone = (async () => {
+      let normalExit = false
       try {
         for await (const msg of q) {
           setActiveSessionKey(state.sessionKey)
           dispatchSdkMessage(msg, state, emitter)
         }
+        normalExit = true
       } catch (err: any) {
         if (err?.name !== 'AbortError') {
           emitter.emit('chat.error', { sessionKey: state.sessionKey, error: err?.message ?? String(err) })
@@ -1104,6 +1106,15 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         state.liveQuery = undefined
         state.agentStatus = 'idle'
         emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
+
+        // Layer 2 auto-trigger: check context fill after a normal turn
+        // completion. Skip when the exit came from abort/error/recycle —
+        // those paths already handle cleanup or indicate a broken loop.
+        if (normalExit) {
+          maybeAutoRecycle(state).catch((err) => {
+            console.warn('[context-recycle] auto-trigger error:', err)
+          })
+        }
       }
     })()
 
@@ -1465,7 +1476,9 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       label: state.label ?? null,
       parentKey: state.parentSessionKey ?? null,
       backendSessionId: state.backendSessionId ?? null,
-      backendSessionFile: state.sessionFile ?? null
+      backendSessionFile: state.sessionFile ?? null,
+      lastRecycleAt: state.lastRecycleAt ?? null,
+      backendKind: KIND
     }
   }
 
@@ -1602,6 +1615,44 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       tools: { listChars: 0, schemaChars: 0, entries: [] },
       skills: { promptChars: 0, entries: [] }
     } as ContextBudget
+  }
+
+  // ── Layer 2: Auto-Trigger ──────────────────────────────────────────
+  //
+  // Called after each normal turn completion. Compares the session's
+  // current context fill against the configured threshold and triggers
+  // a recycle when the fill exceeds it.
+
+  async function maybeAutoRecycle(state: ClaudeSessionState): Promise<void> {
+    const recycleCfg = config.contextManagement?.recycle
+    if (recycleCfg?.enabled === false) return
+    if (!state.lastUsage) return
+    // Skip subagent sessions — recycling them mid-flight strands the parent.
+    if (state.parentSessionKey) return
+
+    const threshold = recycleCfg?.thresholdPercent ?? 55
+    const maxTokens = state.contextWindow ?? contextWindowFor(state.model)
+    if (maxTokens <= 0) return
+
+    const inputTokens = state.lastUsage.inputTokens ?? 0
+    const cacheRead = state.lastUsage.cacheReadInputTokens ?? 0
+    const cacheCreate = state.lastUsage.cacheCreationInputTokens ?? 0
+    const filled = inputTokens + cacheRead + cacheCreate
+    const fillPercent = (filled / maxTokens) * 100
+
+    if (fillPercent < threshold) return
+
+    console.log(
+      `[context-recycle] auto-trigger: ${fillPercent.toFixed(1)}% filled ` +
+        `(threshold: ${threshold}%), recycling session ${state.sessionKey}`
+    )
+
+    const result = await recycleSession(state.sessionKey)
+    if (result) {
+      console.log(
+        `[context-recycle] auto-recycle complete: ` + `${result.reclaimedBytes} bytes reclaimed (${result.method})`
+      )
+    }
   }
 
   // ── Layer 2: Session Recycle ───────────────────────────────────────
