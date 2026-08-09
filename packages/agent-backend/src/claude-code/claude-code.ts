@@ -1618,8 +1618,22 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   } | null> {
     const state = internal.sessions.get(sessionKey)
     if (!state) return null
-    if (!state.liveQuery) return null
-    if (!state.sessionFile || !fs.existsSync(state.sessionFile)) return null
+    if (!state.sessionFile) return null
+
+    // The SDK binary may still flush the JSONL after handleResult fires
+    // setIdle. Retry briefly before bailing — the file usually appears
+    // within a few hundred milliseconds of the idle signal.
+    if (!fs.existsSync(state.sessionFile)) {
+      let found = false
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await new Promise((r) => setTimeout(r, 500))
+        if (fs.existsSync(state.sessionFile!)) {
+          found = true
+          break
+        }
+      }
+      if (!found) return null
+    }
 
     const recycleCfg = config.contextManagement?.recycle
     if (recycleCfg?.enabled === false) return null
@@ -1636,34 +1650,46 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     const preUsage = computeUsageFromFile(state.sessionFile)
     const preTokens = preUsage.inputTokens
 
-    // 2. Interrupt the live query (graceful — session stays resumable).
-    emitter.emit('chat.status', { sessionKey, status: 'idle' })
-    try {
-      await state.liveQuery.interrupt()
-    } catch {
-      // Fall through — hard abort as fallback.
+    // 2. Interrupt the live query if one exists (graceful — session stays
+    //    resumable). Idle sessions (no liveQuery) skip straight to pruning.
+    if (state.liveQuery) {
+      emitter.emit('chat.status', { sessionKey, status: 'idle' })
       try {
-        state.abortController?.abort()
+        await state.liveQuery.interrupt()
       } catch {
-        /* ignore */
+        // Fall through — hard abort as fallback.
+        try {
+          state.abortController?.abort()
+        } catch {
+          /* ignore */
+        }
       }
-    }
 
-    // 3. Wait for the iterator to complete (the for-await-of loop in
-    //    startSessionLoop exits cleanly after interrupt).
-    if (state.iteratorDone) {
-      try {
-        await state.iteratorDone
-      } catch {
-        /* ignore */
+      // 3. Wait for the iterator to complete (the for-await-of loop in
+      //    startSessionLoop exits cleanly after interrupt). Cap at 10s so
+      //    a stuck iterator never blocks the cleanup endpoint indefinitely.
+      if (state.iteratorDone) {
+        try {
+          await Promise.race([
+            state.iteratorDone,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('iterator-timeout')), 10_000))
+          ])
+        } catch {
+          // Timed out or errored — force-abort and move on.
+          try {
+            state.abortController?.abort()
+          } catch {
+            /* ignore */
+          }
+        }
       }
-    }
 
-    // 4. Reset pump bindings so startSessionLoop can re-create them.
-    state.pushUserMessage = undefined
-    state.endInput = undefined
-    state.abortController = undefined
-    state.liveQuery = undefined
+      // 4. Reset pump bindings so startSessionLoop can re-create them.
+      state.pushUserMessage = undefined
+      state.endInput = undefined
+      state.abortController = undefined
+      state.liveQuery = undefined
+    }
 
     // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
     let method: 'cozempic' | 'native' = 'native'

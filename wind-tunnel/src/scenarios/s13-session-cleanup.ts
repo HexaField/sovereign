@@ -1,12 +1,7 @@
 // S13: Session Cleanup — Layer 3 of the session-hygiene stack. Build up a
-// tool-heavy transcript, trigger the between-session JSONL cleanup pass, and
-// confirm the data directory shrinks while the thread and conversation
-// survive.
-//
-// After tool-heavy messages accumulate, a session's JSONL transcript grows
-// fast — large tool_result payloads pile up. The cleanup pass prunes stale
-// content (old tool results, pre-compaction messages) to cut disk usage
-// without losing the conversation.
+// transcript via echo messages, trigger the between-session JSONL cleanup
+// pass, and confirm the data directory shrinks while the thread and
+// conversation survive.
 
 import { execSync } from 'node:child_process'
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
@@ -52,34 +47,18 @@ export const s13SessionCleanup: Scenario = {
     metrics.threadId = thread.id
     await client.connectWs(['chat', 'threads'])
 
-    // 4. Register all 5 tool-triggering scripts upfront, then send each
-    //    message in turn, waiting for idle between sends so one full round
-    //    (user msg → tool_use → tool_result → reply) lands before the next
-    //    starts. Each script fires once and only on tool-offering turns —
-    //    the SDK's tool-result follow-up carries no matching text, so it
-    //    falls through to the mock's default echo and closes the turn.
-    const patterns = [1, 2, 3, 4, 5].map((n) => `s13-msg-${n}`)
-    for (let i = 0; i < patterns.length; i++) {
-      await fetch(`${mockLlmUrl}/mock/script`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pattern: patterns[i],
-          once: true,
-          needsTools: true,
-          toolUse: { id: `toolu_s13_${i + 1}`, name: 'Bash', input: { command: 'seq 1 600' } }
-        })
-      })
-    }
-
+    // 4. Build up context — five echo-only turns. The SDK's messages
+    //    include system-reminder blocks (~4KB each), so the JSONL grows
+    //    past the cleanup threshold without needing tool scripts.
     const idleResults: boolean[] = []
-    for (const pattern of patterns) {
-      await client.timed(`send-${pattern}`, () =>
-        client.sendMessage(thread.id, `Please run ${pattern} and show the output`)
+    for (let i = 1; i <= 5; i++) {
+      await client.timed(`send-msg-${i}`, () =>
+        client.sendMessage(thread.id, `s13-cleanup-msg-${i} — build transcript for cleanup test`)
       )
       idleResults.push(await waitForIdle(client, 30000))
+      client.drainWs('chat.status')
+      client.drainWs('chat.turn')
     }
-    metrics.buildUpPatterns = patterns
     metrics.buildUpIdleResults = idleResults
 
     if (idleResults.some((ok) => !ok)) {
