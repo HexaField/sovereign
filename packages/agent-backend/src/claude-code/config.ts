@@ -55,7 +55,7 @@ export function claudeCodeConfigFromStore(configStore: ConfigStore, dataDir: str
       mcpServers['semble'] = {
         type: 'stdio',
         command: 'uvx',
-        args: ['--from', 'semble[mcp]', 'semble']
+        args: ['--from', 'semble[mcp]==0.5.4', 'semble']
       }
     }
   }

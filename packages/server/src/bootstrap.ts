@@ -5,6 +5,7 @@
 // call — everything else lives here so `index.ts` stays at a glance.
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type express from 'express'
@@ -120,6 +121,50 @@ export interface BootstrapResult {
 }
 
 const authMiddleware = (_req: any, _res: any, next: any) => next()
+
+// ── Layer 3 orphan-sweep helpers ─────────────────────────────────────────
+// Pure helpers for the context-cleanup cron below. Kept outside
+// `bootstrapServer` because they take no closure state — easier to reason
+// about and to unit test in isolation.
+
+/**
+ * Reconstruct the shared `.claude/projects` root from a known session file
+ * path. Session files nest at varying depth — top-level sessions sit one
+ * level under the root, subagents nest three levels deep — so we anchor on
+ * the literal `projects` path segment that every backend inserts (see
+ * `sessionJsonlPath` in `@sovereign/agent-backend`) rather than assume a
+ * fixed number of parent hops. Returns null when no candidate path contains
+ * that segment (e.g. no tracked sessions yet).
+ */
+function deriveProjectsDir(knownSessionFilePaths: string[]): string | null {
+  for (const filePath of knownSessionFilePaths) {
+    const segments = filePath.split(path.sep)
+    const idx = segments.lastIndexOf('projects')
+    if (idx !== -1) return segments.slice(0, idx + 1).join(path.sep)
+  }
+  return null
+}
+
+/**
+ * Recursively lists every `.jsonl` file under `dir`. Best-effort — a missing
+ * or unreadable directory yields an empty list rather than throwing, so one
+ * bad path never aborts the wider cleanup sweep.
+ */
+function listJsonlFilesRecursive(dir: string): string[] {
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+  } catch {
+    return []
+  }
+  const out: string[] = []
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      out.push(path.join(entry.parentPath, entry.name))
+    }
+  }
+  return out
+}
 
 export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const { app, server, wss, bus, dataDir, configStore } = input
@@ -591,9 +636,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       if (!be?.recycleSession || !be?.listSessions) return
       const sessions = await be.listSessions()
       let pruned = 0
+      const trackedFiles = new Set<string>()
       for (const session of sessions) {
         const filePath = be.getSessionFilePath?.(session.key)
         if (!filePath) continue
+        trackedFiles.add(filePath)
         try {
           const stat = fs.statSync(filePath)
           if (stat.size < thresholdBytes) continue
@@ -603,6 +650,35 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
           /* skip — session may have ended mid-sweep */
         }
       }
+
+      // ── Orphan sweep ────────────────────────────────────────────────
+      // `listSessions()` above only returns sessions Sovereign currently
+      // tracks in memory against a live thread. A crashed or stale session
+      // leaves its JSONL transcript on disk with nothing tracking it, so it
+      // never reaches the loop above. Scan the raw session directory and
+      // flag oversized files that don't belong to any tracked session.
+      //
+      // We only LOG here — pruning needs a live session context
+      // (`recycleSession` interrupts a running query and resumes it).
+      // Editing an untracked transcript blind risks corrupting a session
+      // that later resumes. `cozempic doctor` or a manual pass handles the
+      // actual reclaim.
+      let orphanCount = 0
+      const projectsDir = deriveProjectsDir([...trackedFiles]) ?? path.join(os.homedir(), '.claude', 'projects')
+      if (fs.existsSync(projectsDir)) {
+        for (const jsonlPath of listJsonlFilesRecursive(projectsDir)) {
+          if (trackedFiles.has(jsonlPath)) continue
+          try {
+            const stat = fs.statSync(jsonlPath)
+            if (stat.size < thresholdBytes) continue
+          } catch {
+            continue // file may have been removed mid-sweep
+          }
+          orphanCount++
+          console.warn(`[context-cleanup] orphaned session file over threshold (untracked, not pruned): ${jsonlPath}`)
+        }
+      }
+
       bus.emit({
         type: 'scheduler.job.completed',
         timestamp: new Date().toISOString(),
@@ -611,7 +687,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
           runId: payload.runId,
           jobId: job.id,
           jobName: 'context-cleanup-sweep',
-          summary: `pruned ${pruned} session(s)`
+          summary: `pruned ${pruned} session(s)`,
+          orphanedOversized: orphanCount
         }
       })
     })

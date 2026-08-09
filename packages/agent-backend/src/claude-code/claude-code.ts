@@ -301,6 +301,7 @@ interface PersistedClaudeSessionState {
   agentStatus: ClaudeSessionState['agentStatus']
   label?: string
   parentSessionKey?: string
+  lastRecycleAt?: number
   liveSubagents: string[]
   streamLastLength: number
   thinkingAccum: string
@@ -421,6 +422,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       agentStatus: state.agentStatus,
       label: state.label,
       parentSessionKey: state.parentSessionKey,
+      lastRecycleAt: state.lastRecycleAt,
       liveSubagents: [...state.liveSubagents],
       streamLastLength: state.streamLastLength,
       thinkingAccum: state.thinkingAccum,
@@ -444,6 +446,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
         agentStatus: 'idle',
         label: value.label,
         parentSessionKey: value.parentSessionKey,
+        lastRecycleAt: value.lastRecycleAt,
         liveSubagents: new Set(), // cleared on restart — nothing survives the process boundary
         streamLastLength: value.streamLastLength,
         thinkingAccum: value.thinkingAccum,
