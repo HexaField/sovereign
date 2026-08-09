@@ -29,7 +29,7 @@ export const s8ConfigMembranes: Scenario = {
     let membraneId: string | null = null
     try {
       const created = await client.timed('create-membrane', () =>
-        client.post('/api/membranes', { label: 'swt-s8-test', description: 'wind tunnel test' })
+        client.post('/api/membranes', { name: 'swt-s8-test', description: 'wind tunnel test' })
       )
       membraneId = created?.id ?? null
       metrics.membraneId = membraneId
