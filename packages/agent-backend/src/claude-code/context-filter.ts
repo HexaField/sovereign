@@ -39,6 +39,15 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
   const seenHashes = new Map<string, number>()
   let turnCounter = 0
 
+  // Telemetry counters — accumulate for the lifetime of the session (NOT
+  // cleared by `reset()`, which only clears dedup state on recycle). Exposed
+  // via `stats()` for observability into how much the filter is reclaiming.
+  let trimCount = 0
+  let trimBytesReclaimed = 0
+  let dedupCount = 0
+  let dedupBytesReclaimed = 0
+  let signatureStripCount = 0
+
   function md5(text: string): string {
     return createHash('md5').update(text).digest('hex')
   }
@@ -48,14 +57,18 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
    * Returns the original if under threshold.
    */
   function trimLargeOutput(text: string): string {
-    if (Buffer.byteLength(text, 'utf-8') <= cfg.trimThresholdBytes) return text
+    const originalBytes = Buffer.byteLength(text, 'utf-8')
+    if (originalBytes <= cfg.trimThresholdBytes) return text
     const lines = text.split('\n')
     if (lines.length <= cfg.trimMaxLines) return text
     const halfLines = Math.floor(cfg.trimMaxLines / 2)
     const head = lines.slice(0, halfLines)
     const tail = lines.slice(-halfLines)
     const trimmedCount = lines.length - cfg.trimMaxLines
-    return [...head, `\n[... ${trimmedCount} lines trimmed by context filter ...]\n`, ...tail].join('\n')
+    const result = [...head, `\n[... ${trimmedCount} lines trimmed by context filter ...]\n`, ...tail].join('\n')
+    trimCount++
+    trimBytesReclaimed += originalBytes - Buffer.byteLength(result, 'utf-8')
+    return result
   }
 
   /** Strip signature blocks from the end of a string. */
@@ -63,7 +76,9 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
     if (!cfg.stripSignatures) return text
     let result = text
     for (const pattern of SIGNATURE_PATTERNS) {
+      const before = result
       result = result.replace(pattern, '')
+      if (result !== before) signatureStripCount++
     }
     return result
   }
@@ -78,7 +93,10 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
     const hash = md5(text)
     const firstSeen = seenHashes.get(hash)
     if (firstSeen !== undefined) {
-      return `[duplicate content — first seen at turn ${firstSeen}, ${text.length} chars omitted]`
+      const stub = `[duplicate content — first seen at turn ${firstSeen}, ${text.length} chars omitted]`
+      dedupCount++
+      dedupBytesReclaimed += text.length - stub.length
+      return stub
     }
     seenHashes.set(hash, turnCounter)
     return text
@@ -220,7 +238,10 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
     turnCounter++
   }
 
-  /** Reset dedup state. Call on session recycle. */
+  /** Reset dedup state. Call on session recycle. Telemetry counters are
+   *  intentionally NOT reset here — they accumulate across the session's
+   *  full lifetime so `stats()` reflects total reclaim, not just since the
+   *  last recycle. */
   function reset(): void {
     seenHashes.clear()
     turnCounter = 0
@@ -231,7 +252,28 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
     Object.assign(cfg, patch)
   }
 
-  return { filterToolOutput, advanceTurn, reset, updateConfig }
+  /** Snapshot of accumulated filter telemetry, for observability. */
+  function stats(): {
+    trimCount: number
+    trimBytesReclaimed: number
+    dedupCount: number
+    dedupBytesReclaimed: number
+    signatureStripCount: number
+    seenHashes: number
+    turnCounter: number
+  } {
+    return {
+      trimCount,
+      trimBytesReclaimed,
+      dedupCount,
+      dedupBytesReclaimed,
+      signatureStripCount,
+      seenHashes: seenHashes.size,
+      turnCounter
+    }
+  }
+
+  return { filterToolOutput, advanceTurn, reset, updateConfig, stats }
 }
 
 export type ContextFilter = ReturnType<typeof createContextFilter>
