@@ -1,0 +1,48 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5801,
+    "tls": {
+      "enabled": false
+    }
+  },
+  "personality": {
+    "enabled": false
+  },
+  "contextManagement": {
+    "recycle": {
+      "enabled": true,
+      "thresholdPercent": 1,
+      "minIntervalMs": 0,
+      "prescription": "standard",
+      "skipDuringSubagents": true
+    },
+    "cleanup": {
+      "enabled": true,
+      "maxSessionSizeMB": 0.004,
+      "schedule": "0 4 * * *"
+    }
+  },
+  "agentBackend": {
+    "enabled": ["claude-code", "local-llm"],
+    "default": "claude-code",
+    "localLlm": {
+      "baseUrl": "http://host.docker.internal:9090",
+      "model": "Qwen3.6-35B-A3B-Q4_K_M",
+      "contextWindow": 32768,
+      "temperature": 0.1,
+      "maxTokens": 4096,
+      "toolCallFormat": "auto",
+      "sandbox": {
+        "allowedCwds": ["/tmp"]
+      }
+    }
+  },
+  "summary": {
+    "enabled": true,
+    "baseUrl": "http://mock-llm:8900",
+    "model": "default",
+    "debounceMs": 500,
+    "maxSummaryWords": 100
+  }
+}

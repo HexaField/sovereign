@@ -1,0 +1,13 @@
+# Benchmark overlay — routes local-llm backend to the host's real
+# llama-server instead of mock-llm.
+#
+# SAFETY: Sovereign still runs inside Docker. Only the inference
+# endpoint reaches the host. Tool calls execute inside the container.
+#
+# Usage:
+#   ./run.sh --benchmark --scenario s18
+
+services:
+  sovereign:
+    volumes:
+      - ./config.benchmark.json:/data/config/config.json:ro

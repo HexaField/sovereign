@@ -56,6 +56,7 @@ services:
       - "api.anthropic.com:172.28.0.10"
       - "console.anthropic.com:172.28.0.10"
       - "claude.ai:172.28.0.10"
+      - "host.docker.internal:host-gateway"
     networks:
       - windtunnel
     depends_on:
