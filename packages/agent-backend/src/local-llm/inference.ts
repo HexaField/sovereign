@@ -79,43 +79,13 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
     messages: ChatMessage[],
     opts?: { tools?: ToolSchema[]; signal?: AbortSignal }
   ): Promise<CompletionResponse> {
-    const body: Record<string, unknown> = {
-      model: state.model,
-      messages,
-      temperature: state.temperature,
-      max_tokens: state.maxTokens,
-      stream: false
+    // Always stream internally to keep the TCP connection alive during
+    // long generations. Collect chunks and assemble a CompletionResponse.
+    const assembled = assembleEmpty()
+    for await (const chunk of stream(messages, opts)) {
+      assembleChunk(assembled, chunk)
     }
-    if (opts?.tools?.length) {
-      body.tools = opts.tools
-      body.tool_choice = 'auto'
-    }
-    if (state.thinking === false) {
-      body.chat_template_kwargs = { enable_thinking: false }
-    }
-
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), state.timeoutMs ?? 600_000)
-    if (opts?.signal) {
-      opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
-    }
-
-    try {
-      const url = `${state.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal
-      })
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(`Inference failed: ${res.status} ${res.statusText} — ${text}`)
-      }
-      return (await res.json()) as CompletionResponse
-    } finally {
-      clearTimeout(timer)
-    }
+    return assembled.response
   }
 
   async function* stream(
@@ -181,6 +151,61 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
       }
     } finally {
       clearTimeout(timer)
+    }
+  }
+
+  // ── Stream → CompletionResponse assembly ────────────────────────
+  // Collects SSE chunks into a single non-streaming response shape.
+
+  interface AssemblyState {
+    response: CompletionResponse
+    toolCalls: Map<number, ToolCall> // keyed by chunk.tool_calls[].index
+  }
+
+  function assembleEmpty(): AssemblyState {
+    return {
+      response: {
+        id: '',
+        choices: [{ index: 0, message: { role: 'assistant', content: '' }, finish_reason: null }],
+        model: state.model
+      },
+      toolCalls: new Map()
+    }
+  }
+
+  function assembleChunk(st: AssemblyState, chunk: StreamChunk): void {
+    if (chunk.id) st.response.id = chunk.id
+    if (chunk.model) st.response.model = chunk.model
+    if (chunk.usage) st.response.usage = chunk.usage
+
+    const delta = chunk.choices?.[0]?.delta
+    if (!delta) return
+
+    const msg = st.response.choices[0].message
+    if (delta.role) msg.role = delta.role as ChatMessage['role']
+    if (delta.content) msg.content = (msg.content ?? '') + delta.content
+
+    // Accumulate tool calls by their stream index
+    if (delta.tool_calls) {
+      for (const tc of delta.tool_calls) {
+        let existing = st.toolCalls.get(tc.index)
+        if (!existing) {
+          existing = { id: tc.id ?? '', type: 'function', function: { name: '', arguments: '' } }
+          st.toolCalls.set(tc.index, existing)
+        }
+        if (tc.id) existing.id = tc.id
+        if (tc.function?.name) existing.function.name += tc.function.name
+        if (tc.function?.arguments) existing.function.arguments += tc.function.arguments
+      }
+    }
+
+    const reason = chunk.choices?.[0]?.finish_reason
+    if (reason) {
+      st.response.choices[0].finish_reason = reason
+      // Finalise tool_calls on the message
+      if (st.toolCalls.size > 0) {
+        msg.tool_calls = [...st.toolCalls.values()]
+      }
     }
   }
 

@@ -33,7 +33,7 @@
       "temperature": 0.1,
       "maxTokens": 32768,
       "timeoutMs": 1800000,
-      "thinking": true,
+      "thinking": false,
       "toolCallFormat": "auto",
       "sandbox": {
         "allowedCwds": ["/tmp"]
