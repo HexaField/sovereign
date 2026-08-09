@@ -43,6 +43,29 @@ export interface ClaudeCodeConfig {
    * to swap the SDK shim.
    */
   inProcessOnly?: boolean
+  /** Context management settings — filter, recycle, cleanup. Comes from
+   *  `configStore.get('contextManagement')`. */
+  contextManagement?: {
+    filter?: {
+      enabled?: boolean
+      trimThresholdBytes?: number
+      trimMaxLines?: number
+      dedupMinBytes?: number
+      stripSignatures?: boolean
+    }
+    recycle?: {
+      enabled?: boolean
+      thresholdPercent?: number
+      minIntervalMs?: number
+      prescription?: string
+      skipDuringSubagents?: boolean
+    }
+    cleanup?: {
+      enabled?: boolean
+      maxSessionSizeMB?: number
+      schedule?: string
+    }
+  }
 }
 
 /**
@@ -87,6 +110,10 @@ export interface ClaudeSessionState {
   label?: string
   /** Optional parent session key for subagent records. */
   parentSessionKey?: string
+  /** Per-session context filter instance (Layer 1). Created once per session. */
+  contextFilter?: import('./context-filter.js').ContextFilter
+  /** Wall-clock ms of the last successful recycle (Layer 2 rate-limiting). */
+  lastRecycleAt?: number
   /** Abort controller for the in-flight `query()` (if any). */
   abortController?: AbortController
   /** Input-queue write side for streaming input mode. */
@@ -110,7 +137,7 @@ export interface ClaudeSessionState {
   lastUsage?: ClaudeUsage
   /** Path of the session JSONL on disk (set when known). */
   sessionFile?: string
-  /** Handle to the live SDK Query — used to call `setModel`/`interrupt` mid-session. */
+  /** Handle to the live SDK Query — used to call `setModel`/`interrupt`/`getContextUsage` mid-session. */
   liveQuery?: {
     setModel(model?: string): Promise<void>
     // SDK 0.3.220 widened the return type from `Promise<void>` to
@@ -126,6 +153,19 @@ export interface ClaudeSessionState {
      *  hook to force a fresh `tools/list` against every server so the SDK's
      *  deferred-tool catalog doesn't go stale across compact events. */
     setMcpServers?(servers: Record<string, unknown>): Promise<unknown>
+    /** Rich per-category context breakdown. Used by Layer 2 (recycle) to
+     *  monitor token accumulation and decide when to trigger a prune cycle. */
+    getContextUsage?(): Promise<{
+      totalTokens: number
+      maxTokens: number
+      autoCompactThreshold?: number
+      messageBreakdown?: {
+        toolResultTokens: number
+        toolCallTokens: number
+        assistantMessageTokens: number
+        userMessageTokens: number
+      }
+    }>
   }
 }
 

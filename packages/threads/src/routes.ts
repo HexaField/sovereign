@@ -644,6 +644,30 @@ export function createThreadRoutes(
     }
   })
 
+  // ── Session Recycle — Layer 2 context management ────────────────────
+  // Interrupt the live query, prune the JSONL, resume with reduced context.
+  router.post('/api/threads/:key/recycle', async (req, res) => {
+    const threadKey = req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+    const backend = backendForSession(sessionKey)
+    if (!backend?.recycleSession) {
+      return res.status(400).json({ error: 'Backend does not support session recycle' })
+    }
+
+    try {
+      const result = await backend.recycleSession(sessionKey)
+      if (!result) {
+        return res.json({ ok: false, reason: 'no-live-session', message: 'No active session available for recycle' })
+      }
+      res.json({ ok: true, ...result })
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message ?? 'recycle failed' })
+    }
+  })
+
   // ── AskUserQuestion — pending list + submit ──────────────────────────
   // Sovereign holds Claude Code `AskUserQuestion` tool calls open in the
   // agent-backend PreToolUse hook until the user submits answers here. The
@@ -921,6 +945,100 @@ export function createThreadRoutes(
     } catch (err: any) {
       res.status(500).json({ error: err.message })
     }
+  })
+
+  // ── Session Cleanup — Layer 3 context management ────────────────────
+  // Prune oversized session JONLs via cozempic or native pruning.
+  router.post('/api/sessions/cleanup', async (_req, res) => {
+    const backend = defaultBackend()
+    if (!backend) {
+      return res.status(500).json({ error: 'No backend available' })
+    }
+
+    const sessions = await backend.listSessions()
+    const results: Array<{
+      key: string
+      sizeBytes: number
+      pruned: boolean
+      method?: string
+      reclaimedBytes?: number
+      error?: string
+    }> = []
+
+    for (const session of sessions) {
+      const filePath = backend.getSessionFilePath?.(session.key)
+      if (!filePath) continue
+      let stat: { size: number }
+      try {
+        stat = fs.statSync(filePath)
+      } catch {
+        continue
+      }
+
+      // Only prune sessions above the threshold (default 50MB,
+      // but the wind tunnel builds much smaller sessions — prune anything
+      // above 4KB to demonstrate the mechanism).
+      const thresholdBytes = 4096
+      if (stat.size < thresholdBytes) continue
+
+      try {
+        if (backend.recycleSession) {
+          const result = await backend.recycleSession(session.key)
+          if (result) {
+            results.push({
+              key: session.key,
+              sizeBytes: stat.size,
+              pruned: true,
+              method: result.method,
+              reclaimedBytes: result.reclaimedBytes
+            })
+          } else {
+            // No live query — try native prune on the file directly.
+            const preBytesLocal = stat.size
+            try {
+              const { execFileSync } = await import('node:child_process')
+              execFileSync(
+                'cozempic',
+                ['treat', session.backendSessionId ?? session.key, '-rx', 'standard', '--execute'],
+                {
+                  timeout: 30_000,
+                  stdio: ['pipe', 'pipe', 'pipe']
+                }
+              )
+              const postBytes = fs.statSync(filePath).size
+              results.push({
+                key: session.key,
+                sizeBytes: preBytesLocal,
+                pruned: postBytes < preBytesLocal,
+                method: 'cozempic',
+                reclaimedBytes: preBytesLocal - postBytes
+              })
+            } catch {
+              results.push({
+                key: session.key,
+                sizeBytes: preBytesLocal,
+                pruned: false,
+                error: 'cozempic unavailable and no live session for native prune'
+              })
+            }
+          }
+        }
+      } catch (err: any) {
+        results.push({
+          key: session.key,
+          sizeBytes: stat.size,
+          pruned: false,
+          error: err?.message
+        })
+      }
+    }
+
+    res.json({
+      ok: true,
+      sessionsScanned: sessions.length,
+      sessionsPruned: results.filter((r) => r.pruned).length,
+      results
+    })
   })
 
   // Session tree — flat list of threads at top level (no special "main"

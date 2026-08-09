@@ -75,5 +75,26 @@ export const defaults: SovereignConfig = {
     membraneId: 'personal',
     membraneName: 'Personal',
     threadLabel: 'Main'
+  },
+  contextManagement: {
+    filter: {
+      enabled: true,
+      trimThresholdBytes: 8192,
+      trimMaxLines: 100,
+      dedupMinBytes: 1024,
+      stripSignatures: true
+    },
+    recycle: {
+      enabled: true,
+      thresholdPercent: 55,
+      minIntervalMs: 300_000,
+      prescription: 'standard',
+      skipDuringSubagents: true
+    },
+    cleanup: {
+      enabled: true,
+      maxSessionSizeMB: 50,
+      schedule: '0 4 * * *'
+    }
   }
 }

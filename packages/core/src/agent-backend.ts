@@ -377,6 +377,19 @@ export interface AgentBackend {
   /** Get the context-budget report for a session. */
   getContextBudget(sessionKey: string): Promise<ContextBudget | null>
 
+  /**
+   * OPTIONAL — recycle a session: interrupt the live query, prune the JSONL
+   * transcript, resume with a smaller context. Returns a summary of reclaimed
+   * tokens/bytes, or null if the session has no live query or recycle failed.
+   */
+  recycleSession?(sessionKey: string): Promise<{
+    preTokens: number
+    postTokens: number
+    reclaimedTokens: number
+    reclaimedBytes: number
+    method: 'cozempic' | 'native'
+  } | null>
+
   /** OPTIONAL — backends that natively support subagents implement this. */
   spawnSubagent?(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string>
   /** OPTIONAL — backends with a device identity. */
