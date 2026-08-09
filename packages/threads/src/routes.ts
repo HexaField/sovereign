@@ -23,6 +23,8 @@ interface RoutingBackend extends BackendRouter {
   all(): Array<{ kind: string; backend: AgentBackend }>
   forKind(kind: AgentBackendKind): AgentBackend | undefined
   default(): AgentBackend
+  /** Record a thread→session→backend binding so forSession resolves later. */
+  bindThread(record: { threadKey: string; sessionKey: string; backendKind: AgentBackendKind }): unknown
 }
 
 /** Aggregate `getActivityMap()` across every enabled backend in a routing
@@ -744,7 +746,7 @@ export function createThreadRoutes(
       // Accept ?backend=<kind> to query models from a specific backend.
       // Falls back to the default backend when omitted (back-compat).
       const backendKind = req.query.backend as AgentBackendKind | undefined
-      let backend: AgentBackend | undefined
+      let backend: AgentBackend | null | undefined
       if (backendKind && opts?.backend && 'forKind' in opts.backend) {
         backend = (opts.backend as RoutingBackend).forKind(backendKind)
       }
