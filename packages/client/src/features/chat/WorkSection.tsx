@@ -30,6 +30,70 @@ import {
   ImageIcon
 } from '../../ui/icons.js'
 
+// ── Tool name normalization ──────────────────────────────────────────
+// The backend hands this file two raw tool-name families it doesn't control:
+//  - Claude Code SDK builtin tools, PascalCase (Bash, Read, Edit, Grep, ...)
+//  - MCP tools, prefixed mcp__<server>__<tool> (mcp__sovereign__cron_create)
+// Every icon/summary/detail lookup below keys off a short lowercase name, so
+// normalizeToolName() runs once per tool call before any of those lookups.
+
+/**
+ * Claude Code SDK builtin tool names, PascalCase, mapped to the short
+ * lowercase name the icon/summary/detail lookups use. `WebFetch`/`WebSearch`
+ * keep their existing `web_fetch`/`web_search` short names (not bare
+ * `fetch`/`search`) so they stay distinct from the semble MCP tool's own
+ * `search` short name — collapsing them together would route semble code
+ * search results through the web-search detail view.
+ */
+const CLAUDE_CODE_TOOL_NAMES: Record<string, string> = {
+  Bash: 'exec',
+  Read: 'read',
+  Write: 'write',
+  Edit: 'edit',
+  Grep: 'grep',
+  Glob: 'glob',
+  Agent: 'agent',
+  Task: 'task',
+  WebFetch: 'web_fetch',
+  WebSearch: 'web_search',
+  Skill: 'skill',
+  LS: 'ls',
+  NotebookEdit: 'notebook',
+  ToolSearch: 'tool_search',
+  Workflow: 'workflow',
+  ReportFindings: 'report'
+}
+
+/**
+ * Split an MCP tool's full backend name (`mcp__<server>__<tool>`) into its
+ * server and bare-tool segments. Returns null for non-MCP names. MCP tool
+ * names never carry a literal double underscore inside the tool segment
+ * itself, so the `__` separator splits it correctly. Takes the last segment
+ * as the tool name (not the third), which stays robust even if a tool
+ * segment ever grows its own `__`.
+ */
+function splitMcpName(raw: string): { server: string; tool: string } | null {
+  if (!raw || !raw.startsWith('mcp__')) return null
+  const segments = raw.split('__')
+  if (segments.length < 3) return null
+  return { server: segments[1] ?? '', tool: segments[segments.length - 1] || raw }
+}
+
+/**
+ * Normalize a raw backend tool name (PascalCase Claude Code tool, or
+ * mcp__server__tool) down to the lowercase short name the icon/summary/detail
+ * lookups key off. MCP names collapse to their bare tool name — e.g.
+ * mcp__sovereign__cron_create → cron_create. Anything else passes through
+ * lowercased, which keeps this a no-op for names that already arrive in
+ * short form (legacy callers, tests).
+ */
+export function normalizeToolName(raw: string): string {
+  if (!raw) return 'tool'
+  const mcp = splitMcpName(raw)
+  if (mcp) return mcp.tool
+  return CLAUDE_CODE_TOOL_NAMES[raw] ?? raw.toLowerCase()
+}
+
 // ── Tool icons & labels ──────────────────────────────────────────────
 const cls = 'h-3 w-3'
 
@@ -87,7 +151,46 @@ const TOOL_ICONS: Record<string, string> = {
   sessions_history: '📜',
   session_status: '📊',
   subagents: '🧵',
-  agents_list: '📋'
+  agents_list: '📋',
+  // Claude Code SDK builtin tools beyond the original set above
+  grep: '🔍',
+  glob: '📁',
+  agent: '🤖',
+  task: '🤖',
+  skill: '🧩',
+  ls: '📂',
+  notebook: '📓',
+  tool_search: '🔎',
+  workflow: '🔀',
+  report: '📝',
+  // mcp__sovereign__* short names (normalizeToolName strips the mcp__sovereign__ prefix)
+  cron_create: '⏰',
+  cron_delete: '⏰',
+  cron_list: '⏰',
+  agents_spawn: '🧪',
+  browser_act: '🌐',
+  browser_open: '🌐',
+  browser_close: '🌐',
+  create_issue: '🎫',
+  list_orgs: '📋',
+  notifications_send: '🔔',
+  read_meeting: '📅',
+  update_planning_node: '🗂️',
+  // mcp__semble__* short names
+  search: '🔍',
+  find_related: '🔍'
+}
+
+/**
+ * Fallback icon for an MCP tool whose bare tool name has no direct entry
+ * above, keyed by the MCP server segment (mcp__<server>__...). Covers
+ * ad4m's many fine-grained tools without listing each one, and catches any
+ * future sovereign/semble tool this file doesn't name explicitly yet.
+ */
+const MCP_SERVER_FALLBACK_ICON: Record<string, string> = {
+  sovereign: '🔌',
+  semble: '🔍',
+  ad4m: '🔗'
 }
 
 function resolveIcon(key: string): JSX.Element {
@@ -95,8 +198,17 @@ function resolveIcon(key: string): JSX.Element {
   return fn ? fn() : <WrenchIcon class={cls} />
 }
 
-function toolIcon(name: string): string {
-  return TOOL_ICONS[name] || '⚙'
+/**
+ * Emoji icon for a raw backend tool name. Normalizes first, tries a direct
+ * TOOL_ICONS match on the short name, then falls back to an MCP
+ * server-level icon, then the generic default.
+ */
+function toolIcon(rawName: string): string {
+  const short = normalizeToolName(rawName)
+  if (TOOL_ICONS[short]) return TOOL_ICONS[short]
+  const mcp = splitMcpName(rawName)
+  if (mcp) return MCP_SERVER_FALLBACK_ICON[mcp.server] ?? '🔌'
+  return '⚙'
 }
 
 function toolIconElement(name: string): JSX.Element {
@@ -105,30 +217,16 @@ function toolIconElement(name: string): JSX.Element {
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export function getToolIcon(name: string): string {
-  const icons: Record<string, string> = {
-    read: '📖',
-    write: '✏️',
-    edit: '✂️',
-    exec: '▶',
-    process: '⚙',
-    browser: '🌐',
-    web_search: '🔍',
-    web_fetch: '🌐',
-    memory_search: 'search',
-    memory_get: 'list',
-    cron: '⏰',
-    gateway: '🔌',
-    tts: '🔊',
-    sessions_spawn: '🧪',
-    sessions_send: '💬',
-    sessions_list: '📋',
-    sessions_history: '📜',
-    session_status: '📊',
-    subagents: '🧵',
-    agents_list: '📋',
-    nodes: '📱'
-  }
-  return icons[name] || 'tool'
+  // memory_search/memory_get intentionally diverge from TOOL_ICONS here —
+  // this helper predates the TOOL_ICONS emoji unification and existing
+  // tests pin its word-form output for those two keys.
+  const legacyOverrides: Record<string, string> = { memory_search: 'search', memory_get: 'list' }
+  const short = normalizeToolName(name)
+  if (legacyOverrides[short]) return legacyOverrides[short]
+  if (TOOL_ICONS[short]) return TOOL_ICONS[short]
+  const mcp = splitMcpName(name)
+  if (mcp) return MCP_SERVER_FALLBACK_ICON[mcp.server] ?? '🔌'
+  return 'tool'
 }
 
 export function summarizeWork(items: WorkItem[]): string {
@@ -137,10 +235,12 @@ export function summarizeWork(items: WorkItem[]): string {
   const thinking = items.filter((w) => w.type === 'thinking').length
   const parts: string[] = []
   if (calls.length > 0) {
-    // Group by tool name with counts
+    // Group by normalized tool name with counts — collapses PascalCase
+    // Claude Code names and mcp__server__tool names to their short form so
+    // e.g. "Read" and "read" count as the same tool.
     const counts = new Map<string, number>()
     for (const c of calls) {
-      const name = c.name || 'tool'
+      const name = normalizeToolName(c.name || 'tool')
       counts.set(name, (counts.get(name) || 0) + 1)
     }
     const uniqueTools = Array.from(counts.entries())
@@ -214,7 +314,11 @@ function pairTools(work: WorkItem[]): Array<WorkItem | ToolPair> {
         matched = true
       }
       if (!matched) {
-        const idx = unmatched.findIndex((p) => p.call.name === w.name && !p.result)
+        // Compare normalized short names, not raw ones — tolerates any
+        // casing difference between a call's and its result's raw name.
+        const idx = unmatched.findIndex(
+          (p) => normalizeToolName(p.call.name || '') === normalizeToolName(w.name || '') && !p.result
+        )
         if (idx >= 0) {
           unmatched[idx].result = w
         } else {
@@ -241,8 +345,8 @@ export function WorkSection(props: { work: WorkItem[] }) {
   const preview = (): { icon: JSX.Element; text: string } => {
     for (let i = props.work.length - 1; i >= 0; i--) {
       const w = props.work[i]
-      if (w.type === 'tool_call') return { icon: toolIconElement(w.name || ''), text: w.name || 'tool' }
-      if (w.type === 'tool_result') return { icon: resolveIcon('check'), text: w.name || 'tool' }
+      if (w.type === 'tool_call') return { icon: toolIconElement(w.name || ''), text: normalizeToolName(w.name || '') }
+      if (w.type === 'tool_result') return { icon: resolveIcon('check'), text: normalizeToolName(w.name || '') }
       if (w.type === 'system_event') {
         const sk = w.icon || 'generic'
         const icons: Record<string, string> = {
@@ -281,7 +385,7 @@ export function WorkSection(props: { work: WorkItem[] }) {
     if (calls.length > 0) {
       const counts = new Map<string, number>()
       for (const c of calls) {
-        const name = c.name || 'tool'
+        const name = normalizeToolName(c.name || 'tool')
         counts.set(name, (counts.get(name) || 0) + 1)
       }
       const uniqueTools = Array.from(counts.entries())
@@ -447,7 +551,8 @@ function ToolPairRow(props: { pair: ToolPair }) {
   const [expanded, setExpanded] = createSignal(false)
   const call = () => props.pair.call
   const result = () => props.pair.result
-  const name = () => call().name || 'tool'
+  const rawName = () => call().name || 'tool'
+  const name = () => normalizeToolName(rawName())
   const callInput = () => parseInput(call().input)
   const hasDetails = () => !!(call().input && Object.keys(callInput()).length > 0) || !!result()?.output
 
@@ -458,7 +563,7 @@ function ToolPairRow(props: { pair: ToolPair }) {
         style={{ background: 'var(--c-work-body-bg)', color: 'var(--c-text-muted)' }}
         onClick={() => hasDetails() && setExpanded(!expanded())}
       >
-        <span class="text-[11px]">{toolIcon(name())}</span>
+        <span class="text-[11px]">{toolIcon(rawName())}</span>
         <span class="font-mono text-[11px] font-medium" style={{ color: 'var(--c-text)' }}>
           {name()}
         </span>
@@ -504,6 +609,17 @@ function ToolCallSummary(props: { name: string; input: Record<string, unknown> }
         return shortPath(str(inp.path || inp.file_path))
       case 'exec':
         return truncate(str(inp.command), 60)
+      case 'grep':
+        return truncate(str(inp.pattern), 60)
+      case 'glob':
+        return truncate(str(inp.pattern), 60)
+      case 'agent':
+      case 'task':
+        return truncate(str(inp.description || inp.prompt), 60)
+      case 'skill':
+        return str(inp.skill)
+      case 'ls':
+        return shortPath(str(inp.path))
       case 'process':
         return `${str(inp.action)} ${str(inp.sessionId || '')}`.trim()
       case 'browser':
@@ -1102,7 +1218,7 @@ function ToolResultContent(props: { name: string; content?: string }) {
         color: 'var(--c-text-muted)'
       }}
     >
-      <span class="font-mono text-[11px]">✓ {props.name}</span>
+      <span class="font-mono text-[11px]">✓ {normalizeToolName(props.name)}</span>
       <Show when={props.content}>
         <div class="mt-1 max-h-20 overflow-hidden font-mono text-[11px] break-all whitespace-pre-wrap">
           {(props.content?.length || 0) > 300 ? props.content!.slice(0, 300) + '…' : props.content}

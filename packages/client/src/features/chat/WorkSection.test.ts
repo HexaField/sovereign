@@ -5,6 +5,7 @@ import {
   formatDuration,
   shouldCollapse,
   getWorkItemStatus,
+  normalizeToolName,
   WorkSection
 } from './WorkSection.js'
 import type { WorkItem } from '@sovereign/core'
@@ -30,6 +31,64 @@ describe('§4.4 WorkSection', () => {
       expect(getToolIcon('memory_search')).toBe('search')
       expect(getToolIcon('memory_get')).toBe('list')
       expect(getToolIcon('unknown_tool')).toBe('tool')
+    })
+  })
+
+  describe('tool name normalization (backend PascalCase / MCP names)', () => {
+    // The backend emits Claude Code SDK tool names verbatim (PascalCase) and
+    // MCP tool names as mcp__<server>__<tool>. Every icon/summary/detail
+    // lookup keys off a short lowercase name, so normalizeToolName() has to
+    // bridge the two — this is the fix under test.
+    it('maps PascalCase Claude Code SDK tool names to their short lowercase form', () => {
+      expect(normalizeToolName('Bash')).toBe('exec')
+      expect(normalizeToolName('Read')).toBe('read')
+      expect(normalizeToolName('Write')).toBe('write')
+      expect(normalizeToolName('Edit')).toBe('edit')
+      expect(normalizeToolName('Grep')).toBe('grep')
+      expect(normalizeToolName('Glob')).toBe('glob')
+      expect(normalizeToolName('Agent')).toBe('agent')
+    })
+    it('collapses mcp__server__tool names to the bare tool name', () => {
+      expect(normalizeToolName('mcp__sovereign__cron_create')).toBe('cron_create')
+      expect(normalizeToolName('mcp__semble__search')).toBe('search')
+      expect(normalizeToolName('mcp__semble__find_related')).toBe('find_related')
+      expect(normalizeToolName('mcp__ad4m__add_link')).toBe('add_link')
+    })
+    it('passes already-short lowercase names through unchanged', () => {
+      expect(normalizeToolName('read')).toBe('read')
+      expect(normalizeToolName('exec')).toBe('exec')
+      expect(normalizeToolName('cron')).toBe('cron')
+    })
+    it('lowercases an unrecognized name as a last resort', () => {
+      expect(normalizeToolName('SomeFutureTool')).toBe('somefuturetool')
+    })
+    it('falls back to the generic tool label for an empty name', () => {
+      expect(normalizeToolName('')).toBe('tool')
+    })
+
+    it('resolves the correct icon for PascalCase tool names, matching their short-name equivalent', () => {
+      expect(getToolIcon('Bash')).toBe(getToolIcon('exec'))
+      expect(getToolIcon('Bash')).toBe('▶')
+      expect(getToolIcon('Read')).toBe('📖')
+      expect(getToolIcon('Write')).toBe('✏️')
+      expect(getToolIcon('Edit')).toBe('✂️')
+      expect(getToolIcon('Grep')).toBe('🔍')
+      expect(getToolIcon('Glob')).toBe('📁')
+    })
+    it('resolves a direct icon for a recognized mcp__server__tool name', () => {
+      expect(getToolIcon('mcp__semble__search')).toBe('🔍')
+      expect(getToolIcon('mcp__semble__find_related')).toBe('🔍')
+      expect(getToolIcon('mcp__sovereign__cron_create')).toBe('⏰')
+      expect(getToolIcon('mcp__sovereign__agents_spawn')).toBe('🧪')
+      expect(getToolIcon('mcp__sovereign__sessions_send')).toBe('💬')
+    })
+    it('falls back to a server-level icon for an MCP tool with no direct short-name match', () => {
+      // No entry named "add_link" exists — falls back to the ad4m server icon.
+      expect(getToolIcon('mcp__ad4m__add_link')).toBe('🔗')
+      expect(getToolIcon('mcp__ad4m__query_links')).toBe('🔗')
+    })
+    it('falls back to a generic plug icon for an unrecognized MCP server', () => {
+      expect(getToolIcon('mcp__unknown_server__does_something')).toBe('🔌')
     })
   })
 
@@ -111,6 +170,21 @@ describe('§4.4 WorkSection', () => {
     })
     it('handles empty work items', () => {
       expect(summarizeWork([])).toBe('No work items')
+    })
+    it('groups PascalCase backend tool calls under their short-name equivalent', () => {
+      const items: WorkItem[] = [
+        { type: 'tool_call', name: 'Read', timestamp: 1 },
+        { type: 'tool_call', name: 'read', timestamp: 2 },
+        { type: 'tool_call', name: 'Bash', timestamp: 3 }
+      ]
+      expect(summarizeWork(items)).toBe('read (2), exec')
+    })
+    it('groups mcp__server__tool calls under their bare tool name', () => {
+      const items: WorkItem[] = [
+        { type: 'tool_call', name: 'mcp__sovereign__cron_create', timestamp: 1 },
+        { type: 'tool_call', name: 'mcp__sovereign__cron_create', timestamp: 2 }
+      ]
+      expect(summarizeWork(items)).toBe('cron_create (2)')
     })
   })
 
