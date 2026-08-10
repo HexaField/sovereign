@@ -12,7 +12,9 @@ export interface ForwarderConfig {
   sovereignUrl: string
   /** If set, sent as `X-Sovereign-Mcp-Secret` to match the daemon's check. */
   sharedSecret?: string
-  /** Hard timeout per call. Default 30 s — browser ops can be slow. */
+  /** Hard timeout per call. Default 180 s — local-llm completions need
+   *  40-90 s, browser ops can be slow, and presence_internal_send awaits
+   *  the full LLM response cycle. Override via SOVEREIGN_MCP_TIMEOUT_MS. */
   timeoutMs?: number
 }
 
@@ -25,7 +27,7 @@ export type ForwardFn = (
 }>
 
 export function createForwarder(cfg: ForwarderConfig): ForwardFn {
-  const timeoutMs = cfg.timeoutMs ?? 30_000
+  const timeoutMs = cfg.timeoutMs ?? 180_000
   return async (toolName, args) => {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new Error('sovereign-mcp: timeout')), timeoutMs)

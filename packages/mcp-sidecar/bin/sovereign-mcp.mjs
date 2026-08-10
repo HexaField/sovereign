@@ -15,11 +15,12 @@ const port = Number(process.env.SOVEREIGN_MCP_PORT ?? 5802)
 const host = process.env.SOVEREIGN_MCP_HOST ?? '127.0.0.1'
 const sovereignUrl = (process.env.SOVEREIGN_URL ?? 'http://127.0.0.1:5801').replace(/\/+$/, '')
 const sharedSecret = process.env.SOVEREIGN_MCP_RPC_SECRET || undefined
+const timeoutMs = Number(process.env.SOVEREIGN_MCP_TIMEOUT_MS || 180_000)
 
 const handle = await startSidecar({
   port,
   host,
-  forwarder: { sovereignUrl, sharedSecret }
+  forwarder: { sovereignUrl, sharedSecret, timeoutMs }
 })
 
 function shutdown(signal) {
