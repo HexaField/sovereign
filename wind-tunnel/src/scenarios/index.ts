@@ -19,6 +19,7 @@ import { s15SummaryService } from './s15-summary-service.js'
 import { s16AutoRecycle } from './s16-auto-recycle.js'
 import { s17BackendMixing } from './s17-backend-mixing.js'
 import { s18LlmBenchmark } from './s18-llm-benchmark.js'
+import { s19PresenceTools } from './s19-presence-tools.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -48,5 +49,8 @@ export const ALL_SCENARIOS: Scenario[] = [
   s17BackendMixing,
   // LLM benchmark — configurable prompt via SWT_BENCHMARK_PROMPT env var.
   // Self-skips when the variable has no value or local-llm backend absent.
-  s18LlmBenchmark
+  s18LlmBenchmark,
+  // Presence MCP tools — verifies the RPC catalog includes all 9 presence
+  // handlers and that they respond to calls (not 404).
+  s19PresenceTools
 ]

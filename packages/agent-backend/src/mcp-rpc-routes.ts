@@ -34,9 +34,36 @@ interface RpcErr {
  * If a caller bypasses the sidecar, the handler's own runtime checks will
  * surface the error.
  */
+function bareThreadKey(key: string): string {
+  if (key === 'agent:main:main') return 'main'
+  if (key.startsWith('agent:main:thread:')) return key.slice('agent:main:thread:'.length)
+  return key
+}
+
 function buildHandlers(deps: SovereignToolDeps): Record<string, (args: any) => Promise<unknown>> {
   const okText = (text: string) => ({ content: [{ type: 'text' as const, text }] })
   const okJson = (obj: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }] })
+
+  /**
+   * Gate a presence tool to the expected thread role. Returns a refusal
+   * response when the caller does not match, or null when allowed.
+   * Through the sidecar→RPC path, `deps.currentSessionKey()` reflects
+   * the most-recently-active SDK session — correct when sessions run
+   * serially, racy with concurrent sessions. Acceptable for now.
+   */
+  function presenceRefuseFor(role: 'internal' | 'gateway'): ReturnType<typeof okText> | null {
+    if (!deps.presence) return okText('presence: not configured.')
+    const expectedId = role === 'internal' ? deps.presence.internalThreadId() : deps.presence.gatewayThreadId()
+    const current = deps.currentSessionKey?.()
+    const currentBare = current ? bareThreadKey(current) : undefined
+    if (!expectedId) return okText(`presence: no ${role} thread configured.`)
+    if (currentBare !== expectedId) {
+      return okText(
+        `presence: this tool can only be used from the ${role} session (current: ${currentBare ?? 'unknown'}, ${role}: ${expectedId}).`
+      )
+    }
+    return null
+  }
 
   return {
     // ── cron ────────────────────────────────────────────────────────────────
@@ -194,6 +221,73 @@ function buildHandlers(deps: SovereignToolDeps): Record<string, (args: any) => P
     // ── orgs ────────────────────────────────────────────────────────────────
     async list_orgs() {
       return okJson({ orgs: deps.orgs.list() })
+    },
+
+    // ── presence ────────────────────────────────────────────────────────
+    async presence_reply_voice(args: any) {
+      const refusal = presenceRefuseFor('internal')
+      if (refusal) return refusal
+      const result = await deps.presence!.tools.reply_voice(
+        args.text,
+        args.deviceId ? { deviceId: args.deviceId } : undefined
+      )
+      return okJson(result)
+    },
+    async presence_reply_ad4m(args: any) {
+      const refusal = presenceRefuseFor('internal')
+      if (refusal) return refusal
+      const opts: { perspectiveUuid?: string; channelAddress?: string } = {}
+      if (args.perspectiveUuid) opts.perspectiveUuid = args.perspectiveUuid
+      if (args.channelAddress) opts.channelAddress = args.channelAddress
+      const result = await deps.presence!.tools.reply_ad4m(args.text, Object.keys(opts).length ? opts : undefined)
+      return okJson(result)
+    },
+    async presence_reply_text(args: any) {
+      const refusal = presenceRefuseFor('internal')
+      if (refusal) return refusal
+      const resolved = args.threadId ? (deps.presence!.resolveThreadId?.(args.threadId) ?? args.threadId) : undefined
+      const result = await deps.presence!.tools.reply_text(args.text, resolved ? { threadId: resolved } : undefined)
+      return okJson(result)
+    },
+    async presence_reply_webhook(args: any) {
+      const refusal = presenceRefuseFor('internal')
+      if (refusal) return refusal
+      const result = await deps.presence!.tools.reply_webhook(args.text, { source: args.source })
+      return okJson(result)
+    },
+    async presence_watch(args: any) {
+      const refusal = presenceRefuseFor('internal')
+      if (refusal) return refusal
+      const resolved = deps.presence!.resolveThreadId?.(args.threadId) ?? args.threadId
+      const entry = deps.presence!.watch.add(resolved, args.reason)
+      return okJson({ watched: entry })
+    },
+    async presence_unwatch(args: any) {
+      const refusal = presenceRefuseFor('internal')
+      if (refusal) return refusal
+      const resolved = deps.presence!.resolveThreadId?.(args.threadId) ?? args.threadId
+      const removed = deps.presence!.watch.remove(resolved)
+      return okJson({ removed })
+    },
+    async presence_watched() {
+      const refusal = presenceRefuseFor('internal')
+      if (refusal) return refusal
+      return okJson({ watched: deps.presence!.watch.list() })
+    },
+    async presence_internal_send(args: any) {
+      const refusal = presenceRefuseFor('gateway')
+      if (refusal) return refusal
+      const result = await deps.presence!.forwardToInternal(
+        args.text,
+        args.deviceId ? { deviceId: args.deviceId } : undefined
+      )
+      return okJson(result)
+    },
+    async presence_internal_history(args: any) {
+      const refusal = presenceRefuseFor('gateway')
+      if (refusal) return refusal
+      const result = await deps.presence!.internalHistory(args.limit ?? 20)
+      return okJson(result)
     }
   }
 }

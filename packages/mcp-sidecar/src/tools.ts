@@ -213,6 +213,85 @@ export function buildTools(forward: ForwardFn): SidecarTool[] {
     ),
 
     // ── orgs ────────────────────────────────────────────────────────────────
-    t('list_orgs', 'List Sovereign orgs/workspaces.', {}, fwd('list_orgs'))
+    t('list_orgs', 'List Sovereign orgs/workspaces.', {}, fwd('list_orgs')),
+
+    // ── presence (internal-only tools) ───────────────────────────────────
+    t(
+      'presence_reply_voice',
+      'Synthesize a voice (TTS) reply to the last voice-origin device, or an explicit deviceId. Returns delivery status. Only callable from the presence-internal thread.',
+      {
+        text: z.string().describe('The spoken reply text — keep it short and conversational.'),
+        deviceId: z.string().optional().describe('Override the target deviceId (defaults to the last voice origin).')
+      },
+      fwd('presence_reply_voice')
+    ),
+    t(
+      'presence_reply_ad4m',
+      'Post a reply into the AD4M channel of the last ad4m-origin message (or explicit perspective/channel). Only callable from the presence-internal thread.',
+      {
+        text: z.string(),
+        perspectiveUuid: z.string().optional(),
+        channelAddress: z.string().optional()
+      },
+      fwd('presence_reply_ad4m')
+    ),
+    t(
+      'presence_reply_text',
+      'Post a normal chat turn — defaults to the GATEWAY thread so the user sees your reply in their primary chat surface. Pass `threadId` to broadcast into another thread. Only callable from the presence-internal thread.',
+      {
+        text: z.string(),
+        threadId: z.string().optional().describe('Target thread id or label. Defaults to the gateway thread.')
+      },
+      fwd('presence_reply_text')
+    ),
+    t(
+      'presence_reply_webhook',
+      'Stub — reaches back to a webhook source. Currently returns { delivered: false, reason: "not-implemented" }. Only callable from the presence-internal thread.',
+      {
+        text: z.string(),
+        source: z.string().describe('Webhook source identifier carried in the inbound origin.')
+      },
+      fwd('presence_reply_webhook')
+    ),
+    t(
+      'presence_watch',
+      'Watch a thread — its assistant turns will be summarised into the next inbound digest. Only callable from the presence-internal thread.',
+      {
+        threadId: z.string().describe('Thread id (UUID) or label.'),
+        reason: z.string().optional().describe('Short note about why this thread is being watched.')
+      },
+      fwd('presence_watch')
+    ),
+    t(
+      'presence_unwatch',
+      'Stop watching a thread. Only callable from the presence-internal thread.',
+      { threadId: z.string() },
+      fwd('presence_unwatch')
+    ),
+    t(
+      'presence_watched',
+      'List threads currently watched. Only callable from the presence-internal thread.',
+      {},
+      fwd('presence_watched')
+    ),
+
+    // ── presence (gateway-only tools) ────────────────────────────────────
+    t(
+      'presence_internal_send',
+      'Forward a text message into the internal (presence-internal) thread as a text-modality inbound. Use this when the user asks you to remember something, watch a thread, take an action with the ambient tools, etc. Only callable from the gateway thread.',
+      {
+        text: z.string(),
+        deviceId: z.string().optional().describe('Originating deviceId, if relevant for reply routing.')
+      },
+      fwd('presence_internal_send')
+    ),
+    t(
+      'presence_internal_history',
+      "Peek at the internal thread's recent turns. Useful for summarising Hex's ambient activity to the user. Only callable from the gateway thread.",
+      {
+        limit: z.number().int().min(1).max(100).optional().default(20)
+      },
+      fwd('presence_internal_history')
+    )
   ]
 }
