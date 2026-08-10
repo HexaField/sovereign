@@ -314,7 +314,14 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               if (!existing || existing.backendKind !== 'local-llm') return null
               return existing
             }
-          }
+          },
+          resolveSystemPromptAppend: makePresenceAwareAppendResolver(membraneManager, threadManager, {
+            internalThreadId: () => input.presence?.internalThreadId() ?? null,
+            gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
+            personalityFile: input.presencePersonalityFile,
+            memoryFile: input.presenceMemoryFile,
+            knowledgeFile: input.presenceKnowledgeFile
+          })
         })
       }
     }
