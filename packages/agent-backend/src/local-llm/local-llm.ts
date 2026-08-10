@@ -61,6 +61,10 @@ export interface LocalLlmBackendDeps {
     upsertSession(record: Record<string, unknown>): void
     lookupSession(sessionKey: string): unknown | null
   }
+  /** Optional resolver that returns extra context to prepend to the system
+   *  prompt — membrane CONTEXT.md, presence files, etc. Called fresh each
+   *  turn so file changes take effect without a session restart. */
+  resolveSystemPromptAppend?: (sessionKey: string) => string | undefined
 }
 
 function defaultSystemPrompt(cwd: string): string {
@@ -339,6 +343,14 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
 
     const controller = new AbortController()
     state.abortController = controller
+
+    // Refresh the system prompt each turn — the resolver may read live files
+    // (PRESENCE_MEMORY.md, membrane CONTEXT.md) that change between turns.
+    if (deps.resolveSystemPromptAppend) {
+      const append = deps.resolveSystemPromptAppend(state.sessionKey)
+      const base = defaultSystemPrompt(state.cwd)
+      state.systemPrompt = append ? `${append}\n\n${base}` : base
+    }
 
     // The system prompt is prepended fresh for the wire request only — it is
     // never stored in `state.messages`, so getHistory/getContextBudget never
