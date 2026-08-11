@@ -129,7 +129,7 @@ const ownershipWatch = setInterval(() => {
 }, 30_000)
 if (typeof ownershipWatch.unref === 'function') ownershipWatch.unref()
 
-const { shutdown } = bootstrapServer({ app, server, wss, bus, dataDir, configStore })
+const { shutdown } = bootstrapServer({ app, server, wss, bus, configDir, dataDir, configStore })
 
 // Fast shutdown: snapshot every subsystem synchronously and exit. Any
 // in-flight LLM turn is severed at whatever point it reached — the SDK
