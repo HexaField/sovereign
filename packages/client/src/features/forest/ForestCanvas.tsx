@@ -111,7 +111,7 @@ export default function ForestCanvas(props: ForestCanvasProps) {
 
     // ── Scene ─────────────────────────────────────────────
     scene = new THREE.Scene()
-    const bgColor = getCssVar('--c-bg') || '#1a1a2e'
+    const bgColor = getCssVar('--c-bg') || '#000000'
     scene.background = new THREE.Color(parseHexColor(bgColor))
 
     // ── Camera ────────────────────────────────────────────
@@ -227,7 +227,7 @@ export default function ForestCanvas(props: ForestCanvasProps) {
   // Update background when theme changes
   createEffect(() => {
     if (!scene) return
-    const bgColor = getCssVar('--c-bg') || '#1a1a2e'
+    const bgColor = getCssVar('--c-bg') || '#000000'
     ;(scene.background as THREE.Color)?.set(parseHexColor(bgColor))
   })
 
