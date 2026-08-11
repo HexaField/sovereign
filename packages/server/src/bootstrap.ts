@@ -395,10 +395,22 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
                 const perspectives = await c.perspective.all()
                 return perspectives.map((p: any) => ({ uuid: p.uuid, name: p.name }))
               },
-              querySparql: async (perspectiveUuid: string, query: string) => {
+              queryLinks: async (
+                perspectiveUuid: string,
+                opts?: { source?: string; predicate?: string; target?: string }
+              ) => {
                 const c = ad4mClient.getClient()
                 if (!c) return []
-                return (c.perspective as any).querySparql(perspectiveUuid, query)
+                // queryLinks returns LinkExpression[] — data lives in .data
+                const raw = await (c.perspective as any).queryLinks(perspectiveUuid, opts ?? {})
+                if (!Array.isArray(raw)) return []
+                return raw.map((le: any) => ({
+                  source: le.data?.source ?? le.source ?? '',
+                  predicate: le.data?.predicate ?? le.predicate ?? '',
+                  target: le.data?.target ?? le.target ?? '',
+                  timestamp: le.timestamp ?? '',
+                  author: le.author ?? ''
+                }))
               }
             }
           : null
