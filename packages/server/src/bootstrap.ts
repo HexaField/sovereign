@@ -112,6 +112,7 @@ export interface BootstrapInput {
   server: http.Server | https.Server
   wss: WebSocketServer
   bus: EventBus
+  configDir: string
   dataDir: string
   configStore: ConfigStore
 }
@@ -167,7 +168,7 @@ function listJsonlFilesRecursive(dir: string): string[] {
 }
 
 export function bootstrapServer(input: BootstrapInput): BootstrapResult {
-  const { app, server, wss, bus, dataDir, configStore } = input
+  const { app, server, wss, bus, configDir, dataDir, configStore } = input
   const wsHandler = createWsHandler(bus)
   const cfg: SovereignConfig = configStore.get()
 
@@ -274,9 +275,13 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // the whole file. Recompiles on (a) source `.md` file changes (via fs.watch)
   // and (b) `config.personality` changes (via configStore.onChange).
   const personalityDir = cfg.personality.sourceDir || cfg.workspace.root
+  // Derive outputPath from config, not from HOME — non-production contexts
+  // must never write to the production ~/.claude/CLAUDE.md.
+  const agentDir = cfg.agentBackend.claudeCode.agentDir || path.join(os.homedir(), '.claude')
   const personalityCompiler = personalityDir
     ? createPersonalityCompiler({
         sourceDir: personalityDir,
+        outputPath: path.join(agentDir, 'CLAUDE.md'),
         manifest: { files: cfg.personality.files, separator: cfg.personality.separator }
       })
     : null
@@ -445,9 +450,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     },
     resolveThreadId: (idOrLabel: string) => threadManager.resolve(idOrLabel)?.id
   }
-  const presencePersonalityFile = path.join(process.env.HOME ?? '', '.sovereign', 'PRESENCE.md')
-  const presenceMemoryFile = path.join(process.env.HOME ?? '', '.sovereign', 'PRESENCE_MEMORY.md')
-  const presenceKnowledgeFile = path.join(process.env.HOME ?? '', '.sovereign', 'PRESENCE_KNOWLEDGE.md')
+  // Presence files live alongside the personality sources in configDir
+  // (not hardcoded to HOME — tests must never touch production paths).
+  const presencePersonalityFile = path.join(configDir, 'PRESENCE.md')
+  const presenceMemoryFile = path.join(configDir, 'PRESENCE_MEMORY.md')
+  const presenceKnowledgeFile = path.join(configDir, 'PRESENCE_KNOWLEDGE.md')
 
   // Agent backend (the only construction cycle)
   const {
@@ -664,8 +671,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       // that later resumes. `cozempic doctor` or a manual pass handles the
       // actual reclaim.
       let orphanCount = 0
-      const projectsDir = deriveProjectsDir([...trackedFiles]) ?? path.join(os.homedir(), '.claude', 'projects')
-      if (fs.existsSync(projectsDir)) {
+      // Derive from tracked session file paths only — no HOME fallback.
+      // Non-production contexts must never scan production ~/.claude/projects.
+      const projectsDir = deriveProjectsDir([...trackedFiles])
+      if (projectsDir && fs.existsSync(projectsDir)) {
         for (const jsonlPath of listJsonlFilesRecursive(projectsDir)) {
           if (trackedFiles.has(jsonlPath)) continue
           try {
@@ -806,7 +815,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         agentIcon: configStore.get<string>('identity.agentIcon')
       }),
       getPersonalityInfo: () => {
-        const outputPath = path.join(process.env.HOME ?? '', '.claude', 'CLAUDE.md')
+        const outputPath = path.join(agentDir, 'CLAUDE.md')
         try {
           const stat = fs.statSync(outputPath)
           return { compiledAt: stat.mtimeMs, size: stat.size, watcherActive: personalityWatcherActive, outputPath }

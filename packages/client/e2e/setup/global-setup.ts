@@ -75,7 +75,13 @@ export default async function globalSetup() {
       globalPath: ''
     },
     agentBackend: {
-      default: 'mock'
+      default: 'mock',
+      claudeCode: {
+        // Point agentDir at the temp dir so the personality compiler and
+        // orphan cleanup never resolve to production ~/.claude.
+        agentDir: path.join(tmpBase, '.claude'),
+        cwd: tmpBase
+      }
     }
   }
   fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify(testConfig, null, 2))
