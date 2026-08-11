@@ -1,9 +1,9 @@
 // §6 System View — Administration and observability
-// Tab state is managed in nav/store.ts so the Header can render the tab bar
+// Tab state lives in nav/store.ts; tab bar renders here in content.
 
 import { type Component } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
-import { activeSystemTab } from '../nav/store.js'
+import { activeSystemTab, setActiveSystemTab, type SystemTabId } from '../nav/store.js'
 import StatusTab from './StatusTab'
 import AgentsTab from './AgentsTab'
 import ActivityTab from './ActivityTab'
@@ -32,7 +32,25 @@ const SystemView: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
-      {/* No tab bar here — tabs are in the Header */}
+      {/* Sub-tab bar */}
+      <div
+        class="scrollbar-none flex shrink-0 items-center gap-1 overflow-x-auto px-4 py-2"
+        style={{ 'border-bottom': '1px solid var(--c-border)' }}
+      >
+        {SYSTEM_TABS.map((tab) => (
+          <button
+            class="shrink-0 cursor-pointer rounded-md border-none px-3 py-1 text-xs font-medium transition-colors"
+            style={{
+              background: activeSystemTab() === tab.id ? 'var(--c-accent)' : 'transparent',
+              color: activeSystemTab() === tab.id ? '#fff' : 'var(--c-text-muted)'
+            }}
+            onClick={() => setActiveSystemTab(tab.id as SystemTabId)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       <div class="flex-1 overflow-y-auto p-4">
         <Dynamic component={activeComponent()} />
       </div>
