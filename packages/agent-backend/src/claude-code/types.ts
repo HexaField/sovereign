@@ -8,6 +8,12 @@ export interface ClaudeCodeConfig {
   /** Sovereign data dir. The adapter lives under `${dataDir}/agent-backend/claude-code/`. */
   dataDir: string
   /**
+   * Sovereign config dir (e.g. `~/.sovereign`). Used to locate skills and
+   * other config-rooted resources. When absent, features that depend on
+   * configDir (e.g. AD4M skill symlink) silently skip.
+   */
+  configDir?: string
+  /**
    * Working directory used as `cwd` for new sessions. Drives CLAUDE.md walk-up
    * and the on-disk session JSONL path layout under `~/.claude/projects/<encoded-cwd>/`.
    * Defaults to `process.cwd()`.

@@ -73,10 +73,10 @@ export const schema = {
       properties: {
         enabled: {
           type: 'array',
-          items: { type: 'string', enum: ['claude-code', 'local-llm'] },
+          items: { type: 'string', enum: ['claude-code', 'local-llm', 'mock'] },
           'x-reload': 'restart'
         },
-        default: { type: 'string', enum: ['claude-code', 'local-llm'], 'x-reload': 'restart' },
+        default: { type: 'string', enum: ['claude-code', 'local-llm', 'mock'], 'x-reload': 'restart' },
         claudeCode: {
           type: 'object',
           properties: {

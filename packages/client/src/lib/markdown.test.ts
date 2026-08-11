@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { renderMarkdown } from './markdown.js'
 
 // Access internal module state for testing tilde expansion.

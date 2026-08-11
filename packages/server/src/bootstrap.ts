@@ -470,6 +470,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   } = wireAgentBackend({
     bus,
     dataDir,
+    configDir,
     configStore,
     scheduler,
     orgManager,
@@ -831,7 +832,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       pushManager: {
         allSubscriptions: () => notificationsModule.pushManager.allSubscriptions(),
         getVapidPublicKey: () => notificationsModule.pushManager.getVapidPublicKey()
-      }
+      },
+      agentDir
     })
   )
   registerEventsChannel(wsHandler, eventStream)

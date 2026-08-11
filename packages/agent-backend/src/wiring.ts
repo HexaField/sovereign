@@ -37,6 +37,8 @@ import type { RoutingBackend } from './factory.js'
 export interface AgentBackendWiringInput {
   bus: EventBus
   dataDir: string
+  /** Sovereign config dir — threaded to the Claude Code adapter for config-rooted resources. */
+  configDir?: string
   configStore: ConfigStore
   scheduler: Scheduler
   orgManager: OrgManager
@@ -266,7 +268,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     registry: sessionsRegistry,
     factories: {
       'claude-code': () => {
-        const cc = createClaudeCodeBackend(claudeCodeConfigFromStore(configStore, dataDir), {
+        const cc = createClaudeCodeBackend(claudeCodeConfigFromStore(configStore, dataDir, input.configDir), {
           sovereignMcpServer,
           registry: {
             upsertSession(record) {

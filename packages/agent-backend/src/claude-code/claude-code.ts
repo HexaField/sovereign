@@ -22,7 +22,6 @@
 //   for trusted local execution.
 
 import path from 'node:path'
-import os from 'node:os'
 import fs from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk'
@@ -168,9 +167,9 @@ function familyForModel(model: string | null | undefined): string | null {
  * string when the file is missing or unreadable — the SDK's preset prompt
  * still works without it.
  */
-function readGlobalPersonality(): string {
+function readGlobalPersonality(agentDir: string): string {
   try {
-    return fs.readFileSync(path.join(os.homedir(), '.claude', 'CLAUDE.md'), 'utf8')
+    return fs.readFileSync(path.join(agentDir, 'CLAUDE.md'), 'utf8')
   } catch {
     return ''
   }
@@ -377,7 +376,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     fs.mkdirSync(cwd, { recursive: true })
     ensureLayeredContextFile(cwd)
     ensureDefaultSubagentFile(cwd)
-    if (mcpServers['ad4m']) ensureAd4mSkill()
+    if (mcpServers['ad4m'] && config.configDir) ensureAd4mSkill(config.configDir, agentDir)
   } catch {
     /* user may have a read-only cwd in tests */
   }
@@ -1050,7 +1049,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     //   2. Membrane prelude — per-thread CONTEXT.md resolved by the membrane
     //      manager, scoped to the thread's membrane id.
     // Both are joined and appended onto the `claude_code` preset.
-    const globalPersonality = readGlobalPersonality()
+    const globalPersonality = readGlobalPersonality(agentDir)
     const membraneAppend = deps?.resolveAppendSystemPrompt?.(state.sessionKey)
     const combinedAppend = [globalPersonality, membraneAppend].filter(Boolean).join('\n\n')
     const effectiveContextWindow = state.contextWindow ?? contextWindowFor(state.model)
