@@ -36,9 +36,38 @@ interface ForestIndex {
   buildTime: number
 }
 
-// ── AD4M SPARQL helpers ────────────────────────────────────────────
+// ── AD4M link helpers ─────────────────────────────────────────────
+//
+// AD4M stores data as flat links (source → predicate → target).
+// Property predicates use bare names like "hex://name" (NOT "hex://Entity#name").
+// Values carry a "literal:string:" prefix with URL-encoded content.
+// IRIs use "literal://string:<id>" (double-slash).
+//
+// We query via the link API rather than SPARQL — more reliable for
+// AD4M's non-standard URI schemes.
 
-type SparqlFn = (query: string) => Promise<Record<string, string>[]>
+interface Ad4mLink {
+  source: string
+  predicate: string
+  target: string
+  timestamp: string
+  author: string
+}
+
+type LinkQueryFn = (opts?: { source?: string; predicate?: string; target?: string }) => Promise<Ad4mLink[]>
+
+/** Decode an AD4M literal value — strips "literal:string:" prefix and URL-decodes. */
+function decodeLiteral(val: string): string {
+  const prefix = 'literal:string:'
+  if (val.startsWith(prefix)) {
+    try {
+      return decodeURIComponent(val.slice(prefix.length))
+    } catch {
+      return val.slice(prefix.length)
+    }
+  }
+  return val
+}
 
 /** Find the hex-knowledge perspective UUID. */
 async function findPerspective(
@@ -50,122 +79,107 @@ async function findPerspective(
 }
 
 /** Query all Entity subjects from the perspective. */
-async function fetchEntities(sparql: SparqlFn): Promise<ForestNode[]> {
-  const rows = await sparql(`
-    SELECT ?s ?name ?entityType ?description WHERE {
-      ?s <hex://Entity#name> ?name .
-      ?s <hex://Entity#entityType> ?entityType .
-      OPTIONAL { ?s <hex://Entity#description> ?description . }
-    }
-  `)
+async function fetchEntities(queryLinks: LinkQueryFn): Promise<ForestNode[]> {
+  // Find all subjects typed as hex://Entity
+  const typeLinks = await queryLinks({ predicate: 'rdf://type', target: 'hex://Entity' })
+  const iris = typeLinks.map((l) => l.source)
+  if (iris.length === 0) return []
 
-  const nodes: ForestNode[] = []
-  for (const row of rows) {
-    const iri = row.s ?? ''
-    if (!iri) continue
-    nodes.push({
+  // Fetch all hex:// property links in one call, then partition by subject
+  const allProps = await queryLinks({ predicate: 'hex://name' })
+  const allTypes = await queryLinks({ predicate: 'hex://entityType' })
+  const allDescs = await queryLinks({ predicate: 'hex://description' })
+  const allTags = await queryLinks({ predicate: 'hex://tags' })
+
+  const nameMap = new Map(allProps.map((l) => [l.source, decodeLiteral(l.target)]))
+  const typeMap = new Map(allTypes.map((l) => [l.source, decodeLiteral(l.target)]))
+  const descMap = new Map(allDescs.map((l) => [l.source, decodeLiteral(l.target)]))
+
+  const tagMap = new Map<string, string[]>()
+  for (const l of allTags) {
+    const list = tagMap.get(l.source) ?? []
+    list.push(decodeLiteral(l.target))
+    tagMap.set(l.source, list)
+  }
+
+  return iris
+    .filter((iri) => nameMap.has(iri))
+    .map((iri) => ({
       iri,
-      kind: 'entity',
-      name: row.name ?? '',
-      entityType: row.entityType ?? 'unknown',
-      tags: [],
-      content: row.description ?? '',
+      kind: 'entity' as const,
+      name: nameMap.get(iri) ?? '',
+      entityType: typeMap.get(iri) ?? 'unknown',
+      tags: tagMap.get(iri) ?? [],
+      content: descMap.get(iri) ?? '',
       timestamp: 0,
       embedding: []
-    })
-  }
-
-  // Fetch tags separately (collection properties produce multiple rows)
-  if (nodes.length > 0) {
-    try {
-      const tagRows = await sparql(`
-        SELECT ?s ?tag WHERE {
-          ?s <hex://Entity#tags> ?tag .
-        }
-      `)
-      const tagMap = new Map<string, string[]>()
-      for (const r of tagRows) {
-        if (!r.s || !r.tag) continue
-        const list = tagMap.get(r.s) ?? []
-        list.push(r.tag)
-        tagMap.set(r.s, list)
-      }
-      for (const n of nodes) {
-        n.tags = tagMap.get(n.iri) ?? []
-      }
-    } catch {
-      // Tags optional — SPARQL may fail if no tags exist
-    }
-  }
-
-  return nodes
+    }))
 }
 
 /** Query all Note subjects from the perspective. */
-async function fetchNotes(sparql: SparqlFn): Promise<ForestNode[]> {
-  const rows = await sparql(`
-    SELECT ?s ?content ?timestamp ?noteType ?source WHERE {
-      ?s <hex://Note#content> ?content .
-      ?s <hex://Note#timestamp> ?timestamp .
-      OPTIONAL { ?s <hex://Note#noteType> ?noteType . }
-      OPTIONAL { ?s <hex://Note#source> ?source . }
-    }
-  `)
+async function fetchNotes(queryLinks: LinkQueryFn): Promise<ForestNode[]> {
+  const typeLinks = await queryLinks({ predicate: 'rdf://type', target: 'hex://Note' })
+  const iris = typeLinks.map((l) => l.source)
+  if (iris.length === 0) return []
 
-  return rows
-    .filter((r) => r.s)
-    .map((r) => ({
-      iri: r.s,
-      kind: 'note' as const,
-      name: (r.content ?? '').slice(0, 60).replace(/\n/g, ' '),
-      entityType: r.noteType ?? 'note',
-      tags: [],
-      content: r.content ?? '',
-      timestamp: Number(r.timestamp) || 0,
-      embedding: []
-    }))
+  const allContent = await queryLinks({ predicate: 'hex://content' })
+  const allTimestamp = await queryLinks({ predicate: 'hex://timestamp' })
+  const allNoteType = await queryLinks({ predicate: 'hex://noteType' })
+
+  const contentMap = new Map(allContent.map((l) => [l.source, decodeLiteral(l.target)]))
+  const timestampMap = new Map(allTimestamp.map((l) => [l.source, decodeLiteral(l.target)]))
+  const noteTypeMap = new Map(allNoteType.map((l) => [l.source, decodeLiteral(l.target)]))
+
+  return iris
+    .filter((iri) => contentMap.has(iri))
+    .map((iri) => {
+      const content = contentMap.get(iri) ?? ''
+      return {
+        iri,
+        kind: 'note' as const,
+        name: content.slice(0, 60).replace(/\n/g, ' '),
+        entityType: noteTypeMap.get(iri) ?? 'note',
+        tags: [],
+        content,
+        timestamp: Number(timestampMap.get(iri)) || 0,
+        embedding: []
+      }
+    })
 }
 
-/** Query all links (predicates starting with hex://) from the perspective. */
-async function fetchLinks(sparql: SparqlFn): Promise<ForestLink[]> {
-  const rows = await sparql(`
-    SELECT ?source ?predicate ?target WHERE {
-      ?source ?predicate ?target .
-      FILTER(STRSTARTS(STR(?predicate), "hex://"))
+/** Query all hex:// relationship links (excluding property predicates). */
+async function fetchLinks(queryLinks: LinkQueryFn): Promise<ForestLink[]> {
+  // Fetch known relationship predicates directly
+  const relationPredicates = [
+    'hex://related_to',
+    'hex://part_of',
+    'hex://depends_on',
+    'hex://works_on',
+    'hex://built_with',
+    'hex://supersedes',
+    'hex://caused_by',
+    'hex://about'
+  ]
+
+  const results: ForestLink[] = []
+  for (const pred of relationPredicates) {
+    const links = await queryLinks({ predicate: pred })
+    for (const l of links) {
+      results.push({ source: l.source, target: l.target, predicate: pred })
     }
-  `)
+  }
 
-  return rows
-    .filter((r) => r.source && r.predicate && r.target)
-    .map((r) => ({
-      source: r.source,
-      target: r.target,
-      predicate: r.predicate
-    }))
-}
-
-// Also fetch Note → Entity "about" links
-async function fetchAboutLinks(sparql: SparqlFn): Promise<ForestLink[]> {
-  const rows = await sparql(`
-    SELECT ?s ?about WHERE {
-      ?s <hex://Note#about> ?about .
-    }
-  `)
-
-  return rows
-    .filter((r) => r.s && r.about)
-    .map((r) => ({
-      source: r.s,
-      target: r.about,
-      predicate: 'hex://about'
-    }))
+  return results
 }
 
 // ── Builder ────────────────────────────────────────────────────────
 
 export interface Ad4mDeps {
   listPerspectives: () => Promise<Array<{ uuid: string; name: string }>>
-  querySparql: (perspectiveUuid: string, query: string) => Promise<any>
+  queryLinks: (
+    perspectiveUuid: string,
+    opts?: { source?: string; predicate?: string; target?: string }
+  ) => Promise<Ad4mLink[]>
 }
 
 export interface BuilderOptions {
@@ -226,26 +240,24 @@ export async function buildForestIndex(opts: BuilderOptions): Promise<ForestInde
     return empty
   }
 
-  const sparql: SparqlFn = async (query) => {
-    const result = await ad4m.querySparql(perspectiveUuid, query)
-    // AD4M returns a flat array of row objects
+  const queryLinks: LinkQueryFn = async (opts) => {
+    const result = await ad4m.queryLinks(perspectiveUuid, opts)
     return Array.isArray(result) ? result : []
   }
 
   // 2. Fetch data
   console.log('[forest] fetching entities...')
-  const entities = await fetchEntities(sparql)
+  const entities = await fetchEntities(queryLinks)
   console.log(`[forest] found ${entities.length} entities`)
 
   console.log('[forest] fetching notes...')
-  const notes = await fetchNotes(sparql)
+  const notes = await fetchNotes(queryLinks)
   console.log(`[forest] found ${notes.length} notes`)
 
   const allNodes = [...entities, ...notes]
 
   console.log('[forest] fetching links...')
-  const [hexLinks, aboutLinks] = await Promise.all([fetchLinks(sparql), fetchAboutLinks(sparql)])
-  const allLinks = [...hexLinks, ...aboutLinks]
+  const allLinks = await fetchLinks(queryLinks)
   console.log(`[forest] found ${allLinks.length} links`)
 
   // 3. Embed — concatenate name + content for each node
