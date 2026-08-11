@@ -465,7 +465,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     sessionsRegistry,
     activeSessions,
     createSovereignMcpInstance,
-    mcpRpcRouter,
     askUserQuestionStore
   } = wireAgentBackend({
     bus,
@@ -487,14 +486,12 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     presenceKnowledgeFile
   })
   app.use(createSchedulerRoutes(scheduler, cronService))
-  // RPC façade consumed by `@sovereign/mcp-sidecar`. Exposes every MCP tool
-  // at `POST /api/mcp-rpc/:tool`. Mounted unconditionally — auth (when
-  // wanted) is via `SOVEREIGN_MCP_RPC_SECRET` env on the sidecar side.
-  app.use(mcpRpcRouter)
 
-  // Sovereign MCP over Streamable HTTP — per-session transport pattern.
-  // Each initialize request creates a fresh McpServer + transport pair (session-scoped).
-  // Register with Claude Code once: claude mcp add --transport http sovereign http://127.0.0.1:5801/api/mcp
+  // Sovereign MCP over Streamable HTTP — session-scoped transport.
+  // Each initialize request creates a fresh McpServer + transport pair.
+  // Internal agent sessions use in-process injection (no HTTP round-trip).
+  // This endpoint serves external MCP clients:
+  //   claude mcp add --transport http sovereign http://127.0.0.1:5801/api/mcp
   {
     const sessions = new Map<string, StreamableHTTPServerTransport>()
     const isInit = (body: any) => typeof body === 'object' && body !== null && body.method === 'initialize'
@@ -785,8 +782,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   })
 
   // System module + routes
-  const mcpBaseUrl = process.env.SOVEREIGN_MCP_HTTP_URL
-  const mcpHealthUrl = mcpBaseUrl ? mcpBaseUrl.replace(/\/api\/mcp$/, '/api/mcp/health') : undefined
   const externalServices = configStore.get<SovereignConfig['services']['external']>('services.external') ?? []
   const systemModule = createSystemModule(bus, dataDir, {
     wsHandler,
@@ -795,7 +790,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       models: configStore.get<string[]>('models.available'),
       defaultModel: configStore.get<string>('models.default') || null
     }),
-    mcpHealthUrl,
     externalServices,
     // Honour SEMBLE_BIN for non-standard installs; empty string opts out.
     sembleBin: process.env.SEMBLE_BIN ?? 'semble'

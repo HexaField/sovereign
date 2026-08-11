@@ -163,9 +163,9 @@ Reimplement the 7 core tools + WebFetch as standalone functions. Each tool:
 
 #### Phase 3: MCP tool integration
 
-The local LLM backend connects to Sovereign's MCP tools via the existing sidecar:
+The local LLM backend connects to Sovereign's MCP tools via the in-process MCP server:
 
-- On `connect()`, establish an MCP client session to `http://localhost:5802/api/mcp` (the sidecar)
+- On `connect()`, establish an MCP client session to `http://127.0.0.1:5801/api/mcp` (the main server)
 - Call `tools/list` to discover available tools
 - Merge MCP tool schemas into the tool registry alongside built-in tools
 - When the model calls an MCP tool, forward via MCP `tools/call` and return the result

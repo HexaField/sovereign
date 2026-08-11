@@ -50,7 +50,7 @@ export const ALL_SCENARIOS: Scenario[] = [
   // LLM benchmark — configurable prompt via SWT_BENCHMARK_PROMPT env var.
   // Self-skips when the variable has no value or local-llm backend absent.
   s18LlmBenchmark,
-  // Presence MCP tools — verifies the RPC catalog includes all 9 presence
-  // handlers and that they respond to calls (not 404).
+  // Presence MCP tools — verifies the /api/mcp endpoint advertises all 9
+  // presence tools via the MCP protocol and handles a tools/call.
   s19PresenceTools
 ]

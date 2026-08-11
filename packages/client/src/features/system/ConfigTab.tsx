@@ -277,13 +277,6 @@ const ConfigTab: Component = () => {
                     {activeSessions().length} active session{activeSessions().length !== 1 ? 's' : ''}
                   </div>
                 </Show>
-                <div class="mt-2 ml-4 border-l pl-3" style={{ 'border-color': 'var(--c-border)' }}>
-                  <div class="flex items-center gap-2 text-xs">
-                    {statusDot('healthy')}
-                    <span style={{ color: 'var(--c-text-muted)' }}>MCP Sidecar</span>
-                    <span class="ml-auto font-mono opacity-40">:5802</span>
-                  </div>
-                </div>
               </div>
               <div
                 class="rounded border p-2.5"

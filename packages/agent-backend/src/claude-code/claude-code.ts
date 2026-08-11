@@ -352,20 +352,10 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   }
   const query = deps.sdkQuery ?? sdkQuery
   const mcpServers: Record<string, any> = { ...config.mcpServers }
-  // Three layers of preference, highest first:
-  //   1. Whatever the caller already wired in `config.mcpServers.sovereign`.
-  //   2. `SOVEREIGN_MCP_HTTP_URL` — the standalone sidecar daemon. Has its own
-  //      lifecycle (com.sovereign.mcp.plist) so a Sovereign rebuild doesn't
-  //      tear it down; SDK reconnects automatically.
-  //   3. The in-process `McpSdkServerConfigWithInstance` injection — fallback
-  //      when no sidecar is configured. Bound to this process's lifetime.
-  if (!mcpServers['sovereign']) {
-    const sidecarUrl = process.env.SOVEREIGN_MCP_HTTP_URL?.trim()
-    if (sidecarUrl) {
-      mcpServers.sovereign = { type: 'http', url: sidecarUrl }
-    } else if (deps.sovereignMcpServer) {
-      mcpServers.sovereign = deps.sovereignMcpServer
-    }
+  // In-process MCP server — same lifecycle as the Sovereign process.
+  // No external sidecar; the SDK injects the McpServer instance directly.
+  if (!mcpServers['sovereign'] && deps.sovereignMcpServer) {
+    mcpServers.sovereign = deps.sovereignMcpServer
   }
 
   // Workspace-local seed files — best-effort, never fatal. The global

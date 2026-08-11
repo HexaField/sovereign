@@ -19,7 +19,6 @@ import {
 } from './claude-code/index.js'
 import { createLocalLlmBackend, localLlmConfigFromStore } from './local-llm/index.js'
 import { buildSovereignMcpDeps } from './mcp-deps.js'
-import { createMcpRpcRoutes } from './mcp-rpc-routes.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -82,8 +81,6 @@ export interface AgentBackendWiringResult {
   sovereignMcpServer: import('@anthropic-ai/claude-agent-sdk').McpSdkServerConfigWithInstance
   /** Creates a fresh McpServer instance bound to the same live deps — use for per-session HTTP transport. */
   createSovereignMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
-  /** Express router that exposes every MCP tool as `POST /api/mcp-rpc/:tool` — consumed by `@sovereign/mcp-sidecar`. */
-  mcpRpcRouter: import('express').Router
   /** Registry of pending Claude Code `AskUserQuestion` calls awaiting user submission. */
   askUserQuestionStore: AskUserQuestionStore
 }
@@ -361,7 +358,6 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     activeSessions,
     sovereignMcpServer,
     createSovereignMcpInstance: () => createSovereignMcpServer(sharedMcpDeps).instance,
-    mcpRpcRouter: createMcpRpcRoutes(sharedMcpDeps),
     askUserQuestionStore
   }
 }
