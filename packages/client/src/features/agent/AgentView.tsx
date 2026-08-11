@@ -30,6 +30,7 @@ import type { ChatMessage } from '../chat/types.js'
 
 // Lazy-loaded tabs
 const DashboardView = lazy(() => import('../dashboard/DashboardView.js'))
+const ForestView = lazy(() => import('../forest/ForestView.js'))
 const SystemView = lazy(() => import('../system/SystemView.js'))
 const SettingsContent = lazy(() => import('./SettingsContent.js'))
 
@@ -61,6 +62,9 @@ export default function AgentView() {
           </Match>
           <Match when={activeAgentTab() === 'overview'}>
             <DashboardView />
+          </Match>
+          <Match when={activeAgentTab() === 'forest'}>
+            <ForestView />
           </Match>
           <Match when={activeAgentTab() === 'settings'}>
             <SettingsContent />
