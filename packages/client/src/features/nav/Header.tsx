@@ -1,16 +1,7 @@
 import { createMemo, createSignal, Show, onMount, onCleanup } from 'solid-js'
 import { agentIcon, agentName } from '../../lib/identity.js'
 import { HealthPopover, overallHealth, initHealthPolling } from '../connection/HealthPopover.js'
-import {
-  activeView,
-  setActiveView,
-  activeAgentTab,
-  setActiveAgentTab,
-  activeSystemTab,
-  setActiveSystemTab,
-  type AgentTab,
-  type SystemTabId
-} from '../nav/store.js'
+import { activeView, setActiveView, activeAgentTab, setActiveAgentTab, type AgentTab } from '../nav/store.js'
 import { threadKey, switchThread } from '../threads/store.js'
 import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
@@ -31,16 +22,6 @@ export function getViewModeLabel(mode: string): string {
     recording: 'Recordings'
   }
   return labels[mode] || mode
-}
-
-// ── System tabs ─────────────────────────────────────────────────────
-const SYSTEM_TAB_IDS: SystemTabId[] = ['status', 'agents', 'activity', 'config', 'jobs']
-const SYSTEM_TAB_LABELS: Record<SystemTabId, string> = {
-  status: 'Status',
-  agents: 'Agents',
-  activity: 'Activity',
-  config: 'Config',
-  jobs: 'Jobs'
 }
 
 // ── Agent-context tab bar ───────────────────────────────────────────
@@ -71,27 +52,6 @@ function AgentHeaderContent() {
           </button>
         )
       })}
-
-      {/* System sub-tabs — inline when the system agent tab has focus. */}
-      <Show when={activeAgentTab() === 'system'}>
-        <div
-          class="scrollbar-none ml-2 flex items-center gap-0.5 overflow-x-auto border-l pl-2"
-          style={{ 'border-color': 'var(--c-border)' }}
-        >
-          {SYSTEM_TAB_IDS.map((tabId) => (
-            <button
-              class="shrink-0 rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors"
-              style={{
-                background: activeSystemTab() === tabId ? 'var(--c-accent)' : 'transparent',
-                color: activeSystemTab() === tabId ? '#fff' : 'var(--c-text-muted)'
-              }}
-              onClick={() => setActiveSystemTab(tabId)}
-            >
-              {SYSTEM_TAB_LABELS[tabId]}
-            </button>
-          ))}
-        </div>
-      </Show>
     </div>
   )
 }
