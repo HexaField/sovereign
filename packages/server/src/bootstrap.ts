@@ -95,6 +95,7 @@ import {
 import { createBrowserService } from '@sovereign/browser'
 import { createAd4mService } from '@sovereign/ad4m'
 import { createPresenceModule, createAd4mPoster } from '@sovereign/presence'
+import { createForestRoutes } from './forest/routes.js'
 import { createDashboardRoutes } from './dashboard/routes.js'
 import { createMeetingsService } from '@sovereign/meetings'
 import { createSpeakerService } from '@sovereign/meetings'
@@ -378,6 +379,31 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
   if (ad4mService) {
     ad4mService.mountRoutes(app)
+  }
+
+  // Forest — knowledge graph 3D visualisation index
+  {
+    const ad4mClient = ad4mService?.client() ?? null
+    app.use(
+      createForestRoutes({
+        dataDir,
+        ad4m: ad4mClient
+          ? {
+              listPerspectives: async () => {
+                const c = ad4mClient.getClient()
+                if (!c) return []
+                const perspectives = await c.perspective.all()
+                return perspectives.map((p: any) => ({ uuid: p.uuid, name: p.name }))
+              },
+              querySparql: async (perspectiveUuid: string, query: string) => {
+                const c = ad4mClient.getClient()
+                if (!c) return []
+                return (c.perspective as any).querySparql(perspectiveUuid, query)
+              }
+            }
+          : null
+      })
+    )
   }
 
   // Boot-time resume summary, populated after the resume sweep finishes.
