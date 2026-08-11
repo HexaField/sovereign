@@ -10,7 +10,10 @@ import solid from 'vite-plugin-solid'
 // matter when running `pnpm --filter @sovereign/client dev`.
 const DEV_HOST = 'localhost'
 const DEV_PORT = 3000
-const API_TARGET = 'https://localhost:5801'
+// SOVEREIGN_E2E_API overrides the proxy target during e2e tests so the
+// Vite dev server routes API calls to the isolated test server (port 5899),
+// never to production (port 5801). Set by playwright.config.ts webServer.env.
+const API_TARGET = process.env.SOVEREIGN_E2E_API || 'https://localhost:5801'
 
 export default defineConfig({
   plugins: [solid(), tailwindcss()],

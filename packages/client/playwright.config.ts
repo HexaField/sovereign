@@ -1,5 +1,11 @@
 import { defineConfig, devices } from '@playwright/test'
 
+// ── E2E isolation ──────────────────────────────────────────────────────
+// Must match the port in e2e/setup/global-setup.ts. The test server binds
+// here with a fully isolated config + data dir — never port 5801.
+const E2E_PORT = 5899
+const E2E_API = `http://127.0.0.1:${E2E_PORT}`
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -29,6 +35,11 @@ export default defineConfig({
     url: 'https://localhost:3000',
     reuseExistingServer: !process.env.CI,
     ignoreHTTPSErrors: true,
-    timeout: 30_000
+    timeout: 30_000,
+    // Route the Vite dev proxy to the isolated test server, not production.
+    // vite.config.ts reads SOVEREIGN_E2E_API to set the proxy target.
+    env: {
+      SOVEREIGN_E2E_API: E2E_API
+    }
   }
 })
