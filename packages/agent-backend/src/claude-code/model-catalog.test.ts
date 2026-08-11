@@ -9,7 +9,11 @@ import { createClaudeCodeBackend } from './claude-code.js'
  * it", which surfaces to the user as a broken model picker.
  */
 describe('model catalog ids', () => {
-  const backend = createClaudeCodeBackend({ dataDir: '/tmp/model-catalog-test' })
+  const backend = createClaudeCodeBackend({
+    dataDir: '/tmp/model-catalog-test',
+    cwd: '/tmp/model-catalog-test',
+    agentDir: '/tmp/model-catalog-test/.claude'
+  })
 
   async function ids(): Promise<string[]> {
     const { models } = await backend.listAvailableModels!()

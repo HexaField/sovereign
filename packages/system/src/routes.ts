@@ -41,6 +41,8 @@ export interface SystemRoutesOptions {
   getThreadMeta?: (key: string) => { label?: string; membraneId?: string } | null
   /** Push manager for subscription status endpoint. */
   pushManager?: { allSubscriptions(): { size: number }; getVapidPublicKey?(): string | null }
+  /** Agent config dir (e.g. `~/.claude`). Used for hooks + personality fallback paths. */
+  agentDir?: string
 }
 
 function mockContextBudget(): ContextBudget {
@@ -71,6 +73,7 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
   const healthHistory = 'healthHistory' in opts ? (opts as SystemRoutesOptions).healthHistory : null
   const routingBackend = 'routingBackend' in opts ? (opts as SystemRoutesOptions).routingBackend : null
   const activeSessions = 'activeSessions' in opts ? (opts as SystemRoutesOptions).activeSessions : null
+  const agentDir = 'agentDir' in opts ? ((opts as SystemRoutesOptions).agentDir ?? '') : ''
 
   const getIdentity = 'getIdentity' in opts ? (opts as SystemRoutesOptions).getIdentity : null
   router.get('/api/system/identity', (_req, res) => {
@@ -177,8 +180,12 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
       res.json(getPersonalityInfo() ?? { compiledAt: null, size: 0, watcherActive: false, outputPath: '' })
       return
     }
-    // Fallback: stat the default output path directly
-    const outputPath = path.join(process.env.HOME ?? '', '.claude', 'CLAUDE.md')
+    // Fallback: stat the output path using the configured agentDir
+    const outputPath = agentDir ? path.join(agentDir, 'CLAUDE.md') : ''
+    if (!outputPath) {
+      res.json({ compiledAt: null, size: 0, watcherActive: false, outputPath: '' })
+      return
+    }
     try {
       const stat = fs.statSync(outputPath)
       res.json({ compiledAt: stat.mtimeMs, size: stat.size, watcherActive: false, outputPath })
@@ -187,9 +194,13 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
     }
   })
 
-  // Hooks summary — reads ~/.claude/settings.json and returns hook event names + counts.
+  // Hooks summary — reads settings.json from the configured agentDir.
   router.get('/api/system/hooks', (_req, res) => {
-    const settingsPath = path.join(process.env.HOME ?? '', '.claude', 'settings.json')
+    if (!agentDir) {
+      res.json({ events: [] })
+      return
+    }
+    const settingsPath = path.join(agentDir, 'settings.json')
     try {
       const raw = fs.readFileSync(settingsPath, 'utf-8')
       const settings = JSON.parse(raw) as Record<string, unknown>

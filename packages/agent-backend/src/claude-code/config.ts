@@ -16,7 +16,11 @@ function readAd4mToken(tokenFile: string): string | null {
   }
 }
 
-export function claudeCodeConfigFromStore(configStore: ConfigStore, dataDir: string): ClaudeCodeConfig {
+export function claudeCodeConfigFromStore(
+  configStore: ConfigStore,
+  dataDir: string,
+  configDir?: string
+): ClaudeCodeConfig {
   const home = process.env.HOME ?? ''
   const mcpServers: Record<string, unknown> = {}
 
@@ -78,6 +82,7 @@ export function claudeCodeConfigFromStore(configStore: ConfigStore, dataDir: str
 
   return {
     dataDir,
+    configDir,
     cwd,
     agentDir,
     defaultModel,
