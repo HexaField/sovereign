@@ -38,9 +38,9 @@ describe('ViewMenu', () => {
       expect(dashboardModalOpen()).toBe(false)
     })
 
-    it('§1.1 — selecting a sibling view (workspace/canvas/planning/system) updates activeView', () => {
-      setActiveView('canvas')
-      expect(activeView()).toBe('canvas')
+    it('§1.1 — selecting a sibling view (workspace/system) updates activeView', () => {
+      setActiveView('system')
+      expect(activeView()).toBe('system')
     })
 
     it('§1.1 — selecting Dashboard toggles the modal, not activeView', () => {
@@ -54,8 +54,8 @@ describe('ViewMenu', () => {
       expect(dashboardModalOpen()).toBe(false)
     })
 
-    it('§1.1 — sibling views: workspace, canvas, planning, system', () => {
-      const views: NavView[] = ['workspace', 'canvas', 'planning', 'system']
+    it('§1.1 — sibling views: workspace, system', () => {
+      const views: NavView[] = ['workspace', 'system']
       views.forEach((v) => {
         setActiveView(v)
         expect(activeView()).toBe(v)
@@ -73,24 +73,24 @@ describe('ViewMenu', () => {
     })
 
     it('§1.1 — clicking a sibling view item switches views', () => {
-      setActiveView('canvas')
-      expect(activeView()).toBe('canvas')
+      setActiveView('system')
+      expect(activeView()).toBe('system')
     })
 
     it('§1.1 — dashboard modal is independent of activeView (peek-and-return)', () => {
-      setActiveView('planning')
+      setActiveView('system')
       openDashboardModal()
-      expect(activeView()).toBe('planning') // underlying view preserved
+      expect(activeView()).toBe('system') // underlying view preserved
       expect(dashboardModalOpen()).toBe(true)
       closeDashboardModal()
       // Closing the modal returns to exactly where we were.
-      expect(activeView()).toBe('planning')
+      expect(activeView()).toBe('system')
       expect(dashboardModalOpen()).toBe(false)
     })
 
     it('§1.1 — persists current view via URL query params (not localStorage)', () => {
-      setActiveView('planning')
-      expect(activeView()).toBe('planning')
+      setActiveView('system')
+      expect(activeView()).toBe('system')
     })
   })
 
@@ -107,25 +107,13 @@ describe('ViewMenu', () => {
       expect(activeView()).toBe('workspace')
     })
 
-    const viewMap: NavView[] = ['workspace', 'canvas', 'planning', 'system']
-
     it('§8 — Cmd+2 switches to Workspace', () => {
-      setActiveView(viewMap[0])
+      setActiveView('workspace')
       expect(activeView()).toBe('workspace')
     })
 
-    it('§8 — Cmd+3 switches to Canvas', () => {
-      setActiveView(viewMap[1])
-      expect(activeView()).toBe('canvas')
-    })
-
-    it('§8 — Cmd+4 switches to Planning', () => {
-      setActiveView(viewMap[2])
-      expect(activeView()).toBe('planning')
-    })
-
-    it('§8 — Cmd+5 switches to System', () => {
-      setActiveView(viewMap[3])
+    it('§8 — Cmd+3 switches to System', () => {
+      setActiveView('system')
       expect(activeView()).toBe('system')
     })
   })

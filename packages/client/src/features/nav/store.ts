@@ -19,9 +19,9 @@ export type ViewMode =
 // page. The legacy URL pattern `?view=dashboard` is still recognised on
 // load and translated to "workspace view + modal open" — see
 // `readNavViewFromUrl` and `readDashboardModalFromUrl` below.
-export type NavView = 'workspace' | 'canvas' | 'planning' | 'system'
+export type NavView = 'workspace' | 'system'
 
-const VALID_NAV_VIEWS: NavView[] = ['workspace', 'canvas', 'planning', 'system']
+const VALID_NAV_VIEWS: NavView[] = ['workspace', 'system']
 
 function readNavViewFromUrl(): NavView {
   if (typeof location === 'undefined') return 'workspace'

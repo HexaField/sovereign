@@ -158,17 +158,17 @@ describe('§3.5 Nav Store', () => {
     // point of the modal pattern is that dismissing returns the user
     // exactly where they were.
     it('does NOT change activeView when opened or closed', () => {
-      _setActiveView('canvas')
+      _setActiveView('system')
       openDashboardModal()
-      expect(activeView()).toBe('canvas')
+      expect(activeView()).toBe('system')
       closeDashboardModal()
-      expect(activeView()).toBe('canvas')
+      expect(activeView()).toBe('system')
     })
 
     it('survives multiple toggles without leaking into activeView', () => {
-      _setActiveView('planning')
+      _setActiveView('system')
       for (let i = 0; i < 5; i++) toggleDashboardModal()
-      expect(activeView()).toBe('planning')
+      expect(activeView()).toBe('system')
     })
 
     it('writes ?dashboard=open to URL when opened, removes it when closed', () => {
@@ -208,8 +208,8 @@ describe('§3.5 Nav Store', () => {
       expect(activeView()).toBe('workspace')
     })
 
-    it('setActiveView accepts workspace / canvas / planning / system', () => {
-      const views = ['workspace', 'canvas', 'planning', 'system'] as const
+    it('setActiveView accepts workspace / system', () => {
+      const views = ['workspace', 'system'] as const
       for (const v of views) {
         setActiveView(v)
         expect(activeView()).toBe(v)

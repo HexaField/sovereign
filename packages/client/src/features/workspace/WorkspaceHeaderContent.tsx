@@ -3,6 +3,8 @@ import { wsStore } from '../../ws/index.js'
 import { formatRelativeTime } from '../../lib/format.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from './store.js'
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
+import { agentName } from '../../lib/identity.js'
+import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { RecipeButton } from '../recipes/RecipePanel.js'
 import { startNotificationPolling } from '../notifications/store.js'
@@ -370,6 +372,7 @@ export function WorkspaceHeaderContent() {
       }>
     >
   >({})
+  const [presenceGatewayId, setPresenceGatewayId] = createSignal<string | null>(null)
 
   // Ticks every 60s so relative-time strings re-compute even when thread data is unchanged.
   const [nowTick, setNowTick] = createSignal(Date.now())
@@ -399,6 +402,7 @@ export function WorkspaceHeaderContent() {
     const offCompleted = wsStore.on('subagent.completed', scheduleSubagentRefetch)
     const offFailed = wsStore.on('subagent.failed', scheduleSubagentRefetch)
     void fetchActiveSubagents()
+    void getPresenceGatewayThreadId().then((id) => setPresenceGatewayId(id))
 
     // Clock tick for relative-time display — every 60s.
     const clockInterval = setInterval(() => setNowTick(Date.now()), 60_000)
@@ -434,6 +438,7 @@ export function WorkspaceHeaderContent() {
   const activeThreadLabel = () => {
     const key = threadKey()
     if (!key) return 'No thread'
+    if (key === presenceGatewayId()) return agentName()
     const t = threads().find((th) => th.id === key)
     if (t) return t.label ?? t.id
     const subs = activeSubagents()
@@ -593,9 +598,33 @@ export function WorkspaceHeaderContent() {
             class="absolute top-full left-0 z-[200] mt-1 min-w-[200px] overflow-hidden rounded-lg shadow-lg"
             style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
           >
+            {/* Presence gateway thread — always at the top, spans all membranes */}
+            <Show when={presenceGatewayId()}>
+              <button
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold transition-colors"
+                style={{
+                  color: presenceGatewayId() === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
+                  background: presenceGatewayId() === threadKey() ? 'var(--c-hover-bg)' : undefined
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = presenceGatewayId() === threadKey() ? 'var(--c-hover-bg)' : '')
+                }
+                onClick={() => {
+                  switchThread(presenceGatewayId()!)
+                  setThreadPickerOpen(false)
+                }}
+              >
+                <Show when={presenceGatewayId() === threadKey()}>
+                  <span class="text-xs">●</span>
+                </Show>
+                <span class="truncate">{agentName()}</span>
+              </button>
+              <div class="mx-2 my-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+            </Show>
             <For
               each={threads()
-                .filter((t) => t.id)
+                .filter((t) => t.id && t.id !== presenceGatewayId())
                 .sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}
             >
               {(t) => (
