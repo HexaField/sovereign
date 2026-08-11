@@ -14,37 +14,50 @@ export interface ForestRouteDeps {
 export function createForestRoutes(deps: ForestRouteDeps): Router {
   const router = Router()
   let building = false
+  let buildPromise: Promise<void> | null = null
 
-  // GET /api/forest/index — serve cached index or build on first request
-  router.get('/api/forest/index', async (_req: Request, res: Response) => {
-    try {
-      const cached = loadCachedIndex(deps.dataDir)
-      if (cached) {
-        res.json(cached)
-        return
-      }
+  /** Kick off a background build — does not block the request. */
+  function startBuild(): void {
+    if (building) return
+    building = true
+    buildPromise = buildForestIndex({ dataDir: deps.dataDir, ad4m: deps.ad4m })
+      .then(() => {
+        building = false
+        buildPromise = null
+      })
+      .catch((err) => {
+        building = false
+        buildPromise = null
+        console.error('[forest] background build failed:', (err as Error)?.message)
+      })
+  }
 
-      // No cache — build lazily on first request
-      if (building) {
-        res.status(202).json({ message: 'Index build in progress' })
-        return
-      }
-
-      building = true
-      const index = await buildForestIndex({ dataDir: deps.dataDir, ad4m: deps.ad4m })
-      building = false
-      res.json(index)
-    } catch (err) {
-      building = false
-      console.error('[forest] index request failed:', (err as Error)?.message)
-      res.status(500).json({ error: 'Failed to build forest index' })
+  // GET /api/forest/index — serve cached index; trigger background build if missing
+  router.get('/api/forest/index', (_req: Request, res: Response) => {
+    const cached = loadCachedIndex(deps.dataDir)
+    if (cached) {
+      res.json(cached)
+      return
     }
+
+    // No cache — start a background build and return 202 with a status body
+    startBuild()
+    res.status(202).json({ building: true, message: 'Index build in progress' })
   })
 
-  // POST /api/forest/rebuild — force rebuild
+  // POST /api/forest/rebuild — force rebuild (blocks until complete)
   router.post('/api/forest/rebuild', async (_req: Request, res: Response) => {
     if (building) {
-      res.status(202).json({ message: 'Build already in progress' })
+      // Wait for the in-flight build instead of rejecting
+      if (buildPromise) {
+        await buildPromise
+        const cached = loadCachedIndex(deps.dataDir)
+        if (cached) {
+          res.json(cached)
+          return
+        }
+      }
+      res.status(202).json({ building: true, message: 'Build in progress' })
       return
     }
 
@@ -52,9 +65,11 @@ export function createForestRoutes(deps: ForestRouteDeps): Router {
       building = true
       const index = await buildForestIndex({ dataDir: deps.dataDir, ad4m: deps.ad4m })
       building = false
+      buildPromise = null
       res.json(index)
     } catch (err) {
       building = false
+      buildPromise = null
       console.error('[forest] rebuild failed:', (err as Error)?.message)
       res.status(500).json({ error: 'Forest rebuild failed' })
     }
