@@ -12,12 +12,6 @@ export interface ModuleInfo {
   publishes: string[]
 }
 
-export interface McpServiceHealth {
-  status: 'ok' | 'down' | 'unknown'
-  sessions: number
-  tools: number
-}
-
 /**
  * Health snapshot for the `semble` code-search CLI that Claude Code sessions
  * invoke as an MCP tool (and Sovereign inherits via `~/.claude.json`). Ok
@@ -67,7 +61,6 @@ export interface HealthInfo {
   jobs: { active: number; lastStatus: string; nextRun: string | null }
   errors: { countLastHour: number; recent: Array<{ message: string; timestamp: string }> }
   services?: {
-    mcp?: McpServiceHealth
     semble?: SembleServiceHealth
     agents?: AgentsCensusHealth
     external?: ExternalServiceHealth[]
@@ -107,8 +100,6 @@ export interface SystemModuleOptions {
   getAgentBackendStatus?: () => string
   /** Optional accessor for the curated models list + default. Falls back to {models:[], defaultModel:null}. */
   getModelConfig?: () => { models: string[]; defaultModel: string | null }
-  /** URL to poll for MCP sidecar health (e.g. http://127.0.0.1:5802/api/mcp/health). */
-  mcpHealthUrl?: string
   /**
    * Executable used to probe the `semble` code-search CLI. Defaults to
    * `semble` on PATH. Set to '' to disable the semble health row entirely.
@@ -165,7 +156,6 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
   const registeredModules: ModuleInfo[] = []
   const healthIntervalMs = options?.healthIntervalMs ?? 10_000
   const wsHandler = options?.wsHandler
-  const mcpHealthUrl = options?.mcpHealthUrl
   const sembleBin = options?.sembleBin ?? 'semble'
   const claudeBin = options?.claudeBin ?? 'claude'
   const externalServiceDefs = (options?.externalServices ?? []).map((s) => ({
@@ -176,8 +166,6 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
     path: s.path ?? '/'
   }))
 
-  // Cached MCP sidecar health — updated on the same periodic interval as system health.
-  let cachedMcpHealth: McpServiceHealth = { status: 'unknown', sessions: 0, tools: 0 }
   // Cached semble CLI health. `semble` has no `--version` flag; we probe with
   // `-h` (exit 0, sub-100ms) and resolve the installed version once from
   // `uv tool list` at boot — good enough for a status row.
@@ -201,25 +189,6 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
       { name: s.name, label: s.label, port: s.port, path: s.path, status: 'unknown' as const }
     ])
   )
-
-  async function pollMcpHealth(): Promise<void> {
-    if (!mcpHealthUrl) return
-    try {
-      const res = await fetch(mcpHealthUrl, { signal: AbortSignal.timeout(2000) })
-      if (res.ok) {
-        const data = (await res.json()) as { ok?: boolean; sovereign?: string; sessions?: number; tools?: number }
-        cachedMcpHealth = {
-          status: data.ok ? 'ok' : 'down',
-          sessions: data.sessions ?? 0,
-          tools: data.tools ?? 0
-        }
-      } else {
-        cachedMcpHealth = { status: 'down', sessions: 0, tools: 0 }
-      }
-    } catch {
-      cachedMcpHealth = { status: 'down', sessions: 0, tools: 0 }
-    }
-  }
 
   function pollSembleHealth(): void {
     if (!sembleBin) {
@@ -368,9 +337,8 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
       jobs: { active: 0, lastStatus: 'idle', nextRun: null },
       errors: { countLastHour: 0, recent: [] }
     }
-    if (mcpHealthUrl || sembleBin || claudeBin || externalServiceDefs.length > 0) {
+    if (sembleBin || claudeBin || externalServiceDefs.length > 0) {
       health.services = {}
-      if (mcpHealthUrl) health.services.mcp = cachedMcpHealth
       if (sembleBin) health.services.semble = cachedSembleHealth
       if (claudeBin) health.services.agents = cachedAgentsHealth
       if (externalServiceDefs.length > 0) {
@@ -383,7 +351,6 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
   const status = () => ({ healthy: true })
 
   // Kick off initial polls (non-blocking)
-  void pollMcpHealth()
   void pollExternalHealth()
   pollSembleHealth()
   pollAgentsCensus()
@@ -391,7 +358,6 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
   // Periodic health emission
   const healthInterval = setInterval(() => {
     // Fire-and-forget — cached values are used even if fetches are in-flight.
-    void pollMcpHealth()
     void pollExternalHealth()
     pollSembleHealth()
     pollAgentsCensus()
