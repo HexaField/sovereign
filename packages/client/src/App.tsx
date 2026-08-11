@@ -1,15 +1,9 @@
-import { createEffect, lazy, Switch, Match, onCleanup, onMount, Show, Suspense } from 'solid-js'
+import { createEffect, lazy, Switch, Match, onCleanup, onMount, Suspense } from 'solid-js'
 import type { ThreadInfo } from '@sovereign/core'
 import './app.css'
 
 // Nav store
-import {
-  activeView,
-  initNavStore,
-  setActiveView,
-  dashboardModalOpen,
-  closeDashboardModal
-} from './features/nav/store.js'
+import { activeView, initNavStore, setActiveView } from './features/nav/store.js'
 
 // Identity
 import { loadIdentity } from './lib/identity.js'
@@ -38,12 +32,11 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
 
 // Components
 import { Header } from './features/nav/Header.js'
-import { SettingsModal } from './features/nav/SettingsModal.js'
 import { QuickSwitchModal } from './features/threads/QuickSwitchModal.js'
+
 // Lazy-loaded views
-const DashboardView = lazy(() => import('./features/dashboard/DashboardView.js'))
 const WorkspaceView = lazy(() => import('./features/workspace/WorkspaceView.js'))
-const SystemView = lazy(() => import('./features/system/SystemView.js'))
+const AgentView = lazy(() => import('./features/agent/AgentView.js'))
 
 export default function App() {
   const cleanups: Array<() => void> = []
@@ -75,10 +68,6 @@ export default function App() {
     cleanups.push(cleanupThreads)
 
     // Keep the workspace/membrane dropdown in sync with the active thread.
-    // Direct threadKey changes (dashboard ThreadList click, service-worker
-    // notification hash assignment, back/forward navigation) don't go through
-    // the workspace dropdown, so without this coordinator the dropdown stays
-    // pinned to the previous workspace while the thread UUID moves.
     let lastSyncedThreadId: string | null = null
     createEffect(() => {
       const key = threadKey()
@@ -93,8 +82,6 @@ export default function App() {
         applyFrom(local)
         return
       }
-      // Thread lives in a different workspace than the one currently loaded —
-      // fetch its metadata so we can resolve the target workspace.
       fetch(`/api/threads/${encodeURIComponent(key)}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data: { thread?: ThreadInfo } | null) => {
@@ -103,17 +90,13 @@ export default function App() {
         .catch(() => {})
     })
 
-    // Init chat store at app level so dashboard GlobalChat has data on fresh load
+    // Init chat store at app level so agent/hex and workspace chat have data.
     const cleanupChat = initChatStore(threadKey, wsStore)
     if (cleanupChat) cleanups.push(cleanupChat)
 
-    // Init cron results store for real-time cron run monitoring
     const cleanupCronResults = initCronResultsStore(wsStore)
     cleanups.push(cleanupCronResults)
 
-    // Presence emitter: tell the server which thread this tab has focused so
-    // push notifications + unread badges suppress when the user is already
-    // looking at the thread. Fire-and-forget on the mute load.
     const cleanupPresence = initPresence(threadKey, wsStore)
     cleanups.push(cleanupPresence)
     void loadMutes()
@@ -128,18 +111,6 @@ export default function App() {
     }
     window.addEventListener('sovereign:open-file', handleOpenFile)
     cleanups.push(() => window.removeEventListener('sovereign:open-file', handleOpenFile))
-
-    // ESC closes the dashboard modal. Lives at App level so it works no
-    // matter which underlying view is focused. Stops propagation so any
-    // view-level ESC handlers don't fire as well.
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && dashboardModalOpen()) {
-        e.stopPropagation()
-        closeDashboardModal()
-      }
-    }
-    document.addEventListener('keydown', handleEsc, true)
-    cleanups.push(() => document.removeEventListener('keydown', handleEsc, true))
 
     const checkInterval = setInterval(() => {
       setConnectionStatus(wsStore.connected() ? 'connected' : 'disconnected')
@@ -173,33 +144,13 @@ export default function App() {
             <Match when={activeView() === 'workspace'}>
               <WorkspaceView />
             </Match>
-            <Match when={activeView() === 'system'}>
-              <SystemView />
+            <Match when={activeView() === 'agent'}>
+              <AgentView />
             </Match>
           </Switch>
         </Suspense>
-
-        {/* Dashboard modal overlay — covers the full page when open,
-            stays mounted *on top of* the underlying view so dismissing
-            it returns the user exactly where they were (same view,
-            same thread, same scroll position). No backdrop dismiss by
-            design — only the ⬡ button or ESC closes it. */}
-        <Show when={dashboardModalOpen()}>
-          <div
-            class="absolute inset-0 z-[150] overflow-hidden"
-            style={{ background: 'var(--c-bg)' }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Dashboard"
-          >
-            <Suspense>
-              <DashboardView />
-            </Suspense>
-          </div>
-        </Show>
       </main>
 
-      <SettingsModal />
       <QuickSwitchModal />
     </div>
   )

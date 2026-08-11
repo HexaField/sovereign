@@ -12,36 +12,44 @@ export type ViewMode =
   | 'files'
   | 'plans'
 
-// --- NavView — the underlying "page" the user is on. ---
+// --- NavView — two top-level modes. ---
 //
-// `dashboard` is intentionally NOT in this union. The dashboard is now
-// a full-page modal overlay (see `dashboardModalOpen`), not a sibling
-// page. The legacy URL pattern `?view=dashboard` is still recognised on
-// load and translated to "workspace view + modal open" — see
-// `readNavViewFromUrl` and `readDashboardModalFromUrl` below.
-export type NavView = 'workspace' | 'system'
+// `workspace` — multi-agent / multi-thread workspace with sidebar, file
+// browser, and per-membrane thread picker.
+//
+// `agent` — single-agent context: the user's primary interface with
+// Hex (or whatever the configured agent name). Contains tabs for the
+// presence thread chat, overview dashboard, settings, and system status.
+export type NavView = 'workspace' | 'agent'
 
-const VALID_NAV_VIEWS: NavView[] = ['workspace', 'system']
+// --- Agent-context tabs (visible when activeView === 'agent') ---
+export type AgentTab = 'hex' | 'overview' | 'settings' | 'system'
+
+const VALID_NAV_VIEWS: NavView[] = ['workspace', 'agent']
+const VALID_AGENT_TABS: AgentTab[] = ['hex', 'overview', 'settings', 'system']
 
 function readNavViewFromUrl(): NavView {
   if (typeof location === 'undefined') return 'workspace'
   const params = new URLSearchParams(location.search)
   const v = params.get('view')
   if (v && VALID_NAV_VIEWS.includes(v as NavView)) return v as NavView
-  // Legacy `?view=dashboard` → resolve to workspace; modal open comes
-  // from `readDashboardModalFromUrl` separately.
+  // Legacy `?view=dashboard` → resolve to agent/overview.
+  if (v === 'dashboard') return 'agent'
+  // Legacy `?view=system` → resolve to agent/system.
+  if (v === 'system') return 'agent'
   return 'workspace'
 }
 
-/**
- * Whether the dashboard modal should be open at startup. Returns true
- * for either the canonical marker `?dashboard=open` or the legacy
- * `?view=dashboard` URL.
- */
-function readDashboardModalFromUrl(): boolean {
-  if (typeof location === 'undefined') return false
+function readAgentTabFromUrl(): AgentTab {
+  if (typeof location === 'undefined') return 'hex'
   const params = new URLSearchParams(location.search)
-  return params.get('dashboard') === 'open' || params.get('view') === 'dashboard'
+  // Legacy `?view=dashboard` → overview tab.
+  if (params.get('view') === 'dashboard' || params.get('dashboard') === 'open') return 'overview'
+  // Legacy `?view=system` → system tab.
+  if (params.get('view') === 'system') return 'system'
+  const t = params.get('tab')
+  if (t && VALID_AGENT_TABS.includes(t as AgentTab)) return t as AgentTab
+  return 'hex'
 }
 
 function readViewModeFromUrl(): ViewMode {
@@ -65,40 +73,27 @@ function readViewModeFromUrl(): ViewMode {
 
 export const [viewMode, _setViewMode] = createSignal<ViewMode>(readViewModeFromUrl())
 export const [activeView, _setActiveView] = createSignal<NavView>(readNavViewFromUrl())
-export const [dashboardModalOpen, _setDashboardModalOpen] = createSignal<boolean>(readDashboardModalFromUrl())
+export const [activeAgentTab, _setActiveAgentTab] = createSignal<AgentTab>(readAgentTabFromUrl())
 export const [drawerOpen, _setDrawerOpen] = createSignal(false)
-export const [settingsOpen, _setSettingsOpen] = createSignal(false)
 
-/** Write current view + workspace to URL search params (replaceState, no navigation). */
+/** Write current view + agent tab + workspace to URL (replaceState). */
 export function syncViewToUrl(view: NavView, workspaceId?: string): void {
   if (typeof history === 'undefined' || typeof location === 'undefined') return
   const url = new URL(location.href)
-  // Always write the view explicitly — `workspace` is no longer the
-  // implicit default (since dashboard was dropped from the union, there
-  // is no "no-param means dashboard" shorthand anymore).
   url.searchParams.set('view', view)
-  // If workspaceId provided, update it; otherwise preserve existing.
+  // Clean up legacy params.
+  url.searchParams.delete('dashboard')
+  if (view === 'agent') {
+    const tab = activeAgentTab()
+    if (tab !== 'hex') url.searchParams.set('tab', tab)
+    else url.searchParams.delete('tab')
+  } else {
+    url.searchParams.delete('tab')
+  }
   if (workspaceId !== undefined) {
     if (workspaceId && workspaceId !== '_global') url.searchParams.set('workspace', workspaceId)
     else url.searchParams.delete('workspace')
   }
-  history.replaceState(null, '', url.toString())
-}
-
-/**
- * Reflect modal-open state in the URL via `?dashboard=open`. Any legacy
- * `?view=dashboard` is stripped at the same time so the URL converges
- * on the new canonical form.
- */
-export function syncDashboardModalToUrl(open: boolean): void {
-  if (typeof history === 'undefined' || typeof location === 'undefined') return
-  const url = new URL(location.href)
-  // Drop legacy marker regardless of new state.
-  if (url.searchParams.get('view') === 'dashboard') {
-    url.searchParams.set('view', 'workspace')
-  }
-  if (open) url.searchParams.set('dashboard', 'open')
-  else url.searchParams.delete('dashboard')
   history.replaceState(null, '', url.toString())
 }
 
@@ -107,24 +102,37 @@ export function setActiveView(view: NavView): void {
   syncViewToUrl(view)
 }
 
+export function setActiveAgentTab(tab: AgentTab): void {
+  _setActiveAgentTab(tab)
+  if (activeView() === 'agent') syncViewToUrl('agent')
+}
+
 /**
- * Open / close / toggle the dashboard modal.
- *
- * These do NOT touch `activeView`. The underlying view (and its workspace +
- * thread params) is preserved while the modal floats on top — so dismissing
- * the modal returns the user exactly where they were.
+ * Toggle between workspace and agent modes.
+ * Returns the new view so callers can coordinate thread switching.
  */
-export function openDashboardModal(): void {
-  _setDashboardModalOpen(true)
-  syncDashboardModalToUrl(true)
+export function toggleMode(): NavView {
+  const next: NavView = activeView() === 'workspace' ? 'agent' : 'workspace'
+  setActiveView(next)
+  return next
 }
+
+/**
+ * Navigate to the agent context with a specific tab.
+ * Used by dashboard components that want to leave the overview and go to workspace.
+ */
+export function navigateToAgent(tab: AgentTab = 'hex'): void {
+  _setActiveAgentTab(tab)
+  setActiveView('agent')
+}
+
+/**
+ * Backward-compat shim — dashboard components call this to navigate
+ * away from the overview to workspace mode. Equivalent to
+ * setActiveView('workspace').
+ */
 export function closeDashboardModal(): void {
-  _setDashboardModalOpen(false)
-  syncDashboardModalToUrl(false)
-}
-export function toggleDashboardModal(): void {
-  if (dashboardModalOpen()) closeDashboardModal()
-  else openDashboardModal()
+  setActiveView('workspace')
 }
 
 export function setViewMode(mode: ViewMode): void {
@@ -140,11 +148,7 @@ export function setDrawerOpen(open: boolean): void {
   _setDrawerOpen(open)
 }
 
-export function setSettingsOpen(open: boolean): void {
-  _setSettingsOpen(open)
-}
-
-// System view active tab (shared so Header can render it)
+// System view active tab (shared so Header can render it in agent/system tab)
 export type SystemTabId = 'status' | 'agents' | 'activity' | 'config' | 'jobs'
 export const [activeSystemTab, setActiveSystemTab] = createSignal<SystemTabId>('status')
 
@@ -153,17 +157,11 @@ let popstateHandler: (() => void) | null = null
 export function initNavStore(): () => void {
   _setViewMode(readViewModeFromUrl())
   _setActiveView(readNavViewFromUrl())
-  _setDashboardModalOpen(readDashboardModalFromUrl())
-  // If we landed on the legacy `?view=dashboard` URL, normalise it
-  // once so the canonical `?view=workspace&dashboard=open` survives
-  // refresh.
-  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('view') === 'dashboard') {
-    syncDashboardModalToUrl(true)
-  }
+  _setActiveAgentTab(readAgentTabFromUrl())
   popstateHandler = () => {
     _setViewMode(readViewModeFromUrl())
     _setActiveView(readNavViewFromUrl())
-    _setDashboardModalOpen(readDashboardModalFromUrl())
+    _setActiveAgentTab(readAgentTabFromUrl())
   }
   if (typeof globalThis.addEventListener === 'function') {
     globalThis.addEventListener('popstate', popstateHandler)
