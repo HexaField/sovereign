@@ -583,6 +583,65 @@ _run_builds() {
   (cd "$REPO_DIR" && pnpm -r --if-present build)
 }
 
+_build_summary() {
+  # Machine-readable post-build summary — gives agents and operators a single
+  # block to confirm the build result without parsing scattered log lines.
+  echo ""
+  echo "--- sovereign build summary ---"
+
+  # State + PID
+  if _is_running; then
+    local pid
+    pid="$(_service_pid 2>/dev/null || true)"
+    echo "state: running"
+    [ -n "$pid" ] && echo "pid: $pid"
+  else
+    echo "state: stopped"
+  fi
+
+  # Health endpoint
+  local health_out
+  if health_out=$(_healthcheck 2>/dev/null); then
+    echo "health: ok"
+    # Extract uptime from health JSON if present
+    if command -v node >/dev/null 2>&1; then
+      local uptime_s
+      uptime_s=$(printf '%s' "$health_out" | node -e '
+        let s=""
+        process.stdin.on("data",d=>s+=d).on("end",()=>{
+          try {
+            const h = JSON.parse(s)
+            const u = h.uptime ?? h.uptimeSeconds ?? h.uptime_seconds
+            if (u !== undefined) process.stdout.write(String(Math.round(u)))
+          } catch {}
+        })
+      ' 2>/dev/null || true)
+      [ -n "$uptime_s" ] && echo "uptime: ${uptime_s}s"
+    fi
+  else
+    echo "health: unavailable"
+  fi
+
+  # Active sessions
+  local agents_json summary count await
+  agents_json="$(_active_agents_json 2>/dev/null || true)"
+  if [ -n "$agents_json" ]; then
+    summary="$(_active_agents_summary "$agents_json")"
+    count="${summary% *}"
+    await="${summary#* }"
+    [[ "$count" =~ ^[0-9]+$ ]] || count=0
+    [[ "$await" =~ ^[0-9]+$ ]] || await=0
+    if [ "$await" -gt 0 ]; then
+      echo "sessions: ${count} active (${await} awaiting input)"
+    else
+      echo "sessions: ${count} active"
+    fi
+  fi
+
+  echo "url: $HEALTH_URL"
+  echo "---"
+}
+
 _guarded_build() {
   local was_running=0
   if _is_running; then
@@ -639,6 +698,7 @@ _guarded_build() {
   else
     _note "Build complete; service was not running"
   fi
+  _build_summary
 }
 
 _show_status() {
