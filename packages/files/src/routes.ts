@@ -169,19 +169,20 @@ export function createFileRouter(
   }) as RequestHandler)
 
   // GET /api/files/workspace/read?path=... — read a workspace file by absolute path
+  // Accepts ~/... paths (expanded to the server process's home directory).
+  // Restricted to files under the user's home directory.
   router.get('/workspace/read', (async (req, res) => {
-    if (!sovereignWorkspace) {
-      res.status(404).json({ error: 'Workspace not configured' })
-      return
-    }
-    const filePath = req.query.path as string
+    const homeDir = os.homedir()
+    let filePath = req.query.path as string
     if (!filePath) {
       res.status(400).json({ error: 'path parameter required' })
       return
     }
+    // Expand ~/... to absolute
+    if (filePath.startsWith('~/')) filePath = nodePath.join(homeDir, filePath.slice(2))
     const resolved = nodePath.resolve(filePath)
-    if (!resolved.startsWith(sovereignWorkspace)) {
-      res.status(403).json({ error: 'Path outside workspace' })
+    if (!resolved.startsWith(homeDir + '/') && resolved !== homeDir) {
+      res.status(403).json({ error: 'Path outside home directory' })
       return
     }
     try {

@@ -138,7 +138,34 @@ export function refreshWorkspaceFiles(): void {
   workspaceFiles = null
   workspaceFilesLoading = false
   lastWorkspacePath = null
+  cachedHomeDir = null
   loadWorkspaceFiles()
+}
+
+// ── Tilde expansion ─────────────────────────────────────────────────────
+
+/** Cached home directory, derived from workspace file paths.
+ *  Falls back to null if no absolute paths have been loaded yet. */
+let cachedHomeDir: string | null = null
+
+function getHomeDir(): string | null {
+  if (cachedHomeDir) return cachedHomeDir
+  // Derive from any cached absolute path matching /home/<user>/ or /Users/<user>/
+  for (const absPath of absoluteToRelative.keys()) {
+    const m = absPath.match(/^(\/(?:home|Users)\/[^/]+)\//)
+    if (m) {
+      cachedHomeDir = m[1]
+      return cachedHomeDir
+    }
+  }
+  return null
+}
+
+/** Expand a `~/...` path to its absolute form, or return as-is if no home dir known. */
+function expandTilde(p: string): string {
+  if (!p.startsWith('~/')) return p
+  const home = getHomeDir()
+  return home ? home + p.slice(1) : p
 }
 
 // ── File chip injection ──────────────────────────────────────────────────
@@ -182,12 +209,17 @@ function injectFileChips(html: string): string {
       filePath = filePath.slice(16) // file://localhost/abs → /abs
     else if (filePath.startsWith('file://')) filePath = filePath.slice(7) // file://abs (malformed but seen)
 
+    // Expand ~/... to absolute path
+    if (filePath.startsWith('~/')) filePath = expandTilde(filePath)
+
     // Strip inner HTML tags for display text
     const displayText = inner.replace(/<[^>]+>/g, '').trim() || filePath.split('/').pop() || filePath
 
-    // Absolute path — chip unconditionally (explicit link intent; /api/files/read handles any path).
-    // Prefer the cached display name if we have it, but don't require it.
-    if (filePath.startsWith('/')) {
+    // Absolute or ~/... path — chip unconditionally (explicit link intent;
+    // /api/files/read handles any path). ~/... paths that couldn't be expanded
+    // (no cached home dir yet) still get chipped with the tilde form — the
+    // click handler resolves them server-side.
+    if (filePath.startsWith('/') || filePath.startsWith('~/')) {
       const relPath = absoluteToRelative.get(filePath)
       return makeChip(filePath, displayText || relPath || filePath.split('/').pop() || filePath)
     }
@@ -205,16 +237,18 @@ function injectFileChips(html: string): string {
     return match
   })
 
-  // Phase 1: absolute paths — only chip if file exists in workspace cache
+  // Phase 1: absolute and ~/... paths — only chip if file exists in workspace cache
   result = result.replace(
-    /(<(?:a|code|pre)[^>]*>[\s\S]*?<\/(?:a|code|pre)>)|(?<![="'(])(\/([\w.+-]+\/)*[\w.+-]+\.\w{1,10})(?![="')\w])/gi,
+    /(<(?:a|code|pre)[^>]*>[\s\S]*?<\/(?:a|code|pre)>)|(?<![="'(])(~?\/([\w.+-]+\/)*[\w.+-]+\.\w{1,10})(?![="')\w])/gi,
     (match, tag, path) => {
       if (tag) return tag
       if (!path) return match
+      // Expand ~/... to absolute before cache lookup
+      const absPath = path.startsWith('~/') ? expandTilde(path) : path
       if (workspaceFiles && absoluteToRelative.size > 0) {
-        const relPath = absoluteToRelative.get(path)
+        const relPath = absoluteToRelative.get(absPath)
         if (!relPath) return match // Not a known workspace file — leave as plain text
-        return makeChip(path, relPath)
+        return makeChip(absPath, relPath)
       }
       return match
     }
