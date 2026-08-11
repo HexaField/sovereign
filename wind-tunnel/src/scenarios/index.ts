@@ -20,6 +20,7 @@ import { s16AutoRecycle } from './s16-auto-recycle.js'
 import { s17BackendMixing } from './s17-backend-mixing.js'
 import { s18LlmBenchmark } from './s18-llm-benchmark.js'
 import { s19PresenceTools } from './s19-presence-tools.js'
+import { s20ForestIndex } from './s20-forest-index.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -52,5 +53,8 @@ export const ALL_SCENARIOS: Scenario[] = [
   s18LlmBenchmark,
   // Presence MCP tools — verifies the /api/mcp endpoint advertises all 9
   // presence tools via the MCP protocol and handles a tools/call.
-  s19PresenceTools
+  s19PresenceTools,
+  // Forest knowledge graph API — verifies index/rebuild response shape.
+  // Self-skips when the endpoints return 404 (pre-implementation baseline).
+  s20ForestIndex
 ]
