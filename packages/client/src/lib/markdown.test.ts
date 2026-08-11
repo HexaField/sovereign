@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { renderMarkdown } from './markdown.js'
+
+// Access internal module state for testing tilde expansion.
+// The workspace file cache populates absoluteToRelative, which getHomeDir()
+// scans for the /home/<user>/ or /Users/<user>/ prefix.
+// We import the module and seed the cache directly via the exported refresh +
+// a manual workspace load stub — but since the cache is module-private,
+// the simplest approach is to test the output behaviour with markdown links
+// (Phase 0), which chip unconditionally for absolute paths.
 
 describe('renderMarkdown', () => {
   it('converts markdown to HTML', () => {
@@ -72,5 +80,27 @@ describe('file chip — markdown link resolution', () => {
     const result = renderMarkdown(md)
     expect(result).toContain('My Plan')
     expect(result).toContain('class="file-chip"')
+  })
+})
+
+describe('file chip — tilde path expansion', () => {
+  it('chips a markdown link with ~/... path even without cached home dir', () => {
+    // Phase 0 handles markdown links: [label](path). ~/... paths get chipped
+    // unconditionally (same as absolute paths) — the click handler resolves
+    // the tilde server-side. Without a cached home dir, expandTilde returns
+    // the path unchanged, but it still becomes a file-chip.
+    const md = '[memory](~/.sovereign/memory/project_membrane-first-threading.md)'
+    const result = renderMarkdown(md)
+    expect(result).toContain('class="file-chip"')
+    expect(result).toContain('data-file-path="~/.sovereign/memory/project_membrane-first-threading.md"')
+    expect(result).not.toContain('<a href="~/')
+  })
+
+  it('preserves paths that do not start with ~/', () => {
+    const md = '[file](/absolute/path/to/file.md)'
+    const result = renderMarkdown(md)
+    // Should chip as an absolute path (Phase 0 unconditional)
+    expect(result).toContain('class="file-chip"')
+    expect(result).toContain('data-file-path="/absolute/path/to/file.md"')
   })
 })
