@@ -8,6 +8,10 @@ import { activeView, initNavStore, setActiveView } from './features/nav/store.js
 // Identity
 import { loadIdentity } from './lib/identity.js'
 
+// Theme — must load eagerly so the stored theme class applies on startup
+// (SettingsContent is lazy-loaded, so its import alone won't trigger this)
+import './features/theme/store.js'
+
 // Workspace auto-init
 import {
   activeWorkspace,
