@@ -142,18 +142,37 @@ export const nodeByIri = createMemo<Map<string, ForestNode>>(() => {
 // ── Actions ─────────────────────────────────────────────────────────
 
 export async function loadForestIndex(): Promise<void> {
+  if (forestLoading()) return // prevent concurrent loads
   setForestLoading(true)
   setForestError(null)
   try {
     const res = await fetch('/api/forest/index')
+
+    // 202 = build in progress — poll until ready
+    if (res.status === 202) {
+      scheduleRetry()
+      return
+    }
+
     if (!res.ok) throw new Error(`Forest index request failed: ${res.status}`)
-    const data: ForestIndex = await res.json()
+    const data = (await res.json()) as ForestIndex
+    // Validate shape — a 200 response without nodes array means something broke
+    if (!Array.isArray(data?.nodes)) throw new Error('Invalid forest index shape')
     setForestIndex(data)
+    setForestLoading(false)
   } catch (err) {
     setForestError((err as Error).message)
-  } finally {
     setForestLoading(false)
   }
+}
+
+/** Retry loading after a short delay (build in progress). */
+function scheduleRetry(): void {
+  setTimeout(() => {
+    // Reset loading flag so the next call proceeds
+    setForestLoading(false)
+    void loadForestIndex()
+  }, 2000)
 }
 
 export async function rebuildForestIndex(): Promise<void> {
@@ -161,8 +180,14 @@ export async function rebuildForestIndex(): Promise<void> {
   setForestError(null)
   try {
     const res = await fetch('/api/forest/rebuild', { method: 'POST' })
+    if (res.status === 202) {
+      // Build kicked off — poll via loadForestIndex
+      scheduleRetry()
+      return
+    }
     if (!res.ok) throw new Error(`Forest rebuild failed: ${res.status}`)
-    const data: ForestIndex = await res.json()
+    const data = (await res.json()) as ForestIndex
+    if (!Array.isArray(data?.nodes)) throw new Error('Invalid forest index shape')
     setForestIndex(data)
   } catch (err) {
     setForestError((err as Error).message)
