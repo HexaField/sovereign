@@ -18,7 +18,7 @@ describe('§P.8 UI Polish', () => {
   describe('§P.8.1 Menu/Navigation', () => {
     it('§P.8.1 SHOULD verify all view modes are accessible', () => {
       const storeSrc = fs.readFileSync(path.resolve(__dirname, 'store.ts'), 'utf-8')
-      for (const view of ['dashboard', 'workspace', 'system']) {
+      for (const view of ['workspace', 'agent']) {
         expect(storeSrc).toContain(`'${view}'`)
       }
     })
@@ -68,8 +68,8 @@ describe('§P.8 UI Polish', () => {
       }
     })
 
-    it('§P.8.2 SHOULD verify theme picker in settings modal works', () => {
-      const src = fs.readFileSync(path.resolve(__dirname, 'SettingsModal.tsx'), 'utf-8')
+    it('§P.8.2 SHOULD verify theme picker in settings content works', () => {
+      const src = fs.readFileSync(path.resolve(__dirname, '../agent/SettingsContent.tsx'), 'utf-8')
       expect(src).toContain('THEME_OPTIONS')
       expect(src).toContain('setTheme')
     })

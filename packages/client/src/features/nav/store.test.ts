@@ -2,22 +2,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   viewMode,
   drawerOpen,
-  settingsOpen,
   setViewMode,
   setDrawerOpen,
-  setSettingsOpen,
   _setViewMode,
   _setDrawerOpen,
-  _setSettingsOpen,
   initNavStore,
   _triggerPopstate,
   activeView,
   _setActiveView,
   setActiveView,
-  dashboardModalOpen,
-  openDashboardModal,
+  activeAgentTab,
+  _setActiveAgentTab,
+  setActiveAgentTab,
+  toggleMode,
+  navigateToAgent,
   closeDashboardModal,
-  toggleDashboardModal
+  type NavView,
+  type AgentTab
 } from './store.js'
 
 describe('§3.5 Nav Store', () => {
@@ -26,7 +27,8 @@ describe('§3.5 Nav Store', () => {
   beforeEach(() => {
     _setViewMode('chat')
     _setDrawerOpen(false)
-    _setSettingsOpen(false)
+    _setActiveView('workspace')
+    _setActiveAgentTab('hex')
     if (typeof globalThis.location === 'undefined') {
       ;(globalThis as any).location = { search: '', href: 'http://localhost' }
     }
@@ -55,7 +57,6 @@ describe('§3.5 Nav Store', () => {
       globalThis.location.search = '?view=voice'
       ;(globalThis.location as any).href = 'http://localhost?view=voice'
       cleanup = initNavStore()
-      // The store reads on module load, so we test via setViewMode round-trip
       _setViewMode('voice')
       expect(viewMode()).toBe('voice')
     })
@@ -110,80 +111,89 @@ describe('§3.5 Nav Store', () => {
     })
   })
 
-  describe('settingsOpen', () => {
-    it('MUST expose settingsOpen accessor', () => {
-      expect(settingsOpen()).toBeDefined()
-    })
-
-    it('MUST default to false', () => {
-      expect(settingsOpen()).toBe(false)
-    })
-
-    it('MUST toggle via setSettingsOpen', () => {
-      setSettingsOpen(true)
-      expect(settingsOpen()).toBe(true)
-      setSettingsOpen(false)
-      expect(settingsOpen()).toBe(false)
-    })
-  })
-
-  describe('dashboard modal', () => {
+  describe('two-mode architecture', () => {
     beforeEach(() => {
-      closeDashboardModal()
       _setActiveView('workspace')
+      _setActiveAgentTab('hex')
     })
 
-    it('defaults to closed', () => {
-      expect(dashboardModalOpen()).toBe(false)
+    it('defaults to workspace view', () => {
+      expect(activeView()).toBe('workspace')
     })
 
-    it('open / close set the flag', () => {
-      openDashboardModal()
-      expect(dashboardModalOpen()).toBe(true)
+    it('setActiveView switches between workspace and agent', () => {
+      setActiveView('agent')
+      expect(activeView()).toBe('agent')
+      setActiveView('workspace')
+      expect(activeView()).toBe('workspace')
+    })
+
+    it('toggleMode flips between workspace and agent', () => {
+      expect(toggleMode()).toBe('agent')
+      expect(activeView()).toBe('agent')
+      expect(toggleMode()).toBe('workspace')
+      expect(activeView()).toBe('workspace')
+    })
+
+    it('agent tabs default to hex', () => {
+      expect(activeAgentTab()).toBe('hex')
+    })
+
+    it('setActiveAgentTab switches tabs', () => {
+      const tabs: AgentTab[] = ['hex', 'overview', 'settings', 'system']
+      for (const tab of tabs) {
+        setActiveAgentTab(tab)
+        expect(activeAgentTab()).toBe(tab)
+      }
+    })
+
+    it('navigateToAgent sets view + tab', () => {
+      navigateToAgent('settings')
+      expect(activeView()).toBe('agent')
+      expect(activeAgentTab()).toBe('settings')
+    })
+
+    it('navigateToAgent defaults to hex tab', () => {
+      navigateToAgent()
+      expect(activeView()).toBe('agent')
+      expect(activeAgentTab()).toBe('hex')
+    })
+
+    it('closeDashboardModal compat shim switches to workspace', () => {
+      setActiveView('agent')
       closeDashboardModal()
-      expect(dashboardModalOpen()).toBe(false)
+      expect(activeView()).toBe('workspace')
     })
 
-    it('toggle flips the flag', () => {
-      toggleDashboardModal()
-      expect(dashboardModalOpen()).toBe(true)
-      toggleDashboardModal()
-      expect(dashboardModalOpen()).toBe(false)
+    it('does NOT leak agent tab state when switching views', () => {
+      setActiveAgentTab('system')
+      setActiveView('workspace')
+      setActiveView('agent')
+      // Tab should persist across view switches.
+      expect(activeAgentTab()).toBe('system')
     })
 
-    // ── The core peek-and-return contract ────────────────────────────
-    //
-    // Opening the dashboard must NOT touch `activeView` (or workspaceId
-    // or threadKey — but those aren't owned by this store). The whole
-    // point of the modal pattern is that dismissing returns the user
-    // exactly where they were.
-    it('does NOT change activeView when opened or closed', () => {
-      _setActiveView('system')
-      openDashboardModal()
-      expect(activeView()).toBe('system')
-      closeDashboardModal()
-      expect(activeView()).toBe('system')
-    })
-
-    it('survives multiple toggles without leaking into activeView', () => {
-      _setActiveView('system')
-      for (let i = 0; i < 5; i++) toggleDashboardModal()
-      expect(activeView()).toBe('system')
-    })
-
-    it('writes ?dashboard=open to URL when opened, removes it when closed', () => {
+    it('writes ?view=agent&tab=<tab> to URL when agent view active', () => {
       const replaceState = vi.fn()
       globalThis.history.replaceState = replaceState
-      openDashboardModal()
-      expect(replaceState).toHaveBeenCalledWith(null, '', expect.stringContaining('dashboard=open'))
-      replaceState.mockClear()
-      closeDashboardModal()
-      // After close, the URL passed should NOT contain `dashboard=open`.
+      _setActiveAgentTab('settings')
+      setActiveView('agent')
       const lastCall = replaceState.mock.calls[replaceState.mock.calls.length - 1]
-      expect(lastCall[2]).not.toContain('dashboard=open')
+      expect(lastCall[2]).toContain('view=agent')
+      expect(lastCall[2]).toContain('tab=settings')
     })
 
-    it('legacy ?view=dashboard URL opens the modal on init (with workspace as underlying view)', () => {
+    it('omits tab param when tab=hex (default)', () => {
+      const replaceState = vi.fn()
+      globalThis.history.replaceState = replaceState
+      _setActiveAgentTab('hex')
+      setActiveView('agent')
+      const lastCall = replaceState.mock.calls[replaceState.mock.calls.length - 1]
+      expect(lastCall[2]).toContain('view=agent')
+      expect(lastCall[2]).not.toContain('tab=')
+    })
+
+    it('legacy ?view=dashboard URL resolves to agent/overview on init', () => {
       cleanup()
       Object.defineProperty(globalThis, 'location', {
         value: { search: '?view=dashboard', href: 'http://localhost?view=dashboard', hash: '' },
@@ -191,13 +201,25 @@ describe('§3.5 Nav Store', () => {
         configurable: true
       })
       cleanup = initNavStore()
-      expect(dashboardModalOpen()).toBe(true)
-      expect(activeView()).toBe('workspace')
+      expect(activeView()).toBe('agent')
+      expect(activeAgentTab()).toBe('overview')
+    })
+
+    it('legacy ?view=system URL resolves to agent/system on init', () => {
+      cleanup()
+      Object.defineProperty(globalThis, 'location', {
+        value: { search: '?view=system', href: 'http://localhost?view=system', hash: '' },
+        writable: true,
+        configurable: true
+      })
+      cleanup = initNavStore()
+      expect(activeView()).toBe('agent')
+      expect(activeAgentTab()).toBe('system')
     })
   })
 
   describe('activeView default + sibling views', () => {
-    it('default activeView is workspace (dashboard is no longer a sibling view)', () => {
+    it('default activeView resolves to workspace', () => {
       cleanup()
       Object.defineProperty(globalThis, 'location', {
         value: { search: '', href: 'http://localhost', hash: '' },
@@ -208,8 +230,8 @@ describe('§3.5 Nav Store', () => {
       expect(activeView()).toBe('workspace')
     })
 
-    it('setActiveView accepts workspace / system', () => {
-      const views = ['workspace', 'system'] as const
+    it('setActiveView accepts workspace / agent', () => {
+      const views: NavView[] = ['workspace', 'agent']
       for (const v of views) {
         setActiveView(v)
         expect(activeView()).toBe(v)

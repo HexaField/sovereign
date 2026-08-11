@@ -14,48 +14,36 @@ const localStorageMock = {
 }
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
 
-import {
-  activeView,
-  setActiveView,
-  _setActiveView,
-  dashboardModalOpen,
-  openDashboardModal,
-  closeDashboardModal,
-  toggleDashboardModal,
-  type NavView
-} from './store.js'
+import { activeView, setActiveView, _setActiveView, toggleMode, closeDashboardModal, type NavView } from './store.js'
 
 beforeEach(() => {
   localStorageMock.clear()
   _setActiveView('workspace')
-  closeDashboardModal()
 })
 
 describe('ViewMenu', () => {
   describe('§1.1 — View Menu Dropdown', () => {
-    it('§1.1 — defaults to workspace view (dashboard is now a modal, not a sibling view)', () => {
+    it('§1.1 — defaults to workspace view', () => {
       expect(activeView()).toBe('workspace')
-      expect(dashboardModalOpen()).toBe(false)
     })
 
-    it('§1.1 — selecting a sibling view (workspace/system) updates activeView', () => {
-      setActiveView('system')
-      expect(activeView()).toBe('system')
+    it('§1.1 — selecting agent view updates activeView', () => {
+      setActiveView('agent')
+      expect(activeView()).toBe('agent')
     })
 
-    it('§1.1 — selecting Dashboard toggles the modal, not activeView', () => {
-      _setActiveView('workspace')
-      openDashboardModal()
-      // Underlying view is preserved while the modal floats on top.
+    it('§1.1 — toggleMode flips between workspace and agent', () => {
       expect(activeView()).toBe('workspace')
-      expect(dashboardModalOpen()).toBe(true)
-      closeDashboardModal()
+      const next = toggleMode()
+      expect(next).toBe('agent')
+      expect(activeView()).toBe('agent')
+      const back = toggleMode()
+      expect(back).toBe('workspace')
       expect(activeView()).toBe('workspace')
-      expect(dashboardModalOpen()).toBe(false)
     })
 
-    it('§1.1 — sibling views: workspace, system', () => {
-      const views: NavView[] = ['workspace', 'system']
+    it('§1.1 — sibling views: workspace, agent', () => {
+      const views: NavView[] = ['workspace', 'agent']
       views.forEach((v) => {
         setActiveView(v)
         expect(activeView()).toBe(v)
@@ -63,58 +51,41 @@ describe('ViewMenu', () => {
     })
 
     it('§1.1 — active view shows check mark or accent highlight', () => {
-      setActiveView('system')
-      expect(activeView()).toBe('system')
+      setActiveView('agent')
+      expect(activeView()).toBe('agent')
     })
 
     it('§1.1 — dropdown uses var(--c-menu-bg) background with var(--c-border) border', () => {
       // Verified by ViewMenu component JSX — CSS tokens used in style attribute
-      expect(true).toBe(true) // Structural test — verified by code review
+      expect(true).toBe(true)
     })
 
-    it('§1.1 — clicking a sibling view item switches views', () => {
-      setActiveView('system')
-      expect(activeView()).toBe('system')
+    it('§1.1 — clicking a view item switches views', () => {
+      setActiveView('agent')
+      expect(activeView()).toBe('agent')
     })
 
-    it('§1.1 — dashboard modal is independent of activeView (peek-and-return)', () => {
-      setActiveView('system')
-      openDashboardModal()
-      expect(activeView()).toBe('system') // underlying view preserved
-      expect(dashboardModalOpen()).toBe(true)
+    it('§1.1 — closeDashboardModal compat shim switches to workspace', () => {
+      setActiveView('agent')
       closeDashboardModal()
-      // Closing the modal returns to exactly where we were.
-      expect(activeView()).toBe('system')
-      expect(dashboardModalOpen()).toBe(false)
+      expect(activeView()).toBe('workspace')
     })
 
     it('§1.1 — persists current view via URL query params (not localStorage)', () => {
-      setActiveView('system')
-      expect(activeView()).toBe('system')
+      setActiveView('agent')
+      expect(activeView()).toBe('agent')
     })
   })
 
   describe('§8 — Keyboard Shortcuts', () => {
-    it('§8 — Cmd+1 toggles the dashboard modal', () => {
+    it('§8 — Cmd+1 toggles between workspace and agent', () => {
       _setActiveView('workspace')
-      expect(dashboardModalOpen()).toBe(false)
-      toggleDashboardModal()
-      expect(dashboardModalOpen()).toBe(true)
-      // Underlying view never changes.
+      const next = toggleMode()
+      expect(next).toBe('agent')
+      expect(activeView()).toBe('agent')
+      const back = toggleMode()
+      expect(back).toBe('workspace')
       expect(activeView()).toBe('workspace')
-      toggleDashboardModal()
-      expect(dashboardModalOpen()).toBe(false)
-      expect(activeView()).toBe('workspace')
-    })
-
-    it('§8 — Cmd+2 switches to Workspace', () => {
-      setActiveView('workspace')
-      expect(activeView()).toBe('workspace')
-    })
-
-    it('§8 — Cmd+3 switches to System', () => {
-      setActiveView('system')
-      expect(activeView()).toBe('system')
     })
   })
 })
