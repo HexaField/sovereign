@@ -18,14 +18,14 @@ describe('§P.8 UI Polish', () => {
   describe('§P.8.1 Menu/Navigation', () => {
     it('§P.8.1 SHOULD verify all view modes are accessible', () => {
       const storeSrc = fs.readFileSync(path.resolve(__dirname, 'store.ts'), 'utf-8')
-      for (const view of ['dashboard', 'workspace', 'canvas', 'planning', 'system']) {
+      for (const view of ['dashboard', 'workspace', 'system']) {
         expect(storeSrc).toContain(`'${view}'`)
       }
     })
 
     it('§P.8.1 SHOULD verify no duplicate labels in menu items', () => {
       const viewMenuSrc = fs.readFileSync(path.resolve(__dirname, 'ViewMenu.tsx'), 'utf-8')
-      const labels = Array.from(viewMenuSrc.matchAll(/label:\s*'([^']+)'/g)).map(m => m[1])
+      const labels = Array.from(viewMenuSrc.matchAll(/label:\s*'([^']+)'/g)).map((m) => m[1])
       expect(new Set(labels).size).toBe(labels.length)
     })
 

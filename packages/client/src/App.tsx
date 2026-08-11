@@ -43,8 +43,6 @@ import { QuickSwitchModal } from './features/threads/QuickSwitchModal.js'
 // Lazy-loaded views
 const DashboardView = lazy(() => import('./features/dashboard/DashboardView.js'))
 const WorkspaceView = lazy(() => import('./features/workspace/WorkspaceView.js'))
-const CanvasView = lazy(() => import('./features/canvas/CanvasView.js'))
-const GlobalPlanningView = lazy(() => import('./features/planning/GlobalPlanningView.js'))
 const SystemView = lazy(() => import('./features/system/SystemView.js'))
 
 export default function App() {
@@ -174,12 +172,6 @@ export default function App() {
           <Switch>
             <Match when={activeView() === 'workspace'}>
               <WorkspaceView />
-            </Match>
-            <Match when={activeView() === 'canvas'}>
-              <CanvasView />
-            </Match>
-            <Match when={activeView() === 'planning'}>
-              <GlobalPlanningView />
             </Match>
             <Match when={activeView() === 'system'}>
               <SystemView />

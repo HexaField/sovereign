@@ -8,10 +8,10 @@ import {
   toggleDashboardModal,
   type NavView
 } from './store.js'
-import { DashboardIcon, WorkspaceIcon, CanvasIcon, PlanningIcon, SystemIcon } from '../../ui/icons.js'
+import { WorkspaceIcon, SystemIcon } from '../../ui/icons.js'
 
 // `dashboard` is a pseudo-key — selecting it toggles the modal overlay
-// rather than switching activeView. Kept in the menu for discoverability.
+// rather than switching activeView. Accessed via the ⬡ icon (top-left).
 type ViewKey = NavView | 'dashboard'
 
 interface ViewItem {
@@ -22,21 +22,16 @@ interface ViewItem {
 }
 
 const VIEW_ITEMS: ViewItem[] = [
-  { key: 'dashboard', icon: () => <DashboardIcon class="h-4 w-4" />, label: 'Dashboard', shortcut: '⌘1' },
   { key: 'workspace', icon: () => <WorkspaceIcon class="h-4 w-4" />, label: 'Workspace', shortcut: '⌘2' },
-  { key: 'canvas', icon: () => <CanvasIcon class="h-4 w-4" />, label: 'Canvas', shortcut: '⌘3' },
-  { key: 'planning', icon: () => <PlanningIcon class="h-4 w-4" />, label: 'Planning', shortcut: '⌘4' },
-  { key: 'system', icon: () => <SystemIcon class="h-4 w-4" />, label: 'System', shortcut: '⌘5' }
+  { key: 'system', icon: () => <SystemIcon class="h-4 w-4" />, label: 'System', shortcut: '⌘3' }
 ]
 
 export default function ViewMenu() {
   const [open, setOpen] = createSignal(false)
 
-  // The trigger label reflects what the user is *looking at*. If the
-  // dashboard modal is open it wins over the underlying activeView.
+  // The trigger label reflects what the user is *looking at*.
   const currentItem = () => {
-    if (dashboardModalOpen()) return VIEW_ITEMS[0]
-    return VIEW_ITEMS.find((v) => v.key === activeView()) || VIEW_ITEMS[1]
+    return VIEW_ITEMS.find((v) => v.key === activeView()) || VIEW_ITEMS[0]
   }
 
   const select = (key: ViewKey) => {
@@ -52,9 +47,9 @@ export default function ViewMenu() {
         e.preventDefault()
         toggleDashboardModal()
         setOpen(false)
-      } else if (num >= 2 && num <= 5) {
+      } else if (num >= 2 && num <= 3) {
         e.preventDefault()
-        select(VIEW_ITEMS[num - 1].key)
+        select(VIEW_ITEMS[num - 2].key)
       }
     }
     if (e.key === 'Escape' && open()) setOpen(false)

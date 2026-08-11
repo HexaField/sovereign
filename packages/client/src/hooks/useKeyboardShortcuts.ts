@@ -10,9 +10,7 @@ import { setQuickSwitchOpen, quickSwitchOpen } from '../features/threads/QuickSw
  */
 export const VIEW_SHORTCUTS: Record<string, NavView> = {
   '2': 'workspace',
-  '3': 'canvas',
-  '4': 'planning',
-  '5': 'system'
+  '3': 'system'
 }
 
 /** Handle a keyboard event, returning true if it was consumed */

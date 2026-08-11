@@ -1,18 +1,7 @@
 import { createMemo, createSignal, Show, For, onMount, onCleanup } from 'solid-js'
 import { agentIcon } from '../../lib/identity.js'
 import { HealthPopover, overallHealth, initHealthPolling } from '../connection/HealthPopover.js'
-import {
-  DashboardIcon,
-  WorkspaceIcon,
-  CanvasIcon,
-  PlanningIcon,
-  SystemIcon,
-  SettingsIcon,
-  LinkIcon,
-  KanbanIcon,
-  ListIcon,
-  TreeIcon
-} from '../../ui/icons.js'
+import { WorkspaceIcon, SystemIcon, SettingsIcon } from '../../ui/icons.js'
 import {
   activeView,
   setActiveView,
@@ -21,15 +10,9 @@ import {
   setActiveSystemTab,
   dashboardModalOpen,
   toggleDashboardModal,
-  openDashboardModal,
   type NavView,
   type SystemTabId
 } from '../nav/store.js'
-import {
-  viewMode as planningViewMode,
-  setViewMode as setPlanningViewMode,
-  type PlanningViewMode
-} from '../planning/store.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
@@ -60,14 +43,6 @@ const SYSTEM_TAB_LABELS: Record<SystemTabId, string> = {
   jobs: 'Jobs'
 }
 
-// ── Planning mode icons ──────────────────────────────────────────────
-const PLANNING_MODES: Array<{ mode: PlanningViewMode; label: string; icon: () => any }> = [
-  { mode: 'dag', label: 'DAG', icon: () => <LinkIcon class="h-3.5 w-3.5" /> },
-  { mode: 'kanban', label: 'Kanban', icon: () => <KanbanIcon class="h-3.5 w-3.5" /> },
-  { mode: 'list', label: 'List', icon: () => <ListIcon class="h-3.5 w-3.5" /> },
-  { mode: 'tree', label: 'Tree', icon: () => <TreeIcon class="h-3.5 w-3.5" /> }
-]
-
 // ── Per-view header center content ───────────────────────────────────
 
 function DashboardHeaderContent() {
@@ -75,42 +50,6 @@ function DashboardHeaderContent() {
     <span class="text-base font-semibold" style={{ color: 'var(--c-text-heading)' }}>
       Dashboard
     </span>
-  )
-}
-
-function CanvasHeaderContent() {
-  return (
-    <span class="text-base font-semibold" style={{ color: 'var(--c-text-heading)' }}>
-      Canvas
-    </span>
-  )
-}
-
-function PlanningHeaderContent() {
-  return (
-    <div class="flex items-center gap-3">
-      <span class="text-base font-semibold" style={{ color: 'var(--c-text-heading)' }}>
-        Planning
-      </span>
-      <div class="flex items-center gap-0.5 rounded-lg p-0.5" style={{ background: 'var(--c-bg)' }}>
-        <For each={PLANNING_MODES}>
-          {(pm) => (
-            <button
-              class="flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors"
-              style={{
-                background: planningViewMode() === pm.mode ? 'var(--c-accent)' : 'transparent',
-                color: planningViewMode() === pm.mode ? '#fff' : 'var(--c-text-muted)'
-              }}
-              onClick={() => setPlanningViewMode(pm.mode)}
-              title={pm.label}
-            >
-              {pm.icon()}
-              <span class="hidden sm:inline">{pm.label}</span>
-            </button>
-          )}
-        </For>
-      </div>
-    </div>
   )
 }
 
@@ -137,15 +76,11 @@ function SystemHeaderContent() {
 
 // ── Top-level views for menu ─────────────────────────────────────────
 //
-// `dashboard` is a pseudo-entry — selecting it toggles the modal overlay
-// (see `selectView`) rather than switching the underlying view. It is
-// kept in the menu for discoverability and to preserve the ⌘1 shortcut.
-const topLevelViews: Array<{ view: NavView | 'dashboard'; label: string; icon: () => any; shortcut: string }> = [
-  { view: 'dashboard', label: 'Dashboard', icon: () => <DashboardIcon class="h-4 w-4" />, shortcut: '⌘1' },
+// Dashboard accessed via the ⬡ icon (top-left). Canvas and Planning
+// removed pending reimplementation. Menu shows only active pages.
+const topLevelViews: Array<{ view: NavView; label: string; icon: () => any; shortcut: string }> = [
   { view: 'workspace', label: 'Workspace', icon: () => <WorkspaceIcon class="h-4 w-4" />, shortcut: '⌘2' },
-  { view: 'canvas', label: 'Canvas', icon: () => <CanvasIcon class="h-4 w-4" />, shortcut: '⌘3' },
-  { view: 'planning', label: 'Planning', icon: () => <PlanningIcon class="h-4 w-4" />, shortcut: '⌘4' },
-  { view: 'system', label: 'System', icon: () => <SystemIcon class="h-4 w-4" />, shortcut: '⌘5' }
+  { view: 'system', label: 'System', icon: () => <SystemIcon class="h-4 w-4" />, shortcut: '⌘3' }
 ]
 
 // ── Main Header ──────────────────────────────────────────────────────
@@ -195,15 +130,8 @@ export function Header() {
 
   const totalBadge = createMemo(() => warningCount())
 
-  const selectView = (view: NavView | 'dashboard') => {
-    if (view === 'dashboard') {
-      // Dashboard is an overlay, not a sibling view — leave activeView alone.
-      // The menu-button affordance is "open the dashboard"; closing happens
-      // via the ⬡ button, ESC, or in-modal navigation.
-      openDashboardModal()
-    } else {
-      setActiveView(view)
-    }
+  const selectView = (view: NavView) => {
+    setActiveView(view)
     setMenuOpen(false)
   }
 
@@ -230,12 +158,6 @@ export function Header() {
         </Show>
         <Show when={!dashboardModalOpen() && activeView() === 'workspace'}>
           <WorkspaceHeaderContent />
-        </Show>
-        <Show when={!dashboardModalOpen() && activeView() === 'canvas'}>
-          <CanvasHeaderContent />
-        </Show>
-        <Show when={!dashboardModalOpen() && activeView() === 'planning'}>
-          <PlanningHeaderContent />
         </Show>
         <Show when={!dashboardModalOpen() && activeView() === 'system'}>
           <SystemHeaderContent />
@@ -296,12 +218,7 @@ export function Header() {
               style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
             >
               {topLevelViews.map((item) => {
-                // Dashboard's "active" state tracks the modal, not activeView,
-                // since opening the dashboard doesn't change the underlying view.
-                const isActive = () =>
-                  item.view === 'dashboard'
-                    ? dashboardModalOpen()
-                    : (activeView() as NavView | 'dashboard') === item.view
+                const isActive = () => activeView() === item.view
                 return (
                   <button
                     class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors"

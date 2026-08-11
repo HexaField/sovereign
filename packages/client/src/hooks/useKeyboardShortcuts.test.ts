@@ -58,8 +58,8 @@ describe('§8 Keyboard Shortcuts', () => {
     expect(activeView()).toBe('workspace')
   })
 
-  it('Cmd+2..5 switches the underlying view', () => {
-    const views = ['workspace', 'canvas', 'planning', 'system'] as const
+  it('Cmd+2..3 switches the underlying view', () => {
+    const views = ['workspace', 'system'] as const
     for (let i = 0; i < views.length; i++) {
       const key = String(i + 2)
       const e = makeKeyEvent(key)
@@ -97,8 +97,8 @@ describe('§8 Keyboard Shortcuts', () => {
     expect(handleShortcut(e)).toBe(false)
   })
 
-  it('VIEW_SHORTCUTS maps 2-5 to sibling views (1 is dashboard-modal toggle, handled separately)', () => {
-    expect(Object.keys(VIEW_SHORTCUTS)).toEqual(['2', '3', '4', '5'])
+  it('VIEW_SHORTCUTS maps 2-3 to sibling views (1 is dashboard-modal toggle, handled separately)', () => {
+    expect(Object.keys(VIEW_SHORTCUTS)).toEqual(['2', '3'])
     expect(VIEW_SHORTCUTS['1']).toBeUndefined()
   })
 })
