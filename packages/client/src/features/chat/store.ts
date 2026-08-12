@@ -189,22 +189,28 @@ function cleanStreamText(raw: string): string {
     .trim()
 }
 
-// chat.ts prepends a one-word `[modality]\n` tag to outbound text on
-// non-internal threads (see packages/chat/src/chat.ts pumpQueue) so the
-// agent learns how a message arrived. The SDK persists exactly what it
-// received, so a history reload reads the tag straight back out of the
-// JSONL. Strip it here and normalize it into `origin` so MessageBubble can
-// render an icon from one field regardless of source. Turns that already
-// carry `origin` (the live SSE turn attaches it directly from the queue
-// entry — see completeInFlight in chat.ts) pass through untouched, since
-// their content never held the tag to begin with.
-const ORIGIN_PREFIX_RE = /^\[(text|voice|ad4m|cron|webhook)\]\n/
+// chat.ts prepends a one-word `[modality]\n` tag — or `[modality:deviceName]\n`
+// when the sending connection announced a friendly device name — to
+// outbound text on non-internal threads (see packages/chat/src/chat.ts
+// pumpQueue) so the agent learns how a message arrived. The SDK persists
+// exactly what it received, so a history reload reads the tag straight
+// back out of the JSONL. Strip it here and normalize it into `origin` so
+// MessageBubble can render an icon from one field regardless of source.
+// Turns that already carry `origin` (the live SSE turn attaches it
+// directly from the queue entry — see completeInFlight in chat.ts) pass
+// through untouched, since their content never held the tag to begin with.
+const ORIGIN_PREFIX_RE = /^\[(text|voice|ad4m|cron|webhook)(?::([^\]]+))?\]\n/
 
 function stripOriginPrefix(turn: ParsedTurn): ParsedTurn {
   if (turn.role !== 'user' || turn.origin || !turn.content) return turn
   const match = ORIGIN_PREFIX_RE.exec(turn.content)
   if (!match) return turn
-  return { ...turn, content: turn.content.slice(match[0].length), origin: { modality: match[1] } }
+  const [, modality, deviceName] = match
+  return {
+    ...turn,
+    content: turn.content.slice(match[0].length),
+    origin: { modality, ...(deviceName ? { deviceName } : {}) }
+  }
 }
 
 function stripOriginPrefixes(list: ParsedTurn[]): ParsedTurn[] {

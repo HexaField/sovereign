@@ -150,6 +150,11 @@ describe('renderInboundEnvelope', () => {
     expect(out).toBe('[presence:inbound modality=voice deviceId=d-1]\nhello')
   })
 
+  it('includes the device name when the origin carries one', () => {
+    const out = renderInboundEnvelope({ modality: 'voice', deviceId: 'd-1', deviceName: 'Josh Phone' }, 'hello')
+    expect(out).toBe('[presence:inbound modality=voice deviceId=d-1 deviceName="Josh Phone"]\nhello')
+  })
+
   it('renders an ad4m envelope', () => {
     const out = renderInboundEnvelope(
       { modality: 'ad4m', ad4m: { perspectiveUuid: 'p', channelAddress: 'c', messageAddress: 'm' } },

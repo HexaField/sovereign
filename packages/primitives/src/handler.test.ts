@@ -262,6 +262,77 @@ describe('WsHandler', () => {
     })
   })
 
+  describe('device names', () => {
+    it('returns undefined for a device that never announced a name', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      expect(handler.getDeviceName('d1')).toBeUndefined()
+    })
+
+    it('stores the name from a ws.device-name message', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+      expect(handler.getDeviceName('d1')).toBe('Josh Phone')
+    })
+
+    it('trims whitespace from an announced name', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: '  Josh Phone  ' }))
+      expect(handler.getDeviceName('d1')).toBe('Josh Phone')
+    })
+
+    it('ignores a blank or missing name', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: '   ' }))
+      expect(handler.getDeviceName('d1')).toBeUndefined()
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name' }))
+      expect(handler.getDeviceName('d1')).toBeUndefined()
+    })
+
+    it('does not treat ws.device-name as an unknown channel type', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+      expect(ws.sent.some((s) => JSON.parse(s as string).type === 'error')).toBe(false)
+    })
+
+    it('keeps device names independent per connection', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws1 = mockWs()
+      const ws2 = mockWs()
+      handler.handleConnection(ws1, 'd1')
+      handler.handleConnection(ws2, 'd2')
+      ws1.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+      ws2.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Desktop' }))
+      expect(handler.getDeviceName('d1')).toBe('Josh Phone')
+      expect(handler.getDeviceName('d2')).toBe('Josh Desktop')
+    })
+
+    it('clears the device name on disconnect', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+      ws.emit('close')
+      expect(handler.getDeviceName('d1')).toBeUndefined()
+    })
+  })
+
   describe('broadcast', () => {
     it('broadcasts message to all connected clients', () => {
       const handler = createWsHandler(mockBus())

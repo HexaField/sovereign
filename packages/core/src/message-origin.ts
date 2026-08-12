@@ -16,6 +16,10 @@ export interface MessageOrigin {
   /** WS deviceId of the originating tab/device — used to target voice TTS
    *  back to the same surface, or to scope text replies. */
   deviceId?: string
+  /** Friendly device label the user sets in Settings (e.g. "Josh Phone").
+   *  Display only — every routing decision still keys off deviceId. Lets
+   *  the agent reference the device by name instead of a random id. */
+  deviceName?: string
   /** AD4M context for reply routing. */
   ad4m?: {
     perspectiveUuid: string
@@ -33,6 +37,7 @@ export interface MessageOrigin {
 export function renderOriginTag(origin: MessageOrigin): string {
   const parts: string[] = [`modality=${origin.modality}`]
   if (origin.deviceId) parts.push(`deviceId=${origin.deviceId}`)
+  if (origin.deviceName) parts.push(`deviceName="${origin.deviceName}"`)
   if (origin.ad4m) {
     parts.push(`perspectiveUuid=${origin.ad4m.perspectiveUuid}`)
     parts.push(`channelAddress=${origin.ad4m.channelAddress}`)

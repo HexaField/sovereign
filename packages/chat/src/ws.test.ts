@@ -19,7 +19,8 @@ function createMockWsHandler(): WsHandler & { _channels: Map<string, WsChannelOp
     sendBinary: vi.fn(),
     sendBinaryTo: vi.fn(() => false),
     getConnectedDevices: vi.fn(() => []),
-    getChannels: vi.fn(() => [])
+    getChannels: vi.fn(() => []),
+    getDeviceName: vi.fn(() => undefined)
   }
 }
 

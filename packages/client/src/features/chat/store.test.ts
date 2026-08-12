@@ -274,6 +274,21 @@ describe('§3.2 Chat Store', () => {
       expect(turns()[1].origin).toBeUndefined()
     })
 
+    it('MUST strip a [modality:deviceName]\\n prefix and set both modality and deviceName on origin', () => {
+      const history: ParsedTurn[] = [
+        {
+          role: 'user',
+          content: '[voice:Josh Phone]\nturn the lights on',
+          timestamp: 1,
+          workItems: [],
+          thinkingBlocks: []
+        }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', history })
+      expect(turns()[0].content).toBe('turn the lights on')
+      expect(turns()[0].origin).toEqual({ modality: 'voice', deviceName: 'Josh Phone' })
+    })
+
     it('MUST leave a user turn with an existing origin field untouched', () => {
       const history: ParsedTurn[] = [
         {

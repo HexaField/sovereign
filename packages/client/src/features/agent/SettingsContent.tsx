@@ -1,12 +1,13 @@
 // Settings tab content — extracted from SettingsModal for use as an
-// agent-context tab. Appearance (theme) + notifications.
+// agent-context tab. Device name + appearance (theme) + notifications.
 
-import { For, type JSX } from 'solid-js'
+import { createSignal, For, type JSX } from 'solid-js'
 import { agentName } from '../../lib/identity.js'
 import { currentTheme, setTheme } from '../theme/store.js'
 import { MoonIcon, SunIcon, CircleDotIcon } from '../../ui/icons.js'
 import type { Theme } from '../theme/themes.js'
 import { pushPermission, pushSubscribed, enablePush, disablePush } from '../../lib/push.js'
+import { deviceName, setDeviceName } from '../settings/device-name.js'
 
 const THEME_OPTIONS: Array<{ value: Theme; label: string; icon: () => JSX.Element }> = [
   { value: 'default', label: 'Dark', icon: () => <MoonIcon class="h-5 w-5" /> },
@@ -19,6 +20,9 @@ export default function SettingsContent() {
   return (
     <div class="mx-auto h-full max-w-md overflow-y-auto p-6">
       <div class="space-y-6">
+        {/* Device */}
+        <DeviceNameSection />
+
         {/* Appearance */}
         <section>
           <h3 class="mb-3 text-xs font-medium tracking-wider uppercase" style={{ color: 'var(--c-text-muted)' }}>
@@ -53,6 +57,42 @@ export default function SettingsContent() {
         </div>
       </div>
     </div>
+  )
+}
+
+function DeviceNameSection(): JSX.Element {
+  const [draft, setDraft] = createSignal(deviceName())
+
+  const commit = (): void => {
+    setDeviceName(draft())
+    setDraft(deviceName())
+  }
+
+  return (
+    <section>
+      <h3 class="mb-3 text-xs font-medium tracking-wider uppercase" style={{ color: 'var(--c-text-muted)' }}>
+        Device Name
+      </h3>
+      <input
+        type="text"
+        value={draft()}
+        placeholder="e.g. Josh Phone"
+        onInput={(e) => setDraft(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+        }}
+        class="w-full rounded-lg px-3 py-2 text-sm outline-none"
+        style={{
+          background: 'var(--c-bg)',
+          border: '1px solid var(--c-border)',
+          color: 'var(--c-text)'
+        }}
+      />
+      <div class="mt-2 text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+        Names this device so {agentName()} can tell your devices apart in voice replies.
+      </div>
+    </section>
   )
 }
 

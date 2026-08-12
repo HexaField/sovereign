@@ -139,7 +139,8 @@ function createMockWsHandler(): WsHandler {
     sendBinary: vi.fn(),
     sendBinaryTo: vi.fn(() => false),
     getConnectedDevices: vi.fn(() => []),
-    getChannels: vi.fn(() => [])
+    getChannels: vi.fn(() => []),
+    getDeviceName: vi.fn(() => undefined)
   }
 }
 
@@ -605,6 +606,30 @@ describe('§2.4 Chat Module (Server)', () => {
       origin: { modality: 'voice', deviceId: 'dev-1' }
     })
     expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, '[voice]\nturn the lights on')
+  })
+
+  // A device name turns the raw connection id into something the agent can
+  // reference directly. The wsHandler map (populated by a ws.device-name
+  // message on the live connection) holds the authoritative name.
+  it('handleSend with origin MUST include the wsHandler-known device name in the modality tag', async () => {
+    ;(wsHandler.getDeviceName as ReturnType<typeof vi.fn>).mockImplementation((deviceId: string) =>
+      deviceId === 'dev-1' ? 'Josh Phone' : undefined
+    )
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleSend(threadId, 'turn the lights on', undefined, {
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, '[voice:Josh Phone]\nturn the lights on')
+  })
+
+  // Covers the race where the HTTP send lands before the WS ws.device-name
+  // handshake finishes announcing the name to the wsHandler map.
+  it('handleSend with origin MUST fall back to origin.deviceName when the wsHandler has no name yet', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleSend(threadId, 'turn the lights on', undefined, {
+      origin: { modality: 'voice', deviceId: 'dev-1', deviceName: 'Josh Phone' }
+    })
+    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, '[voice:Josh Phone]\nturn the lights on')
   })
 
   it('handleSend without origin MUST send text unmodified (no regression)', async () => {

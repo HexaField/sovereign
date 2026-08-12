@@ -18,6 +18,10 @@ export interface WsHandler {
   sendBinaryTo(deviceId: string, channel: string, data: Buffer): boolean
   getConnectedDevices(): string[]
   getChannels(): string[]
+  /** Friendly name for a device's connection, set via a ws.device-name
+   *  message from that connection. Returns undefined when the device
+   *  announced no name. */
+  getDeviceName(deviceId: string): string | undefined
 }
 
 export interface WsLike {
@@ -31,6 +35,10 @@ export function createWsHandler(bus: EventBus): WsHandler {
   // Maps client message type -> channel name
   const clientTypeToChannel = new Map<string, string>()
   const connections = new Map<string, WsLike>()
+  // Friendly device labels (e.g. "Josh Phone"), keyed by the same
+  // connection deviceId as `connections`. Display only — sendTo/broadcast
+  // and every other routing path still key off deviceId, never the name.
+  const deviceNames = new Map<string, string>()
   const tracker = createSubscriptionTracker()
   const binaryRegistry = createBinaryChannelRegistry()
 
@@ -53,6 +61,8 @@ export function createWsHandler(bus: EventBus): WsHandler {
     const ws = connections.get(deviceId)
     if (ws) sendJson(ws, msg)
   }
+
+  const getDeviceName = (deviceId: string): string | undefined => deviceNames.get(deviceId)
 
   const broadcast = (msg: WsMessage): void => {
     const data = JSON.stringify(msg)
@@ -168,6 +178,17 @@ export function createWsHandler(bus: EventBus): WsHandler {
         return
       }
 
+      // Built-in: ws.device-name — a friendly label the client sets for
+      // this connection's device (phone, desktop, …). Display only: TTS
+      // and every other routing decision still key off deviceId.
+      if (type === 'ws.device-name') {
+        const { deviceName } = msg as { deviceName?: string }
+        if (typeof deviceName === 'string' && deviceName.trim()) {
+          deviceNames.set(deviceId, deviceName.trim())
+        }
+        return
+      }
+
       // Ack support
       if ((msg as WsMessage).ackId) {
         sendJson(ws, { type: 'ack', ackId: (msg as WsMessage).ackId })
@@ -185,6 +206,7 @@ export function createWsHandler(bus: EventBus): WsHandler {
 
     ws.on('close', () => {
       connections.delete(deviceId)
+      deviceNames.delete(deviceId)
       const removedChannels = tracker.removeDevice(deviceId)
       // Invoke onDisconnect for all channels the device was subscribed to
       for (const ch of removedChannels) {
@@ -206,6 +228,7 @@ export function createWsHandler(bus: EventBus): WsHandler {
     sendBinary,
     sendBinaryTo,
     getConnectedDevices,
-    getChannels
+    getChannels,
+    getDeviceName
   }
 }
