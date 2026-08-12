@@ -18,7 +18,6 @@ import {
   autoSelectProject,
   openFileTab,
   setChatExpanded,
-  setLastOpenFilePath,
   syncWorkspaceForThread
 } from './features/workspace/store.js'
 
@@ -109,7 +108,6 @@ export default function App() {
     const handleOpenFile = (e: Event) => {
       const { path } = (e as CustomEvent).detail
       setChatExpanded(false)
-      setLastOpenFilePath(path)
       openFileTab(path, '_workspace')
       setActiveView('workspace')
     }
