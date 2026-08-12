@@ -58,6 +58,9 @@ export function wireStatusAggregator(input: StatusWiringInput): StatusAggregator
   wss.on('connection', (ws) => {
     const deviceId = Math.random().toString(36).slice(2)
     wsHandler.handleConnection(ws as any, deviceId)
+    // Tell the client its assigned device ID so it can attach it to
+    // voice-originated messages (voice-response uses it for TTS routing).
+    ws.send(JSON.stringify({ type: 'ws.device-id', deviceId }))
     ws.send(JSON.stringify({ type: 'status.update', payload: statusAggregator.getStatus() }))
   })
 
