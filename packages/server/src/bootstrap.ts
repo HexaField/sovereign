@@ -335,7 +335,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // Voice / Recordings / Meetings (config-driven URLs; hot-reloadable)
   const voiceModule = createVoiceModule(bus, {
     transcribeUrl: cfg.voice.transcribeUrl || undefined,
-    ttsUrl: cfg.voice.ttsUrl || undefined
+    ttsUrl: cfg.voice.ttsUrl || undefined,
+    // Qwen3-TTS on ROCm iGPU needs up to 90s for cold kernel compilation
+    // on unseen tensor shapes. The default 30s kills most first-run synths.
+    timeoutMs: 120_000
   })
   configStore.onChange('voice', () => {
     const next = configStore.get<SovereignConfig['voice']>('voice')
