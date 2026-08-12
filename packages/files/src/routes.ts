@@ -8,9 +8,19 @@ import { buildTree } from './tree.js'
 
 type ProjectResolver = (project: string) => string
 
+export interface FileRoot {
+  id: string
+  name: string
+  path: string
+}
+
+export type RootsProvider = () => FileRoot[]
+
 export interface FileRouterOptions {
   /** Default cwd used to enumerate workspace files for the `/workspace` endpoints. */
   workspaceRoot?: string
+  /** Returns all browsable roots (org paths). Used by GET /roots. */
+  getRoots?: RootsProvider
 }
 
 export function createFileRouter(
@@ -48,6 +58,12 @@ export function createFileRouter(
         res.status(500).json({ error: err.message })
       }
     }
+  }) as RequestHandler)
+
+  // GET /api/files/roots — list all browsable top-level roots (orgs)
+  router.get('/roots', ((_req, res) => {
+    const roots = options.getRoots ? options.getRoots() : []
+    res.json({ roots })
   }) as RequestHandler)
 
   // Resolve project param: if it looks like a UUID, try to resolve to path; otherwise use as-is

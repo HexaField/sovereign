@@ -31,26 +31,33 @@ export interface FileWatcher {
 }
 
 export function createFileWatcher(bus: EventBus, rootPath: string): FileWatcher {
-  let watcher: fs.FSWatcher | null = null
+  return createMultiRootFileWatcher(bus, [rootPath])
+}
+
+/**
+ * Watch multiple root directories for filesystem changes.
+ * Each root gets its own `fs.watch` instance; events carry the
+ * originating root so subscribers can resolve relative paths.
+ */
+export function createMultiRootFileWatcher(bus: EventBus, rootPaths: string[]): FileWatcher {
+  const watchers: fs.FSWatcher[] = []
   let isWatching = false
 
-  // Debounce map: filePath -> timeout
+  // Debounce map: fullPath -> timeout
   const pending = new Map<string, NodeJS.Timeout>()
   const DEBOUNCE_MS = 100
 
   const now = () => new Date().toISOString()
 
-  function emitChange(filePath: string) {
-    const fullPath = path.isAbsolute(filePath) ? filePath : path.join(rootPath, filePath)
-    const relativePath = path.relative(rootPath, fullPath)
+  function emitChange(root: string, filePath: string) {
+    const fullPath = path.isAbsolute(filePath) ? filePath : path.join(root, filePath)
+    const relativePath = path.relative(root, fullPath)
 
     if (shouldIgnore(relativePath)) return
 
-    // Determine event type
     let eventType: string
     try {
       fs.statSync(fullPath)
-      // File exists — could be created or changed, we can't distinguish with fs.watch
       eventType = 'file.changed'
     } catch {
       eventType = 'file.deleted'
@@ -60,45 +67,47 @@ export function createFileWatcher(bus: EventBus, rootPath: string): FileWatcher 
       type: eventType,
       timestamp: now(),
       source: 'files',
-      payload: { path: relativePath, fullPath }
+      payload: { path: relativePath, fullPath, root }
     })
   }
 
-  function handleEvent(_eventType: string, filename: string | null) {
-    if (!filename) return
-    const filePath = filename
+  function makeHandler(root: string) {
+    return (_eventType: string, filename: string | null) => {
+      if (!filename) return
+      const key = path.join(root, filename)
 
-    // Clear existing debounce timer
-    const existing = pending.get(filePath)
-    if (existing) clearTimeout(existing)
+      const existing = pending.get(key)
+      if (existing) clearTimeout(existing)
 
-    pending.set(
-      filePath,
-      setTimeout(() => {
-        pending.delete(filePath)
-        emitChange(filePath)
-      }, DEBOUNCE_MS)
-    )
+      pending.set(
+        key,
+        setTimeout(() => {
+          pending.delete(key)
+          emitChange(root, filename)
+        }, DEBOUNCE_MS)
+      )
+    }
   }
 
   return {
     start() {
       if (isWatching) return
-      try {
-        watcher = fs.watch(rootPath, { recursive: true }, handleEvent)
-        watcher.on('error', (err) => {
-          console.error('[file-watcher] Error:', err.message)
-        })
-        isWatching = true
-      } catch (err: any) {
-        console.error('[file-watcher] Failed to start:', err.message)
+      for (const root of rootPaths) {
+        try {
+          const w = fs.watch(root, { recursive: true }, makeHandler(root))
+          w.on('error', (err) => {
+            console.error(`[file-watcher] Error on ${root}:`, err.message)
+          })
+          watchers.push(w)
+        } catch (err: any) {
+          console.error(`[file-watcher] Failed to start on ${root}:`, err.message)
+        }
       }
+      isWatching = watchers.length > 0
     },
     stop() {
-      if (watcher) {
-        watcher.close()
-        watcher = null
-      }
+      for (const w of watchers) w.close()
+      watchers.length = 0
       for (const timer of pending.values()) clearTimeout(timer)
       pending.clear()
       isWatching = false

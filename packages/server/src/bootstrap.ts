@@ -30,7 +30,7 @@ import { createMembraneRoutes } from '@sovereign/membranes'
 import { createFileService } from '@sovereign/files'
 import { createFileRouter } from '@sovereign/files'
 import { registerFilesChannel } from '@sovereign/files'
-import { createFileWatcher } from '@sovereign/files'
+import { createMultiRootFileWatcher } from '@sovereign/files'
 import { createGitCli } from '@sovereign/git'
 import { createGitService } from '@sovereign/git'
 import { createGitRoutes } from '@sovereign/git'
@@ -211,10 +211,24 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   }
   app.use(
     '/api/files',
-    createFileRouter(fileService, undefined, fileProjectResolver, { workspaceRoot: cfg.workspace.root })
+    createFileRouter(fileService, undefined, fileProjectResolver, {
+      workspaceRoot: cfg.workspace.root,
+      getRoots: () => orgManager.listOrgs().map((o) => ({ id: o.id, name: o.name, path: o.path }))
+    })
   )
   registerFilesChannel(wsHandler, bus)
-  const fileWatcher = createFileWatcher(bus, globalPath)
+
+  // Watch ALL org roots for file changes, not just the global workspace.
+  // Each org path gets its own fs.watch instance via the multi-root watcher.
+  const watchRoots = [
+    ...new Set(
+      orgManager
+        .listOrgs()
+        .map((o) => o.path)
+        .filter((p) => fs.existsSync(p))
+    )
+  ]
+  const fileWatcher = createMultiRootFileWatcher(bus, watchRoots)
   fileWatcher.start()
 
   const resolveProject = (orgId: string, projectId: string, _w?: string) => {
