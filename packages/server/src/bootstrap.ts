@@ -59,6 +59,7 @@ import { createDraftRouter } from '@sovereign/drafts'
 import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
+import { createInferenceClient, localLlmConfigFromStore } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
 import { createChatRoutes } from '@sovereign/chat'
@@ -66,7 +67,7 @@ import { registerChatWs } from '@sovereign/chat'
 import { createThreadRoutes } from '@sovereign/threads'
 import { registerThreadsWs } from '@sovereign/threads'
 import { createForwardHandler } from '@sovereign/threads'
-import { createVoiceModule } from '@sovereign/voice'
+import { createVoiceModule, createVoiceResponse } from '@sovereign/voice'
 import { createVoiceRoutes } from '@sovereign/voice'
 import { createRecordingsService } from '@sovereign/recordings'
 import { registerRecordingRoutes } from '@sovereign/recordings'
@@ -653,6 +654,59 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       }
     })
   }
+  // ── Voice response (auto-TTS for voice-originated messages) ────────
+  // Generates immediate spoken acknowledgments and post-response summaries
+  // for voice-originated messages using the local-llm for text generation
+  // and the configured TTS service for audio synthesis.
+  {
+    const llmCfg = localLlmConfigFromStore(configStore, dataDir)
+    const voiceLlm = createInferenceClient({
+      baseUrl: llmCfg.baseUrl,
+      model: llmCfg.model,
+      temperature: 0.3,
+      maxTokens: 150,
+      timeoutMs: 15_000,
+      thinking: false
+    })
+
+    const voiceResponse = createVoiceResponse({
+      bus,
+      synthesize: (text: string) => voiceModule.synthesize(text),
+      llm: voiceLlm,
+      getRecentTurns: async (threadId: string, limit: number) => {
+        const sessionKey = chatModule.getSessionKeyForThread(threadId)
+        if (!sessionKey) return []
+        try {
+          const { turns } = await backend.getHistory(sessionKey)
+          return turns.slice(-limit).map((t: any) => ({ role: t.role ?? 'user', content: t.content ?? '' }))
+        } catch {
+          return []
+        }
+      },
+      sendToDevice: (deviceId: string, msg: Record<string, unknown>) => wsHandler.sendTo(deviceId, msg as any),
+      config: () => {
+        const v = configStore.get<SovereignConfig['voice']>('voice')
+        return {
+          autoTts: v?.autoTts ?? false,
+          ttsUrl: v?.ttsUrl ?? '',
+          ackDelayMs: v?.ackDelayMs ?? 1500
+        }
+      }
+    })
+
+    // Hot-reload the inference client when local-llm config changes
+    configStore.onChange('agentBackend.localLlm', () => {
+      const next = localLlmConfigFromStore(configStore, dataDir)
+      voiceLlm.updateConfig({
+        baseUrl: next.baseUrl,
+        model: next.model
+      })
+    })
+
+    // Expose for shutdown
+    ;(app as any).__voiceResponse = voiceResponse
+  }
+
   registerChatWs(wsHandler, chatModule)
   app.use(createChatRoutes(chatModule, backend, dataDir))
   app.use(

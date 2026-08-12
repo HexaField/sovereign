@@ -41,6 +41,9 @@ function createMockWsHandler(): WsHandler & {
       sent.push({ deviceId, msg })
     },
     sendBinary() {},
+    sendBinaryTo(_deviceId: string, _channel: string, _data: Buffer) {
+      return false
+    },
     getConnectedDevices() {
       return []
     },

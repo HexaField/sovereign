@@ -10,6 +10,8 @@ import Ajv from 'ajv'
 const stringHot = { type: 'string', 'x-reload': 'hot' } as const
 const stringSession = { type: 'string', 'x-reload': 'session' } as const
 const stringRestart = { type: 'string', 'x-reload': 'restart' } as const
+const booleanHot = { type: 'boolean', 'x-reload': 'hot' } as const
+const numberHot = { type: 'number', 'x-reload': 'hot' } as const
 
 export const schema = {
   type: 'object',
@@ -128,7 +130,9 @@ export const schema = {
       type: 'object',
       properties: {
         transcribeUrl: { ...stringHot },
-        ttsUrl: { ...stringHot }
+        ttsUrl: { ...stringHot },
+        autoTts: { ...booleanHot },
+        ackDelayMs: { ...numberHot, minimum: 0, maximum: 10000 }
       },
       additionalProperties: false
     },

@@ -2,3 +2,4 @@
 
 export { createLocalLlmBackend, type LocalLlmBackend } from './local-llm.js'
 export { localLlmConfigFromStore, type LocalLlmConfig } from './config.js'
+export { createInferenceClient, type InferenceClient, type InferenceClientConfig } from './inference.js'
