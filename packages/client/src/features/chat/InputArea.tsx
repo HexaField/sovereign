@@ -499,7 +499,10 @@ export function InputArea(props: InputAreaProps) {
         pushMsgHistory(threadKey(), text)
         setHistoryIndex(-1)
         draftText = ''
-        sendMessage(text)
+        const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
+        sendMessage(text, undefined, {
+          origin: { modality: 'voice' as const, ...(deviceId ? { deviceId } : {}) }
+        })
       }
     } catch (e) {
       console.error('Transcription error:', e)
