@@ -250,13 +250,20 @@ export function createChatModule(
     // stays visible until the agent has actually started — bridging the
     // gap between "POST returned" and "user message appears in history".
     const sentAt = Date.now()
+    const sentPayload = {
+      threadId,
+      text: head.text,
+      timestamp: sentAt,
+      queueId: head.id,
+      ...(head.origin ? { origin: head.origin } : {})
+    }
     bus.emit({
       type: 'chat.message.sent',
       timestamp: new Date(sentAt).toISOString(),
       source: 'chat',
-      payload: { threadId, text: head.text, timestamp: sentAt, queueId: head.id }
+      payload: sentPayload
     })
-    chatEvents.emit('chat.message.sent', { threadId, text: head.text, timestamp: sentAt, queueId: head.id })
+    chatEvents.emit('chat.message.sent', sentPayload)
   }
 
   function completeInFlight(threadId: string): void {
