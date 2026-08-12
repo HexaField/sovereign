@@ -24,23 +24,23 @@ export const s22VoiceResponse: Scenario = {
     const { client, mockLlmUrl } = ctx
     const metrics: Record<string, unknown> = {}
 
-    // ── 0. Configure voice with mock TTS ──────────────────────────────
-    await client.timed('configure-voice', () =>
-      client.patch('/api/config', {
-        voice: {
-          ttsUrl: `${mockLlmUrl}/synthesize`,
-          autoTts: true,
-          ackDelayMs: 0
-        }
-      })
-    )
-
-    // Verify config
+    // ── 0. Verify voice config from docker/config.json ─────────────────
+    // The Docker config already sets ttsUrl → mock-llm:8900/synthesize,
+    // autoTts, and ackDelayMs. Patching from outside Docker would write
+    // a localhost URL that Sovereign inside the container cannot reach.
     const cfg = await client.config()
     if (!cfg?.voice?.ttsUrl?.includes('/synthesize')) {
       return {
         passed: false,
         summary: `voice.ttsUrl not configured — got "${cfg?.voice?.ttsUrl}"`,
+        metrics,
+        samples: client.samples
+      }
+    }
+    if (!cfg?.voice?.autoTts) {
+      return {
+        passed: false,
+        summary: 'voice.autoTts not enabled in docker config',
         metrics,
         samples: client.samples
       }
