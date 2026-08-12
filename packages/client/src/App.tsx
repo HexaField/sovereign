@@ -29,6 +29,7 @@ import { initThreadStore, threadKey, threads, threadPrimaryWorkspace } from './f
 import { initPresence } from './features/threads/presence.js'
 import { loadMutes } from './features/threads/mute-store.js'
 import { initChatStore } from './features/chat/store.js'
+import { initSummaryStore } from './features/chat/summary-store.js'
 import { initCronResultsStore } from './features/crons/CronResultsBanner.js'
 import { hasDeviceName, initDeviceNameSync } from './features/settings/device-name.js'
 
@@ -114,6 +115,9 @@ export default function App() {
 
     const cleanupPresence = initPresence(threadKey, wsStore)
     cleanups.push(cleanupPresence)
+
+    const cleanupSummary = initSummaryStore(wsStore, threadKey)
+    cleanups.push(cleanupSummary)
     void loadMutes()
 
     // Listen for sovereign:open-file events from file chips

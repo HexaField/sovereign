@@ -69,6 +69,7 @@ import { registerThreadsWs } from '@sovereign/threads'
 import { createForwardHandler } from '@sovereign/threads'
 import { createVoiceModule, createVoiceResponse } from '@sovereign/voice'
 import { createVoiceRoutes } from '@sovereign/voice'
+import { createConversationSummary, createConversationSummaryRoutes } from '@sovereign/voice'
 import { createRecordingsService } from '@sovereign/recordings'
 import { registerRecordingRoutes } from '@sovereign/recordings'
 import { registerRecordingsChannel } from '@sovereign/recordings'
@@ -657,6 +658,19 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       }
     })
   }
+  // Shared by voice response + conversation summary below — both pair a
+  // completed turn with recent thread history via the same session lookup.
+  const getRecentTurns = async (threadId: string, limit: number): Promise<Array<{ role: string; content: string }>> => {
+    const sessionKey = chatModule.getSessionKeyForThread(threadId)
+    if (!sessionKey) return []
+    try {
+      const { turns } = await backend.getHistory(sessionKey)
+      return turns.slice(-limit).map((t: any) => ({ role: t.role ?? 'user', content: t.content ?? '' }))
+    } catch {
+      return []
+    }
+  }
+
   // ── Voice response (auto-TTS for voice-originated messages) ────────
   // Generates immediate spoken acknowledgments and post-response summaries
   // for voice-originated messages using the local-llm for text generation
@@ -676,16 +690,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       bus,
       synthesize: (text: string) => voiceModule.synthesize(text),
       llm: voiceLlm,
-      getRecentTurns: async (threadId: string, limit: number) => {
-        const sessionKey = chatModule.getSessionKeyForThread(threadId)
-        if (!sessionKey) return []
-        try {
-          const { turns } = await backend.getHistory(sessionKey)
-          return turns.slice(-limit).map((t: any) => ({ role: t.role ?? 'user', content: t.content ?? '' }))
-        } catch {
-          return []
-        }
-      },
+      getRecentTurns,
       sendToDevice: (deviceId: string, msg: Record<string, unknown>) => wsHandler.sendTo(deviceId, msg as any),
       config: () => {
         const v = configStore.get<SovereignConfig['voice']>('voice')
@@ -708,6 +713,68 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
     // Expose for shutdown
     ;(app as any).__voiceResponse = voiceResponse
+  }
+
+  // ── Conversation summary (rolling summary bubble, presence gateway
+  // thread only) ──────────────────────────────────────────────────────
+  // Shares the local-llm connection settings with voice response above via
+  // a dedicated client instance — the summary prompt needs more headroom
+  // (maxTokens 200) than the ack/summary TTS pipeline (150), and a shared
+  // instance would race the two prompts' generations against each other.
+  //
+  // Registers its GET /api/threads/:threadId/summary route at the same
+  // path @sovereign/summary uses further below. That service ships
+  // disabled by default and has no client consumer today, so this route
+  // (mounted first) safely takes precedence whenever both run.
+  {
+    const llmCfg = localLlmConfigFromStore(configStore, dataDir)
+    const summaryLlm = createInferenceClient({
+      baseUrl: llmCfg.baseUrl,
+      model: llmCfg.model,
+      temperature: 0.3,
+      maxTokens: 200,
+      timeoutMs: 20_000,
+      thinking: false
+    })
+
+    const conversationSummary = createConversationSummary({
+      bus,
+      llm: summaryLlm,
+      getRecentTurns,
+      config: () => {
+        const v = configStore.get<SovereignConfig['voice']>('voice')
+        const gateway = threadManager.getPresenceThread('gateway')
+        return {
+          enabled: v?.conversationSummary ?? false,
+          gatewayThreadId: gateway?.id ?? null
+        }
+      }
+    })
+    app.use(createConversationSummaryRoutes(conversationSummary))
+
+    // Push every update to the chat WS channel so the header bubble
+    // refreshes live, without a page reload.
+    bus.on('chat.summary.updated', (e) => {
+      const payload = (e.payload ?? {}) as { threadId?: string; summary?: string }
+      if (!payload.threadId || !payload.summary) return
+      wsHandler.broadcastToChannel('chat', {
+        type: 'chat.summary',
+        threadId: payload.threadId,
+        summary: payload.summary
+      })
+    })
+
+    // Hot-reload the inference client when local-llm config changes
+    configStore.onChange('agentBackend.localLlm', () => {
+      const next = localLlmConfigFromStore(configStore, dataDir)
+      summaryLlm.updateConfig({
+        baseUrl: next.baseUrl,
+        model: next.model
+      })
+    })
+
+    // Expose for shutdown
+    ;(app as any).__conversationSummary = conversationSummary
   }
 
   registerChatWs(wsHandler, chatModule)
