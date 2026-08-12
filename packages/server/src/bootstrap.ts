@@ -96,7 +96,7 @@ import {
 } from '@sovereign/thread-presence'
 import { createBrowserService } from '@sovereign/browser'
 import { createAd4mService } from '@sovereign/ad4m'
-import { createPresenceModule, createAd4mPoster } from '@sovereign/presence'
+import { createPresenceModule, createAd4mPoster, bootstrapKnowledgeGraph } from '@sovereign/presence'
 import { createForestRoutes } from './forest/routes.js'
 import { createDashboardRoutes } from './dashboard/routes.js'
 import { createMeetingsService } from '@sovereign/meetings'
@@ -400,6 +400,24 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     ad4mService.mountRoutes(app)
   }
 
+  // Knowledge graph bootstrap — register the AD4M perspective + SHACL
+  // models at startup, replacing the manual LLM-driven bootstrap that
+  // PRESENCE.md previously instructed. Perspective name derives from
+  // identity.agentName; schemas come from the membrane-local file.
+  let teardownKnowledgeGraph: (() => void) | undefined
+  if (ad4mService) {
+    const schemasFile = path.join(configDir, 'membranes', 'personal', 'knowledge-graph-schemas.json')
+    if (fs.existsSync(schemasFile)) {
+      teardownKnowledgeGraph = bootstrapKnowledgeGraph({
+        ad4m: ad4mService.client(),
+        agentName: cfg.identity.agentName,
+        schemasFile,
+        dataDir: path.join(dataDir, 'presence'),
+        memoryFile: path.join(configDir, 'PRESENCE_MEMORY.md')
+      })
+    }
+  }
+
   // Forest — knowledge graph 3D visualisation index
   {
     const ad4mClient = ad4mService?.client() ?? null
@@ -513,6 +531,30 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const presenceMemoryFile = path.join(configDir, 'PRESENCE_MEMORY.md')
   const presenceKnowledgeFile = path.join(configDir, 'PRESENCE_KNOWLEDGE.md')
 
+  // Late-bound health summary — the system module does not exist yet at
+  // wiring time. The getter runs only when a session starts (well after
+  // boot completes), so the ref will have resolved by then.
+  let systemModuleRef: import('@sovereign/system').SystemModule | undefined
+  const presenceGetHealthSummary = (): string | undefined => {
+    if (!systemModuleRef) return undefined
+    const h = systemModuleRef.getHealth()
+    const lines: string[] = ['# Service health at session start', '']
+    lines.push(`Uptime: ${h.connection.uptime}s`)
+    lines.push(`Agent backend: ${h.connection.agentBackend}`)
+    if (h.services?.external?.length) {
+      lines.push('', '## External services', '')
+      for (const svc of h.services.external) {
+        const icon = svc.status === 'ok' ? '✓' : '✗'
+        lines.push(`- ${icon} **${svc.label}** (port ${svc.port}): ${svc.status}`)
+      }
+    }
+    if (h.services?.semble) {
+      const s = h.services.semble
+      lines.push(`- Semble: ${s.status}${s.version ? ` v${s.version}` : ''}`)
+    }
+    return lines.join('\n')
+  }
+
   // Agent backend (the only construction cycle)
   const {
     routingBackend,
@@ -540,7 +582,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     presence: presenceMcpDeps,
     presencePersonalityFile,
     presenceMemoryFile,
-    presenceKnowledgeFile
+    presenceKnowledgeFile,
+    presenceGetHealthSummary
   })
   app.use(createSchedulerRoutes(scheduler, cronService))
 
@@ -986,6 +1029,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     // Honour SEMBLE_BIN for non-standard installs; empty string opts out.
     sembleBin: process.env.SEMBLE_BIN ?? 'semble'
   })
+  // Resolve the late-bound ref so the presence append resolver can read
+  // health status when the first session starts.
+  systemModuleRef = systemModule
   let personalityWatcherActive = !!personalityCompiler
   app.use(
     createSystemRoutes({
@@ -1072,27 +1118,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       })
         .then((report) => {
           lastResumeReport = { at: Date.now(), counts: report.counts, total: report.outcomes.length }
-
-          // Auto-start the presence internal thread if it was not resumed.
-          // The presence module creates threads on boot but never starts
-          // sessions. If the resume orchestrator did not pick up an entry
-          // for the internal thread (first boot, crash, entries lost), send
-          // a boot message so the thread has an active session immediately.
-          const internalId = presenceModule.internalThreadId()
-          if (internalId) {
-            const resumed = report.outcomes.some((o) => o.sessionKey === internalId || o.threadKey === internalId)
-            if (!resumed) {
-              const hasSession = activeSessions.get(internalId)
-              if (!hasSession) {
-                console.log(`[presence] auto-starting internal thread ${internalId} (not resumed)`)
-                chatModule
-                  .handleSend(internalId, '[system: presence thread restarted after boot]', undefined, {
-                    synthRole: 'system'
-                  })
-                  .catch((err: any) => console.error('[presence] auto-start failed:', err?.message ?? err))
-              }
-            }
-          }
+          // No auto-start of the presence internal thread — the LLM
+          // session starts lazily on the first real inbound message
+          // (voice, AD4M mention, digest, gateway forward). Presence
+          // memory + health status get injected at that point via the
+          // append resolver.
         })
         .catch((err: any) => console.error('[resume] orchestrator failed:', err?.message ?? err))
     )
@@ -1124,6 +1154,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       browserService.dispose().catch(() => {})
       statusAggregator.destroy()
       systemModule.dispose()
+      teardownKnowledgeGraph?.()
       eventStream.dispose()
       presenceOrchestrator.destroy()
       presenceWs.destroy()

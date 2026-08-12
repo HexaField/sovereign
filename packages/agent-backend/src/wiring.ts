@@ -69,6 +69,10 @@ export interface AgentBackendWiringInput {
    *  BOTH presence threads (internal + gateway). Carries the AD4M knowledge
    *  graph schema, tools reference, and usage patterns. */
   presenceKnowledgeFile?: string
+  /** Late-bound health summary for the internal presence thread. Called at
+   *  session-start time (not at wiring time) so the system module can
+   *  populate before any session fires. */
+  presenceGetHealthSummary?: () => string | undefined
 }
 
 export interface AgentBackendWiringResult {
@@ -152,12 +156,15 @@ export function makeMembraneAppendResolver(
  * Wraps the membrane append resolver so that presence sessions get extra
  * prompt layers on top of the membrane context:
  *
- *  - **Internal thread** — PRESENCE.md + PRESENCE_MEMORY.md + PRESENCE_KNOWLEDGE.md
+ *  - **Internal thread** — PRESENCE.md + PRESENCE_MEMORY.md + PRESENCE_KNOWLEDGE.md + health summary
  *  - **Gateway thread**  — PRESENCE_KNOWLEDGE.md only
  *
  * The knowledge file carries the AD4M knowledge-graph schema and usage
  * patterns; both threads need it so either can read/write the graph.
  * See plans/presence-thread-spec.md (R3).
+ *
+ * The health summary injects startup service status into the internal
+ * thread so the LLM knows which services are available without probing.
  */
 export function makePresenceAwareAppendResolver(
   membraneManager: MembraneManager | undefined,
@@ -168,6 +175,9 @@ export function makePresenceAwareAppendResolver(
     personalityFile?: string
     memoryFile?: string
     knowledgeFile?: string
+    /** Late-bound health summary — called when the session starts (not at
+     *  wiring time). Returns a formatted string or undefined to skip. */
+    getHealthSummary?: () => string | undefined
   }
 ): ((sessionKey: string) => string | undefined) | undefined {
   const base = makeMembraneAppendResolver(membraneManager, threadManager)
@@ -179,7 +189,7 @@ export function makePresenceAwareAppendResolver(
     const internalId = presence.internalThreadId()
     const gatewayId = presence.gatewayThreadId()
 
-    // Internal thread gets personality + memory + knowledge.
+    // Internal thread gets personality + memory + knowledge + health.
     if (threadKey && internalId && threadKey === internalId) {
       if (presence.personalityFile) {
         try {
@@ -195,6 +205,17 @@ export function makePresenceAwareAppendResolver(
           if (txt) parts.push(`# Presence memory\n\n${txt}`)
         } catch {
           /* missing — skip silently */
+        }
+      }
+
+      // Health summary — injected at session start so the LLM knows
+      // which external services are available right now.
+      if (presence.getHealthSummary) {
+        try {
+          const summary = presence.getHealthSummary()
+          if (summary) parts.push(summary)
+        } catch {
+          /* health unavailable — skip silently */
         }
       }
     }
@@ -295,7 +316,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
             gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
             personalityFile: input.presencePersonalityFile,
             memoryFile: input.presenceMemoryFile,
-            knowledgeFile: input.presenceKnowledgeFile
+            knowledgeFile: input.presenceKnowledgeFile,
+            getHealthSummary: input.presenceGetHealthSummary
           })
         })
         claudeCodeBackend = cc
@@ -319,7 +341,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
             gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
             personalityFile: input.presencePersonalityFile,
             memoryFile: input.presenceMemoryFile,
-            knowledgeFile: input.presenceKnowledgeFile
+            knowledgeFile: input.presenceKnowledgeFile,
+            getHealthSummary: input.presenceGetHealthSummary
           })
         })
       }
