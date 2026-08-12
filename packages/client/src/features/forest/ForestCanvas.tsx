@@ -34,18 +34,6 @@ interface TransitionState {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function parseHexColor(cssVar: string): number {
-  if (cssVar.startsWith('#')) {
-    return parseInt(cssVar.slice(1), 16)
-  }
-  return 0x1a1a2e // fallback dark
-}
-
-function getCssVar(name: string): string {
-  if (typeof getComputedStyle === 'undefined') return ''
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-}
-
 function lerpVec3(a: Vec3, b: Vec3, t: number): Vec3 {
   return {
     x: a.x + (b.x - a.x) * t,
@@ -111,8 +99,9 @@ export default function ForestCanvas(props: ForestCanvasProps) {
 
     // ── Scene ─────────────────────────────────────────────
     scene = new THREE.Scene()
-    const bgColor = getCssVar('--c-bg') || '#000000'
-    scene.background = new THREE.Color(parseHexColor(bgColor))
+    // No scene.background — renderer alpha:true lets the CSS-themed
+    // container background show through. Works with every theme
+    // (hex, rgba, glass) without colour-format parsing.
 
     // ── Camera ────────────────────────────────────────────
     camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 500)
@@ -224,12 +213,7 @@ export default function ForestCanvas(props: ForestCanvasProps) {
     updateHighlighting()
   })
 
-  // Update background when theme changes
-  createEffect(() => {
-    if (!scene) return
-    const bgColor = getCssVar('--c-bg') || '#000000'
-    ;(scene.background as THREE.Color)?.set(parseHexColor(bgColor))
-  })
+  // Background handled by CSS (alpha:true renderer) — no scene.background needed.
 
   // ── Build functions ───────────────────────────────────────────────
 
