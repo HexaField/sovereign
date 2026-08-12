@@ -155,6 +155,14 @@ export function createWsStore(options: WsStoreOptions): WsStore {
           lastPong = Date.now()
           return
         }
+        // Store server-assigned device ID so voice origin can reference it
+        if (msg.type === 'ws.device-id') {
+          ;(window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId = (
+            msg as unknown as { deviceId: string }
+          ).deviceId
+          lastPong = Date.now()
+          return
+        }
         // Any message from server counts as alive
         lastPong = Date.now()
         const set = handlers.get(msg.type)

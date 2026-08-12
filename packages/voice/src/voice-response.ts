@@ -238,7 +238,10 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     }
     if (!payload?.threadId || !payload?.text) return
     if (payload.origin?.modality !== 'voice') return
-    if (!payload.origin?.deviceId) return
+    if (!payload.origin?.deviceId) {
+      console.warn('[voice-response] voice message has no deviceId — cannot route TTS audio back to client')
+      return
+    }
 
     const cfg = config()
     if (!cfg.autoTts || !cfg.ttsUrl) return
