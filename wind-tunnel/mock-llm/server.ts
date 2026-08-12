@@ -36,6 +36,9 @@ interface LogEntry {
 }
 const requestLog: LogEntry[] = []
 
+// ── Mock transcription state (STT wind-tunnel) ─────────────────────
+let mockTranscript = 'mock transcription'
+
 // ── Scripted response registry ──────────────────────────────────────
 // Scripts are keyed by a matcher function over the last user message.
 // First match wins. Default: echo the user message back.
@@ -349,6 +352,27 @@ const server = http.createServer(async (req, res) => {
     scripts.length = 0
     res.writeHead(204)
     res.end()
+    return
+  }
+
+  // ── Mock transcription endpoint (STT wind-tunnel) ─────────────────
+  // Accepts multipart audio (any content) and returns a canned transcript.
+  // Configure via POST /mock/transcribe-script { text: "..." }.
+  if (url.pathname === '/mock/transcribe-script' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req))
+    mockTranscript = body.text ?? 'mock transcription'
+    if (VERBOSE) console.log(`[mock-llm] transcribe script set: "${mockTranscript}"`)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
+    return
+  }
+
+  if (url.pathname === '/mock/transcribe' && req.method === 'POST') {
+    // Consume the multipart body (we don't parse it — just drain)
+    await readBody(req)
+    if (VERBOSE) console.log(`[mock-llm] transcribe → "${mockTranscript}"`)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ text: mockTranscript }))
     return
   }
 

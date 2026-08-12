@@ -21,6 +21,7 @@ import { s17BackendMixing } from './s17-backend-mixing.js'
 import { s18LlmBenchmark } from './s18-llm-benchmark.js'
 import { s19PresenceTools } from './s19-presence-tools.js'
 import { s20ForestIndex } from './s20-forest-index.js'
+import { s21SttRoundtrip } from './s21-stt-roundtrip.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -56,5 +57,7 @@ export const ALL_SCENARIOS: Scenario[] = [
   s19PresenceTools,
   // Forest knowledge graph API — verifies index/rebuild response shape.
   // Self-skips when the endpoints return 404 (pre-implementation baseline).
-  s20ForestIndex
+  s20ForestIndex,
+  // STT roundtrip — mock transcription → chat message with voice origin → LLM response.
+  s21SttRoundtrip
 ]
