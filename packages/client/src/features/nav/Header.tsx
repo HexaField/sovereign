@@ -5,6 +5,7 @@ import { activeView, setActiveView, activeAgentTab, setActiveAgentTab, type Agen
 import { threadKey, switchThread } from '../threads/store.js'
 import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
+import { SummaryBubble } from '../chat/SummaryBubble.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -73,6 +74,13 @@ export function Header() {
     void getPresenceGatewayThreadId().then((id) => setPresenceGatewayId(id))
   })
 
+  // Gates the summary bubble — it only ever holds data for the gateway
+  // thread, so showing it only ever makes sense while that thread stays open.
+  const onGatewayThread = createMemo(() => {
+    const pgId = presenceGatewayId()
+    return !!pgId && pgId === threadKey()
+  })
+
   const statusStyle = createMemo(() => {
     const h = overallHealth()
     if (h === 'ok') return { background: 'rgba(74,255,138,0.1)', color: '#4aff8a' }
@@ -124,6 +132,11 @@ export function Header() {
           <AgentHeaderContent />
         </Show>
       </div>
+
+      {/* Rolling conversation summary — gateway thread only. */}
+      <Show when={onGatewayThread()}>
+        <SummaryBubble />
+      </Show>
 
       {/* Status dot */}
       <button

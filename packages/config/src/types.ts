@@ -98,6 +98,10 @@ export interface SovereignConfig {
     /** Milliseconds to delay ack playback — if the real response arrives
      *  before this window, the ack gets cancelled. Default 1500. */
     ackDelayMs: number
+    /** When true, the presence gateway thread grows a rolling conversation
+     *  summary (via local-llm) after each assistant turn, surfaced as the
+     *  header bubble on the client. Every other thread stays untouched. */
+    conversationSummary: boolean
   }
   meetings: {
     summarizeUrl: string

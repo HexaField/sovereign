@@ -73,7 +73,8 @@ export const defaults: SovereignConfig = {
     transcribeUrl: '',
     ttsUrl: '',
     autoTts: false,
-    ackDelayMs: 1500
+    ackDelayMs: 1500,
+    conversationSummary: false
   },
   meetings: {
     summarizeUrl: ''

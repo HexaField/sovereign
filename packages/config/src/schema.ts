@@ -132,7 +132,8 @@ export const schema = {
         transcribeUrl: { ...stringHot },
         ttsUrl: { ...stringHot },
         autoTts: { ...booleanHot },
-        ackDelayMs: { ...numberHot, minimum: 0, maximum: 10000 }
+        ackDelayMs: { ...numberHot, minimum: 0, maximum: 10000 },
+        conversationSummary: { ...booleanHot }
       },
       additionalProperties: false
     },
