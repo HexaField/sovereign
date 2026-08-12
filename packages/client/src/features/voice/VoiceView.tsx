@@ -25,6 +25,7 @@ import { escapeHtml } from '../../lib/markdown.js'
 import { sendMessage } from '../chat/store.js'
 import { getPresenceInternalThreadId } from '../threads/presence-helper.js'
 import { threadKey } from '../threads/store.js'
+import { deviceName } from '../settings/device-name.js'
 
 function getCurrentDeviceId(): string | undefined {
   try {
@@ -151,9 +152,10 @@ export function VoiceView() {
       const focusedThread = threadKey()
       const targetThread = focusedThread || (await getPresenceInternalThreadId())
       const deviceId = getCurrentDeviceId()
+      const name = deviceName()
       sendMessage(text, undefined, {
         ...(targetThread ? { threadId: targetThread } : {}),
-        origin: { modality: 'voice', ...(deviceId ? { deviceId } : {}) }
+        origin: { modality: 'voice', ...(deviceId ? { deviceId } : {}), ...(name ? { deviceName: name } : {}) }
       })
     } catch (e) {
       setVoiceState('idle')

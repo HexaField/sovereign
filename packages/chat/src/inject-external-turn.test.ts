@@ -93,7 +93,8 @@ function makeWsHandler(): WsHandler & { broadcasts: Array<{ channel: string; dat
     sendBinary: vi.fn(),
     sendBinaryTo: vi.fn(() => false),
     getConnectedDevices: vi.fn(() => []),
-    getChannels: vi.fn(() => [])
+    getChannels: vi.fn(() => []),
+    getDeviceName: vi.fn(() => undefined)
   }
 }
 

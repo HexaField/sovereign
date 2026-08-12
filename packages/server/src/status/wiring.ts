@@ -60,7 +60,11 @@ export function wireStatusAggregator(input: StatusWiringInput): StatusAggregator
     wsHandler.handleConnection(ws as any, deviceId)
     // Tell the client its assigned device ID so it can attach it to
     // voice-originated messages (voice-response uses it for TTS routing).
-    ws.send(JSON.stringify({ type: 'ws.device-id', deviceId }))
+    // Echo back a previously-announced name for this exact connection, if
+    // one exists, so a client that raced a ws.device-name send ahead of
+    // this handler still sees its own name reflected.
+    const deviceName = wsHandler.getDeviceName(deviceId)
+    ws.send(JSON.stringify({ type: 'ws.device-id', deviceId, ...(deviceName ? { deviceName } : {}) }))
     ws.send(JSON.stringify({ type: 'status.update', payload: statusAggregator.getStatus() }))
   })
 

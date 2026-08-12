@@ -58,6 +58,9 @@ function createMockWsHandler(): WsHandler & {
     },
     getChannels() {
       return [...channels.keys()]
+    },
+    getDeviceName() {
+      return undefined
     }
   }
 }

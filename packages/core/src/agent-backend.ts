@@ -91,12 +91,13 @@ export interface ParsedTurn {
   kind?: TurnKind
   /**
    * How the underlying message arrived — voice, AD4M, webhook, etc. Carries
-   * only the modality string; device identifiers and routing details stay
-   * server-side. Populated on user turns whose queue entry carries an
-   * origin, or parsed client-side from a `[modality]` prefix in persisted
+   * the modality string plus an optional friendly device label; routing
+   * identifiers (deviceId, ad4m addresses) stay server-side. Populated on
+   * user turns whose queue entry carries an origin, or parsed client-side
+   * from a `[modality]` or `[modality:deviceName]` prefix in persisted
    * content (see packages/chat/src/chat.ts pumpQueue).
    */
-  origin?: { modality: string }
+  origin?: { modality: string; deviceName?: string }
 }
 
 /**

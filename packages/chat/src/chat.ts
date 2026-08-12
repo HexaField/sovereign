@@ -230,7 +230,15 @@ export function createChatModule(
       // Non-internal threads skip the full presence envelope — a one-word
       // modality tag gives the agent the same origin hint without spending
       // context on deviceId or routing fields a normal chat reply never needs.
-      textToSend = `[${head.origin.modality}]\n${head.text}`
+      // A device name turns a raw connection id into something the agent
+      // can reference directly ("your phone" beats "device k7xqf3m9b2").
+      // The wsHandler map holds the name announced on this exact live
+      // connection; origin.deviceName (sent alongside the HTTP send) covers
+      // the rare race where that announcement hasn't landed yet.
+      const deviceName =
+        (head.origin.deviceId && wsHandler?.getDeviceName(head.origin.deviceId)) || head.origin.deviceName
+      const modalityTag = deviceName ? `${head.origin.modality}:${deviceName}` : head.origin.modality
+      textToSend = `[${modalityTag}]\n${head.text}`
     }
 
     try {

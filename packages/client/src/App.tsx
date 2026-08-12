@@ -3,7 +3,7 @@ import type { ThreadInfo } from '@sovereign/core'
 import './app.css'
 
 // Nav store
-import { activeView, initNavStore, setActiveView } from './features/nav/store.js'
+import { activeView, initNavStore, setActiveView, navigateToAgent } from './features/nav/store.js'
 
 // Identity
 import { loadIdentity } from './lib/identity.js'
@@ -30,6 +30,7 @@ import { initPresence } from './features/threads/presence.js'
 import { loadMutes } from './features/threads/mute-store.js'
 import { initChatStore } from './features/chat/store.js'
 import { initCronResultsStore } from './features/crons/CronResultsBanner.js'
+import { hasDeviceName, initDeviceNameSync } from './features/settings/device-name.js'
 
 // Global keyboard shortcuts
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
@@ -67,6 +68,12 @@ export default function App() {
 
     const cleanupConnection = initConnectionStore(wsStore)
     cleanups.push(cleanupConnection)
+
+    // Device naming — announce the stored name on every WS connect/
+    // reconnect, and open Settings on first launch so the user names the
+    // device before voice replies need to reference it.
+    cleanups.push(initDeviceNameSync())
+    if (!hasDeviceName()) navigateToAgent('settings')
 
     // Voice TTS playback — listens for voice.tts.audio JSON messages
     const cleanupTts = initTtsPlayer(wsStore)

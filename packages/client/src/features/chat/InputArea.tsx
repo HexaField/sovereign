@@ -12,6 +12,7 @@ import {
 } from './store.js'
 import { threadKey } from '../threads/store.js'
 import { isRecording, setVoiceState, voiceTimerText, setVoiceTimerText } from '../voice/store.js'
+import { deviceName } from '../settings/device-name.js'
 
 // ── Constants (exported for tests) ───────────────────────────────────
 
@@ -500,8 +501,13 @@ export function InputArea(props: InputAreaProps) {
         setHistoryIndex(-1)
         draftText = ''
         const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
+        const name = deviceName()
         sendMessage(text, undefined, {
-          origin: { modality: 'voice' as const, ...(deviceId ? { deviceId } : {}) }
+          origin: {
+            modality: 'voice' as const,
+            ...(deviceId ? { deviceId } : {}),
+            ...(name ? { deviceName: name } : {})
+          }
         })
       }
     } catch (e) {

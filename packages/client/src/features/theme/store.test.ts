@@ -5,6 +5,23 @@ import type { Theme } from './themes.js'
 let currentTheme: () => Theme
 let setTheme: (t: Theme) => void
 
+// jsdom's built-in localStorage does not survive this repo's vitest setup
+// (no origin/url configured for the jsdom environment), so every test file
+// that touches it stubs a plain in-memory implementation instead — same
+// pattern as packages/client/src/features/chat/store.test.ts.
+const store: Record<string, string> = {}
+const localStorageMock = {
+  getItem: (key: string) => store[key] ?? null,
+  setItem: (key: string, val: string) => {
+    store[key] = val
+  },
+  removeItem: (key: string) => {
+    delete store[key]
+  },
+  clear: () => Object.keys(store).forEach((k) => delete store[k])
+}
+Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
+
 beforeEach(async () => {
   localStorage.clear()
   document.documentElement.classList.remove('light', 'ironman', 'jarvis')
