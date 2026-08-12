@@ -36,6 +36,12 @@ export const [liveThinkingText, setLiveThinkingText] = createSignal('')
 // always-online; if the server is unreachable the page wouldn't load at all.
 export const [serverQueue, setServerQueue] = createSignal<QueuedMessage[]>([])
 
+// Timestamps (ParsedTurn.timestamp) of assistant turns whose reply got
+// spoken back through TTS. Populated from `voice.tts.audio` (kind:
+// 'summary') pushes — MessageBubble reads this set to show a speaker icon
+// instead of threading TTS delivery state through ParsedTurn itself.
+export const [ttsDeliveredTurns, setTtsDeliveredTurns] = createSignal<Set<number>>(new Set())
+
 function draftKey(threadKey: string): string {
   return `sovereign:draft:${threadKey}`
 }
@@ -183,6 +189,28 @@ function cleanStreamText(raw: string): string {
     .trim()
 }
 
+// chat.ts prepends a one-word `[modality]\n` tag to outbound text on
+// non-internal threads (see packages/chat/src/chat.ts pumpQueue) so the
+// agent learns how a message arrived. The SDK persists exactly what it
+// received, so a history reload reads the tag straight back out of the
+// JSONL. Strip it here and normalize it into `origin` so MessageBubble can
+// render an icon from one field regardless of source. Turns that already
+// carry `origin` (the live SSE turn attaches it directly from the queue
+// entry — see completeInFlight in chat.ts) pass through untouched, since
+// their content never held the tag to begin with.
+const ORIGIN_PREFIX_RE = /^\[(text|voice|ad4m|cron|webhook)\]\n/
+
+function stripOriginPrefix(turn: ParsedTurn): ParsedTurn {
+  if (turn.role !== 'user' || turn.origin || !turn.content) return turn
+  const match = ORIGIN_PREFIX_RE.exec(turn.content)
+  if (!match) return turn
+  return { ...turn, content: turn.content.slice(match[0].length), origin: { modality: match[1] } }
+}
+
+function stripOriginPrefixes(list: ParsedTurn[]): ParsedTurn[] {
+  return list.map(stripOriginPrefix)
+}
+
 function getThinkingText(item: WorkItem | undefined): string {
   return (item?.output || item?.input || '').trim()
 }
@@ -231,6 +259,7 @@ function resetState(): void {
   setLoadingOlder(false)
   recentUserMessages.clear()
   setServerQueue([])
+  setTtsDeliveredTurns(new Set<number>())
   lastSSESeq = 0
   lastSentText = ''
   lastSentTime = 0
@@ -363,7 +392,7 @@ function connectSSE(threadKey: string): void {
           // backend hasn't flushed to JSONL yet only lives in `turns()`. A
           // gap-triggered fetchHistory would otherwise wipe it. See
           // `merge-history.ts` for the rule.
-          setTurns((prev) => mergeFetchedHistory(prev, data.turns))
+          setTurns((prev) => mergeFetchedHistory(prev, stripOriginPrefixes(data.turns)))
           setHasOlderMessages(data.hasMore ?? false)
           if (!historyLoaded) {
             historyLoaded = true
@@ -411,7 +440,7 @@ function connectSSE(threadKey: string): void {
   // ── history: full history reload via SSE (server-pushed) ──
   eventSource.addEventListener('history', (e) => {
     const data = JSON.parse((e as MessageEvent).data)
-    setTurns(data.turns ?? [])
+    setTurns(stripOriginPrefixes(data.turns ?? []))
     setHasOlderMessages(data.hasMore ?? false)
     setLoadingOlder(false)
     clearLiveState()
@@ -486,7 +515,7 @@ function connectSSE(threadKey: string): void {
   eventSource.addEventListener('turn', (e) => {
     if (!checkSeq(e)) return
     const data = JSON.parse((e as MessageEvent).data)
-    const turn = data.turn as ParsedTurn
+    const turn = stripOriginPrefix(data.turn as ParsedTurn)
 
     // Framing system turns (compaction chip, hook lifecycle output) are folded
     // into the preceding assistant turn's workItems as system_event rows so
@@ -624,11 +653,28 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
-      const history: ParsedTurn[] = msg.history ?? []
+      const history: ParsedTurn[] = stripOriginPrefixes(msg.history ?? [])
       setHasOlderMessages(msg.hasMore ?? false)
       setLoadingOlder(false)
       setTurns(history)
       clearLiveState()
+    })
+  )
+
+  // TTS delivery — marks the most recent assistant turn in the current
+  // thread as spoken aloud, matched by threadId on the audio push. Ack
+  // audio doesn't correspond to a finished turn, so only 'summary' counts.
+  unsubs.push(
+    ws.on('voice.tts.audio', (msg: any) => {
+      if (msg.kind !== 'summary') return
+      if (msg.threadId && msg.threadId !== _threadKey()) return
+      const list = turns()
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].role === 'assistant') {
+          setTtsDeliveredTurns((prev) => new Set(prev).add(list[i].timestamp))
+          break
+        }
+      }
     })
   )
 

@@ -226,6 +226,11 @@ export function createChatModule(
         parts.push(head.text)
       }
       textToSend = parts.join('\n\n')
+    } else if (head.origin) {
+      // Non-internal threads skip the full presence envelope — a one-word
+      // modality tag gives the agent the same origin hint without spending
+      // context on deviceId or routing fields a normal chat reply never needs.
+      textToSend = `[${head.origin.modality}]\n${head.text}`
     }
 
     try {
@@ -292,7 +297,11 @@ export function createChatModule(
         content: entry.text,
         timestamp: entry.timestamp,
         workItems: [],
-        thinkingBlocks: []
+        thinkingBlocks: [],
+        // Carry the modality forward from the queue entry so the live SSE
+        // turn shows a mic icon right away, instead of waiting on a JSONL
+        // reload to recover it from the `[modality]` prefix sent above.
+        ...(entry.origin ? { origin: { modality: entry.origin.modality } } : {})
       }
       if (wsHandler) {
         wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn: turnPayload })

@@ -595,6 +595,93 @@ describe('§2.4 Chat Module (Server)', () => {
   // not a real agent completion. Synthesizing idle here would steal the
   // "working" indicator the moment the user's bubble lands; only assistant
   // turns close out the busy state.
+  // Regression: voice/AD4M-originated messages need a modality hint in the
+  // agent's context, but only the internal presence thread gets the full
+  // `[presence:inbound ...]` envelope. Every other thread (gateway or a
+  // plain user thread) gets a lightweight one-word tag instead.
+  it('handleSend with origin on a non-internal thread MUST prepend a one-word modality tag', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleSend(threadId, 'turn the lights on', undefined, {
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, '[voice]\nturn the lights on')
+  })
+
+  it('handleSend without origin MUST send text unmodified (no regression)', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    await chatModule.handleSend(threadId, 'plain text message')
+    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'plain text message')
+  })
+
+  // The live synthetic user chat.turn (broadcast by completeInFlight) reads
+  // its content straight from the queue entry, which never held the
+  // `[modality]` tag — that tag only ever reaches the agent, not the UI.
+  // Origin rides as a separate structured field instead.
+  it('the synthetic user chat.turn MUST carry origin.modality while content stays unprefixed', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const broadcasts = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const beforeCount = broadcasts.length
+    await chatModule.handleSend(threadId, 'turn the lights on', undefined, {
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    emitBackendEvent(backend, 'chat.turn', {
+      sessionKey,
+      turn: { role: 'assistant', content: 'done', workItems: [], thinkingBlocks: [], timestamp: Date.now() }
+    } as any)
+    const userTurn = broadcasts
+      .slice(beforeCount)
+      .map(([, msg]: any[]) => msg as any)
+      .find((msg: any) => msg?.type === 'chat.turn' && msg.turn?.role === 'user')
+    expect(userTurn).toBeDefined()
+    expect(userTurn.turn.content).toBe('turn the lights on')
+    expect(userTurn.turn.origin).toEqual({ modality: 'voice' })
+  })
+
+  it('the synthetic user chat.turn MUST omit origin when the queued message carried none', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const broadcasts = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const beforeCount = broadcasts.length
+    await chatModule.handleSend(threadId, 'plain text message')
+    emitBackendEvent(backend, 'chat.turn', {
+      sessionKey,
+      turn: { role: 'assistant', content: 'done', workItems: [], thinkingBlocks: [], timestamp: Date.now() }
+    } as any)
+    const userTurn = broadcasts
+      .slice(beforeCount)
+      .map(([, msg]: any[]) => msg as any)
+      .find((msg: any) => msg?.type === 'chat.turn' && msg.turn?.role === 'user')
+    expect(userTurn).toBeDefined()
+    expect(userTurn.turn.origin).toBeUndefined()
+  })
+
+  // Guards the branch this feature added: an internal presence thread must
+  // keep using the full `[presence:inbound ...]` envelope, not the short tag.
+  it('handleSend on an internal presence thread MUST still use the full presence:inbound envelope', async () => {
+    const freshDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-test-internal-'))
+    try {
+      const internalBackend = createMockBackend()
+      const internalThreadManager = createMockThreadManager()
+      const internalWsHandler = createMockWsHandler()
+      const presenceModule = createChatModule(bus, internalBackend, internalThreadManager, {
+        dataDir: freshDataDir,
+        wsHandler: internalWsHandler,
+        presence: { takeDigest: () => null }
+      })
+      const { threadId, sessionKey } = await presenceModule.handleSessionCreate()
+      const thread = internalThreadManager.get(threadId) as any
+      thread.presence = 'internal'
+      await presenceModule.handleSend(threadId, 'hello from voice', undefined, {
+        origin: { modality: 'voice', deviceId: 'dev-1' }
+      })
+      expect(internalBackend.sendMessage).toHaveBeenCalledWith(
+        sessionKey,
+        '[presence:inbound modality=voice deviceId=dev-1]\nhello from voice'
+      )
+    } finally {
+      fs.rmSync(freshDataDir, { recursive: true, force: true })
+    }
+  })
+
   it('user-role chat.turn must NOT trigger a synthetic idle broadcast', async () => {
     const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     const calls = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls

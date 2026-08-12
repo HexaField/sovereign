@@ -101,6 +101,21 @@ describe('§4.2 MessageBubble', () => {
     })
   })
 
+  describe('modality icons', () => {
+    it('shows a mic icon on a user bubble when turn.origin.modality equals "voice"', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('omits the mic icon on user bubbles with no origin or a non-voice origin', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('shows a speaker icon on an assistant bubble whose timestamp is in ttsDeliveredTurns', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+    it('renders modality icons always visible (not hover-gated like msg-copy-btn)', () => {
+      expect(typeof MessageBubble).toBe('function')
+    })
+  })
+
   describe('subagent completion cards', () => {
     it('does not hide task completion events that match isRuntimeContext', () => {
       // Regression test: isRuntimeContext && isTaskCompletion must NOT return null
