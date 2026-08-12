@@ -33,8 +33,13 @@ export interface VoiceResponseDeps {
   llm: LlmCompleter
   /** Fetch the last N turns for a thread. */
   getRecentTurns: (threadId: string, limit: number) => Promise<Array<{ role: string; content: string }>>
-  /** Push a JSON message to a specific device (includes audio as base64). */
-  sendToDevice: (deviceId: string, msg: Record<string, unknown>) => void
+  /** Push a JSON message to every connection announced under a device name
+   *  (includes audio as base64). Reaches the right tab even after a page
+   *  refresh mints a fresh deviceId, because the announced name persists
+   *  across reconnects. */
+  sendToDeviceName: (deviceName: string, msg: Record<string, unknown>) => void
+  /** Resolve a live connection's announced device name from its deviceId. */
+  getDeviceName: (deviceId: string) => string | undefined
   /** Current config (called per-event so hot-reload works). */
   config: () => VoiceResponseConfig
 }
@@ -77,15 +82,17 @@ Rules:
 // ── Module ─────────────────────────────────────────────────────────────
 
 /** Tracks which threads have a pending voice interaction so the summary
- *  pipeline knows to fire when the assistant turn arrives. */
+ *  pipeline knows to fire when the assistant turn arrives. Keys TTS
+ *  routing off deviceName rather than deviceId, so a page refresh mid-turn
+ *  — which mints a fresh deviceId — still finds the originating tab. */
 interface VoiceOrigin {
-  deviceId: string
+  deviceName: string
   threadId: string
   timestamp: number
 }
 
 export function createVoiceResponse(deps: VoiceResponseDeps) {
-  const { bus, synthesize, llm, getRecentTurns, sendToDevice, config } = deps
+  const { bus, synthesize, llm, getRecentTurns, sendToDeviceName, getDeviceName, config } = deps
 
   // Active voice origins — maps threadId → origin info.
   // Set when a voice message enters the queue; consumed when the
@@ -98,7 +105,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
   // ── ACK pipeline ───────────────────────────────────────────────────
 
-  async function generateAck(threadId: string, userText: string, deviceId: string): Promise<void> {
+  async function generateAck(threadId: string, userText: string, deviceName: string): Promise<void> {
     const cfg = config()
     if (!cfg.autoTts || !cfg.ttsUrl) return
 
@@ -141,7 +148,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       if (!ackText || controller.signal.aborted) return
 
       // Notify client that ack audio is coming
-      sendToDevice(deviceId, { type: 'voice.ack.pending', threadId, text: ackText })
+      sendToDeviceName(deviceName, { type: 'voice.ack.pending', threadId, text: ackText })
 
       // Synthesize audio
       const { audio, durationMs } = await synthesize(ackText)
@@ -152,16 +159,18 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
         return
       }
 
-      // Push audio as base64-encoded JSON to the originating device
+      // Push audio as base64-encoded JSON to every tab announcing this device name
       const audioBase64 = audio.toString('base64')
-      sendToDevice(deviceId, {
+      sendToDeviceName(deviceName, {
         type: 'voice.tts.audio',
         threadId,
         text: ackText,
         audio: audioBase64,
         kind: 'ack'
       })
-      console.log(`[voice-response] ack delivered to ${deviceId}: "${ackText}" (${durationMs}ms TTS, ${audio.length}B)`)
+      console.log(
+        `[voice-response] ack delivered to ${deviceName}: "${ackText}" (${durationMs}ms TTS, ${audio.length}B)`
+      )
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[voice-response] ack generation failed for ${threadId}: ${msg}`)
@@ -172,7 +181,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
   // ── SUMMARY pipeline ──────────────────────────────────────────────
 
-  async function generateSummary(threadId: string, responseText: string, deviceId: string): Promise<void> {
+  async function generateSummary(threadId: string, responseText: string, deviceName: string): Promise<void> {
     const cfg = config()
     if (!cfg.autoTts || !cfg.ttsUrl) return
 
@@ -204,14 +213,14 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       if (!summaryText) return
 
       // Notify client that summary audio is coming
-      sendToDevice(deviceId, { type: 'voice.summary.pending', threadId, text: summaryText })
+      sendToDeviceName(deviceName, { type: 'voice.summary.pending', threadId, text: summaryText })
 
       // Synthesize audio
       const { audio, durationMs } = await synthesize(summaryText)
 
-      // Push audio as base64-encoded JSON to the originating device
+      // Push audio as base64-encoded JSON to every tab announcing this device name
       const audioBase64 = audio.toString('base64')
-      sendToDevice(deviceId, {
+      sendToDeviceName(deviceName, {
         type: 'voice.tts.audio',
         threadId,
         text: summaryText,
@@ -219,7 +228,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
         kind: 'summary'
       })
       console.log(
-        `[voice-response] summary delivered to ${deviceId}: "${summaryText.slice(0, 60)}…" (${durationMs}ms TTS, ${audio.length}B)`
+        `[voice-response] summary delivered to ${deviceName}: "${summaryText.slice(0, 60)}…" (${durationMs}ms TTS, ${audio.length}B)`
       )
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -234,12 +243,20 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     const payload = event.payload as {
       threadId?: string
       text?: string
-      origin?: { modality?: string; deviceId?: string }
+      origin?: { modality?: string; deviceId?: string; deviceName?: string }
     }
     if (!payload?.threadId || !payload?.text) return
     if (payload.origin?.modality !== 'voice') return
-    if (!payload.origin?.deviceId) {
-      console.warn('[voice-response] voice message has no deviceId — cannot route TTS audio back to client')
+
+    // The live connection's announced name beats the one carried on the
+    // origin payload — it reflects current state, while origin.deviceName
+    // only captures a snapshot taken when the message entered the queue.
+    // The fallback covers the race where that snapshot arrives before the
+    // ws.device-name announcement lands on this exact connection.
+    const deviceName =
+      (payload.origin?.deviceId && getDeviceName(payload.origin.deviceId)) || payload.origin?.deviceName
+    if (!deviceName) {
+      console.warn('[voice-response] voice message carries no device name — TTS audio has nowhere to route')
       return
     }
 
@@ -247,13 +264,12 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     if (!cfg.autoTts || !cfg.ttsUrl) return
 
     const { threadId, text } = payload
-    const deviceId = payload.origin.deviceId
 
     // Track this thread as voice-originated for the summary pipeline
-    pendingVoice.set(threadId, { deviceId, threadId, timestamp: Date.now() })
+    pendingVoice.set(threadId, { deviceName, threadId, timestamp: Date.now() })
 
     // Fire the ack pipeline (non-blocking)
-    void generateAck(threadId, text, deviceId)
+    void generateAck(threadId, text, deviceName)
   })
 
   // Listen for assistant turns completing
@@ -275,7 +291,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     if (!responseText) return
 
     // Fire the summary pipeline (non-blocking)
-    void generateSummary(payload.threadId, responseText, origin.deviceId)
+    void generateSummary(payload.threadId, responseText, origin.deviceName)
   })
 
   // Expire stale voice origins (safety valve — 5 minutes)

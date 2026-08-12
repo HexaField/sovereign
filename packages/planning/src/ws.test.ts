@@ -18,6 +18,7 @@ function makeMockWs(): WsHandler {
     broadcast: vi.fn(),
     broadcastToChannel: vi.fn(),
     sendTo: vi.fn(),
+    sendToDeviceName: vi.fn(),
     sendBinary: vi.fn(),
     sendBinaryTo: vi.fn(() => false),
     getConnectedDevices: vi.fn().mockReturnValue([]),

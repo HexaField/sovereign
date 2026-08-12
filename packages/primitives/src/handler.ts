@@ -12,6 +12,13 @@ export interface WsHandler {
   broadcast(msg: WsMessage): void
   broadcastToChannel(channel: string, msg: WsMessage, scope?: Record<string, string>): void
   sendTo(deviceId: string, msg: WsMessage): void
+  /** Send a message to every live connection announced under the given
+   *  device name. Matches zero, one, or many deviceIds — several tabs on
+   *  one physical device share a name but hold distinct connections. Use
+   *  this for TTS audio: the name persists across a page refresh even
+   *  though the refresh mints a fresh deviceId, so audio finds the right
+   *  tab where a plain sendTo would miss it. */
+  sendToDeviceName(name: string, msg: WsMessage): void
   sendBinary(channel: string, data: Buffer, scope?: Record<string, string>): void
   /** Send a binary frame to a single device on a named channel. Returns true
    *  if the device had an active connection, false otherwise. */
@@ -36,8 +43,10 @@ export function createWsHandler(bus: EventBus): WsHandler {
   const clientTypeToChannel = new Map<string, string>()
   const connections = new Map<string, WsLike>()
   // Friendly device labels (e.g. "Josh Phone"), keyed by the same
-  // connection deviceId as `connections`. Display only — sendTo/broadcast
-  // and every other routing path still key off deviceId, never the name.
+  // connection deviceId as `connections`. Most routing paths still key off
+  // deviceId, never the name — sendToDeviceName forms the one exception.
+  // The TTS pipeline calls it so audio keeps reaching the right tab across
+  // a page refresh, which always mints a fresh deviceId.
   const deviceNames = new Map<string, string>()
   const tracker = createSubscriptionTracker()
   const binaryRegistry = createBinaryChannelRegistry()
@@ -60,6 +69,14 @@ export function createWsHandler(bus: EventBus): WsHandler {
   const sendTo = (deviceId: string, msg: WsMessage): void => {
     const ws = connections.get(deviceId)
     if (ws) sendJson(ws, msg)
+  }
+
+  // Walk every announced name and forward to each match — covers multiple
+  // tabs that share one physical device's name.
+  const sendToDeviceName = (name: string, msg: WsMessage): void => {
+    for (const [deviceId, storedName] of deviceNames) {
+      if (storedName === name) sendTo(deviceId, msg)
+    }
   }
 
   const getDeviceName = (deviceId: string): string | undefined => deviceNames.get(deviceId)
@@ -179,8 +196,10 @@ export function createWsHandler(bus: EventBus): WsHandler {
       }
 
       // Built-in: ws.device-name — a friendly label the client sets for
-      // this connection's device (phone, desktop, …). Display only: TTS
-      // and every other routing decision still key off deviceId.
+      // this connection's device (phone, desktop, …). Most routing
+      // decisions still key off deviceId; sendToDeviceName forms the one
+      // exception — the TTS pipeline calls it so audio survives a
+      // deviceId change across page refresh.
       if (type === 'ws.device-name') {
         const { deviceName } = msg as { deviceName?: string }
         if (typeof deviceName === 'string' && deviceName.trim()) {
@@ -225,6 +244,7 @@ export function createWsHandler(bus: EventBus): WsHandler {
     broadcast,
     broadcastToChannel,
     sendTo,
+    sendToDeviceName,
     sendBinary,
     sendBinaryTo,
     getConnectedDevices,

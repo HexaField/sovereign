@@ -374,4 +374,70 @@ describe('WsHandler', () => {
       expect(ws2.sent).toHaveLength(0)
     })
   })
+
+  describe('sendToDeviceName', () => {
+    it('sends to every connection announced under the given name', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws1 = mockWs()
+      const ws2 = mockWs()
+      handler.handleConnection(ws1, 'd1')
+      handler.handleConnection(ws2, 'd2')
+      ws1.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+      ws2.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+      handler.sendToDeviceName('Josh Phone', { type: 'voice.tts.audio' })
+      expect(ws1.sent.some((s) => JSON.parse(s as string).type === 'voice.tts.audio')).toBe(true)
+      expect(ws2.sent.some((s) => JSON.parse(s as string).type === 'voice.tts.audio')).toBe(true)
+    })
+
+    it('skips a connection announced under a different name', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws1 = mockWs()
+      const ws2 = mockWs()
+      handler.handleConnection(ws1, 'd1')
+      handler.handleConnection(ws2, 'd2')
+      ws1.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+      ws2.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Desktop' }))
+      handler.sendToDeviceName('Josh Phone', { type: 'voice.tts.audio' })
+      expect(ws1.sent.some((s) => JSON.parse(s as string).type === 'voice.tts.audio')).toBe(true)
+      expect(ws2.sent).toHaveLength(0)
+    })
+
+    it('reaches no connection when nothing announces the given name', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws1 = mockWs()
+      handler.handleConnection(ws1, 'd1')
+      handler.sendToDeviceName('Nobody', { type: 'voice.tts.audio' })
+      expect(ws1.sent).toHaveLength(0)
+    })
+
+    // The regression this method fixes: a page refresh mints a fresh
+    // deviceId for the same physical device. sendTo(oldDeviceId, ...) then
+    // reaches nothing, but sendToDeviceName still finds the tab because the
+    // client re-announces the same name on the new connection.
+    it('reaches a tab after it reconnects with a fresh deviceId under the same name', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const wsOld = mockWs()
+      handler.handleConnection(wsOld, 'd1')
+      wsOld.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+
+      // Page refresh: the old connection drops, a new one opens with a new deviceId
+      wsOld.emit('close')
+      const wsNew = mockWs()
+      handler.handleConnection(wsNew, 'd2')
+      wsNew.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Josh Phone' }))
+
+      handler.sendToDeviceName('Josh Phone', { type: 'voice.tts.audio' })
+      expect(wsNew.sent.some((s) => JSON.parse(s as string).type === 'voice.tts.audio')).toBe(true)
+
+      // sendTo against the stale deviceId no longer reaches anything —
+      // confirms the bug sendToDeviceName exists to route around.
+      const before = wsNew.sent.length
+      handler.sendTo('d1', { type: 'stale' })
+      expect(wsNew.sent.length).toBe(before)
+    })
+  })
 })
