@@ -90,6 +90,7 @@ function makeWsHandler(): WsHandler & { broadcasts: Array<{ channel: string; dat
       broadcasts.push({ channel, data })
     }),
     sendTo: vi.fn(),
+    sendToDeviceName: vi.fn(),
     sendBinary: vi.fn(),
     sendBinaryTo: vi.fn(() => false),
     getConnectedDevices: vi.fn(() => []),

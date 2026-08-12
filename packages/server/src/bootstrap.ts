@@ -691,7 +691,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       synthesize: (text: string) => voiceModule.synthesize(text),
       llm: voiceLlm,
       getRecentTurns,
-      sendToDevice: (deviceId: string, msg: Record<string, unknown>) => wsHandler.sendTo(deviceId, msg as any),
+      sendToDeviceName: (deviceName: string, msg: Record<string, unknown>) =>
+        wsHandler.sendToDeviceName(deviceName, msg as any),
+      getDeviceName: (deviceId: string) => wsHandler.getDeviceName(deviceId),
       config: () => {
         const v = configStore.get<SovereignConfig['voice']>('voice')
         return {
