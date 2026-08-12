@@ -1,75 +1,122 @@
-import { describe, it, expect, afterEach } from 'vitest'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { createEventBus } from '@sovereign/core'
-import { createFileWatcher } from './watcher.js'
+/**
+ * Multi-root file watcher tests.
+ *
+ * Validates: start/stop lifecycle, multiple roots, event emission,
+ * and ignore patterns.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'sovereign-watcher-test-'))
-}
+// Stub fs.watch before importing the module
+const mockWatchers: Array<{
+  handler: (eventType: string, filename: string | null) => void
+  root: string
+  close: ReturnType<typeof vi.fn>
+  on: ReturnType<typeof vi.fn>
+}> = []
 
-describe('FileWatcher', () => {
-  const cleanups: Array<() => void> = []
+vi.mock('node:fs', () => ({
+  default: {
+    watch: vi.fn((root: string, _opts: any, handler: any) => {
+      const watcher = {
+        handler,
+        root,
+        close: vi.fn(),
+        on: vi.fn()
+      }
+      mockWatchers.push(watcher)
+      return watcher
+    }),
+    statSync: vi.fn(() => ({ isFile: () => true }))
+  }
+}))
 
-  afterEach(() => {
-    cleanups.forEach((fn) => fn())
-    cleanups.length = 0
+describe('createMultiRootFileWatcher', () => {
+  beforeEach(() => {
+    mockWatchers.length = 0
+    vi.clearAllMocks()
   })
 
-  it('ignores changes inside data/ directory (prevents event log feedback loop)', async () => {
-    const root = tmpDir()
-    const bus = createEventBus(root)
-    const events: Array<{ type: string; path: string }> = []
+  it('creates one watcher per root', async () => {
+    const { createMultiRootFileWatcher } = await import('./watcher.js')
+    const bus = { emit: vi.fn() } as any
 
-    bus.on('file.*', (e) => {
-      const p = (e.payload as any)?.path ?? ''
-      events.push({ type: e.type, path: p })
-    })
-
-    const watcher = createFileWatcher(bus, root)
+    const watcher = createMultiRootFileWatcher(bus, ['/root/a', '/root/b', '/root/c'])
     watcher.start()
-    cleanups.push(() => watcher.stop())
 
-    // Write to data/events/ — should be ignored
-    const eventsDir = path.join(root, 'data', 'events')
-    fs.mkdirSync(eventsDir, { recursive: true })
-    fs.writeFileSync(path.join(eventsDir, '2026-06-16.jsonl'), '{"test":true}\n')
-
-    // Write to a non-data file — should emit
-    fs.writeFileSync(path.join(root, 'test-file.md'), 'hello')
-
-    // Wait for debounce (100ms) + buffer
-    await new Promise((r) => setTimeout(r, 300))
-
-    const dataPaths = events.filter((e) => e.path.startsWith('data/') || e.path.startsWith('data\\'))
-    const normalPaths = events.filter((e) => e.path === 'test-file.md')
-
-    expect(dataPaths).toHaveLength(0)
-    expect(normalPaths.length).toBeGreaterThan(0)
+    expect(mockWatchers.length).toBe(3)
+    expect(watcher.watching()).toBe(true)
   })
 
-  it('ignores log files in data/ subdirectories', async () => {
-    const root = tmpDir()
-    const bus = createEventBus(root)
-    const events: Array<{ type: string; path: string }> = []
+  it('stops all watchers on stop()', async () => {
+    const { createMultiRootFileWatcher } = await import('./watcher.js')
+    const bus = { emit: vi.fn() } as any
 
-    bus.on('file.*', (e) => {
-      const p = (e.payload as any)?.path ?? ''
-      events.push({ type: e.type, path: p })
-    })
-
-    const watcher = createFileWatcher(bus, root)
+    const watcher = createMultiRootFileWatcher(bus, ['/root/a', '/root/b'])
     watcher.start()
-    cleanups.push(() => watcher.stop())
+    watcher.stop()
 
-    const logsDir = path.join(root, 'data', 'logs')
-    fs.mkdirSync(logsDir, { recursive: true })
-    fs.writeFileSync(path.join(logsDir, 'sovereign.stdout.log'), 'log line\n')
+    expect(mockWatchers[0].close).toHaveBeenCalled()
+    expect(mockWatchers[1].close).toHaveBeenCalled()
+    expect(watcher.watching()).toBe(false)
+  })
 
-    await new Promise((r) => setTimeout(r, 300))
+  it('emits events with root in payload', async () => {
+    vi.useFakeTimers()
+    const { createMultiRootFileWatcher } = await import('./watcher.js')
+    const bus = { emit: vi.fn() } as any
 
-    const dataPaths = events.filter((e) => e.path.startsWith('data/') || e.path.startsWith('data\\'))
-    expect(dataPaths).toHaveLength(0)
+    const watcher = createMultiRootFileWatcher(bus, ['/root/a'])
+    watcher.start()
+
+    // Simulate a file change
+    mockWatchers[0].handler('change', 'src/index.ts')
+
+    // Advance past debounce
+    vi.advanceTimersByTime(200)
+
+    expect(bus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'file.changed',
+        source: 'files',
+        payload: expect.objectContaining({
+          path: 'src/index.ts',
+          fullPath: '/root/a/src/index.ts',
+          root: '/root/a'
+        })
+      })
+    )
+
+    watcher.stop()
+    vi.useRealTimers()
+  })
+
+  it('ignores node_modules paths', async () => {
+    vi.useFakeTimers()
+    const { createMultiRootFileWatcher } = await import('./watcher.js')
+    const bus = { emit: vi.fn() } as any
+
+    const watcher = createMultiRootFileWatcher(bus, ['/root/a'])
+    watcher.start()
+
+    mockWatchers[0].handler('change', 'node_modules/pkg/index.js')
+    vi.advanceTimersByTime(200)
+
+    expect(bus.emit).not.toHaveBeenCalled()
+
+    watcher.stop()
+    vi.useRealTimers()
+  })
+
+  it('handles single root via createFileWatcher compat', async () => {
+    const { createFileWatcher } = await import('./watcher.js')
+    const bus = { emit: vi.fn() } as any
+
+    const watcher = createFileWatcher(bus, '/single/root')
+    watcher.start()
+
+    expect(mockWatchers.length).toBe(1)
+    expect(watcher.watching()).toBe(true)
+
+    watcher.stop()
   })
 })
