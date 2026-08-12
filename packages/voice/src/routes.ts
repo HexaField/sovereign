@@ -9,7 +9,7 @@ export function createVoiceRoutes(voice: VoiceModule): Router {
   const router = Router()
   const upload = multer({ storage: multer.memoryStorage() })
 
-  router.post('/api/voice/transcribe', upload.single('file'), async (req: Request, res: Response) => {
+  router.post('/api/voice/transcribe', upload.single('audio'), async (req: Request, res: Response) => {
     try {
       const file = (req as any).file
       if (!file) {
@@ -49,13 +49,3 @@ export function createVoiceRoutes(voice: VoiceModule): Router {
 
   return router
 }
-
-// Legacy export for backward compat
-const router = Router()
-router.post('/api/voice/transcribe', (_req, res) => {
-  res.status(501).json({ error: 'not implemented' })
-})
-router.post('/api/voice/tts', (_req, res) => {
-  res.status(501).json({ error: 'not implemented' })
-})
-export { router as voiceRoutes }
