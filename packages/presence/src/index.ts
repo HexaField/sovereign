@@ -28,3 +28,4 @@ export {
 } from './response-tools.js'
 export { createAd4mPoster } from './ad4m-poster.js'
 export { createPresenceModule, type PresenceModule, type PresenceModuleDeps } from './module.js'
+export { bootstrapKnowledgeGraph, type KnowledgeGraphBootstrapOpts } from './knowledge-graph.js'

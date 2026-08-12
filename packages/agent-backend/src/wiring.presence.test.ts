@@ -126,4 +126,46 @@ describe('makePresenceAwareAppendResolver', () => {
     const gatewayText = resolver?.(GATEWAY_ID)
     expect(gatewayText).toContain('knowledge graph')
   })
+
+  it('injects health summary into the internal thread when provided', () => {
+    const personalityFile = path.join(dir, 'PRESENCE.md')
+    fs.writeFileSync(personalityFile, '## presence personality')
+    const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
+      internalThreadId: () => PRESENCE_ID,
+      gatewayThreadId: () => GATEWAY_ID,
+      personalityFile,
+      getHealthSummary: () => '# Service health\n\n- ✓ AD4M: ok'
+    })
+    const text = resolver?.(PRESENCE_ID)
+    expect(text).toContain('Service health')
+    expect(text).toContain('AD4M: ok')
+  })
+
+  it('does NOT inject health summary into the gateway thread', () => {
+    const knowledgeFile = path.join(dir, 'PRESENCE_KNOWLEDGE.md')
+    fs.writeFileSync(knowledgeFile, '## knowledge graph')
+    const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
+      internalThreadId: () => PRESENCE_ID,
+      gatewayThreadId: () => GATEWAY_ID,
+      knowledgeFile,
+      getHealthSummary: () => '# Service health\n\n- ✓ AD4M: ok'
+    })
+    const text = resolver?.(GATEWAY_ID)
+    expect(text).toContain('knowledge graph')
+    expect(text).not.toContain('Service health')
+  })
+
+  it('handles getHealthSummary returning undefined', () => {
+    const personalityFile = path.join(dir, 'PRESENCE.md')
+    fs.writeFileSync(personalityFile, '## presence personality')
+    const resolver = makePresenceAwareAppendResolver(undefined, makeThreadManager(), {
+      internalThreadId: () => PRESENCE_ID,
+      gatewayThreadId: () => GATEWAY_ID,
+      personalityFile,
+      getHealthSummary: () => undefined
+    })
+    const text = resolver?.(PRESENCE_ID)
+    expect(text).toContain('presence personality')
+    expect(text).not.toContain('Service health')
+  })
 })
