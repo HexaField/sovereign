@@ -23,6 +23,7 @@ import {
 
 // WS + connection stores
 import { wsStore } from './ws/index.js'
+import { initTtsPlayer } from './features/voice/tts-player.js'
 import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
 import { initThreadStore, threadKey, threads, threadPrimaryWorkspace } from './features/threads/store.js'
 import { initPresence } from './features/threads/presence.js'
@@ -66,6 +67,10 @@ export default function App() {
 
     const cleanupConnection = initConnectionStore(wsStore)
     cleanups.push(cleanupConnection)
+
+    // Voice TTS playback — listens for voice.tts.audio JSON messages
+    const cleanupTts = initTtsPlayer(wsStore)
+    cleanups.push(cleanupTts)
 
     const cleanupThreads = initThreadStore(wsStore, activeWorkspace()?.orgId)
     cleanups.push(cleanupThreads)

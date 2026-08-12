@@ -13,6 +13,9 @@ export interface WsHandler {
   broadcastToChannel(channel: string, msg: WsMessage, scope?: Record<string, string>): void
   sendTo(deviceId: string, msg: WsMessage): void
   sendBinary(channel: string, data: Buffer, scope?: Record<string, string>): void
+  /** Send a binary frame to a single device on a named channel. Returns true
+   *  if the device had an active connection, false otherwise. */
+  sendBinaryTo(deviceId: string, channel: string, data: Buffer): boolean
   getConnectedDevices(): string[]
   getChannels(): string[]
 }
@@ -76,6 +79,15 @@ export function createWsHandler(bus: EventBus): WsHandler {
       const ws = connections.get(deviceId)
       if (ws) ws.send(frame)
     }
+  }
+
+  const sendBinaryTo = (deviceId: string, channel: string, data: Buffer): boolean => {
+    const ws = connections.get(deviceId)
+    if (!ws) return false
+    const channelId = binaryRegistry.getChannelId(channel)
+    if (channelId === undefined) return false
+    ws.send(encodeBinaryFrame(channelId, data))
+    return true
   }
 
   const sendError = (ws: WsLike, code: string, message: string): void => {
@@ -192,6 +204,7 @@ export function createWsHandler(bus: EventBus): WsHandler {
     broadcastToChannel,
     sendTo,
     sendBinary,
+    sendBinaryTo,
     getConnectedDevices,
     getChannels
   }

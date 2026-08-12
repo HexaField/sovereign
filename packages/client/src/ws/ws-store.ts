@@ -8,6 +8,9 @@ export interface WsStore {
   subscribe(channels: string[], scope?: Record<string, string>): void
   unsubscribe(channels: string[]): void
   on<T extends WsMessage>(type: string, handler: (msg: T) => void): () => void
+  /** Register a handler for binary frames on a named channel. The channel
+   *  ID mapping mirrors the server's `binaryChannelRegistry` order. */
+  onBinary(channel: string, handler: (data: ArrayBuffer) => void): () => void
   send(msg: WsMessage): void
   close(): void
 }
@@ -19,11 +22,12 @@ export interface WsStoreOptions {
 
 interface WebSocketLike {
   readyState: number
+  binaryType?: string
   send(data: string): void
   close(): void
   onopen: ((ev: unknown) => void) | null
   onclose: ((ev: unknown) => void) | null
-  onmessage: ((ev: { data: string }) => void) | null
+  onmessage: ((ev: { data: string | ArrayBuffer }) => void) | null
   onerror: ((ev: unknown) => void) | null
 }
 
@@ -36,6 +40,11 @@ export function createWsStore(options: WsStoreOptions): WsStore {
   let ws: WebSocketLike | null = null
   let isConnected = false
   const handlers = new Map<string, Set<(msg: WsMessage) => void>>()
+  const binaryHandlers = new Map<number, Set<(data: ArrayBuffer) => void>>()
+  // Channel name → ID mapping (mirrors server's binaryChannelRegistry order).
+  // The first binary channel registered on the server gets ID 1.
+  const binaryChannelIds = new Map<string, number>()
+  let nextBinaryChannelId = 1
   const activeSubscriptions: Array<{ channels: string[]; scope?: Record<string, string> }> = []
   const queue: WsMessage[] = []
   const reconnector = createReconnector()
@@ -97,6 +106,7 @@ export function createWsStore(options: WsStoreOptions): WsStore {
     if (closed) return
     if (!WsCtor) return
     ws = new WsCtor(url)
+    if (ws.binaryType !== undefined) ws.binaryType = 'arraybuffer'
 
     ws.onopen = () => {
       isConnected = true
@@ -122,7 +132,22 @@ export function createWsStore(options: WsStoreOptions): WsStore {
       // onclose will fire after onerror
     }
 
-    ws.onmessage = (ev: { data: string }) => {
+    ws.onmessage = (ev: { data: string | ArrayBuffer }) => {
+      // Binary frame — route by channel ID (first byte)
+      if (ev.data instanceof ArrayBuffer) {
+        lastPong = Date.now()
+        if (ev.data.byteLength < 2) return
+        const view = new Uint8Array(ev.data)
+        const channelId = view[0]
+        const payload = ev.data.slice(1)
+        const set = binaryHandlers.get(channelId)
+        if (set) {
+          for (const h of set) h(payload)
+        }
+        return
+      }
+
+      // JSON frame — existing path
       try {
         const msg = JSON.parse(ev.data) as WsMessage
         // Heartbeat pong — update last seen time
@@ -173,6 +198,19 @@ export function createWsStore(options: WsStoreOptions): WsStore {
     }
   }
 
+  const onBinary = (channel: string, handler: (data: ArrayBuffer) => void): (() => void) => {
+    // Assign a channel ID if not yet mapped (must match server registration order)
+    if (!binaryChannelIds.has(channel)) {
+      binaryChannelIds.set(channel, nextBinaryChannelId++)
+    }
+    const channelId = binaryChannelIds.get(channel)!
+    if (!binaryHandlers.has(channelId)) binaryHandlers.set(channelId, new Set())
+    binaryHandlers.get(channelId)!.add(handler)
+    return () => {
+      binaryHandlers.get(channelId)?.delete(handler)
+    }
+  }
+
   const send = (msg: WsMessage): void => {
     sendRaw(msg)
   }
@@ -187,5 +225,5 @@ export function createWsStore(options: WsStoreOptions): WsStore {
   // Auto-connect
   connect()
 
-  return { connected, subscribe, unsubscribe, on, send, close }
+  return { connected, subscribe, unsubscribe, on, onBinary, send, close }
 }

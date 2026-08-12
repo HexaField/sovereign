@@ -92,6 +92,12 @@ export interface SovereignConfig {
   voice: {
     transcribeUrl: string
     ttsUrl: string
+    /** When true, voice-originated messages receive an immediate TTS
+     *  acknowledgment and a spoken summary of the assistant response. */
+    autoTts: boolean
+    /** Milliseconds to delay ack playback — if the real response arrives
+     *  before this window, the ack gets cancelled. Default 1500. */
+    ackDelayMs: number
   }
   meetings: {
     summarizeUrl: string

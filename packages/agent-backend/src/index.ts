@@ -56,5 +56,5 @@ export {
 } from './claude-code/index.js'
 
 // Local LLM adapter
-export { createLocalLlmBackend, localLlmConfigFromStore } from './local-llm/index.js'
-export type { LocalLlmBackend, LocalLlmConfig } from './local-llm/index.js'
+export { createLocalLlmBackend, localLlmConfigFromStore, createInferenceClient } from './local-llm/index.js'
+export type { LocalLlmBackend, LocalLlmConfig, InferenceClient, InferenceClientConfig } from './local-llm/index.js'
