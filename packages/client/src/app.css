@@ -454,10 +454,12 @@ pre:hover .code-copy-btn {
 
 .msg-origin-icon {
   position: absolute;
-  top: 6px;
-  right: 32px;
-  padding: 4px;
+  top: -8px;
+  right: -8px;
+  padding: 3px;
   color: var(--c-text-muted);
+  background: var(--c-bg);
+  border-radius: 50%;
   line-height: 0;
   opacity: 0.6;
   pointer-events: none;
