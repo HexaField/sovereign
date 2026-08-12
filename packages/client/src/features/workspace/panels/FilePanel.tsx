@@ -1,20 +1,27 @@
 /**
- * FilePanel — Unified file viewer with slide-out tree drawer, edit/view toggle,
- * markdown rendering, image preview, and Monaco editor.
+ * FilePanel — Unified file viewer with universal file tree, multi-file tab bar,
+ * edit/view toggle, markdown rendering, image preview, and Monaco editor.
+ *
+ * The file tree shows ALL registered workspace roots (orgs), not just the
+ * active workspace. Open files persist per-tab via sessionStorage.
  *
  * Desktop: file tree slides out as overlay drawer from left edge.
- * Mobile: file tree is default view; tapping a file switches to viewer in-place.
+ * Mobile: file tree fills the view; tapping a file switches to viewer in-place.
  */
-import { Component, Show, For, createSignal, createEffect, onCleanup, onMount } from 'solid-js'
+import { Component, Show, For, createSignal, createEffect, onCleanup, onMount, batch } from 'solid-js'
 import { marked } from 'marked'
 import {
-  activeWorkspace,
   lastOpenFilePath,
   setLastOpenFilePath,
   mobileFileShowTree,
   setMobileFileShowTree,
   persistedExpandedDirs,
-  setPersistedExpandedDirs
+  setPersistedExpandedDirs,
+  openFileTabs,
+  activeFileTabId,
+  setActiveFileTabId,
+  openFileTab,
+  closeFileTab
 } from '../store.js'
 import { wsStore } from '../../../ws/index.js'
 
@@ -39,13 +46,19 @@ interface FileData {
   language?: string
 }
 
+interface FileRoot {
+  id: string
+  name: string
+  path: string
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 const IMAGE_EXTENSIONS = new Set(['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'])
 
-function getExt(path: string): string {
-  const idx = path.lastIndexOf('.')
-  return idx >= 0 ? path.slice(idx + 1).toLowerCase() : ''
+function getExt(p: string): string {
+  const idx = p.lastIndexOf('.')
+  return idx >= 0 ? p.slice(idx + 1).toLowerCase() : ''
 }
 
 function isImage(ext: string): boolean {
@@ -92,14 +105,24 @@ function getLanguage(ext: string): string {
   return map[ext] || 'plaintext'
 }
 
-function fileName(path: string): string {
-  return path.split('/').pop() ?? path
+function fileName(p: string): string {
+  return p.split('/').pop() ?? p
 }
 
 // ── API ──────────────────────────────────────────────────────────────
 
-async function fetchTree(projectPath: string | null): Promise<FileNode[]> {
-  if (!projectPath) return []
+async function fetchRoots(): Promise<FileRoot[]> {
+  try {
+    const res = await fetch('/api/files/roots')
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.roots ?? []
+  } catch {
+    return []
+  }
+}
+
+async function fetchTree(projectPath: string): Promise<FileNode[]> {
   const res = await fetch(`/api/files/tree?project=${encodeURIComponent(projectPath)}`)
   if (!res.ok) return []
   return res.json()
@@ -113,23 +136,20 @@ async function fetchSubtree(projectPath: string, dirPath: string): Promise<FileN
   return res.json()
 }
 
-async function fetchFile(projectPath: string, filePath: string): Promise<FileData> {
-  const res = await fetch(`/api/files?path=${encodeURIComponent(filePath)}&project=${encodeURIComponent(projectPath)}`)
-  if (!res.ok) throw new Error(`Failed to load file: ${res.statusText}`)
-  return res.json()
-}
-
 async function fetchFileAbsolute(filePath: string): Promise<FileData> {
   const res = await fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`)
   if (!res.ok) throw new Error(`Failed to load file: ${res.statusText}`)
   return res.json()
 }
 
-async function saveFileContent(projectPath: string, filePath: string, content: string): Promise<void> {
+async function saveFileAbsolute(filePath: string, content: string): Promise<void> {
+  // Write via the absolute-path route: project = dirname, path = relative filename
+  const dir = filePath.substring(0, filePath.lastIndexOf('/'))
+  const rel = filePath.substring(filePath.lastIndexOf('/') + 1)
   const res = await fetch('/api/files', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: filePath, project: projectPath, content })
+    body: JSON.stringify({ path: rel, project: dir, content })
   })
   if (!res.ok) throw new Error(`Failed to save: ${res.statusText}`)
 }
@@ -140,7 +160,7 @@ const ContextMenu: Component<{
   x: number
   y: number
   node: FileNode | null
-  projectPath: string
+  rootPath: string
   onClose: () => void
   onRefresh: () => void
 }> = (props) => {
@@ -152,7 +172,7 @@ const ContextMenu: Component<{
     await fetch('/api/files/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: props.projectPath, path: `${parentDir}/${name}`, type })
+      body: JSON.stringify({ project: props.rootPath, path: `${parentDir}/${name}`, type })
     })
     props.onRefresh()
     props.onClose()
@@ -165,7 +185,7 @@ const ContextMenu: Component<{
     await fetch('/api/files/rename', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: props.projectPath, oldPath: props.node.path, newName })
+      body: JSON.stringify({ project: props.rootPath, oldPath: props.node.path, newName })
     })
     props.onRefresh()
     props.onClose()
@@ -177,7 +197,7 @@ const ContextMenu: Component<{
     await fetch('/api/files/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: props.projectPath, path: props.node.path })
+      body: JSON.stringify({ project: props.rootPath, path: props.node.path })
     })
     props.onRefresh()
     props.onClose()
@@ -234,16 +254,17 @@ const ContextMenu: Component<{
 const TreeNodeItem: Component<{
   node: FileNode
   depth: number
-  projectPath: string
+  rootPath: string
   activeFilePath: string | null
   expandedDirs: Set<string>
-  onToggleDir: (path: string) => void
-  onSelectFile: (path: string) => void
+  onToggleDir: (dirPath: string, rootPath: string) => void
+  onSelectFile: (absolutePath: string) => void
   onContextMenu: (e: MouseEvent, node: FileNode) => void
 }> = (props) => {
   const isDir = () => props.node.type === 'directory'
-  const isExpanded = () => props.expandedDirs.has(props.node.path)
-  const isActive = () => props.activeFilePath === props.node.path
+  const isExpanded = () => props.expandedDirs.has(`${props.rootPath}:${props.node.path}`)
+  const fullPath = () => `${props.rootPath}/${props.node.path}`
+  const isActive = () => props.activeFilePath === fullPath()
   const indent = () => props.depth * 14 + 6
 
   return (
@@ -256,8 +277,8 @@ const TreeNodeItem: Component<{
           background: isActive() ? 'var(--c-hover-bg, rgba(255,255,255,0.06))' : 'transparent'
         }}
         onClick={() => {
-          if (isDir()) props.onToggleDir(props.node.path)
-          else props.onSelectFile(props.node.path)
+          if (isDir()) props.onToggleDir(props.node.path, props.rootPath)
+          else props.onSelectFile(fullPath())
         }}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -297,7 +318,7 @@ const TreeNodeItem: Component<{
             <TreeNodeItem
               node={child}
               depth={props.depth + 1}
-              projectPath={props.projectPath}
+              rootPath={props.rootPath}
               activeFilePath={props.activeFilePath}
               expandedDirs={props.expandedDirs}
               onToggleDir={props.onToggleDir}
@@ -311,15 +332,75 @@ const TreeNodeItem: Component<{
   )
 }
 
+// ── Tab Bar ──────────────────────────────────────────────────────────
+
+const FileTabBar: Component<{
+  onSelectTab: (filePath: string) => void
+}> = (props) => {
+  const tabs = openFileTabs
+  const activeId = activeFileTabId
+
+  return (
+    <Show when={tabs().length > 0}>
+      <div
+        class="scrollbar-none flex shrink-0 items-center gap-0 overflow-x-auto border-b"
+        style={{ 'border-color': 'var(--c-border)', background: 'var(--c-bg-raised)' }}
+      >
+        <For each={tabs()}>
+          {(tab) => {
+            const active = () => activeId() === tab.id
+            return (
+              <div
+                class="group flex shrink-0 items-center"
+                style={{
+                  background: active() ? 'var(--c-bg)' : 'transparent',
+                  'border-right': '1px solid var(--c-border)'
+                }}
+              >
+                <button
+                  class="px-3 py-1.5 text-[11px] transition-colors"
+                  style={{
+                    color: active() ? 'var(--c-text)' : 'var(--c-text-muted)',
+                    'font-weight': active() ? '500' : '400'
+                  }}
+                  onClick={() => {
+                    setActiveFileTabId(tab.id)
+                    props.onSelectTab(tab.path)
+                  }}
+                  title={tab.path}
+                >
+                  {tab.label}
+                </button>
+                <button
+                  class="px-1 py-1 text-[10px] opacity-0 transition-opacity group-hover:opacity-100"
+                  style={{ color: 'var(--c-text-muted)' }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeFileTab(tab.id)
+                  }}
+                  title="Close tab"
+                >
+                  ✕
+                </button>
+              </div>
+            )
+          }}
+        </For>
+      </div>
+    </Show>
+  )
+}
+
 // ── Main FilePanel ───────────────────────────────────────────────────
 
 const FilePanel: Component = () => {
-  const ws = () => activeWorkspace()
-
   // ── State ──
-  const [orgPath, setOrgPath] = createSignal<string | null>(null)
-  const [treeData, setTreeData] = createSignal<FileNode[]>([])
+  const [roots, setRoots] = createSignal<FileRoot[]>([])
+  // Tree data keyed by root path
+  const [treeMaps, setTreeMaps] = createSignal<Record<string, FileNode[]>>({})
   const [expandedDirs, setExpandedDirs] = createSignal<Set<string>>(new Set(persistedExpandedDirs()))
+  // expandedRoots tracks which root sections show their tree
+  const [expandedRoots, setExpandedRoots] = createSignal<Set<string>>(new Set())
   const [activeFilePath, setActiveFilePath] = createSignal<string | null>(lastOpenFilePath())
   const [fileData, setFileData] = createSignal<FileData | null>(null)
   const [mode, setMode] = createSignal<FileMode>('view')
@@ -330,67 +411,53 @@ const FilePanel: Component = () => {
   const [renderedHtml, setRenderedHtml] = createSignal('')
   const [editorContent, setEditorContent] = createSignal('')
   const [drawerOpen, setDrawerOpen] = createSignal(false)
-  const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; node: FileNode | null } | null>(null)
+  const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; node: FileNode | null; rootPath: string } | null>(
+    null
+  )
 
   let editorContainer: HTMLDivElement | undefined
   let monacoEditor: any = null
   let monacoInstance: any = null
 
-  // ── Resolve org/project path ──
-  createEffect(async () => {
-    const orgId = ws()?.orgId
-    if (!orgId) {
-      setOrgPath(null)
-      return
-    }
-    try {
-      const activeProj = ws()?.activeProjectId
-      if (activeProj) {
-        const projRes = await fetch(`/api/orgs/${encodeURIComponent(orgId)}/projects`)
-        if (projRes.ok) {
-          const projects = await projRes.json()
-          const proj = projects.find((p: any) => p.id === activeProj)
-          if (proj?.repoPath) {
-            setOrgPath(proj.repoPath)
-            return
-          }
-        }
-      }
-      const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}`)
-      if (res.ok) {
-        const org = await res.json()
-        setOrgPath(org.path ?? null)
-      } else {
-        setOrgPath(null)
-      }
-    } catch {
-      setOrgPath(null)
+  // ── Load roots on mount ──
+  onMount(async () => {
+    const r = await fetchRoots()
+    setRoots(r)
+    // Auto-expand the first root
+    if (r.length > 0) {
+      toggleRoot(r[0].path)
     }
   })
 
-  // ── Load tree when path changes ──
-  createEffect(async () => {
-    const path = orgPath()
-    if (!path) {
-      setTreeData([])
-      return
-    }
-    const nodes = await fetchTree(path)
-    setTreeData(nodes)
-  })
-
-  // ── Tree operations ──
-  const toggleDir = async (dirPath: string) => {
-    const s = new Set(expandedDirs())
-    if (s.has(dirPath)) {
-      s.delete(dirPath)
+  // ── Root toggle — load tree on first expand ──
+  const toggleRoot = async (rootPath: string) => {
+    const s = new Set(expandedRoots())
+    if (s.has(rootPath)) {
+      s.delete(rootPath)
     } else {
-      s.add(dirPath)
-      const path = orgPath()
-      if (path) {
-        const children = await fetchSubtree(path, dirPath)
-        setTreeData((prev) => mergeChildren(prev, dirPath, children))
+      s.add(rootPath)
+      // Load tree if not already loaded
+      if (!treeMaps()[rootPath]) {
+        const nodes = await fetchTree(rootPath)
+        setTreeMaps((prev) => ({ ...prev, [rootPath]: nodes }))
       }
+    }
+    setExpandedRoots(s)
+  }
+
+  // ── Directory toggle — lazy-load children ──
+  const toggleDir = async (dirPath: string, rootPath: string) => {
+    const key = `${rootPath}:${dirPath}`
+    const s = new Set(expandedDirs())
+    if (s.has(key)) {
+      s.delete(key)
+    } else {
+      s.add(key)
+      const children = await fetchSubtree(rootPath, dirPath)
+      setTreeMaps((prev) => {
+        const rootNodes = prev[rootPath] ?? []
+        return { ...prev, [rootPath]: mergeChildren(rootNodes, dirPath, children) }
+      })
     }
     setExpandedDirs(s)
     setPersistedExpandedDirs([...s])
@@ -409,11 +476,8 @@ const FilePanel: Component = () => {
     })
   }
 
-  // ── File operations ──
+  // ── File operations (always absolute paths) ──
   const openFile = async (filePath: string) => {
-    const path = orgPath()
-    const isAbsolute = filePath.startsWith('/')
-    if (!isAbsolute && !path) return
     setLoading(true)
     setError(null)
     setActiveFilePath(filePath)
@@ -421,11 +485,14 @@ const FilePanel: Component = () => {
     setMode('view')
     setDirty(false)
 
+    // Add to tabs
+    openFileTab(filePath, '_workspace')
+
     if (isMobile()) setMobileFileShowTree(false)
     setDrawerOpen(false)
 
     try {
-      const data = isAbsolute ? await fetchFileAbsolute(filePath) : await fetchFile(path!, filePath)
+      const data = await fetchFileAbsolute(filePath)
       setFileData(data)
       setEditorContent(data.content)
 
@@ -440,15 +507,20 @@ const FilePanel: Component = () => {
     }
   }
 
+  // Switch to an already-open tab
+  const switchToTab = (filePath: string) => {
+    if (activeFilePath() === filePath) return
+    openFile(filePath)
+  }
+
   const save = async () => {
-    const path = orgPath()
     const fp = activeFilePath()
     const fd = fileData()
-    if (!path || !fp || !fd || !dirty()) return
+    if (!fp || !fd || !dirty()) return
     setSaving(true)
     try {
       const content = monacoEditor ? monacoEditor.getValue() : editorContent()
-      await saveFileContent(path, fp, content)
+      await saveFileAbsolute(fp, content)
       setDirty(false)
       setEditorContent(content)
       if (getExt(fp) === 'md') {
@@ -536,49 +608,56 @@ const FilePanel: Component = () => {
   }
 
   // ── Context menu ──
-  const handleCtxMenu = (e: MouseEvent, node: FileNode) => {
+  const handleCtxMenu = (e: MouseEvent, node: FileNode, rootPath: string) => {
     e.preventDefault()
-    setCtxMenu({ x: e.clientX, y: e.clientY, node })
+    setCtxMenu({ x: e.clientX, y: e.clientY, node, rootPath })
   }
 
   const closeCtxMenu = () => setCtxMenu(null)
 
-  const refreshTree = async () => {
-    const path = orgPath()
-    if (!path) return
-    const nodes = await fetchTree(path)
-    setTreeData(nodes)
+  const refreshRoot = async (rootPath: string) => {
+    const nodes = await fetchTree(rootPath)
+    setTreeMaps((prev) => ({ ...prev, [rootPath]: nodes }))
   }
 
   // ── Restore persisted file on mount + subscribe to file changes ──
   onMount(() => {
     document.addEventListener('click', closeCtxMenu)
 
-    const stored = lastOpenFilePath()
-    if (stored && !mobileFileShowTree()) {
-      const isAbsolute = stored.startsWith('/')
-      if (isAbsolute || orgPath()) {
+    // Restore the active tab from sessionStorage
+    const tabs = openFileTabs()
+    const activeId = activeFileTabId()
+    if (activeId && tabs.length > 0) {
+      const activeTab = tabs.find((t) => t.id === activeId)
+      if (activeTab) {
+        openFile(activeTab.path)
+      }
+    } else {
+      const stored = lastOpenFilePath()
+      if (stored && !mobileFileShowTree()) {
         openFile(stored)
       }
     }
 
     wsStore.subscribe(['files'])
     const offChanged = wsStore.on('file.changed', (msg: any) => {
-      const changedPath = msg.path || msg.fullPath
+      const changedPath = msg.fullPath || msg.path
       if (!changedPath) return
       const active = activeFilePath()
-      if (!active) return
-      const activeFull = active.startsWith('/') ? active : orgPath() ? `${orgPath()}/${active}` : null
-      if (changedPath === active || changedPath === activeFull || msg.fullPath === activeFull) {
+      if (active && changedPath === active) {
         if (msg.kind === 'deleted') {
-          setFileData(null)
-          setActiveFilePath(null)
-          setLastOpenFilePath(null)
+          batch(() => {
+            setFileData(null)
+            setActiveFilePath(null)
+            setLastOpenFilePath(null)
+          })
         } else if (!dirty()) {
           openFile(active)
         }
       }
-      refreshTree()
+      // Refresh the tree for the affected root
+      const root = msg.root
+      if (root) refreshRoot(root)
     })
     onCleanup(() => {
       offChanged()
@@ -586,21 +665,19 @@ const FilePanel: Component = () => {
     })
   })
 
-  // Load lastOpenFilePath whenever it changes (covers: restore on mount, file chip open, workspace switch)
+  // Load lastOpenFilePath whenever it changes externally (file chip open)
   createEffect(() => {
     const stored = lastOpenFilePath()
     if (!stored || loading()) return
-    if (activeFilePath() === stored) return // already showing this file
-    const isAbsolute = stored.startsWith('/')
-    if (isAbsolute || orgPath()) {
-      openFile(stored)
-    }
+    if (activeFilePath() === stored) return
+    openFile(stored)
   })
 
-  // Sync expandedDirs from store when workspace changes (store is updated by restoreWorkspacePanelState)
+  // Sync expandedDirs from store
   createEffect(() => {
     setExpandedDirs(new Set(persistedExpandedDirs()))
   })
+
   onCleanup(() => {
     if (monacoEditor) monacoEditor.dispose()
     document.removeEventListener('click', closeCtxMenu)
@@ -609,34 +686,79 @@ const FilePanel: Component = () => {
   // ── Derived state ──
   const ext = () => getExt(activeFilePath() ?? '')
   const hasFile = () => !!fileData() && !!activeFilePath()
-  const projectPath = () => orgPath() ?? ''
 
-  // ── File content URL for images ──
-
-  // ── Tree component (shared between desktop drawer and mobile) ──
+  // ── Tree component — renders all roots ──
   const FileTree: Component<{ class?: string }> = (treeProps) => (
     <div class={`overflow-y-auto ${treeProps.class ?? ''}`}>
       <Show
-        when={treeData().length > 0}
+        when={roots().length > 0}
         fallback={
           <p class="px-3 py-4 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
-            {orgPath() ? 'Empty directory' : 'No workspace selected'}
+            No workspaces configured
           </p>
         }
       >
-        <For each={treeData()}>
-          {(node) => (
-            <TreeNodeItem
-              node={node}
-              depth={0}
-              projectPath={projectPath()}
-              activeFilePath={activeFilePath()}
-              expandedDirs={expandedDirs()}
-              onToggleDir={toggleDir}
-              onSelectFile={openFile}
-              onContextMenu={handleCtxMenu}
-            />
-          )}
+        <For each={roots()}>
+          {(root) => {
+            const rootExpanded = () => expandedRoots().has(root.path)
+            const rootNodes = () => treeMaps()[root.path] ?? []
+            return (
+              <div>
+                {/* Root header */}
+                <button
+                  class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[11px] font-semibold transition-colors"
+                  style={{
+                    color: 'var(--c-text-heading, var(--c-text))',
+                    background: 'transparent',
+                    'border-bottom': rootExpanded() ? '1px solid var(--c-border)' : 'none'
+                  }}
+                  onClick={() => toggleRoot(root.path)}
+                >
+                  <span class="w-3 shrink-0 text-center text-[9px]" style={{ color: 'var(--c-text-muted)' }}>
+                    {rootExpanded() ? '▾' : '▸'}
+                  </span>
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    style={{ color: 'var(--c-text-muted)' }}
+                  >
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                  </svg>
+                  <span class="truncate">{root.name}</span>
+                </button>
+                {/* Root tree contents */}
+                <Show when={rootExpanded()}>
+                  <Show
+                    when={rootNodes().length > 0}
+                    fallback={
+                      <p class="px-3 py-2 text-center text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                        Empty directory
+                      </p>
+                    }
+                  >
+                    <For each={rootNodes()}>
+                      {(node) => (
+                        <TreeNodeItem
+                          node={node}
+                          depth={1}
+                          rootPath={root.path}
+                          activeFilePath={activeFilePath()}
+                          expandedDirs={expandedDirs()}
+                          onToggleDir={toggleDir}
+                          onSelectFile={openFile}
+                          onContextMenu={(e, n) => handleCtxMenu(e, n, root.path)}
+                        />
+                      )}
+                    </For>
+                  </Show>
+                </Show>
+              </div>
+            )
+          }}
         </For>
       </Show>
     </div>
@@ -703,9 +825,7 @@ const FilePanel: Component = () => {
               if (!fp) return
               const name = fileName(fp)
               const fd = fileData()
-              const isAbsolute = fp.startsWith('/')
-              if (isAbsolute && fd) {
-                // Already have the content — download as blob (avoids project-path restriction)
+              if (fd) {
                 const mime = fd.encoding === 'base64' ? 'application/octet-stream' : 'text/plain'
                 const content =
                   fd.encoding === 'base64' ? Uint8Array.from(atob(fd.content), (c) => c.charCodeAt(0)) : fd.content
@@ -718,16 +838,6 @@ const FilePanel: Component = () => {
                 a.click()
                 document.body.removeChild(a)
                 URL.revokeObjectURL(url)
-              } else {
-                const path = orgPath()
-                if (!path) return
-                const url = `/api/files/raw?project=${encodeURIComponent(path)}&path=${encodeURIComponent(fp)}&download=1`
-                const a = document.createElement('a')
-                a.href = url
-                a.download = name
-                document.body.appendChild(a)
-                a.click()
-                document.body.removeChild(a)
               }
             }}
             title="Download file"
@@ -802,7 +912,6 @@ const FilePanel: Component = () => {
               <Show
                 when={fd()!.encoding === 'base64'}
                 fallback={
-                  /* SVG: render inline from content */
                   <div
                     class="max-h-[70vh] max-w-full overflow-auto rounded shadow-lg"
                     style={{
@@ -850,6 +959,7 @@ const FilePanel: Component = () => {
   // ── Desktop Layout ──
   const DesktopLayout: Component = () => (
     <div class="relative flex h-full flex-col overflow-hidden" onKeyDown={handleKeyDown}>
+      <FileTabBar onSelectTab={switchToTab} />
       <Toolbar />
       <div class="relative flex-1 overflow-hidden">
         {/* Drawer backdrop */}
@@ -865,7 +975,7 @@ const FilePanel: Component = () => {
         <div
           class="absolute top-0 bottom-0 left-0 z-30 flex flex-col overflow-hidden transition-transform duration-200"
           style={{
-            width: '240px',
+            width: '260px',
             background: 'var(--c-bg-raised)',
             'border-right': '1px solid var(--c-border)',
             transform: drawerOpen() ? 'translateX(0)' : 'translateX(-100%)'
@@ -932,6 +1042,7 @@ const FilePanel: Component = () => {
   const MobileLayout: Component = () => (
     <div class="flex h-full flex-col overflow-hidden" onKeyDown={handleKeyDown}>
       <Show when={!mobileFileShowTree()}>
+        <FileTabBar onSelectTab={switchToTab} />
         <Toolbar />
       </Show>
 
@@ -988,9 +1099,9 @@ const FilePanel: Component = () => {
             x={menu().x}
             y={menu().y}
             node={menu().node}
-            projectPath={projectPath()}
+            rootPath={menu().rootPath}
             onClose={closeCtxMenu}
-            onRefresh={refreshTree}
+            onRefresh={() => refreshRoot(menu().rootPath)}
           />
         )}
       </Show>

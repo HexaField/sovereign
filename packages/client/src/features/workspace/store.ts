@@ -36,6 +36,10 @@ function wsKey(orgId: string, name: string): string {
   return `sovereign:workspace:${orgId}:${name}`
 }
 
+// --- Storage helpers ---
+// Layout/panel state → localStorage (shared across tabs).
+// File-related state (open tabs, expanded dirs) → sessionStorage (per-tab isolation).
+
 function readStorage<T>(key: string, fallback: T, parse: (v: string) => T = JSON.parse): T {
   if (typeof localStorage === 'undefined') return fallback
   try {
@@ -51,6 +55,26 @@ function writeStorage(key: string, value: unknown): void {
   if (typeof localStorage === 'undefined') return
   try {
     localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value))
+  } catch {
+    /* ignore */
+  }
+}
+
+function readSession<T>(key: string, fallback: T, parse: (v: string) => T = JSON.parse): T {
+  if (typeof sessionStorage === 'undefined') return fallback
+  try {
+    const v = sessionStorage.getItem(key)
+    if (v !== null) return parse(v)
+  } catch {
+    /* ignore */
+  }
+  return fallback
+}
+
+function writeSession(key: string, value: unknown): void {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    sessionStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value))
   } catch {
     /* ignore */
   }
@@ -137,24 +161,24 @@ export function isMobileWidth(): boolean {
   return window.innerWidth < 768
 }
 
-// §7.4 — Mobile file panel persistence
+// §7.4 — Mobile file panel persistence (sessionStorage — per-tab)
 export const [lastOpenFilePath, _setLastOpenFilePath] = createSignal<string | null>(null)
 export const [mobileFileShowTree, _setMobileFileShowTree] = createSignal(true)
 export const [persistedExpandedDirs, _setPersistedExpandedDirs] = createSignal<string[]>([])
 
 export function setLastOpenFilePath(v: string | null): void {
   _setLastOpenFilePath(v)
-  writeStorage(wsKey(currentOrgId(), 'lastOpenFilePath'), v)
+  writeSession('sovereign:file:lastOpenFilePath', v)
 }
 
 export function setMobileFileShowTree(v: boolean): void {
   _setMobileFileShowTree(v)
-  writeStorage(wsKey(currentOrgId(), 'mobileFileShowTree'), v)
+  writeSession('sovereign:file:mobileFileShowTree', v)
 }
 
 export function setPersistedExpandedDirs(dirs: string[]): void {
   _setPersistedExpandedDirs(dirs)
-  writeStorage(wsKey(currentOrgId(), 'expandedDirs'), dirs)
+  writeSession('sovereign:file:expandedDirs', dirs)
 }
 
 // §3.2 — Expand chat mode
@@ -185,7 +209,7 @@ export function setChatPanelWidth(v: number): void {
 // thread on load). No thread label is assumed to exist.
 export const [activeThreadKey, setActiveThreadKey] = createSignal('')
 
-// §3.6 — Open file tabs in main content
+// §3.6 — Open file tabs in main content (sessionStorage — per-tab isolation)
 export interface OpenFileTab {
   id: string
   path: string
@@ -193,17 +217,31 @@ export interface OpenFileTab {
   label: string
 }
 
-export const [openFileTabs, setOpenFileTabs] = createSignal<OpenFileTab[]>([])
-export const [activeFileTabId, setActiveFileTabId] = createSignal<string | null>(null)
+const SESSION_TABS_KEY = 'sovereign:file:openTabs'
+const SESSION_ACTIVE_TAB_KEY = 'sovereign:file:activeTabId'
 
-export function openFileTab(path: string, projectId: string): void {
-  const id = `file:${projectId}:${path}`
-  const label = path.split('/').pop() ?? path
+export const [openFileTabs, setOpenFileTabs] = createSignal<OpenFileTab[]>(
+  readSession<OpenFileTab[]>(SESSION_TABS_KEY, [])
+)
+export const [activeFileTabId, setActiveFileTabId] = createSignal<string | null>(
+  readSession<string | null>(SESSION_ACTIVE_TAB_KEY, null, (v) => (v === 'null' ? null : v))
+)
+
+function persistTabs(): void {
+  writeSession(SESSION_TABS_KEY, openFileTabs())
+  writeSession(SESSION_ACTIVE_TAB_KEY, activeFileTabId())
+}
+
+export function openFileTab(filePath: string, projectId: string): void {
+  const id = `file:${projectId}:${filePath}`
+  const label = filePath.split('/').pop() ?? filePath
   setOpenFileTabs((prev) => {
     if (prev.some((t) => t.id === id)) return prev
-    return [...prev, { id, path, projectId, label }]
+    return [...prev, { id, path: filePath, projectId, label }]
   })
   setActiveFileTabId(id)
+  setLastOpenFilePath(filePath)
+  persistTabs()
 }
 
 // §3.4 — Main content view types
@@ -238,10 +276,14 @@ export function closeFileTab(id: string): void {
   setOpenFileTabs((prev) => {
     const next = prev.filter((t) => t.id !== id)
     if (activeFileTabId() === id) {
-      setActiveFileTabId(next.length > 0 ? next[next.length - 1].id : null)
+      const newActive = next.length > 0 ? next[next.length - 1].id : null
+      setActiveFileTabId(newActive)
+      const newTab = next.find((t) => t.id === newActive)
+      _setLastOpenFilePath(newTab?.path ?? null)
     }
     return next
   })
+  persistTabs()
 }
 
 // §3.1 — Sidebar width and collapsed state
@@ -375,8 +417,9 @@ export function syncWorkspaceForThread(orgId: string, orgName?: string): void {
   }
 }
 
-/** Restore all per-workspace panel state from localStorage */
+/** Restore layout panel state from localStorage + file state from sessionStorage */
 function restoreWorkspacePanelState(orgId: string): void {
+  // Layout state → localStorage (shared across tabs)
   _setSidebarWidth(readStorage(wsKey(orgId, 'sidebarWidth'), SIDEBAR_DEFAULT_WIDTH))
   _setChatPanelWidth(readStorage(wsKey(orgId, 'chatPanelWidth'), CHAT_PANEL_DEFAULT_WIDTH))
   _setSidebarCollapsed(readStorage(wsKey(orgId, 'sidebarCollapsed'), false))
@@ -386,11 +429,12 @@ function restoreWorkspacePanelState(orgId: string): void {
   if (SIDEBAR_TABS.some((t) => t.key === tab)) {
     _setActiveSidebarTab(tab as SidebarTab)
   }
+  // File state → sessionStorage (per-tab isolation)
   _setLastOpenFilePath(
-    readStorage<string | null>(wsKey(orgId, 'lastOpenFilePath'), null, (v) => (v === 'null' ? null : v))
+    readSession<string | null>('sovereign:file:lastOpenFilePath', null, (v) => (v === 'null' ? null : v))
   )
-  _setMobileFileShowTree(readStorage(wsKey(orgId, 'mobileFileShowTree'), true))
-  _setPersistedExpandedDirs(readStorage<string[]>(wsKey(orgId, 'expandedDirs'), []))
+  _setMobileFileShowTree(readSession('sovereign:file:mobileFileShowTree', true))
+  _setPersistedExpandedDirs(readSession<string[]>('sovereign:file:expandedDirs', []))
 }
 
 export function setActiveProject(projectId: string, projectName?: string): void {
