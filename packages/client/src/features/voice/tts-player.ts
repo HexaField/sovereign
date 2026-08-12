@@ -53,32 +53,91 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer
 }
 
-/** Play a WAV audio buffer through the Web Audio API. */
-async function playAudio(wavData: ArrayBuffer): Promise<void> {
-  // Interrupt any current playback
-  interruptTts()
+// ── Chunk queue ─────────────────────────────────────────────────────
+// When streaming TTS sends multiple voice.tts.audio messages for one
+// summary (each with chunk.index / chunk.total), queue them and play
+// sequentially instead of interrupting. A non-chunked message (no
+// chunk field) interrupts as before.
 
-  const ctx = getAudioContext()
-  try {
-    const audioBuffer = await ctx.decodeAudioData(wavData.slice(0))
-    const source = ctx.createBufferSource()
-    source.buffer = audioBuffer
-    source.connect(ctx.destination)
+const chunkQueue: ArrayBuffer[] = []
+let draining = false
 
-    currentSource = source
-    isPlaying = true
+async function drainChunkQueue(): Promise<void> {
+  if (draining) return
+  draining = true
+  isPlaying = true
+  while (chunkQueue.length > 0) {
+    const wavData = chunkQueue.shift()!
+    await playOnce(wavData)
+  }
+  draining = false
+  isPlaying = false
+}
 
-    source.onended = () => {
-      if (currentSource === source) {
-        currentSource = null
-        isPlaying = false
-      }
+/** Play a single WAV buffer and resolve when it finishes. */
+function playOnce(wavData: ArrayBuffer): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const ctx = getAudioContext()
+    ctx
+      .decodeAudioData(wavData.slice(0))
+      .then((audioBuffer) => {
+        const source = ctx.createBufferSource()
+        source.buffer = audioBuffer
+        source.connect(ctx.destination)
+        currentSource = source
+        source.onended = () => {
+          if (currentSource === source) currentSource = null
+          resolve()
+        }
+        source.start()
+      })
+      .catch((err) => {
+        console.error('[tts-player] chunk decode/play failed:', err)
+        resolve() // Skip failed chunk, continue queue
+      })
+  })
+}
+
+/** Play a WAV audio buffer through the Web Audio API.
+ *  Handles both single-shot messages (interrupt) and streamed chunks
+ *  (queue sequentially). */
+async function playAudio(wavData: ArrayBuffer, chunk?: { index: number; total: number; done: boolean }): Promise<void> {
+  if (chunk && chunk.total > 1) {
+    // Streaming mode — queue chunks and play sequentially.
+    // First chunk interrupts any prior playback; subsequent ones queue.
+    if (chunk.index === 0) {
+      interruptTts()
+      chunkQueue.length = 0
     }
+    chunkQueue.push(wavData)
+    void drainChunkQueue()
+  } else {
+    // Single-shot — interrupt and play immediately
+    interruptTts()
+    chunkQueue.length = 0
 
-    source.start()
-  } catch (err) {
-    console.error('[tts-player] audio decode/play failed:', err)
-    isPlaying = false
+    const ctx = getAudioContext()
+    try {
+      const audioBuffer = await ctx.decodeAudioData(wavData.slice(0))
+      const source = ctx.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(ctx.destination)
+
+      currentSource = source
+      isPlaying = true
+
+      source.onended = () => {
+        if (currentSource === source) {
+          currentSource = null
+          isPlaying = false
+        }
+      }
+
+      source.start()
+    } catch (err) {
+      console.error('[tts-player] audio decode/play failed:', err)
+      isPlaying = false
+    }
   }
 }
 
@@ -134,6 +193,7 @@ export interface TtsAudioMessage {
   kind?: string
   text?: string
   audio?: string
+  chunk?: { index: number; total: number; done: boolean }
 }
 
 /** Derive the claim key for a TTS payload. threadId + kind + a hash of
@@ -186,7 +246,7 @@ async function handleIncomingAudio(msg: TtsAudioMessage): Promise<void> {
     return
   }
   const wavData = base64ToArrayBuffer(msg.audio as string)
-  void playAudio(wavData)
+  void playAudio(wavData, msg.chunk)
 }
 
 /** Wire up the TTS player to listen for voice.tts.audio messages.

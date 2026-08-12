@@ -26,9 +26,29 @@ export interface LlmCompleter {
   }>
 }
 
+/** A single audio chunk from sentence-level TTS streaming. */
+export interface TtsStreamChunk {
+  index: number
+  total: number
+  sentence: string
+  audio: Buffer
+  durationMs: number
+  done: boolean
+}
+
 export interface VoiceResponseDeps {
   bus: EventBus
   synthesize: (text: string) => Promise<{ audio: Buffer; durationMs: number }>
+  /** Stream TTS as sentence-level audio chunks. When provided, the
+   *  summary pipeline streams each sentence to the client as it
+   *  finishes synthesizing — first audio arrives after one sentence,
+   *  not after the full text completes. Falls back to single
+   *  synthesize() when absent. */
+  synthesizeStream?: (
+    text: string,
+    onChunk: (chunk: TtsStreamChunk) => void,
+    options?: { signal?: AbortSignal }
+  ) => Promise<void>
   /** Lightweight LLM for ack/summary generation (local-llm inference client). */
   llm: LlmCompleter
   /** Fetch the last N turns for a thread. */
@@ -92,7 +112,7 @@ interface VoiceOrigin {
 }
 
 export function createVoiceResponse(deps: VoiceResponseDeps) {
-  const { bus, synthesize, llm, getRecentTurns, sendToDeviceName, getDeviceName, config } = deps
+  const { bus, synthesize, synthesizeStream, llm, getRecentTurns, sendToDeviceName, getDeviceName, config } = deps
 
   // Active voice origins — maps threadId → origin info.
   // Set when a voice message enters the queue; consumed when the
@@ -215,21 +235,42 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       // Notify client that summary audio is coming
       sendToDeviceName(deviceName, { type: 'voice.summary.pending', threadId, text: summaryText })
 
-      // Synthesize audio
-      const { audio, durationMs } = await synthesize(summaryText)
-
-      // Push audio as base64-encoded JSON to every tab announcing this device name
-      const audioBase64 = audio.toString('base64')
-      sendToDeviceName(deviceName, {
-        type: 'voice.tts.audio',
-        threadId,
-        text: summaryText,
-        audio: audioBase64,
-        kind: 'summary'
-      })
-      console.log(
-        `[voice-response] summary delivered to ${deviceName}: "${summaryText.slice(0, 60)}…" (${durationMs}ms TTS, ${audio.length}B)`
-      )
+      // Use streaming when available — the client receives each sentence's
+      // audio as it finishes synthesizing, cutting perceived latency from
+      // "full text time" to "one sentence time".
+      if (synthesizeStream) {
+        let chunkCount = 0
+        await synthesizeStream(summaryText, (chunk) => {
+          chunkCount++
+          const audioBase64 = chunk.audio.toString('base64')
+          sendToDeviceName(deviceName, {
+            type: 'voice.tts.audio',
+            threadId,
+            text: chunk.sentence,
+            audio: audioBase64,
+            kind: 'summary',
+            chunk: { index: chunk.index, total: chunk.total, done: chunk.done }
+          })
+          console.log(
+            `[voice-response] summary chunk [${chunk.index + 1}/${chunk.total}] delivered to ${deviceName}: "${chunk.sentence.slice(0, 40)}…" (${chunk.durationMs}ms TTS)`
+          )
+        })
+        console.log(`[voice-response] summary stream complete for ${deviceName}: ${chunkCount} chunk(s)`)
+      } else {
+        // Fallback: single-shot synthesis
+        const { audio, durationMs } = await synthesize(summaryText)
+        const audioBase64 = audio.toString('base64')
+        sendToDeviceName(deviceName, {
+          type: 'voice.tts.audio',
+          threadId,
+          text: summaryText,
+          audio: audioBase64,
+          kind: 'summary'
+        })
+        console.log(
+          `[voice-response] summary delivered to ${deviceName}: "${summaryText.slice(0, 60)}…" (${durationMs}ms TTS, ${audio.length}B)`
+        )
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[voice-response] summary generation failed for ${threadId}: ${msg}`)

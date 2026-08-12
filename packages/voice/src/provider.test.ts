@@ -7,6 +7,7 @@ function mockVoiceModule(overrides: Partial<VoiceModule> = {}): VoiceModule {
     status: vi.fn().mockReturnValue({ module: 'voice', status: 'ok' }),
     transcribe: vi.fn().mockResolvedValue({ text: 'hello world', durationMs: 1500 }),
     synthesize: vi.fn().mockResolvedValue({ audio: Buffer.from('audio'), durationMs: 500 }),
+    synthesizeStream: vi.fn().mockResolvedValue(undefined),
     updateConfig: vi.fn(),
     ...overrides
   }

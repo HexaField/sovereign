@@ -376,6 +376,97 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  // ── Mock TTS endpoints (voice-response wind-tunnel) ────────────────
+  // Returns a minimal valid WAV file (silence) so the voice pipeline
+  // exercises the full encode→transmit→decode path without needing a
+  // real TTS model. The WAV header matches PCM_16, 24kHz mono.
+
+  /** Generate a silent WAV buffer of `durationMs` milliseconds. */
+  function silentWav(durationMs: number): Buffer {
+    const sampleRate = 24000
+    const numSamples = Math.floor((sampleRate * durationMs) / 1000)
+    const dataSize = numSamples * 2 // 16-bit = 2 bytes per sample
+    const buf = Buffer.alloc(44 + dataSize) // WAV header + PCM data (zeros = silence)
+    // RIFF header
+    buf.write('RIFF', 0)
+    buf.writeUInt32LE(36 + dataSize, 4)
+    buf.write('WAVE', 8)
+    // fmt sub-chunk
+    buf.write('fmt ', 12)
+    buf.writeUInt32LE(16, 16) // sub-chunk size
+    buf.writeUInt16LE(1, 20) // PCM format
+    buf.writeUInt16LE(1, 22) // mono
+    buf.writeUInt32LE(sampleRate, 24)
+    buf.writeUInt32LE(sampleRate * 2, 28) // byte rate
+    buf.writeUInt16LE(2, 32) // block align
+    buf.writeUInt16LE(16, 34) // bits per sample
+    // data sub-chunk
+    buf.write('data', 36)
+    buf.writeUInt32LE(dataSize, 40)
+    // PCM data stays zero-filled (silence)
+    return buf
+  }
+
+  // POST /synthesize — single WAV response (matches qwen-tts API)
+  if (url.pathname === '/synthesize' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req))
+    const text = body.text ?? ''
+    // ~100ms of silence per word, minimum 200ms
+    const wordCount = text.split(/\s+/).filter(Boolean).length
+    const durationMs = Math.max(200, wordCount * 100)
+    const wav = silentWav(durationMs)
+    if (VERBOSE) console.log(`[mock-llm] synthesize "${text.slice(0, 40)}..." → ${durationMs}ms silence`)
+    res.writeHead(200, {
+      'Content-Type': 'audio/wav',
+      'X-RTF': '0.001',
+      'X-Audio-Duration-Seconds': String(durationMs / 1000)
+    })
+    res.end(wav)
+    return
+  }
+
+  // POST /synthesize/stream — NDJSON sentence-level streaming (matches qwen-tts streaming API)
+  if (url.pathname === '/synthesize/stream' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req))
+    const text = (body.text ?? '').trim()
+    // Split on sentence boundaries
+    const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean)
+    const total = sentences.length || 1
+    if (VERBOSE) console.log(`[mock-llm] synthesize/stream "${text.slice(0, 40)}..." → ${total} sentence(s)`)
+
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson',
+      'X-Sentence-Count': String(total)
+    })
+
+    for (let i = 0; i < (sentences.length || 1); i++) {
+      const sentence = sentences[i] ?? text
+      const wordCount = sentence.split(/\s+/).filter(Boolean).length
+      const durationMs = Math.max(200, wordCount * 100)
+      const wav = silentWav(durationMs)
+      const chunk =
+        JSON.stringify({
+          index: i,
+          total,
+          sentence,
+          audio: wav.toString('base64'),
+          durationMs,
+          rtf: 0.001,
+          done: i === total - 1
+        }) + '\n'
+      res.write(chunk)
+    }
+    res.end()
+    return
+  }
+
+  // GET /health — TTS health endpoint
+  if (url.pathname === '/health' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ status: 'ok', model: 'mock-tts', uptime_s: process.uptime() }))
+    return
+  }
+
   // ── Messages API ──────────────────────────────────────────────────
   if (url.pathname === '/v1/messages' && req.method === 'POST') {
     let bodyStr: string
