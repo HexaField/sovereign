@@ -38,6 +38,13 @@
       }
     }
   },
+  "voice": {
+    "transcribeUrl": "http://mock-llm:8900/mock/transcribe",
+    "ttsUrl": "http://mock-llm:8900/synthesize",
+    "autoTts": true,
+    "ackDelayMs": 0,
+    "conversationSummary": true
+  },
   "summary": {
     "enabled": true,
     "baseUrl": "http://mock-llm:8900",

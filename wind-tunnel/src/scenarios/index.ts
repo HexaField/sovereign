@@ -22,6 +22,7 @@ import { s18LlmBenchmark } from './s18-llm-benchmark.js'
 import { s19PresenceTools } from './s19-presence-tools.js'
 import { s20ForestIndex } from './s20-forest-index.js'
 import { s21SttRoundtrip } from './s21-stt-roundtrip.js'
+import { s22VoiceResponse } from './s22-voice-response.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -59,5 +60,7 @@ export const ALL_SCENARIOS: Scenario[] = [
   // Self-skips when the endpoints return 404 (pre-implementation baseline).
   s20ForestIndex,
   // STT roundtrip — mock transcription → chat message with voice origin → LLM response.
-  s21SttRoundtrip
+  s21SttRoundtrip,
+  // Voice response — TTS ack + summary pipeline + streaming endpoint.
+  s22VoiceResponse
 ]

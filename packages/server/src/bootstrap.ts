@@ -689,6 +689,20 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     const voiceResponse = createVoiceResponse({
       bus,
       synthesize: (text: string) => voiceModule.synthesize(text),
+      synthesizeStream: (text, onChunk, options) =>
+        voiceModule.synthesizeStream(
+          text,
+          (chunk) =>
+            onChunk({
+              index: chunk.index,
+              total: chunk.total,
+              sentence: chunk.sentence,
+              audio: chunk.audio,
+              durationMs: chunk.durationMs,
+              done: chunk.done
+            }),
+          options
+        ),
       llm: voiceLlm,
       getRecentTurns,
       sendToDeviceName: (deviceName: string, msg: Record<string, unknown>) =>

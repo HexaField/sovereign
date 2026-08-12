@@ -8,6 +8,17 @@ export interface VoiceModuleConfig {
   timeoutMs?: number
 }
 
+/** A single audio chunk from the streaming TTS endpoint. */
+export interface TtsChunk {
+  index: number
+  total: number
+  sentence: string
+  audio: Buffer
+  durationMs: number
+  rtf: number
+  done: boolean
+}
+
 export interface VoiceModule {
   status(): { module: string; status: string }
   transcribe(
@@ -20,6 +31,10 @@ export interface VoiceModule {
     voice?: string,
     options?: { signal?: AbortSignal }
   ): Promise<{ audio: Buffer; durationMs: number }>
+  /** Stream TTS as sentence-level audio chunks. Each chunk carries WAV
+   *  audio for one sentence. The caller receives first audio after a
+   *  single sentence synthesizes, not after the full text completes. */
+  synthesizeStream(text: string, onChunk: (chunk: TtsChunk) => void, options?: { signal?: AbortSignal }): Promise<void>
   updateConfig(config: Partial<VoiceModuleConfig>): void
 }
 
@@ -167,6 +182,126 @@ export function createVoiceModule(bus: EventBus, config: VoiceModuleConfig): Voi
         throw wrapFetchError('TTS', err)
       } finally {
         cleanup()
+      }
+    },
+
+    async synthesizeStream(
+      text: string,
+      onChunk: (chunk: TtsChunk) => void,
+      options?: { signal?: AbortSignal }
+    ): Promise<void> {
+      if (!currentConfig.ttsUrl) {
+        throw new Error('No TTS URL configured')
+      }
+
+      // Derive the stream URL from the configured ttsUrl by appending /stream.
+      // e.g. http://127.0.0.1:5810/synthesize → http://127.0.0.1:5810/synthesize/stream
+      const streamUrl = currentConfig.ttsUrl.replace(/\/?$/, '/stream')
+
+      // Streaming can take much longer than a single synthesis — the total
+      // timeout covers ALL sentences, not just one. Multiply the per-sentence
+      // timeout by a generous factor.
+      const streamTimeoutMs = getTimeoutMs() * 5
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(new Error('Stream timeout')), streamTimeoutMs)
+
+      function onExternalAbort() {
+        controller.abort(options?.signal?.reason ?? new Error('Aborted'))
+      }
+      if (options?.signal) {
+        if (options.signal.aborted) {
+          clearTimeout(timeoutId)
+          controller.abort(options.signal.reason ?? new Error('Aborted'))
+        } else {
+          options.signal.addEventListener('abort', onExternalAbort, { once: true })
+        }
+      }
+
+      try {
+        const response = await fetch(streamUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+          signal: controller.signal
+        })
+
+        if (!response.ok) {
+          throw new Error(`TTS stream failed: ${response.status} ${response.statusText}`)
+        }
+
+        if (!response.body) {
+          throw new Error('TTS stream returned no body')
+        }
+
+        // Read NDJSON lines from the response body
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+
+          // Process complete lines
+          let newlineIdx: number
+          while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIdx).trim()
+            buffer = buffer.slice(newlineIdx + 1)
+
+            if (!line) continue
+
+            try {
+              const parsed = JSON.parse(line) as {
+                index: number
+                total: number
+                sentence: string
+                audio?: string
+                durationMs?: number
+                rtf?: number
+                done: boolean
+                error?: string
+              }
+
+              if (parsed.error) {
+                throw new Error(`TTS stream error on sentence ${parsed.index + 1}: ${parsed.error}`)
+              }
+
+              if (parsed.audio) {
+                onChunk({
+                  index: parsed.index,
+                  total: parsed.total,
+                  sentence: parsed.sentence,
+                  audio: Buffer.from(parsed.audio, 'base64'),
+                  durationMs: parsed.durationMs ?? 0,
+                  rtf: parsed.rtf ?? 0,
+                  done: parsed.done
+                })
+              }
+            } catch (parseErr) {
+              if (parseErr instanceof Error && parseErr.message.startsWith('TTS stream error')) {
+                throw parseErr
+              }
+              // Skip malformed lines
+              console.warn('[voice] skipped malformed TTS stream line')
+            }
+          }
+        }
+
+        bus.emit({
+          type: 'voice.tts.stream.completed',
+          timestamp: new Date().toISOString(),
+          source: 'voice',
+          payload: { text }
+        })
+      } catch (err) {
+        throw wrapFetchError('TTS stream', err)
+      } finally {
+        clearTimeout(timeoutId)
+        if (options?.signal) {
+          options.signal.removeEventListener('abort', onExternalAbort)
+        }
       }
     },
 
