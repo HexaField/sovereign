@@ -452,6 +452,17 @@ pre:hover .code-copy-btn {
   opacity: 1 !important;
 }
 
+.msg-origin-icon {
+  position: absolute;
+  top: 6px;
+  right: 32px;
+  padding: 4px;
+  color: var(--c-text-muted);
+  line-height: 0;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 /* ── File chips ────────────────────────────────────────────────────────── */
 
 .file-chip {

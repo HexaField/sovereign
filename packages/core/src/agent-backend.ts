@@ -89,6 +89,14 @@ export interface ParsedTurn {
    * timestamp from `firedAt`) instead of a normal user/assistant bubble.
    */
   kind?: TurnKind
+  /**
+   * How the underlying message arrived — voice, AD4M, webhook, etc. Carries
+   * only the modality string; device identifiers and routing details stay
+   * server-side. Populated on user turns whose queue entry carries an
+   * origin, or parsed client-side from a `[modality]` prefix in persisted
+   * content (see packages/chat/src/chat.ts pumpQueue).
+   */
+  origin?: { modality: string }
 }
 
 /**

@@ -33,6 +33,7 @@ import {
   inputValue,
   setInputValue,
   mergeLiveWorkItems,
+  ttsDeliveredTurns,
   _resetState
 } from './store.js'
 import type { ParsedTurn, WorkItem } from '@sovereign/core'
@@ -254,5 +255,93 @@ describe('§3.2 Chat Store', () => {
   it('MUST accept threadKey as a reactive accessor via initChatStore', () => {
     // Already tested via initChatStore(() => 'main', ws) in beforeEach
     expect(typeof initChatStore).toBe('function')
+  })
+
+  // chat.ts prepends a one-word `[modality]\n` tag to text sent to the
+  // agent; the SDK persists exactly what it received, so a history reload
+  // reads the tag back out of the JSONL. The store strips it and sets
+  // `origin` so MessageBubble can render an icon without showing the tag.
+  describe('origin prefix parsing', () => {
+    it('MUST strip a [modality]\\n prefix from a user turn and set turn.origin', () => {
+      const history: ParsedTurn[] = [
+        { role: 'user', content: '[voice]\nturn the lights on', timestamp: 1, workItems: [], thinkingBlocks: [] },
+        { role: 'assistant', content: 'Done.', timestamp: 2, workItems: [], thinkingBlocks: [] }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', history })
+      expect(turns()[0].content).toBe('turn the lights on')
+      expect(turns()[0].origin).toEqual({ modality: 'voice' })
+      // Assistant turns never carry the tag — origin stays unset.
+      expect(turns()[1].origin).toBeUndefined()
+    })
+
+    it('MUST leave a user turn with an existing origin field untouched', () => {
+      const history: ParsedTurn[] = [
+        {
+          role: 'user',
+          content: 'turn the lights on',
+          timestamp: 1,
+          workItems: [],
+          thinkingBlocks: [],
+          origin: { modality: 'voice' }
+        }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', history })
+      expect(turns()[0].content).toBe('turn the lights on')
+      expect(turns()[0].origin).toEqual({ modality: 'voice' })
+    })
+
+    it('MUST leave plain text turns without a bracket prefix untouched', () => {
+      const history: ParsedTurn[] = [
+        { role: 'user', content: 'hello there', timestamp: 1, workItems: [], thinkingBlocks: [] }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', history })
+      expect(turns()[0].content).toBe('hello there')
+      expect(turns()[0].origin).toBeUndefined()
+    })
+  })
+
+  // The client marks the most recent assistant turn as TTS-delivered when a
+  // voice.tts.audio (kind: 'summary') push arrives for the current thread —
+  // MessageBubble reads ttsDeliveredTurns() to render a speaker icon.
+  describe('TTS delivery tracking', () => {
+    it('MUST mark the most recent assistant turn as TTS-delivered on voice.tts.audio kind "summary"', () => {
+      const history: ParsedTurn[] = [
+        { role: 'user', content: 'hi', timestamp: 1, workItems: [], thinkingBlocks: [] },
+        { role: 'assistant', content: 'hello', timestamp: 2, workItems: [], thinkingBlocks: [] }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', history })
+      ws._emit('voice.tts.audio', {
+        type: 'voice.tts.audio',
+        threadId: 'main',
+        kind: 'summary',
+        text: 'hello',
+        audio: ''
+      })
+      expect(ttsDeliveredTurns().has(2)).toBe(true)
+    })
+
+    it('MUST NOT mark delivery for voice.tts.audio kind "ack"', () => {
+      const history: ParsedTurn[] = [
+        { role: 'assistant', content: 'hello', timestamp: 2, workItems: [], thinkingBlocks: [] }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', history })
+      ws._emit('voice.tts.audio', { type: 'voice.tts.audio', threadId: 'main', kind: 'ack', text: 'ack', audio: '' })
+      expect(ttsDeliveredTurns().has(2)).toBe(false)
+    })
+
+    it('MUST NOT mark delivery for a voice.tts.audio push targeting a different thread', () => {
+      const history: ParsedTurn[] = [
+        { role: 'assistant', content: 'hello', timestamp: 2, workItems: [], thinkingBlocks: [] }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', history })
+      ws._emit('voice.tts.audio', {
+        type: 'voice.tts.audio',
+        threadId: 'other-thread',
+        kind: 'summary',
+        text: 'hello',
+        audio: ''
+      })
+      expect(ttsDeliveredTurns().has(2)).toBe(false)
+    })
   })
 })

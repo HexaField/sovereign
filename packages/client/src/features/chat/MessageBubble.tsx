@@ -2,7 +2,7 @@ import { Show, createSignal, createMemo, createEffect, onCleanup, type JSX } fro
 import type { ParsedTurn, ForwardedMessage, TurnKind } from '@sovereign/core'
 import { renderMarkdown, escapeHtml } from '../../lib/markdown.js'
 import { messageToMarkdown, downloadText, exportMessagePdf, turnsToMarkdown, exportThreadPdf } from './export.js'
-import { turns } from './store.js'
+import { turns, ttsDeliveredTurns } from './store.js'
 import {
   WriteIcon,
   BotIcon,
@@ -22,6 +22,12 @@ import {
 
 const copyIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`
 const checkIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+// Modality indicators — a mic badge marks a user turn that arrived via
+// voice STT; a speaker badge marks an assistant turn Sovereign read back
+// through TTS. Both stay small and muted, always visible (not hover-only)
+// so the modality reads at a glance while scrolling a thread.
+const micIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>`
+const speakerIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`
 
 // ── Exported helpers (tests depend on these) ─────────────────────────
 
@@ -391,6 +397,12 @@ export function MessageBubble(props: MessageBubbleProps) {
             fallback={<span innerHTML={escapeHtml(content()).replace(/\n/g, '<br>')} />}
           >
             <MarkdownContentInternal text={content()} />
+          </Show>
+          <Show when={role() === 'user' && props.turn.origin?.modality === 'voice'}>
+            <span class="msg-origin-icon" title="Sent by voice" innerHTML={micIcon} />
+          </Show>
+          <Show when={role() === 'assistant' && ttsDeliveredTurns().has(timestamp())}>
+            <span class="msg-origin-icon" title="Delivered by voice" innerHTML={speakerIcon} />
           </Show>
           <button
             class="msg-copy-btn"
