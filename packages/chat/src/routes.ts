@@ -141,6 +141,16 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     res.json({ ok: true })
   })
 
+  router.post('/api/chat/queue/:id/force-send', async (req, res) => {
+    try {
+      const ok = await chatModule.forceSend(req.params.id)
+      if (!ok) return res.status(404).json({ error: 'not force-sendable (missing or already sending)' })
+      res.json({ ok: true })
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
   router.post('/api/chat/sessions', async (_req, res) => {
     try {
       const label = _req.body?.label as string | undefined

@@ -350,6 +350,15 @@ export function retryQueuedMessage(id: string): void {
   })
 }
 
+/** Force-send a queued message immediately — bypasses the queue gate.
+ *  For Claude Code this injects mid-turn; for local-llm it queues as
+ *  the next turn in the backend's internal pending queue. */
+export function forceSendQueuedMessage(id: string): void {
+  fetch(`/api/chat/queue/${encodeURIComponent(id)}/force-send`, { method: 'POST' }).catch(() => {
+    /* ignore */
+  })
+}
+
 export function loadOlderMessages(): void {
   const threadKey = currentThreadKey?.() ?? ''
   if (!ws || loadingOlder() || !hasOlderMessages() || !threadKey) return
