@@ -71,10 +71,14 @@ A rebuild severs in-flight agent turns rather than draining them. Draining deadl
 
 ## Presence system
 
-Two long-lived threads form the presence system (`packages/presence/`):
+Two long-lived threads form the presence system (`packages/presence/`). They pair but stay independent — each has its own session, history, and context window. They communicate via explicit tool calls, not by sharing context.
 
-- **`presence-internal`** (`ThreadInfo.presence = 'internal'`) — the agent's stream-of-consciousness. Receives ambient inbound (voice, AD4M, watched-thread digests). The agent speaks externally only via `presence_reply_*` tool calls; silence counts as valid. Carries PRESENCE.md + PRESENCE_MEMORY.md + PRESENCE_KNOWLEDGE.md in its session prompt.
-- **`presence`** (`ThreadInfo.presence = 'gateway'`) — the user's text-chat surface. A normal Claude Code thread. Carries only PRESENCE_KNOWLEDGE.md in its session prompt.
+### Thread roles
+
+- **`presence`** (`ThreadInfo.presence = 'gateway'`) — the user's primary interface. Voice input, text conversations, and direct work happen here (or in subagents spawned from here). A normal Claude Code thread. Carries only PRESENCE_KNOWLEDGE.md in its session prompt.
+- **`presence-internal`** (`ThreadInfo.presence = 'internal'`) — the agent's peripheral awareness. Processes **external and ambient signals only**: AD4M mentions, webhook events, watched-thread digests, and context forwarded from the gateway. The agent speaks externally only via `presence_reply_*` tool calls; silence counts as valid. Carries PRESENCE.md + PRESENCE_MEMORY.md + PRESENCE_KNOWLEDGE.md in its session prompt.
+
+The internal thread does NOT handle direct work. It observes the periphery — things that happen outside Sovereign (external integrations) and activity across other threads (watch digests). It surfaces noteworthy items to the gateway via `presence_reply_text`.
 
 ### Prompt layers
 

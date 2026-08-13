@@ -2,10 +2,13 @@
 //
 // NOTE: this package is distinct from @sovereign/thread-presence (which
 // tracks WS device focus for push notifications). This one owns the
-// "presence thread" concept — a long-lived ambient thread that
-// receives un-targeted inbound (voice, AD4M mentions, future gateways),
-// thinks in a stream-of-consciousness loop, and reaches out via explicit
-// tool calls only.
+// two-thread presence system:
+//   - 'gateway'  — user's primary interface (voice, text, direct work)
+//   - 'internal' — peripheral awareness (external integrations, digests)
+//
+// The internal thread processes external/ambient signals and surfaces
+// noteworthy items to the gateway via presence_reply_text. Direct work
+// stays in the gateway (or purpose-built threads with subagents).
 //
 // See plans/presence-thread-spec.md for the spec.
 

@@ -2,16 +2,25 @@
 
 ## Goal
 
-Introduce a **two-thread presence system**: a persistent pair of threads that together serve as the single touchpoint for all non-specific inbound messages — STT transcriptions, AD4M mentions, future gateways — plus a clean user-facing chat surface, with long-term continuity, dedicated memory, and modality-aware response routing.
-
-When Josh speaks to Sovereign via STT, the internal agent replies via TTS _to that tab_. When an AD4M mention arrives, the internal agent replies _in that AD4M context_. When Josh types in the gateway thread, that thread's own agent handles the conversation and can forward to / coordinate with the internal agent. Each of the two threads is always the same long-lived session — never spinning up new sessions per interaction.
+Introduce a **two-thread presence system**: a persistent pair of threads that together handle the split between direct interaction and peripheral awareness, with long-term continuity, dedicated memory, and modality-aware response routing.
 
 ### The two threads
 
-- **`presence-internal`** — the agent's stream-of-consciousness. Where Hex thinks, observes, manages watched threads, and decides whether/how to reach out externally. Inbound voice / AD4M / future ambient gateways land here. Its assistant turns are NOT auto-pushed anywhere (R4). It carries PRESENCE.md + PRESENCE_MEMORY.md. The user _can_ read or write here directly, but it's not the normal way to chat.
-- **`presence`** — the user's primary text gateway to Hex. A normal Claude Code thread with its own SDK session and JSONL. This is where the user has typed conversations with Hex when no other thread is contextually relevant. Has tools to forward text into the internal thread and to read internal's recent state.
+- **`presence`** (gateway) — the user's primary interface. Voice, text, and direct work happen here (or in subagents spawned from here). A normal Claude Code thread with its own SDK session and JSONL. Has tools to forward context into the internal thread and to peek at internal's recent state.
+- **`presence-internal`** (internal) — the agent's peripheral awareness. Processes **external and ambient signals only**: AD4M mentions, webhook events, watched-thread digests, and context forwarded from the gateway. The agent thinks about these signals and decides whether any deserve the user's attention. Its assistant turns stay internal (NOT auto-pushed anywhere, R4). It carries PRESENCE.md + PRESENCE*MEMORY.md. The user \_can* read here directly, but this thread does not handle direct work.
 
-The two threads are paired but independent. Each has its own session, history, and context window. They communicate via explicit tool calls — not via auto-piping.
+The two threads pair but stay independent. Each has its own session, history, and context window. They communicate via explicit tool calls — not by sharing context.
+
+### What goes where
+
+| Signal | Destination | Rationale |
+| --- | --- | --- |
+| Voice / text from user | **Gateway** | Direct task delegation and conversation. |
+| AD4M mentions | **Internal** | External social context. Think first, reply in-channel if warranted. |
+| Webhooks / future integrations | **Internal** | External events. Assess relevance, surface if needed. |
+| Watch digests | **Internal** | Background awareness of other threads. Rides along on next inbound. |
+| Cron-triggered prompts | Target thread (specified by cron) | Already works — cron specifies its thread. |
+| Gateway forwards | **Internal** | User or gateway agent explicitly sends context for internal to process. |
 
 ## Non-Goals
 
@@ -265,17 +274,11 @@ Start with simple first-sentence extraction from the last assistant turn (essent
 
 #### STT/TTS (Voice)
 
-**Current flow**: VoiceView.tsx → `stopRecording()` → `transcribeAudio()` → `sendMessage(text)` → sends to whatever thread is currently selected in the UI.
+Voice input routes to the **gateway** thread — the same surface that handles text. Voice serves direct task delegation and conversation, not ambient contemplation.
 
-**New flow**: When voice input arrives and _no specific thread is focused_ (or the user is on the dashboard/voice page), route to the presence thread instead.
+**Current flow**: VoiceView.tsx → `stopRecording()` → `transcribeAudio()` → `sendMessage(text)` → sends to the gateway thread (presence). Voice sends include `origin: { modality: 'voice', deviceId }` so TTS replies can target the originating device.
 
-Changes:
-
-- `VoiceView.tsx` / `VoiceWidget.tsx`: Check if a specific thread is focused. If not, send to presence thread ID.
-- `sendMessage()` in chat store needs to accept an explicit `threadId` override (currently uses `currentThreadKey()`).
-- The voice send includes `origin: { modality: 'voice', deviceId }` so the server can route TTS back.
-
-**Stubbed for now.** The voice modality tag and routing plumbing are wired in this spec, but actual STT transcription and TTS synthesis are deferred to [`vui-voice-backend-spec.md`](vui-voice-backend-spec.md), which covers provider selection, streaming synthesis, wake-word detection, and the full voice pipeline. The response router's `voice` branch will be a no-op (falls back to text broadcast) until that spec lands.
+The gateway agent handles the work directly (or spawns subagents). No inner-monologue pass-through needed for voice — the user expects a direct response, not filtered contemplation.
 
 #### AD4M Mentions
 
@@ -359,11 +362,12 @@ Tools resolve their default targets from a small in-memory "last origin per moda
 
 ### R7. Gateway Routing — Inbound
 
-- Voice client surfaces (`VoiceView`, `VoiceWidget`) route to the **internal** thread when no specific thread is focused (ambient voice = ambient agent). When the user is focused on the gateway thread, voice goes to the gateway like any other thread. Voice sends include `origin: { modality: 'voice', deviceId }`.
-- The chat store's `sendMessage()` accepts an explicit `threadId` override so voice/AD4M paths can target the internal thread regardless of UI selection.
+- Voice client surfaces (`VoiceView`, `VoiceWidget`) route to the **gateway** thread. Voice serves direct task delegation and conversation — the same request/response loop as text. Voice sends include `origin: { modality: 'voice', deviceId }` so TTS replies can target the originating device.
+- The chat store's `sendMessage()` accepts an explicit `threadId` override so AD4M and other external paths can target the internal thread regardless of UI selection.
 - AD4M mention handler in bootstrap routes to the **internal** thread (not per-perspective threads) and includes `origin: { modality: 'ad4m', ad4m: { perspectiveUuid, channelAddress, messageAddress } }`.
 - The AD4M waker emits the full perspective/channel/message context so the origin can be constructed verbatim.
-- The **gateway** thread receives no special inbound routing — it's a normal chat surface that the user types into directly. Its agent forwards anything noteworthy to internal via `presence_internal_send`.
+- Webhook and future external integration events route to the **internal** thread with appropriate `MessageOrigin`.
+- The **gateway** thread handles all direct user interaction — voice, text, and work. Its agent forwards context to internal via `presence_internal_send` when peripheral awareness needs updating.
 
 ### R8. Packaging
 
