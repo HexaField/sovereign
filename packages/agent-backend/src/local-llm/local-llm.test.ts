@@ -119,15 +119,15 @@ describe('local-llm backend: session lifecycle', () => {
     expect(key).toBe('my-thread-id')
   })
 
-  it('capabilities() reports an honest, non-subagent-capable local backend', () => {
+  it('capabilities() reports sovereign-orchestrated subagent support', () => {
     const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: makeFakeClient().client })
     const caps = backend.capabilities()
-    expect(caps.subagents).toBe('unsupported')
+    expect(caps.subagents).toBe('sovereign-orchestrated')
     expect(caps.multiProvider).toBe(true)
     expect(caps.toolStreaming).toBe(true)
   })
 
-  it('listSubagents always returns empty (no native subagent support)', async () => {
+  it('listSubagents returns empty when no subagents exist', async () => {
     const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: makeFakeClient().client })
     await backend.createSession('t')
     expect(await backend.listSubagents()).toEqual([])
@@ -405,5 +405,78 @@ describe('local-llm backend: context budget + recycle', () => {
 
     const turns = await backend.getFullHistory(key)
     expect(JSON.stringify(turns)).toContain('pruned')
+  })
+})
+
+describe('local-llm backend: subagent spawning', () => {
+  it('spawnSubagent creates a child session and returns a subagent key', async () => {
+    const { client } = makeFakeClient(textResponse('child result'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+    const childKey = await backend.spawnSubagent!(parentKey, { task: 'do something' })
+    expect(childKey).toMatch(/^agent:main:subagent:/)
+    // Let the fire-and-forget sendMessage settle.
+    await vi.waitFor(async () => {
+      const meta = await backend.getSessionMeta(childKey)
+      expect(meta?.parentKey).toBe(parentKey)
+    })
+  })
+
+  it('spawnSubagent child appears in listSubagents', async () => {
+    const { client } = makeFakeClient(textResponse('done'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+    const childKey = await backend.spawnSubagent!(parentKey, { task: 'child task', label: 'worker' })
+    await vi.waitFor(async () => {
+      const subs = await backend.listSubagents(parentKey)
+      expect(subs.length).toBe(1)
+      expect(subs[0].sessionKey).toBe(childKey)
+      expect(subs[0].label).toBe('worker')
+      expect(subs[0].task).toBe('child task')
+    })
+  })
+
+  it('listSubagents filters by parent key', async () => {
+    const { client } = makeFakeClient(textResponse('a'), textResponse('b'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentA = await backend.createSession('A')
+    const parentB = await backend.createSession('B')
+    await backend.spawnSubagent!(parentA, { task: 'task a' })
+    await backend.spawnSubagent!(parentB, { task: 'task b' })
+    await vi.waitFor(async () => {
+      const subsA = await backend.listSubagents(parentA)
+      const subsB = await backend.listSubagents(parentB)
+      expect(subsA.length).toBe(1)
+      expect(subsB.length).toBe(1)
+      expect(subsA[0].task).toBe('task a')
+      expect(subsB[0].task).toBe('task b')
+    })
+  })
+
+  it('listSessions marks subagent sessions with kind "subagent"', async () => {
+    const { client } = makeFakeClient(textResponse('ok'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+    await backend.spawnSubagent!(parentKey, { task: 'child' })
+    await vi.waitFor(async () => {
+      const threads = await backend.listSessions({ kind: 'thread' })
+      const subagents = await backend.listSessions({ kind: 'subagent' })
+      expect(threads.every((s) => s.key === parentKey)).toBe(true)
+      expect(subagents.length).toBe(1)
+      expect(subagents[0].kind).toBe('subagent')
+      expect(subagents[0].parentKey).toBe(parentKey)
+    })
+  })
+
+  it('spawnSubagent without parent session still creates a child', async () => {
+    const { client } = makeFakeClient(textResponse('orphan'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    // Spawn with a non-existent parent — should still work (parentState is undefined).
+    const childKey = await backend.spawnSubagent!('nonexistent', { task: 'run' })
+    expect(childKey).toMatch(/^agent:main:subagent:/)
+    await vi.waitFor(async () => {
+      const meta = await backend.getSessionMeta(childKey)
+      expect(meta).not.toBeNull()
+    })
   })
 })

@@ -20,6 +20,7 @@ import type {
   SessionKind,
   SessionMeta,
   SessionSummary,
+  SpawnSubagentOptions,
   SubagentSummary
 } from '@sovereign/core'
 import { createBackendEmitter, createWriteThroughStore, parseTurns } from '@sovereign/primitives'
@@ -493,11 +494,35 @@ export function createLocalLlmBackend(
       backendKind: KIND,
       label,
       cwd: opts?.cwd,
-      model: opts?.model?.model
+      model: opts?.model?.model,
+      parentSessionKey: opts?.parentSessionKey
     })
     const history = await getFullHistory(sessionKey)
     emitter.emit('session.info', { sessionKey, label, history })
     return sessionKey
+  }
+
+  async function spawnSubagent(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string> {
+    const childKey = `agent:main:subagent:${randomUUID()}`
+    const parentState = sessions.get(parentSessionKey)
+
+    await createSession(opts.label, {
+      threadKey: childKey,
+      parentSessionKey,
+      cwd: parentState?.cwd,
+      model: opts.model ? { provider: PROVIDER, model: opts.model.model } : undefined,
+      systemPromptOverride: opts.task
+        ? `You are a subagent. Complete the following task and return a concise result.\n\nTask: ${opts.task}`
+        : undefined
+    })
+
+    // Fire-and-forget — matches claude-code's async subagent semantics.
+    // The parent doesn't block on the child completing.
+    sendMessage(childKey, opts.task).catch((err) => {
+      emitter.emit('chat.error', { sessionKey: childKey, error: String(err) })
+    })
+
+    return childKey
   }
 
   async function getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }> {
@@ -516,7 +541,7 @@ export function createLocalLlmBackend(
 
   function capabilities(): BackendCapabilities {
     return {
-      subagents: 'unsupported',
+      subagents: 'sovereign-orchestrated',
       cron: 'sovereign-managed',
       steering: false,
       followUp: false,
@@ -530,7 +555,7 @@ export function createLocalLlmBackend(
   async function listSessions(filter?: { kind?: SessionKind; parentKey?: string }): Promise<SessionSummary[]> {
     const out: SessionSummary[] = []
     for (const state of sessions.values()) {
-      const kind: SessionKind = 'thread' // local-llm has no native subagent concept
+      const kind: SessionKind = state.parentSessionKey ? 'subagent' : 'thread'
       if (filter?.kind && filter.kind !== kind) continue
       if (filter?.parentKey && state.parentSessionKey !== filter.parentKey) continue
       out.push({
@@ -546,8 +571,22 @@ export function createLocalLlmBackend(
     return out
   }
 
-  async function listSubagents(_parentKey?: string): Promise<SubagentSummary[]> {
-    return [] // no native subagent support — see capabilities().subagents
+  async function listSubagents(parentKey?: string): Promise<SubagentSummary[]> {
+    const out: SubagentSummary[] = []
+    for (const state of sessions.values()) {
+      if (!state.parentSessionKey) continue
+      if (parentKey && state.parentSessionKey !== parentKey) continue
+      // Extract task from the first user message if available.
+      const firstUserMsg = state.messages.find((m) => m.role === 'user')
+      out.push({
+        sessionKey: state.sessionKey,
+        label: state.label ?? state.sessionKey,
+        status: state.agentStatus,
+        lastActivity: state.updatedAt,
+        task: firstUserMsg ? String(firstUserMsg.content) : undefined
+      })
+    }
+    return out
   }
 
   async function getSessionMeta(sessionKey: string): Promise<SessionMeta | null> {
@@ -721,6 +760,7 @@ export function createLocalLlmBackend(
     capabilities,
     listSessions,
     listSubagents,
+    spawnSubagent,
     getSessionMeta,
     setSessionModel,
     listAvailableModels,
