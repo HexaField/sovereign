@@ -11,6 +11,7 @@ import { mergeFetchedHistory } from './merge-history.js'
 // node deps — import it directly.
 import { absorbFoldableTurn } from '@sovereign/core/fold-system-events'
 import { initQuestionsStore } from './questions-store.js'
+import { showFaviconBadge, clearFaviconBadge } from '../../lib/favicon-badge.js'
 
 export const [turns, setTurns] = createSignal<ParsedTurn[]>([])
 export const [agentStatus, setAgentStatus] = createSignal<AgentStatus>('idle')
@@ -563,7 +564,15 @@ function connectSSE(threadKey: string): void {
       }
       return [...prev, merged]
     })
-    if (!isUser) clearLiveState()
+    if (!isUser) {
+      clearLiveState()
+      // Badge the favicon when an assistant turn completes while the tab
+      // sits in the background. Each tab runs its own JS context + SSE
+      // connection, so badge state scopes naturally to the active thread.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        void showFaviconBadge()
+      }
+    }
   })
 
   // ── compacting ──
@@ -714,6 +723,7 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // Visibility change — SSE auto-reconnects, but if we want fresh data on visibility:
   const onVisibility = () => {
     if (document.visibilityState === 'visible') {
+      clearFaviconBadge()
       const key = _threadKey()
       // SSE auto-reconnects and sends fresh history, but if it's already connected
       // and we just want a refresh while idle, we can re-connect
