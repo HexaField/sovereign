@@ -1,4 +1,6 @@
 import { createSignal } from 'solid-js'
+import { threadKey, switchThread } from '../threads/store.js'
+import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 
 // --- Legacy ViewMode (kept for backward compat) ---
 export type ViewMode =
@@ -76,6 +78,30 @@ export const [activeView, _setActiveView] = createSignal<NavView>(readNavViewFro
 export const [activeAgentTab, _setActiveAgentTab] = createSignal<AgentTab>(readAgentTabFromUrl())
 export const [drawerOpen, _setDrawerOpen] = createSignal(false)
 
+// ── Thread save/restore across mode switches ────────────────────────
+//
+// When the user enters agent mode, we save their current workspace thread
+// to sessionStorage and switch to the presence gateway thread. Returning
+// to workspace mode restores the saved thread. This centralised logic
+// runs inside setActiveView so ALL mode-switching paths (icon button,
+// ⌘1, ViewMenu, navigateToAgent, closeDashboardModal) get it for free.
+
+const SAVED_WORKSPACE_THREAD_KEY = 'sovereign:savedWorkspaceThread'
+
+/** Cached gateway thread id — populated on first workspace→agent transition. */
+let cachedGatewayId: string | null = null
+
+function readSavedWorkspaceThread(): string | null {
+  if (typeof sessionStorage === 'undefined') return null
+  return sessionStorage.getItem(SAVED_WORKSPACE_THREAD_KEY)
+}
+
+function writeSavedWorkspaceThread(id: string | null): void {
+  if (typeof sessionStorage === 'undefined') return
+  if (id) sessionStorage.setItem(SAVED_WORKSPACE_THREAD_KEY, id)
+  else sessionStorage.removeItem(SAVED_WORKSPACE_THREAD_KEY)
+}
+
 /** Write current view + agent tab + workspace to URL (replaceState). */
 export function syncViewToUrl(view: NavView, workspaceId?: string): void {
   if (typeof history === 'undefined' || typeof location === 'undefined') return
@@ -98,8 +124,32 @@ export function syncViewToUrl(view: NavView, workspaceId?: string): void {
 }
 
 export function setActiveView(view: NavView): void {
+  const prev = activeView()
   _setActiveView(view)
   syncViewToUrl(view)
+
+  // Thread save/restore on mode transition.
+  if (prev === 'workspace' && view === 'agent') {
+    // Entering agent mode — save current workspace thread.
+    const current = threadKey()
+    if (current) writeSavedWorkspaceThread(current)
+    // Switch to presence gateway thread.
+    if (cachedGatewayId) {
+      switchThread(cachedGatewayId)
+    } else {
+      void getPresenceGatewayThreadId().then((id) => {
+        if (id) {
+          cachedGatewayId = id
+          // Guard: user might have toggled back before the fetch resolved.
+          if (activeView() === 'agent') switchThread(id)
+        }
+      })
+    }
+  } else if (prev === 'agent' && view === 'workspace') {
+    // Returning to workspace — restore the saved thread.
+    const saved = readSavedWorkspaceThread()
+    if (saved) switchThread(saved)
+  }
 }
 
 export function setActiveAgentTab(tab: AgentTab): void {
@@ -176,4 +226,12 @@ export function initNavStore(): () => void {
 /** @internal — for testing */
 export function _triggerPopstate(): void {
   if (popstateHandler) popstateHandler()
+}
+
+/** @internal — reset thread-switching state between tests. */
+export function _resetNavThreadState(): void {
+  cachedGatewayId = null
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.removeItem(SAVED_WORKSPACE_THREAD_KEY)
+  }
 }
