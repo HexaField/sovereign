@@ -57,6 +57,8 @@ export interface ThreadManager {
     workspaceIds?: string[]
     contextWindow?: number
     presence?: 'internal' | 'gateway'
+    subagentBackend?: string
+    subagentModel?: string
   }): ThreadInfo
   /** Get by UUID. */
   get(id: string): ThreadInfo | undefined
@@ -78,6 +80,10 @@ export interface ThreadManager {
       contextWindow?: number
       /** Set to `'internal'` or `'gateway'` to assign a role; pass `null` to clear. */
       presence?: 'internal' | 'gateway' | null
+      /** Set to a backend kind string to override subagent backend; `null` to clear. */
+      subagentBackend?: string | null
+      /** Set to a model id to override subagent model; `null` to clear. */
+      subagentModel?: string | null
     }
   ): ThreadInfo | undefined
   /** Returns the single thread carrying the given presence role, or null when

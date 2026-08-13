@@ -62,6 +62,20 @@ export interface ThreadInfo {
    *                    tools to forward to / read internal state.
    *  At most one thread carries each role. See `plans/presence-thread-spec.md`. */
   presence?: 'internal' | 'gateway'
+  /**
+   * Default backend kind for subagents spawned from this thread.
+   * When set, `agents_spawn` routes to this backend unless the caller
+   * provides an explicit `backend` override. Unset = inherit the parent
+   * session's backend (existing behaviour).
+   */
+  subagentBackend?: string
+  /**
+   * Default model for subagents spawned from this thread.
+   * Format: model id string (e.g. `'default'`, a local-llm model name,
+   * or `'anthropic/claude-sonnet-4-20250514'`).
+   * Unset = backend default.
+   */
+  subagentModel?: string
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus

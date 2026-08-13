@@ -712,4 +712,105 @@ describe('ThreadManager', () => {
       expect(tm.getPresenceThread('internal')?.id).toBe('legacy-id-1')
     })
   })
+
+  describe('subagent routing (subagentBackend / subagentModel)', () => {
+    it('create() accepts subagentBackend and subagentModel', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({
+        label: 'routed',
+        subagentBackend: 'local-llm',
+        subagentModel: 'default'
+      })
+      expect(t.subagentBackend).toBe('local-llm')
+      expect(t.subagentModel).toBe('default')
+    })
+
+    it('create() without subagent fields leaves them undefined', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'plain' })
+      expect(t.subagentBackend).toBeUndefined()
+      expect(t.subagentModel).toBeUndefined()
+    })
+
+    it('update() sets subagentBackend and subagentModel', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'updatable' })
+      const updated = tm.update(t.id, {
+        subagentBackend: 'local-llm',
+        subagentModel: 'qwen3.6-35b-a3b'
+      })
+      expect(updated?.subagentBackend).toBe('local-llm')
+      expect(updated?.subagentModel).toBe('qwen3.6-35b-a3b')
+    })
+
+    it('update() with null clears subagent fields', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({
+        label: 'clearable',
+        subagentBackend: 'local-llm',
+        subagentModel: 'default'
+      })
+      const cleared = tm.update(t.id, {
+        subagentBackend: null,
+        subagentModel: null
+      })
+      expect(cleared?.subagentBackend).toBeUndefined()
+      expect(cleared?.subagentModel).toBeUndefined()
+    })
+
+    it('persists subagent config across instances', () => {
+      const tm1 = createThreadManager(bus, dataDir)
+      const t = tm1.create({
+        label: 'persistent',
+        subagentBackend: 'local-llm',
+        subagentModel: 'gemma-4-26b-a4b'
+      })
+      const tm2 = createThreadManager(bus, dataDir)
+      const reloaded = tm2.get(t.id)
+      expect(reloaded?.subagentBackend).toBe('local-llm')
+      expect(reloaded?.subagentModel).toBe('gemma-4-26b-a4b')
+    })
+
+    it('update() can change subagentBackend without affecting subagentModel', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({
+        label: 'partial-update',
+        subagentBackend: 'local-llm',
+        subagentModel: 'default'
+      })
+      const updated = tm.update(t.id, { subagentBackend: 'claude-code' })
+      expect(updated?.subagentBackend).toBe('claude-code')
+      expect(updated?.subagentModel).toBe('default')
+    })
+
+    it('projectToV2 preserves subagent config from persisted data', () => {
+      // Write a thread with subagent fields directly to disk
+      const legacyPath = path.join(dataDir, 'threads.json')
+      fs.writeFileSync(
+        legacyPath,
+        JSON.stringify({
+          version: 2,
+          threads: [
+            {
+              id: 'sub-test-1',
+              label: 'loaded',
+              workspaceIds: [],
+              entities: [],
+              subagentBackend: 'local-llm',
+              subagentModel: 'qwen3.6-35b-a3b',
+              lastActivity: 0,
+              unreadCount: 0,
+              agentStatus: 'idle',
+              createdAt: 0,
+              archived: false
+            }
+          ]
+        })
+      )
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.get('sub-test-1')
+      expect(t?.subagentBackend).toBe('local-llm')
+      expect(t?.subagentModel).toBe('qwen3.6-35b-a3b')
+    })
+  })
 })

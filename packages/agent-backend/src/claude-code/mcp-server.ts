@@ -38,7 +38,7 @@ export interface SovereignToolDeps {
     ): Promise<Array<{ sessionKey: string; label: string; status: string; task?: string }>>
     spawn(
       parentSessionKey: string,
-      opts: { task: string; label?: string; backend?: string }
+      opts: { task: string; label?: string; backend?: string; model?: string }
     ): Promise<{ sessionKey: string }>
   }
   notifications: {
@@ -355,7 +355,13 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
           .string()
           .optional()
           .describe(
-            'Backend kind to run the subagent on (e.g. "claude-code", "local-llm"). Defaults to the parent session\'s backend.'
+            'Backend kind to run the subagent on (e.g. "claude-code", "local-llm"). Defaults to the thread\'s subagent backend config, then the parent session\'s backend.'
+          ),
+        model: z
+          .string()
+          .optional()
+          .describe(
+            'Model to use for the subagent (e.g. "default", a local model name). Defaults to the thread\'s subagent model config, then the backend\'s default model.'
           )
       },
       async (args) => {
@@ -364,7 +370,8 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
         const result = await deps.agents.spawn(parent, {
           task: args.task,
           label: args.label,
-          backend: args.backend
+          backend: args.backend,
+          model: args.model
         })
         return okJson({ sessionKey: result.sessionKey, parentSessionKey: parent })
       }
