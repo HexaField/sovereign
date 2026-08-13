@@ -379,7 +379,29 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const eventStream = createEventStream(bus)
   const notificationsModule = createNotifications(bus, dataDir)
   app.use(createNotificationRoutes(notificationsModule, notificationsModule.pushManager))
-  const browserService = createBrowserService(dataDir)
+  // Browser service degrades gracefully — a missing Chromium warns but never
+  // crashes startup. The service itself handles a null executable path, but
+  // wrap construction as a safety net against any unforeseen init failure.
+  let browserService: ReturnType<typeof createBrowserService>
+  try {
+    browserService = createBrowserService(dataDir)
+  } catch (err) {
+    console.error('[browser] service creation failed — browser tools unavailable:', (err as Error)?.message ?? err)
+    // Provide a stub that rejects every call with a clear message.
+    browserService = {
+      async open() {
+        throw new Error('browser: service unavailable (init failed)')
+      },
+      async act() {
+        throw new Error('browser: service unavailable (init failed)')
+      },
+      async close() {},
+      list() {
+        return []
+      },
+      async dispose() {}
+    }
+  }
 
   // AD4M integration (optional — only if host configured)
   const ad4mService = cfg.ad4m.host

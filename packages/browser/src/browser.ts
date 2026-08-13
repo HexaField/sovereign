@@ -60,21 +60,30 @@ const CHROME_CANDIDATES = [
   })()
 ].filter(Boolean) as string[]
 
-function findChrome(): string {
+/** Locate a Chrome/Chromium binary. Returns the path or null when absent. */
+function findChrome(): string | null {
   for (const candidate of CHROME_CANDIDATES) {
     if (fs.existsSync(candidate)) return candidate
   }
-  throw new Error(
-    `browser: no Chrome/Chromium binary found. Searched:\n${CHROME_CANDIDATES.join('\n')}\nSet CHROME_PATH to override.`
-  )
+  return null
 }
 
 const DEFAULT_MAX_SESSIONS = 4
 
 export function createBrowserService(dataDir: string, config: BrowserManagerConfig = {}): BrowserService {
-  const executablePath = config.executablePath ?? findChrome()
   const maxSessions = config.maxSessions ?? DEFAULT_MAX_SESSIONS
   const userDataRoot = config.userDataRoot ?? path.join(dataDir, 'browser', 'profiles')
+
+  // Resolve the executable path lazily — a missing browser degrades the
+  // service (open/act throw) but never crashes the server at startup.
+  let executablePath: string | null = config.executablePath ?? findChrome()
+  if (!executablePath) {
+    console.warn(
+      `[browser] no Chrome/Chromium binary found. Browser tools will fail until one is installed.\n` +
+        `  Searched: ${CHROME_CANDIDATES.join(', ')}\n` +
+        `  Set CHROME_PATH to override.`
+    )
+  }
 
   const sessions = new Map<string, SessionState>()
   let sharedBrowser: Browser | null = null
@@ -85,6 +94,14 @@ export function createBrowserService(dataDir: string, config: BrowserManagerConf
 
   async function ensureBrowser(headed: boolean): Promise<Browser> {
     if (sharedBrowser?.isConnected()) return sharedBrowser
+    // Re-probe on each launch attempt — the binary may appear after install.
+    if (!executablePath) executablePath = findChrome()
+    if (!executablePath) {
+      throw new Error(
+        `browser: no Chrome/Chromium binary found. Install Chromium or set CHROME_PATH.\n` +
+          `  Searched: ${CHROME_CANDIDATES.join(', ')}`
+      )
+    }
     sharedBrowser = await chromium.launch({
       executablePath,
       headless: !headed,
