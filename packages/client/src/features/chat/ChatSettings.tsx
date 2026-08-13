@@ -105,6 +105,10 @@ export function ChatSettingsButton() {
   const [availableBackends, setAvailableBackends] = createSignal<Array<{ kind: string; status: string }>>([])
   const [currentBackend, setCurrentBackend] = createSignal<string | null>(null)
   const [backendSaving, setBackendSaving] = createSignal(false)
+  const [subagentBackend, setSubagentBackend] = createSignal<string | null>(null)
+  const [subagentModel, setSubagentModel] = createSignal<string | null>(null)
+  const [subagentSaving, setSubagentSaving] = createSignal(false)
+  const [subagentModels, setSubagentModels] = createSignal<string[]>([])
   let containerRef!: HTMLDivElement
   let dropdownRef!: HTMLDivElement
 
@@ -149,6 +153,20 @@ export function ChatSettingsButton() {
       if (threadRes.ok) {
         const data = await threadRes.json()
         setContextWindowSize(data.thread?.contextWindow)
+        setSubagentBackend(data.thread?.subagentBackend ?? null)
+        setSubagentModel(data.thread?.subagentModel ?? null)
+        // Fetch models for the subagent backend (if configured and different from main)
+        if (data.thread?.subagentBackend) {
+          try {
+            const subModelsRes = await fetch(`/api/models?backend=${encodeURIComponent(data.thread.subagentBackend)}`)
+            if (subModelsRes.ok) {
+              const subData = await subModelsRes.json()
+              setSubagentModels(subData.models ?? [])
+            }
+          } catch {
+            /* ignore */
+          }
+        }
       }
     } catch {
       /* ignore */
@@ -284,6 +302,69 @@ export function ChatSettingsButton() {
       setActionFeedback('Failed')
     }
     setBackendSaving(false)
+    setTimeout(() => setActionFeedback(''), 2000)
+  }
+
+  const handleSubagentBackendSwitch = async (backend: string) => {
+    const key = threadKey()
+    if (!key) return
+    setSubagentSaving(true)
+    const value = backend || null // empty string → clear
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(key)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subagentBackend: value })
+      })
+      if (res.ok) {
+        setSubagentBackend(value)
+        setActionFeedback(value ? 'Subagent backend updated' : 'Subagent backend cleared')
+        // Refresh model list for the new subagent backend
+        if (value) {
+          try {
+            const modelsRes = await fetch(`/api/models?backend=${encodeURIComponent(value)}`)
+            if (modelsRes.ok) {
+              const data = await modelsRes.json()
+              setSubagentModels(data.models ?? [])
+            }
+          } catch {
+            /* ignore */
+          }
+        } else {
+          setSubagentModels([])
+          setSubagentModel(null)
+        }
+      } else {
+        setActionFeedback('Failed to update subagent backend')
+      }
+    } catch {
+      setActionFeedback('Failed')
+    }
+    setSubagentSaving(false)
+    setTimeout(() => setActionFeedback(''), 2000)
+  }
+
+  const handleSubagentModelSwitch = async (model: string) => {
+    const key = threadKey()
+    if (!key) return
+    setSubagentSaving(true)
+    const value = model || null
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(key)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subagentModel: value })
+      })
+      if (res.ok) {
+        setSubagentModel(value)
+        setActionFeedback(value ? 'Subagent model updated' : 'Subagent model cleared')
+      } else {
+        setActionFeedback('Failed to update subagent model')
+      }
+    } catch {
+      setActionFeedback('Failed')
+    }
+    setSubagentSaving(false)
     setTimeout(() => setActionFeedback(''), 2000)
   }
 
@@ -701,6 +782,86 @@ export function ChatSettingsButton() {
                         <option value="1000000">1M (extended)</option>
                       </select>
                     </div>
+
+                    {/* Subagent Routing — backend + model for spawned subagents */}
+                    <Show when={availableBackends().length > 0}>
+                      <div
+                        style={{
+                          'padding-top': '8px',
+                          'border-top': '1px solid var(--c-border)',
+                          display: 'flex',
+                          'flex-direction': 'column',
+                          gap: '6px'
+                        }}
+                      >
+                        <span
+                          class="text-xs font-medium"
+                          style={{ color: 'var(--c-text-heading)', 'margin-bottom': '2px' }}
+                        >
+                          Subagent Routing
+                        </span>
+                        <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                          <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                            Backend
+                          </span>
+                          <select
+                            class="text-xs"
+                            style={{
+                              background: 'var(--c-bg)',
+                              color: 'var(--c-text)',
+                              border: '1px solid var(--c-border)',
+                              'border-radius': '6px',
+                              padding: '2px 8px',
+                              cursor: subagentSaving() ? 'wait' : 'pointer',
+                              opacity: subagentSaving() ? '0.6' : '1'
+                            }}
+                            disabled={subagentSaving()}
+                            value={subagentBackend() ?? ''}
+                            onChange={(e) => void handleSubagentBackendSwitch(e.currentTarget.value)}
+                          >
+                            <option value="">Inherit (parent)</option>
+                            <For each={availableBackends()}>
+                              {(b) => (
+                                <option value={b.kind} selected={b.kind === subagentBackend()}>
+                                  {b.kind}
+                                </option>
+                              )}
+                            </For>
+                          </select>
+                        </div>
+                        <Show when={subagentBackend() && subagentModels().length > 0}>
+                          <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
+                            <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                              Model
+                            </span>
+                            <select
+                              class="text-xs"
+                              style={{
+                                background: 'var(--c-bg)',
+                                color: 'var(--c-text)',
+                                border: '1px solid var(--c-border)',
+                                'border-radius': '6px',
+                                padding: '2px 8px',
+                                cursor: subagentSaving() ? 'wait' : 'pointer',
+                                opacity: subagentSaving() ? '0.6' : '1'
+                              }}
+                              disabled={subagentSaving()}
+                              value={subagentModel() ?? ''}
+                              onChange={(e) => void handleSubagentModelSwitch(e.currentTarget.value)}
+                            >
+                              <option value="">Default</option>
+                              <For each={subagentModels()}>
+                                {(m) => (
+                                  <option value={m} selected={m === subagentModel()}>
+                                    {m.includes('/') ? m.split('/').pop() : m}
+                                  </option>
+                                )}
+                              </For>
+                            </select>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
 
                     {/* Notifications mute toggle for THIS thread */}
                     <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>

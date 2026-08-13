@@ -14,6 +14,8 @@ import type { MeetingsService } from '@sovereign/meetings'
 import type { Notifications } from '@sovereign/notifications'
 import type { BrowserService } from '@sovereign/browser'
 import type { AgentBackend, AgentBackendKind, EventBus } from '@sovereign/core'
+import type { ThreadManager } from '@sovereign/threads'
+import { sessionKeyToThreadKey } from './wiring.js'
 
 export interface SovereignMcpDepsInput {
   bus: EventBus
@@ -27,6 +29,9 @@ export interface SovereignMcpDepsInput {
   browserService: BrowserService
   /** Resolver for the currently-active Claude Code session key (optional). */
   getClaudeCodeBackend?: () => ClaudeCodeBackend | undefined
+  /** Thread manager — used by agents.spawn to resolve per-thread subagent
+   *  routing config (subagentBackend / subagentModel). */
+  threadManager?: ThreadManager
   /** Presence-thread integration. When set, registers the seven presence_*
    *  MCP tools. Sourced from `@sovereign/presence` in bootstrap. */
   presence?: PresenceMcpDeps
@@ -98,19 +103,31 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         return out
       },
       async spawn(parentKey, opts) {
-        // Cross-backend spawning: when `opts.backend` specifies a different
-        // backend kind, resolve the target backend and spawn there instead
-        // of defaulting to the parent's backend.
+        // Resolve the parent thread's subagent routing config (if any).
+        const threadKey = sessionKeyToThreadKey(parentKey)
+        const thread = threadKey ? input.threadManager?.get(threadKey) : undefined
+
+        // Cross-backend spawning: explicit `opts.backend` wins, then
+        // thread-level `subagentBackend`, then parent session's backend.
         let backend: AgentBackend
-        if (opts.backend) {
-          const target = routing.forKind(opts.backend as AgentBackendKind)
-          if (!target) throw new Error(`agents_spawn: backend "${opts.backend}" not enabled`)
+        const effectiveBackend = opts.backend ?? thread?.subagentBackend
+        if (effectiveBackend) {
+          const target = routing.forKind(effectiveBackend as AgentBackendKind)
+          if (!target) throw new Error(`agents_spawn: backend "${effectiveBackend}" not enabled`)
           backend = target
         } else {
           backend = routing.forSession(parentKey)
         }
         if (!backend.spawnSubagent) throw new Error('agents_spawn: backend does not support subagent spawn')
-        const childKey = await backend.spawnSubagent(parentKey, { task: opts.task, label: opts.label })
+
+        // Thread-level subagent model applies when no explicit model
+        // override was provided by the caller.
+        const effectiveModel = opts.model ?? thread?.subagentModel
+        const childKey = await backend.spawnSubagent(parentKey, {
+          task: opts.task,
+          label: opts.label,
+          ...(effectiveModel ? { model: { provider: '', model: effectiveModel } } : {})
+        })
         return { sessionKey: childKey }
       }
     },

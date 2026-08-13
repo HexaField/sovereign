@@ -288,6 +288,8 @@ export function createThreadRoutes(
       backend: backendKindRaw,
       contextWindow: bodyContextWindow,
       presence: bodyPresence,
+      subagentBackend: bodySubagentBackend,
+      subagentModel: bodySubagentModel,
       cwd
     } = req.body ?? {}
     const workspaceIds = bodyWorkspaceIds ?? (legacyOrgId && legacyOrgId !== '_global' ? [legacyOrgId] : undefined)
@@ -301,7 +303,9 @@ export function createThreadRoutes(
         workspaceIds,
         membraneId: bodyMembraneId,
         contextWindow,
-        ...(presenceRole ? { presence: presenceRole } : {})
+        ...(presenceRole ? { presence: presenceRole } : {}),
+        ...(typeof bodySubagentBackend === 'string' ? { subagentBackend: bodySubagentBackend } : {}),
+        ...(typeof bodySubagentModel === 'string' ? { subagentModel: bodySubagentModel } : {})
       })
     } catch (err) {
       return res.status(400).json({ error: (err as Error).message })
@@ -346,7 +350,9 @@ export function createThreadRoutes(
       workspaceIds: bodyWorkspaceIds,
       membraneId,
       contextWindow: bodyContextWindow,
-      presence: bodyPresence
+      presence: bodyPresence,
+      subagentBackend: bodySubagentBackend,
+      subagentModel: bodySubagentModel
     } = req.body
     // Translate legacy `orgId` body field. Empty/`_global` → empty array
     // so a PATCH with `orgId: '_global'` actually moves a thread to global.
@@ -383,7 +389,9 @@ export function createThreadRoutes(
         membraneId,
         workspaceIds,
         ...(bodyContextWindow !== undefined ? { contextWindow } : {}),
-        ...presencePatch
+        ...presencePatch,
+        ...(bodySubagentBackend !== undefined ? { subagentBackend: bodySubagentBackend ?? null } : {}),
+        ...(bodySubagentModel !== undefined ? { subagentModel: bodySubagentModel ?? null } : {})
       })
     } catch (err) {
       return res.status(400).json({ error: (err as Error).message })

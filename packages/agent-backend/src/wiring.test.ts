@@ -8,9 +8,11 @@
 import { describe, it, expect } from 'vitest'
 import type { MembraneManager } from '@sovereign/membranes'
 import type { ThreadManager } from '@sovereign/threads'
-import { makeMembraneAppendResolver } from './wiring.js'
+import { makeMembraneAppendResolver, makePresenceAwareAppendResolver } from './wiring.js'
 
-function stubThreads(map: Record<string, { membraneId?: string }>): ThreadManager {
+function stubThreads(
+  map: Record<string, { membraneId?: string; subagentBackend?: string; subagentModel?: string }>
+): ThreadManager {
   return {
     get(key: string) {
       return map[key] as any
@@ -85,5 +87,74 @@ describe('makeMembraneAppendResolver', () => {
       stubThreads({ main: { membraneId: 'personal' } })
     )!
     expect(resolver('agent:main:main')).toBeUndefined()
+  })
+})
+
+describe('makePresenceAwareAppendResolver — subagent routing injection', () => {
+  const noPresence = {
+    internalThreadId: () => null,
+    gatewayThreadId: () => null
+  }
+
+  it('injects subagent routing when thread has subagentBackend', () => {
+    const resolver = makePresenceAwareAppendResolver(
+      stubMembranes({}),
+      stubThreads({ 'thread-1': { subagentBackend: 'local-llm' } }),
+      noPresence
+    )!
+    const result = resolver('agent:main:thread:thread-1')
+    expect(result).toContain('Subagent Routing')
+    expect(result).toContain('local-llm')
+  })
+
+  it('injects subagent routing when thread has subagentModel', () => {
+    const resolver = makePresenceAwareAppendResolver(
+      stubMembranes({}),
+      stubThreads({ 'thread-2': { subagentModel: 'qwen3.6-35b-a3b' } }),
+      noPresence
+    )!
+    const result = resolver('agent:main:thread:thread-2')
+    expect(result).toContain('Subagent Routing')
+    expect(result).toContain('qwen3.6-35b-a3b')
+  })
+
+  it('injects both backend and model when both configured', () => {
+    const resolver = makePresenceAwareAppendResolver(
+      stubMembranes({}),
+      stubThreads({ 'thread-3': { subagentBackend: 'local-llm', subagentModel: 'gemma-4-26b-a4b' } }),
+      noPresence
+    )!
+    const result = resolver('agent:main:thread:thread-3')
+    expect(result).toContain('local-llm')
+    expect(result).toContain('gemma-4-26b-a4b')
+  })
+
+  it('does NOT inject subagent routing when thread has no subagent config', () => {
+    const resolver = makePresenceAwareAppendResolver(stubMembranes({}), stubThreads({ 'thread-4': {} }), noPresence)!
+    const result = resolver('agent:main:thread:thread-4')
+    expect(result).toBeUndefined()
+  })
+
+  it('combines membrane context with subagent routing', () => {
+    const resolver = makePresenceAwareAppendResolver(
+      stubMembranes({ personal: '# Personal context' }),
+      stubThreads({ 'thread-5': { membraneId: 'personal', subagentBackend: 'local-llm' } }),
+      noPresence
+    )!
+    const result = resolver('agent:main:thread:thread-5')
+    expect(result).toContain('# Personal context')
+    expect(result).toContain('Subagent Routing')
+    expect(result).toContain('local-llm')
+  })
+
+  it('does not inject subagent routing for subagent session keys', () => {
+    const resolver = makePresenceAwareAppendResolver(
+      stubMembranes({}),
+      stubThreads({ 'thread-6': { subagentBackend: 'local-llm' } }),
+      noPresence
+    )!
+    // Subagent sessions have key format agent:main:subagent:xxx — sessionKeyToThreadKey returns undefined
+    const result = resolver('agent:main:subagent:some-child')
+    expect(result).toBeUndefined()
   })
 })

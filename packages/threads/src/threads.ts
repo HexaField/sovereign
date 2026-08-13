@@ -84,6 +84,8 @@ function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
     workspaceIds,
     entities: raw.entities ?? [],
     contextWindow: typeof raw.contextWindow === 'number' && raw.contextWindow > 0 ? raw.contextWindow : undefined,
+    subagentBackend: typeof raw.subagentBackend === 'string' ? raw.subagentBackend : undefined,
+    subagentModel: typeof raw.subagentModel === 'string' ? raw.subagentModel : undefined,
     // Migrate legacy `presence: true` (boolean) → `presence: 'internal'`.
     // String roles pass through untouched; anything else is dropped.
     presence:
@@ -196,6 +198,8 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     workspaceIds?: string[]
     contextWindow?: number
     presence?: 'internal' | 'gateway'
+    subagentBackend?: string
+    subagentModel?: string
   }): ThreadInfo {
     if (!opts.label?.trim()) {
       throw new Error('ThreadManager.create: label is required (UUID model — labels carry the display name)')
@@ -221,6 +225,8 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       entities: opts.entities ?? [],
       contextWindow: opts.contextWindow,
       presence: opts.presence,
+      subagentBackend: opts.subagentBackend,
+      subagentModel: opts.subagentModel,
       lastActivity: now,
       unreadCount: 0,
       agentStatus: 'idle',
@@ -278,6 +284,8 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       workspaceIds?: string[]
       contextWindow?: number
       presence?: 'internal' | 'gateway' | null
+      subagentBackend?: string | null
+      subagentModel?: string | null
     }
   ): ThreadInfo | undefined {
     const thread = threads.get(id)
@@ -286,6 +294,14 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     if (patch.membraneId !== undefined) thread.membraneId = patch.membraneId
     if (patch.workspaceIds !== undefined) thread.workspaceIds = patch.workspaceIds
     if (patch.contextWindow !== undefined) thread.contextWindow = patch.contextWindow
+    if (patch.subagentBackend !== undefined) {
+      if (patch.subagentBackend === null) delete thread.subagentBackend
+      else thread.subagentBackend = patch.subagentBackend
+    }
+    if (patch.subagentModel !== undefined) {
+      if (patch.subagentModel === null) delete thread.subagentModel
+      else thread.subagentModel = patch.subagentModel
+    }
     if (patch.presence !== undefined) {
       if (patch.presence === null) {
         delete thread.presence

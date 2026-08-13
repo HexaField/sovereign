@@ -114,9 +114,9 @@ function makeToolPolicy(orgManager: OrgManager) {
 /**
  * Sovereign session keys take the form `agent:main:thread:<key>` for
  * threads and `agent:main:main` for the main "ambient" session. Inverse
- * of `deriveSessionKey` — kept local because nothing else needs it.
+ * of `deriveSessionKey`.
  */
-function sessionKeyToThreadKey(sessionKey: string): string | undefined {
+export function sessionKeyToThreadKey(sessionKey: string): string | undefined {
   // Bare-UUID scheme: a thread session's key IS the Thread.id. Legacy
   // compound forms are coerced for safety. Subagent sessions resolve to a
   // non-thread id, so `threadManager.get()` simply misses and no membrane
@@ -233,6 +233,30 @@ export function makePresenceAwareAppendResolver(
       }
     }
 
+    // Subagent routing — inject when the thread has a subagent config so the
+    // model routes `agents_spawn` calls to the configured backend/model.
+    if (threadKey && threadManager) {
+      const thread = threadManager.get(threadKey)
+      if (thread?.subagentBackend || thread?.subagentModel) {
+        const lines: string[] = ['# Subagent Routing Configuration']
+        lines.push(
+          'This thread has per-thread subagent routing configured. When spawning subagents via `agents_spawn`:'
+        )
+        if (thread.subagentBackend) {
+          lines.push(
+            `- Pass \`backend: "${thread.subagentBackend}"\` to route subagents to the ${thread.subagentBackend} backend.`
+          )
+        }
+        if (thread.subagentModel) {
+          lines.push(`- The configured subagent model: \`${thread.subagentModel}\``)
+        }
+        lines.push(
+          'The harness also enforces these defaults automatically — subagents spawned without an explicit backend/model override will use these values.'
+        )
+        parts.push(lines.join('\n'))
+      }
+    }
+
     return parts.length > 0 ? parts.join('\n\n') : undefined
   }
 }
@@ -267,6 +291,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     routing: new Proxy({} as any, { get: (_t, p) => (routingBackend as any)[p as any] }),
     cronService: new Proxy({} as any, { get: (_t, p) => (cronService as any)[p as any] }),
     orgManager,
+    threadManager,
     planningService,
     issueTracker,
     meetingsService,
