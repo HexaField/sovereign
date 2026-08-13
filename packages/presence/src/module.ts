@@ -4,9 +4,10 @@
 // Exposes hooks the chat module and MCP server consume.
 //
 // Two threads play roles in the presence system (see plans/presence-thread-spec.md):
-//   - 'internal' — the agent's stream-of-consciousness, where ambient inbound
-//                  lands. Carries PRESENCE.md + memory.
-//   - 'gateway'  — the user's text-chat surface. Normal Claude Code thread.
+//   - 'gateway'  — the user's primary interface. Voice, text, and direct work
+//                  happen here. Normal Claude Code thread.
+//   - 'internal' — peripheral awareness. External integrations (AD4M, webhooks)
+//                  and watched-thread digests land here. Carries PRESENCE.md + memory.
 // Both are auto-created on first boot when missing.
 
 import fs from 'node:fs'

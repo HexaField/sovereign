@@ -1,9 +1,11 @@
 // Presence-thread helpers for un-targeted client sends (voice, ambient
 // surfaces). Two threads play roles in the presence system:
-//   • internal — ambient inbound (voice, AD4M) lands here, agent's stream-of-
-//                consciousness. Used as the routing target when no specific
-//                thread is focused.
-//   • gateway  — the user's primary text-chat surface with Hex.
+//   • gateway  — the user's primary interface. Voice, text, and direct work
+//                happen here. Used as the routing target when no specific
+//                thread has focus.
+//   • internal — peripheral awareness. External integrations (AD4M mentions,
+//                webhooks) and watched-thread digests land here. The agent's
+//                background processing thread.
 // See plans/presence-thread-spec.md.
 
 interface PresenceThreads {
@@ -42,12 +44,12 @@ async function fetchOnce(): Promise<PresenceThreads> {
   return inflight
 }
 
-/** Internal presence thread id — ambient inbound target (voice, AD4M). */
+/** Internal presence thread id — peripheral awareness (external integrations, digests). */
 export async function getPresenceInternalThreadId(): Promise<string | null> {
   return (await fetchOnce()).internalId
 }
 
-/** Gateway presence thread id — user's primary text-chat surface. */
+/** Gateway presence thread id — user's primary interface (voice, text, direct work). */
 export async function getPresenceGatewayThreadId(): Promise<string | null> {
   return (await fetchOnce()).gatewayId
 }

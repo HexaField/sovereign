@@ -23,7 +23,7 @@ import {
 } from './store.js'
 import { escapeHtml } from '../../lib/markdown.js'
 import { sendMessage } from '../chat/store.js'
-import { getPresenceInternalThreadId } from '../threads/presence-helper.js'
+import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { threadKey } from '../threads/store.js'
 import { deviceName } from '../settings/device-name.js'
 
@@ -145,12 +145,12 @@ export function VoiceView() {
       setVoiceTranscriptHtml(`<span style="color:var(--c-text)">You:</span> ` + escapeHtml(text))
       setVoiceState('processing')
       setVoiceStatusText('Thinking…')
-      // Route to the presence-internal thread when no specific thread is
-      // focused — ambient voice = ambient agent. When the user is on the
-      // gateway thread (or any other thread), voice goes there like any
-      // other chat. See plans/presence-thread-spec.md (R7).
+      // Route to the gateway thread when no specific thread has focus —
+      // voice serves direct task delegation, same as text. When the user
+      // focuses a different thread, voice goes there instead.
+      // See plans/presence-thread-spec.md (R7).
       const focusedThread = threadKey()
-      const targetThread = focusedThread || (await getPresenceInternalThreadId())
+      const targetThread = focusedThread || (await getPresenceGatewayThreadId())
       const deviceId = getCurrentDeviceId()
       const name = deviceName()
       sendMessage(text, undefined, {
