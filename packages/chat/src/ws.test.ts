@@ -48,7 +48,8 @@ function createMockChatModule(): ChatModule {
     retryQueued: vi.fn(() => false),
     messageQueue: {} as any,
     flushState: vi.fn(),
-    injectExternalTurn: vi.fn()
+    injectExternalTurn: vi.fn(),
+    forceSend: vi.fn(async () => false)
   }
 }
 

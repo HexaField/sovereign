@@ -16,11 +16,9 @@ import {
   streamingHtml,
   liveWork,
   liveThinkingText,
-  serverQueue,
-  cancelQueuedMessage,
-  retryQueuedMessage,
-  turns
+  serverQueue
 } from './store.js'
+import { QueueIndicator } from './QueueIndicator.js'
 import { ChatIcon } from '../../ui/icons.js'
 import { renderMarkdown } from '../../lib/markdown.js'
 
@@ -432,69 +430,6 @@ export function ChatView(props: ChatViewProps) {
           }}
         </For>
 
-        {/* ── Outbound queue (Sovereign-owned) ─────────────────────
-            Render any queue items whose text doesn't already appear in
-            history or as an optimistic pending turn. The server queue is
-            the canonical source of truth for in-flight messages. */}
-        <For each={serverQueue()}>
-          {(item) => {
-            const alreadyVisible = () =>
-              turns().some((t) => t.role === 'user' && t.content === item.text && !t.sendFailed)
-            return (
-              <Show when={!alreadyVisible()}>
-                <div class="flex w-full justify-end">
-                  <div
-                    class="group relative max-w-[85%] rounded-2xl rounded-br-sm px-4 py-3 text-sm leading-relaxed break-words whitespace-pre-wrap"
-                    style={{
-                      background: 'var(--c-user-bubble)',
-                      color: 'var(--c-user-bubble-text)',
-                      opacity: item.status === 'failed' ? '0.6' : '0.6',
-                      'font-style': 'italic',
-                      border: item.status === 'failed' ? '1px solid #ef4444' : 'none'
-                    }}
-                  >
-                    {item.text}
-                    <div
-                      class="mt-1.5 flex items-center justify-end gap-2 text-[10px]"
-                      style={{ color: 'var(--c-user-bubble-text)', opacity: '0.8' }}
-                    >
-                      <Show when={item.status === 'queued'}>
-                        <span>queued</span>
-                      </Show>
-                      <Show when={item.status === 'sending'}>
-                        <span>sending…</span>
-                      </Show>
-                      <Show when={item.status === 'failed'}>
-                        <span style={{ color: '#ef4444' }}>
-                          failed{item.error ? `: ${item.error.slice(0, 60)}` : ''}
-                        </span>
-                        <button
-                          class="cursor-pointer rounded px-1.5 py-0.5"
-                          style={{ background: 'rgba(255,255,255,0.18)' }}
-                          onClick={() => retryQueuedMessage(item.id)}
-                          title="Retry"
-                        >
-                          ↻
-                        </button>
-                      </Show>
-                      <Show when={item.status !== 'sending'}>
-                        <button
-                          class="cursor-pointer rounded px-1.5 py-0.5"
-                          style={{ background: 'rgba(255,255,255,0.18)' }}
-                          onClick={() => cancelQueuedMessage(item.id)}
-                          title="Cancel"
-                        >
-                          ✕
-                        </button>
-                      </Show>
-                    </div>
-                  </div>
-                </div>
-              </Show>
-            )
-          }}
-        </For>
-
         {/* ── Orphan pending AskUserQuestion cards ────────────────────
             Any pending question whose tool_use_id isn't matched by a tool_call
             in the visible turns' workItems. This is the surface for subagent
@@ -571,6 +506,9 @@ export function ChatView(props: ChatViewProps) {
           </div>
         </Show>
       </div>
+
+      {/* Queue indicator — collapsed button / expandable list */}
+      <QueueIndicator />
 
       {/* Compaction indicator */}
       {props.compacting && (
