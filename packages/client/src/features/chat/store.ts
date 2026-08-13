@@ -173,14 +173,20 @@ export function clearRetryCountdown(): void {
 
 // ── Helpers ──────────────────────────────────────────────────
 
-/** Clear all live streaming state */
-function clearLiveState(): void {
+/** Clear streaming text/html/thinking — everything except liveWork. */
+function clearStreamingState(): void {
   streamingRawText = ''
   streamTextOffset = 0
   setStreamingText('')
   setStreamingHtml('')
-  setLiveWork([])
   setLiveThinkingText('')
+}
+
+/** Clear ALL live state including liveWork. Call only after liveWork
+ *  has been merged into the completed turn (see the SSE `turn` handler). */
+function clearLiveState(): void {
+  clearStreamingState()
+  setLiveWork([])
 }
 
 /** Clean text: strip thinking blocks and directive tags */
@@ -473,7 +479,12 @@ function connectSSE(threadKey: string): void {
     } else {
       stopDurationTimer()
       if (data.status === 'idle') {
-        clearLiveState()
+        // Clear streaming text/html/thinking but preserve liveWork —
+        // the SSE `turn` event arrives AFTER `status: idle` (both
+        // emitted synchronously from the same server callback, idle
+        // first). The turn handler needs liveWork to populate the
+        // completed turn's workItems before clearing it.
+        clearStreamingState()
       }
     }
   })
