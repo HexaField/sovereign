@@ -1,4 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Mock thread dependencies — must precede the store import (vi.mock hoists).
+vi.mock('../threads/store.js', () => ({
+  threadKey: vi.fn(() => ''),
+  switchThread: vi.fn(),
+  setThreadKey: vi.fn()
+}))
+
+vi.mock('../threads/presence-helper.js', () => ({
+  getPresenceGatewayThreadId: vi.fn(() => Promise.resolve('gateway-thread-123'))
+}))
+
+import { switchThread, threadKey } from '../threads/store.js'
 import {
   viewMode,
   drawerOpen,
@@ -8,6 +21,7 @@ import {
   _setDrawerOpen,
   initNavStore,
   _triggerPopstate,
+  _resetNavThreadState,
   activeView,
   _setActiveView,
   setActiveView,
@@ -36,11 +50,31 @@ describe('§3.5 Nav Store', () => {
     if (typeof globalThis.history === 'undefined') {
       ;(globalThis as any).history = { replaceState: vi.fn() }
     }
+    // Provide sessionStorage for thread save/restore tests.
+    if (typeof globalThis.sessionStorage === 'undefined') {
+      const store: Record<string, string> = {}
+      ;(globalThis as any).sessionStorage = {
+        getItem: (k: string) => store[k] ?? null,
+        setItem: (k: string, v: string) => {
+          store[k] = v
+        },
+        removeItem: (k: string) => {
+          delete store[k]
+        },
+        clear: () => {
+          for (const k of Object.keys(store)) delete store[k]
+        }
+      }
+    }
+    _resetNavThreadState()
+    vi.mocked(switchThread).mockClear()
+    vi.mocked(threadKey).mockReturnValue('')
     cleanup = initNavStore()
   })
 
   afterEach(() => {
     cleanup()
+    _resetNavThreadState()
   })
 
   describe('viewMode', () => {
@@ -236,6 +270,139 @@ describe('§3.5 Nav Store', () => {
         setActiveView(v)
         expect(activeView()).toBe(v)
       }
+    })
+  })
+
+  describe('mode-switch thread save/restore', () => {
+    it('saves workspace thread to sessionStorage when entering agent mode', () => {
+      vi.mocked(threadKey).mockReturnValue('workspace-thread-abc')
+      _setActiveView('workspace')
+
+      setActiveView('agent')
+
+      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBe('workspace-thread-abc')
+    })
+
+    it('restores workspace thread when returning from agent mode', async () => {
+      // Simulate: user had thread-abc open, toggled to agent, now toggles back.
+      vi.mocked(threadKey).mockReturnValue('workspace-thread-abc')
+      _setActiveView('workspace')
+      setActiveView('agent')
+      await Promise.resolve() // flush gateway fetch microtask
+      vi.mocked(switchThread).mockClear()
+
+      setActiveView('workspace')
+
+      expect(switchThread).toHaveBeenCalledWith('workspace-thread-abc')
+    })
+
+    it('switches to presence gateway thread when entering agent mode', async () => {
+      vi.mocked(threadKey).mockReturnValue('some-thread')
+      _setActiveView('workspace')
+
+      setActiveView('agent')
+      await Promise.resolve() // flush getPresenceGatewayThreadId
+
+      expect(switchThread).toHaveBeenCalledWith('gateway-thread-123')
+    })
+
+    it('uses cached gateway id on subsequent toggles (no extra fetch)', async () => {
+      vi.mocked(threadKey).mockReturnValue('t1')
+      _setActiveView('workspace')
+      setActiveView('agent')
+      await Promise.resolve() // first fetch populates cache
+      vi.mocked(switchThread).mockClear()
+
+      // Return to workspace
+      setActiveView('workspace')
+      vi.mocked(switchThread).mockClear()
+
+      // Enter agent mode again — should use cached id synchronously
+      vi.mocked(threadKey).mockReturnValue('t2')
+      setActiveView('agent')
+      expect(switchThread).toHaveBeenCalledWith('gateway-thread-123')
+    })
+
+    it('does not switch threads when view stays the same', () => {
+      _setActiveView('workspace')
+      vi.mocked(switchThread).mockClear()
+
+      setActiveView('workspace')
+
+      expect(switchThread).not.toHaveBeenCalled()
+    })
+
+    it('navigateToAgent saves workspace thread', () => {
+      vi.mocked(threadKey).mockReturnValue('nav-thread-xyz')
+      _setActiveView('workspace')
+
+      navigateToAgent('settings')
+
+      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBe('nav-thread-xyz')
+      expect(activeView()).toBe('agent')
+      expect(activeAgentTab()).toBe('settings')
+    })
+
+    it('closeDashboardModal restores workspace thread', async () => {
+      vi.mocked(threadKey).mockReturnValue('dashboard-thread')
+      _setActiveView('workspace')
+      setActiveView('agent')
+      await Promise.resolve()
+      vi.mocked(switchThread).mockClear()
+
+      closeDashboardModal()
+
+      expect(switchThread).toHaveBeenCalledWith('dashboard-thread')
+      expect(activeView()).toBe('workspace')
+    })
+
+    it('toggleMode round-trips thread correctly', async () => {
+      vi.mocked(threadKey).mockReturnValue('toggle-thread')
+      _setActiveView('workspace')
+
+      // workspace → agent
+      toggleMode()
+      await Promise.resolve()
+      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBe('toggle-thread')
+      expect(switchThread).toHaveBeenCalledWith('gateway-thread-123')
+      vi.mocked(switchThread).mockClear()
+
+      // agent → workspace
+      toggleMode()
+      expect(switchThread).toHaveBeenCalledWith('toggle-thread')
+    })
+
+    it('skips save when threadKey returns empty string', () => {
+      vi.mocked(threadKey).mockReturnValue('')
+      _setActiveView('workspace')
+
+      setActiveView('agent')
+
+      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBeNull()
+    })
+
+    it('skips gateway switch if user toggles back before fetch resolves', async () => {
+      vi.mocked(threadKey).mockReturnValue('fast-toggle')
+      _setActiveView('workspace')
+
+      setActiveView('agent') // starts async fetch
+      setActiveView('workspace') // toggles back before fetch resolves
+      vi.mocked(switchThread).mockClear()
+
+      await Promise.resolve() // fetch resolves — but view changed back to workspace
+
+      // switchThread should NOT have been called with gateway (guard fires)
+      const gatewayCalls = vi.mocked(switchThread).mock.calls.filter((c) => c[0] === 'gateway-thread-123')
+      expect(gatewayCalls).toHaveLength(0)
+    })
+
+    it('persists across _resetNavThreadState + reinit', () => {
+      vi.mocked(threadKey).mockReturnValue('persist-thread')
+      _setActiveView('workspace')
+      setActiveView('agent')
+
+      // sessionStorage survives reset (only cachedGatewayId clears)
+      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBe('persist-thread')
     })
   })
 })

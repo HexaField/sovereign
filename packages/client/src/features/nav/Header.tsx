@@ -1,8 +1,8 @@
 import { createMemo, createSignal, Show, onMount, onCleanup } from 'solid-js'
 import { agentIcon, agentName } from '../../lib/identity.js'
 import { HealthPopover, overallHealth, initHealthPolling } from '../connection/HealthPopover.js'
-import { activeView, setActiveView, activeAgentTab, setActiveAgentTab, type AgentTab } from '../nav/store.js'
-import { threadKey, switchThread } from '../threads/store.js'
+import { activeView, toggleMode, activeAgentTab, setActiveAgentTab, type AgentTab } from '../nav/store.js'
+import { threadKey } from '../threads/store.js'
 import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
 import { SummaryBubble } from '../chat/SummaryBubble.js'
@@ -64,8 +64,6 @@ export function Header() {
   const [healthOpen, setHealthOpen] = createSignal(false)
   let healthDotRef: HTMLButtonElement | undefined
 
-  // Saved workspace thread — restored when leaving agent mode.
-  let savedWorkspaceThread: string | null = null
   const [presenceGatewayId, setPresenceGatewayId] = createSignal<string | null>(null)
 
   onMount(() => {
@@ -96,17 +94,7 @@ export function Header() {
   })
 
   /** Toggle between workspace and agent modes. */
-  const handleToggleMode = () => {
-    if (activeView() === 'workspace') {
-      savedWorkspaceThread = threadKey()
-      setActiveView('agent')
-      const pgId = presenceGatewayId()
-      if (pgId) switchThread(pgId)
-    } else {
-      setActiveView('workspace')
-      if (savedWorkspaceThread) switchThread(savedWorkspaceThread)
-    }
-  }
+  const handleToggleMode = () => toggleMode()
 
   return (
     <div
