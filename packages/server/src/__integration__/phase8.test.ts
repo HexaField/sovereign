@@ -10,7 +10,7 @@ import { createMeetingsService, type Meeting } from '@sovereign/meetings'
 import { createSpeakerService } from '@sovereign/meetings'
 import { createSummarizationPipeline, type SummarizationResult } from '@sovereign/meetings'
 import { createImportHandler } from '@sovereign/meetings'
-import { createRetentionJob } from '@sovereign/meetings'
+import { runCleanup } from '@sovereign/meetings'
 
 // Recordings
 import { createRecordingsService } from '@sovereign/recordings'
@@ -228,7 +228,6 @@ describe('Phase 8 Integration', () => {
   describe('Retention', () => {
     it('removes old meetings based on retention config', async () => {
       const meetings = createMeetingsService(bus, dataDir)
-      const retention = createRetentionJob(bus, { retentionDays: 0 })
       const orgId = 'test-org'
 
       // Create a meeting with old timestamp
@@ -237,7 +236,7 @@ describe('Phase 8 Integration', () => {
         createdAt: new Date(Date.now() - 86400000 * 2).toISOString()
       })
 
-      const removed = await retention.runCleanup(orgId, dataDir)
+      const removed = await runCleanup(orgId, dataDir, 0)
       // With 0 retentionDays, everything older than now should be cleaned
       expect(removed).toBeGreaterThanOrEqual(0) // may be 0 if impl checks differently
     })

@@ -44,6 +44,7 @@ export type {
 export {
   createClaudeCodeBackend,
   claudeCodeConfigFromStore,
+  claudeCodeConfigGetter,
   createSovereignMcpServer,
   createPersonalityCompiler,
   createAskUserQuestionStore,
@@ -56,5 +57,10 @@ export {
 } from './claude-code/index.js'
 
 // Local LLM adapter
-export { createLocalLlmBackend, localLlmConfigFromStore, createInferenceClient } from './local-llm/index.js'
+export {
+  createLocalLlmBackend,
+  localLlmConfigFromStore,
+  localLlmConfigGetter,
+  createInferenceClient
+} from './local-llm/index.js'
 export type { LocalLlmBackend, LocalLlmConfig, InferenceClient, InferenceClientConfig } from './local-llm/index.js'

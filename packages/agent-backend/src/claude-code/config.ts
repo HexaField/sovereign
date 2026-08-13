@@ -91,3 +91,14 @@ export function claudeCodeConfigFromStore(
     contextManagement
   }
 }
+
+/** Return a getter that re-reads Claude Code config from the store on every
+ *  call. Backends that accept `() => ClaudeCodeConfig` use this so config
+ *  changes take effect without a restart. */
+export function claudeCodeConfigGetter(
+  configStore: ConfigStore,
+  dataDir: string,
+  configDir?: string
+): () => ClaudeCodeConfig {
+  return () => claudeCodeConfigFromStore(configStore, dataDir, configDir)
+}

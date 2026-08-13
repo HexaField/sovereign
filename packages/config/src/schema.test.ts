@@ -32,16 +32,6 @@ describe('Config Schema', () => {
       expect(result.valid).toBe(false)
     })
 
-    it('rejects invalid terminal.shell type', () => {
-      const result = validate({ terminal: { shell: 123 } })
-      expect(result.valid).toBe(false)
-    })
-
-    it('rejects invalid worktrees.staleDays type', () => {
-      const result = validate({ worktrees: { staleDays: 'fourteen' } })
-      expect(result.valid).toBe(false)
-    })
-
     it('returns detailed error messages for each violation', () => {
       const result = validate({ server: { port: 'bad', host: 123 } })
       expect(result.valid).toBe(false)

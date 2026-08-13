@@ -71,29 +71,29 @@ describe('Phase 3 Integration', () => {
         events.push(e.payload)
       })
 
-      const oldShell = configStore.get<string>('terminal.shell')
-      configStore.set('terminal.shell', '/bin/bash')
+      const oldName = configStore.get<string>('identity.agentName')
+      configStore.set('identity.agentName', 'CustomAgent')
 
-      expect(configStore.get<string>('terminal.shell')).toBe('/bin/bash')
+      expect(configStore.get<string>('identity.agentName')).toBe('CustomAgent')
       expect(events.length).toBeGreaterThanOrEqual(1)
       const change = events[0] as { path: string; oldValue: unknown; newValue: unknown }
-      expect(change.path).toBe('terminal.shell')
-      expect(change.newValue).toBe('/bin/bash')
-      expect(change.oldValue).toBe(oldShell)
+      expect(change.path).toBe('identity.agentName')
+      expect(change.newValue).toBe('CustomAgent')
+      expect(change.oldValue).toBe(oldName)
     })
 
-    it('change terminal.shell → terminal module uses new shell on next session', async () => {
+    it('change identity.agentName → module uses new value on next read', async () => {
       const bus = createEventBus(dataDir)
       const configStore = createConfigStore(bus, dataDir)
 
       // Use onChange to simulate a module picking up config
-      let latestShell = configStore.get<string>('terminal.shell')
-      const unsub = configStore.onChange('terminal.shell', (change) => {
-        latestShell = change.newValue as string
+      let latestName = configStore.get<string>('identity.agentName')
+      const unsub = configStore.onChange('identity.agentName', (change) => {
+        latestName = change.newValue as string
       })
 
-      configStore.set('terminal.shell', '/usr/bin/fish')
-      expect(latestShell).toBe('/usr/bin/fish')
+      configStore.set('identity.agentName', 'AnotherAgent')
+      expect(latestName).toBe('AnotherAgent')
       unsub()
     })
   })

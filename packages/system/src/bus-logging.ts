@@ -31,7 +31,7 @@ export function wireBusLogging(bus: EventBus, logsChannel: LogsChannel): void {
 
   bus.on('config.changed', (event) => {
     const payload = event.payload as Record<string, unknown>
-    moduleLogger.info(`Config changed: ${payload?.key ?? 'unknown'}`)
+    moduleLogger.info(`Config changed: ${payload?.path ?? 'unknown'}`)
   })
 
   bus.on('webhook.received', (event) => {

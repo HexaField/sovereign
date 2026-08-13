@@ -194,7 +194,11 @@ interface PersistedLocalLlmSession {
   updatedAt: number
 }
 
-export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBackendDeps): LocalLlmBackend {
+export function createLocalLlmBackend(
+  configOrGetter: LocalLlmConfig | (() => LocalLlmConfig),
+  deps: LocalLlmBackendDeps
+): LocalLlmBackend {
+  const getConfig = typeof configOrGetter === 'function' ? configOrGetter : () => configOrGetter
   const emitter = createBackendEmitter(KIND)
   const sessions = new Map<string, LocalLlmSessionState>()
   let connectionStatus: BackendConnectionStatus = 'disconnected'
@@ -207,21 +211,20 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
   })
 
   function makeClient(model: string): InferenceClient {
-    return (
-      deps.inferenceClient ??
-      createInferenceClient({
-        baseUrl: config.baseUrl,
-        model,
-        temperature: config.temperature,
-        maxTokens: config.maxTokens,
-        timeoutMs: config.timeoutMs,
-        thinking: config.thinking
-      })
-    )
+    if (deps.inferenceClient) return deps.inferenceClient
+    const cfg = getConfig()
+    return createInferenceClient({
+      baseUrl: cfg.baseUrl,
+      model,
+      temperature: cfg.temperature,
+      maxTokens: cfg.maxTokens,
+      timeoutMs: cfg.timeoutMs,
+      thinking: cfg.thinking
+    })
   }
 
   // Used only for connect()'s reachability probe — never bound to a session.
-  const probeClient = makeClient(config.model)
+  const probeClient = makeClient(getConfig().model)
 
   function persist(state: LocalLlmSessionState): void {
     state.updatedAt = Date.now()
@@ -241,9 +244,10 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
   }
 
   function rehydrate(): void {
+    const cfg = getConfig()
     for (const { key, value } of sessionStore.entries()) {
-      const cwd = value.cwd || config.sandbox.allowedCwds[0] || process.cwd()
-      const model = value.model || config.model
+      const cwd = value.cwd || cfg.sandbox.allowedCwds[0] || process.cwd()
+      const model = value.model || cfg.model
       const filesRead = new Set<string>() // nothing survives the process boundary
       sessions.set(key, {
         sessionKey: value.sessionKey,
@@ -262,8 +266,8 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
         processing: false,
         filesRead,
         toolExecutor: createToolExecutor({
-          allowedCwds: config.sandbox.allowedCwds,
-          bashTimeout: config.sandbox.bashTimeout,
+          allowedCwds: cfg.sandbox.allowedCwds,
+          bashTimeout: cfg.sandbox.bashTimeout,
           filesRead,
           cwd
         }),
@@ -293,8 +297,9 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
     if (existing) return existing
 
     const now = Date.now()
-    const cwd = path.resolve(opts?.cwd?.trim() || config.sandbox.allowedCwds[0] || process.cwd())
-    const model = opts?.model?.trim() || config.model
+    const cfg = getConfig()
+    const cwd = path.resolve(opts?.cwd?.trim() || cfg.sandbox.allowedCwds[0] || process.cwd())
+    const model = opts?.model?.trim() || cfg.model
     const filesRead = new Set<string>()
     const state: LocalLlmSessionState = {
       sessionKey,
@@ -313,8 +318,8 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
       processing: false,
       filesRead,
       toolExecutor: createToolExecutor({
-        allowedCwds: config.sandbox.allowedCwds,
-        bashTimeout: config.sandbox.bashTimeout,
+        allowedCwds: cfg.sandbox.allowedCwds,
+        bashTimeout: cfg.sandbox.bashTimeout,
         filesRead,
         cwd
       }),
@@ -435,7 +440,7 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
     setConnectionStatus('connecting')
     const reachable = await probeClient.healthCheck()
     if (reachable) setConnectionStatus('connected')
-    else setConnectionStatus('error', `Could not reach inference server at ${config.baseUrl}`)
+    else setConnectionStatus('error', `Could not reach inference server at ${getConfig().baseUrl}`)
   }
 
   async function disconnect(): Promise<void> {
@@ -554,7 +559,7 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
       sessionKey,
       model: state.model,
       modelProvider: PROVIDER,
-      contextTokens: state.contextWindow ?? config.contextWindow,
+      contextTokens: state.contextWindow ?? getConfig().contextWindow,
       totalTokens: estimatedTokens,
       inputTokens: estimatedTokens,
       outputTokens: null,
@@ -586,8 +591,9 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
   }
 
   async function listAvailableModels(): Promise<{ models: string[]; defaultModel: string | null }> {
+    const cfg = getConfig()
     try {
-      const url = `${config.baseUrl.replace(/\/+$/, '')}/v1/models`
+      const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/models`
       const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
       if (!res.ok) throw new Error(`status ${res.status}`)
       const data = (await res.json()) as { data?: Array<{ id?: unknown }> }
@@ -595,11 +601,11 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
         ? data.data.map((m) => m.id).filter((id): id is string => typeof id === 'string')
         : []
       if (ids.length === 0) throw new Error('inference server returned no models')
-      return { models: ids, defaultModel: ids.includes(config.model) ? config.model : ids[0] }
+      return { models: ids, defaultModel: ids.includes(cfg.model) ? cfg.model : ids[0] }
     } catch {
       // Server may not implement GET /v1/models (not all llama.cpp builds
       // do) — fall back to the single configured model rather than erroring.
-      return { models: [config.model], defaultModel: config.model }
+      return { models: [cfg.model], defaultModel: cfg.model }
     }
   }
 
@@ -680,7 +686,7 @@ export function createLocalLlmBackend(config: LocalLlmConfig, deps: LocalLlmBack
   function getDeviceInfo(): DeviceInfo {
     return {
       backendKind: KIND,
-      deviceId: `local-llm@${config.baseUrl}`,
+      deviceId: `local-llm@${getConfig().baseUrl}`,
       connectionStatus
     }
   }

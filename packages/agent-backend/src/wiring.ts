@@ -11,13 +11,13 @@ import { createSessionsRegistry } from '@sovereign/primitives'
 import { createActiveSessions, type ActiveSessions } from './active-sessions.js'
 import {
   createClaudeCodeBackend,
-  claudeCodeConfigFromStore,
+  claudeCodeConfigGetter,
   createSovereignMcpServer,
   createAskUserQuestionStore,
   type ClaudeCodeBackend,
   type AskUserQuestionStore
 } from './claude-code/index.js'
-import { createLocalLlmBackend, localLlmConfigFromStore } from './local-llm/index.js'
+import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.js'
 import { buildSovereignMcpDeps } from './mcp-deps.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
@@ -286,7 +286,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     registry: sessionsRegistry,
     factories: {
       'claude-code': () => {
-        const cc = createClaudeCodeBackend(claudeCodeConfigFromStore(configStore, dataDir, input.configDir), {
+        const cc = createClaudeCodeBackend(claudeCodeConfigGetter(configStore, dataDir, input.configDir), {
           sovereignMcpServer,
           registry: {
             upsertSession(record) {
@@ -324,7 +324,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
         return cc
       },
       'local-llm': () => {
-        return createLocalLlmBackend(localLlmConfigFromStore(configStore, dataDir), {
+        return createLocalLlmBackend(localLlmConfigGetter(configStore, dataDir), {
           dataDir,
           registry: {
             upsertSession(record: Record<string, unknown>) {

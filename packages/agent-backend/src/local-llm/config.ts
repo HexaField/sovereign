@@ -75,3 +75,10 @@ export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: strin
     }
   }
 }
+
+/** Return a getter that re-reads local-llm config from the store on every
+ *  call. Backends that accept `() => LocalLlmConfig` use this so config
+ *  changes take effect without a restart. */
+export function localLlmConfigGetter(configStore: ConfigStore, dataDir: string): () => LocalLlmConfig {
+  return () => localLlmConfigFromStore(configStore, dataDir)
+}

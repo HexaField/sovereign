@@ -106,7 +106,6 @@ import { makeFetchSummarizer } from '@sovereign/meetings'
 import { createImportHandler } from '@sovereign/meetings'
 import { registerMeetingRoutes } from '@sovereign/meetings'
 import { registerMeetingsChannel } from '@sovereign/meetings'
-import { createRetentionJob } from '@sovereign/meetings'
 import { wireStatusAggregator } from './status/wiring.js'
 import { createWsHandler } from '@sovereign/primitives'
 
@@ -361,7 +360,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     onSummarize: makeFetchSummarizer({ getUrl: () => configStore.get<string>('meetings.summarizeUrl') })
   })
   const importHandler = createImportHandler({ bus, meetings: meetingsService })
-  void createRetentionJob(bus)
   app.use(
     registerMeetingRoutes({
       meetings: meetingsService,

@@ -8,20 +8,6 @@ export interface SovereignConfig {
       enabled: boolean
     }
   }
-  terminal: {
-    shell: string
-    gracePeriodMs: number
-    maxSessions: number
-  }
-  worktrees: {
-    staleDays: number
-    autoCleanupMerged: boolean
-  }
-  projects: {
-    defaults: {
-      remotes: string[]
-    }
-  }
   workspace: {
     /** Default cwd for new Claude Code sessions and file-chip workspace listings. */
     root: string
