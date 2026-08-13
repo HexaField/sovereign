@@ -261,11 +261,30 @@ export function createChatModule(
       return
     }
 
-    // Backend accepted the message. We keep it in 'sending' state in the queue
-    // and only remove it once the agent confirms the turn (chat.status → idle
-    // OR chat.turn for this thread). That ensures a queued message UI item
-    // stays visible until the agent has actually started — bridging the
-    // gap between "POST returned" and "user message appears in history".
+    // ── Single source of truth: the queue item leaves as soon as the
+    // backend accepts it. The synthetic user turn provides immediate
+    // visual feedback; the JSONL history is the authoritative record.
+    // No 'sending' items linger in the persisted queue. ──
+
+    // Synthesize a chat.turn so clients render the user message in
+    // history immediately — emit BEFORE removeSent so the SSE order
+    // is: user turn → queue empty, giving a clean visual handover.
+    const synthRole = synthRoleById.get(head.id) ?? 'user'
+    synthRoleById.delete(head.id)
+    const turnPayload = {
+      role: synthRole,
+      content: head.text,
+      timestamp: head.timestamp,
+      workItems: [],
+      thinkingBlocks: [],
+      ...(head.origin ? { origin: { modality: head.origin.modality } } : {})
+    }
+    if (wsHandler) {
+      wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn: turnPayload })
+    }
+    chatEvents.emit('chat.turn', { threadId, turn: turnPayload })
+    messageQueue.removeSent(head.id)
+
     const sentAt = Date.now()
     const sentPayload = {
       threadId,
@@ -281,47 +300,22 @@ export function createChatModule(
       payload: sentPayload
     })
     chatEvents.emit('chat.message.sent', sentPayload)
+
+    // If the agent already went idle while we awaited sendMessage
+    // (completeInFlight cleared the gate), pump the next queued item.
+    if (!inFlightByThread.has(threadId)) {
+      void pumpQueue(threadId)
+    }
   }
 
+  /** Agent finished a turn — clear the in-flight gate so the next queued
+   *  message can dispatch. The queue item itself was already removed by
+   *  pumpQueue when the backend accepted the send; this just unblocks
+   *  the next dispatch cycle. Idempotent — safe to call from both
+   *  chat.status:idle and chat.turn handlers. */
   function completeInFlight(threadId: string): void {
-    const id = inFlightByThread.get(threadId)
-    if (!id) return
+    if (!inFlightByThread.has(threadId)) return
     inFlightByThread.delete(threadId)
-    // Only remove if the entry is still in 'sending' (might already have been
-    // cancelled / failed elsewhere).
-    const items = messageQueue.getQueue(threadId)
-    const entry = items.find((m) => m.id === id)
-    if (entry && entry.status === 'sending') {
-      // Synthesize a chat.turn so clients can promote the queue bubble
-      // into authoritative history without round-tripping for a refetch.
-      // Emit BEFORE removeSent so the SSE order is: user turn → queue empty
-      // → assistant turn, giving a clean visual handover with no flash.
-      //
-      // The role matches what the SDK will persist for this input: UI sends
-      // become user turns; cron injections become system turns (the SDK
-      // records `[Cron: …]` inputs as system messages, so emitting a user
-      // turn here would briefly render a user bubble that flips to system
-      // on the next refresh — a confusing mismatch).
-      const synthRole = synthRoleById.get(id) ?? 'user'
-      synthRoleById.delete(id)
-      const turnPayload = {
-        role: synthRole,
-        content: entry.text,
-        timestamp: entry.timestamp,
-        workItems: [],
-        thinkingBlocks: [],
-        // Carry the modality forward from the queue entry so the live SSE
-        // turn shows a mic icon right away, instead of waiting on a JSONL
-        // reload to recover it from the `[modality]` prefix sent above.
-        ...(entry.origin ? { origin: { modality: entry.origin.modality } } : {})
-      }
-      if (wsHandler) {
-        wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn: turnPayload })
-      }
-      chatEvents.emit('chat.turn', { threadId, turn: turnPayload })
-      messageQueue.removeSent(id)
-    }
-    // Try to dispatch any following queued message.
     void pumpQueue(threadId)
   }
 
