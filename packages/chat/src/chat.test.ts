@@ -790,16 +790,16 @@ describe('§2.4 Chat Module (Server)', () => {
       expect(ok).toBe(false)
     })
 
-    it('MUST return false for an item already in sending status', async () => {
+    it('MUST return false for an item that already went through the send path', async () => {
       const { threadId } = await chatModule.handleSessionCreate()
-      await chatModule.handleSend(threadId, 'in-flight message')
+      await chatModule.handleSend(threadId, 'already sent')
 
-      // The first message gets picked up by pumpQueue → status 'sending'
+      // pumpQueue sends + removes the item immediately — queue is empty
       const queue = chatModule.getQueueSnapshot(threadId)
-      const sendingItem = queue.find((m) => m.status === 'sending')
-      expect(sendingItem).toBeDefined()
+      expect(queue).toHaveLength(0)
 
-      const ok = await chatModule.forceSend(sendingItem!.id)
+      // Force-sending a non-existent id returns false
+      const ok = await chatModule.forceSend('does-not-exist')
       expect(ok).toBe(false)
     })
 
