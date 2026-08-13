@@ -1,7 +1,7 @@
 // Public surface of the Claude Code adapter.
 
 export { createClaudeCodeBackend, type ClaudeCodeBackend, type ClaudeCodeBackendDeps } from './claude-code.js'
-export { claudeCodeConfigFromStore } from './config.js'
+export { claudeCodeConfigFromStore, claudeCodeConfigGetter } from './config.js'
 export { createSovereignMcpServer, type SovereignToolDeps } from './mcp-server.js'
 export { ensureLayeredContextFile, ensureDefaultSubagentFile, ensureAd4mSkill } from './personality.js'
 export { createPersonalityCompiler } from './personality-compiler.js'

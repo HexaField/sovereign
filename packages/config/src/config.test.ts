@@ -49,13 +49,13 @@ describe('ConfigStore', () => {
         path.join(tmpDir, 'config.json'),
         JSON.stringify({
           server: { port: 'bad', host: '127.0.0.1' },
-          terminal: { maxSessions: 42 }
+          identity: { agentName: 'custom-name' }
         })
       )
       const store = createConfigStore(bus, tmpDir)
       expect(store.get('server.port')).toBe(3001) // invalid → default backfill
       expect(store.get('server.host')).toBe('127.0.0.1') // valid sibling survives
-      expect(store.get('terminal.maxSessions')).toBe(42) // unrelated section survives
+      expect(store.get('identity.agentName')).toBe('custom-name') // unrelated section survives
     })
 
     it('drops an obsolete unknown key (additionalProperties) without losing valid keys', () => {
@@ -91,7 +91,7 @@ describe('ConfigStore', () => {
     it('applies defaults for missing keys', () => {
       const store = createConfigStore(bus, tmpDir)
       expect(store.get('server.port')).toBe(3001)
-      expect(store.get('terminal.maxSessions')).toBe(10)
+      expect(store.get('identity.agentName')).toBe('Sovereign')
     })
 
     it('creates config.json if it does not exist', () => {
@@ -105,7 +105,7 @@ describe('ConfigStore', () => {
       const store = createConfigStore(bus, tmpDir)
       const full = store.get()
       expect(full).toHaveProperty('server')
-      expect(full).toHaveProperty('terminal')
+      expect(full).toHaveProperty('identity')
     })
 
     it('returns namespaced value with dot-path notation', () => {
@@ -115,7 +115,7 @@ describe('ConfigStore', () => {
 
     it('returns default value for unset key', () => {
       const store = createConfigStore(bus, tmpDir)
-      expect(store.get('worktrees.staleDays')).toBe(14)
+      expect(store.get('voice.ackDelayMs')).toBe(1500)
     })
 
     it('returns env override over file value', () => {
@@ -208,8 +208,8 @@ describe('ConfigStore', () => {
 
     it('modules pick up new values on next read', () => {
       const store = createConfigStore(bus, tmpDir)
-      store.set('terminal.maxSessions', 20)
-      expect(store.get('terminal.maxSessions')).toBe(20)
+      store.set('summary.maxSummaryWords', 20)
+      expect(store.get('summary.maxSummaryWords')).toBe(20)
     })
 
     it('onChange handler fires for subscribed path', () => {
@@ -260,12 +260,12 @@ describe('ConfigStore', () => {
     })
 
     it('double underscore maps to dot-path separator', () => {
-      process.env.SOVEREIGN_TERMINAL__SHELL = '/bin/bash'
+      process.env.SOVEREIGN_AD4M__HOST = 'https://example.com'
       try {
         const store = createConfigStore(bus, tmpDir)
-        expect(store.get('terminal.shell')).toBe('/bin/bash')
+        expect(store.get('ad4m.host')).toBe('https://example.com')
       } finally {
-        delete process.env.SOVEREIGN_TERMINAL__SHELL
+        delete process.env.SOVEREIGN_AD4M__HOST
       }
     })
 
@@ -317,7 +317,7 @@ describe('ConfigStore', () => {
       const store = createConfigStore(bus, tmpDir)
       const exported = store.exportConfig()
       expect(exported.server.port).toBe(3001)
-      expect(exported.terminal).toBeTruthy()
+      expect(exported.workspace).toBeTruthy()
     })
 
     it('importConfig validates before applying', () => {
@@ -343,7 +343,7 @@ describe('ConfigStore', () => {
       const store = createConfigStore(bus, tmpDir)
       const devPreset = {
         server: { port: 3001, host: 'localhost' },
-        terminal: { shell: '/bin/zsh', gracePeriodMs: 30000, maxSessions: 10 }
+        identity: { agentName: 'dev-agent', agentIcon: '⬡' }
       }
       store.importConfig(devPreset)
       expect(store.get('server.port')).toBe(3001)

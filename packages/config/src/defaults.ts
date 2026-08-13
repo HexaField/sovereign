@@ -11,20 +11,6 @@ export const defaults: SovereignConfig = {
       enabled: true
     }
   },
-  terminal: {
-    shell: process.env.SHELL || '/bin/zsh',
-    gracePeriodMs: 30000,
-    maxSessions: 10
-  },
-  worktrees: {
-    staleDays: 14,
-    autoCleanupMerged: false
-  },
-  projects: {
-    defaults: {
-      remotes: []
-    }
-  },
   workspace: {
     root: home ? path.join(home, 'workspaces') : '',
     globalPath: ''

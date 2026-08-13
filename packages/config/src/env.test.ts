@@ -16,10 +16,10 @@ describe('Config Env Overrides', () => {
     expect(result).toEqual({ server: { port: 8080 } })
   })
 
-  it('resolves SOVEREIGN_TERMINAL__SHELL to terminal.shell', () => {
-    process.env.SOVEREIGN_TERMINAL__SHELL = '/bin/bash'
+  it('resolves SOVEREIGN_AD4M__HOST to ad4m.host', () => {
+    process.env.SOVEREIGN_AD4M__HOST = 'https://example.com'
     const result = resolveEnvOverrides()
-    expect(result).toEqual({ terminal: { shell: '/bin/bash' } })
+    expect(result).toEqual({ ad4m: { host: 'https://example.com' } })
   })
 
   it('ignores env vars without SOVEREIGN_ prefix', () => {
@@ -30,9 +30,9 @@ describe('Config Env Overrides', () => {
   })
 
   it('double underscore maps to nested path', () => {
-    process.env.SOVEREIGN_PROJECTS__DEFAULTS__REMOTES = 'origin'
+    process.env.SOVEREIGN_SERVER__TLS__ENABLED = 'true'
     const result = resolveEnvOverrides()
-    expect(result).toEqual({ projects: { defaults: { remotes: 'origin' } } })
+    expect(result).toEqual({ server: { tls: { enabled: true } } })
   })
 
   it('returns empty object when no SOVEREIGN_ vars set', () => {
@@ -48,8 +48,8 @@ describe('Config Env Overrides', () => {
   })
 
   it('coerces boolean string to boolean', () => {
-    process.env.SOVEREIGN_WORKTREES__AUTOCLEANUPMERGED = 'true'
+    process.env.SOVEREIGN_VOICE__AUTOTTS = 'true'
     const result = resolveEnvOverrides()
-    expect((result as any).worktrees.autocleanupmerged).toBe(true)
+    expect((result as any).voice.autotts).toBe(true)
   })
 })

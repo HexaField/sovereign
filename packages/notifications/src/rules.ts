@@ -79,7 +79,7 @@ const DEFAULT_RULES: NotificationRule[] = [
     eventPattern: 'config.changed',
     severity: 'info',
     titleTemplate: 'Config Changed',
-    bodyTemplate: 'Configuration updated: {{payload.key}}'
+    bodyTemplate: 'Configuration updated: {{payload.path}}'
   }
 ]
 

@@ -313,7 +313,11 @@ interface PersistedClaudeSessionState {
 const SESSION_STATE_SCHEMA_VERSION = 1
 const ACTIVE_KEY_SCHEMA_VERSION = 1
 
-export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCodeBackendDeps = {}): ClaudeCodeBackend {
+export function createClaudeCodeBackend(
+  configOrGetter: ClaudeCodeConfig | (() => ClaudeCodeConfig),
+  deps: ClaudeCodeBackendDeps = {}
+): ClaudeCodeBackend {
+  const getConfig = typeof configOrGetter === 'function' ? configOrGetter : () => configOrGetter
   const emitter = createBackendEmitter(KIND)
   const internal: ClaudeAdapterInternal = {
     connectionStatus: 'disconnected',
@@ -333,40 +337,44 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   }
 
   const home = process.env.HOME ?? ''
-  const agentDir = config.agentDir ?? defaultAgentDir(home)
-  const cwd = config.cwd ?? process.cwd()
-  const defaultTools = config.defaultTools ?? DEFAULT_TOOLS
-  const defaultModel = config.defaultModel ?? DEFAULT_MODEL_FALLBACK
-  const modelContextWindows = config.modelContextWindows ?? {}
+
+  // Read dataDir once at construction — it derives state-store paths that
+  // cannot safely change mid-flight.
+  const initConfig = getConfig()
+  const dataDir = initConfig.dataDir
+
+  /** Build the MCP server map from the latest config + deps.  Called per
+   *  session creation so a refreshed AD4M token takes effect immediately. */
+  function resolveMcpServers(): Record<string, any> {
+    const cfg = getConfig()
+    const servers: Record<string, any> = { ...cfg.mcpServers }
+    if (!servers['sovereign'] && deps.sovereignMcpServer) {
+      servers.sovereign = deps.sovereignMcpServer
+    }
+    return servers
+  }
 
   function contextWindowFor(model: string | null | undefined): number {
     if (!model) return DEFAULT_CONTEXT_WINDOW
     const bare = bareModelName(model)
     const family = familyForModel(bare)
-    return (
-      modelContextWindows[bare] ??
-      (family ? modelContextWindows[family] : undefined) ??
-      modelContextWindows[model] ??
-      DEFAULT_CONTEXT_WINDOW
-    )
+    const windows = getConfig().modelContextWindows ?? {}
+    return windows[bare] ?? (family ? windows[family] : undefined) ?? windows[model] ?? DEFAULT_CONTEXT_WINDOW
   }
   const query = deps.sdkQuery ?? sdkQuery
-  const mcpServers: Record<string, any> = { ...config.mcpServers }
-  // In-process MCP server — same lifecycle as the Sovereign process.
-  // No external sidecar; the SDK injects the McpServer instance directly.
-  if (!mcpServers['sovereign'] && deps.sovereignMcpServer) {
-    mcpServers.sovereign = deps.sovereignMcpServer
-  }
 
   // Workspace-local seed files — best-effort, never fatal. The global
   // personality (~/.claude/CLAUDE.md) is owned by the personality compiler
   // in bootstrap; only the layered-context file and default subagent get
   // seeded here.
   try {
-    fs.mkdirSync(cwd, { recursive: true })
-    ensureLayeredContextFile(cwd)
-    ensureDefaultSubagentFile(cwd)
-    if (mcpServers['ad4m'] && config.configDir) ensureAd4mSkill(config.configDir, agentDir)
+    const initCwd = initConfig.cwd ?? process.cwd()
+    const initAgentDir = initConfig.agentDir ?? defaultAgentDir(home)
+    fs.mkdirSync(initCwd, { recursive: true })
+    ensureLayeredContextFile(initCwd)
+    ensureDefaultSubagentFile(initCwd)
+    const initMcp = resolveMcpServers()
+    if (initMcp['ad4m'] && initConfig.configDir) ensureAd4mSkill(initConfig.configDir, initAgentDir)
   } catch {
     /* user may have a read-only cwd in tests */
   }
@@ -376,13 +384,13 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   // and the global active-session-pointer.json. Both rehydrated on adapter
   // construction so a restart resumes the last known state.
   const sessionStateStore: WriteThroughStore<PersistedClaudeSessionState> = createWriteThroughStore({
-    dirPath: path.join(config.dataDir, 'agent-backend', 'claude-code-state'),
+    dirPath: path.join(dataDir, 'agent-backend', 'claude-code-state'),
     version: SESSION_STATE_SCHEMA_VERSION,
     debounceMs: 250,
     label: 'claude-code-state'
   })
   const activeKeyFile: WriteThroughFile<string | null> = createWriteThroughFile<string | null>({
-    filePath: path.join(config.dataDir, 'agent-backend', 'active-session-pointer.json'),
+    filePath: path.join(dataDir, 'agent-backend', 'active-session-pointer.json'),
     version: ACTIVE_KEY_SCHEMA_VERSION,
     defaultValue: null,
     debounceMs: 0, // pointer changes are always synchronous (R5)
@@ -575,9 +583,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   }): ClaudeSessionState {
     let state = internal.sessions.get(opts.sessionKey)
     if (state) return state
-    const sessionFile = sessionJsonlPath(agentDir, opts.cwd ?? cwd, opts.backendSessionId)
+    const cfg = getConfig()
+    const cfgAgentDir = cfg.agentDir ?? defaultAgentDir(home)
+    const cfgCwd = cfg.cwd ?? process.cwd()
+    const sessionFile = sessionJsonlPath(cfgAgentDir, opts.cwd ?? cfgCwd, opts.backendSessionId)
     // Create a per-session context filter (Layer 1) when filtering enabled.
-    const filterCfg = config.contextManagement?.filter
+    const filterCfg = cfg.contextManagement?.filter
     const contextFilter =
       filterCfg?.enabled !== false
         ? createContextFilter(filterCfg as Partial<ContextFilterConfig> | undefined)
@@ -586,8 +597,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     state = {
       sessionKey: opts.sessionKey,
       backendSessionId: opts.backendSessionId,
-      cwd: opts.cwd ?? cwd,
-      model: opts.model ?? defaultModel,
+      cwd: opts.cwd ?? cfgCwd,
+      model: opts.model ?? cfg.defaultModel ?? DEFAULT_MODEL_FALLBACK,
       effort: opts.effort ?? DEFAULT_REASONING_EFFORT,
       contextWindow: opts.contextWindow,
       agentStatus: 'idle',
@@ -905,12 +916,12 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: false })
       // MCP rehydration: compact tears down the SDK's deferred-tool catalog
       // for any MCP server that didn't re-register itself. Forcing
-      // `setMcpServers(mcpServers)` makes the SDK redo `tools/list` against
+      // `setMcpServers(...)` makes the SDK redo `tools/list` against
       // every configured server — recovers `mcp__sovereign__*` tools after
       // both auto-compact and manual `/compact`.
       // See plans/claude-code-mcp-rehydration-bug.md for the bug history.
       try {
-        await state.liveQuery?.setMcpServers?.(mcpServers)
+        await state.liveQuery?.setMcpServers?.(resolveMcpServers())
       } catch (err) {
         // SDK builds without setMcpServers will throw or be undefined.
         // Best-effort — the next session loop start re-registers anyway.
@@ -1039,11 +1050,14 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     //   2. Membrane prelude — per-thread CONTEXT.md resolved by the membrane
     //      manager, scoped to the thread's membrane id.
     // Both are joined and appended onto the `claude_code` preset.
-    const globalPersonality = readGlobalPersonality(agentDir)
+    const cfgAtStart = getConfig()
+    const cfgAgentDir = cfgAtStart.agentDir ?? defaultAgentDir(home)
+    const globalPersonality = readGlobalPersonality(cfgAgentDir)
     const membraneAppend = deps?.resolveAppendSystemPrompt?.(state.sessionKey)
     const combinedAppend = [globalPersonality, membraneAppend].filter(Boolean).join('\n\n')
     const effectiveContextWindow = state.contextWindow ?? contextWindowFor(state.model)
     const betas: SdkBeta[] = effectiveContextWindow > DEFAULT_CONTEXT_WINDOW ? ['context-1m-2025-08-07'] : []
+    const sessionMcpServers = resolveMcpServers()
     const sdkOptions: SdkOptions = {
       cwd: state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
@@ -1051,8 +1065,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       model: state.model ?? undefined,
       effort: state.effort,
       ...(betas.length > 0 ? { betas } : {}),
-      allowedTools: defaultTools,
-      mcpServers,
+      allowedTools: cfgAtStart.defaultTools ?? DEFAULT_TOOLS,
+      mcpServers: sessionMcpServers,
       hooks: buildHooks(),
       // User + local only. Project-level settings deliberately skipped —
       // cozempic's installer mirrors user hooks into <cwd>/.claude/settings.json,
@@ -1179,7 +1193,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     // than the adapter default — gives per-org workspaces their own
     // layered-context + default-subagent without touching the global
     // personality (which the compiler owns).
-    if (opts?.cwd && opts.cwd !== cwd) {
+    if (opts?.cwd && opts.cwd !== (getConfig().cwd ?? process.cwd())) {
       try {
         ensureLayeredContextFile(opts.cwd)
         ensureDefaultSubagentFile(opts.cwd)
@@ -1287,8 +1301,9 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     parentBackendSessionId: string,
     sessionCwd: string
   ): string | null {
+    const cfgAgentDir = getConfig().agentDir ?? defaultAgentDir(home)
     const candidate = path.join(
-      projectsDirForCwd(agentDir, sessionCwd),
+      projectsDirForCwd(cfgAgentDir, sessionCwd),
       parentBackendSessionId,
       'subagents',
       `agent-${childBackendSessionId}.jsonl`
@@ -1314,7 +1329,8 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     // rely on this to compute where to write or where the file will be.
     if (state?.sessionFile) return state.sessionFile
     if (state?.backendSessionId) {
-      const topLevel = findSessionFile(projectsDirForCwd(agentDir, state.cwd), state.backendSessionId)
+      const cfgAgentDir = getConfig().agentDir ?? defaultAgentDir(home)
+      const topLevel = findSessionFile(projectsDirForCwd(cfgAgentDir, state.cwd), state.backendSessionId)
       if (topLevel) return topLevel
     }
     // Cold-resume path: no in-memory state yet (post-restart, history fetched
@@ -1322,8 +1338,9 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     const existing = deps.registry?.lookupSession?.(sessionKey)
     if (existing?.backendSessionFile) return existing.backendSessionFile
     if (existing?.backendSessionId) {
-      const sessionCwd = existing.cwd ?? cwd
-      const topLevel = findSessionFile(projectsDirForCwd(agentDir, sessionCwd), existing.backendSessionId)
+      const cfgAgentDir = getConfig().agentDir ?? defaultAgentDir(home)
+      const sessionCwd = existing.cwd ?? getConfig().cwd ?? process.cwd()
+      const topLevel = findSessionFile(projectsDirForCwd(cfgAgentDir, sessionCwd), existing.backendSessionId)
       if (topLevel) return topLevel
       // Cold-resume subagent fallback — look up the parent in the registry
       // and probe the same nested layout.
@@ -1540,7 +1557,10 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
     )
     return {
       models: catalog.map((e) => e.id),
-      defaultModel: defaultModel ? `${PROVIDER}/${bareModelName(defaultModel)}` : null,
+      defaultModel: (() => {
+        const model = getConfig().defaultModel ?? DEFAULT_MODEL_FALLBACK
+        return `${PROVIDER}/${bareModelName(model)}`
+      })(),
       catalog
     }
   }
@@ -1633,7 +1653,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
   // a recycle when the fill exceeds it.
 
   async function maybeAutoRecycle(state: ClaudeSessionState): Promise<void> {
-    const recycleCfg = config.contextManagement?.recycle
+    const recycleCfg = getConfig().contextManagement?.recycle
     if (recycleCfg?.enabled === false) return
     if (!state.lastUsage) return
     // Skip subagent sessions — recycling them mid-flight strands the parent.
@@ -1698,7 +1718,7 @@ export function createClaudeCodeBackend(config: ClaudeCodeConfig, deps: ClaudeCo
       if (!found) return null
     }
 
-    const recycleCfg = config.contextManagement?.recycle
+    const recycleCfg = getConfig().contextManagement?.recycle
     if (recycleCfg?.enabled === false) return null
 
     // Rate-limit: skip if recycled recently (bypass with force flag

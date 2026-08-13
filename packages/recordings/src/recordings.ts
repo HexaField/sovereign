@@ -52,15 +52,6 @@ export function createRecordingsService(
     transcriptionProvider = provider ?? null
   }
 
-  // Listen for config changes
-  if (bus) {
-    bus.on('config.changed', (event) => {
-      const p = event.payload as Record<string, unknown>
-      if (p.autoTranscribe !== undefined) autoTranscribe = p.autoTranscribe as boolean
-      if (p.maxSizeBytes !== undefined) maxSizeBytes = p.maxSizeBytes as number
-    })
-  }
-
   const ensureDir = (orgId: string): void => {
     fs.mkdirSync(orgDir(dataDir, orgId), { recursive: true })
   }

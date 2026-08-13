@@ -1,17 +1,6 @@
 // Config JSON Schema definition and validation
-//
-// x-reload annotations classify each key:
-//   'hot'     — picked up on next configStore.get()
-//   'session' — applies to new sessions/connections only
-//   'restart' — process restart required (PATCH still durable)
 
 import Ajv from 'ajv'
-
-const stringHot = { type: 'string', 'x-reload': 'hot' } as const
-const stringSession = { type: 'string', 'x-reload': 'session' } as const
-const stringRestart = { type: 'string', 'x-reload': 'restart' } as const
-const booleanHot = { type: 'boolean', 'x-reload': 'hot' } as const
-const numberHot = { type: 'number', 'x-reload': 'hot' } as const
 
 export const schema = {
   type: 'object',
@@ -19,44 +8,14 @@ export const schema = {
     server: {
       type: 'object',
       properties: {
-        port: { type: 'number', minimum: 0, maximum: 65535, 'x-reload': 'restart' },
-        host: { ...stringRestart },
+        port: { type: 'number', minimum: 0, maximum: 65535 },
+        host: { type: 'string' },
         tls: {
           type: 'object',
           properties: {
-            enabled: { type: 'boolean', 'x-reload': 'restart' }
+            enabled: { type: 'boolean' }
           },
           required: ['enabled'],
-          additionalProperties: false
-        }
-      },
-      additionalProperties: false
-    },
-    terminal: {
-      type: 'object',
-      properties: {
-        shell: { ...stringHot },
-        gracePeriodMs: { type: 'number', minimum: 0, 'x-reload': 'session' },
-        maxSessions: { type: 'number', minimum: 1, 'x-reload': 'restart' }
-      },
-      additionalProperties: false
-    },
-    worktrees: {
-      type: 'object',
-      properties: {
-        staleDays: { type: 'number', minimum: 0, 'x-reload': 'hot' },
-        autoCleanupMerged: { type: 'boolean', 'x-reload': 'hot' }
-      },
-      additionalProperties: false
-    },
-    projects: {
-      type: 'object',
-      properties: {
-        defaults: {
-          type: 'object',
-          properties: {
-            remotes: { type: 'array', items: { type: 'string' }, 'x-reload': 'hot' }
-          },
           additionalProperties: false
         }
       },
@@ -65,8 +24,8 @@ export const schema = {
     workspace: {
       type: 'object',
       properties: {
-        root: { ...stringSession },
-        globalPath: { ...stringRestart }
+        root: { type: 'string' },
+        globalPath: { type: 'string' }
       },
       additionalProperties: false
     },
@@ -75,20 +34,18 @@ export const schema = {
       properties: {
         enabled: {
           type: 'array',
-          items: { type: 'string', enum: ['claude-code', 'local-llm', 'mock'] },
-          'x-reload': 'restart'
+          items: { type: 'string', enum: ['claude-code', 'local-llm', 'mock'] }
         },
-        default: { type: 'string', enum: ['claude-code', 'local-llm', 'mock'], 'x-reload': 'restart' },
+        default: { type: 'string', enum: ['claude-code', 'local-llm', 'mock'] },
         claudeCode: {
           type: 'object',
           properties: {
-            cwd: { ...stringSession },
-            agentDir: { ...stringSession },
-            defaultModel: { ...stringSession },
+            cwd: { type: 'string' },
+            agentDir: { type: 'string' },
+            defaultModel: { type: 'string' },
             modelContextWindows: {
               type: 'object',
-              additionalProperties: { type: 'number' },
-              'x-reload': 'session'
+              additionalProperties: { type: 'number' }
             }
           },
           additionalProperties: false
@@ -96,19 +53,19 @@ export const schema = {
         localLlm: {
           type: 'object',
           properties: {
-            baseUrl: { ...stringSession },
-            model: { ...stringSession },
-            contextWindow: { type: 'number', minimum: 1, 'x-reload': 'session' },
-            temperature: { type: 'number', minimum: 0, maximum: 2, 'x-reload': 'hot' },
-            maxTokens: { type: 'number', minimum: 1, 'x-reload': 'hot' },
-            timeoutMs: { type: 'number', minimum: 1000, 'x-reload': 'hot' },
-            thinking: { type: 'boolean', 'x-reload': 'hot' },
-            toolCallFormat: { ...stringHot },
+            baseUrl: { type: 'string' },
+            model: { type: 'string' },
+            contextWindow: { type: 'number', minimum: 1 },
+            temperature: { type: 'number', minimum: 0, maximum: 2 },
+            maxTokens: { type: 'number', minimum: 1 },
+            timeoutMs: { type: 'number', minimum: 1000 },
+            thinking: { type: 'boolean' },
+            toolCallFormat: { type: 'string' },
             sandbox: {
               type: 'object',
               properties: {
-                allowedCwds: { type: 'array', items: { type: 'string' }, 'x-reload': 'restart' },
-                bashTimeout: { type: 'number', minimum: 0, 'x-reload': 'hot' }
+                allowedCwds: { type: 'array', items: { type: 'string' } },
+                bashTimeout: { type: 'number', minimum: 0 }
               },
               additionalProperties: false
             }
@@ -121,26 +78,26 @@ export const schema = {
     ad4m: {
       type: 'object',
       properties: {
-        host: { ...stringRestart },
-        mcpUrl: { ...stringSession }
+        host: { type: 'string' },
+        mcpUrl: { type: 'string' }
       },
       additionalProperties: false
     },
     voice: {
       type: 'object',
       properties: {
-        transcribeUrl: { ...stringHot },
-        ttsUrl: { ...stringHot },
-        autoTts: { ...booleanHot },
-        ackDelayMs: { ...numberHot, minimum: 0, maximum: 10000 },
-        conversationSummary: { ...booleanHot }
+        transcribeUrl: { type: 'string' },
+        ttsUrl: { type: 'string' },
+        autoTts: { type: 'boolean' },
+        ackDelayMs: { type: 'number', minimum: 0, maximum: 10000 },
+        conversationSummary: { type: 'boolean' }
       },
       additionalProperties: false
     },
     meetings: {
       type: 'object',
       properties: {
-        summarizeUrl: { ...stringHot }
+        summarizeUrl: { type: 'string' }
       },
       additionalProperties: false
     },
@@ -149,7 +106,6 @@ export const schema = {
       properties: {
         external: {
           type: 'array',
-          'x-reload': 'restart',
           items: {
             type: 'object',
             properties: {
@@ -169,34 +125,34 @@ export const schema = {
     identity: {
       type: 'object',
       properties: {
-        agentName: { ...stringHot },
-        agentIcon: { ...stringHot }
+        agentName: { type: 'string' },
+        agentIcon: { type: 'string' }
       },
       additionalProperties: false
     },
     models: {
       type: 'object',
       properties: {
-        available: { type: 'array', items: { type: 'string' }, 'x-reload': 'hot' },
-        default: { ...stringHot }
+        available: { type: 'array', items: { type: 'string' } },
+        default: { type: 'string' }
       },
       additionalProperties: false
     },
     personality: {
       type: 'object',
       properties: {
-        sourceDir: { ...stringHot },
-        files: { type: 'array', items: { type: 'string' }, 'x-reload': 'hot' },
-        separator: { ...stringHot }
+        sourceDir: { type: 'string' },
+        files: { type: 'array', items: { type: 'string' } },
+        separator: { type: 'string' }
       },
       additionalProperties: false
     },
     seed: {
       type: 'object',
       properties: {
-        membraneId: { ...stringRestart },
-        membraneName: { ...stringRestart },
-        threadLabel: { ...stringRestart }
+        membraneId: { type: 'string' },
+        membraneName: { type: 'string' },
+        threadLabel: { type: 'string' }
       },
       additionalProperties: false
     },
@@ -206,31 +162,31 @@ export const schema = {
         filter: {
           type: 'object',
           properties: {
-            enabled: { type: 'boolean', 'x-reload': 'hot' },
-            trimThresholdBytes: { type: 'number', minimum: 0, 'x-reload': 'hot' },
-            trimMaxLines: { type: 'number', minimum: 1, 'x-reload': 'hot' },
-            dedupMinBytes: { type: 'number', minimum: 0, 'x-reload': 'hot' },
-            stripSignatures: { type: 'boolean', 'x-reload': 'hot' }
+            enabled: { type: 'boolean' },
+            trimThresholdBytes: { type: 'number', minimum: 0 },
+            trimMaxLines: { type: 'number', minimum: 1 },
+            dedupMinBytes: { type: 'number', minimum: 0 },
+            stripSignatures: { type: 'boolean' }
           },
           additionalProperties: false
         },
         recycle: {
           type: 'object',
           properties: {
-            enabled: { type: 'boolean', 'x-reload': 'hot' },
-            thresholdPercent: { type: 'number', minimum: 0, maximum: 100, 'x-reload': 'hot' },
-            minIntervalMs: { type: 'number', minimum: 0, 'x-reload': 'hot' },
-            prescription: { ...stringHot },
-            skipDuringSubagents: { type: 'boolean', 'x-reload': 'hot' }
+            enabled: { type: 'boolean' },
+            thresholdPercent: { type: 'number', minimum: 0, maximum: 100 },
+            minIntervalMs: { type: 'number', minimum: 0 },
+            prescription: { type: 'string' },
+            skipDuringSubagents: { type: 'boolean' }
           },
           additionalProperties: false
         },
         cleanup: {
           type: 'object',
           properties: {
-            enabled: { type: 'boolean', 'x-reload': 'hot' },
-            maxSessionSizeMB: { type: 'number', minimum: 0, 'x-reload': 'hot' },
-            schedule: { ...stringHot }
+            enabled: { type: 'boolean' },
+            maxSessionSizeMB: { type: 'number', minimum: 0 },
+            schedule: { type: 'string' }
           },
           additionalProperties: false
         }
@@ -240,11 +196,11 @@ export const schema = {
     summary: {
       type: 'object',
       properties: {
-        enabled: { type: 'boolean', 'x-reload': 'restart' },
-        baseUrl: { ...stringSession },
-        model: { ...stringSession },
-        debounceMs: { type: 'number', minimum: 0, 'x-reload': 'hot' },
-        maxSummaryWords: { type: 'number', minimum: 1, 'x-reload': 'hot' }
+        enabled: { type: 'boolean' },
+        baseUrl: { type: 'string' },
+        model: { type: 'string' },
+        debounceMs: { type: 'number', minimum: 0 },
+        maxSummaryWords: { type: 'number', minimum: 1 }
       },
       additionalProperties: false
     }
