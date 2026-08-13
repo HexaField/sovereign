@@ -6,24 +6,33 @@ import { serverQueue, cancelQueuedMessage, retryQueuedMessage, forceSendQueuedMe
  * input area. Renders only when the server-side outbound queue contains
  * at least one item.
  *
- * Collapsed: a compact button showing the queued count.
- * Expanded: a list of queued messages, each with force-send (inject
- *   mid-turn) and remove actions. Failed items also show retry.
+ * Auto-expands when new items arrive so actions (force-send, remove)
+ * appear immediately. The user can manually collapse; auto-collapses
+ * when the queue empties.
  */
 export function QueueIndicator() {
   const [expanded, setExpanded] = createSignal(false)
+  let prevLength = 0
 
-  // Auto-collapse when the queue empties.
+  // Auto-expand when new items arrive; auto-collapse when queue empties.
   createEffect(() => {
-    if (serverQueue().length === 0) setExpanded(false)
+    const len = serverQueue().length
+    if (len === 0) {
+      setExpanded(false)
+    } else if (len > prevLength) {
+      setExpanded(true)
+    }
+    prevLength = len
   })
 
   return (
     <Show when={serverQueue().length > 0}>
       <div
+        class="mx-auto w-full"
         style={{
           'border-top': '1px solid var(--c-border)',
-          background: 'var(--c-bg)'
+          background: 'var(--c-bg)',
+          'max-width': '48rem'
         }}
       >
         {/* Collapsed toggle */}
