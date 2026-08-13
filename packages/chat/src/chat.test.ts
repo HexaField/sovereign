@@ -723,4 +723,118 @@ describe('§2.4 Chat Module (Server)', () => {
     )
     expect(statusIdle).toBeUndefined()
   })
+
+  // ── forceSend tests ─────────────────────────────────────────────────
+  describe('forceSend', () => {
+    it('MUST send a queued message directly to the backend, bypassing the queue gate', async () => {
+      const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+      // Simulate agent busy: enqueue a first message and let it go to 'sending'
+      await chatModule.handleSend(threadId, 'first message')
+      // Now enqueue a second message while the first holds the inFlightByThread gate
+      await chatModule.handleSend(threadId, 'second message')
+      // The second message should be queued (not sent — gate occupied by first)
+      expect(backend.sendMessage).toHaveBeenCalledTimes(1)
+      expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'first message')
+
+      const queue = chatModule.getQueueSnapshot(threadId)
+      const secondItem = queue.find((m) => m.text === 'second message')
+      expect(secondItem).toBeDefined()
+      expect(secondItem!.status).toBe('queued')
+
+      // Force-send the second message
+      const ok = await chatModule.forceSend(secondItem!.id)
+      expect(ok).toBe(true)
+      // Backend received both messages now
+      expect(backend.sendMessage).toHaveBeenCalledTimes(2)
+      expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'second message')
+    })
+
+    it('MUST remove the item from the queue after force-sending', async () => {
+      const { threadId } = await chatModule.handleSessionCreate()
+      await chatModule.handleSend(threadId, 'first')
+      await chatModule.handleSend(threadId, 'second')
+
+      const queue = chatModule.getQueueSnapshot(threadId)
+      const secondItem = queue.find((m) => m.text === 'second')!
+      await chatModule.forceSend(secondItem.id)
+
+      const after = chatModule.getQueueSnapshot(threadId)
+      expect(after.find((m) => m.text === 'second')).toBeUndefined()
+    })
+
+    it('MUST synthesize a user chat.turn for the force-sent message', async () => {
+      const { threadId } = await chatModule.handleSessionCreate()
+      await chatModule.handleSend(threadId, 'first')
+      await chatModule.handleSend(threadId, 'queued message')
+
+      const broadcasts = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+      const beforeCount = broadcasts.length
+
+      const queue = chatModule.getQueueSnapshot(threadId)
+      const item = queue.find((m) => m.text === 'queued message')!
+      await chatModule.forceSend(item.id)
+
+      const newCalls = broadcasts.slice(beforeCount)
+      const userTurn = newCalls.find(
+        ([channel, msg]: any[]) =>
+          channel === 'chat' &&
+          msg?.type === 'chat.turn' &&
+          msg.turn?.role === 'user' &&
+          msg.turn?.content === 'queued message'
+      )
+      expect(userTurn).toBeDefined()
+    })
+
+    it('MUST return false for a non-existent queue item', async () => {
+      const ok = await chatModule.forceSend('non-existent-id')
+      expect(ok).toBe(false)
+    })
+
+    it('MUST return false for an item already in sending status', async () => {
+      const { threadId } = await chatModule.handleSessionCreate()
+      await chatModule.handleSend(threadId, 'in-flight message')
+
+      // The first message gets picked up by pumpQueue → status 'sending'
+      const queue = chatModule.getQueueSnapshot(threadId)
+      const sendingItem = queue.find((m) => m.status === 'sending')
+      expect(sendingItem).toBeDefined()
+
+      const ok = await chatModule.forceSend(sendingItem!.id)
+      expect(ok).toBe(false)
+    })
+
+    it('MUST apply origin modality tag when force-sending a message with origin', async () => {
+      const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+      await chatModule.handleSend(threadId, 'first')
+      await chatModule.handleSend(threadId, 'voice command', undefined, {
+        origin: { modality: 'voice', deviceId: 'dev-1' }
+      })
+
+      const queue = chatModule.getQueueSnapshot(threadId)
+      const item = queue.find((m) => m.text === 'voice command')!
+      await chatModule.forceSend(item.id)
+
+      expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, '[voice]\nvoice command')
+    })
+
+    it('MUST allow force-sending a failed message', async () => {
+      const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+      // Make the first message fail
+      ;(backend.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('backend down'))
+      await chatModule.handleSend(threadId, 'will fail')
+
+      // Wait a tick for the error to propagate
+      await new Promise((r) => setTimeout(r, 10))
+
+      const queue = chatModule.getQueueSnapshot(threadId)
+      const failedItem = queue.find((m) => m.status === 'failed')
+      expect(failedItem).toBeDefined()
+
+      // Reset mock to succeed
+      ;(backend.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+      const ok = await chatModule.forceSend(failedItem!.id)
+      expect(ok).toBe(true)
+      expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'will fail')
+    })
+  })
 })
