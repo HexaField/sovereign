@@ -752,9 +752,22 @@ export function createLocalLlmBackend(
     // The system prompt is prepended fresh for the wire request only — it is
     // never stored in `state.messages`, so getHistory/getContextBudget never
     // need to filter it back out.
+    //
+    // Compaction summaries stored in state.messages use role:'system'.
+    // Many model templates (Qwen3, Llama 3.x) reject multiple system
+    // messages — merge any system-role messages from the transcript into
+    // the single leading system message.
+    const inlineSystemMsgs = state.messages.filter((m) => m.role === 'system')
+    const conversationMsgs =
+      inlineSystemMsgs.length > 0 ? state.messages.filter((m) => m.role !== 'system') : state.messages
+    const systemContent =
+      inlineSystemMsgs.length > 0
+        ? [state.systemPrompt, ...inlineSystemMsgs.map((m) => m.content).filter(Boolean)].join('\n\n')
+        : state.systemPrompt
+
     const transcript: ChatMessage[] = [
-      { role: 'system', content: state.systemPrompt, timestamp: state.createdAt },
-      ...state.messages
+      { role: 'system', content: systemContent, timestamp: state.createdAt },
+      ...conversationMsgs
     ]
     const beforeLen = transcript.length
 
