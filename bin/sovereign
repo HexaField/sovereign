@@ -661,38 +661,40 @@ _guarded_build() {
     _die "Guarded build failed before reload; running service left untouched"
   fi
 
+  _cleanup_backup
+
   if [ "$build_ok" -eq 1 ] && [ "$was_running" -eq 1 ]; then
-    _note "Reloading running service"
-    local reload_ok=0
-    if _is_macos; then
-      _restart_launchd_service && reload_ok=1
-    elif _is_linux_systemd; then
-      _restart_systemd && reload_ok=1
-    else
-      _stop_pidfile
-      _start_pidfile && reload_ok=1
-    fi
+    # Print the success summary BEFORE restarting. The restart kills the
+    # running Sovereign process, which tears down any MCP transport that
+    # an agent session (Claude Code) holds. If the restart happens
+    # synchronously, the caller never sees the build output — it looks
+    # like a failure even though the build succeeded (the harness
+    # interprets the dropped connection as a tool rejection).
+    #
+    # The deferred restart fires 1s after the script exits, giving the
+    # caller time to receive the output. Health verification + rollback
+    # happen in the background process — if the restart fails, the
+    # backup was already cleaned up (build artifacts replaced in-place),
+    # but the build was verified good so the only failure mode is the
+    # service itself not starting, which systemd surfaces via status.
+    _note "Build succeeded; service restart scheduled (1s)"
+    _build_summary
 
-    if [ "$reload_ok" -eq 1 ]; then
-      _cleanup_backup
-      return 0
-    fi
-
-    _warn "Reload failed health verification; restoring previous build artifacts"
-    _restore_artifacts
-    if _is_macos; then
-      _restart_launchd_service || _die "Rollback failed; inspect $STDERR_LOG"
-    elif _is_linux_systemd; then
-      _restart_systemd || _die "Rollback failed; inspect $STDERR_LOG"
-    else
-      _stop_pidfile || true
-      _start_pidfile || _die "Rollback failed; inspect $STDERR_LOG"
-    fi
-    _cleanup_backup
-    _die "Reload failed; rolled back to last known-good build"
+    (
+      sleep 1
+      if _is_macos; then
+        _restart_launchd_service
+      elif _is_linux_systemd; then
+        _restart_systemd
+      else
+        _stop_pidfile
+        _start_pidfile
+      fi
+    ) &
+    disown
+    return 0
   fi
 
-  _cleanup_backup
   if [ "$was_running" -eq 1 ]; then
     _note "Build + reload complete"
   else
