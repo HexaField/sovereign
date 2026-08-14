@@ -27,6 +27,11 @@ export interface LocalLlmConfig {
   thinking: boolean
   /** Tool-call format detection: auto | openai | hermes. Reserved for future prompt-format branching. */
   toolCallFormat: string
+  /** Path to a JSON model registry (e.g. `~/.local/share/llama.cpp/models.json`).
+   *  When set, `listAvailableModels` reads all entries from the registry instead
+   *  of relying solely on the running server's `/v1/models` (which reports only
+   *  the single loaded model). */
+  modelsRegistry: string | null
   /** Sandbox restrictions applied to every filesystem/shell tool call. */
   sandbox: {
     /** Directories tool calls may touch. Empty array = no restriction. */
@@ -45,6 +50,7 @@ interface RawLocalLlmConfig {
   timeoutMs?: number
   thinking?: boolean
   toolCallFormat?: string
+  modelsRegistry?: string
   sandbox?: {
     allowedCwds?: string[]
     bashTimeout?: number
@@ -69,6 +75,8 @@ export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: strin
     timeoutMs: cfg.timeoutMs ?? 600_000,
     thinking: cfg.thinking !== false,
     toolCallFormat: cfg.toolCallFormat?.trim() || 'auto',
+    modelsRegistry:
+      cfg.modelsRegistry?.trim() || (home ? path.join(home, '.local', 'share', 'llama.cpp', 'models.json') : null),
     sandbox: {
       allowedCwds: cfg.sandbox?.allowedCwds ?? (home ? [path.join(home, 'workspaces')] : []),
       bashTimeout: cfg.sandbox?.bashTimeout ?? 120000

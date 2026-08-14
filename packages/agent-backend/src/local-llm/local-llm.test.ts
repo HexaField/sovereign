@@ -28,6 +28,7 @@ function makeConfig(): LocalLlmConfig {
     timeoutMs: 60_000,
     thinking: true,
     toolCallFormat: 'auto',
+    modelsRegistry: null,
     sandbox: { allowedCwds: [tmpDir], bashTimeout: 5000 }
   }
 }
@@ -141,6 +142,57 @@ describe('local-llm backend: session lifecycle', () => {
     expect(filePath).toContain(dataDir)
     backend.flushState()
     expect(fs.existsSync(filePath!)).toBe(true)
+  })
+})
+
+describe('local-llm backend: model registry', () => {
+  it('listAvailableModels reads all models from an on-disk registry', async () => {
+    const registryPath = path.join(dataDir, 'models.json')
+    fs.writeFileSync(
+      registryPath,
+      JSON.stringify({
+        models: {
+          'model-a': { label: 'Model A', quant: 'Q4_K_M' },
+          'model-b': { label: 'Model B', quant: 'Q8_0' },
+          'model-c': { label: 'Model C' }
+        },
+        active: 'model-b'
+      })
+    )
+    const config = { ...makeConfig(), modelsRegistry: registryPath }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    const result = await backend.listAvailableModels()
+    expect(result.models).toEqual(['model-a', 'model-b', 'model-c'])
+    expect(result.defaultModel).toBe('model-b')
+    expect(result.catalog).toHaveLength(3)
+    expect(result.catalog![0]).toEqual({
+      id: 'model-a',
+      provider: 'local-llm',
+      family: 'model-a',
+      familyLabel: 'Model A',
+      version: 'Q4_K_M',
+      versionLabel: 'Q4_K_M'
+    })
+    expect(result.catalog![2].version).toBeNull()
+    expect(result.catalog![2].versionLabel).toBe('default')
+  })
+
+  it('listAvailableModels falls back to server probe when registry absent', async () => {
+    const config = { ...makeConfig(), modelsRegistry: '/nonexistent/path.json' }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    // Server unreachable (port 1) — falls all the way back to config.model.
+    const result = await backend.listAvailableModels()
+    expect(result.models).toEqual(['test-model'])
+    expect(result.defaultModel).toBe('test-model')
+  })
+
+  it('listAvailableModels falls back when registry has no models key', async () => {
+    const registryPath = path.join(dataDir, 'models.json')
+    fs.writeFileSync(registryPath, JSON.stringify({ active: 'x' }))
+    const config = { ...makeConfig(), modelsRegistry: registryPath }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    const result = await backend.listAvailableModels()
+    expect(result.models).toEqual(['test-model'])
   })
 })
 
