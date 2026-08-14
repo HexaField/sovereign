@@ -354,7 +354,9 @@ export function createLocalLlmBackend(
 
     // Refresh the system prompt each turn — the resolver may read live files
     // (PRESENCE_MEMORY.md, membrane CONTEXT.md) that change between turns.
-    if (deps.resolveSystemPromptAppend) {
+    // Skip for subagent sessions — they use a lean task-focused prompt set at
+    // spawn time and should not inherit the parent's personality/membrane bulk.
+    if (deps.resolveSystemPromptAppend && !state.parentSessionKey) {
       const append = deps.resolveSystemPromptAppend(state.sessionKey)
       const base = defaultSystemPrompt(state.cwd)
       state.systemPrompt = append ? `${append}\n\n${base}` : base

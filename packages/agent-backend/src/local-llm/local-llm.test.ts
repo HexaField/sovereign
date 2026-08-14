@@ -531,4 +531,23 @@ describe('local-llm backend: subagent spawning', () => {
       expect(meta).not.toBeNull()
     })
   })
+
+  it('subagent keeps task-focused prompt — not overwritten by resolveSystemPromptAppend', async () => {
+    const { client, complete } = makeFakeClient(textResponse('done'))
+    const backend = createLocalLlmBackend(makeConfig(), {
+      dataDir,
+      inferenceClient: client,
+      resolveSystemPromptAppend: () => 'HUGE PERSONALITY BLOB THAT SHOULD NOT APPEAR'
+    })
+    const parentKey = await backend.createSession('parent')
+    await backend.spawnSubagent!(parentKey, { task: 'summarise X' })
+    // Wait for the fire-and-forget sendMessage to complete.
+    await vi.waitFor(() => expect(complete).toHaveBeenCalled())
+    // The system message sent to the inference client should contain the
+    // task override, NOT the resolveSystemPromptAppend output.
+    const callArgs = complete.mock.calls[0][0] as Array<{ role: string; content: string }>
+    const systemMsg = callArgs.find((m) => m.role === 'system')
+    expect(systemMsg?.content).toContain('summarise X')
+    expect(systemMsg?.content).not.toContain('HUGE PERSONALITY BLOB')
+  })
 })
