@@ -284,29 +284,93 @@ export function createLocalLlmBackend(
     : CORE_TOOL_SCHEMAS
 
   // ── On-demand compaction ──────────────────────────────────────────
-  // When conversation tokens exceed 75% of the context window, drop the
-  // oldest messages (keeping the most recent COMPACT_KEEP_RECENT) and
-  // insert a synthetic "[compacted]" summary. Uses a simple heuristic
-  // (character-based token estimate) — no summarisation call to the model.
+  // Production-grade context management. Uses the session's own model to
+  // generate a summary of dropped messages. Falls back to heuristic
+  // summary when the model call fails. Respects round boundaries so
+  // tool_call/tool_result pairs never split.
   const COMPACT_THRESHOLD_RATIO = 0.75
   const COMPACT_KEEP_RECENT = 10
+  /** Max chars of dropped content fed into the summarisation prompt. */
+  const COMPACT_SUMMARY_INPUT_CHARS = 40_000
+  /** Timeout for the summarisation inference call. */
+  const COMPACT_SUMMARY_TIMEOUT_MS = 60_000
 
-  async function maybeCompact(state: LocalLlmSessionState, contextWindow: number): Promise<void> {
-    const totalChars = state.systemPrompt.length + state.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0)
-    const estimatedTokens = estimateTokens(totalChars)
-    const threshold = Math.floor(contextWindow * COMPACT_THRESHOLD_RATIO)
-    if (estimatedTokens < threshold) return
-    if (state.messages.length <= COMPACT_KEEP_RECENT + 2) return // not enough to compact
+  const COMPACTION_SYSTEM_PROMPT =
+    'You are a context compaction engine. Summarize the conversation excerpt below into a concise ' +
+    'briefing for the assistant who will continue the conversation. Preserve:\n' +
+    '- Key decisions made and their rationale\n' +
+    '- File paths read, written, or edited\n' +
+    '- Current task state and progress\n' +
+    '- Important tool results that inform future actions\n' +
+    '- User preferences or corrections expressed\n' +
+    '- Error states or blockers encountered\n\n' +
+    'Omit: verbose tool output, intermediate reasoning, failed attempts that were superseded, ' +
+    'redundant greetings, and any content that would not help the assistant continue the task.\n\n' +
+    'Write in third person past tense. Be concise but thorough — this summary replaces the ' +
+    'original messages permanently.'
 
-    const dropCount = state.messages.length - COMPACT_KEEP_RECENT
-    const dropped = state.messages.splice(0, dropCount)
+  /** Estimate total token usage for the current session state. Accounts for
+   *  system prompt, tool schemas, and all messages. */
+  function estimateSessionTokens(state: LocalLlmSessionState): number {
+    const toolSchemaChars = JSON.stringify(allToolSchemas).length
+    const systemChars = state.systemPrompt.length
+    const messageChars = state.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0)
+    return estimateTokens(systemChars + toolSchemaChars + messageChars)
+  }
 
-    // Build a compact summary of dropped messages
-    const summaryLines: string[] = ['[Earlier conversation compacted. Summary of dropped messages:]']
+  /** Find the boundary index where we can safely split messages into
+   *  "drop" and "keep" segments without breaking tool_call/tool_result
+   *  pairs. Returns the number of messages to drop. Walks backwards from
+   *  the desired split point to ensure the kept segment starts at a round
+   *  boundary (a user message or a system message). */
+  function findSafeDropCount(messages: ChatMessage[], desiredKeep: number): number {
+    if (messages.length <= desiredKeep) return 0
+    let splitIdx = messages.length - desiredKeep
+
+    // Walk forward from the split point to find a safe boundary — the
+    // kept segment should start with a user or system message (never an
+    // assistant or tool mid-round).
+    while (splitIdx < messages.length) {
+      const msg = messages[splitIdx]
+      if (msg.role === 'user' || msg.role === 'system') break
+      splitIdx++
+    }
+    // If we walked all the way to the end, fall back to the original split
+    if (splitIdx >= messages.length) splitIdx = messages.length - desiredKeep
+    return splitIdx
+  }
+
+  /** Build a serialised transcript of dropped messages for the
+   *  summarisation model. Truncates to COMPACT_SUMMARY_INPUT_CHARS. */
+  function buildCompactionTranscript(dropped: ChatMessage[]): string {
+    const parts: string[] = []
+    let totalChars = 0
+    for (const msg of dropped) {
+      const role = msg.role === 'tool' ? `tool(${msg.name ?? '?'})` : msg.role
+      const content = msg.content ?? ''
+      // Truncate individual messages to avoid one giant tool result
+      // consuming the entire budget
+      const maxPerMsg = 2000
+      const truncated = content.length > maxPerMsg ? content.slice(0, maxPerMsg) + ' [truncated]' : content
+      const line = `[${role}]: ${truncated}`
+      if (totalChars + line.length > COMPACT_SUMMARY_INPUT_CHARS) {
+        parts.push(`[...${dropped.length - parts.length} earlier messages omitted for brevity...]`)
+        break
+      }
+      parts.push(line)
+      totalChars += line.length
+    }
+    return parts.join('\n\n')
+  }
+
+  /** Heuristic fallback summary — used when the model call fails. */
+  function buildHeuristicSummary(dropped: ChatMessage[]): string {
+    const lines: string[] = ['[Earlier conversation compacted — model summary unavailable.]']
     let userCount = 0
     let assistantCount = 0
     let toolCount = 0
     const toolNames = new Set<string>()
+    const filePaths = new Set<string>()
     for (const msg of dropped) {
       if (msg.role === 'user') userCount++
       else if (msg.role === 'assistant') assistantCount++
@@ -314,24 +378,125 @@ export function createLocalLlmBackend(
         toolCount++
         if (msg.name) toolNames.add(msg.name)
       }
+      // Extract file paths mentioned in content
+      const content = msg.content ?? ''
+      const pathMatches = content.match(/\/[\w./-]+\.\w+/g)
+      if (pathMatches) pathMatches.slice(0, 20).forEach((p) => filePaths.add(p))
     }
-    summaryLines.push(`${userCount} user messages, ${assistantCount} assistant messages, ${toolCount} tool results.`)
-    if (toolNames.size > 0) summaryLines.push(`Tools used: ${[...toolNames].join(', ')}.`)
+    lines.push(
+      `Dropped ${dropped.length} messages: ${userCount} user, ${assistantCount} assistant, ${toolCount} tool results.`
+    )
+    if (toolNames.size > 0) lines.push(`Tools used: ${[...toolNames].join(', ')}.`)
+    if (filePaths.size > 0) lines.push(`Files referenced: ${[...filePaths].slice(0, 15).join(', ')}.`)
 
-    // Extract key information from the last few dropped assistant messages
-    const lastAssistants = dropped.filter((m) => m.role === 'assistant' && m.content).slice(-3)
-    for (const msg of lastAssistants) {
-      const preview = msg.content!.slice(0, 500).replace(/\n/g, ' ')
-      summaryLines.push(`Assistant said: ${preview}`)
+    // Keep the last few user messages and assistant responses as context
+    const recentPairs: string[] = []
+    for (let i = dropped.length - 1; i >= 0 && recentPairs.length < 4; i--) {
+      const msg = dropped[i]
+      if (msg.role === 'user' && msg.content) {
+        recentPairs.unshift(`User: ${msg.content.slice(0, 300).replace(/\n/g, ' ')}`)
+      } else if (msg.role === 'assistant' && msg.content) {
+        recentPairs.unshift(`Assistant: ${msg.content.slice(0, 300).replace(/\n/g, ' ')}`)
+      }
+    }
+    if (recentPairs.length > 0) {
+      lines.push('', 'Last exchanges before compaction:')
+      lines.push(...recentPairs)
+    }
+    return lines.join('\n')
+  }
+
+  async function maybeCompact(state: LocalLlmSessionState, contextWindow: number): Promise<void> {
+    const estimatedTokens = estimateSessionTokens(state)
+    const threshold = Math.floor(contextWindow * COMPACT_THRESHOLD_RATIO)
+    if (estimatedTokens < threshold) return
+    if (state.messages.length <= COMPACT_KEEP_RECENT + 2) return
+
+    const dropCount = findSafeDropCount(state.messages, COMPACT_KEEP_RECENT)
+    if (dropCount <= 0) return
+
+    // Emit a work item so the UI shows compaction activity
+    emitter.emit('chat.work', {
+      sessionKey: state.sessionKey,
+      work: {
+        type: 'tool_call',
+        toolCallId: `compaction-${Date.now()}`,
+        name: '_compaction',
+        input: `Compacting ${dropCount} messages (${estimateTokens(state.messages.slice(0, dropCount).reduce((n, m) => n + (m.content?.length ?? 0), 0))} est. tokens)`,
+        timestamp: Date.now()
+      } as any
+    })
+
+    const dropped = state.messages.splice(0, dropCount)
+
+    // Check for an existing compaction summary — include it in the prompt
+    // so accumulated context carries forward across multiple compactions.
+    let priorSummary = ''
+    if (dropped.length > 0 && dropped[0].role === 'system' && dropped[0].content?.startsWith('[Compacted')) {
+      priorSummary = dropped[0].content
+      dropped.shift()
+    }
+
+    const transcript = buildCompactionTranscript(dropped)
+    let summaryContent: string
+
+    try {
+      // Use the session's model to generate a proper summary
+      const summariseMessages: WireChatMessage[] = [
+        { role: 'system', content: COMPACTION_SYSTEM_PROMPT },
+        ...(priorSummary
+          ? [{ role: 'user' as const, content: `Previous compaction summary:\n\n${priorSummary}` }]
+          : []),
+        {
+          role: 'user',
+          content: `Summarize this conversation excerpt:\n\n${transcript}`
+        }
+      ]
+      const response = await state.client.complete(summariseMessages, {
+        signal: AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
+      })
+
+      const rawSummary = response.choices?.[0]?.message?.content?.trim()
+      if (rawSummary && rawSummary.length > 50) {
+        summaryContent = `[Compacted conversation — summary generated by ${state.model}]\n\n${rawSummary}`
+      } else {
+        // Model returned too little — fall back
+        summaryContent = buildHeuristicSummary(dropped)
+      }
+    } catch (err) {
+      console.error(`[local-llm] compaction summary failed for ${state.sessionKey}: ${(err as Error).message}`)
+      summaryContent = buildHeuristicSummary(dropped)
     }
 
     state.messages.unshift({
       role: 'system',
-      content: summaryLines.join('\n'),
+      content: summaryContent,
       timestamp: Date.now()
     })
 
     state.compactionCount = (state.compactionCount ?? 0) + 1
+
+    // If still over budget after compaction (e.g. massive system prompt
+    // or very long recent messages), log a warning but don't recurse —
+    // the model will get a truncated context on this turn.
+    const postTokens = estimateSessionTokens(state)
+    if (postTokens > contextWindow) {
+      console.warn(
+        `[local-llm] post-compaction tokens (${postTokens}) still exceed context window (${contextWindow}) for ${state.sessionKey}`
+      )
+    }
+
+    emitter.emit('chat.work', {
+      sessionKey: state.sessionKey,
+      work: {
+        type: 'tool_result',
+        toolCallId: `compaction-${Date.now()}`,
+        name: '_compaction',
+        output: `Compacted ${dropped.length} messages into summary (${summaryContent.length} chars). Compaction #${state.compactionCount}.`,
+        timestamp: Date.now()
+      } as any
+    })
+
     persist(state)
   }
 
