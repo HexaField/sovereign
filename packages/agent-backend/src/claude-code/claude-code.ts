@@ -276,6 +276,15 @@ export interface ClaudeCodeBackendDeps {
    * untouched (no `systemPrompt` override). Safe to omit.
    */
   resolveAppendSystemPrompt?: (sessionKey: string) => string | undefined
+  /**
+   * Per-session tool denylist. Called once when a session loop starts;
+   * the returned array is passed as `disallowedTools` to the SDK, which
+   * removes the named tools from the model's context entirely. Sovereign
+   * uses this to block the built-in `Agent` tool when a thread's subagent
+   * routing directs spawning through the local-llm backend. Returning
+   * `undefined` or an empty array leaves all tools available.
+   */
+  resolveDisallowedTools?: (sessionKey: string) => string[] | undefined
   /** Override sdkQuery for tests; defaults to the SDK's query(). */
   sdkQuery?: typeof sdkQuery
   /**
@@ -1058,6 +1067,7 @@ export function createClaudeCodeBackend(
     const effectiveContextWindow = state.contextWindow ?? contextWindowFor(state.model)
     const betas: SdkBeta[] = effectiveContextWindow > DEFAULT_CONTEXT_WINDOW ? ['context-1m-2025-08-07'] : []
     const sessionMcpServers = resolveMcpServers()
+    const disallowedTools = deps?.resolveDisallowedTools?.(state.sessionKey)
     const sdkOptions: SdkOptions = {
       cwd: state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
@@ -1066,6 +1076,7 @@ export function createClaudeCodeBackend(
       effort: state.effort,
       ...(betas.length > 0 ? { betas } : {}),
       allowedTools: cfgAtStart.defaultTools ?? DEFAULT_TOOLS,
+      ...(disallowedTools && disallowedTools.length > 0 ? { disallowedTools } : {}),
       mcpServers: sessionMcpServers,
       hooks: buildHooks(),
       // User + local only. Project-level settings deliberately skipped —

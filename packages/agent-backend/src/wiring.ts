@@ -261,6 +261,34 @@ export function makePresenceAwareAppendResolver(
   }
 }
 
+/**
+ * When a thread's subagent routing points at a non-claude-code backend,
+ * block the SDK's built-in subagent tools (`Agent`, `Workflow`,
+ * `SendMessage`) so the model cannot bypass Sovereign's routing layer.
+ * The model must use `agents_spawn` (Sovereign MCP) instead, which the
+ * harness redirects to the configured backend.
+ *
+ * Returns `undefined` (no tools blocked) when:
+ *  - no threadManager provided
+ *  - session doesn't map to a thread
+ *  - thread has no subagentBackend set
+ *  - subagentBackend is 'claude-code' (native SDK subagents are fine)
+ */
+export function makeSubagentToolBlocker(
+  threadManager: ThreadManager | undefined
+): ((sessionKey: string) => string[] | undefined) | undefined {
+  if (!threadManager) return undefined
+  return (sessionKey: string): string[] | undefined => {
+    const threadKey = sessionKeyToThreadKey(sessionKey)
+    if (!threadKey) return undefined
+    const thread = threadManager.get(threadKey)
+    if (!thread?.subagentBackend || thread.subagentBackend === 'claude-code') return undefined
+    // Block SDK-native subagent spawning — force through Sovereign's
+    // agents_spawn MCP tool which respects the routing config.
+    return ['Agent', 'Workflow', 'SendMessage']
+  }
+}
+
 export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWiringResult {
   const {
     bus,
@@ -343,7 +371,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
             memoryFile: input.presenceMemoryFile,
             knowledgeFile: input.presenceKnowledgeFile,
             getHealthSummary: input.presenceGetHealthSummary
-          })
+          }),
+          resolveDisallowedTools: makeSubagentToolBlocker(threadManager)
         })
         claudeCodeBackend = cc
         return cc
