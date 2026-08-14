@@ -64,6 +64,10 @@ export interface SendOptions {
    *  queue and made visible to the agent via a `[presence:inbound …]`
    *  envelope when the target is the presence thread. */
   origin?: MessageOrigin
+  /** When true, bypass the queue gate and send directly to the backend.
+   *  The message still touches the queue (for dedup + snapshot), but gets
+   *  force-sent immediately instead of waiting for the dispatch loop. */
+  immediate?: boolean
 }
 
 export interface ChatModule {
@@ -793,6 +797,13 @@ export function createChatModule(
         payload: { threadId, origin: opts.origin, queueId: queued.id }
       })
     }
+
+    // Immediate mode: bypass the queue gate and force-send right now.
+    // Falls back to normal queue pump if force-send fails.
+    if (opts?.immediate && !queued.deduplicated) {
+      const sent = await forceSend(queued.id)
+      if (sent) return
+    }
     await pumpQueue(threadId)
   }
 
@@ -904,6 +915,85 @@ export function createChatModule(
     return { threadId: thread.id, sessionKey }
   }
 
+  /** Force-send a queued/failed message immediately, bypassing the queue
+   *  gate. Extracted as a local function so both `handleSend` (immediate
+   *  mode) and the external `forceSend` method share the same path. */
+  async function forceSend(id: string): Promise<boolean> {
+    // Locate the queue item by scanning all thread queues.
+    let found: QueuedMessage | undefined
+    let foundThreadId: string | undefined
+    for (const [tid, items] of messageQueue.getAllQueues()) {
+      const item = items.find((m) => m.id === id)
+      if (item) {
+        found = item
+        foundThreadId = tid
+        break
+      }
+    }
+    if (!found || !foundThreadId) return false
+    // Never double-send an item already in flight.
+    if (found.status === 'sending') return false
+
+    const threadId = foundThreadId
+    let sessionKey = threadToSession.get(threadId)
+    if (!sessionKey) {
+      sessionKey = deriveSessionKey(threadId)
+      setMapping(threadId, sessionKey)
+    }
+
+    // Snapshot the item data before removing it from the queue.
+    const text = found.text
+    const origin = found.origin
+    const timestamp = found.timestamp
+
+    // Remove from the Sovereign queue. The queue-change listener
+    // broadcasts the updated snapshot to clients automatically.
+    messageQueue.cancel(id)
+
+    // Synthesize a user turn so the message appears in chat history
+    // immediately — same pattern as completeInFlight.
+    const turnPayload = {
+      role: 'user' as const,
+      content: text,
+      timestamp,
+      workItems: [] as unknown[],
+      thinkingBlocks: [] as unknown[],
+      ...(origin ? { origin: { modality: origin.modality } } : {})
+    }
+    if (wsHandler) {
+      wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn: turnPayload })
+    }
+    chatEvents.emit('chat.turn', { threadId, turn: turnPayload })
+
+    // Wrap text with an origin tag (same as pumpQueue, minus presence digest
+    // — consuming the digest mid-turn would inject stale context).
+    let textToSend = text
+    if (origin) {
+      const isInternal = presenceHook && threadManager.get(threadId)?.presence === 'internal'
+      if (isInternal) {
+        textToSend = `[presence:inbound ${renderOriginTag(origin)}]\n${text}`
+      } else {
+        const deviceName = (origin.deviceId && wsHandler?.getDeviceName(origin.deviceId)) || origin.deviceName
+        const modalityTag = deviceName ? `${origin.modality}:${deviceName}` : origin.modality
+        textToSend = `[${modalityTag}]\n${text}`
+      }
+    }
+
+    // Send directly to the backend — bypasses the inFlightByThread gate.
+    // For Claude Code: pushes into the live InputPump (genuine mid-turn
+    // injection). For local-llm: appends to the backend's internal
+    // pendingQueue (processed as the next turn after the current one).
+    try {
+      await backend.sendMessage(sessionKey, textToSend)
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      console.error(`[chat] force-send failed for ${threadId} (${id}): ${errMsg}`)
+      return false
+    }
+
+    return true
+  }
+
   return {
     status: () => ({ name: 'chat', status: 'ok' }),
     handleSend,
@@ -969,81 +1059,7 @@ export function createChatModule(
       }
       return true
     },
-    async forceSend(id: string): Promise<boolean> {
-      // Locate the queue item by scanning all thread queues.
-      let found: QueuedMessage | undefined
-      let foundThreadId: string | undefined
-      for (const [tid, items] of messageQueue.getAllQueues()) {
-        const item = items.find((m) => m.id === id)
-        if (item) {
-          found = item
-          foundThreadId = tid
-          break
-        }
-      }
-      if (!found || !foundThreadId) return false
-      // Never double-send an item already in flight.
-      if (found.status === 'sending') return false
-
-      const threadId = foundThreadId
-      let sessionKey = threadToSession.get(threadId)
-      if (!sessionKey) {
-        sessionKey = deriveSessionKey(threadId)
-        setMapping(threadId, sessionKey)
-      }
-
-      // Snapshot the item data before removing it from the queue.
-      const text = found.text
-      const origin = found.origin
-      const timestamp = found.timestamp
-
-      // Remove from the Sovereign queue. The queue-change listener
-      // broadcasts the updated snapshot to clients automatically.
-      messageQueue.cancel(id)
-
-      // Synthesize a user turn so the message appears in chat history
-      // immediately — same pattern as completeInFlight.
-      const turnPayload = {
-        role: 'user' as const,
-        content: text,
-        timestamp,
-        workItems: [] as unknown[],
-        thinkingBlocks: [] as unknown[],
-        ...(origin ? { origin: { modality: origin.modality } } : {})
-      }
-      if (wsHandler) {
-        wsHandler.broadcastToChannel('chat', { type: 'chat.turn', threadId, turn: turnPayload })
-      }
-      chatEvents.emit('chat.turn', { threadId, turn: turnPayload })
-
-      // Wrap text with an origin tag (same as pumpQueue, minus presence digest
-      // — consuming the digest mid-turn would inject stale context).
-      let textToSend = text
-      if (origin) {
-        const isInternal = presenceHook && threadManager.get(threadId)?.presence === 'internal'
-        if (isInternal) {
-          textToSend = `[presence:inbound ${renderOriginTag(origin)}]\n${text}`
-        } else {
-          const deviceName = (origin.deviceId && wsHandler?.getDeviceName(origin.deviceId)) || origin.deviceName
-          const modalityTag = deviceName ? `${origin.modality}:${deviceName}` : origin.modality
-          textToSend = `[${modalityTag}]\n${text}`
-        }
-      }
-
-      // Send directly to the backend — bypasses the inFlightByThread gate.
-      // For Claude Code: pushes into the live InputPump (genuine mid-turn
-      // injection). For local-llm: appends to the backend's internal
-      // pendingQueue (processed as the next turn after the current one).
-      try {
-        await backend.sendMessage(sessionKey, textToSend)
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
-        console.error(`[chat] force-send failed for ${threadId} (${id}): ${errMsg}`)
-        return false
-      }
-
-      return true
-    },
+    forceSend,
     messageQueue,
     flushState: () => liveStateStore.flush(),
 

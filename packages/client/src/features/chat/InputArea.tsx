@@ -1,4 +1,4 @@
-import { createSignal, createEffect, Show, For } from 'solid-js'
+import { createSignal, createEffect, Show, For, onCleanup } from 'solid-js'
 import type { AgentStatus } from '@sovereign/core'
 import { AttachIcon, CloseIcon, LoaderIcon } from '../../ui/icons.js'
 import {
@@ -527,6 +527,96 @@ export function InputArea(props: InputAreaProps) {
 
   const isBusyOrStreaming = () => busy()
 
+  // ── Long-press send menu ──────────────────────────────────────────
+  const [sendMenuOpen, setSendMenuOpen] = createSignal(false)
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null
+  let didLongPress = false
+
+  const LONG_PRESS_MS = 400
+
+  const startLongPress = () => {
+    didLongPress = false
+    longPressTimer = setTimeout(() => {
+      didLongPress = true
+      setSendMenuOpen(true)
+    }, LONG_PRESS_MS)
+  }
+
+  const cancelLongPress = () => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer)
+      longPressTimer = null
+    }
+  }
+
+  const handleSendPointerUp = () => {
+    cancelLongPress()
+    // Regular tap — only fire if long press didn't trigger
+    if (!didLongPress) handleSend()
+  }
+
+  const handleSendWithVoice = () => {
+    setSendMenuOpen(false)
+    const text = inputValue().trim()
+    const files = attachedFiles()
+    if (!text && !files.length) return
+
+    pushMsgHistory(threadKey(), text || '[files]')
+    setHistoryIndex(-1)
+    draftText = ''
+    setInputValue('')
+    setAttachedFiles([])
+    clearScratchpad(localStorage, threadKey())
+    if (textareaRef) textareaRef.style.height = 'auto'
+
+    const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
+    const name = deviceName()
+    sendMessage(text, undefined, {
+      origin: {
+        modality: 'voice' as const,
+        ...(deviceId ? { deviceId } : {}),
+        ...(name ? { deviceName: name } : {})
+      }
+    })
+  }
+
+  const handleSendImmediate = () => {
+    setSendMenuOpen(false)
+    const text = inputValue().trim()
+    const files = attachedFiles()
+    if (!text && !files.length) return
+
+    let msg = text
+    if (files.length) {
+      const fileLines = files.map((f) => `📎 ${f.name} (${(f.size / 1024).toFixed(1)}KB)`).join('\n')
+      msg = files.length && text ? `${text}\n\n${fileLines}` : fileLines
+    }
+    const rawFiles = files.map((f) => f.file)
+
+    pushMsgHistory(threadKey(), text || '[files]')
+    setHistoryIndex(-1)
+    draftText = ''
+    setInputValue('')
+    setAttachedFiles([])
+    clearScratchpad(localStorage, threadKey())
+    if (textareaRef) textareaRef.style.height = 'auto'
+
+    sendMessage(msg, rawFiles.length ? rawFiles : undefined, { immediate: true })
+  }
+
+  // Close menu on outside click
+  const handleDocClick = (e: MouseEvent) => {
+    if (sendMenuOpen()) {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-send-menu]')) setSendMenuOpen(false)
+    }
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', handleDocClick, true)
+    onCleanup(() => document.removeEventListener('click', handleDocClick, true))
+  }
+  // ──────────────────────────────────────────────────────────────────
+
   return (
     <div
       class="safe-bottom relative flex shrink-0 flex-col items-end gap-2.5 px-4 pt-3 pb-6"
@@ -965,26 +1055,79 @@ export function InputArea(props: InputAreaProps) {
           <Show
             when={isBusyOrStreaming()}
             fallback={
-              <button
-                class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30"
-                style={{ background: 'var(--c-accent)' }}
-                disabled={retryCountdownSeconds() > 0 || (!inputValue().trim() && !attachedFiles().length)}
-                onClick={handleSend}
-              >
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
+              <div class="relative" data-send-menu>
+                <button
+                  class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30"
+                  style={{ background: 'var(--c-accent)' }}
+                  disabled={retryCountdownSeconds() > 0 || (!inputValue().trim() && !attachedFiles().length)}
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return
+                    e.preventDefault()
+                    startLongPress()
+                  }}
+                  onPointerUp={handleSendPointerUp}
+                  onPointerLeave={cancelLongPress}
+                  onContextMenu={(e) => e.preventDefault()}
                 >
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-              </button>
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="22" y1="2" x2="11" y2="13" />
+                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
+                </button>
+
+                {/* Long-press send options menu */}
+                <Show when={sendMenuOpen()}>
+                  <div
+                    class="absolute right-0 bottom-full z-50 mb-2 min-w-[200px] overflow-hidden rounded-xl shadow-lg"
+                    style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
+                  >
+                    <button
+                      class="flex w-full cursor-pointer items-center gap-2.5 border-none px-4 py-3 text-left text-sm transition-colors"
+                      style={{ background: 'transparent', color: 'var(--c-text)' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-bg-raised)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      onClick={handleSendWithVoice}
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        style={{ 'flex-shrink': '0' }}
+                      >
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                      </svg>
+                      <span>Reply via voice</span>
+                    </button>
+                    <div style={{ height: '1px', background: 'var(--c-border)' }} />
+                    <button
+                      class="flex w-full cursor-pointer items-center gap-2.5 border-none px-4 py-3 text-left text-sm transition-colors"
+                      style={{ background: 'transparent', color: 'var(--c-text)' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-bg-raised)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      onClick={handleSendImmediate}
+                    >
+                      <span style={{ 'flex-shrink': '0', 'font-size': '16px' }}>⚡</span>
+                      <span>Send immediately</span>
+                    </button>
+                  </div>
+                </Show>
+              </div>
             }
           >
             <button
