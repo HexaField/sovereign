@@ -225,9 +225,14 @@ function toGenericMessages(messages: ChatMessage[]): Array<Record<string, unknow
       })
       continue
     }
-    // 'system' — never appears in a persisted session transcript (the system
-    // prompt is kept out-of-band and prepended only for the wire request —
-    // see `runTurn`), but skip defensively if one ever sneaks in.
+    // System messages in the persisted transcript come from compaction
+    // summaries. Pass them through so parseTurns renders them as visible
+    // system turns in the history (the fallback at parseTurns:262 handles
+    // unknown roles by extracting text into a system ParsedTurn).
+    if (m.role === 'system') {
+      out.push({ role: 'system', content: typeof m.content === 'string' ? m.content : '', timestamp: m.timestamp })
+      continue
+    }
   }
   return out
 }
@@ -273,6 +278,7 @@ interface PersistedLocalLlmSession {
   label?: string
   parentSessionKey?: string
   contextWindow?: number
+  compactionCount?: number
   systemPrompt: string
   messages: ChatMessage[]
   createdAt: number
@@ -574,6 +580,7 @@ export function createLocalLlmBackend(
       label: state.label,
       parentSessionKey: state.parentSessionKey,
       contextWindow: state.contextWindow,
+      compactionCount: state.compactionCount,
       systemPrompt: state.systemPrompt,
       messages: state.messages,
       createdAt: state.createdAt,
@@ -596,6 +603,7 @@ export function createLocalLlmBackend(
         parentSessionKey: value.parentSessionKey,
         agentStatus: 'idle', // reset any non-idle status on restart — nothing is actually running
         contextWindow: value.contextWindow,
+        compactionCount: value.compactionCount ?? 0,
         systemPrompt:
           value.systemPrompt ||
           defaultSystemPrompt(
