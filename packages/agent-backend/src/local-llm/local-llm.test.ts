@@ -101,6 +101,21 @@ function collectEvents(backend: LocalLlmBackend) {
   return { turns, statuses }
 }
 
+/** Wait for a specific sessionKey to emit chat.status: idle. Times out after 2s. */
+function waitForIdle(backend: LocalLlmBackend, _key?: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('waitForIdle timed out')), 2000)
+    const handler = (d: Record<string, unknown>) => {
+      if (d.status === 'idle') {
+        clearTimeout(timer)
+        backend.off('chat.status', handler)
+        resolve()
+      }
+    }
+    backend.on('chat.status', handler)
+  })
+}
+
 describe('local-llm backend: session lifecycle', () => {
   it('createSession returns a key and getSessionMeta reflects it', async () => {
     const { client } = makeFakeClient()
@@ -203,7 +218,10 @@ describe('local-llm backend: sendMessage (no tools)', () => {
     const { turns, statuses } = collectEvents(backend)
 
     const key = await backend.createSession('t')
+    // sendMessage fires-and-forgets; wait for the async turn to complete.
+    const idle = waitForIdle(backend)
     await backend.sendMessage(key, 'Hello there.')
+    await idle
 
     expect(complete).toHaveBeenCalledTimes(1)
     expect(turns).toHaveLength(1)
@@ -215,7 +233,9 @@ describe('local-llm backend: sendMessage (no tools)', () => {
     const { client } = makeFakeClient(textResponse('answer'))
     const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
     const key = await backend.createSession('t')
+    const idle = waitForIdle(backend)
     await backend.sendMessage(key, 'question')
+    await idle
 
     const turns = await backend.getFullHistory(key)
     expect(turns.map((t) => t.role)).toEqual(['user', 'assistant'])
@@ -226,7 +246,9 @@ describe('local-llm backend: sendMessage (no tools)', () => {
   it('lazily creates a session on sendMessage if none was created first', async () => {
     const { client } = makeFakeClient(textResponse('ok'))
     const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const idle = waitForIdle(backend)
     await backend.sendMessage('never-created', 'hi')
+    await idle
     const turns = await backend.getFullHistory('never-created')
     expect(turns).toHaveLength(2)
   })
@@ -237,9 +259,17 @@ describe('local-llm backend: sendMessage (no tools)', () => {
     const { turns } = collectEvents(backend)
     const key = await backend.createSession('t')
 
-    const p1 = backend.sendMessage(key, 'first question')
-    const p2 = backend.sendMessage(key, 'second question')
-    await Promise.all([p1, p2])
+    // Both messages queue; the drain loop processes them sequentially.
+    // Wait for the second idle (two turns → two idle emissions).
+    let idleCount = 0
+    const bothDone = new Promise<void>((resolve) => {
+      backend.on('chat.status', (d) => {
+        if (d.status === 'idle' && ++idleCount >= 2) resolve()
+      })
+    })
+    await backend.sendMessage(key, 'first question')
+    await backend.sendMessage(key, 'second question')
+    await bothDone
 
     expect(complete).toHaveBeenCalledTimes(2)
     expect(turns.map((t) => t.content)).toEqual(['first answer', 'second answer'])
@@ -257,7 +287,9 @@ describe('local-llm backend: sendMessage (tool calling)', () => {
     const { turns } = collectEvents(backend)
     const key = await backend.createSession('t', { cwd: tmpDir })
 
+    const idle = waitForIdle(backend)
     await backend.sendMessage(key, 'write a file')
+    await idle
 
     expect(complete).toHaveBeenCalledTimes(2)
     expect(fs.readFileSync(target, 'utf-8')).toBe('hello from the model')
@@ -272,7 +304,9 @@ describe('local-llm backend: sendMessage (tool calling)', () => {
     const { turns } = collectEvents(backend)
     const key = await backend.createSession('t', { cwd: tmpDir })
 
+    const idle = waitForIdle(backend)
     await backend.sendMessage(key, 'list files')
+    await idle
 
     expect(turns).toHaveLength(1)
     expect(turns[0].content).toBe('(no response from model)')
@@ -286,10 +320,12 @@ describe('local-llm backend: abort', () => {
     const { turns, statuses } = collectEvents(backend)
     const key = await backend.createSession('t')
 
-    const sendPromise = backend.sendMessage(key, 'hi')
+    // sendMessage now fires-and-forgets. Wait for the async drain to complete.
+    const idle = waitForIdle(backend)
+    await backend.sendMessage(key, 'hi')
     await new Promise((r) => setTimeout(r, 20)) // let runTurn reach the pending complete() call
     await backend.abort(key)
-    await sendPromise
+    await idle
 
     expect(statuses[statuses.length - 1]).toBe('idle')
     expect(turns).toHaveLength(0)
@@ -316,7 +352,9 @@ describe('local-llm backend: errors', () => {
     backend.on('chat.error', (d) => errors.push(d.error))
     const key = await backend.createSession('t')
 
+    const idle = waitForIdle(backend)
     await backend.sendMessage(key, 'hi')
+    await idle
 
     expect(turns).toHaveLength(1)
     expect(turns[0].sendFailed).toBe(true)
@@ -381,7 +419,9 @@ describe('local-llm backend: activity + listing', () => {
     const { client } = makeFakeClient(textResponse('ok'))
     const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
     const key = await backend.createSession('t')
+    const idle = waitForIdle(backend)
     await backend.sendMessage(key, 'hi')
+    await idle
     const map = await backend.getActivityMap?.()
     expect(map?.get(key)).toBeGreaterThan(0)
   })
@@ -401,7 +441,9 @@ describe('local-llm backend: persistence across restarts', () => {
     const { client } = makeFakeClient(textResponse('answer one'))
     const backendA = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
     const key = await backendA.createSession('persisted')
+    const idle = waitForIdle(backendA)
     await backendA.sendMessage(key, 'question')
+    await idle
     backendA.flushState()
 
     const backendB = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
@@ -446,9 +488,13 @@ describe('local-llm backend: context budget + recycle', () => {
     const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
     const key = await backend.createSession('t', { cwd: tmpDir })
 
+    let idle = waitForIdle(backend)
     await backend.sendMessage(key, 'read the big file') // user, assistant(tool_call), tool(result), assistant(final)
+    await idle
     for (let i = 0; i < 12; i++) {
+      idle = waitForIdle(backend)
       await backend.sendMessage(key, `filler question ${i}`) // user, assistant
+      await idle
     }
 
     const result = await backend.recycleSession?.(key, { force: true })

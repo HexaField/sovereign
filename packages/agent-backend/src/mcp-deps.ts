@@ -17,6 +17,13 @@ import type { AgentBackend, AgentBackendKind, EventBus } from '@sovereign/core'
 import type { ThreadManager } from '@sovereign/threads'
 import { sessionKeyToThreadKey } from './wiring.js'
 
+/** Global defaults for subagent routing. Thread-level config takes priority
+ *  over these; these take priority over the model's explicit request. */
+export interface SubagentDefaults {
+  backend?: string
+  model?: string
+}
+
 export interface SovereignMcpDepsInput {
   bus: EventBus
   routing: RoutingBackend
@@ -35,6 +42,9 @@ export interface SovereignMcpDepsInput {
   /** Presence-thread integration. When set, registers the seven presence_*
    *  MCP tools. Sourced from `@sovereign/presence` in bootstrap. */
   presence?: PresenceMcpDeps
+  /** Global subagent defaults — from config `agentBackend.subagentDefaults`.
+   *  Thread-level config takes priority; these override the model's request. */
+  subagentDefaults?: SubagentDefaults
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -106,11 +116,15 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         // Resolve the parent thread's subagent routing config (if any).
         const threadKey = sessionKeyToThreadKey(parentKey)
         const thread = threadKey ? input.threadManager?.get(threadKey) : undefined
+        const defaults = input.subagentDefaults
 
-        // Cross-backend spawning: explicit `opts.backend` wins, then
-        // thread-level `subagentBackend`, then parent session's backend.
+        // Priority chain (NON-NEGOTIABLE — thread config is authoritative):
+        //   1. Thread-level subagentBackend (highest — per-thread override)
+        //   2. Global subagentDefaults.backend (system-wide policy)
+        //   3. Model's explicit opts.backend (advisory — model cannot escape routing)
+        //   4. Parent session's own backend (fallback)
         let backend: AgentBackend
-        const effectiveBackend = opts.backend ?? thread?.subagentBackend
+        const effectiveBackend = thread?.subagentBackend ?? defaults?.backend ?? opts.backend
         if (effectiveBackend) {
           const target = routing.forKind(effectiveBackend as AgentBackendKind)
           if (!target) throw new Error(`agents_spawn: backend "${effectiveBackend}" not enabled`)
@@ -120,9 +134,8 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         }
         if (!backend.spawnSubagent) throw new Error('agents_spawn: backend does not support subagent spawn')
 
-        // Thread-level subagent model applies when no explicit model
-        // override was provided by the caller.
-        const effectiveModel = opts.model ?? thread?.subagentModel
+        // Same priority for model: thread > global > model's request.
+        const effectiveModel = thread?.subagentModel ?? defaults?.model ?? opts.model
         const childKey = await backend.spawnSubagent(parentKey, {
           task: opts.task,
           label: opts.label,

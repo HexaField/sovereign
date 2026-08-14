@@ -178,7 +178,10 @@ export function makePresenceAwareAppendResolver(
     /** Late-bound health summary — called when the session starts (not at
      *  wiring time). Returns a formatted string or undefined to skip. */
     getHealthSummary?: () => string | undefined
-  }
+  },
+  /** Late-bound resolver for global subagent defaults (resolved at call time,
+   *  not wiring time, so config changes take effect without a restart). */
+  getSubagentDefaults?: () => { backend?: string | null; model?: string | null }
 ): ((sessionKey: string) => string | undefined) | undefined {
   const base = makeMembraneAppendResolver(membraneManager, threadManager)
   return (sessionKey: string): string | undefined => {
@@ -233,25 +236,27 @@ export function makePresenceAwareAppendResolver(
       }
     }
 
-    // Subagent routing — inject when the thread has a subagent config so the
-    // model routes `agents_spawn` calls to the configured backend/model.
+    // Subagent routing — inject when thread or global config specifies
+    // subagent routing so the model knows its subagents get routed.
     if (threadKey && threadManager) {
       const thread = threadManager.get(threadKey)
-      if (thread?.subagentBackend || thread?.subagentModel) {
+      const defaults = getSubagentDefaults?.()
+      const effBackend = thread?.subagentBackend ?? defaults?.backend
+      const effModel = thread?.subagentModel ?? defaults?.model
+      if (effBackend || effModel) {
         const lines: string[] = ['# Subagent Routing Configuration']
+        const source = thread?.subagentBackend || thread?.subagentModel ? 'per-thread' : 'global default'
         lines.push(
-          'This thread has per-thread subagent routing configured. When spawning subagents via `agents_spawn`:'
+          `This thread has ${source} subagent routing configured. When spawning subagents via \`agents_spawn\`:`
         )
-        if (thread.subagentBackend) {
-          lines.push(
-            `- Pass \`backend: "${thread.subagentBackend}"\` to route subagents to the ${thread.subagentBackend} backend.`
-          )
+        if (effBackend) {
+          lines.push(`- All subagents route to the \`${effBackend}\` backend.`)
         }
-        if (thread.subagentModel) {
-          lines.push(`- The configured subagent model: \`${thread.subagentModel}\``)
+        if (effModel) {
+          lines.push(`- All subagents use model: \`${effModel}\``)
         }
         lines.push(
-          'The harness also enforces these defaults automatically — subagents spawned without an explicit backend/model override will use these values.'
+          'The harness enforces this routing programmatically — the model cannot override these values via explicit backend/model parameters. Thread config > global config > model request.'
         )
         parts.push(lines.join('\n'))
       }
@@ -262,27 +267,32 @@ export function makePresenceAwareAppendResolver(
 }
 
 /**
- * When a thread's subagent routing points at a non-claude-code backend,
- * block the SDK's built-in subagent tools (`Agent`, `Workflow`,
- * `SendMessage`) so the model cannot bypass Sovereign's routing layer.
- * The model must use `agents_spawn` (Sovereign MCP) instead, which the
- * harness redirects to the configured backend.
+ * When a thread's subagent routing (or the global default) points at a
+ * non-claude-code backend, block the SDK's built-in subagent tools
+ * (`Agent`, `Workflow`, `SendMessage`) so the model cannot bypass
+ * Sovereign's routing layer. The model must use `agents_spawn`
+ * (Sovereign MCP) instead, which the harness redirects to the
+ * configured backend.
+ *
+ * Priority: thread-level config > global default.
  *
  * Returns `undefined` (no tools blocked) when:
  *  - no threadManager provided
  *  - session doesn't map to a thread
- *  - thread has no subagentBackend set
- *  - subagentBackend is 'claude-code' (native SDK subagents are fine)
+ *  - neither thread config nor global default specifies a non-claude-code backend
  */
 export function makeSubagentToolBlocker(
-  threadManager: ThreadManager | undefined
+  threadManager: ThreadManager | undefined,
+  globalDefaultBackend?: string
 ): ((sessionKey: string) => string[] | undefined) | undefined {
   if (!threadManager) return undefined
   return (sessionKey: string): string[] | undefined => {
     const threadKey = sessionKeyToThreadKey(sessionKey)
     if (!threadKey) return undefined
     const thread = threadManager.get(threadKey)
-    if (!thread?.subagentBackend || thread.subagentBackend === 'claude-code') return undefined
+    // Effective backend: thread config wins, then global default.
+    const effectiveBackend = thread?.subagentBackend ?? globalDefaultBackend
+    if (!effectiveBackend || effectiveBackend === 'claude-code') return undefined
     // Block SDK-native subagent spawning — force through Sovereign's
     // agents_spawn MCP tool which respects the routing config.
     return ['Agent', 'Workflow', 'SendMessage']
@@ -314,6 +324,13 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const sessionsRegistry = createSessionsRegistry(dataDir)
   const activeSessions = createActiveSessions({ dataDir })
   const askUserQuestionStore = createAskUserQuestionStore(bus)
+  // Global subagent routing defaults — thread config still takes priority.
+  const subagentDefaults = {
+    backend: configStore.get<string>('agentBackend.subagentDefaults.backend'),
+    model: configStore.get<string>('agentBackend.subagentDefaults.model')
+  }
+  const hasSubagentDefaults = subagentDefaults.backend || subagentDefaults.model
+
   const sharedMcpDeps = buildSovereignMcpDeps({
     bus,
     routing: new Proxy({} as any, { get: (_t, p) => (routingBackend as any)[p as any] }),
@@ -326,6 +343,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     notificationsModule,
     browserService,
     getClaudeCodeBackend: () => claudeCodeBackend,
+    ...(hasSubagentDefaults ? { subagentDefaults } : {}),
     ...(input.presence ? { presence: input.presence } : {})
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
@@ -387,15 +405,20 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
           toolPolicy: makeToolPolicy(orgManager),
           activeSessions,
           askUserQuestionStore,
-          resolveAppendSystemPrompt: makePresenceAwareAppendResolver(membraneManager, threadManager, {
-            internalThreadId: () => input.presence?.internalThreadId() ?? null,
-            gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
-            personalityFile: input.presencePersonalityFile,
-            memoryFile: input.presenceMemoryFile,
-            knowledgeFile: input.presenceKnowledgeFile,
-            getHealthSummary: input.presenceGetHealthSummary
-          }),
-          resolveDisallowedTools: makeSubagentToolBlocker(threadManager)
+          resolveAppendSystemPrompt: makePresenceAwareAppendResolver(
+            membraneManager,
+            threadManager,
+            {
+              internalThreadId: () => input.presence?.internalThreadId() ?? null,
+              gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
+              personalityFile: input.presencePersonalityFile,
+              memoryFile: input.presenceMemoryFile,
+              knowledgeFile: input.presenceKnowledgeFile,
+              getHealthSummary: input.presenceGetHealthSummary
+            },
+            () => subagentDefaults
+          ),
+          resolveDisallowedTools: makeSubagentToolBlocker(threadManager, subagentDefaults.backend ?? undefined)
         })
         claudeCodeBackend = cc
         return cc
@@ -413,14 +436,19 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               return existing
             }
           },
-          resolveSystemPromptAppend: makePresenceAwareAppendResolver(membraneManager, threadManager, {
-            internalThreadId: () => input.presence?.internalThreadId() ?? null,
-            gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
-            personalityFile: input.presencePersonalityFile,
-            memoryFile: input.presenceMemoryFile,
-            knowledgeFile: input.presenceKnowledgeFile,
-            getHealthSummary: input.presenceGetHealthSummary
-          }),
+          resolveSystemPromptAppend: makePresenceAwareAppendResolver(
+            membraneManager,
+            threadManager,
+            {
+              internalThreadId: () => input.presence?.internalThreadId() ?? null,
+              gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
+              personalityFile: input.presencePersonalityFile,
+              memoryFile: input.presenceMemoryFile,
+              knowledgeFile: input.presenceKnowledgeFile,
+              getHealthSummary: input.presenceGetHealthSummary
+            },
+            () => subagentDefaults
+          ),
           subagentPromptFile: input.configDir ? `${input.configDir}/SUBAGENT.md` : undefined,
           globalPersonalityFile: globalPersonalityPath,
           sovereignTools: sharedMcpDeps,
