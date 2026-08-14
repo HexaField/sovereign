@@ -36,6 +36,9 @@ import { CORE_TOOL_SCHEMAS } from './tools/schemas.js'
 import type { ToolSchema } from './tools/schemas.js'
 import { SOVEREIGN_TOOL_SCHEMAS, createSovereignToolExecutor } from './tools/sovereign.js'
 import type { SovereignToolsDeps } from './tools/sovereign.js'
+import { SEMBLE_TOOL_SCHEMAS, createSembleToolExecutor } from './tools/semble.js'
+import { createMcpBridge } from './tools/mcp-bridge.js'
+import type { McpBridge, McpBridgeConfig } from './tools/mcp-bridge.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
 
@@ -84,14 +87,28 @@ export interface LocalLlmBackendDeps {
    *  When provided, Sovereign tools + WebFetch register as native tools
    *  alongside the core 7. */
   sovereignTools?: SovereignToolsDeps
+  /** Enable semble code search tools (semble_search, semble_find_related).
+   *  Default: true when the semble binary exists on PATH. */
+  enableSemble?: boolean
+  /** External MCP servers to bridge — auto-discovers tools and proxies calls.
+   *  Each entry becomes a set of tools with the `name` as prefix. */
+  mcpBridges?: McpBridgeConfig[]
 }
 
-function defaultSystemPrompt(cwd: string, hasSovereignTools: boolean): string {
-  const toolList = hasSovereignTools
-    ? 'core tools (Read, Write, Edit, Bash, Grep, Glob, LS) and Sovereign tools (cron, sessions, browser, agents, notifications, planning, WebFetch)'
-    : '7 tools: Read, Write, Edit, Bash, Grep, Glob, LS'
+function defaultSystemPrompt(
+  cwd: string,
+  hasSovereignTools: boolean,
+  hasSemble: boolean,
+  mcpBridgeNames: string[]
+): string {
+  const toolSections: string[] = ['core tools (Read, Write, Edit, Bash, Grep, Glob, LS)']
+  if (hasSovereignTools)
+    toolSections.push('Sovereign tools (cron, sessions, browser, agents, notifications, planning, WebFetch)')
+  if (hasSemble) toolSections.push('semble code search (semble_search, semble_find_related)')
+  if (mcpBridgeNames.length > 0) toolSections.push(`external services (${mcpBridgeNames.join(', ')})`)
+
   return [
-    `You are a helpful assistant with access to a local filesystem, shell, and services through ${toolList}.`,
+    `You are a helpful assistant with access to a local filesystem, shell, and services through ${toolSections.join(', ')}.`,
     '',
     'Rules:',
     '- Read a file before you Write or Edit it.',
@@ -104,6 +121,20 @@ function defaultSystemPrompt(cwd: string, hasSovereignTools: boolean): string {
           '',
           'Sovereign tools use the `sovereign_` prefix (e.g. sovereign_cron_create, sovereign_browser_open).',
           'WebFetch fetches content from URLs — use it for HTTP requests.'
+        ]
+      : []),
+    ...(hasSemble
+      ? [
+          '',
+          'Semble tools provide semantic code search. Use semble_search for finding code by natural language or symbol name.',
+          'Use semble_find_related to discover similar code given a file and line number.',
+          'Prefer semble over Grep for exploratory searches. Grep remains better for literal string sweeps.'
+        ]
+      : []),
+    ...(mcpBridgeNames.length > 0
+      ? [
+          '',
+          `External MCP tools use their service name as prefix (e.g. ${mcpBridgeNames.map((n) => `${n}_*`).join(', ')}).`
         ]
       : []),
     '',
@@ -277,11 +308,41 @@ export function createLocalLlmBackend(
     })
   }
 
-  // ── Tool schemas + sovereign executor ──────────────────────────────
+  // ── Tool schemas + executors ──────────────────────────────────────
   const sovereignExecutor = deps.sovereignTools ? createSovereignToolExecutor(deps.sovereignTools) : null
-  const allToolSchemas: ToolSchema[] = deps.sovereignTools
-    ? [...CORE_TOOL_SCHEMAS, ...SOVEREIGN_TOOL_SCHEMAS]
-    : CORE_TOOL_SCHEMAS
+
+  // Semble code search — enabled by default when the binary exists
+  const sembleEnabled = deps.enableSemble !== false
+  const sembleExecutor = sembleEnabled ? createSembleToolExecutor() : null
+
+  // External MCP bridges (e.g. AD4M) — lazy-connect on first tool call
+  const mcpBridges: McpBridge[] = (deps.mcpBridges ?? []).map(createMcpBridge)
+
+  // Assemble tool schemas: core + sovereign + semble + MCP bridges.
+  // MCP bridge schemas load asynchronously (tool discovery), so the schema
+  // list starts with the statically-known tools and gets extended when
+  // bridges connect. This keeps the first turn fast.
+  const staticSchemas: ToolSchema[] = [
+    ...CORE_TOOL_SCHEMAS,
+    ...(deps.sovereignTools ? SOVEREIGN_TOOL_SCHEMAS : []),
+    ...(sembleEnabled ? SEMBLE_TOOL_SCHEMAS : [])
+  ]
+  let allToolSchemas: ToolSchema[] = [...staticSchemas]
+
+  // Kick off MCP bridge discovery (non-blocking)
+  if (mcpBridges.length > 0) {
+    Promise.allSettled(
+      mcpBridges.map(async (bridge) => {
+        const schemas = await bridge.getSchemas()
+        if (schemas.length > 0) {
+          allToolSchemas = [...staticSchemas, ...mcpBridges.flatMap((b) => b.getCachedSchemas())]
+          console.log(
+            `[local-llm] MCP bridge "${bridge.name}" added ${schemas.length} tools (total: ${allToolSchemas.length})`
+          )
+        }
+      })
+    )
+  }
 
   // ── On-demand compaction ──────────────────────────────────────────
   // Production-grade context management. Uses the session's own model to
@@ -535,7 +596,14 @@ export function createLocalLlmBackend(
         parentSessionKey: value.parentSessionKey,
         agentStatus: 'idle', // reset any non-idle status on restart — nothing is actually running
         contextWindow: value.contextWindow,
-        systemPrompt: value.systemPrompt || defaultSystemPrompt(cwd, !!deps.sovereignTools),
+        systemPrompt:
+          value.systemPrompt ||
+          defaultSystemPrompt(
+            cwd,
+            !!deps.sovereignTools,
+            sembleEnabled,
+            mcpBridges.map((b) => b.name)
+          ),
         messages: value.messages ?? [],
         createdAt: value.createdAt,
         updatedAt: value.updatedAt,
@@ -587,7 +655,14 @@ export function createLocalLlmBackend(
       parentSessionKey: opts?.parentSessionKey,
       agentStatus: 'idle',
       contextWindow: opts?.contextWindow,
-      systemPrompt: opts?.systemPromptOverride?.trim() || defaultSystemPrompt(cwd, !!deps.sovereignTools),
+      systemPrompt:
+        opts?.systemPromptOverride?.trim() ||
+        defaultSystemPrompt(
+          cwd,
+          !!deps.sovereignTools,
+          sembleEnabled,
+          mcpBridges.map((b) => b.name)
+        ),
       messages: [],
       createdAt: now,
       updatedAt: now,
@@ -649,8 +724,23 @@ export function createLocalLlmBackend(
       const repoCtx = findRepoContext(state.cwd)
       if (repoCtx) parts.push(repoCtx)
       // 4. Base tool/rules prompt
-      parts.push(defaultSystemPrompt(state.cwd, !!deps.sovereignTools))
+      parts.push(
+        defaultSystemPrompt(
+          state.cwd,
+          !!deps.sovereignTools,
+          sembleEnabled,
+          mcpBridges.map((b) => b.name)
+        )
+      )
       state.systemPrompt = parts.join('\n\n')
+    }
+
+    // Refresh MCP bridge tool schemas — they may have connected since startup
+    if (mcpBridges.length > 0) {
+      const cachedMcpSchemas = mcpBridges.flatMap((b) => b.getCachedSchemas())
+      if (cachedMcpSchemas.length > 0 || allToolSchemas.length === staticSchemas.length) {
+        allToolSchemas = [...staticSchemas, ...cachedMcpSchemas]
+      }
     }
 
     // ── On-demand compaction ──────────────────────────────────────────
@@ -668,16 +758,29 @@ export function createLocalLlmBackend(
     ]
     const beforeLen = transcript.length
 
-    // Resolve tool executor — merge core + sovereign when available
-    const executeTool = sovereignExecutor
-      ? async (name: string, input: Record<string, unknown>): Promise<ToolResult> => {
-          // Sovereign tools use the sovereign_ prefix or WebFetch
-          if (name.startsWith('sovereign_') || name === 'WebFetch') {
-            return sovereignExecutor(name, input)
-          }
-          return state.toolExecutor.execute(name, input)
+    // Resolve tool executor — routes tool calls to the correct handler:
+    //   1. sovereign_ prefix or WebFetch → sovereign executor
+    //   2. semble_ prefix → semble CLI executor
+    //   3. MCP bridge prefix match → MCP bridge proxy
+    //   4. everything else → core tool executor (Read/Write/Edit/Bash/Grep/Glob/LS)
+    const executeTool = async (name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+      // Sovereign tools
+      if (sovereignExecutor && (name.startsWith('sovereign_') || name === 'WebFetch')) {
+        return sovereignExecutor(name, input)
+      }
+      // Semble code search
+      if (sembleExecutor && name.startsWith('semble_')) {
+        return sembleExecutor(name, input)
+      }
+      // MCP bridges — check each bridge for ownership
+      for (const bridge of mcpBridges) {
+        if (bridge.owns(name)) {
+          return bridge.execute(name, input)
         }
-      : state.toolExecutor.execute
+      }
+      // Core tools
+      return state.toolExecutor.execute(name, input)
+    }
 
     const loopDeps: ToolLoopDeps = {
       complete: (msgs, opts) =>

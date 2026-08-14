@@ -336,6 +336,23 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const home = process.env.HOME ?? ''
   const globalPersonalityPath = home ? `${home}/.claude/CLAUDE.md` : undefined
 
+  // External MCP bridges for local-llm — resolve AD4M config from the config store.
+  // When ad4m.mcpUrl exists and a valid token file contains a JWT, the bridge
+  // auto-connects on first tool call. Otherwise it stays dormant.
+  const mcpBridges: Array<{ name: string; endpoint: string; authToken?: string }> = []
+  const ad4mMcpUrl = configStore.get<string>('ad4m.mcpUrl')?.trim() || ''
+  if (ad4mMcpUrl) {
+    const tokenFile = `${dataDir}/ad4m-token.json`
+    let ad4mToken: string | undefined
+    try {
+      const raw = fs.readFileSync(tokenFile, 'utf-8')
+      ad4mToken = (JSON.parse(raw) as { token?: string }).token ?? undefined
+    } catch {
+      /* no token — bridge will try without auth */
+    }
+    mcpBridges.push({ name: 'ad4m', endpoint: ad4mMcpUrl, authToken: ad4mToken })
+  }
+
   const enabledBackends = configStore.get<string[]>('agentBackend.enabled') as AgentBackendKind[]
   const defaultKind = configStore.get<AgentBackendKind>('agentBackend.default')
 
@@ -406,7 +423,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
           }),
           subagentPromptFile: input.configDir ? `${input.configDir}/SUBAGENT.md` : undefined,
           globalPersonalityFile: globalPersonalityPath,
-          sovereignTools: sharedMcpDeps
+          sovereignTools: sharedMcpDeps,
+          mcpBridges
         })
       }
     }
