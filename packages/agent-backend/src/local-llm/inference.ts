@@ -115,12 +115,35 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
 
     try {
       const url = `${state.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`
-      const res = await fetch(url, {
+      let res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: controller.signal
       })
+
+      // llama-server returns 500 when it fails to parse the model's tool
+      // call arguments as JSON (e.g. truncated output hitting max_tokens).
+      // Retry without the `tools` parameter so the server returns raw text
+      // instead of crashing. Our parseToolCallsFromText() in tool-loop.ts
+      // extracts valid <tool_call> tags from the text and skips malformed
+      // ones — a graceful fallback the server-side parser lacks.
+      if (!res.ok && body.tools) {
+        const errText = await res.text().catch(() => '')
+        if (errText.includes('Failed to parse tool call arguments')) {
+          const retryBody = { ...body }
+          delete retryBody.tools
+          delete retryBody.tool_choice
+          res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(retryBody),
+            signal: controller.signal
+          })
+        } else {
+          throw new Error(`Inference stream failed: ${res.status} — ${errText}`)
+        }
+      }
       if (!res.ok) {
         const text = await res.text().catch(() => '')
         throw new Error(`Inference stream failed: ${res.status} — ${text}`)
