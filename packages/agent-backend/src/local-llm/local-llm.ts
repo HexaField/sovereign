@@ -5,6 +5,7 @@
 // and inference client (so per-session model switches never race each
 // other on a shared client) — see `ensureSession`/`rehydrate` below.
 
+import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
@@ -20,6 +21,7 @@ import type {
   SessionKind,
   SessionMeta,
   SessionSummary,
+  ModelCatalogEntry,
   SpawnSubagentOptions,
   SubagentSummary
 } from '@sovereign/core'
@@ -629,8 +631,48 @@ export function createLocalLlmBackend(
     persist(state)
   }
 
-  async function listAvailableModels(): Promise<{ models: string[]; defaultModel: string | null }> {
+  async function listAvailableModels(): Promise<{
+    models: string[]
+    defaultModel: string | null
+    catalog?: ModelCatalogEntry[]
+  }> {
     const cfg = getConfig()
+
+    // ── 1. Read on-disk model registry (e.g. llama.cpp models.json) ──────
+    // The registry holds all installed models — the running inference server
+    // only reports the single currently-loaded model via /v1/models.
+    if (cfg.modelsRegistry) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(cfg.modelsRegistry, 'utf-8')) as {
+          models?: Record<
+            string,
+            { label?: string; arch?: string; active_params?: string; total_params?: string; quant?: string }
+          >
+          active?: string
+        }
+        if (raw.models && Object.keys(raw.models).length > 0) {
+          const ids = Object.keys(raw.models)
+          const catalog: ModelCatalogEntry[] = ids.map((key) => {
+            const entry = raw.models![key]
+            return {
+              id: key,
+              provider: PROVIDER,
+              family: key,
+              familyLabel: entry.label ?? key,
+              version: entry.quant ?? null,
+              versionLabel: entry.quant ?? 'default'
+            }
+          })
+          const activeKey = raw.active ?? cfg.model
+          const defaultModel = ids.includes(activeKey) ? activeKey : ids[0]
+          return { models: ids, defaultModel, catalog }
+        }
+      } catch {
+        // Registry unreadable or malformed — fall through to server probe.
+      }
+    }
+
+    // ── 2. Fallback: query the running inference server ──────────────────
     try {
       const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/models`
       const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
@@ -642,8 +684,6 @@ export function createLocalLlmBackend(
       if (ids.length === 0) throw new Error('inference server returned no models')
       return { models: ids, defaultModel: ids.includes(cfg.model) ? cfg.model : ids[0] }
     } catch {
-      // Server may not implement GET /v1/models (not all llama.cpp builds
-      // do) — fall back to the single configured model rather than erroring.
       return { models: [cfg.model], defaultModel: cfg.model }
     }
   }
