@@ -742,9 +742,16 @@ export function createThreadRoutes(
     })
   })
 
-  router.get('/api/efforts', async (_req, res) => {
+  router.get('/api/efforts', async (req, res) => {
     try {
-      const backend = defaultBackend()
+      // Accept ?backend=<kind> to query efforts from a specific backend.
+      // Falls back to the default backend when omitted (back-compat).
+      const backendKind = req.query.backend as AgentBackendKind | undefined
+      let backend: AgentBackend | null | undefined
+      if (backendKind && opts?.backend && 'forKind' in opts.backend) {
+        backend = (opts.backend as RoutingBackend).forKind(backendKind)
+      }
+      if (!backend) backend = defaultBackend()
       if (!backend || !backend.listAvailableEfforts) {
         return res.json({ efforts: [], defaultEffort: null })
       }

@@ -117,32 +117,43 @@ export function ChatSettingsButton() {
     if (!key) return
     setLoading(true)
     try {
-      // Fetch session info + models + efforts + backends in parallel
-      const [infoRes, modelsRes, effortsRes, threadRes, backendsRes] = await Promise.all([
+      // Fetch session info, thread data, and backends in parallel.
+      // Models + efforts depend on the thread's backendKind (from session-info),
+      // so we fetch those after we know the backend.
+      const [infoRes, threadRes, backendsRes] = await Promise.all([
         fetch(`/api/threads/${encodeURIComponent(key)}/session-info`),
-        fetch('/api/models'),
-        fetch('/api/efforts'),
         fetch(`/api/threads/${encodeURIComponent(key)}`),
         fetch('/api/backends')
       ])
+      let resolvedBackend: string | null = null
       if (infoRes.ok) {
         const data = await infoRes.json()
         setInfo(data)
         const current = data.modelProvider && data.model ? `${data.modelProvider}/${data.model}` : (data.model ?? '')
         setSelectedModel(current)
         setSelectedEffort(data.reasoningEffort ?? '')
-        if (data.backendKind) setCurrentBackend(data.backendKind)
-      }
-      if (modelsRes.ok) {
-        const data = await modelsRes.json()
-        setAvailableModels(data.models ?? [])
-        setModelCatalog(data.catalog ?? [])
-        setDefaultModel(data.defaultModel ?? null)
+        if (data.backendKind) {
+          setCurrentBackend(data.backendKind)
+          resolvedBackend = data.backendKind
+        }
       }
       if (backendsRes?.ok) {
         const data = await backendsRes.json()
         setAvailableBackends(data.backends ?? [])
         if (!currentBackend() && data.defaultBackend) setCurrentBackend(data.defaultBackend)
+      }
+
+      // Fetch models + efforts for the thread's actual backend
+      const backendParam = resolvedBackend ? `?backend=${encodeURIComponent(resolvedBackend)}` : ''
+      const [modelsRes, effortsRes] = await Promise.all([
+        fetch(`/api/models${backendParam}`),
+        fetch(`/api/efforts${backendParam}`)
+      ])
+      if (modelsRes.ok) {
+        const data = await modelsRes.json()
+        setAvailableModels(data.models ?? [])
+        setModelCatalog(data.catalog ?? [])
+        setDefaultModel(data.defaultModel ?? null)
       }
       if (effortsRes.ok) {
         const data = await effortsRes.json()
@@ -287,13 +298,21 @@ export function ChatSettingsButton() {
       if (res.ok) {
         setCurrentBackend(backend)
         setActionFeedback('Backend updated')
-        // Re-fetch models for the new backend
-        const modelsRes = await fetch(`/api/models?backend=${encodeURIComponent(backend)}`)
+        // Re-fetch models + efforts for the new backend
+        const [modelsRes, effortsRes] = await Promise.all([
+          fetch(`/api/models?backend=${encodeURIComponent(backend)}`),
+          fetch(`/api/efforts?backend=${encodeURIComponent(backend)}`)
+        ])
         if (modelsRes.ok) {
           const data = await modelsRes.json()
           setAvailableModels(data.models ?? [])
           setModelCatalog(data.catalog ?? [])
           setDefaultModel(data.defaultModel ?? null)
+        }
+        if (effortsRes.ok) {
+          const data = await effortsRes.json()
+          setAvailableEfforts(data.efforts ?? [])
+          setDefaultEffort(data.defaultEffort ?? null)
         }
       } else {
         setActionFeedback('Failed to switch backend')
@@ -757,30 +776,49 @@ export function ChatSettingsButton() {
                       </div>
                     </Show>
 
-                    {/* Context Window Selector */}
+                    {/* Context Window — Claude: selectable 200K/1M; others: read-only from backend */}
                     <div style={{ display: 'flex', 'align-items': 'center', 'justify-content': 'space-between' }}>
                       <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
                         Context
                       </span>
-                      <select
-                        class="rounded-md text-xs font-medium"
-                        style={{
-                          background: 'var(--c-bg)',
-                          border: '1px solid var(--c-border)',
-                          color: 'var(--c-text)',
-                          'max-width': '170px',
-                          padding: '2px 6px',
-                          cursor: 'pointer',
-                          opacity: contextWindowSaving() ? '0.5' : '1',
-                          'border-radius': '9999px'
-                        }}
-                        value={contextWindowSize() === 1000000 ? '1000000' : '200000'}
-                        disabled={contextWindowSaving()}
-                        onChange={(e) => handleContextWindowSwitch(e.currentTarget.value)}
+                      <Show
+                        when={currentBackend() === 'claude-code'}
+                        fallback={
+                          <span
+                            class="rounded-md text-xs font-medium"
+                            style={{
+                              background: 'var(--c-bg)',
+                              border: '1px solid var(--c-border)',
+                              color: 'var(--c-text-muted)',
+                              'max-width': '170px',
+                              padding: '2px 8px',
+                              'border-radius': '9999px'
+                            }}
+                          >
+                            {info()?.contextTokens ? formatTokens(info()!.contextTokens!) : '—'}
+                          </span>
+                        }
                       >
-                        <option value="200000">200K (default)</option>
-                        <option value="1000000">1M (extended)</option>
-                      </select>
+                        <select
+                          class="rounded-md text-xs font-medium"
+                          style={{
+                            background: 'var(--c-bg)',
+                            border: '1px solid var(--c-border)',
+                            color: 'var(--c-text)',
+                            'max-width': '170px',
+                            padding: '2px 6px',
+                            cursor: 'pointer',
+                            opacity: contextWindowSaving() ? '0.5' : '1',
+                            'border-radius': '9999px'
+                          }}
+                          value={contextWindowSize() === 1000000 ? '1000000' : '200000'}
+                          disabled={contextWindowSaving()}
+                          onChange={(e) => handleContextWindowSwitch(e.currentTarget.value)}
+                        >
+                          <option value="200000">200K (default)</option>
+                          <option value="1000000">1M (extended)</option>
+                        </select>
+                      </Show>
                     </div>
 
                     {/* Subagent Routing — backend + model for spawned subagents */}
