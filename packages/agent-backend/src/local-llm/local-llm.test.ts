@@ -420,7 +420,8 @@ describe('local-llm backend: context budget + recycle', () => {
     const key = await backend.createSession('t')
     const budget = await backend.getContextBudget(key)
     expect(budget?.systemPrompt?.chars).toBeGreaterThan(0)
-    expect(budget?.tools?.entries.length).toBe(7)
+    // 7 core tools + 2 semble tools (enabled by default)
+    expect(budget?.tools?.entries.length).toBe(9)
   })
 
   it('getContextBudget returns null for an unknown session', async () => {
