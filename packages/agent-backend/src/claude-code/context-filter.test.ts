@@ -18,6 +18,9 @@ function bigBlob(bytes: number): string {
  * Multi-line text sized to exceed both the trim byte threshold and the
  * trim line-count threshold, so trimLargeOutput's head+tail rewrite fires.
  * Each line is uniquely identifiable via its index for head/tail assertions.
+ *
+ * With `trimMaxLines=40` (default), pass `count >= 41` to trigger trimming.
+ * Typical usage: `manyLines(trimMaxLines * 2)` → 80 lines, always trimmable.
  */
 function manyLines(count: number): string {
   const padWidth = Math.ceil(trimThresholdBytes / count) + 16
@@ -48,9 +51,34 @@ describe('ContextFilter', () => {
       expect(result).toContain(`line ${lineCount - 1} `)
     })
 
+    it('trims a 60-line file read that exceeds 8KB — catches typical development tool output', () => {
+      const filter = createContextFilter()
+      // 60 lines × ~200 chars each ≈ 12KB — exceeds both thresholds.
+      // At the old trimMaxLines=100 this would PASS through untrimmed.
+      const text = manyLines(60)
+      const halfLines = Math.floor(trimMaxLines / 2)
+      const trimmedCount = 60 - trimMaxLines
+
+      const result = filter.filterToolOutput('Read', {
+        type: 'text',
+        file: { content: text }
+      }) as { file: { content: string } } | null
+
+      expect(result).not.toBeNull()
+      expect(result!.file.content).toContain(`[... ${trimmedCount} lines trimmed by context filter ...]`)
+    })
+
     it('leaves text at or below both thresholds unchanged (returns null)', () => {
       const filter = createContextFilter()
       const text = manyLines(10) // well under trimMaxLines and trimThresholdBytes
+      expect(filter.filterToolOutput('Bash', text)).toBeNull()
+    })
+
+    it('leaves a 30-line output under trimMaxLines unchanged', () => {
+      const filter = createContextFilter()
+      // 30 lines < trimMaxLines(40), so even if byte threshold exceeded,
+      // the line count guard prevents trimming.
+      const text = manyLines(30)
       expect(filter.filterToolOutput('Bash', text)).toBeNull()
     })
 

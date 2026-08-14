@@ -21,7 +21,7 @@ export interface ContextFilterConfig {
 export const CONTEXT_FILTER_DEFAULTS: ContextFilterConfig = {
   enabled: true,
   trimThresholdBytes: 8192,
-  trimMaxLines: 100,
+  trimMaxLines: 40,
   dedupMinBytes: 1024,
   stripSignatures: true
 }
