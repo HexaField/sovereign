@@ -196,8 +196,8 @@ const lsSchema: ToolSchema = {
   }
 }
 
-/** All 7 built-in tool schemas, sent verbatim as `tools` on every chat-completion request. */
-export const TOOL_SCHEMAS: ToolSchema[] = [
+/** The 7 core filesystem/shell tool schemas. */
+export const CORE_TOOL_SCHEMAS: ToolSchema[] = [
   readSchema,
   writeSchema,
   editSchema,
@@ -206,3 +206,6 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
   globSchema,
   lsSchema
 ]
+
+/** @deprecated Use CORE_TOOL_SCHEMAS — this alias kept for back-compat. */
+export const TOOL_SCHEMAS: ToolSchema[] = CORE_TOOL_SCHEMAS

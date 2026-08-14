@@ -330,6 +330,12 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 
+  // Global personality — ~/.claude/CLAUDE.md, compiled by the personality
+  // compiler. Claude Code reads this via its SDK; local-llm reads it via
+  // a dep so it gets the same identity/context.
+  const home = process.env.HOME ?? ''
+  const globalPersonalityPath = home ? `${home}/.claude/CLAUDE.md` : undefined
+
   const enabledBackends = configStore.get<string[]>('agentBackend.enabled') as AgentBackendKind[]
   const defaultKind = configStore.get<AgentBackendKind>('agentBackend.default')
 
@@ -398,7 +404,9 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
             knowledgeFile: input.presenceKnowledgeFile,
             getHealthSummary: input.presenceGetHealthSummary
           }),
-          subagentPromptFile: input.configDir ? `${input.configDir}/SUBAGENT.md` : undefined
+          subagentPromptFile: input.configDir ? `${input.configDir}/SUBAGENT.md` : undefined,
+          globalPersonalityFile: globalPersonalityPath,
+          sovereignTools: sharedMcpDeps
         })
       }
     }

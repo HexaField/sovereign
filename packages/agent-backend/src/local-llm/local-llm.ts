@@ -31,7 +31,11 @@ import type { LocalLlmConfig } from './config.js'
 import { createInferenceClient } from './inference.js'
 import type { ChatMessage as WireChatMessage, InferenceClient } from './inference.js'
 import { createToolExecutor } from './tools/index.js'
-import { TOOL_SCHEMAS } from './tools/schemas.js'
+import type { ToolResult } from './tools/index.js'
+import { CORE_TOOL_SCHEMAS } from './tools/schemas.js'
+import type { ToolSchema } from './tools/schemas.js'
+import { SOVEREIGN_TOOL_SCHEMAS, createSovereignToolExecutor } from './tools/sovereign.js'
+import type { SovereignToolsDeps } from './tools/sovereign.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
 
@@ -72,11 +76,22 @@ export interface LocalLlmBackendDeps {
    *  are prepended to the system prompt for subagent sessions — compact guardrails
    *  without the full personality/membrane bulk. Read once at spawn time. */
   subagentPromptFile?: string
+  /** Path to the global personality file (e.g. ~/.claude/CLAUDE.md). Read each
+   *  turn and prepended to the system prompt — gives local models the same
+   *  identity/context as Claude Code. */
+  globalPersonalityFile?: string
+  /** Sovereign-native tool deps (cron, sessions, browser, agents, etc.).
+   *  When provided, Sovereign tools + WebFetch register as native tools
+   *  alongside the core 7. */
+  sovereignTools?: SovereignToolsDeps
 }
 
-function defaultSystemPrompt(cwd: string): string {
+function defaultSystemPrompt(cwd: string, hasSovereignTools: boolean): string {
+  const toolList = hasSovereignTools
+    ? 'core tools (Read, Write, Edit, Bash, Grep, Glob, LS) and Sovereign tools (cron, sessions, browser, agents, notifications, planning, WebFetch)'
+    : '7 tools: Read, Write, Edit, Bash, Grep, Glob, LS'
   return [
-    'You are a helpful assistant with access to a local filesystem and shell through 7 tools: Read, Write, Edit, Bash, Grep, Glob, LS.',
+    `You are a helpful assistant with access to a local filesystem, shell, and services through ${toolList}.`,
     '',
     'Rules:',
     '- Read a file before you Write or Edit it.',
@@ -84,9 +99,40 @@ function defaultSystemPrompt(cwd: string): string {
     '- Use Grep and Glob to find things instead of guessing paths.',
     '- Keep Bash commands short and check their output before proceeding.',
     '- Only call a tool when it is actually needed to answer. Otherwise, answer directly and concisely.',
+    ...(hasSovereignTools
+      ? [
+          '',
+          'Sovereign tools use the `sovereign_` prefix (e.g. sovereign_cron_create, sovereign_browser_open).',
+          'WebFetch fetches content from URLs — use it for HTTP requests.'
+        ]
+      : []),
     '',
     `Your current working directory is: ${cwd}`
   ].join('\n')
+}
+
+/** Walk from `startDir` up to the filesystem root looking for CLAUDE.md or
+ *  AGENTS.md — the repo-level context file. Returns the first match found. */
+function findRepoContext(startDir: string): string | null {
+  let dir = startDir
+  const visited = new Set<string>()
+  while (true) {
+    if (visited.has(dir)) break
+    visited.add(dir)
+    for (const name of ['CLAUDE.md', 'AGENTS.md']) {
+      const p = path.join(dir, name)
+      try {
+        const txt = fs.readFileSync(p, 'utf-8').trim()
+        if (txt) return txt
+      } catch {
+        /* not found — keep walking */
+      }
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
 }
 
 function estimateTokens(chars: number): number {
@@ -178,6 +224,7 @@ interface LocalLlmSessionState {
   processing: boolean
   abortController?: AbortController
   lastRecycleAt?: number
+  compactionCount?: number
   /** Files Read this session — Write/Edit refuse to touch unread files. Reset on restart. */
   filesRead: Set<string>
   toolExecutor: ReturnType<typeof createToolExecutor>
@@ -230,6 +277,64 @@ export function createLocalLlmBackend(
     })
   }
 
+  // ── Tool schemas + sovereign executor ──────────────────────────────
+  const sovereignExecutor = deps.sovereignTools ? createSovereignToolExecutor(deps.sovereignTools) : null
+  const allToolSchemas: ToolSchema[] = deps.sovereignTools
+    ? [...CORE_TOOL_SCHEMAS, ...SOVEREIGN_TOOL_SCHEMAS]
+    : CORE_TOOL_SCHEMAS
+
+  // ── On-demand compaction ──────────────────────────────────────────
+  // When conversation tokens exceed 75% of the context window, drop the
+  // oldest messages (keeping the most recent COMPACT_KEEP_RECENT) and
+  // insert a synthetic "[compacted]" summary. Uses a simple heuristic
+  // (character-based token estimate) — no summarisation call to the model.
+  const COMPACT_THRESHOLD_RATIO = 0.75
+  const COMPACT_KEEP_RECENT = 10
+
+  async function maybeCompact(state: LocalLlmSessionState, contextWindow: number): Promise<void> {
+    const totalChars = state.systemPrompt.length + state.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0)
+    const estimatedTokens = estimateTokens(totalChars)
+    const threshold = Math.floor(contextWindow * COMPACT_THRESHOLD_RATIO)
+    if (estimatedTokens < threshold) return
+    if (state.messages.length <= COMPACT_KEEP_RECENT + 2) return // not enough to compact
+
+    const dropCount = state.messages.length - COMPACT_KEEP_RECENT
+    const dropped = state.messages.splice(0, dropCount)
+
+    // Build a compact summary of dropped messages
+    const summaryLines: string[] = ['[Earlier conversation compacted. Summary of dropped messages:]']
+    let userCount = 0
+    let assistantCount = 0
+    let toolCount = 0
+    const toolNames = new Set<string>()
+    for (const msg of dropped) {
+      if (msg.role === 'user') userCount++
+      else if (msg.role === 'assistant') assistantCount++
+      else if (msg.role === 'tool') {
+        toolCount++
+        if (msg.name) toolNames.add(msg.name)
+      }
+    }
+    summaryLines.push(`${userCount} user messages, ${assistantCount} assistant messages, ${toolCount} tool results.`)
+    if (toolNames.size > 0) summaryLines.push(`Tools used: ${[...toolNames].join(', ')}.`)
+
+    // Extract key information from the last few dropped assistant messages
+    const lastAssistants = dropped.filter((m) => m.role === 'assistant' && m.content).slice(-3)
+    for (const msg of lastAssistants) {
+      const preview = msg.content!.slice(0, 500).replace(/\n/g, ' ')
+      summaryLines.push(`Assistant said: ${preview}`)
+    }
+
+    state.messages.unshift({
+      role: 'system',
+      content: summaryLines.join('\n'),
+      timestamp: Date.now()
+    })
+
+    state.compactionCount = (state.compactionCount ?? 0) + 1
+    persist(state)
+  }
+
   // Used only for connect()'s reachability probe — never bound to a session.
   const probeClient = makeClient(getConfig().model)
 
@@ -265,7 +370,7 @@ export function createLocalLlmBackend(
         parentSessionKey: value.parentSessionKey,
         agentStatus: 'idle', // reset any non-idle status on restart — nothing is actually running
         contextWindow: value.contextWindow,
-        systemPrompt: value.systemPrompt || defaultSystemPrompt(cwd),
+        systemPrompt: value.systemPrompt || defaultSystemPrompt(cwd, !!deps.sovereignTools),
         messages: value.messages ?? [],
         createdAt: value.createdAt,
         updatedAt: value.updatedAt,
@@ -317,7 +422,7 @@ export function createLocalLlmBackend(
       parentSessionKey: opts?.parentSessionKey,
       agentStatus: 'idle',
       contextWindow: opts?.contextWindow,
-      systemPrompt: opts?.systemPromptOverride?.trim() || defaultSystemPrompt(cwd),
+      systemPrompt: opts?.systemPromptOverride?.trim() || defaultSystemPrompt(cwd, !!deps.sovereignTools),
       messages: [],
       createdAt: now,
       updatedAt: now,
@@ -356,15 +461,38 @@ export function createLocalLlmBackend(
     const controller = new AbortController()
     state.abortController = controller
 
-    // Refresh the system prompt each turn — the resolver may read live files
-    // (PRESENCE_MEMORY.md, membrane CONTEXT.md) that change between turns.
-    // Skip for subagent sessions — they use a lean task-focused prompt set at
-    // spawn time and should not inherit the parent's personality/membrane bulk.
-    if (deps.resolveSystemPromptAppend && !state.parentSessionKey) {
-      const append = deps.resolveSystemPromptAppend(state.sessionKey)
-      const base = defaultSystemPrompt(state.cwd)
-      state.systemPrompt = append ? `${append}\n\n${base}` : base
+    // Refresh the system prompt each turn — reads live files (personality,
+    // membrane CONTEXT.md, repo AGENTS.md/CLAUDE.md) that change between turns.
+    // Skip for subagent sessions — they keep their lean task-focused prompt.
+    if (!state.parentSessionKey) {
+      const parts: string[] = []
+      // 1. Global personality (~/.claude/CLAUDE.md)
+      if (deps.globalPersonalityFile) {
+        try {
+          const txt = fs.readFileSync(deps.globalPersonalityFile, 'utf-8').trim()
+          if (txt) parts.push(txt)
+        } catch {
+          /* missing — skip */
+        }
+      }
+      // 2. Membrane context (per-thread CONTEXT.md, presence files, etc.)
+      if (deps.resolveSystemPromptAppend) {
+        const append = deps.resolveSystemPromptAppend(state.sessionKey)
+        if (append) parts.push(append)
+      }
+      // 3. Repo context (walk up from cwd for CLAUDE.md / AGENTS.md)
+      const repoCtx = findRepoContext(state.cwd)
+      if (repoCtx) parts.push(repoCtx)
+      // 4. Base tool/rules prompt
+      parts.push(defaultSystemPrompt(state.cwd, !!deps.sovereignTools))
+      state.systemPrompt = parts.join('\n\n')
     }
+
+    // ── On-demand compaction ──────────────────────────────────────────
+    // Before sending to the model, check whether the conversation exceeds
+    // the context budget. If so, compact older messages into a summary.
+    const contextWindow = state.contextWindow ?? getConfig().contextWindow
+    await maybeCompact(state, contextWindow)
 
     // The system prompt is prepended fresh for the wire request only — it is
     // never stored in `state.messages`, so getHistory/getContextBudget never
@@ -375,12 +503,23 @@ export function createLocalLlmBackend(
     ]
     const beforeLen = transcript.length
 
+    // Resolve tool executor — merge core + sovereign when available
+    const executeTool = sovereignExecutor
+      ? async (name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+          // Sovereign tools use the sovereign_ prefix or WebFetch
+          if (name.startsWith('sovereign_') || name === 'WebFetch') {
+            return sovereignExecutor(name, input)
+          }
+          return state.toolExecutor.execute(name, input)
+        }
+      : state.toolExecutor.execute
+
     const loopDeps: ToolLoopDeps = {
       complete: (msgs, opts) =>
         state.client.complete(toWireMessages(msgs), { tools: opts?.tools, signal: opts?.signal }),
-      executeTool: state.toolExecutor.execute,
+      executeTool,
       emit: emitter.emit,
-      toolSchemas: TOOL_SCHEMAS,
+      toolSchemas: allToolSchemas,
       maxIterations: DEFAULT_MAX_ITERATIONS
     }
 
@@ -624,7 +763,7 @@ export function createLocalLlmBackend(
       totalTokens: estimatedTokens,
       inputTokens: estimatedTokens,
       outputTokens: null,
-      compactionCount: 0,
+      compactionCount: state.compactionCount ?? 0,
       thinkingLevel: null,
       reasoningEffort: null,
       task: null,
@@ -727,9 +866,9 @@ export function createLocalLlmBackend(
       workspaceDir: state.cwd,
       systemPrompt: { chars: state.systemPrompt.length },
       tools: {
-        listChars: TOOL_SCHEMAS.map((t) => t.function.name).join(', ').length,
-        schemaChars: JSON.stringify(TOOL_SCHEMAS).length,
-        entries: TOOL_SCHEMAS.map((t) => ({ name: t.function.name, chars: JSON.stringify(t).length }))
+        listChars: allToolSchemas.map((t) => t.function.name).join(', ').length,
+        schemaChars: JSON.stringify(allToolSchemas).length,
+        entries: allToolSchemas.map((t) => ({ name: t.function.name, chars: JSON.stringify(t).length }))
       },
       session: { contextTokens: estimateTokens(state.systemPrompt.length + sessionChars) },
       disabledTools: [],
