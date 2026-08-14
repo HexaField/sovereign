@@ -28,6 +28,7 @@ import { s24LocalLlmTools } from './s24-local-llm-tools.js'
 import { s25LocalLlmRoundtrip } from './s25-local-llm-roundtrip.js'
 import { s26SubagentRouting } from './s26-subagent-routing.js'
 import { s27EventIsolation } from './s27-event-isolation.js'
+import { s28LocalLlmHistory } from './s28-local-llm-history.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -86,5 +87,9 @@ export const ALL_SCENARIOS: Scenario[] = [
   // Event isolation — local-llm and claude-code threads' SSE/WS events
   // stay isolated. No cross-thread marker leakage. Covers the cross-thread
   // message routing bug. Self-skips when both backends not available.
-  s27EventIsolation
+  s27EventIsolation,
+  // History persistence — basic send, multi-turn accumulation, compaction
+  // survival, compaction summary visibility, post-compaction growth.
+  // Regression for toGenericMessages silently dropping system messages.
+  s28LocalLlmHistory
 ]
