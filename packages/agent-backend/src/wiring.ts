@@ -397,7 +397,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
             memoryFile: input.presenceMemoryFile,
             knowledgeFile: input.presenceKnowledgeFile,
             getHealthSummary: input.presenceGetHealthSummary
-          })
+          }),
+          subagentPromptFile: input.configDir ? `${input.configDir}/SUBAGENT.md` : undefined
         })
       }
     }

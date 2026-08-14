@@ -550,4 +550,58 @@ describe('local-llm backend: subagent spawning', () => {
     expect(systemMsg?.content).toContain('summarise X')
     expect(systemMsg?.content).not.toContain('HUGE PERSONALITY BLOB')
   })
+
+  it('subagent system prompt includes SUBAGENT.md guardrails when file exists', async () => {
+    // Write a temporary SUBAGENT.md
+    const subagentFile = path.join(tmpDir, 'SUBAGENT.md')
+    fs.writeFileSync(subagentFile, '# Guardrails\n\nFollow E-Prime. No stubs.')
+    const { client, complete } = makeFakeClient(textResponse('done'))
+    const backend = createLocalLlmBackend(makeConfig(), {
+      dataDir,
+      inferenceClient: client,
+      subagentPromptFile: subagentFile
+    })
+    const parentKey = await backend.createSession('parent')
+    await backend.spawnSubagent!(parentKey, { task: 'write a test' })
+    await vi.waitFor(() => expect(complete).toHaveBeenCalled())
+    const callArgs = complete.mock.calls[0][0] as Array<{ role: string; content: string }>
+    const systemMsg = callArgs.find((m) => m.role === 'system')
+    // Guardrails appear before the task
+    expect(systemMsg?.content).toContain('# Guardrails')
+    expect(systemMsg?.content).toContain('Follow E-Prime')
+    // Task still present
+    expect(systemMsg?.content).toContain('write a test')
+  })
+
+  it('subagent system prompt omits guardrails when subagentPromptFile not set', async () => {
+    const { client, complete } = makeFakeClient(textResponse('done'))
+    const backend = createLocalLlmBackend(makeConfig(), {
+      dataDir,
+      inferenceClient: client
+      // no subagentPromptFile
+    })
+    const parentKey = await backend.createSession('parent')
+    await backend.spawnSubagent!(parentKey, { task: 'compile report' })
+    await vi.waitFor(() => expect(complete).toHaveBeenCalled())
+    const callArgs = complete.mock.calls[0][0] as Array<{ role: string; content: string }>
+    const systemMsg = callArgs.find((m) => m.role === 'system')
+    expect(systemMsg?.content).toContain('compile report')
+    expect(systemMsg?.content).not.toContain('Guardrails')
+  })
+
+  it('subagent system prompt omits guardrails when file missing (no crash)', async () => {
+    const { client, complete } = makeFakeClient(textResponse('done'))
+    const backend = createLocalLlmBackend(makeConfig(), {
+      dataDir,
+      inferenceClient: client,
+      subagentPromptFile: '/nonexistent/SUBAGENT.md'
+    })
+    const parentKey = await backend.createSession('parent')
+    await backend.spawnSubagent!(parentKey, { task: 'do work' })
+    await vi.waitFor(() => expect(complete).toHaveBeenCalled())
+    const callArgs = complete.mock.calls[0][0] as Array<{ role: string; content: string }>
+    const systemMsg = callArgs.find((m) => m.role === 'system')
+    expect(systemMsg?.content).toContain('do work')
+    // No crash, no guardrails content — graceful fallback
+  })
 })
