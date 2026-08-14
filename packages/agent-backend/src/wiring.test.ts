@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import type { MembraneManager } from '@sovereign/membranes'
 import type { ThreadManager } from '@sovereign/threads'
-import { makeMembraneAppendResolver, makePresenceAwareAppendResolver } from './wiring.js'
+import { makeMembraneAppendResolver, makePresenceAwareAppendResolver, makeSubagentToolBlocker } from './wiring.js'
 
 function stubThreads(
   map: Record<string, { membraneId?: string; subagentBackend?: string; subagentModel?: string }>
@@ -156,5 +156,33 @@ describe('makePresenceAwareAppendResolver — subagent routing injection', () =>
     // Subagent sessions have key format agent:main:subagent:xxx — sessionKeyToThreadKey returns undefined
     const result = resolver('agent:main:subagent:some-child')
     expect(result).toBeUndefined()
+  })
+})
+
+describe('makeSubagentToolBlocker', () => {
+  it('blocks Agent/Workflow/SendMessage when subagentBackend targets a non-claude-code backend', () => {
+    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-a': { subagentBackend: 'local-llm' } }))!
+    const result = blocker('thread-a')
+    expect(result).toEqual(['Agent', 'Workflow', 'SendMessage'])
+  })
+
+  it('returns undefined when subagentBackend targets claude-code (native subagents allowed)', () => {
+    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-b': { subagentBackend: 'claude-code' } }))!
+    expect(blocker('thread-b')).toBeUndefined()
+  })
+
+  it('returns undefined when thread has no subagent routing configured', () => {
+    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-c': {} }))!
+    expect(blocker('thread-c')).toBeUndefined()
+  })
+
+  it('returns undefined for subagent session keys (no thread match)', () => {
+    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-d': { subagentBackend: 'local-llm' } }))!
+    expect(blocker('agent:main:subagent:child-1')).toBeUndefined()
+  })
+
+  it('returns undefined when threadManager not provided', () => {
+    const blocker = makeSubagentToolBlocker(undefined)
+    expect(blocker).toBeUndefined()
   })
 })
