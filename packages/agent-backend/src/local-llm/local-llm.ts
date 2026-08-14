@@ -68,6 +68,10 @@ export interface LocalLlmBackendDeps {
    *  prompt — membrane CONTEXT.md, presence files, etc. Called fresh each
    *  turn so file changes take effect without a session restart. */
   resolveSystemPromptAppend?: (sessionKey: string) => string | undefined
+  /** Path to a subagent prompt file (e.g. SUBAGENT.md). When set, its contents
+   *  are prepended to the system prompt for subagent sessions — compact guardrails
+   *  without the full personality/membrane bulk. Read once at spawn time. */
+  subagentPromptFile?: string
 }
 
 function defaultSystemPrompt(cwd: string): string {
@@ -510,14 +514,28 @@ export function createLocalLlmBackend(
     const childKey = `agent:main:subagent:${randomUUID()}`
     const parentState = sessions.get(parentSessionKey)
 
+    // Build the subagent system prompt: guardrails (SUBAGENT.md) + task.
+    let systemPrompt: string | undefined
+    if (opts.task) {
+      const parts: string[] = []
+      if (deps.subagentPromptFile) {
+        try {
+          const rules = fs.readFileSync(deps.subagentPromptFile, 'utf-8').trim()
+          if (rules) parts.push(rules)
+        } catch {
+          /* missing file — proceed without guardrails */
+        }
+      }
+      parts.push(`# Task\n\nComplete the following task and return a concise result.\n\n${opts.task}`)
+      systemPrompt = parts.join('\n\n')
+    }
+
     await createSession(opts.label, {
       threadKey: childKey,
       parentSessionKey,
       cwd: parentState?.cwd,
       model: opts.model ? { provider: PROVIDER, model: opts.model.model } : undefined,
-      systemPromptOverride: opts.task
-        ? `You are a subagent. Complete the following task and return a concise result.\n\nTask: ${opts.task}`
-        : undefined
+      systemPromptOverride: systemPrompt
     })
 
     // Fire-and-forget — matches claude-code's async subagent semantics.
