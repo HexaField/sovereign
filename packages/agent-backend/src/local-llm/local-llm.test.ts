@@ -274,6 +274,62 @@ describe('local-llm backend: sendMessage (no tools)', () => {
     expect(complete).toHaveBeenCalledTimes(2)
     expect(turns.map((t) => t.content)).toEqual(['first answer', 'second answer'])
   })
+
+  it('merges compaction summary system messages into the single leading system message on the wire', async () => {
+    // Regression: Qwen3/Llama templates reject multiple system messages.
+    // A compaction summary stored as role:'system' in state.messages MUST
+    // get folded into the leading system message, not sent separately.
+    //
+    // Pre-populate the state directory with a session file that has a
+    // compaction summary, then construct a fresh backend so rehydrate()
+    // loads the seeded state — matching the production scenario exactly.
+    const sessionKey = 'compaction-merge-test'
+    const stateDir = path.join(dataDir, 'agent-backend', 'local-llm-state')
+    fs.mkdirSync(stateDir, { recursive: true })
+    const stateFile = path.join(stateDir, `${sessionKey}.json`)
+    fs.writeFileSync(
+      stateFile,
+      JSON.stringify({
+        version: 1,
+        data: {
+          sessionKey,
+          backendSessionId: 'bsid-1',
+          cwd: tmpDir,
+          model: 'test-model',
+          label: 'compaction-test',
+          systemPrompt: 'You help with things.',
+          messages: [
+            {
+              role: 'system',
+              content: '[Compacted conversation — summary]\n\nUser asked about X.',
+              timestamp: Date.now() - 5000
+            },
+            { role: 'user', content: 'follow up on X', timestamp: Date.now() - 4000 },
+            { role: 'assistant', content: 'here is X', timestamp: Date.now() - 3000 }
+          ],
+          createdAt: Date.now() - 10000,
+          updatedAt: Date.now() - 3000
+        }
+      })
+    )
+
+    const { client, complete } = makeFakeClient(textResponse('still working'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const idle = waitForIdle(backend)
+    await backend.sendMessage(sessionKey, 'continue')
+    await idle
+
+    // The wire messages sent to complete() must have exactly ONE system message
+    const wireMessages = complete.mock.calls[0][0] as Array<{ role: string; content: string }>
+    const systemMsgs = wireMessages.filter((m) => m.role === 'system')
+    expect(systemMsgs).toHaveLength(1)
+    // The single system message must contain the compaction summary
+    expect(systemMsgs[0].content).toContain('[Compacted conversation')
+    // Non-system messages must still appear
+    const nonSystem = wireMessages.filter((m) => m.role !== 'system')
+    expect(nonSystem.some((m) => m.role === 'user' && m.content === 'follow up on X')).toBe(true)
+    expect(nonSystem.some((m) => m.role === 'user' && m.content === 'continue')).toBe(true)
+  })
 })
 
 describe('local-llm backend: sendMessage (tool calling)', () => {
