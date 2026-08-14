@@ -25,6 +25,9 @@ import { s21SttRoundtrip } from './s21-stt-roundtrip.js'
 import { s22VoiceResponse } from './s22-voice-response.js'
 import { s23LocalLlmCompaction } from './s23-local-llm-compaction.js'
 import { s24LocalLlmTools } from './s24-local-llm-tools.js'
+import { s25LocalLlmRoundtrip } from './s25-local-llm-roundtrip.js'
+import { s26SubagentRouting } from './s26-subagent-routing.js'
+import { s27EventIsolation } from './s27-event-isolation.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -71,5 +74,17 @@ export const ALL_SCENARIOS: Scenario[] = [
   // Local LLM tool routing — sovereign tools, semble schemas, MCP bridge
   // resilience, core tool execution through the 4-tier executor.
   // Self-skips when local-llm backend not enabled.
-  s24LocalLlmTools
+  s24LocalLlmTools,
+  // Local LLM chat roundtrip — S3 equivalent for local-llm. Verifies
+  // fire-and-forget sendMessage (user turn appears promptly), assistant
+  // response content, system prompt injection, and idle lifecycle.
+  s25LocalLlmRoundtrip,
+  // Subagent routing enforcement — system prompt declares routing policy,
+  // SDK tools (Agent/Workflow/SendMessage) blocked, sovereign_agents_spawn
+  // available. Self-skips when local-llm backend not enabled.
+  s26SubagentRouting,
+  // Event isolation — local-llm and claude-code threads' SSE/WS events
+  // stay isolated. No cross-thread marker leakage. Covers the cross-thread
+  // message routing bug. Self-skips when both backends not available.
+  s27EventIsolation
 ]
