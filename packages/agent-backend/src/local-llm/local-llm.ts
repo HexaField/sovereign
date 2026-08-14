@@ -875,7 +875,17 @@ export function createLocalLlmBackend(
     const state = ensureSession(sessionKey)
     state.pendingQueue.push({ text, attachments })
     if (state.processing) return // already draining — the new message will be picked up in order
-    await drainQueue(state)
+    // Fire-and-forget — matches Claude Code's async semantics. The tool
+    // loop runs asynchronously; chat.status/chat.turn/chat.error events
+    // drive the UI lifecycle. Blocking here caused user messages to
+    // "disappear": pumpQueue's synthetic user turn only fires after
+    // sendMessage resolves, but drainQueue blocks until the full tool
+    // loop completes, so the assistant response arrived before the user
+    // message was visible in the turn list.
+    void drainQueue(state).catch((err) => {
+      console.error(`[local-llm] drainQueue error for ${sessionKey}:`, err)
+      emitter.emit('chat.error', { sessionKey, error: String(err) })
+    })
   }
 
   async function abort(sessionKey: string): Promise<void> {

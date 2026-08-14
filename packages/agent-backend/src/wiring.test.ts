@@ -185,4 +185,25 @@ describe('makeSubagentToolBlocker', () => {
     const blocker = makeSubagentToolBlocker(undefined)
     expect(blocker).toBeUndefined()
   })
+
+  it('blocks SDK tools when global default backend targets non-claude-code (no per-thread config)', () => {
+    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-e': {} }), 'local-llm')!
+    expect(blocker('thread-e')).toEqual(['Agent', 'Workflow', 'SendMessage'])
+  })
+
+  it('thread-level claude-code overrides global non-claude-code default (allows native)', () => {
+    const blocker = makeSubagentToolBlocker(
+      stubThreads({ 'thread-f': { subagentBackend: 'claude-code' } }),
+      'local-llm'
+    )!
+    expect(blocker('thread-f')).toBeUndefined()
+  })
+
+  it('thread-level non-claude-code overrides global claude-code default (blocks native)', () => {
+    const blocker = makeSubagentToolBlocker(
+      stubThreads({ 'thread-g': { subagentBackend: 'local-llm' } }),
+      'claude-code'
+    )!
+    expect(blocker('thread-g')).toEqual(['Agent', 'Workflow', 'SendMessage'])
+  })
 })
