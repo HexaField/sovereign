@@ -298,7 +298,12 @@ let lastSentTime = 0
 export async function sendMessage(
   text: string,
   attachments?: File[],
-  opts?: { threadId?: string; origin?: import('@sovereign/core').MessageOrigin }
+  opts?: {
+    threadId?: string
+    origin?: import('@sovereign/core').MessageOrigin
+    /** Bypass the queue gate — send directly to the backend. */
+    immediate?: boolean
+  }
 ): Promise<void> {
   const threadKey = opts?.threadId ?? currentThreadKey?.() ?? ''
   if (!threadKey) return // No thread selected — nothing to send to.
@@ -312,6 +317,7 @@ export async function sendMessage(
 
   let body: Record<string, unknown> = { threadId: threadKey, message: text }
   if (opts?.origin) body.origin = opts.origin
+  if (opts?.immediate) body.immediate = true
   if (attachments?.length) {
     const base64Files = await Promise.all(
       attachments.map(async (f) => {
