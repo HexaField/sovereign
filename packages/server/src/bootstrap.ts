@@ -871,17 +871,19 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
   // ── Layer 3: scheduled cleanup cron ──────────────────────────────────
   // Register a system job that sweeps oversized session JSONLs on the
-  // configured schedule (default: daily at 04:00 UTC).
+  // configured schedule (default: daily at 04:00 UTC). Enabled by default
+  // even without explicit config — matches Layers 1/2 default-on behaviour.
   const CLEANUP_JOB_KIND = 'system-context-cleanup'
   const cleanupCfg = cfg.contextManagement?.cleanup
-  if (cleanupCfg?.enabled !== false && cleanupCfg?.schedule && scheduler) {
+  const cleanupSchedule = cleanupCfg?.schedule ?? '0 4 * * *'
+  if (cleanupCfg?.enabled !== false && scheduler) {
     // Remove stale instances from prior boots (hot-reload safe).
     for (const j of scheduler.list()) {
       if ((j.payload?.kind as string) === CLEANUP_JOB_KIND) scheduler.remove(j.id)
     }
     scheduler.add({
       name: 'context-cleanup-sweep',
-      schedule: { kind: 'cron', expr: cleanupCfg.schedule, tz: 'UTC' },
+      schedule: { kind: 'cron', expr: cleanupSchedule, tz: 'UTC' },
       payload: { kind: CLEANUP_JOB_KIND },
       enabled: true,
       tags: ['system']

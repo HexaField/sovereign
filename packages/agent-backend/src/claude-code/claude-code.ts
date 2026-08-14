@@ -1670,9 +1670,16 @@ export function createClaudeCodeBackend(
     // Skip subagent sessions — recycling them mid-flight strands the parent.
     if (state.parentSessionKey) return
 
-    const threshold = recycleCfg?.thresholdPercent ?? 55
+    // Use the session's actual context window (set per-thread), falling back
+    // to the model's default. Most Claude sessions use 200K, not 1M — using
+    // the real value makes the threshold meaningful.
     const maxTokens = state.contextWindow ?? contextWindowFor(state.model)
     if (maxTokens <= 0) return
+
+    // Adaptive threshold: the configured percentage (default 45%) applies to
+    // whichever context window the session uses. At 200K this triggers at
+    // ~90K tokens; at 1M at ~450K — both realistic production fill levels.
+    const threshold = recycleCfg?.thresholdPercent ?? 45
 
     const inputTokens = state.lastUsage.inputTokens ?? 0
     const cacheRead = state.lastUsage.cacheReadInputTokens ?? 0
@@ -1683,7 +1690,7 @@ export function createClaudeCodeBackend(
     if (fillPercent < threshold) return
 
     console.log(
-      `[context-recycle] auto-trigger: ${fillPercent.toFixed(1)}% filled ` +
+      `[context-recycle] auto-trigger: ${fillPercent.toFixed(1)}% of ${maxTokens} tokens filled ` +
         `(threshold: ${threshold}%), recycling session ${state.sessionKey}`
     )
 
