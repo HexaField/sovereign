@@ -23,6 +23,8 @@ import { s19PresenceTools } from './s19-presence-tools.js'
 import { s20ForestIndex } from './s20-forest-index.js'
 import { s21SttRoundtrip } from './s21-stt-roundtrip.js'
 import { s22VoiceResponse } from './s22-voice-response.js'
+import { s23LocalLlmCompaction } from './s23-local-llm-compaction.js'
+import { s24LocalLlmTools } from './s24-local-llm-tools.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -62,5 +64,12 @@ export const ALL_SCENARIOS: Scenario[] = [
   // STT roundtrip — mock transcription → chat message with voice origin → LLM response.
   s21SttRoundtrip,
   // Voice response — TTS ack + summary pipeline + streaming endpoint.
-  s22VoiceResponse
+  s22VoiceResponse,
+  // Local LLM compaction — context overflow triggers model-generated summary.
+  // Self-skips when local-llm backend not enabled.
+  s23LocalLlmCompaction,
+  // Local LLM tool routing — sovereign tools, semble schemas, MCP bridge
+  // resilience, core tool execution through the 4-tier executor.
+  // Self-skips when local-llm backend not enabled.
+  s24LocalLlmTools
 ]
