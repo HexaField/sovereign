@@ -6,9 +6,11 @@
 //   2. Hex's outbound replies (from `presence.reply` — reply_voice / reply_text)
 //
 // The result strips away internal reasoning, tool calls, and subagent work
-// — just what was said between them. In-memory only; clears on restart
-// (matches the conversation summary's ephemeral nature).
+// — just what was said between them. Persisted to disk so entries survive
+// service restarts and rebuilds.
 
+import fs from 'node:fs'
+import path from 'node:path'
 import type { EventBus } from '@sovereign/core'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -29,15 +31,64 @@ export interface SimpleConversationConfig {
 export interface SimpleConversationDeps {
   bus: EventBus
   config: () => SimpleConversationConfig
+  /** Directory for the persistence file. When absent, the store runs
+   *  in-memory only (useful for tests). */
+  dataDir?: string
 }
 
 const MAX_ENTRIES = 200
+const FILE_NAME = 'simple-conversation.json'
 
 // ── Module ─────────────────────────────────────────────────────────────
 
 export function createSimpleConversation(deps: SimpleConversationDeps) {
-  const { bus, config } = deps
+  const { bus, config, dataDir } = deps
+  const filePath = dataDir ? path.join(dataDir, FILE_NAME) : null
   const entries: SimpleConversationEntry[] = []
+
+  // ── Load from disk ────────────────────────────────────────────────
+
+  if (filePath) {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8')
+      const parsed = JSON.parse(raw) as SimpleConversationEntry[]
+      if (Array.isArray(parsed)) {
+        for (const e of parsed) {
+          if (e && typeof e.text === 'string' && typeof e.role === 'string') {
+            entries.push(e)
+          }
+        }
+        // Trim to cap in case an old file exceeded the limit
+        if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES)
+      }
+    } catch {
+      /* no file or corrupt — start empty */
+    }
+  }
+
+  // ── Debounced persistence ─────────────────────────────────────────
+
+  let writeTimer: ReturnType<typeof setTimeout> | null = null
+
+  function schedulePersist(): void {
+    if (!filePath || writeTimer) return
+    writeTimer = setTimeout(() => {
+      writeTimer = null
+      persistNow()
+    }, 500)
+  }
+
+  function persistNow(): void {
+    if (!filePath) return
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      const tmp = filePath + '.tmp'
+      fs.writeFileSync(tmp, JSON.stringify(entries))
+      fs.renameSync(tmp, filePath)
+    } catch (err) {
+      console.warn('[simple-conversation] persist failed:', (err as Error)?.message)
+    }
+  }
 
   // ── User messages on the gateway thread ───────────────────────────
 
@@ -79,6 +130,8 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
     entries.push(entry)
     if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES)
 
+    schedulePersist()
+
     // Emit for live WS push
     bus.emit({
       type: 'presence.simple-conversation.updated',
@@ -95,6 +148,12 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
     shutdown() {
       offSent()
       offReply()
+      // Flush pending writes before clearing
+      if (writeTimer) {
+        clearTimeout(writeTimer)
+        writeTimer = null
+      }
+      persistNow()
       entries.length = 0
     }
   }

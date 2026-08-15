@@ -873,7 +873,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       config: () => {
         const gateway = threadManager.getPresenceThread('gateway')
         return { gatewayThreadId: gateway?.id ?? null }
-      }
+      },
+      dataDir: path.join(dataDir, 'presence')
     })
 
     // REST endpoint — initial load / page refresh.
