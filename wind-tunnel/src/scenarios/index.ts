@@ -30,6 +30,7 @@ import { s26SubagentRouting } from './s26-subagent-routing.js'
 import { s27EventIsolation } from './s27-event-isolation.js'
 import { s28LocalLlmHistory } from './s28-local-llm-history.js'
 import { s29ContextStrategies } from './s29-context-strategies.js'
+import { s30HistoryArchive } from './s30-history-archive.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -97,5 +98,9 @@ export const ALL_SCENARIOS: Scenario[] = [
   // Context strategies — Cozempic-inspired progressive pruning pipeline.
   // Fills context with large messages, verifies pipeline runs (>20 msgs),
   // conversation survives pruning. Self-skips when local-llm not enabled.
-  s29ContextStrategies
+  s29ContextStrategies,
+  // History archive preservation — full user+assistant history survives
+  // context strategies and session recycle. Verifies both local-llm and
+  // claude-code backends via the history API. Tests archive defence-in-depth.
+  s30HistoryArchive
 ]
