@@ -64,3 +64,13 @@ export {
   createInferenceClient
 } from './local-llm/index.js'
 export type { LocalLlmBackend, LocalLlmConfig, InferenceClient, InferenceClientConfig } from './local-llm/index.js'
+
+// Metrics
+export { createMetricsAccumulator } from './metrics.js'
+export type {
+  MetricsAccumulator,
+  ToolCallMetric,
+  CompactionMetric,
+  ContextSnapshotMetric,
+  SessionAggregate
+} from './metrics.js'

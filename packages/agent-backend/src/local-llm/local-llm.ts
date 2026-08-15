@@ -93,6 +93,8 @@ export interface LocalLlmBackendDeps {
   /** External MCP servers to bridge — auto-discovers tools and proxies calls.
    *  Each entry becomes a set of tools with the `name` as prefix. */
   mcpBridges?: McpBridgeConfig[]
+  /** Shared metrics accumulator. Optional — when absent, no metrics emitted. */
+  metrics?: import('../metrics.js').MetricsAccumulator
 }
 
 function defaultSystemPrompt(
@@ -635,6 +637,21 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       } as any
     })
 
+    // Record compaction metric
+    if (deps.metrics) {
+      deps.metrics.recordCompaction({
+        ts: Date.now(),
+        sessionKey: state.sessionKey,
+        backendKind: 'local-llm',
+        model: state.model,
+        preTokens: estimatedTokens,
+        postTokens,
+        tokensReclaimed: estimatedTokens - postTokens,
+        method: 'compaction',
+        isSubagent: !!state.parentSessionKey
+      })
+    }
+
     persist(state)
   }
 
@@ -874,10 +891,33 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       return state.toolExecutor.execute(name, input)
     }
 
+    // Wrap executeTool with metrics timing + char measurement
+    const metricsExecuteTool: typeof executeTool = async (name, input) => {
+      const startTime = Date.now()
+      const inputChars = JSON.stringify(input).length
+      const result = await executeTool(name, input)
+      const outputChars = (result.content?.length ?? 0) + (result.error?.length ?? 0)
+      if (deps.metrics) {
+        deps.metrics.recordToolCall({
+          ts: Date.now(),
+          sessionKey: state.sessionKey,
+          backendKind: 'local-llm',
+          model: state.model,
+          toolName: name,
+          inputChars,
+          outputChars,
+          outputTrimmedChars: 0,
+          durationMs: Date.now() - startTime,
+          isSubagent: !!state.parentSessionKey
+        })
+      }
+      return result
+    }
+
     const loopDeps: ToolLoopDeps = {
       complete: (msgs, opts) =>
         state.client.complete(toWireMessages(msgs), { tools: opts?.tools, signal: opts?.signal }),
-      executeTool,
+      executeTool: metricsExecuteTool,
       emit: emitter.emit,
       toolSchemas: allToolSchemas,
       maxIterations: DEFAULT_MAX_ITERATIONS
@@ -927,6 +967,22 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
     state.agentStatus = 'idle'
     emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
+
+    // Record context snapshot after each turn
+    if (deps.metrics) {
+      const contextWindow = state.contextWindow ?? getConfig().contextWindow
+      const totalTokens = estimateSessionTokens(state)
+      deps.metrics.recordContextSnapshot({
+        ts: Date.now(),
+        sessionKey: state.sessionKey,
+        backendKind: 'local-llm',
+        model: state.model,
+        totalTokens,
+        contextWindow,
+        fillPercent: contextWindow > 0 ? (totalTokens / contextWindow) * 100 : 0
+      })
+    }
+
     persist(state)
   }
 
@@ -1284,6 +1340,21 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     const postTokens = estimateSessionTokens(state)
     state.lastRecycleAt = Date.now()
     if (changed) persist(state)
+
+    // Record recycle metric
+    if (deps.metrics) {
+      deps.metrics.recordCompaction({
+        ts: Date.now(),
+        sessionKey,
+        backendKind: 'local-llm',
+        model: state.model,
+        preTokens,
+        postTokens,
+        tokensReclaimed: preTokens - postTokens,
+        method: 'recycle',
+        isSubagent: !!state.parentSessionKey
+      })
+    }
 
     return {
       preTokens,

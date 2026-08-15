@@ -584,7 +584,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     sessionsRegistry,
     activeSessions,
     createSovereignMcpInstance,
-    askUserQuestionStore
+    askUserQuestionStore,
+    metrics
   } = wireAgentBackend({
     bus,
     dataDir,
@@ -1087,7 +1088,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         allSubscriptions: () => notificationsModule.pushManager.allSubscriptions(),
         getVapidPublicKey: () => notificationsModule.pushManager.getVapidPublicKey()
       },
-      agentDir
+      agentDir,
+      metrics
     })
   )
   registerEventsChannel(wsHandler, eventStream)

@@ -43,6 +43,8 @@ export interface SystemRoutesOptions {
   pushManager?: { allSubscriptions(): { size: number }; getVapidPublicKey?(): string | null }
   /** Agent config dir (e.g. `~/.claude`). Used for hooks + personality fallback paths. */
   agentDir?: string
+  /** Metrics accumulator — when present, `/api/system/metrics` endpoint serves live telemetry. */
+  metrics?: import('@sovereign/agent-backend').MetricsAccumulator
 }
 
 function mockContextBudget(): ContextBudget {
@@ -431,6 +433,34 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
       res.json(result)
     }
   })
+
+  // ── Metrics ──────────────────────────────────────────────────────────
+  const metrics = 'metrics' in opts ? (opts as SystemRoutesOptions).metrics : null
+  if (metrics) {
+    router.get('/api/system/metrics', (req, res) => {
+      const section = req.query.section as string | undefined
+      if (section === 'tools') {
+        res.json({ toolCalls: metrics.recentToolCalls() })
+      } else if (section === 'compactions') {
+        res.json({ compactions: metrics.recentCompactions() })
+      } else if (section === 'snapshots') {
+        res.json({ snapshots: metrics.recentSnapshots() })
+      } else if (section === 'sessions') {
+        res.json({ sessions: metrics.sessionAggregates() })
+      } else {
+        // Full summary
+        res.json({
+          global: metrics.globalTotals(),
+          sessions: metrics.sessionAggregates(),
+          recent: {
+            toolCalls: metrics.recentToolCalls().slice(-50),
+            compactions: metrics.recentCompactions().slice(-20),
+            snapshots: metrics.recentSnapshots().slice(-20)
+          }
+        })
+      }
+    })
+  }
 
   // ── Event stream ──────────────────────────────────────────────────────
   const eventStream = 'eventStream' in opts ? (opts as SystemRoutesOptions).eventStream : null
