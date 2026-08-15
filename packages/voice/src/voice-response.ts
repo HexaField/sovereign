@@ -225,7 +225,9 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
   }
 
   /** Stream LLM tokens → split into sentences → synthesise each via TTS
-   *  as it completes. First audio plays after one sentence finishes. */
+   *  sequentially as it completes. First audio plays after one sentence
+   *  finishes; subsequent sentences synthesise and send in order so the
+   *  client receives chunks sequentially (no out-of-order arrival). */
   async function streamSummaryToTts(
     messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>,
     threadId: string,
@@ -234,37 +236,12 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     if (!llm.stream || !synthesizeStream) return
 
     let accumulated = ''
-    let sentenceIndex = 0
-    let sentencesSent = 0
-    const ttsQueue: Promise<void>[] = []
+    // Collect sentences as they split out of the LLM stream, then
+    // synthesise + deliver them sequentially after streaming ends.
+    // This ensures chunks arrive at the client in order.
+    const sentences: string[] = []
 
-    /** Enqueue a sentence for TTS synthesis + delivery. */
-    function enqueueSentence(sentence: string, isFinal: boolean): void {
-      const idx = sentenceIndex++
-      const task = (async () => {
-        try {
-          const { audio, durationMs } = await synthesize(sentence.trim())
-          const audioBase64 = audio.toString('base64')
-          sendToDeviceName(deviceName, {
-            type: 'voice.tts.audio',
-            threadId,
-            text: sentence.trim(),
-            audio: audioBase64,
-            kind: 'summary',
-            chunk: { index: idx, total: isFinal ? idx + 1 : -1, done: isFinal }
-          })
-          sentencesSent++
-          console.log(
-            `[voice-response] streaming summary [${idx + 1}] to ${deviceName}: "${sentence.trim().slice(0, 40)}…" (${durationMs}ms TTS)`
-          )
-        } catch (err) {
-          console.error(`[voice-response] TTS failed for sentence ${idx}:`, err)
-        }
-      })()
-      ttsQueue.push(task)
-    }
-
-    // Stream LLM tokens
+    // Stream LLM tokens — split into sentences as they arrive
     for await (const chunk of llm.stream(messages)) {
       const delta = chunk.choices?.[0]?.delta?.content
       if (!delta) continue
@@ -273,27 +250,43 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       // Check for complete sentences
       const sentenceEnd = findSentenceEnd(accumulated)
       if (sentenceEnd > 0) {
-        const completeSentence = accumulated.slice(0, sentenceEnd)
+        const completeSentence = accumulated.slice(0, sentenceEnd).trim()
         accumulated = accumulated.slice(sentenceEnd).trimStart()
-        enqueueSentence(completeSentence, false)
+        if (completeSentence) sentences.push(completeSentence)
       }
     }
 
-    // Flush any remaining text as the final sentence
+    // Flush remaining text
     const remaining = accumulated.trim()
-    if (remaining) {
-      enqueueSentence(remaining, true)
-    } else if (ttsQueue.length > 0) {
-      // Mark the last queued sentence as final (retrospectively — the TTS
-      // task already sent done:false; the client handles out-of-order fine)
+    if (remaining) sentences.push(remaining)
+
+    if (sentences.length === 0) return
+
+    // Synthesise and deliver each sentence sequentially
+    const total = sentences.length
+    for (let idx = 0; idx < total; idx++) {
+      const sentence = sentences[idx]
+      const isFinal = idx === total - 1
+      try {
+        const { audio, durationMs } = await synthesize(sentence)
+        const audioBase64 = audio.toString('base64')
+        sendToDeviceName(deviceName, {
+          type: 'voice.tts.audio',
+          threadId,
+          text: sentence,
+          audio: audioBase64,
+          kind: 'summary',
+          chunk: { index: idx, total, done: isFinal }
+        })
+        console.log(
+          `[voice-response] streaming summary [${idx + 1}/${total}] to ${deviceName}: "${sentence.slice(0, 40)}…" (${durationMs}ms TTS)`
+        )
+      } catch (err) {
+        console.error(`[voice-response] TTS failed for sentence ${idx}:`, err)
+      }
     }
 
-    // Wait for all TTS tasks to finish
-    await Promise.all(ttsQueue)
-
-    if (sentencesSent > 0) {
-      console.log(`[voice-response] streaming summary complete: ${sentencesSent} sentence(s) to ${deviceName}`)
-    }
+    console.log(`[voice-response] streaming summary complete: ${total} sentence(s) to ${deviceName}`)
   }
 
   async function generateSummary(threadId: string, responseText: string, deviceName: string): Promise<void> {
