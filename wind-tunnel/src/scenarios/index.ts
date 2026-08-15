@@ -69,8 +69,9 @@ export const ALL_SCENARIOS: Scenario[] = [
   s21SttRoundtrip,
   // Voice response — TTS ack + summary pipeline + streaming endpoint.
   s22VoiceResponse,
-  // Local LLM compaction — context overflow triggers model-generated summary.
-  // Self-skips when local-llm backend not enabled.
+  // Local LLM compaction loop — structured summary, iterative updates,
+  // history survival across multiple compactions. Self-skips when
+  // local-llm backend not enabled.
   s23LocalLlmCompaction,
   // Local LLM tool routing — sovereign tools, semble schemas, MCP bridge
   // resilience, core tool execution through the 4-tier executor.

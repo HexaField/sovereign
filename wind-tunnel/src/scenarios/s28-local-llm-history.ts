@@ -265,11 +265,16 @@ export const s28LocalLlmHistory: Scenario = {
     metrics.historyNotEmpty = historyNotEmpty
 
     // The compaction summary should appear as a system turn containing
-    // "[Compacted" text. Before the fix, toGenericMessages silently
-    // dropped system-role messages and this turn vanished.
+    // the compaction prefix — either the new "[CONTEXT COMPACTION" or
+    // legacy "[Compacted" format. Before the fix, toGenericMessages
+    // silently dropped system-role messages and this turn vanished.
     const hasCompactionSummary =
       compactionCount > 0
-        ? turns3.some((t: any) => t.role === 'system' && (t.content ?? '').includes('Compacted'))
+        ? turns3.some(
+            (t: any) =>
+              t.role === 'system' &&
+              ((t.content ?? '').includes('CONTEXT COMPACTION') || (t.content ?? '').includes('Compacted'))
+          )
         : true // no compaction = pass this check vacuously
     metrics.hasCompactionSummary = hasCompactionSummary
 
