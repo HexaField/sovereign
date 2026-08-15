@@ -7,7 +7,8 @@
 //
 // The toggle signal `showSimpleView` controls whether the Hex tab shows
 // the full conversation or the simple view. The SummaryBubble icon
-// drives this toggle.
+// drives this toggle. State persists to the `?simple` URL search param
+// so a page refresh keeps the chosen mode.
 
 import { createSignal } from 'solid-js'
 import type { Accessor } from 'solid-js'
@@ -20,17 +21,44 @@ export interface SimpleConversationEntry {
   timestamp: string
 }
 
+// ── URL search param persistence ────────────────────────────────────
+
+function readSimpleParam(): boolean {
+  if (typeof location === 'undefined') return false
+  const params = new URLSearchParams(location.search)
+  return params.get('simple') === '1'
+}
+
+function writeSimpleParam(active: boolean): void {
+  if (typeof history === 'undefined' || typeof location === 'undefined') return
+  const url = new URL(location.href)
+  if (active) url.searchParams.set('simple', '1')
+  else url.searchParams.delete('simple')
+  history.replaceState(null, '', url.toString())
+}
+
+// ── Signals ─────────────────────────────────────────────────────────
+
 const [entries, setEntries] = createSignal<SimpleConversationEntry[]>([])
-const [showSimpleView, setShowSimpleView] = createSignal(false)
+const [showSimpleView, setShowSimpleView] = createSignal(readSimpleParam())
 
 export { entries as simpleConversationEntries, showSimpleView }
 
 export function toggleSimpleView(): void {
-  setShowSimpleView((prev) => !prev)
+  setShowSimpleView((prev) => {
+    const next = !prev
+    writeSimpleParam(next)
+    return next
+  })
 }
+
+// ── Init / cleanup ──────────────────────────────────────────────────
 
 export function initSimpleConversationStore(ws: WsStore, threadKey: Accessor<string>): () => void {
   ws.subscribe(['chat'])
+
+  // Restore from URL on init (covers page refresh)
+  setShowSimpleView(readSimpleParam())
 
   // Live push — new entries arrive one at a time.
   const offEntry = ws.on('chat.simple-conversation', (msg: Record<string, unknown>) => {
