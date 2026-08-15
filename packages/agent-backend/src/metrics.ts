@@ -44,6 +44,31 @@ export interface ContextSnapshotMetric {
   fillPercent: number
 }
 
+export interface ContextStrategyMetric {
+  ts: number
+  sessionKey: string
+  backendKind: string
+  model: string
+  /** Per-strategy breakdown — which strategies fired and what they saved. */
+  strategies: Array<{
+    name: string
+    charsSaved: number
+    messagesAffected: number
+    messagesRemoved: number
+    messagesReplaced: number
+  }>
+  /** Total chars in conversation before pruning. */
+  originalChars: number
+  /** Total chars saved by all strategies combined. */
+  prunedChars: number
+  /** Messages removed entirely. */
+  messagesRemoved: number
+  /** Messages with content replaced (stubs, truncation). */
+  messagesReplaced: number
+  /** Pipeline execution time (ms). */
+  durationMs: number
+}
+
 export interface SessionAggregate {
   sessionKey: string
   backendKind: string
@@ -57,6 +82,12 @@ export interface SessionAggregate {
   totalTokensReclaimed: number
   /** Per-tool breakdown: toolName → { calls, inputChars, outputChars, trimmedChars } */
   byTool: Record<string, { calls: number; inputChars: number; outputChars: number; trimmedChars: number }>
+  /** Context strategy pipeline runs for this session. */
+  strategyRuns: number
+  /** Total chars saved by context strategies in this session. */
+  strategyCharsSaved: number
+  /** Total messages removed by context strategies in this session. */
+  strategyMessagesRemoved: number
 }
 
 // ---------------------------------------------------------------------------
@@ -100,17 +131,21 @@ class RingBuffer<T> {
 const TOOL_RING_SIZE = 500
 const COMPACTION_RING_SIZE = 100
 const SNAPSHOT_RING_SIZE = 200
+const STRATEGY_RING_SIZE = 100
 
 export interface MetricsAccumulator {
   recordToolCall(m: ToolCallMetric): void
   recordCompaction(m: CompactionMetric): void
   recordContextSnapshot(m: ContextSnapshotMetric): void
+  recordContextStrategy(m: ContextStrategyMetric): void
   /** Recent tool-call entries (ring buffer, newest last). */
   recentToolCalls(): ToolCallMetric[]
   /** Recent compaction/recycle entries. */
   recentCompactions(): CompactionMetric[]
   /** Recent context snapshots. */
   recentSnapshots(): ContextSnapshotMetric[]
+  /** Recent context strategy pipeline runs. */
+  recentContextStrategies(): ContextStrategyMetric[]
   /** Per-session aggregates, keyed by sessionKey. */
   sessionAggregates(): SessionAggregate[]
   /** Global totals across all sessions. */
@@ -122,6 +157,11 @@ export interface MetricsAccumulator {
     compactions: number
     totalTokensReclaimed: number
     startedAt: number
+    strategyRuns: number
+    strategyCharsSaved: number
+    strategyMessagesRemoved: number
+    /** Per-strategy-name cumulative breakdown */
+    byStrategy: Record<string, { runs: number; charsSaved: number; messagesAffected: number }>
   }
 }
 
@@ -129,6 +169,7 @@ export function createMetricsAccumulator(): MetricsAccumulator {
   const toolRing = new RingBuffer<ToolCallMetric>(TOOL_RING_SIZE)
   const compactRing = new RingBuffer<CompactionMetric>(COMPACTION_RING_SIZE)
   const snapRing = new RingBuffer<ContextSnapshotMetric>(SNAPSHOT_RING_SIZE)
+  const strategyRing = new RingBuffer<ContextStrategyMetric>(STRATEGY_RING_SIZE)
 
   // Per-session aggregates
   const sessions = new Map<string, SessionAggregate>()
@@ -141,6 +182,10 @@ export function createMetricsAccumulator(): MetricsAccumulator {
   let gTrimmedChars = 0
   let gCompactions = 0
   let gTokensReclaimed = 0
+  let gStrategyRuns = 0
+  let gStrategyCharsSaved = 0
+  let gStrategyMessagesRemoved = 0
+  const gByStrategy: Record<string, { runs: number; charsSaved: number; messagesAffected: number }> = {}
 
   function ensureSession(m: {
     sessionKey: string
@@ -161,7 +206,10 @@ export function createMetricsAccumulator(): MetricsAccumulator {
         totalTrimmedChars: 0,
         compactions: 0,
         totalTokensReclaimed: 0,
-        byTool: {}
+        byTool: {},
+        strategyRuns: 0,
+        strategyCharsSaved: 0,
+        strategyMessagesRemoved: 0
       }
       sessions.set(m.sessionKey, s)
     }
@@ -221,13 +269,48 @@ export function createMetricsAccumulator(): MetricsAccumulator {
     // No log line — snapshots happen every turn, log only on recycle/compact.
   }
 
+  function recordContextStrategy(m: ContextStrategyMetric): void {
+    strategyRing.push(m)
+
+    // Session-level accumulation (strategy runs lack isSubagent — look up)
+    const s = sessions.get(m.sessionKey)
+    if (s) {
+      s.strategyRuns++
+      s.strategyCharsSaved += m.prunedChars
+      s.strategyMessagesRemoved += m.messagesRemoved
+    }
+
+    // Global counters
+    gStrategyRuns++
+    gStrategyCharsSaved += m.prunedChars
+    gStrategyMessagesRemoved += m.messagesRemoved
+
+    // Per-strategy-name breakdown
+    for (const strat of m.strategies) {
+      const entry = gByStrategy[strat.name] ?? { runs: 0, charsSaved: 0, messagesAffected: 0 }
+      entry.runs++
+      entry.charsSaved += strat.charsSaved
+      entry.messagesAffected += strat.messagesAffected
+      gByStrategy[strat.name] = entry
+    }
+
+    const savingsPct = m.originalChars > 0 ? ((m.prunedChars / m.originalChars) * 100).toFixed(1) : '0'
+    console.log(
+      `[metrics] context-strategy session=${short(m.sessionKey)} model=${m.model} ` +
+        `saved=${m.prunedChars}chars (${savingsPct}%) removed=${m.messagesRemoved} ` +
+        `replaced=${m.messagesReplaced} dur=${m.durationMs}ms`
+    )
+  }
+
   return {
     recordToolCall,
     recordCompaction,
     recordContextSnapshot,
+    recordContextStrategy,
     recentToolCalls: () => toolRing.toArray(),
     recentCompactions: () => compactRing.toArray(),
     recentSnapshots: () => snapRing.toArray(),
+    recentContextStrategies: () => strategyRing.toArray(),
     sessionAggregates: () => [...sessions.values()],
     globalTotals: () => ({
       toolCalls: gToolCalls,
@@ -236,7 +319,11 @@ export function createMetricsAccumulator(): MetricsAccumulator {
       totalTrimmedChars: gTrimmedChars,
       compactions: gCompactions,
       totalTokensReclaimed: gTokensReclaimed,
-      startedAt
+      startedAt,
+      strategyRuns: gStrategyRuns,
+      strategyCharsSaved: gStrategyCharsSaved,
+      strategyMessagesRemoved: gStrategyMessagesRemoved,
+      byStrategy: Object.fromEntries(Object.entries(gByStrategy).map(([k, v]) => [k, { ...v }]))
     })
   }
 }

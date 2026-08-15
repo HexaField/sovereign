@@ -447,6 +447,8 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
         res.json({ snapshots: metrics.recentSnapshots() })
       } else if (section === 'sessions') {
         res.json({ sessions: metrics.sessionAggregates() })
+      } else if (section === 'contextStrategies') {
+        res.json({ contextStrategies: metrics.recentContextStrategies() })
       } else {
         // Full summary
         res.json({
@@ -455,7 +457,8 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
           recent: {
             toolCalls: metrics.recentToolCalls().slice(-50),
             compactions: metrics.recentCompactions().slice(-20),
-            snapshots: metrics.recentSnapshots().slice(-20)
+            snapshots: metrics.recentSnapshots().slice(-20),
+            contextStrategies: metrics.recentContextStrategies().slice(-20)
           }
         })
       }

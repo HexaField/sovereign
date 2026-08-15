@@ -3,7 +3,8 @@ import {
   createMetricsAccumulator,
   type ToolCallMetric,
   type CompactionMetric,
-  type ContextSnapshotMetric
+  type ContextSnapshotMetric,
+  type ContextStrategyMetric
 } from './metrics.js'
 
 function toolMetric(overrides: Partial<ToolCallMetric> = {}): ToolCallMetric {
@@ -200,4 +201,134 @@ describe('MetricsAccumulator', () => {
     expect(snaps[0].totalTokens).toBe(10)
     expect(snaps[199].totalTokens).toBe(209)
   })
+
+  it('records context strategy runs and updates global + session aggregates', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const m = createMetricsAccumulator()
+
+    // Ensure the session exists (strategies don't carry isSubagent)
+    m.recordToolCall(toolMetric({ sessionKey: 'session-1' }))
+
+    m.recordContextStrategy(
+      strategyMetric({
+        strategies: [
+          { name: 'tool-result-age', charsSaved: 5000, messagesAffected: 3, messagesRemoved: 2, messagesReplaced: 1 },
+          { name: 'stale-reads', charsSaved: 2000, messagesAffected: 1, messagesRemoved: 1, messagesReplaced: 0 }
+        ],
+        originalChars: 50000,
+        prunedChars: 7000,
+        messagesRemoved: 3,
+        messagesReplaced: 1
+      })
+    )
+
+    const g = m.globalTotals()
+    expect(g.strategyRuns).toBe(1)
+    expect(g.strategyCharsSaved).toBe(7000)
+    expect(g.strategyMessagesRemoved).toBe(3)
+    expect(g.byStrategy['tool-result-age']).toEqual({ runs: 1, charsSaved: 5000, messagesAffected: 3 })
+    expect(g.byStrategy['stale-reads']).toEqual({ runs: 1, charsSaved: 2000, messagesAffected: 1 })
+
+    const sessions = m.sessionAggregates()
+    const s1 = sessions.find((s) => s.sessionKey === 'session-1')!
+    expect(s1.strategyRuns).toBe(1)
+    expect(s1.strategyCharsSaved).toBe(7000)
+    expect(s1.strategyMessagesRemoved).toBe(3)
+
+    expect(m.recentContextStrategies()).toHaveLength(1)
+  })
+
+  it('accumulates per-strategy breakdown across multiple runs', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const m = createMetricsAccumulator()
+    m.recordToolCall(toolMetric({ sessionKey: 'session-1' }))
+
+    m.recordContextStrategy(
+      strategyMetric({
+        strategies: [
+          { name: 'tool-result-age', charsSaved: 3000, messagesAffected: 2, messagesRemoved: 2, messagesReplaced: 0 }
+        ],
+        prunedChars: 3000,
+        messagesRemoved: 2
+      })
+    )
+    m.recordContextStrategy(
+      strategyMetric({
+        strategies: [
+          { name: 'tool-result-age', charsSaved: 1500, messagesAffected: 1, messagesRemoved: 1, messagesReplaced: 0 }
+        ],
+        prunedChars: 1500,
+        messagesRemoved: 1
+      })
+    )
+
+    const g = m.globalTotals()
+    expect(g.strategyRuns).toBe(2)
+    expect(g.strategyCharsSaved).toBe(4500)
+    expect(g.byStrategy['tool-result-age']).toEqual({ runs: 2, charsSaved: 4500, messagesAffected: 3 })
+  })
+
+  it('emits structured log line for context strategy runs', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const m = createMetricsAccumulator()
+    m.recordToolCall(toolMetric({ sessionKey: 'session-1' }))
+
+    m.recordContextStrategy(
+      strategyMetric({
+        originalChars: 100000,
+        prunedChars: 15000,
+        messagesRemoved: 5,
+        messagesReplaced: 2,
+        durationMs: 12
+      })
+    )
+
+    // Last log call should contain context-strategy tag
+    const lines = logSpy.mock.calls.map((c) => c[0] as string)
+    const stratLine = lines.find((l) => l.includes('[metrics] context-strategy'))
+    expect(stratLine).toBeDefined()
+    expect(stratLine).toContain('saved=15000chars')
+    expect(stratLine).toContain('15.0%')
+    expect(stratLine).toContain('removed=5')
+    expect(stratLine).toContain('replaced=2')
+    expect(stratLine).toContain('dur=12ms')
+  })
+
+  it('returns a copy of byStrategy in globalTotals (no mutation leaks)', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const m = createMetricsAccumulator()
+    m.recordToolCall(toolMetric({ sessionKey: 'session-1' }))
+
+    m.recordContextStrategy(
+      strategyMetric({
+        strategies: [
+          { name: 'mega-block-trim', charsSaved: 8000, messagesAffected: 1, messagesRemoved: 0, messagesReplaced: 1 }
+        ],
+        prunedChars: 8000
+      })
+    )
+
+    const g1 = m.globalTotals()
+    // Mutate the returned object — should not affect internal state
+    g1.byStrategy['mega-block-trim'].charsSaved = 0
+
+    const g2 = m.globalTotals()
+    expect(g2.byStrategy['mega-block-trim'].charsSaved).toBe(8000)
+  })
 })
+
+function strategyMetric(overrides: Partial<ContextStrategyMetric> = {}): ContextStrategyMetric {
+  return {
+    ts: Date.now(),
+    sessionKey: 'session-1',
+    backendKind: 'local-llm',
+    model: 'qwen3-8b',
+    strategies: [],
+    originalChars: 50000,
+    prunedChars: 0,
+    messagesRemoved: 0,
+    messagesReplaced: 0,
+    durationMs: 5,
+    ...overrides
+  }
+}
