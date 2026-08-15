@@ -968,6 +968,7 @@ export function createClaudeCodeBackend(
       if (input.hook_event_name !== 'PostCompact') return { continue: true }
       const state = stateForHook(input)
       if (!state) return { continue: true }
+      state.compactionCount = (state.compactionCount ?? 0) + 1
       emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: false })
       // MCP rehydration: compact tears down the SDK's deferred-tool catalog
       // for any MCP server that didn't re-register itself. Forcing
@@ -1556,7 +1557,7 @@ export function createClaudeCodeBackend(
       totalTokens: filled,
       inputTokens,
       outputTokens,
-      compactionCount: 0,
+      compactionCount: state.compactionCount ?? 0,
       thinkingLevel: null,
       reasoningEffort: state.effort,
       task: null,
