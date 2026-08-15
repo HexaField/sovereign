@@ -1478,15 +1478,31 @@ export function createClaudeCodeBackend(
   async function getSessionMeta(sessionKey: string): Promise<SessionMeta | null> {
     const state = internal.sessions.get(sessionKey)
     if (!state) return null
-    // `totalTokens` here means "tokens currently filling the context window"
-    // — what the UI divides by `contextTokens` for the usage bar. For
-    // Anthropic that's input + cache_read + cache_creation on the latest
-    // turn (the full prompt size). Output tokens are not in-window after
-    // the turn completes and are exposed separately via `outputTokens`.
-    const inputTokens = state.lastUsage?.inputTokens ?? 0
-    const cacheRead = state.lastUsage?.cacheReadInputTokens ?? 0
-    const cacheCreate = state.lastUsage?.cacheCreationInputTokens ?? 0
-    const filled = inputTokens + cacheRead + cacheCreate
+    // `totalTokens` = tokens currently filling the context window (what the
+    // UI divides by `contextTokens` for the usage bar). For Anthropic that's
+    // input + cache_read + cache_creation on the LAST API CALL (the full
+    // prompt size for that call). Output tokens leave the window after the
+    // turn and are exposed separately.
+    //
+    // IMPORTANT: `state.lastUsage` contains the SDK's ACCUMULATED usage
+    // across all API calls in one agentic turn (tool-use loop). A turn with
+    // 50 tool calls accumulates ~50× the actual context fill. We must read
+    // the last API call's usage from the JSONL instead.
+    let filled = 0
+    let inputTokens = 0
+    let outputTokens = 0
+    if (state.sessionFile && fs.existsSync(state.sessionFile)) {
+      const latest = latestUsageFromFile(state.sessionFile)
+      inputTokens = latest.inputTokens
+      filled = latest.inputTokens + latest.cacheRead + latest.cacheWrite
+      outputTokens = latest.outputTokens
+    } else if (state.lastUsage) {
+      // No JSONL yet (session just created) — fall back to SDK usage.
+      inputTokens = state.lastUsage.inputTokens ?? 0
+      filled =
+        inputTokens + (state.lastUsage.cacheReadInputTokens ?? 0) + (state.lastUsage.cacheCreationInputTokens ?? 0)
+      outputTokens = state.lastUsage.outputTokens ?? 0
+    }
     return {
       sessionKey,
       model: state.model,
@@ -1494,7 +1510,7 @@ export function createClaudeCodeBackend(
       contextTokens: state.contextWindow ?? contextWindowFor(state.model),
       totalTokens: filled,
       inputTokens,
-      outputTokens: state.lastUsage?.outputTokens ?? 0,
+      outputTokens,
       compactionCount: 0,
       thinkingLevel: null,
       reasoningEffort: state.effort,
@@ -1670,7 +1686,6 @@ export function createClaudeCodeBackend(
   async function maybeAutoRecycle(state: ClaudeSessionState): Promise<void> {
     const recycleCfg = getConfig().contextManagement?.recycle
     if (recycleCfg?.enabled === false) return
-    if (!state.lastUsage) return
     // Skip subagent sessions — recycling them mid-flight strands the parent.
     if (state.parentSessionKey) return
 
@@ -1685,10 +1700,20 @@ export function createClaudeCodeBackend(
     // ~90K tokens; at 1M at ~450K — both realistic production fill levels.
     const threshold = recycleCfg?.thresholdPercent ?? 45
 
-    const inputTokens = state.lastUsage.inputTokens ?? 0
-    const cacheRead = state.lastUsage.cacheReadInputTokens ?? 0
-    const cacheCreate = state.lastUsage.cacheCreationInputTokens ?? 0
-    const filled = inputTokens + cacheRead + cacheCreate
+    // Read actual context fill from the LAST API call in the JSONL.
+    // `state.lastUsage` contains the SDK's accumulated turn total (all API
+    // calls in one agentic loop), which inflates by N× for N tool uses.
+    let filled = 0
+    if (state.sessionFile && fs.existsSync(state.sessionFile)) {
+      const latest = latestUsageFromFile(state.sessionFile)
+      filled = latest.inputTokens + latest.cacheRead + latest.cacheWrite
+    } else if (state.lastUsage) {
+      filled =
+        (state.lastUsage.inputTokens ?? 0) +
+        (state.lastUsage.cacheReadInputTokens ?? 0) +
+        (state.lastUsage.cacheCreationInputTokens ?? 0)
+    }
+    if (filled <= 0) return
     const fillPercent = (filled / maxTokens) * 100
 
     if (fillPercent < threshold) return
