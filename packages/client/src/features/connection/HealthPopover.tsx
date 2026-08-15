@@ -6,12 +6,6 @@ import { wsStore } from '../../ws/index.js'
 import { ExternalLinkIcon } from '../../ui/icons.js'
 import { formatBytes } from '../system/HealthTab.js'
 
-export interface McpHealth {
-  status: 'ok' | 'down' | 'unknown'
-  sessions: number
-  tools: number
-}
-
 export interface SembleHealth {
   status: 'ok' | 'down' | 'unknown'
   version: string
@@ -55,7 +49,6 @@ const CONTEXT_MGMT_HEALTH_UNKNOWN: ContextManagementHealth = {
   layer3: { enabled: false }
 }
 
-const [mcpHealth, setMcpHealth] = createSignal<McpHealth>({ status: 'unknown', sessions: 0, tools: 0 })
 const [sembleHealth, setSembleHealth] = createSignal<SembleHealth>({ status: 'unknown', version: '' })
 const [agentsHealth, setAgentsHealth] = createSignal<AgentsCensusHealth>({
   status: 'unknown',
@@ -69,9 +62,6 @@ export const overallHealth = (): OverallHealth => {
   const conn = connectionStatus()
   if (conn === 'error' || conn === 'disconnected') return 'error'
 
-  const mcp = mcpHealth()
-  if (mcp.status === 'down') return 'error'
-
   // Any external service being down degrades overall health but does not
   // hard-error — the Sovereign UI is still usable when AD4M or WE is offline.
   const ext = externalHealth()
@@ -83,14 +73,7 @@ export const overallHealth = (): OverallHealth => {
   const ctxMgmt = contextMgmtHealth()
   if (ctxMgmt.healthy === false) return 'degraded'
 
-  if (
-    conn === 'connecting' ||
-    conn === 'authenticating' ||
-    mcp.status === 'unknown' ||
-    semble.status === 'down' ||
-    anyExtDown
-  )
-    return 'degraded'
+  if (conn === 'connecting' || conn === 'authenticating' || semble.status === 'down' || anyExtDown) return 'degraded'
   return 'ok'
 }
 
@@ -101,13 +84,11 @@ export function initHealthPolling(): () => void {
   const offHealth = wsStore.on('system.health', (msg: Record<string, unknown>) => {
     const services = msg.services as
       | {
-          mcp?: McpHealth
           semble?: SembleHealth
           agents?: AgentsCensusHealth
           external?: ExternalServiceHealth[]
         }
       | undefined
-    if (services?.mcp) setMcpHealth(services.mcp)
     if (services?.semble) setSembleHealth(services.semble)
     if (services?.agents) setAgentsHealth(services.agents)
     if (Array.isArray(services?.external)) setExternalHealth(services.external)
@@ -258,13 +239,6 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
     return { status: 'ok' as const, detail: 'connected' }
   })
 
-  const mcpRow = createMemo(() => {
-    const h = mcpHealth()
-    if (h.status === 'ok') return { status: 'ok' as const, detail: `${h.sessions} sess · ${h.tools} tools` }
-    if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'checking...' }
-    return { status: 'error' as const, detail: 'unreachable' }
-  })
-
   const sembleRow = createMemo(() => {
     const h = sembleHealth()
     if (h.status === 'ok') return { status: 'ok' as const, detail: h.version ? `v${h.version}` : 'available' }
@@ -332,12 +306,11 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
           }}
         >
           <div class="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Service Health</div>
-          {/* Health rows render in order: Sovereign origin, MCP sidecar, per-thread built-in
-              context management (Layers 1/2/3), then any externally-configured LAN services
-              (AD4M dapp, WE launcher, …). */}
+          {/* Health rows: Sovereign origin, code search, agent sessions,
+              per-thread context management (Layers 1/2/3), then any
+              externally-configured LAN services (AD4M dapp, WE launcher, …). */}
           <div class="divide-y" style={{ 'border-color': 'var(--c-border)' }}>
             <StatusRow label="Sovereign" status={connRow().status} detail={connRow().detail} port={sovereignPort()} />
-            <StatusRow label="MCP Sidecar" status={mcpRow().status} detail={mcpRow().detail} />
             <StatusRow label="Semble" status={sembleRow().status} detail={sembleRow().detail} />
             <StatusRow label="Agent Sessions" status={agentsRow().status} detail={agentsRow().detail} />
             <StatusRow

@@ -22,6 +22,9 @@ export interface ConversationSummaryConfig {
   /** The presence gateway thread id, or null when not yet provisioned.
    *  A summary update fires only for turns landing on this thread. */
   gatewayThreadId: string | null
+  /** System prompt for running summary generation. When empty, uses a
+   *  built-in generic default. */
+  systemPrompt: string
 }
 
 export interface ConversationSummaryDeps {
@@ -36,9 +39,11 @@ export interface ConversationSummaryDeps {
   config: () => ConversationSummaryConfig
 }
 
-// ── Prompt ─────────────────────────────────────────────────────────────
+// ── Prompt default ────────────────────────────────────────────────────
+// Generic, personality-free fallback. Production deployments override
+// via config.json → voice.prompts.conversationSummarySystem.
 
-const SUMMARY_SYSTEM = `You maintain a running summary of a conversation between a user and their AI assistant Hex.
+const DEFAULT_SUMMARY_SYSTEM = `You maintain a running summary of a conversation between a user and their AI assistant.
 Given the previous summary and the latest exchange (user message + assistant response),
 produce an updated summary that captures the key points, decisions, and current state.
 
@@ -46,9 +51,7 @@ Rules:
 - Keep under 4 sentences.
 - Focus on what happened, what got decided, and what remains open.
 - Never use markdown, code, or special formatting.
-- Never use any form of the verb "to be" (is, are, was, were, am, be, been, being).
-- Use active verbs instead.
-- Write in third person ("The user asked...", "Hex implemented...").`
+- Write in third person ("The user asked...", "The assistant implemented...").`
 
 // ── Module ─────────────────────────────────────────────────────────────
 
@@ -83,14 +86,16 @@ export function createConversationSummary(deps: ConversationSummaryDeps) {
         // response alone still carries summarizable content.
       }
 
+      const cfg = config()
       const existing = summaries.get(threadId) ?? ''
       const exchange = userText
-        ? `User: ${userText.slice(0, 1000)}\n\nHex: ${assistantText.slice(0, 2000)}`
-        : `Hex: ${assistantText.slice(0, 2000)}`
+        ? `User: ${userText.slice(0, 1000)}\n\nAssistant: ${assistantText.slice(0, 2000)}`
+        : `Assistant: ${assistantText.slice(0, 2000)}`
 
+      const systemPrompt = cfg.systemPrompt || DEFAULT_SUMMARY_SYSTEM
       type Role = 'system' | 'user' | 'assistant' | 'tool'
       const messages: Array<{ role: Role; content: string }> = [
-        { role: 'system', content: SUMMARY_SYSTEM },
+        { role: 'system', content: systemPrompt },
         {
           role: 'user',
           content: `Previous summary:\n${existing || '(none yet — this opens the conversation)'}\n\nLatest exchange:\n${exchange}\n\nProduce the updated summary.`

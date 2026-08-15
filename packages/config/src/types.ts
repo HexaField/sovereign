@@ -88,6 +88,17 @@ export interface SovereignConfig {
      *  summary (via local-llm) after each assistant turn, surfaced as the
      *  header bubble on the client. Every other thread stays untouched. */
     conversationSummary: boolean
+    /** System prompts for voice pipelines. Each defaults to a generic
+     *  personality-free version — override in config.json to inject
+     *  identity-specific language (name, address style, constraints). */
+    prompts: {
+      /** System prompt for voice acknowledgment generation. */
+      ackSystem: string
+      /** System prompt for spoken response summary generation. */
+      summarySystem: string
+      /** System prompt for rolling conversation summary generation. */
+      conversationSummarySystem: string
+    }
   }
   meetings: {
     summarizeUrl: string

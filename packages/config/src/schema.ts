@@ -90,7 +90,16 @@ export const schema = {
         ttsUrl: { type: 'string' },
         autoTts: { type: 'boolean' },
         ackDelayMs: { type: 'number', minimum: 0, maximum: 10000 },
-        conversationSummary: { type: 'boolean' }
+        conversationSummary: { type: 'boolean' },
+        prompts: {
+          type: 'object',
+          properties: {
+            ackSystem: { type: 'string' },
+            summarySystem: { type: 'string' },
+            conversationSummarySystem: { type: 'string' }
+          },
+          additionalProperties: false
+        }
       },
       additionalProperties: false
     },

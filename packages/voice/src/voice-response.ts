@@ -18,6 +18,12 @@ export interface VoiceResponseConfig {
   autoTts: boolean
   ttsUrl: string
   ackDelayMs: number
+  /** System prompt for acknowledgment generation. When empty, uses a
+   *  built-in generic default. */
+  ackSystemPrompt: string
+  /** System prompt for spoken summary generation. When empty, uses a
+   *  built-in generic default. */
+  summarySystemPrompt: string
 }
 
 export interface LlmCompleter {
@@ -71,9 +77,11 @@ export interface VoiceResponseDeps {
   config: () => VoiceResponseConfig
 }
 
-// ── Prompts ────────────────────────────────────────────────────────────
+// ── Prompt defaults ───────────────────────────────────────────────────
+// Generic, personality-free fallbacks. Production deployments override
+// these via config.json → voice.prompts.ackSystem / summarySystem.
 
-const ACK_SYSTEM = `You generate brief spoken acknowledgments for a voice assistant named Hex.
+const DEFAULT_ACK_SYSTEM = `You generate brief spoken acknowledgments for a voice assistant.
 Given the user's message and recent conversation context, produce a single short sentence
 confirming you received the request and will work on it. Include a tiny amount of context
 from the request so the user knows you understood.
@@ -82,27 +90,21 @@ Rules:
 - One sentence only, under 20 words.
 - Never use markdown, code, or special formatting.
 - Speak naturally as a calm, competent assistant.
-- Address the user as "sir" when appropriate.
-- Never use any form of the verb "to be" (is, are, was, were, am, be, been, being).
-- Use active verbs instead.
 
 Examples:
-- "Looking into the build logs now, sir."
+- "Looking into the build logs now."
 - "Running that analysis for you now."
-- "Checking on the deployment status, sir."
+- "Checking on the deployment status."
 - "On it — pulling up the test results now."`
 
-const SUMMARY_SYSTEM = `You summarize assistant responses into brief spoken language for a voice assistant named Hex.
+const DEFAULT_SUMMARY_SYSTEM = `You summarize assistant responses into brief spoken language for a voice assistant.
 Convert the assistant's written response into a concise spoken summary suitable for text-to-speech.
 
 Rules:
 - Keep it under 3 sentences for short responses, under 5 for longer ones.
 - Strip ALL markdown, code blocks, URLs, file paths, and technical formatting.
 - Rephrase code-heavy content as plain descriptions of what happened.
-- Never use any form of the verb "to be" (is, are, was, were, am, be, been, being).
-- Use active verbs instead.
 - Speak naturally — this gets read aloud.
-- Address the user as "sir" when appropriate.
 - If the response contains a list of items, mention the count and highlight the most important ones.
 - For error reports, state what failed and what to do next.`
 
@@ -150,9 +152,10 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
       if (controller.signal.aborted) return
 
-      // Build the prompt
+      // Build the prompt — config override takes precedence, then fallback
+      const ackPrompt = cfg.ackSystemPrompt || DEFAULT_ACK_SYSTEM
       type Role = 'system' | 'user' | 'assistant' | 'tool'
-      const messages: Array<{ role: Role; content: string }> = [{ role: 'system', content: ACK_SYSTEM }]
+      const messages: Array<{ role: Role; content: string }> = [{ role: 'system', content: ackPrompt }]
 
       // Add recent context as condensed history
       if (context.length > 0) {
@@ -316,10 +319,11 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       // Skip empty or very short responses
       if (!responseText || responseText.trim().length < 5) return
 
-      // Build the summary prompt
+      // Build the summary prompt — config override takes precedence
+      const summaryPrompt = cfg.summarySystemPrompt || DEFAULT_SUMMARY_SYSTEM
       type Role = 'system' | 'user' | 'assistant' | 'tool'
       const messages: Array<{ role: Role; content: string }> = [
-        { role: 'system', content: SUMMARY_SYSTEM },
+        { role: 'system', content: summaryPrompt },
         {
           role: 'user',
           content: `Summarize this assistant response for spoken delivery:\n\n${responseText.slice(0, 4000)}`
