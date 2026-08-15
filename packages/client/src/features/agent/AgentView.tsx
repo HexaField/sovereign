@@ -27,8 +27,7 @@ import { threadKey } from '../threads/store.js'
 import { SubagentView } from '../chat/SubagentView.js'
 import type { SubagentNavEntry } from '../chat/SubagentView.js'
 import type { ChatMessage } from '../chat/types.js'
-import { showSimpleView } from '../chat/simple-conversation-store.js'
-import { SimpleConversationView } from '../chat/SimpleConversationView.js'
+import { showSimpleView, simpleConversationEntries } from '../chat/simple-conversation-store.js'
 
 // Lazy-loaded tabs
 const DashboardView = lazy(() => import('../dashboard/DashboardView.js'))
@@ -87,6 +86,21 @@ function HexTab(props: { messages: () => ChatMessage[] }) {
     return stack.length > 0 ? stack[stack.length - 1] : null
   }
 
+  /** Convert simple conversation entries to ChatMessage[] for the summary
+   *  mode ChatView. Maps 'hex' → 'assistant', string timestamps → numbers,
+   *  and fills empty workItems/thinkingBlocks. */
+  const summaryMessages = (): ChatMessage[] =>
+    simpleConversationEntries().map((entry) => ({
+      turn: {
+        role: entry.role === 'hex' ? ('assistant' as const) : ('user' as const),
+        content: entry.text,
+        timestamp: new Date(entry.timestamp).getTime(),
+        workItems: [],
+        thinkingBlocks: [],
+        origin: entry.modality !== 'text' ? { modality: entry.modality } : undefined
+      }
+    }))
+
   return (
     <div class="flex h-full flex-col">
       <Show
@@ -101,41 +115,25 @@ function HexTab(props: { messages: () => ChatMessage[] }) {
           />
         }
       >
-        <Show
-          when={!showSimpleView()}
-          fallback={
-            <div
-              style={{
-                position: 'relative',
-                display: 'flex',
-                'flex-direction': 'column',
-                flex: '1',
-                'min-height': '0'
-              }}
-            >
-              <SimpleConversationView />
-            </div>
-          }
+        <div
+          style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
         >
-          <div
-            style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
-          >
-            <ChatView
-              messages={props.messages()}
-              streamingHtml={streamingHtml()}
-              agentStatus={agentStatus()}
-              liveWork={liveWork()}
-              liveThinkingText={liveThinkingText()}
-              compacting={compacting()}
-              isRetryCountdownActive={isRetryCountdownActive()}
-              retryCountdownSeconds={retryCountdownSeconds()}
-              onViewSubagent={pushSubagent}
-              onSend={sendMessage}
-              onAbort={abortChat}
-              threadKey={threadKey()}
-            />
-          </div>
-        </Show>
+          <ChatView
+            messages={showSimpleView() ? summaryMessages() : props.messages()}
+            streamingHtml={showSimpleView() ? '' : streamingHtml()}
+            agentStatus={agentStatus()}
+            liveWork={showSimpleView() ? [] : liveWork()}
+            liveThinkingText={liveThinkingText()}
+            compacting={showSimpleView() ? false : compacting()}
+            isRetryCountdownActive={showSimpleView() ? false : isRetryCountdownActive()}
+            retryCountdownSeconds={showSimpleView() ? 0 : retryCountdownSeconds()}
+            onViewSubagent={pushSubagent}
+            onSend={sendMessage}
+            onAbort={abortChat}
+            threadKey={threadKey()}
+            mode={showSimpleView() ? 'summary' : 'full'}
+          />
+        </div>
         <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
       </Show>
     </div>

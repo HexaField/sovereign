@@ -97,7 +97,7 @@ Examples:
 - "Checking on the deployment status."
 - "On it — pulling up the test results now."`
 
-const DEFAULT_SUMMARY_SYSTEM = `You summarize assistant responses into brief spoken language for a voice assistant.
+export const DEFAULT_SUMMARY_SYSTEM = `You summarize assistant responses into brief spoken language for a voice assistant.
 Convert the assistant's written response into a concise spoken summary suitable for text-to-speech.
 
 Rules:

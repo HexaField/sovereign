@@ -292,6 +292,18 @@ export function initTtsPlayer(ws: WsStore): () => void {
   return cleanup
 }
 
+/** Play base64-encoded WAV audio directly (single-shot, interrupts any
+ *  current playback). Used by the on-demand "Play aloud" context menu. */
+export async function playBase64Audio(base64: string): Promise<void> {
+  interruptTts()
+  chunkQueue.length = 0
+
+  if (!isKeepAliveActive()) startMediaKeepAlive()
+
+  const wavData = base64ToArrayBuffer(base64)
+  await playAudio(wavData)
+}
+
 /** Reports whether TTS audio currently plays. */
 export function isTtsPlaying(): boolean {
   return isPlaying
