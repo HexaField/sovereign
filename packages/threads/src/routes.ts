@@ -1098,6 +1098,29 @@ export function createThreadRoutes(
       threadNodes.set(t.id, node)
     }
 
+    // Populate totalTokens for threads with recent activity.
+    try {
+      const activeIds = [...activityMap.keys()].filter((id) => threadNodes.has(id))
+      if (activeIds.length > 0) {
+        const metas = await Promise.allSettled(
+          activeIds.map(async (id) => {
+            const sessionKey = opts?.chatModule?.getSessionKeyForThread(id) ?? deriveSessionKey(id)
+            const backend = backendForSession(sessionKey)
+            const meta = backend ? await backend.getSessionMeta(sessionKey) : null
+            return { id, tokens: meta?.totalTokens ?? 0 }
+          })
+        )
+        for (const r of metas) {
+          if (r.status === 'fulfilled' && r.value.tokens > 0) {
+            const node = threadNodes.get(r.value.id)
+            if (node) node.totalTokens = r.value.tokens
+          }
+        }
+      }
+    } catch {
+      /* best-effort — tree still works without token counts */
+    }
+
     // Attach subagents under their parent threads.
     try {
       const routing = opts?.backend

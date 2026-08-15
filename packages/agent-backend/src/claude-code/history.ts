@@ -163,7 +163,11 @@ export function findSessionFile(projectsDir: string, sessionId: string): string 
   return fs.existsSync(candidate) ? candidate : null
 }
 
-/** Compute aggregate usage from a session file's `result` entries. */
+/** Compute aggregate (cumulative) usage from a session file's `result` entries.
+ *  NOTE: Each turn's `input_tokens` already includes the full conversation
+ *  context, so the SUM across turns does NOT represent current context fill —
+ *  use `latestUsageFromFile` for that.  This function remains useful only for
+ *  lifetime cost accounting. */
 export function computeUsageFromFile(filePath: string): {
   inputTokens: number
   outputTokens: number
@@ -187,6 +191,46 @@ export function computeUsageFromFile(filePath: string): {
         }
         const cost = entry?.total_cost_usd ?? entry?.message?.total_cost_usd
         if (typeof cost === 'number') out.costUsd += cost
+      } catch {
+        /* malformed line */
+      }
+    }
+  } catch {
+    /* file missing */
+  }
+  return out
+}
+
+/** Return the LAST turn's usage from a session file — the actual snapshot of
+ *  how many tokens currently fill the context window.  Each turn's
+ *  `input_tokens` already covers the full conversation, so only the final
+ *  entry matters for "current fill". */
+export function latestUsageFromFile(filePath: string): {
+  inputTokens: number
+  outputTokens: number
+  cacheRead: number
+  cacheWrite: number
+  costUsd: number
+} {
+  const out = { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 }
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8')
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const entry = JSON.parse(line)
+        const usage = entry?.message?.usage
+        if (usage) {
+          // Overwrite (not accumulate) — we want only the last entry.
+          out.inputTokens = usage.input_tokens ?? 0
+          out.outputTokens = usage.output_tokens ?? 0
+          out.cacheRead = usage.cache_read_input_tokens ?? 0
+          out.cacheWrite = usage.cache_creation_input_tokens ?? 0
+        }
+        const cost = entry?.total_cost_usd ?? entry?.message?.total_cost_usd
+        if (typeof cost === 'number') {
+          out.costUsd = cost
+        }
       } catch {
         /* malformed line */
       }
