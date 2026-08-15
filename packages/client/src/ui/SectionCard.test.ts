@@ -3,69 +3,25 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 // §P.1 Architecture View tests
+// OverviewTab.tsx was removed — section card overview content no longer
+// lives in a dedicated tab. Tests that verified section card presence in
+// that file are removed; the SectionCard component and remaining system
+// view tests survive.
 
-const overviewSrc = fs.readFileSync(path.resolve(__dirname, '../features/system/OverviewTab.tsx'), 'utf-8')
 const systemViewSrc = fs.readFileSync(path.resolve(__dirname, '../features/system/SystemView.tsx'), 'utf-8')
 
 describe('§P.1 Architecture View', () => {
   // §P.1.1 Overview Tab
-  describe('§P.1.1 Overview Tab', () => {
+  describe('§P.1.1 System View', () => {
     it('§P.1.1 tabbed interface exists in SystemView', () => {
-      // SystemView has tabs — verified by source inspection
-      expect(systemViewSrc).toContain('Architecture')
+      // Tabs renamed: Architecture → Status, plus Agents, Activity, Config, Jobs
+      expect(systemViewSrc).toContain('SYSTEM_TABS')
+      expect(systemViewSrc).toContain('Status')
     })
 
     it('§P.1.1 SectionCard reusable component exists with collapsible body + badge', async () => {
       const mod = await import('./SectionCard.js')
       expect(typeof mod.SectionCard).toBe('function')
-    })
-
-    it('§P.1.1 Thread Health section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Thread Health')
-    })
-
-    it('§P.1.1 Models section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Models')
-    })
-
-    it('§P.1.1 Channels section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Channels')
-    })
-
-    it('§P.1.1 Sessions section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Sessions')
-    })
-
-    it('§P.1.1 Cron Jobs section card exists in OverviewTab', () => {
-      expect(overviewSrc).toMatch(/Cron|Jobs/)
-    })
-
-    it('§P.1.1 Skills section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Skills')
-    })
-
-    it('§P.1.1 LLM Context section card exists in OverviewTab', () => {
-      expect(overviewSrc).toMatch(/LLM|Context/)
-    })
-
-    it('§P.1.1 Hooks section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Hooks')
-    })
-
-    it('§P.1.1 Notifications section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Notification')
-    })
-
-    it('§P.1.1 Events section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Events')
-    })
-
-    it('§P.1.1 Security & Devices section card exists in OverviewTab', () => {
-      expect(overviewSrc).toMatch(/Security|Devices/)
-    })
-
-    it('§P.1.1 Scripts section card exists in OverviewTab', () => {
-      expect(overviewSrc).toContain('Scripts')
     })
   })
 
