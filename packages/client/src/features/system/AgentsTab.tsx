@@ -21,6 +21,7 @@ interface Thread {
 }
 
 interface SessionMeta {
+  totalTokens?: number | null
   contextTokens?: number | null
   compactionCount?: number | null
   model?: string | null
@@ -40,8 +41,6 @@ const MEMBRANE_COLORS: Record<string, string> = {
   connectionengine: '#f59e0b'
 }
 
-const MAX_CONTEXT_TOKENS = 200_000
-
 function membraneColor(id: string): string {
   return MEMBRANE_COLORS[id] ?? '#6b7280'
 }
@@ -54,9 +53,15 @@ function formatRelativeTime(ms: number): string {
   return new Date(ms).toLocaleDateString()
 }
 
-function contextPct(tokens: number | null | undefined): number {
-  if (!tokens) return 0
-  return Math.min(100, Math.round((tokens / MAX_CONTEXT_TOKENS) * 100))
+function contextPct(meta: SessionMeta | null): number {
+  if (!meta?.totalTokens || !meta.contextTokens) return 0
+  return Math.min(100, Math.round((meta.totalTokens / meta.contextTokens) * 100))
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
 }
 
 function contextBarColor(pct: number): string {
@@ -205,7 +210,7 @@ const AgentsTab: Component = () => {
             const active = row.active
             const meta = row.meta
             const isActive = !!active
-            const pct = contextPct(meta?.contextTokens)
+            const pct = contextPct(meta)
             const kindColor = KIND_COLORS[t.kind ?? ''] ?? '#6b7280'
             const memId = active?.membraneId ?? t.membraneId
             const label = active?.label ?? t.label ?? t.id
@@ -283,8 +288,7 @@ const AgentsTab: Component = () => {
                         >
                           <span>Context</span>
                           <span class="font-mono">
-                            {meta!.contextTokens!.toLocaleString()} / {MAX_CONTEXT_TOKENS.toLocaleString()} tokens (
-                            {pct}%)
+                            {formatTokens(meta!.totalTokens ?? 0)} / {formatTokens(meta!.contextTokens!)} ({pct}%)
                           </span>
                         </div>
                         <div class="h-1 w-full overflow-hidden rounded-full" style={{ background: 'var(--c-border)' }}>
