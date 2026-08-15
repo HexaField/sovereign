@@ -101,9 +101,12 @@ function playOnce(wavData: ArrayBuffer): Promise<void> {
 
 /** Play a WAV audio buffer through the Web Audio API.
  *  Handles both single-shot messages (interrupt) and streamed chunks
- *  (queue sequentially). */
+ *  (queue sequentially). Any message carrying a `chunk` field enters
+ *  queue mode — chunk.index 0 interrupts prior playback, subsequent
+ *  chunks append to the queue. Messages without `chunk` interrupt
+ *  immediately (acks, single-shot synthesis). */
 async function playAudio(wavData: ArrayBuffer, chunk?: { index: number; total: number; done: boolean }): Promise<void> {
-  if (chunk && chunk.total > 1) {
+  if (chunk != null) {
     // Streaming mode — queue chunks and play sequentially.
     // First chunk interrupts any prior playback; subsequent ones queue.
     if (chunk.index === 0) {
