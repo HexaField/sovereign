@@ -266,6 +266,62 @@ describe('SimpleConversation — assistant turn capture', () => {
     store.shutdown()
   })
 
+  it('truncates long text-mode responses to first paragraph', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    const longContent =
+      'Done. Here is the summary.\n\n' +
+      'First implementation detail that goes into great depth about the changes.\n\n' +
+      'Second paragraph with even more detail that nobody needs in the simple view.\n\n' +
+      'Third paragraph. ' +
+      'x'.repeat(1000)
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: { threadId: GATEWAY, turn: { role: 'assistant', content: longContent } }
+    })
+
+    vi.advanceTimersByTime(5100)
+    const text = store.getEntries()[0].text
+    // Should contain the first paragraph only, not the full response
+    expect(text).toContain('Done')
+    expect(text.length).toBeLessThanOrEqual(500)
+    expect(text).not.toContain('Second paragraph')
+    store.shutdown()
+  })
+
+  it('does not duplicate entry when timer fires just before presence.reply', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: { threadId: GATEWAY, turn: { role: 'assistant', content: 'Short answer.' } }
+    })
+
+    // Timer fires — text entry pushed
+    vi.advanceTimersByTime(5100)
+    expect(store.getEntries()).toHaveLength(1)
+    expect(store.getEntries()[0].modality).toBe('text')
+
+    // Voice summary arrives just after the timer — should NOT add a duplicate
+    bus.emit({
+      type: 'presence.reply',
+      timestamp: '2026-01-01T00:00:11Z',
+      source: 'voice-response',
+      payload: { modality: 'voice', text: 'Short answer, sir.' }
+    })
+
+    // Still only one entry — the text one from the timer
+    expect(store.getEntries()).toHaveLength(1)
+    store.shutdown()
+  })
+
   it('discards a deferred turn when a presence.reply arrives within the grace window', () => {
     const bus = makeBus()
     const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
@@ -304,6 +360,7 @@ describe('SimpleConversation — assistant turn capture', () => {
     const bus = makeBus()
     const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
 
+    // Single paragraph — no truncation, just markdown stripping
     bus.emit({
       type: 'chat.turn.completed',
       timestamp: '2026-01-01T00:00:05Z',
@@ -312,18 +369,14 @@ describe('SimpleConversation — assistant turn capture', () => {
         threadId: GATEWAY,
         turn: {
           role: 'assistant',
-          content:
-            '## Build Status\n\nThe **tests** pass. Here\'s `some code`.\n\n```js\nconsole.log("hi")\n```\n\nAll good.'
+          content: "The **tests** pass. Here's `some code`. All good."
         }
       }
     })
 
     vi.advanceTimersByTime(5100)
     const text = store.getEntries()[0].text
-    expect(text).not.toContain('##')
     expect(text).not.toContain('**')
-    expect(text).not.toContain('```')
-    expect(text).toContain('Build Status')
     expect(text).toContain('The tests pass')
     expect(text).toContain('All good')
     store.shutdown()
@@ -454,6 +507,43 @@ describe('SimpleConversation — persistence', () => {
     expect(entries).toHaveLength(2)
     expect(entries.map((e) => e.text)).toEqual(['First', 'Second'])
     store3.shutdown()
+  })
+
+  it('filters stale entries on reload — strips placeholders, dedup, and truncation', () => {
+    const dir = makeTmpDir()
+    // Seed the file with entries from before the fix
+    const staleEntries = [
+      { role: 'user', text: 'Hello', modality: 'text', timestamp: '2026-01-01T00:00:00Z' },
+      // Placeholder from pre-fix streaming path — should get stripped
+      { role: 'hex', text: '(streaming summary)', modality: 'voice', timestamp: '2026-01-01T00:00:05Z' },
+      // Duplicate consecutive hex entries with same timestamp — both present
+      // in the pre-fix data from the timer/reply race. After placeholder
+      // stripped, the next hex at the same timestamp is kept (first hex@05).
+      { role: 'hex', text: 'Concise voice summary.', modality: 'voice', timestamp: '2026-01-01T00:00:05Z' },
+      { role: 'hex', text: 'Duplicate full text.', modality: 'text', timestamp: '2026-01-01T00:00:05Z' },
+      // Overly long text entry — should get truncated
+      {
+        role: 'hex',
+        text: 'Done. Summary paragraph.\n\n' + 'x'.repeat(2000),
+        modality: 'text',
+        timestamp: '2026-01-01T00:00:10Z'
+      },
+      { role: 'user', text: 'Thanks', modality: 'text', timestamp: '2026-01-01T00:00:15Z' }
+    ]
+    fs.writeFileSync(path.join(dir, 'simple-conversation.json'), JSON.stringify(staleEntries))
+
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+    const entries = store.getEntries()
+
+    // Placeholder stripped, duplicate (same ts consecutive hex) stripped → 4 entries
+    expect(entries).toHaveLength(4)
+    expect(entries[0].text).toBe('Hello')
+    expect(entries[1].text).toBe('Concise voice summary.')
+    // The long entry should get truncated to first paragraph
+    expect(entries[2].text).toBe('Done. Summary paragraph.')
+    expect(entries[3].text).toBe('Thanks')
+    store.shutdown()
   })
 
   it('survives a corrupt file gracefully', () => {
