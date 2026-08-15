@@ -984,7 +984,7 @@ export function InputArea(props: InputAreaProps) {
         {/* Recording bar — replaces textarea during voice input */}
         <Show when={hasActiveSession()}>
           <div
-            class="flex flex-1 items-center gap-2 rounded-xl px-3.5 py-2"
+            class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-xl px-3.5 py-2"
             style={{ background: 'var(--c-rec-bg, rgba(239,68,68,0.1))' }}
           >
             {/* Red dot + timer */}
@@ -1021,7 +1021,7 @@ export function InputArea(props: InputAreaProps) {
                       void exitTranscriptEdit()
                     }
                   }}
-                  class="max-h-[80px] min-h-[28px] flex-1 resize-none rounded-lg px-2.5 py-1 font-[inherit] text-sm outline-none"
+                  class="max-h-[80px] min-h-[28px] min-w-0 flex-1 resize-none rounded-lg px-2.5 py-1 font-[inherit] text-sm outline-none"
                   style={{
                     background: 'var(--c-bg)',
                     border: '1px solid var(--c-accent)',
@@ -1031,7 +1031,7 @@ export function InputArea(props: InputAreaProps) {
               }
             >
               <span
-                class="flex-1 cursor-pointer truncate text-sm"
+                class="min-w-0 flex-1 cursor-pointer truncate text-sm"
                 style={{
                   color: inputValue().trim() ? 'var(--c-text)' : 'var(--c-text-muted)',
                   'font-style': inputValue().trim() ? 'normal' : 'italic'
