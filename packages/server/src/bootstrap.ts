@@ -803,7 +803,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         return {
           autoTts: v?.autoTts ?? false,
           ttsUrl: v?.ttsUrl ?? '',
-          ackDelayMs: v?.ackDelayMs ?? 1500
+          ackDelayMs: v?.ackDelayMs ?? 1500,
+          ackSystemPrompt: v?.prompts?.ackSystem ?? '',
+          summarySystemPrompt: v?.prompts?.summarySystem ?? ''
         }
       }
     })
@@ -852,7 +854,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         const gateway = threadManager.getPresenceThread('gateway')
         return {
           enabled: v?.conversationSummary ?? false,
-          gatewayThreadId: gateway?.id ?? null
+          gatewayThreadId: gateway?.id ?? null,
+          systemPrompt: v?.prompts?.conversationSummarySystem ?? ''
         }
       }
     })

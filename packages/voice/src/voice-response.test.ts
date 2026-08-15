@@ -55,7 +55,15 @@ function createDeps(): {
     complete: vi.fn(async () => ({ choices: [{ message: { content: 'Spoken text.' } }] }))
   }
   const getRecentTurns = vi.fn(async () => [])
-  const config = vi.fn((): VoiceResponseConfig => ({ autoTts: true, ttsUrl: 'http://tts.local', ackDelayMs: 0 }))
+  const config = vi.fn(
+    (): VoiceResponseConfig => ({
+      autoTts: true,
+      ttsUrl: 'http://tts.local',
+      ackDelayMs: 0,
+      ackSystemPrompt: '',
+      summarySystemPrompt: ''
+    })
+  )
 
   const deps: VoiceResponseDeps = {
     bus,
