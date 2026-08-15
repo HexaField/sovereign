@@ -501,4 +501,55 @@ describe('ContextFilter', () => {
       expect(s.turnCounter).toBe(0)
     })
   })
+
+  describe('generic fallback', () => {
+    it('filters string fields on unrecognised tool output objects', () => {
+      const filter = createContextFilter()
+      const text = manyLines(trimMaxLines * 2)
+
+      const result = filter.filterToolOutput('SomeNewTool', { output: text, status: 'ok' }) as {
+        output: string
+        status: string
+      } | null
+
+      expect(result).not.toBeNull()
+      expect(result!.output).toContain('lines trimmed by context filter')
+      expect(result!.status).toBe('ok')
+    })
+
+    it('filters content arrays inside unrecognised tool output objects', () => {
+      const filter = createContextFilter()
+      const text = manyLines(trimMaxLines * 2)
+
+      const result = filter.filterToolOutput('SomeNewTool', {
+        content: [{ type: 'text', text }],
+        meta: 'kept'
+      }) as { content: Array<{ type: string; text: string }>; meta: string } | null
+
+      expect(result).not.toBeNull()
+      expect(result!.content[0].text).toContain('lines trimmed by context filter')
+      expect(result!.meta).toBe('kept')
+    })
+
+    it('returns null for small unrecognised tool outputs', () => {
+      const filter = createContextFilter()
+      expect(filter.filterToolOutput('SomeNewTool', { output: 'small', count: 1 })).toBeNull()
+    })
+
+    it('falls through to generic for Edit when content field is missing', () => {
+      // The SDK may structure Edit results differently from our assumed
+      // {content: string} shape. The generic fallback catches any string field.
+      const filter = createContextFilter()
+      const text = manyLines(trimMaxLines * 2)
+
+      const result = filter.filterToolOutput('Edit', { result: text, path: 'foo.ts' }) as {
+        result: string
+        path: string
+      } | null
+
+      expect(result).not.toBeNull()
+      expect(result!.result).toContain('lines trimmed by context filter')
+      expect(result!.path).toBe('foo.ts')
+    })
+  })
 })

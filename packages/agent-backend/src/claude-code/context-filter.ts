@@ -146,29 +146,39 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
       }
 
       // Read → { type: 'text', file: { content: string, ... }, ... }
+      // Falls through to generic handler when the expected shape doesn't match.
       case 'Read': {
         const file = output.file as Record<string, unknown> | undefined
-        if (output.type !== 'text' || !file || typeof file.content !== 'string') return null
-        const filtered = filterText(file.content as string)
-        if (filtered === file.content) return null
-        return { ...output, file: { ...file, content: filtered } }
+        if (output.type === 'text' && file && typeof file.content === 'string') {
+          const filtered = filterText(file.content as string)
+          if (filtered === file.content) return null
+          return { ...output, file: { ...file, content: filtered } }
+        }
+        return filterGenericObject(output)
       }
 
       // Grep → { content?: string, filenames: string[], ... }
+      // Falls through to generic handler when content isn't a string.
       case 'Grep': {
-        if (typeof output.content !== 'string') return null
-        const filtered = filterText(output.content as string)
-        if (filtered === output.content) return null
-        return { ...output, content: filtered }
+        if (typeof output.content === 'string') {
+          const filtered = filterText(output.content as string)
+          if (filtered === output.content) return null
+          return { ...output, content: filtered }
+        }
+        return filterGenericObject(output)
       }
 
       // Edit / Write → { content?: string, ... }
+      // Falls through to generic handler when content isn't a string —
+      // the SDK may structure the response differently.
       case 'Edit':
       case 'Write': {
-        if (typeof output.content !== 'string') return null
-        const filtered = filterText(output.content as string)
-        if (filtered === output.content) return null
-        return { ...output, content: filtered }
+        if (typeof output.content === 'string') {
+          const filtered = filterText(output.content as string)
+          if (filtered === output.content) return null
+          return { ...output, content: filtered }
+        }
+        return filterGenericObject(output)
       }
 
       // Agent / Task subagent results → { content: [{ type, text }], ... }
@@ -179,8 +189,41 @@ export function createContextFilter(initialConfig?: Partial<ContextFilterConfig>
       }
 
       default:
-        return null
+        // Generic fallback — handles unknown tools and SDK response shapes
+        // that don't match the hardcoded cases above. Walks all string
+        // fields in the output object and filters them individually.
+        return filterGenericObject(output)
     }
+  }
+
+  /**
+   * Generic fallback filter for arbitrary structured objects. Walks the
+   * top-level keys and filters any string value through the full chain.
+   * Returns a shallow copy with modified fields, or `null` when nothing
+   * changed. Handles the common SDK pattern where tool_response carries
+   * fields like `content`, `output`, `result`, or `text` as strings.
+   */
+  function filterGenericObject(output: Record<string, unknown>): unknown | null {
+    let changed = false
+    const result = { ...output }
+    for (const key of Object.keys(output)) {
+      const val = output[key]
+      if (typeof val === 'string') {
+        const filtered = filterText(val)
+        if (filtered !== val) {
+          result[key] = filtered
+          changed = true
+        }
+      } else if (Array.isArray(val)) {
+        // Content array — `[{ type: 'text', text: '...' }, ...]`
+        const copy = [...val]
+        if (filterContentArray(copy)) {
+          result[key] = copy
+          changed = true
+        }
+      }
+    }
+    return changed ? result : null
   }
 
   /**

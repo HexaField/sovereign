@@ -117,12 +117,35 @@ export const s11ContextFilter: Scenario = {
 
     // 8b. The filter must trim the result — below FILTERED_THRESHOLD_CHARS
     //     means the PostToolUse hook cut the output before the model saw it.
-    const passed = actualSize < FILTERED_THRESHOLD_CHARS
+    const trimmed = actualSize < FILTERED_THRESHOLD_CHARS
+    metrics.toolResultTrimmed = trimmed
+
+    // 8c. Verify context-health endpoint reports non-zero filter activity.
+    //     The PostToolUse hook records trimCount and trimBytesReclaimed via
+    //     the context filter — these should be non-zero after a successful trim.
+    let healthOk = false
+    try {
+      const health = await client.timed('context-health', () => client.get(`/api/threads/${thread.id}/context-health`))
+      metrics.contextHealth = {
+        trimCount: health?.layer1?.trimCount,
+        trimBytesReclaimed: health?.layer1?.trimBytesReclaimed,
+        enabled: health?.layer1?.enabled
+      }
+      // Trim count should be positive when the filter actually trimmed.
+      healthOk = trimmed ? (health?.layer1?.trimCount ?? 0) > 0 : true
+      metrics.healthVerified = healthOk
+    } catch (err: any) {
+      // Endpoint might not exist — degrade gracefully.
+      metrics.contextHealthError = err?.message
+      healthOk = true // Don't fail on missing endpoint
+    }
+
+    const passed = trimmed && healthOk
     return {
       passed,
       summary: passed
-        ? `context filter trimmed the tool_result — ${actualSize} chars (raw ~${metrics.originalEstimate} bytes)`
-        : `filter did NOT trim — tool_result ${actualSize} chars, raw ~${metrics.originalEstimate} bytes (expected < ${FILTERED_THRESHOLD_CHARS})`,
+        ? `context filter trimmed the tool_result — ${actualSize} chars (raw ~${metrics.originalEstimate} bytes), health: trimCount=${(metrics.contextHealth as any)?.trimCount ?? '?'}`
+        : `filter check failed — trimmed=${trimmed} (${actualSize} chars, expected < ${FILTERED_THRESHOLD_CHARS}), healthOk=${healthOk}`,
       metrics,
       samples: client.samples
     }
