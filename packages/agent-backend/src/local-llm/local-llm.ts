@@ -42,6 +42,7 @@ import type { McpBridge, McpBridgeConfig } from './tools/mcp-bridge.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
 import { runContextStrategies } from '../context-strategies/index.js'
+import { archiveMessagesBeforeStrategies } from '../history-archive.js'
 
 const KIND: AgentBackendKind = 'local-llm'
 const PROVIDER = 'local-llm'
@@ -845,6 +846,10 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     // without information loss (age-decay stubs, dedup, stale-read prune).
     // Compaction runs on the leaner result and produces a better summary.
     if (state.messages.length > 20) {
+      // Archive the full message array BEFORE strategies mutate it.
+      // The archive preserves the complete, unmodified conversation history.
+      archiveMessagesBeforeStrategies(deps.dataDir, state.sessionKey, state.messages)
+
       const pipelineResult = runContextStrategies(
         state.messages as import('../context-strategies/types.js').GenericMessage[]
       )
@@ -1367,6 +1372,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     if (!opts?.force && state.lastRecycleAt && Date.now() - state.lastRecycleAt < RECYCLE_MIN_INTERVAL_MS) return null
 
     const preTokens = estimateSessionTokens(state)
+
+    // Archive the full message array BEFORE truncation modifies it.
+    archiveMessagesBeforeStrategies(deps.dataDir, sessionKey, state.messages)
 
     const keepFromIndex = Math.max(0, state.messages.length - RECYCLE_KEEP_RECENT_MESSAGES)
     let changed = false

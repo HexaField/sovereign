@@ -74,6 +74,7 @@ import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
 import { parseCozempicOutput } from './cozempic-parser.js'
+import { archiveJsonlBeforeRecycle, archiveRawToolOutput } from '../history-archive.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -886,6 +887,21 @@ export function createClaudeCodeBackend(
       }
 
       if (filtered == null) return { continue: true }
+
+      // Archive the raw tool output before the trimmed version replaces it.
+      // The archive preserves full, unfiltered history — the SDK's JSONL
+      // only ever receives the trimmed version.
+      if (trimmedChars > 0 && state) {
+        archiveRawToolOutput(dataDir, state.backendSessionId, {
+          ts: Date.now(),
+          toolName,
+          toolUseId,
+          rawChars: rawOutputChars,
+          trimmedChars,
+          raw: inp.tool_response
+        })
+      }
+
       return {
         continue: true,
         hookSpecificOutput: {
@@ -1944,6 +1960,12 @@ export function createClaudeCodeBackend(
       state.abortController = undefined
       state.liveQuery = undefined
     }
+
+    // 4b. Archive the full JSONL BEFORE any pruning modifies it.
+    //     The archive preserves the complete, unmodified conversation
+    //     history as a write-once snapshot. Pruning only affects the
+    //     working JSONL that the SDK reads for context.
+    archiveJsonlBeforeRecycle(dataDir, state.backendSessionId, state.sessionFile)
 
     // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
     let method: 'cozempic' | 'native' = 'native'
