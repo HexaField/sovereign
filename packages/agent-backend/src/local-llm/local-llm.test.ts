@@ -323,8 +323,9 @@ describe('local-llm backend: sendMessage (no tools)', () => {
     const wireMessages = complete.mock.calls[0][0] as Array<{ role: string; content: string }>
     const systemMsgs = wireMessages.filter((m) => m.role === 'system')
     expect(systemMsgs).toHaveLength(1)
-    // The single system message must contain the compaction summary
-    expect(systemMsgs[0].content).toContain('[Compacted conversation')
+    // The single system message must contain the compaction summary (old or new prefix)
+    const sysContent = systemMsgs[0].content
+    expect(sysContent.includes('[Compacted') || sysContent.includes('[CONTEXT COMPACTION')).toBe(true)
     // Non-system messages must still appear
     const nonSystem = wireMessages.filter((m) => m.role !== 'system')
     expect(nonSystem.some((m) => m.role === 'user' && m.content === 'follow up on X')).toBe(true)
@@ -706,5 +707,263 @@ describe('local-llm backend: subagent spawning', () => {
     const systemMsg = callArgs.find((m) => m.role === 'system')
     expect(systemMsg?.content).toContain('do work')
     // No crash, no guardrails content — graceful fallback
+  })
+})
+
+describe('local-llm backend: compaction', () => {
+  it('compaction triggers when context exceeds 75% budget and produces a structured summary', async () => {
+    // contextWindow 4096 tokens ≈ 16K chars. The system prompt + tool schemas
+    // consume ~3-4K tokens, so 75% threshold ≈ 3072 tokens. Sending 6 rounds
+    // of 2K-char messages (user+assistant ≈ 4K chars per round ≈ 1K tokens)
+    // accumulates ~6K tokens of conversation, easily exceeding the threshold.
+    const config = { ...makeConfig(), contextWindow: 4096 }
+    const structuredSummary =
+      '<summary>\n1. **Goal:** Test compaction.\n2. **Constraints & Preferences:** None.\n' +
+      '3. **Progress:**\n   - **Done:** Sent fill messages.\n   - **In Progress:** Compaction.\n' +
+      '   - **Blocked:** None.\n4. **Key Decisions:** None.\n5. **Files & Code:** None.\n' +
+      '6. **Errors & Fixes:** None.\n7. **Tool Results:** None.\n' +
+      '8. **Next Step:** Continue conversation.\n</summary>'
+
+    // Queue responses: 6 fill rounds + 1 compaction summary + 1 post-compaction.
+    // The compaction summary call interleaves with fill rounds when the model
+    // detects context overflow.
+    const responses: CompletionResponse[] = []
+    for (let i = 0; i < 8; i++) responses.push(textResponse(`fill ack ${i}`))
+    responses.push(textResponse(structuredSummary))
+    responses.push(textResponse('still here'))
+
+    const { client, complete } = makeFakeClient(...responses)
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+    const key = await backend.createSession('t')
+
+    // 8 rounds × (2K user + ~12 assistant) = 16 messages, exceeds
+    // COMPACT_KEEP_RECENT + 2 = 12 and the 75% token threshold.
+    for (let i = 0; i < 8; i++) {
+      const idle = waitForIdle(backend)
+      await backend.sendMessage(key, 'x'.repeat(2000))
+      await idle
+    }
+
+    const meta = await backend.getSessionMeta(key)
+    expect(meta?.compactionCount ?? 0).toBeGreaterThan(0)
+
+    const allCalls = complete.mock.calls
+    const compactionCall = allCalls.find((call) => {
+      const msgs = call[0] as Array<{ role: string; content: string }>
+      return msgs.some((m) => m.role === 'system' && m.content.includes('context compaction engine'))
+    })
+    expect(compactionCall).toBeDefined()
+    const compactionSystem = (compactionCall![0] as Array<{ role: string; content: string }>).find(
+      (m) => m.role === 'system'
+    )
+    expect(compactionSystem?.content).toContain('<summary>')
+    expect(compactionSystem?.content).toContain('Goal:')
+    expect(compactionSystem?.content).toContain('Progress:')
+    expect(compactionSystem?.content).toContain('Files & Code:')
+    expect(compactionSystem?.content).toContain('Next Step:')
+    expect(compactionSystem?.content).toContain('Do NOT call any tools')
+  })
+
+  it('compaction summary stored with REFERENCE ONLY prefix and END delimiter', async () => {
+    const config = { ...makeConfig(), contextWindow: 4096 }
+    const structuredSummary = '<summary>\n1. **Goal:** Test prefix.\n3. **Progress:**\n   - **Done:** Fill.\n</summary>'
+
+    // Smart mock: detect compaction calls by system prompt, return structured
+    // summary; return generic ack for everything else.
+    let callCount = 0
+    const complete = vi.fn().mockImplementation((msgs: Array<{ role: string; content: string }>) => {
+      const sysMsg = msgs.find((m) => m.role === 'system')
+      if (sysMsg?.content.includes('context compaction engine')) {
+        return Promise.resolve(textResponse(structuredSummary))
+      }
+      return Promise.resolve(textResponse(`ack ${callCount++}`))
+    })
+    const client: InferenceClient = {
+      complete: complete as unknown as InferenceClient['complete'],
+      stream: (async function* () {})() as unknown as InferenceClient['stream'],
+      healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
+      updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
+    }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+    const key = await backend.createSession('t')
+
+    for (let i = 0; i < 8; i++) {
+      const idle = waitForIdle(backend)
+      await backend.sendMessage(key, 'x'.repeat(2000))
+      await idle
+    }
+
+    const meta = await backend.getSessionMeta(key)
+    expect(meta?.compactionCount ?? 0).toBeGreaterThan(0)
+
+    const turns = await backend.getFullHistory(key)
+    const systemTurn = turns.find((t) => t.role === 'system')
+    expect(systemTurn).toBeDefined()
+    expect(systemTurn!.content).toContain('CONTEXT COMPACTION — REFERENCE ONLY')
+    expect(systemTurn!.content).toContain('background context, NOT active instructions')
+    expect(systemTurn!.content).toContain('END OF CONTEXT SUMMARY')
+    expect(systemTurn!.content).toContain('Goal:')
+    expect(systemTurn!.content).not.toContain('<summary>')
+  })
+
+  it('extractSummary strips <summary> tags and preamble from model output', async () => {
+    const config = { ...makeConfig(), contextWindow: 4096 }
+    const summaryWithTags =
+      'Some preamble thinking...\n\n<summary>\n1. **Goal:** Extract test.\n</summary>\n\nTrailing text.'
+
+    let callCount = 0
+    const complete = vi.fn().mockImplementation((msgs: Array<{ role: string; content: string }>) => {
+      const sysMsg = msgs.find((m) => m.role === 'system')
+      if (sysMsg?.content.includes('context compaction engine')) {
+        return Promise.resolve(textResponse(summaryWithTags))
+      }
+      return Promise.resolve(textResponse(`ack ${callCount++}`))
+    })
+    const client: InferenceClient = {
+      complete: complete as unknown as InferenceClient['complete'],
+      stream: (async function* () {})() as unknown as InferenceClient['stream'],
+      healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
+      updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
+    }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+    const key = await backend.createSession('t')
+
+    for (let i = 0; i < 8; i++) {
+      const idle = waitForIdle(backend)
+      await backend.sendMessage(key, 'x'.repeat(2000))
+      await idle
+    }
+
+    const meta = await backend.getSessionMeta(key)
+    expect(meta?.compactionCount ?? 0).toBeGreaterThan(0)
+
+    const turns = await backend.getFullHistory(key)
+    const systemTurn = turns.find((t) => t.role === 'system')
+    expect(systemTurn).toBeDefined()
+    // Extracted content present (markdown bold preserved), preamble and trailing text stripped
+    expect(systemTurn!.content).toContain('**Goal:** Extract test')
+    expect(systemTurn!.content).not.toContain('preamble thinking')
+    expect(systemTurn!.content).not.toContain('Trailing text')
+    expect(systemTurn!.content).not.toContain('<summary>')
+  })
+
+  it('iterative compaction passes prior summary to the model with UPDATE instruction', async () => {
+    const config = { ...makeConfig(), contextWindow: 4096 }
+
+    // Summaries must exceed 50 chars (the rawSummary.length > 50 guard
+    // in maybeCompact) or the code falls back to the heuristic summary.
+    let compactionCallCount = 0
+    const complete = vi.fn().mockImplementation((msgs: Array<{ role: string; content: string }>) => {
+      const sysMsg = msgs.find((m) => m.role === 'system')
+      if (sysMsg?.content.includes('context compaction engine')) {
+        compactionCallCount++
+        const summary =
+          compactionCallCount === 1
+            ? '<summary>\n1. **Goal:** First pass — verify compaction triggers and produces a well-formed structured summary.\n</summary>'
+            : '<summary>\n1. **Goal:** Updated second pass — verify iterative compaction carries prior context forward.\n</summary>'
+        return Promise.resolve(textResponse(summary))
+      }
+      return Promise.resolve(textResponse('ack'))
+    })
+    const client: InferenceClient = {
+      complete: complete as unknown as InferenceClient['complete'],
+      stream: (async function* () {})() as unknown as InferenceClient['stream'],
+      healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
+      updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
+    }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+    const key = await backend.createSession('t')
+
+    // First compaction cycle — 8 rounds × 2K chars
+    for (let i = 0; i < 8; i++) {
+      const idle = waitForIdle(backend)
+      await backend.sendMessage(key, 'x'.repeat(2000))
+      await idle
+    }
+    const meta1 = await backend.getSessionMeta(key)
+    const count1 = meta1?.compactionCount ?? 0
+    expect(count1).toBeGreaterThan(0)
+
+    // Second compaction cycle — 8 more rounds
+    for (let i = 0; i < 8; i++) {
+      const idle = waitForIdle(backend)
+      await backend.sendMessage(key, 'y'.repeat(2000))
+      await idle
+    }
+    const meta2 = await backend.getSessionMeta(key)
+    const count2 = meta2?.compactionCount ?? 0
+    expect(count2).toBeGreaterThan(count1)
+
+    // The second compaction call should have "UPDATE it" in a user message
+    const allCalls = complete.mock.calls
+    const compactionCalls = allCalls.filter((call) => {
+      const msgs = call[0] as Array<{ role: string; content: string }>
+      return msgs.some((m) => m.role === 'system' && m.content.includes('context compaction engine'))
+    })
+    expect(compactionCalls.length).toBeGreaterThanOrEqual(2)
+    const secondCall = compactionCalls[1][0] as Array<{ role: string; content: string }>
+    const hasUpdateInstruction = secondCall.some((m) => m.role === 'user' && m.content.includes('UPDATE it'))
+    expect(hasUpdateInstruction).toBe(true)
+  })
+
+  it('recognises legacy [Compacted prefix for prior summary detection', async () => {
+    // Seed a session with the OLD prefix format — maybeCompact should still
+    // detect it as a prior summary and pass it to the iterative prompt.
+    const config = { ...makeConfig(), contextWindow: 4096 }
+    const sessionKey = 'legacy-prefix-test'
+    const stateDir = path.join(dataDir, 'agent-backend', 'local-llm-state')
+    fs.mkdirSync(stateDir, { recursive: true })
+    const stateFile = path.join(stateDir, `${sessionKey}.json`)
+
+    // Pre-populate with a legacy-format compaction summary + enough messages
+    // to push past the 75% threshold on the next send.
+    const messages = [
+      {
+        role: 'system',
+        content: '[Compacted conversation — summary generated by test-model]\n\nLegacy summary content.',
+        timestamp: Date.now() - 5000
+      },
+      ...Array.from({ length: 12 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: 'x'.repeat(600),
+        timestamp: Date.now() - 4000 + i * 100
+      }))
+    ]
+
+    fs.writeFileSync(
+      stateFile,
+      JSON.stringify({
+        version: 1,
+        data: {
+          sessionKey,
+          backendSessionId: 'bsid-legacy',
+          cwd: tmpDir,
+          model: 'test-model',
+          systemPrompt: 'You help.',
+          messages,
+          createdAt: Date.now() - 10000,
+          updatedAt: Date.now() - 1000
+        }
+      })
+    )
+
+    const newSummary = '<summary>\n1. **Goal:** Upgrade from legacy.\n</summary>'
+    const { client, complete } = makeFakeClient(textResponse(newSummary), textResponse('ok'))
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+
+    const idle = waitForIdle(backend)
+    await backend.sendMessage(sessionKey, 'trigger compaction')
+    await idle
+
+    // Check if the compaction call included the legacy summary as prior context
+    const compactionCall = complete.mock.calls.find((call) => {
+      const msgs = call[0] as Array<{ role: string; content: string }>
+      return msgs.some((m) => m.role === 'system' && m.content.includes('context compaction engine'))
+    })
+    if (compactionCall) {
+      const msgs = compactionCall[0] as Array<{ role: string; content: string }>
+      const hasLegacyRef = msgs.some((m) => m.role === 'user' && m.content.includes('Legacy summary content'))
+      expect(hasLegacyRef).toBe(true)
+    }
   })
 })

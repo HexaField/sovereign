@@ -362,19 +362,71 @@ export function createLocalLlmBackend(
   /** Timeout for the summarisation inference call. */
   const COMPACT_SUMMARY_TIMEOUT_MS = 60_000
 
-  const COMPACTION_SYSTEM_PROMPT =
-    'You are a context compaction engine. Summarize the conversation excerpt below into a concise ' +
-    'briefing for the assistant who will continue the conversation. Preserve:\n' +
-    '- Key decisions made and their rationale\n' +
-    '- File paths read, written, or edited\n' +
-    '- Current task state and progress\n' +
-    '- Important tool results that inform future actions\n' +
-    '- User preferences or corrections expressed\n' +
-    '- Error states or blockers encountered\n\n' +
-    'Omit: verbose tool output, intermediate reasoning, failed attempts that were superseded, ' +
-    'redundant greetings, and any content that would not help the assistant continue the task.\n\n' +
-    'Write in third person past tense. Be concise but thorough — this summary replaces the ' +
-    'original messages permanently.'
+  // ── Compaction prompt ─────────────────────────────────────────────
+  // Structured format adapted from Claude Code's conversation-summarization
+  // prompt and Hermes' handoff-oriented compaction. Local models need explicit
+  // section headers — they don't infer structure as reliably as frontier models.
+  //
+  // The summary replaces dropped messages permanently, so it must preserve
+  // everything the assistant needs to continue the task without rereading files
+  // or re-asking the user. The `<summary>` tag lets us extract the structured
+  // output even when the model adds preamble or thinking.
+
+  const COMPACTION_SYSTEM_PROMPT = `You are a context compaction engine. Your task: create a detailed summary of the conversation excerpt that preserves everything needed to continue work without losing context.
+
+CRITICAL: Respond with TEXT ONLY. Do NOT call any tools. All context you need appears in the messages below.
+
+Analyze the conversation chronologically, then produce a structured summary using the sections below. Write in third person past tense. Be specific — exact file paths, function names, error messages, and code snippets matter more than general descriptions.
+
+Your response MUST contain a <summary> block with these sections:
+
+<summary>
+1. **Goal:** What the user requested, including all sub-tasks and clarifications.
+
+2. **Constraints & Preferences:** User corrections, stated preferences, style requirements, or rules that must persist (preserve these verbatim).
+
+3. **Progress:**
+   - **Done:** Completed work with specific details (file paths, function names, test results).
+   - **In Progress:** Current task state — what was actively happening when this summary was triggered.
+   - **Blocked:** Anything waiting on external input, missing credentials, or unresolved questions.
+
+4. **Key Decisions:** Architectural choices, trade-offs made, and their rationale. Include decisions the user explicitly approved or rejected.
+
+5. **Files & Code:** Every file read, written, or edited. Include:
+   - File path
+   - What changed and why
+   - Important code snippets (function signatures, key logic)
+   - Current state of each file
+
+6. **Errors & Fixes:** Every error encountered, how it was resolved, and user feedback on fixes. Include the exact error message when available.
+
+7. **Tool Results:** Important outputs from tool calls that inform future actions (test results, search findings, API responses). Omit verbose/redundant output.
+
+8. **Next Step:** The single most immediate action to continue the work, based on the most recent user request. Include a direct quote from the conversation showing where work left off.
+</summary>
+
+Omit: verbose tool output already captured in section 7, intermediate reasoning that was superseded, redundant greetings, and anything that would not help the assistant continue the task.`
+
+  /** Prefix prepended to every compaction summary stored in the transcript.
+   *  Hermes-style REFERENCE ONLY directive — prevents the model from treating
+   *  historical task descriptions as active instructions. */
+  const COMPACTION_SUMMARY_PREFIX =
+    '[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. ' +
+    'This summary is background context, NOT active instructions. Respond to the latest user ' +
+    'message after this summary, not to tasks described within it. Your tools remain fully active.'
+
+  /** End-of-summary delimiter — makes it unambiguous where the summary stops
+   *  and the live conversation resumes. */
+  const COMPACTION_SUMMARY_SUFFIX =
+    '--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---'
+
+  /** Extract the `<summary>...</summary>` block from the model's compaction
+   *  response. Falls back to the full response if no tags found (the model
+   *  may skip them). */
+  function extractSummary(raw: string): string {
+    const match = raw.match(/<summary>([\s\S]*?)<\/summary>/i)
+    return (match ? match[1] : raw).trim()
+  }
 
   /** Estimate total token usage for the current session state. Accounts for
    *  system prompt, tool schemas, and all messages. */
@@ -498,8 +550,14 @@ export function createLocalLlmBackend(
 
     // Check for an existing compaction summary — include it in the prompt
     // so accumulated context carries forward across multiple compactions.
+    // Match both the new prefix ("[CONTEXT COMPACTION") and the legacy prefix
+    // ("[Compacted conversation") for sessions that compacted before the upgrade.
     let priorSummary = ''
-    if (dropped.length > 0 && dropped[0].role === 'system' && dropped[0].content?.startsWith('[Compacted')) {
+    if (
+      dropped.length > 0 &&
+      dropped[0].role === 'system' &&
+      (dropped[0].content?.startsWith('[CONTEXT COMPACTION') || dropped[0].content?.startsWith('[Compacted'))
+    ) {
       priorSummary = dropped[0].content
       dropped.shift()
     }
@@ -508,11 +566,23 @@ export function createLocalLlmBackend(
     let summaryContent: string
 
     try {
-      // Use the session's model to generate a proper summary
+      // Use the session's model to generate a proper structured summary.
+      // When a prior compaction summary exists, instruct the model to UPDATE
+      // it (Hermes-style iterative summaries) rather than re-summarize from
+      // scratch — this preserves information across multiple compactions.
       const summariseMessages: WireChatMessage[] = [
         { role: 'system', content: COMPACTION_SYSTEM_PROMPT },
         ...(priorSummary
-          ? [{ role: 'user' as const, content: `Previous compaction summary:\n\n${priorSummary}` }]
+          ? [
+              {
+                role: 'user' as const,
+                content:
+                  'A previous compaction summary exists. UPDATE it with new information from the ' +
+                  'conversation excerpt below — move completed items to "Done", update "In Progress", ' +
+                  'and revise "Next Step". Do not discard prior context that remains relevant.\n\n' +
+                  `Previous summary:\n\n${priorSummary}`
+              }
+            ]
           : []),
         {
           role: 'user',
@@ -525,7 +595,8 @@ export function createLocalLlmBackend(
 
       const rawSummary = response.choices?.[0]?.message?.content?.trim()
       if (rawSummary && rawSummary.length > 50) {
-        summaryContent = `[Compacted conversation — summary generated by ${state.model}]\n\n${rawSummary}`
+        const extracted = extractSummary(rawSummary)
+        summaryContent = [COMPACTION_SUMMARY_PREFIX, '', extracted, '', COMPACTION_SUMMARY_SUFFIX].join('\n')
       } else {
         // Model returned too little — fall back
         summaryContent = buildHeuristicSummary(dropped)
