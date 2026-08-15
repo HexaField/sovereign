@@ -1004,6 +1004,30 @@ export function createClaudeCodeBackend(
         // Best-effort — the next session loop start re-registers anyway.
         console.error('[claude-code] PostCompact MCP rehydration failed:', (err as Error)?.message ?? err)
       }
+      // Cozempic post-compaction prune — run standard-tier strategies on the
+      // JSONL to clean up pre-compaction residue (tool-use-result-strip,
+      // metadata-strip, envelope-strip, etc.).  Fire-and-forget: pruning
+      // happens async and does not block the model's next turn.
+      if (state.sessionFile && fs.existsSync(state.sessionFile)) {
+        const { execFile } = await import('node:child_process')
+        const cozempicBin = process.env.COZEMPIC_BIN ?? 'cozempic'
+        execFile(
+          cozempicBin,
+          ['treat', '--rx', 'standard', state.sessionFile],
+          { timeout: 30_000 },
+          (err, stdout, stderr) => {
+            if (err) {
+              // Cozempic not installed or failed — log and continue.
+              // Not a hard failure: the conversation functions without it.
+              if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+                console.warn(`[claude-code] PostCompact cozempic prune failed: ${err.message}`)
+              }
+            } else if (stdout.trim()) {
+              console.log(`[claude-code] PostCompact cozempic: ${stdout.trim().split('\n')[0]}`)
+            }
+          }
+        )
+      }
       return { continue: true }
     }
     const onStop = async (input: HookInput) => {
