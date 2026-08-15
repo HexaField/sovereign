@@ -48,6 +48,8 @@ const MAX_ENTRIES = 200
 const FILE_NAME = 'simple-conversation.json'
 /** Grace period (ms) for the voice-response summary to replace a raw turn. */
 const VOICE_GRACE_MS = 5000
+/** Max chars for a text-mode hex entry before truncation. */
+const TEXT_ENTRY_MAX_CHARS = 500
 
 // ── Text stripping ────────────────────────────────────────────────────
 
@@ -81,6 +83,19 @@ function stripToPlainText(raw: string): string {
   return text.trim()
 }
 
+/** Truncate a text-mode response to a concise first paragraph, capped at
+ *  TEXT_ENTRY_MAX_CHARS. Keeps the simple conversation readable without
+ *  dumping the full agent output. */
+function truncateForSimpleView(text: string): string {
+  // Take the first paragraph (split on double newline)
+  const firstPara = text.split(/\n\n/)[0].trim()
+  if (firstPara.length <= TEXT_ENTRY_MAX_CHARS) return firstPara
+  // Truncate at last word boundary within the limit
+  const cut = firstPara.lastIndexOf(' ', TEXT_ENTRY_MAX_CHARS)
+  const end = cut > TEXT_ENTRY_MAX_CHARS * 0.5 ? cut : TEXT_ENTRY_MAX_CHARS
+  return firstPara.slice(0, end) + '…'
+}
+
 export function createSimpleConversation(deps: SimpleConversationDeps) {
   const { bus, config, dataDir } = deps
   const filePath = dataDir ? path.join(dataDir, FILE_NAME) : null
@@ -93,10 +108,23 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
       const raw = fs.readFileSync(filePath, 'utf-8')
       const parsed = JSON.parse(raw) as SimpleConversationEntry[]
       if (Array.isArray(parsed)) {
+        let prevTs = ''
+        let prevRole = ''
         for (const e of parsed) {
-          if (e && typeof e.text === 'string' && typeof e.role === 'string') {
-            entries.push(e)
+          if (!e || typeof e.text !== 'string' || typeof e.role !== 'string') continue
+          // Drop placeholder entries from the pre-fix streaming path
+          if (e.text === '(streaming summary)') continue
+          // Deduplicate consecutive hex entries with the same timestamp
+          // (artifact of the timer/reply race before the guard fix)
+          if (e.role === 'hex' && prevRole === 'hex' && e.timestamp === prevTs) continue
+          // Retroactively truncate overly long text entries from before
+          // the truncation fix — keeps the persisted view consistent
+          if (e.role === 'hex' && e.modality === 'text' && e.text.length > TEXT_ENTRY_MAX_CHARS) {
+            e.text = truncateForSimpleView(e.text)
           }
+          entries.push(e)
+          prevTs = e.timestamp
+          prevRole = e.role
         }
         // Trim to cap in case an old file exceeded the limit
         if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES)
@@ -160,6 +188,10 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
   // first, the stripped raw text gets pushed instead.
 
   const deferredTurns = new Map<string, { timer: ReturnType<typeof setTimeout>; text: string; timestamp: string }>()
+  /** Guard against the timer/reply race: when the deferred timer fires
+   *  first, it adds the threadId here so the subsequent presence.reply
+   *  handler skips its own push (preventing a duplicate entry). */
+  const timerFiredFor = new Set<string>()
 
   function cancelDeferred(threadId: string): void {
     const pending = deferredTurns.get(threadId)
@@ -178,7 +210,12 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
     // Voice summary arrived — cancel any deferred raw turn so we use
     // the summary instead of the verbose markdown response.
     const cfg = config()
-    if (cfg.gatewayThreadId) cancelDeferred(cfg.gatewayThreadId)
+    if (cfg.gatewayThreadId) {
+      cancelDeferred(cfg.gatewayThreadId)
+      // Race guard: if the deferred timer already fired and pushed a
+      // text entry, skip this push to avoid duplicates.
+      if (timerFiredFor.delete(cfg.gatewayThreadId)) return
+    }
 
     push({
       role: 'hex',
@@ -221,9 +258,12 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
     const threadId = payload.threadId
     const timer = setTimeout(() => {
       deferredTurns.delete(threadId)
+      // Signal that the timer fired — the presence.reply handler checks
+      // this to avoid pushing a duplicate voice entry.
+      timerFiredFor.add(threadId)
       push({
         role: 'hex',
-        text: stripped,
+        text: truncateForSimpleView(stripped),
         modality: 'text',
         timestamp: event.timestamp
       })
@@ -258,6 +298,7 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
       // Cancel deferred turn timers
       for (const [, pending] of deferredTurns) clearTimeout(pending.timer)
       deferredTurns.clear()
+      timerFiredFor.clear()
       // Flush pending writes before clearing
       if (writeTimer) {
         clearTimeout(writeTimer)
