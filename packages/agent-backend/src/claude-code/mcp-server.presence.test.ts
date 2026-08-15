@@ -141,6 +141,85 @@ describe('mcp-server presence tools', () => {
       expect(presence.tools.reply_voice).toHaveBeenCalledWith('hello world', undefined)
     })
 
+    it('presence_reply_voice passes deviceId when provided', async () => {
+      const presence = makePresence()
+      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
+      const tools = getTools(deps)
+      await invokeHandler(tools, 'presence_reply_voice', { text: 'hello', deviceId: 'phone-1' })
+      expect(presence.tools.reply_voice).toHaveBeenCalledWith('hello', { deviceId: 'phone-1' })
+    })
+
+    it('presence_reply_ad4m calls the ad4m reply handler', async () => {
+      const presence = makePresence()
+      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
+      const tools = getTools(deps)
+      await invokeHandler(tools, 'presence_reply_ad4m', { text: 'response' })
+      expect(presence.tools.reply_ad4m).toHaveBeenCalledWith('response', undefined)
+    })
+
+    it('presence_reply_ad4m passes perspectiveUuid and channelAddress', async () => {
+      const presence = makePresence()
+      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
+      const tools = getTools(deps)
+      await invokeHandler(tools, 'presence_reply_ad4m', {
+        text: 'reply',
+        perspectiveUuid: 'p-uuid',
+        channelAddress: 'ch-addr'
+      })
+      expect(presence.tools.reply_ad4m).toHaveBeenCalledWith('reply', {
+        perspectiveUuid: 'p-uuid',
+        channelAddress: 'ch-addr'
+      })
+    })
+
+    it('presence_reply_text calls the text reply handler', async () => {
+      const presence = makePresence()
+      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
+      const tools = getTools(deps)
+      await invokeHandler(tools, 'presence_reply_text', { text: 'hello user' })
+      expect(presence.tools.reply_text).toHaveBeenCalledWith('hello user', undefined)
+    })
+
+    it('presence_reply_text resolves threadId via resolveThreadId', async () => {
+      const presence = makePresence({
+        resolveThreadId: vi.fn().mockReturnValue('resolved-uuid')
+      })
+      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
+      const tools = getTools(deps)
+      await invokeHandler(tools, 'presence_reply_text', { text: 'broadcast', threadId: 'my-label' })
+      expect(presence.resolveThreadId).toHaveBeenCalledWith('my-label')
+      expect(presence.tools.reply_text).toHaveBeenCalledWith('broadcast', { threadId: 'resolved-uuid' })
+    })
+
+    it('presence_reply_webhook calls the webhook reply handler', async () => {
+      const presence = makePresence()
+      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
+      const tools = getTools(deps)
+      await invokeHandler(tools, 'presence_reply_webhook', { text: 'ack', source: 'github-webhook' })
+      expect(presence.tools.reply_webhook).toHaveBeenCalledWith('ack', { source: 'github-webhook' })
+    })
+
+    it('presence_watch adds a thread with reason', async () => {
+      const presence = makePresence()
+      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
+      const tools = getTools(deps)
+      const result = await invokeHandler(tools, 'presence_watch', { threadId: 'neural-nets', reason: 'monitoring SNN' })
+      expect(presence.resolveThreadId).toHaveBeenCalledWith('neural-nets')
+      expect(presence.watch.add).toHaveBeenCalledWith('neural-nets', 'monitoring SNN')
+      const parsed = JSON.parse(result.content[0].text)
+      expect(parsed.watched.threadId).toBe('t1')
+    })
+
+    it('presence_unwatch removes a thread', async () => {
+      const presence = makePresence()
+      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
+      const tools = getTools(deps)
+      const result = await invokeHandler(tools, 'presence_unwatch', { threadId: 'neural-nets' })
+      expect(presence.watch.remove).toHaveBeenCalledWith('neural-nets')
+      const parsed = JSON.parse(result.content[0].text)
+      expect(parsed.removed).toBe(true)
+    })
+
     it('presence_watched returns the watch list', async () => {
       const presence = makePresence()
       const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
@@ -171,6 +250,14 @@ describe('mcp-server presence tools', () => {
       const tools = getTools(deps)
       await invokeHandler(tools, 'presence_internal_send', { text: 'remember this' })
       expect(presence.forwardToInternal).toHaveBeenCalledWith('remember this', undefined)
+    })
+
+    it('presence_internal_send passes deviceId when provided', async () => {
+      const presence = makePresence()
+      const deps = makeDeps({ presence, currentSessionKey: () => GATEWAY_ID })
+      const tools = getTools(deps)
+      await invokeHandler(tools, 'presence_internal_send', { text: 'from phone', deviceId: 'phone-1' })
+      expect(presence.forwardToInternal).toHaveBeenCalledWith('from phone', { deviceId: 'phone-1' })
     })
 
     it('presence_internal_history reads internal turns', async () => {
