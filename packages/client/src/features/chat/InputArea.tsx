@@ -364,12 +364,12 @@ export function InputArea(props: InputAreaProps) {
   // ────────────────────────────────────────────────────────────────────────────
 
   const handleSend = async () => {
-    // Stop any active streaming session before sending
-    const hadStreaming = hasActiveSession()
-    if (hadStreaming) {
+    // Safety: stop any lingering streaming session
+    if (hasActiveSession()) {
       stopStreaming()
       setVoiceState('idle')
       setVoiceTimerText('')
+      setEditingTranscript(false)
     }
 
     const text = inputValue().trim()
@@ -411,20 +411,7 @@ export function InputArea(props: InputAreaProps) {
     if (props.onSend) {
       props.onSend(msg, rawFiles.length ? rawFiles : undefined)
     } else {
-      // Tag with voice origin when message contained streaming STT content
-      if (hadStreaming) {
-        const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
-        const name = deviceName()
-        sendMessage(msg, rawFiles.length ? rawFiles : undefined, {
-          origin: {
-            modality: 'voice' as const,
-            ...(deviceId ? { deviceId } : {}),
-            ...(name ? { deviceName: name } : {})
-          }
-        })
-      } else {
-        sendMessage(msg)
-      }
+      sendMessage(msg, rawFiles.length ? rawFiles : undefined)
     }
   }
 
@@ -456,8 +443,13 @@ export function InputArea(props: InputAreaProps) {
   }
 
   // ── Streaming STT ──────────────────────────────
-  // Mic button toggles streaming transcription. Words appear in the
-  // textarea as spoken. User can pause, edit, resume, then send.
+  // Mic button toggles streaming transcription. The recording bar shows
+  // streaming transcript text. Tapping the text enters edit mode (textarea
+  // within the bar, mic pauses). Blur exits edit mode (mic resumes).
+  // Send always tags voice origin. Cancel discards everything.
+
+  const [editingTranscript, setEditingTranscript] = createSignal(false)
+  let editTranscriptRef: HTMLTextAreaElement | undefined
 
   // Initialise streaming WS on first render
   {
@@ -479,12 +471,10 @@ export function InputArea(props: InputAreaProps) {
       // Resume — start mic again, append to existing text
       try {
         setVoiceState('listening')
+        setEditingTranscript(false)
         await startStreaming(
           inputValue(),
-          (fullText) => {
-            setInputValue(fullText)
-            autoResize()
-          },
+          (fullText) => setInputValue(fullText),
           (timerText) => setVoiceTimerText(timerText)
         )
       } catch {
@@ -496,12 +486,10 @@ export function InputArea(props: InputAreaProps) {
     // Start fresh
     try {
       setVoiceState('listening')
+      setEditingTranscript(false)
       await startStreaming(
         inputValue(),
-        (fullText) => {
-          setInputValue(fullText)
-          autoResize()
-        },
+        (fullText) => setInputValue(fullText),
         (timerText) => setVoiceTimerText(timerText)
       )
     } catch {
@@ -509,10 +497,73 @@ export function InputArea(props: InputAreaProps) {
     }
   }
 
+  /** Enter edit mode — pause mic, show textarea in recording bar. */
+  const enterTranscriptEdit = () => {
+    if (streamingState() === 'streaming') {
+      pauseStreaming()
+      setVoiceState('idle')
+      setVoiceTimerText('')
+    }
+    setEditingTranscript(true)
+    setTimeout(() => {
+      if (editTranscriptRef) {
+        editTranscriptRef.focus()
+        const len = editTranscriptRef.value.length
+        editTranscriptRef.setSelectionRange(len, len)
+        editTranscriptRef.style.height = 'auto'
+        editTranscriptRef.style.height = Math.min(editTranscriptRef.scrollHeight, 120) + 'px'
+      }
+    }, 0)
+  }
+
+  /** Exit edit mode — resume mic with current text. */
+  const exitTranscriptEdit = async () => {
+    setEditingTranscript(false)
+    try {
+      setVoiceState('listening')
+      await startStreaming(
+        inputValue(),
+        (fullText) => setInputValue(fullText),
+        (timerText) => setVoiceTimerText(timerText)
+      )
+    } catch {
+      setVoiceState('idle')
+    }
+  }
+
+  /** Send from the recording bar — always voice origin. */
+  const handleVoiceSend = () => {
+    stopStreaming()
+    setVoiceState('idle')
+    setVoiceTimerText('')
+    setEditingTranscript(false)
+
+    const text = inputValue().trim()
+    if (!text) return
+
+    pushMsgHistory(threadKey(), text)
+    setHistoryIndex(-1)
+    draftText = ''
+    setInputValue('')
+    if (textareaRef) textareaRef.style.height = 'auto'
+
+    const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
+    const name = deviceName()
+    sendMessage(text, undefined, {
+      origin: {
+        modality: 'voice' as const,
+        ...(deviceId ? { deviceId } : {}),
+        ...(name ? { deviceName: name } : {})
+      }
+    })
+  }
+
   const cancelRecording = () => {
     stopStreaming()
     setVoiceState('idle')
     setVoiceTimerText('')
+    setEditingTranscript(false)
+    setInputValue('')
   }
 
   const currentAgentStatus = () => props.agentStatus ?? storeAgentStatus()
@@ -835,13 +886,13 @@ export function InputArea(props: InputAreaProps) {
           </div>
         </Show>
 
-        {/* Text input — always visible (streaming transcript appears here) */}
-        <div class="flex flex-1 items-end gap-1">
-          <div class="relative flex-1">
+        {/* Text input (hidden when recording) */}
+        <Show when={!hasActiveSession()}>
+          <div class="flex flex-1 items-end gap-1">
             <textarea
               ref={textareaRef}
               rows={1}
-              placeholder={streamingState() === 'streaming' ? 'Listening…' : 'Message...'}
+              placeholder="Message..."
               value={inputValue()}
               onInput={(e) => {
                 setInputValue(e.currentTarget.value)
@@ -856,10 +907,10 @@ export function InputArea(props: InputAreaProps) {
                 setTextFocused(false)
                 autoResize()
               }}
-              class="max-h-[120px] w-full resize-none rounded-xl px-3.5 py-2.5 font-[inherit] text-sm transition-colors outline-none"
+              class="max-h-[120px] flex-1 resize-none rounded-xl px-3.5 py-2.5 font-[inherit] text-sm transition-colors outline-none"
               style={{
                 background: 'var(--c-bg)',
-                border: `1px solid ${streamingState() === 'streaming' ? 'var(--c-danger, #ef4444)' : 'var(--c-border)'}`,
+                border: '1px solid var(--c-border)',
                 color: 'var(--c-text)',
                 'min-height': `${INPUT_MIN_HEIGHT}px`
               }}
@@ -868,36 +919,7 @@ export function InputArea(props: InputAreaProps) {
               }}
               disabled={props.disabled}
             />
-            {/* Streaming indicator overlay */}
-            <Show when={streamingState() === 'streaming'}>
-              <div class="pointer-events-none absolute top-1 right-2 flex items-center gap-1.5">
-                <div
-                  class="h-1.5 w-1.5 animate-pulse rounded-full"
-                  style={{ background: 'var(--c-danger, #ef4444)' }}
-                />
-                <span class="text-[10px] tabular-nums" style={{ color: 'var(--c-danger, #ef4444)' }}>
-                  {voiceTimerText()}
-                </span>
-              </div>
-            </Show>
-            {/* Paused indicator */}
-            <Show when={streamingState() === 'paused'}>
-              <div class="pointer-events-none absolute top-1 right-2 flex items-center gap-1.5">
-                <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                  paused — tap mic to resume
-                </span>
-                <span
-                  class="pointer-events-auto cursor-pointer text-[10px]"
-                  style={{ color: 'var(--c-danger, #ef4444)' }}
-                  onClick={cancelRecording}
-                >
-                  ✕
-                </span>
-              </div>
-            </Show>
-          </div>
-          {/* History navigation arrows (mobile) */}
-          <Show when={streamingState() === 'idle'}>
+            {/* History navigation arrows (mobile) */}
             <div class="flex flex-col gap-0.5 md:hidden">
               <button
                 class="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded transition-colors"
@@ -956,8 +978,103 @@ export function InputArea(props: InputAreaProps) {
                 </svg>
               </button>
             </div>
-          </Show>
-        </div>
+          </div>
+        </Show>
+
+        {/* Recording bar — replaces textarea during voice input */}
+        <Show when={hasActiveSession()}>
+          <div
+            class="flex flex-1 items-center gap-2 rounded-xl px-3.5 py-2"
+            style={{ background: 'var(--c-rec-bg, rgba(239,68,68,0.1))' }}
+          >
+            {/* Red dot + timer */}
+            <Show when={streamingState() === 'streaming'}>
+              <div
+                class="h-2 w-2 shrink-0 animate-pulse rounded-full"
+                style={{ background: 'var(--c-danger, #ef4444)' }}
+              />
+            </Show>
+            <Show when={streamingState() === 'paused'}>
+              <div class="h-2 w-2 shrink-0 rounded-full" style={{ background: 'var(--c-text-muted)' }} />
+            </Show>
+            <span class="shrink-0 text-[13px] tabular-nums" style={{ color: 'var(--c-danger, #ef4444)' }}>
+              {voiceTimerText() || '0:00'}
+            </span>
+
+            {/* Transcript display / edit toggle */}
+            <Show
+              when={!editingTranscript()}
+              fallback={
+                <textarea
+                  ref={editTranscriptRef}
+                  rows={1}
+                  value={inputValue()}
+                  onInput={(e) => setInputValue(e.currentTarget.value)}
+                  onFocusOut={() => void exitTranscriptEdit()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      handleVoiceSend()
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      void exitTranscriptEdit()
+                    }
+                  }}
+                  class="max-h-[80px] min-h-[28px] flex-1 resize-none rounded-lg px-2.5 py-1 font-[inherit] text-sm outline-none"
+                  style={{
+                    background: 'var(--c-bg)',
+                    border: '1px solid var(--c-accent)',
+                    color: 'var(--c-text)'
+                  }}
+                />
+              }
+            >
+              <span
+                class="flex-1 cursor-pointer truncate text-sm"
+                style={{
+                  color: inputValue().trim() ? 'var(--c-text)' : 'var(--c-text-muted)',
+                  'font-style': inputValue().trim() ? 'normal' : 'italic'
+                }}
+                onClick={enterTranscriptEdit}
+              >
+                {inputValue().trim() || (streamingState() === 'streaming' ? 'Listening…' : 'Tap to edit')}
+              </span>
+            </Show>
+
+            {/* Cancel */}
+            <span
+              class="shrink-0 cursor-pointer px-2 py-1 text-xs"
+              style={{ color: 'var(--c-text-muted)' }}
+              onClick={cancelRecording}
+            >
+              cancel
+            </span>
+
+            {/* Voice send */}
+            <button
+              class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30"
+              style={{ background: 'var(--c-accent)' }}
+              disabled={!inputValue().trim()}
+              onClick={handleVoiceSend}
+              title="Send as voice message"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          </div>
+        </Show>
 
         {/* Action buttons */}
         <div
