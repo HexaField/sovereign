@@ -32,3 +32,10 @@ export {
 export { createAd4mPoster } from './ad4m-poster.js'
 export { createPresenceModule, type PresenceModule, type PresenceModuleDeps } from './module.js'
 export { bootstrapKnowledgeGraph, type KnowledgeGraphBootstrapOpts } from './knowledge-graph.js'
+export {
+  createSimpleConversation,
+  type SimpleConversation,
+  type SimpleConversationEntry,
+  type SimpleConversationConfig,
+  type SimpleConversationDeps
+} from './simple-conversation.js'

@@ -96,7 +96,12 @@ import {
 } from '@sovereign/thread-presence'
 import { createBrowserService } from '@sovereign/browser'
 import { createAd4mService } from '@sovereign/ad4m'
-import { createPresenceModule, createAd4mPoster, bootstrapKnowledgeGraph } from '@sovereign/presence'
+import {
+  createPresenceModule,
+  createAd4mPoster,
+  bootstrapKnowledgeGraph,
+  createSimpleConversation
+} from '@sovereign/presence'
 import { createForestRoutes } from './forest/routes.js'
 import { createDashboardRoutes } from './dashboard/routes.js'
 import { createMeetingsService } from '@sovereign/meetings'
@@ -855,6 +860,42 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
     // Expose for shutdown
     ;(app as any).__conversationSummary = conversationSummary
+  }
+
+  // ── Simple conversation (user↔Hex dialogue, presence gateway) ─────
+  // Collects user messages + Hex's outbound replies (reply_voice /
+  // reply_text) into a chronological log — the voice-level conversation
+  // stripped of internal reasoning and tool calls. Powers the summary
+  // bubble's "simple conversation" toggle.
+  {
+    const simpleConversation = createSimpleConversation({
+      bus,
+      config: () => {
+        const gateway = threadManager.getPresenceThread('gateway')
+        return { gatewayThreadId: gateway?.id ?? null }
+      }
+    })
+
+    // REST endpoint — initial load / page refresh.
+    app.get('/api/presence/simple-conversation', (_req, res) => {
+      res.json({ entries: simpleConversation.getEntries() })
+    })
+
+    // Push new entries to the chat WS channel for live client updates.
+    bus.on('presence.simple-conversation.updated', (e) => {
+      const payload = (e.payload ?? {}) as {
+        entry?: { role: string; text: string; modality: string; timestamp: string }
+        total?: number
+      }
+      if (!payload.entry) return
+      wsHandler.broadcastToChannel('chat', {
+        type: 'chat.simple-conversation',
+        entry: payload.entry,
+        total: payload.total
+      })
+    })
+
+    ;(app as any).__simpleConversation = simpleConversation
   }
 
   registerChatWs(wsHandler, chatModule)

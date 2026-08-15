@@ -30,6 +30,7 @@ import { initPresence } from './features/threads/presence.js'
 import { loadMutes } from './features/threads/mute-store.js'
 import { initChatStore } from './features/chat/store.js'
 import { initSummaryStore } from './features/chat/summary-store.js'
+import { initSimpleConversationStore } from './features/chat/simple-conversation-store.js'
 import { initCronResultsStore } from './features/crons/CronResultsBanner.js'
 import { hasDeviceName, initDeviceNameSync } from './features/settings/device-name.js'
 
@@ -118,6 +119,9 @@ export default function App() {
 
     const cleanupSummary = initSummaryStore(wsStore, threadKey)
     cleanups.push(cleanupSummary)
+
+    const cleanupSimpleConversation = initSimpleConversationStore(wsStore, threadKey)
+    cleanups.push(cleanupSimpleConversation)
     void loadMutes()
 
     // Listen for sovereign:open-file events from file chips

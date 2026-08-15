@@ -121,6 +121,7 @@ export function createPresenceModule(deps: PresenceModuleDeps): PresenceModule {
   })
 
   const tools = createResponseTools({
+    bus: deps.bus,
     lastOrigin,
     voice: deps.voice,
     ws: deps.ws,

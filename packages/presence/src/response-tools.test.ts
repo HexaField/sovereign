@@ -44,6 +44,7 @@ function makeTools() {
     }
   }
   const tools = createResponseTools({
+    bus,
     lastOrigin,
     voice: {
       async synthesize(text: string) {
@@ -64,12 +65,16 @@ function makeTools() {
     },
     presenceThreadId: () => GATEWAY_ID
   })
-  return { tools, bus, wsSent, chatSent, ad4mPosted, lastOrigin }
+  const replies: Array<{ modality: string; text: string }> = []
+  bus.on('presence.reply', (event: any) => {
+    replies.push(event.payload)
+  })
+  return { tools, bus, wsSent, chatSent, ad4mPosted, lastOrigin, replies }
 }
 
 describe('Response tools', () => {
   it('reply_voice uses last voice origin deviceId by default', async () => {
-    const { tools, bus, wsSent } = makeTools()
+    const { tools, bus, wsSent, replies } = makeTools()
     bus.emit({
       type: 'chat.message.origin',
       payload: { threadId: GATEWAY_ID, origin: { modality: 'voice', deviceId: 'dev-a' } satisfies MessageOrigin }
@@ -81,6 +86,9 @@ describe('Response tools', () => {
     expect(wsSent).toHaveLength(1)
     expect(wsSent[0].deviceId).toBe('dev-a')
     expect(wsSent[0].kind).toBe('binary')
+    // Emits a presence.reply event for the simple conversation log
+    expect(replies).toHaveLength(1)
+    expect(replies[0]).toEqual({ modality: 'voice', text: 'hello' })
   })
 
   it('reply_voice respects explicit deviceId override', async () => {
@@ -94,10 +102,12 @@ describe('Response tools', () => {
   })
 
   it('reply_voice returns no-target-device when no origin recorded', async () => {
-    const { tools } = makeTools()
+    const { tools, replies } = makeTools()
     const result = await tools.reply_voice('hello')
     expect(result.delivered).toBe(false)
     expect(result.reason).toBe('no-target-device')
+    // Failed delivery does NOT emit presence.reply
+    expect(replies).toHaveLength(0)
   })
 
   it('reply_ad4m uses last ad4m origin perspective/channel by default', async () => {
@@ -125,9 +135,12 @@ describe('Response tools', () => {
   })
 
   it('reply_text defaults to the gateway thread', async () => {
-    const { tools, chatSent } = makeTools()
+    const { tools, chatSent, replies } = makeTools()
     await tools.reply_text('hi from presence')
     expect(chatSent).toEqual([{ threadId: GATEWAY_ID, content: 'hi from presence' }])
+    // Emits a presence.reply event for the simple conversation log
+    expect(replies).toHaveLength(1)
+    expect(replies[0]).toEqual({ modality: 'text', text: 'hi from presence' })
   })
 
   it('reply_text can target another thread when threadId given', async () => {

@@ -156,6 +156,7 @@ describe('reply_text error handling', () => {
     const lastOrigin = createLastOriginTracker(bus, () => GATEWAY_ID)
     const postAssistantTurn = overrides?.postAssistantTurn ?? vi.fn()
     const tools = createResponseTools({
+      bus,
       lastOrigin,
       chat: { postAssistantTurn },
       presenceThreadId: () => GATEWAY_ID
@@ -189,6 +190,7 @@ describe('reply_text error handling', () => {
     const bus = makeBus()
     const lastOrigin = createLastOriginTracker(bus, () => null as any)
     const tools = createResponseTools({
+      bus,
       lastOrigin,
       chat: { postAssistantTurn: vi.fn() },
       presenceThreadId: () => null
