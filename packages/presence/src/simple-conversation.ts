@@ -42,6 +42,10 @@ export interface SimpleConversationDeps {
   /** Directory for the persistence file. When absent, the store runs
    *  in-memory only (useful for tests). */
   dataDir?: string
+  /** When provided, text-mode assistant responses get summarised via LLM
+   *  instead of truncated. Falls back to truncation on error or when
+   *  absent. Uses the same prompt as the voice summary pipeline. */
+  summarize?: (text: string) => Promise<string>
 }
 
 const MAX_ENTRIES = 200
@@ -97,7 +101,7 @@ function truncateForSimpleView(text: string): string {
 }
 
 export function createSimpleConversation(deps: SimpleConversationDeps) {
-  const { bus, config, dataDir } = deps
+  const { bus, config, dataDir, summarize } = deps
   const filePath = dataDir ? path.join(dataDir, FILE_NAME) : null
   const entries: SimpleConversationEntry[] = []
 
@@ -261,12 +265,26 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
       // Signal that the timer fired — the presence.reply handler checks
       // this to avoid pushing a duplicate voice entry.
       timerFiredFor.add(threadId)
-      push({
-        role: 'hex',
-        text: truncateForSimpleView(stripped),
-        modality: 'text',
-        timestamp: event.timestamp
-      })
+
+      // When an LLM summarizer exists, generate a real summary instead
+      // of truncating. Falls back to truncation on error.
+      if (summarize) {
+        void summarize(stripped)
+          .then((summary) => {
+            const text = summary && summary.length > 0 ? summary : truncateForSimpleView(stripped)
+            push({ role: 'hex', text, modality: 'text', timestamp: event.timestamp })
+          })
+          .catch(() => {
+            push({ role: 'hex', text: truncateForSimpleView(stripped), modality: 'text', timestamp: event.timestamp })
+          })
+      } else {
+        push({
+          role: 'hex',
+          text: truncateForSimpleView(stripped),
+          modality: 'text',
+          timestamp: event.timestamp
+        })
+      }
     }, VOICE_GRACE_MS)
 
     deferredTurns.set(payload.threadId, { timer, text: stripped, timestamp: event.timestamp })

@@ -754,6 +754,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // Generates immediate spoken acknowledgments and post-response summaries
   // for voice-originated messages using the local-llm for text generation
   // and the configured TTS service for audio synthesis.
+  //
+  // The `summarizeForSimpleConversation` closure gets wired into the
+  // simple-conversation module so text-originated assistant turns receive
+  // real LLM summaries instead of truncated raw text.
+  let summarizeForSimpleConversation: ((text: string) => Promise<string>) | undefined
   {
     const llmCfg = localLlmConfigFromStore(configStore, dataDir)
     const voiceLlm = createInferenceClient({
@@ -862,6 +867,23 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       }
     })
 
+    // Expose the summarize function for the simple-conversation module
+    // so text-originated turns get real LLM summaries, not truncation.
+    summarizeForSimpleConversation = async (text: string) => {
+      const v = configStore.get<SovereignConfig['voice']>('voice')
+      const summaryPrompt = v?.prompts?.summarySystem || DEFAULT_SUMMARY_SYSTEM
+      type Role = 'system' | 'user' | 'assistant' | 'tool'
+      const messages: Array<{ role: Role; content: string }> = [
+        { role: 'system', content: summaryPrompt },
+        {
+          role: 'user',
+          content: `Summarize this assistant response for spoken delivery:\n\n${text.slice(0, 4000)}`
+        }
+      ]
+      const completion = await voiceLlm.complete(messages)
+      return completion.choices?.[0]?.message?.content?.trim() || ''
+    }
+
     // Expose for shutdown
     ;(app as any).__voiceResponse = voiceResponse
   }
@@ -941,7 +963,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         const gateway = threadManager.getPresenceThread('gateway')
         return { gatewayThreadId: gateway?.id ?? null }
       },
-      dataDir: path.join(dataDir, 'presence')
+      dataDir: path.join(dataDir, 'presence'),
+      summarize: summarizeForSimpleConversation
     })
 
     // REST endpoint — initial load / page refresh.
