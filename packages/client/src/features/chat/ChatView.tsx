@@ -81,6 +81,9 @@ export interface ChatViewProps {
   onAbort: () => void
   threadKey: string
   onViewSubagent?: (sessionKey: string, label: string) => void
+  /** When 'summary', hides pagination, cron banners, and work sections
+   *  — shows only message bubbles and live status indicators. */
+  mode?: 'full' | 'summary'
 }
 
 /**
@@ -325,8 +328,8 @@ export function ChatView(props: ChatViewProps) {
         tabindex="0"
         style={{ outline: 'none' }}
       >
-        {/* Load older messages */}
-        {hasOlderMessages() && (
+        {/* Load older messages — hidden in summary mode */}
+        {props.mode !== 'summary' && hasOlderMessages() && (
           <div class="flex items-center justify-center">
             <button
               class="rounded-md border border-white/10 px-3 py-1 text-xs hover:bg-white/5"
@@ -339,8 +342,8 @@ export function ChatView(props: ChatViewProps) {
           </div>
         )}
 
-        {/* Cron Results Banner */}
-        <CronResultsBanner />
+        {/* Cron Results Banner — hidden in summary mode */}
+        {props.mode !== 'summary' && <CronResultsBanner />}
 
         {/* Empty state */}
         {isEmptyState(props.messages) && (
@@ -383,17 +386,19 @@ export function ChatView(props: ChatViewProps) {
                   </div>
                 )}
 
-                {/* Work section between user and assistant turns. Filter
-                    AskUserQuestion pairs out — they render richly below as
-                    interactive cards; showing them raw here would duplicate
-                    the whole question payload as a JSON blob. */}
-                {(() => {
-                  const items = (msg.turn.workItems || []).filter((w) => {
-                    if (!isAskUserQuestionToolName(w.name)) return true
-                    return false
-                  })
-                  return items.length > 0 ? <WorkSection work={items} /> : null
-                })()}
+                {/* Work section between user and assistant turns — hidden in
+                    summary mode. Filter AskUserQuestion pairs out — they
+                    render richly below as interactive cards; showing them
+                    raw here would duplicate the whole question payload as
+                    a JSON blob. */}
+                {props.mode !== 'summary' &&
+                  (() => {
+                    const items = (msg.turn.workItems || []).filter((w) => {
+                      if (!isAskUserQuestionToolName(w.name)) return true
+                      return false
+                    })
+                    return items.length > 0 ? <WorkSection work={items} /> : null
+                  })()}
 
                 {/* Subagent task prompt — show as a special collapsible card */}
                 {isSubagentTask() ? (
@@ -405,48 +410,45 @@ export function ChatView(props: ChatViewProps) {
                   )
                 )}
 
-                {/* Subagent cards for sessions_spawn tool calls */}
-                {extractSubagentSpawns(msg.turn.workItems || []).map((spawn) => (
-                  <SubagentCard
-                    sessionKey={spawn.sessionKey}
-                    task={spawn.task}
-                    onView={(key, label) => props.onViewSubagent?.(key, label)}
-                  />
-                ))}
+                {/* Subagent cards for sessions_spawn tool calls — hidden in summary mode */}
+                {props.mode !== 'summary' &&
+                  extractSubagentSpawns(msg.turn.workItems || []).map((spawn) => (
+                    <SubagentCard
+                      sessionKey={spawn.sessionKey}
+                      task={spawn.task}
+                      onView={(key, label) => props.onViewSubagent?.(key, label)}
+                    />
+                  ))}
 
-                {/* AskUserQuestion cards — one per tool_call whose name is
-                    `AskUserQuestion`. Renders as an interactive form while
-                    the server-side hook is still awaiting an answer, and
-                    switches to the read-only summary once a tool_result JSON
-                    lands in the same workItems list. */}
-                {extractAskUserQuestions(msg.turn.workItems || []).map((entry) => (
-                  <AskUserQuestionSlot
-                    toolCallId={entry.toolCallId}
-                    answered={entry.answered}
-                    threadKey={props.threadKey}
-                  />
-                ))}
+                {/* AskUserQuestion cards — hidden in summary mode */}
+                {props.mode !== 'summary' &&
+                  extractAskUserQuestions(msg.turn.workItems || []).map((entry) => (
+                    <AskUserQuestionSlot
+                      toolCallId={entry.toolCallId}
+                      answered={entry.answered}
+                      threadKey={props.threadKey}
+                    />
+                  ))}
               </>
             )
           }}
         </For>
 
-        {/* ── Orphan pending AskUserQuestion cards ────────────────────
-            Any pending question whose tool_use_id isn't matched by a tool_call
-            in the visible turns' workItems. This is the surface for subagent
-            questions — the tool_call lives in the subagent's transcript, but
-            the store's hook walks the parentSessionKey chain so the pending
-            entry lands on the top-level thread the user is viewing. Also
-            covers post-restart / history-truncation cases where a pending
-            entry has no local anchor. */}
-        <For each={orphanPendingQuestions(props.messages)}>
-          {(entry) => <AskUserQuestionSlot toolCallId={entry.toolCallId} answered={null} threadKey={props.threadKey} />}
-        </For>
+        {/* ── Orphan pending AskUserQuestion cards — hidden in summary mode */}
+        {props.mode !== 'summary' && (
+          <For each={orphanPendingQuestions(props.messages)}>
+            {(entry) => (
+              <AskUserQuestionSlot toolCallId={entry.toolCallId} answered={null} threadKey={props.threadKey} />
+            )}
+          </For>
+        )}
 
-        {/* ── Live streaming section (independent of history turns) ── */}
-        <Show when={liveWork().length > 0}>
-          <WorkSection work={liveWork()} />
-        </Show>
+        {/* ── Live streaming section (independent of history turns) — hidden in summary mode */}
+        {props.mode !== 'summary' && (
+          <Show when={liveWork().length > 0}>
+            <WorkSection work={liveWork()} />
+          </Show>
+        )}
 
         {/* Live activity indicator — shows what the agent is currently doing */}
         <Show when={liveWork().length > 0 || props.agentStatus === 'working' || props.agentStatus === 'thinking'}>

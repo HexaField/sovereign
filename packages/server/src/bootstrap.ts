@@ -67,7 +67,7 @@ import { registerChatWs } from '@sovereign/chat'
 import { createThreadRoutes } from '@sovereign/threads'
 import { registerThreadsWs } from '@sovereign/threads'
 import { createForwardHandler } from '@sovereign/threads'
-import { createVoiceModule, createVoiceResponse } from '@sovereign/voice'
+import { createVoiceModule, createVoiceResponse, DEFAULT_SUMMARY_SYSTEM } from '@sovereign/voice'
 import { createVoiceRoutes } from '@sovereign/voice'
 import { registerVoiceStreamChannel } from '@sovereign/voice'
 import { createConversationSummary, createConversationSummaryRoutes } from '@sovereign/voice'
@@ -817,6 +817,49 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         baseUrl: next.baseUrl,
         model: next.model
       })
+    })
+
+    // ── On-demand TTS speak endpoint ──────────────────────────────────
+    // Summarises text via the same LLM prompt used for voice response,
+    // synthesises via F5-TTS, and returns base64 audio for client-side
+    // playback (e.g. "Play aloud" context menu on assistant messages).
+    app.post('/api/voice/speak', async (req, res) => {
+      const { text } = (req as any).body ?? {}
+      if (!text || typeof text !== 'string') {
+        res.status(400).json({ error: 'text required' })
+        return
+      }
+
+      const v = configStore.get<SovereignConfig['voice']>('voice')
+      if (!v?.ttsUrl) {
+        res.status(503).json({ error: 'No TTS service configured' })
+        return
+      }
+
+      try {
+        // Summarise for spoken delivery (same prompt as voice response summary)
+        const summaryPrompt = v?.prompts?.summarySystem || DEFAULT_SUMMARY_SYSTEM
+        type Role = 'system' | 'user' | 'assistant' | 'tool'
+        const messages: Array<{ role: Role; content: string }> = [
+          { role: 'system', content: summaryPrompt },
+          {
+            role: 'user',
+            content: `Summarize this assistant response for spoken delivery:\n\n${text.slice(0, 4000)}`
+          }
+        ]
+        const completion = await voiceLlm.complete(messages)
+        const spokenText = completion.choices?.[0]?.message?.content?.trim() || text.slice(0, 500)
+
+        // Synthesise audio
+        const { audio, durationMs } = await voiceModule.synthesize(spokenText)
+        const audioBase64 = audio.toString('base64')
+
+        res.json({ audio: audioBase64, spokenText, durationMs })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[voice-speak] synthesis failed:', msg)
+        res.status(500).json({ error: msg })
+      }
     })
 
     // Expose for shutdown
