@@ -572,3 +572,143 @@ describe('SimpleConversation — persistence', () => {
     store.shutdown()
   })
 })
+
+describe('SimpleConversation — LLM summarize', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('uses the summarize function instead of truncation when provided', async () => {
+    const bus = makeBus()
+    const summarize = vi.fn(async (text: string) => `Summary of: ${text.slice(0, 20)}`)
+    const store = createSimpleConversation({
+      bus,
+      config: () => ({ gatewayThreadId: GATEWAY }),
+      summarize
+    })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: {
+        threadId: GATEWAY,
+        turn: { role: 'assistant', content: 'A long response with many details.' }
+      }
+    })
+
+    // Fire the grace-period timer
+    vi.advanceTimersByTime(5100)
+    // Flush the summarize promise
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(summarize).toHaveBeenCalledOnce()
+    const entries = store.getEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0].text).toMatch(/^Summary of:/)
+    expect(entries[0].modality).toBe('text')
+    store.shutdown()
+  })
+
+  it('falls back to truncation when summarize rejects', async () => {
+    const bus = makeBus()
+    const summarize = vi.fn(async () => {
+      throw new Error('LLM down')
+    })
+    const store = createSimpleConversation({
+      bus,
+      config: () => ({ gatewayThreadId: GATEWAY }),
+      summarize
+    })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: {
+        threadId: GATEWAY,
+        turn: { role: 'assistant', content: 'Short response.' }
+      }
+    })
+
+    vi.advanceTimersByTime(5100)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(summarize).toHaveBeenCalledOnce()
+    const entries = store.getEntries()
+    expect(entries).toHaveLength(1)
+    // Falls back to truncated text, not the summary
+    expect(entries[0].text).toBe('Short response.')
+    store.shutdown()
+  })
+
+  it('falls back to truncation when summarize returns empty string', async () => {
+    const bus = makeBus()
+    const summarize = vi.fn(async () => '')
+    const store = createSimpleConversation({
+      bus,
+      config: () => ({ gatewayThreadId: GATEWAY }),
+      summarize
+    })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: {
+        threadId: GATEWAY,
+        turn: { role: 'assistant', content: 'Another response.' }
+      }
+    })
+
+    vi.advanceTimersByTime(5100)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const entries = store.getEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0].text).toBe('Another response.')
+    store.shutdown()
+  })
+
+  it('voice summary still takes priority over LLM summarize', async () => {
+    const bus = makeBus()
+    const summarize = vi.fn(async () => 'LLM summary')
+    const store = createSimpleConversation({
+      bus,
+      config: () => ({ gatewayThreadId: GATEWAY }),
+      summarize
+    })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: {
+        threadId: GATEWAY,
+        turn: { role: 'assistant', content: 'Full response text.' }
+      }
+    })
+
+    // Voice summary arrives within grace window — cancels the deferred timer
+    bus.emit({
+      type: 'presence.reply',
+      timestamp: '2026-01-01T00:00:07Z',
+      source: 'voice-response',
+      payload: { modality: 'voice', text: 'Spoken summary.' }
+    })
+
+    vi.advanceTimersByTime(5100)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Summarize never called — voice summary arrived first
+    expect(summarize).not.toHaveBeenCalled()
+    const entries = store.getEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0].text).toBe('Spoken summary.')
+    expect(entries[0].modality).toBe('voice')
+    store.shutdown()
+  })
+})
