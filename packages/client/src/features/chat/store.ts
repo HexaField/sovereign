@@ -43,6 +43,9 @@ export const [serverQueue, setServerQueue] = createSignal<QueuedMessage[]>([])
 // instead of threading TTS delivery state through ParsedTurn itself.
 export const [ttsDeliveredTurns, setTtsDeliveredTurns] = createSignal<Set<number>>(new Set())
 
+/** Last send error — set on POST failure, cleared on next successful send or after 8 seconds. */
+export const [sendError, setSendError] = createSignal<string | null>(null)
+
 function draftKey(threadKey: string): string {
   return `sovereign:draft:${threadKey}`
 }
@@ -340,12 +343,13 @@ export async function sendMessage(
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     // Nothing else to do — the SSE `queue` event will arrive with the
     // newly-queued message and the UI updates declaratively from there.
+    setSendError(null)
   } catch (err) {
-    // Always-online assumption: a failed POST is exceptional. Log and let
-    // the user retry by clicking send again. Surfacing an inline toast
-    // is a future enhancement — for now the dropped send is silent here
-    // and visible only through server logs.
+    const msg = err instanceof Error ? err.message : 'Send failed'
     console.error('[chat] send failed:', err)
+    setSendError(msg)
+    // Auto-clear after 8 seconds so the banner doesn't persist forever.
+    setTimeout(() => setSendError(null), 8000)
   }
 }
 

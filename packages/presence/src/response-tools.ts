@@ -182,12 +182,18 @@ export function createResponseTools(deps: ResponseToolsDeps): PresenceResponseTo
     },
 
     async reply_webhook(text, opts) {
-      // Surface exists so PRESENCE.md can reference it; full implementation
-      // deferred until a webhook gateway lands. Touching args silences the
-      // unused-parameter lint without obscuring intent.
-      void text
-      void opts.source
-      return { delivered: false, reason: 'not-implemented' }
+      // No outbound webhook gateway exists yet. Emit a bus event so the
+      // reply attempt stays observable (logs, metrics, future gateway).
+      deps.bus.emit({
+        type: 'presence.reply.webhook.attempted',
+        timestamp: new Date().toISOString(),
+        source: 'presence',
+        payload: { text, webhookSource: opts.source, delivered: false }
+      })
+      console.warn(
+        `[presence] reply_webhook called for source "${opts.source}" but no webhook gateway exists — message not delivered`
+      )
+      return { delivered: false, reason: 'no-webhook-gateway' }
     }
   }
 }

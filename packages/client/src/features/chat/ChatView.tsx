@@ -16,7 +16,8 @@ import {
   streamingHtml,
   liveWork,
   liveThinkingText,
-  serverQueue
+  serverQueue,
+  sendError
 } from './store.js'
 import { QueueIndicator } from './QueueIndicator.js'
 import { ChatIcon } from '../../ui/icons.js'
@@ -509,6 +510,13 @@ export function ChatView(props: ChatViewProps) {
 
       {/* Queue indicator — collapsed button / expandable list */}
       <QueueIndicator />
+
+      {/* Send error banner — auto-clears after 8s */}
+      <Show when={sendError()}>
+        <div class="px-4 py-1 text-xs" style={{ color: 'var(--c-error, #e74c3c)' }}>
+          ⚠ Send failed: {sendError()} — try again.
+        </div>
+      </Show>
 
       {/* Compaction indicator */}
       {props.compacting && (

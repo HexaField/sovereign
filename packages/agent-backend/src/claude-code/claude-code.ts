@@ -320,6 +320,7 @@ interface PersistedClaudeSessionState {
   textAccum: string[]
   lastUsage?: ClaudeSessionState['lastUsage']
   sessionFile?: string
+  compactionCount?: number
 }
 
 const SESSION_STATE_SCHEMA_VERSION = 1
@@ -438,7 +439,8 @@ export function createClaudeCodeBackend(
       thinkingAccum: state.thinkingAccum,
       textAccum: state.textAccum,
       lastUsage: state.lastUsage,
-      sessionFile: state.sessionFile
+      sessionFile: state.sessionFile,
+      compactionCount: state.compactionCount
     })
   }
 
@@ -457,9 +459,9 @@ export function createClaudeCodeBackend(
         label: value.label,
         parentSessionKey: value.parentSessionKey,
         lastRecycleAt: value.lastRecycleAt,
-        // Recycle count holds no persisted counterpart — it starts back at 0
-        // every restart, same as the in-memory dedup state it sits beside.
+        // Recycle count resets on restart — it gates dedup within a process.
         recycleCount: 0,
+        compactionCount: value.compactionCount ?? 0,
         liveSubagents: new Set(), // cleared on restart — nothing survives the process boundary
         streamLastLength: value.streamLastLength,
         thinkingAccum: value.thinkingAccum,
@@ -469,7 +471,25 @@ export function createClaudeCodeBackend(
       }
       internal.sessions.set(key, state)
       indexSession(state)
-      if (value.parentSessionKey) internal.subagentToParent.set(value.backendSessionId, value.parentSessionKey)
+      if (value.parentSessionKey) {
+        internal.subagentToParent.set(value.backendSessionId, value.parentSessionKey)
+        // Mark subagents that were working before the restart as abandoned —
+        // they can't resume across a process boundary. Emit a system turn so
+        // the parent thread's transcript shows what happened.
+        if (value.agentStatus === 'working' || value.agentStatus === 'thinking') {
+          console.warn(`[claude-code] subagent ${key} was ${value.agentStatus} at shutdown — marking abandoned`)
+          emitter.emit('chat.turn', {
+            sessionKey: value.parentSessionKey,
+            turn: {
+              role: 'system' as const,
+              content: `⚠️ Subagent abandoned (${value.label ?? key}) — was ${value.agentStatus} when Sovereign restarted. The task did not complete.`,
+              timestamp: Date.now(),
+              workItems: [],
+              thinkingBlocks: []
+            }
+          })
+        }
+      }
     }
   }
   rehydrate()
@@ -969,6 +989,7 @@ export function createClaudeCodeBackend(
       const state = stateForHook(input)
       if (!state) return { continue: true }
       state.compactionCount = (state.compactionCount ?? 0) + 1
+      persistState(state)
       emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: false })
       // MCP rehydration: compact tears down the SDK's deferred-tool catalog
       // for any MCP server that didn't re-register itself. Forcing

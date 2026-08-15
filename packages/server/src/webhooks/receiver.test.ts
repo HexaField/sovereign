@@ -225,10 +225,7 @@ describe('Webhook Receiver', () => {
     expect((busEvents[0].payload as { replayed: boolean }).replayed).toBe(true)
   })
 
-  it('rate limits requests per source when configured', async () => {
-    // MAY support — mark as passing (not implemented in Phase 1)
-    expect(true).toBe(true)
-  })
+  it.todo('rate limits requests per source when configured — not implemented in Phase 1')
 })
 
 describe('Webhook Classifier', () => {

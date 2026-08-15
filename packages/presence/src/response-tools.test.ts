@@ -6,8 +6,11 @@ import type { MessageOrigin } from '@sovereign/core'
 
 function makeBus() {
   const emitter = new EventEmitter()
+  const events: Array<{ type: string; payload: unknown }> = []
   return {
+    events,
     emit(event: { type: string; payload: unknown }) {
+      events.push(event)
       emitter.emit(event.type, event)
     },
     on(type: string, handler: (event: { payload: unknown }) => void) {
@@ -149,11 +152,15 @@ describe('Response tools', () => {
     expect(chatSent[0].threadId).toBe('other-thread')
   })
 
-  it('reply_webhook always returns not-implemented', async () => {
-    const { tools } = makeTools()
+  it('reply_webhook returns no-webhook-gateway and emits bus event', async () => {
+    const { tools, bus } = makeTools()
     const result = await tools.reply_webhook('x', { source: 's' })
     expect(result.delivered).toBe(false)
-    expect(result.reason).toBe('not-implemented')
+    expect(result.reason).toBe('no-webhook-gateway')
+    // Should have emitted an observability event
+    const webhookEvents = bus.events.filter((e: any) => e.type === 'presence.reply.webhook.attempted')
+    expect(webhookEvents).toHaveLength(1)
+    expect((webhookEvents[0] as any).payload.webhookSource).toBe('s')
   })
 })
 
