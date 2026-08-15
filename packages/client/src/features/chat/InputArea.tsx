@@ -364,6 +364,9 @@ export function InputArea(props: InputAreaProps) {
   // ────────────────────────────────────────────────────────────────────────────
 
   const handleSend = async () => {
+    // Capture voice flag before stopping the session
+    const usedVoice = voiceUsedForMessage()
+
     // Safety: stop any lingering streaming session
     if (hasActiveSession()) {
       stopStreaming()
@@ -382,6 +385,7 @@ export function InputArea(props: InputAreaProps) {
       setHistoryIndex(-1)
       draftText = ''
       setInputValue('')
+      setVoiceUsedForMessage(false)
       clearScratchpad(localStorage, threadKey())
       if (textareaRef) textareaRef.style.height = 'auto'
       handleAd4mCommand(text)
@@ -403,12 +407,24 @@ export function InputArea(props: InputAreaProps) {
     draftText = ''
     setInputValue('')
     setAttachedFiles([])
+    setVoiceUsedForMessage(false)
     clearScratchpad(localStorage, threadKey())
     if (textareaRef) {
       textareaRef.style.height = 'auto'
     }
 
-    if (props.onSend) {
+    // When voice was used during composition, attach voice origin metadata
+    if (usedVoice) {
+      const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
+      const name = deviceName()
+      sendMessage(msg, rawFiles.length ? rawFiles : undefined, {
+        origin: {
+          modality: 'voice' as const,
+          ...(deviceId ? { deviceId } : {}),
+          ...(name ? { deviceName: name } : {})
+        }
+      })
+    } else if (props.onSend) {
       props.onSend(msg, rawFiles.length ? rawFiles : undefined)
     } else {
       sendMessage(msg, rawFiles.length ? rawFiles : undefined)
@@ -446,9 +462,13 @@ export function InputArea(props: InputAreaProps) {
   // Mic button toggles streaming transcription. The recording bar shows
   // streaming transcript text. Tapping the text enters edit mode (textarea
   // within the bar, mic pauses). Blur exits edit mode (mic resumes).
-  // Send always tags voice origin. Cancel discards everything.
+  // The regular send button auto-attaches voice origin when this flag
+  // indicates voice was used during message composition.
 
   const [editingTranscript, setEditingTranscript] = createSignal(false)
+  /** Tracks whether STT was used at any point during composition of the
+   *  current message. Set when streaming starts, cleared on send/cancel. */
+  const [voiceUsedForMessage, setVoiceUsedForMessage] = createSignal(false)
   let editTranscriptRef: HTMLTextAreaElement | undefined
 
   // Initialise streaming WS on first render
@@ -472,6 +492,7 @@ export function InputArea(props: InputAreaProps) {
       try {
         setVoiceState('listening')
         setEditingTranscript(false)
+        setVoiceUsedForMessage(true)
         await startStreaming(
           inputValue(),
           (fullText) => setInputValue(fullText),
@@ -487,6 +508,7 @@ export function InputArea(props: InputAreaProps) {
     try {
       setVoiceState('listening')
       setEditingTranscript(false)
+      setVoiceUsedForMessage(true)
       await startStreaming(
         inputValue(),
         (fullText) => setInputValue(fullText),
@@ -531,38 +553,12 @@ export function InputArea(props: InputAreaProps) {
     }
   }
 
-  /** Send from the recording bar — always voice origin. */
-  const handleVoiceSend = () => {
-    stopStreaming()
-    setVoiceState('idle')
-    setVoiceTimerText('')
-    setEditingTranscript(false)
-
-    const text = inputValue().trim()
-    if (!text) return
-
-    pushMsgHistory(threadKey(), text)
-    setHistoryIndex(-1)
-    draftText = ''
-    setInputValue('')
-    if (textareaRef) textareaRef.style.height = 'auto'
-
-    const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
-    const name = deviceName()
-    sendMessage(text, undefined, {
-      origin: {
-        modality: 'voice' as const,
-        ...(deviceId ? { deviceId } : {}),
-        ...(name ? { deviceName: name } : {})
-      }
-    })
-  }
-
   const cancelRecording = () => {
     stopStreaming()
     setVoiceState('idle')
     setVoiceTimerText('')
     setEditingTranscript(false)
+    setVoiceUsedForMessage(false)
     setInputValue('')
   }
 
@@ -597,31 +593,6 @@ export function InputArea(props: InputAreaProps) {
     cancelLongPress()
     // Regular tap — only fire if long press didn't trigger
     if (!didLongPress) handleSend()
-  }
-
-  const handleSendWithVoice = () => {
-    setSendMenuOpen(false)
-    const text = inputValue().trim()
-    const files = attachedFiles()
-    if (!text && !files.length) return
-
-    pushMsgHistory(threadKey(), text || '[files]')
-    setHistoryIndex(-1)
-    draftText = ''
-    setInputValue('')
-    setAttachedFiles([])
-    clearScratchpad(localStorage, threadKey())
-    if (textareaRef) textareaRef.style.height = 'auto'
-
-    const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
-    const name = deviceName()
-    sendMessage(text, undefined, {
-      origin: {
-        modality: 'voice' as const,
-        ...(deviceId ? { deviceId } : {}),
-        ...(name ? { deviceName: name } : {})
-      }
-    })
   }
 
   const handleSendImmediate = () => {
@@ -1014,7 +985,7 @@ export function InputArea(props: InputAreaProps) {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
-                      handleVoiceSend()
+                      handleSend()
                     }
                     if (e.key === 'Escape') {
                       e.preventDefault()
@@ -1050,29 +1021,6 @@ export function InputArea(props: InputAreaProps) {
             >
               cancel
             </span>
-
-            {/* Voice send */}
-            <button
-              class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30"
-              style={{ background: 'var(--c-accent)' }}
-              disabled={!inputValue().trim()}
-              onClick={handleVoiceSend}
-              title="Send as voice message"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-            </button>
           </div>
         </Show>
 
@@ -1209,31 +1157,6 @@ export function InputArea(props: InputAreaProps) {
                     class="absolute right-0 bottom-full z-50 mb-2 min-w-[200px] overflow-hidden rounded-xl shadow-lg"
                     style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
                   >
-                    <button
-                      class="flex w-full cursor-pointer items-center gap-2.5 border-none px-4 py-3 text-left text-sm transition-colors"
-                      style={{ background: 'transparent', color: 'var(--c-text)' }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-bg-raised)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                      onClick={handleSendWithVoice}
-                    >
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        style={{ 'flex-shrink': '0' }}
-                      >
-                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                      </svg>
-                      <span>Reply via voice</span>
-                    </button>
-                    <div style={{ height: '1px', background: 'var(--c-border)' }} />
                     <button
                       class="flex w-full cursor-pointer items-center gap-2.5 border-none px-4 py-3 text-left text-sm transition-colors"
                       style={{ background: 'transparent', color: 'var(--c-text)' }}
