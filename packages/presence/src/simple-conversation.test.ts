@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -232,6 +232,148 @@ describe('SimpleConversation', () => {
     })
     expect(store.getEntries()).toHaveLength(1)
     store.shutdown()
+  })
+})
+
+describe('SimpleConversation — assistant turn capture', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('captures a text-originated assistant turn after the grace period', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: { threadId: GATEWAY, turn: { role: 'assistant', content: 'Here are the results, sir.' } }
+    })
+
+    // Immediately after — still deferred
+    expect(store.getEntries()).toHaveLength(0)
+
+    // After the grace window (5s)
+    vi.advanceTimersByTime(5100)
+    expect(store.getEntries()).toHaveLength(1)
+    expect(store.getEntries()[0].role).toBe('hex')
+    expect(store.getEntries()[0].text).toBe('Here are the results, sir.')
+    expect(store.getEntries()[0].modality).toBe('text')
+    store.shutdown()
+  })
+
+  it('discards a deferred turn when a presence.reply arrives within the grace window', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    // Assistant turn completes — deferred
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: {
+        threadId: GATEWAY,
+        turn: { role: 'assistant', content: '# Full markdown response\n\nLots of detail...' }
+      }
+    })
+
+    // Voice summary arrives within grace window — replaces deferred turn
+    bus.emit({
+      type: 'presence.reply',
+      timestamp: '2026-01-01T00:00:07Z',
+      source: 'voice-response',
+      payload: { modality: 'voice', text: 'Concise spoken summary, sir.' }
+    })
+
+    // The voice summary appears immediately
+    expect(store.getEntries()).toHaveLength(1)
+    expect(store.getEntries()[0].text).toBe('Concise spoken summary, sir.')
+    expect(store.getEntries()[0].modality).toBe('voice')
+
+    // After grace window — no duplicate from the raw turn
+    vi.advanceTimersByTime(5200)
+    expect(store.getEntries()).toHaveLength(1)
+    store.shutdown()
+  })
+
+  it('strips markdown from raw assistant turns', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: {
+        threadId: GATEWAY,
+        turn: {
+          role: 'assistant',
+          content:
+            '## Build Status\n\nThe **tests** pass. Here\'s `some code`.\n\n```js\nconsole.log("hi")\n```\n\nAll good.'
+        }
+      }
+    })
+
+    vi.advanceTimersByTime(5100)
+    const text = store.getEntries()[0].text
+    expect(text).not.toContain('##')
+    expect(text).not.toContain('**')
+    expect(text).not.toContain('```')
+    expect(text).toContain('Build Status')
+    expect(text).toContain('The tests pass')
+    expect(text).toContain('All good')
+    store.shutdown()
+  })
+
+  it('ignores non-gateway assistant turns', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: { threadId: 'other-thread', turn: { role: 'assistant', content: 'Should not appear.' } }
+    })
+
+    vi.advanceTimersByTime(5100)
+    expect(store.getEntries()).toHaveLength(0)
+    store.shutdown()
+  })
+
+  it('ignores user turns on the gateway thread', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: { threadId: GATEWAY, turn: { role: 'user', content: 'User turn — skip.' } }
+    })
+
+    expect(store.getEntries()).toHaveLength(0)
+    store.shutdown()
+  })
+
+  it('cleans up deferred timers on shutdown', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'chat',
+      payload: { threadId: GATEWAY, turn: { role: 'assistant', content: 'Pending turn.' } }
+    })
+
+    // Shutdown before grace window fires
+    store.shutdown()
+    expect(store.getEntries()).toHaveLength(0)
   })
 })
 
