@@ -232,6 +232,14 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
       if (!summaryText) return
 
+      // Feed the simple conversation log — Hex's spoken response.
+      bus.emit({
+        type: 'presence.reply',
+        timestamp: new Date().toISOString(),
+        source: 'voice-response',
+        payload: { modality: 'voice', text: summaryText }
+      })
+
       // Notify client that summary audio is coming
       sendToDeviceName(deviceName, { type: 'voice.summary.pending', threadId, text: summaryText })
 

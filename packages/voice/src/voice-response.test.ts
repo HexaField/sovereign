@@ -187,6 +187,32 @@ describe('voice response — device-name routing', () => {
     vr.shutdown()
   })
 
+  it('emits presence.reply with the summary text for the simple conversation log', async () => {
+    const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
+    getDeviceName.mockReturnValue('Josh Phone')
+    const vr = createVoiceResponse(deps)
+
+    emitMessageSent(bus, {
+      threadId: 't1',
+      text: 'check the deploy',
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    await flush()
+    ;(bus.emit as ReturnType<typeof vi.fn>).mockClear()
+
+    emitTurnCompleted(bus, { threadId: 't1', turn: { role: 'assistant', content: 'All services healthy.' } })
+    await flush()
+
+    const replyEvents = (bus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .map(([e]: any) => e)
+      .filter((e: BusEvent) => e.type === 'presence.reply')
+    expect(replyEvents).toHaveLength(1)
+    expect(replyEvents[0].payload).toEqual({ modality: 'voice', text: 'Spoken text.' })
+    expect(replyEvents[0].source).toBe('voice-response')
+
+    vr.shutdown()
+  })
+
   it('clears the pending voice origin after the summary fires (one-shot per message)', async () => {
     const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
     getDeviceName.mockReturnValue('Josh Phone')
