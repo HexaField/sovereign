@@ -69,6 +69,7 @@ import { registerThreadsWs } from '@sovereign/threads'
 import { createForwardHandler } from '@sovereign/threads'
 import { createVoiceModule, createVoiceResponse } from '@sovereign/voice'
 import { createVoiceRoutes } from '@sovereign/voice'
+import { registerVoiceStreamChannel } from '@sovereign/voice'
 import { createConversationSummary, createConversationSummaryRoutes } from '@sovereign/voice'
 import { createRecordingsService } from '@sovereign/recordings'
 import { registerRecordingRoutes } from '@sovereign/recordings'
@@ -350,6 +351,15 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     voiceModule.updateConfig({ transcribeUrl: next.transcribeUrl || undefined, ttsUrl: next.ttsUrl || undefined })
   })
   app.use(createVoiceRoutes(voiceModule))
+
+  // ── Streaming STT (real-time transcription via WS) ──────────────────
+  if (cfg.voice.transcribeUrl) {
+    registerVoiceStreamChannel({
+      ws: wsHandler,
+      transcribeUrl: cfg.voice.transcribeUrl
+    })
+  }
+
   const recordingsService = createRecordingsService(dataDir)
   app.use(registerRecordingRoutes(recordingsService))
   const meetingsService = createMeetingsService(bus, dataDir)
