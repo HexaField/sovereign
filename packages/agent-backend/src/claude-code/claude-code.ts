@@ -73,6 +73,7 @@ import { createContextFilter } from './context-filter.js'
 import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
+import { parseCozempicOutput } from './cozempic-parser.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -1011,22 +1012,30 @@ export function createClaudeCodeBackend(
       if (state.sessionFile && fs.existsSync(state.sessionFile)) {
         const { execFile } = await import('node:child_process')
         const cozempicBin = process.env.COZEMPIC_BIN ?? 'cozempic'
-        execFile(
-          cozempicBin,
-          ['treat', '--rx', 'standard', state.sessionFile],
-          { timeout: 30_000 },
-          (err, stdout, stderr) => {
-            if (err) {
-              // Cozempic not installed or failed — log and continue.
-              // Not a hard failure: the conversation functions without it.
-              if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-                console.warn(`[claude-code] PostCompact cozempic prune failed: ${err.message}`)
+        execFile(cozempicBin, ['treat', '--rx', 'standard', state.sessionFile], { timeout: 30_000 }, (err, stdout) => {
+          if (err) {
+            // Cozempic not installed or failed — log and continue.
+            // Not a hard failure: the conversation functions without it.
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              console.warn(`[claude-code] PostCompact cozempic prune failed: ${err.message}`)
+            }
+          } else if (stdout.trim()) {
+            console.log(`[claude-code] PostCompact cozempic: ${stdout.trim().split('\n')[0]}`)
+            // Record context strategy metrics from cozempic output
+            if (deps.metrics) {
+              const parsed = parseCozempicOutput(stdout)
+              if (parsed) {
+                deps.metrics.recordContextStrategy({
+                  ts: Date.now(),
+                  sessionKey: state.sessionKey,
+                  backendKind: 'claude-code',
+                  model: state.model ?? 'unknown',
+                  ...parsed
+                })
               }
-            } else if (stdout.trim()) {
-              console.log(`[claude-code] PostCompact cozempic: ${stdout.trim().split('\n')[0]}`)
             }
           }
-        )
+        })
       }
       return { continue: true }
     }
@@ -1936,11 +1945,26 @@ export function createClaudeCodeBackend(
 
     try {
       const { execFileSync } = await import('node:child_process')
-      execFileSync('cozempic', ['treat', state.backendSessionId, '-rx', rx, '--execute'], {
+      const cozStdout = execFileSync('cozempic', ['treat', state.backendSessionId, '-rx', rx, '--execute'], {
         timeout: 30_000,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf-8'
       })
       method = 'cozempic'
+
+      // Record context strategy metrics from cozempic output
+      if (deps.metrics && cozStdout) {
+        const parsed = parseCozempicOutput(cozStdout)
+        if (parsed) {
+          deps.metrics.recordContextStrategy({
+            ts: Date.now(),
+            sessionKey,
+            backendKind: 'claude-code',
+            model: state.model ?? 'unknown',
+            ...parsed
+          })
+        }
+      }
     } catch {
       // Cozempic unavailable or failed — native fallback: truncate old
       // tool_result blocks in the JSONL directly.

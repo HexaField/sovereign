@@ -12,6 +12,17 @@ interface ArchSummary {
   config: { models: string[]; defaultModel: string | null }
 }
 
+interface ContextMetrics {
+  global: {
+    strategyRuns: number
+    strategyCharsSaved: number
+    strategyMessagesRemoved: number
+    compactions: number
+    totalTokensReclaimed: number
+    byStrategy: Record<string, { runs: number; charsSaved: number; messagesAffected: number }>
+  }
+}
+
 interface ActiveSession {
   threadKey: string
   agentStatus: string
@@ -36,28 +47,129 @@ function Row(props: { label: string; value: string | number; accent?: string }) 
   )
 }
 
+/** Format a char count into a human-readable size (B/KB/MB). */
+function fmtSize(chars: number): string {
+  if (chars >= 1024 * 1024) return `${(chars / (1024 * 1024)).toFixed(1)}MB`
+  if (chars >= 1024) return `${(chars / 1024).toFixed(1)}KB`
+  return `${chars}B`
+}
+
+/** Context Savings card — shows how much context the strategy pipeline
+ *  and compaction saved compared to doing nothing. */
+function ContextSavingsCard(props: { metrics: () => ContextMetrics | null }) {
+  const g = () => props.metrics()?.global
+  const hasStrategies = () => (g()?.strategyRuns ?? 0) > 0
+  const hasCompactions = () => (g()?.compactions ?? 0) > 0
+  const hasSavings = () => hasStrategies() || hasCompactions()
+
+  const sortedStrategies = () => {
+    const by = g()?.byStrategy
+    if (!by) return []
+    return Object.entries(by)
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.charsSaved - a.charsSaved)
+  }
+
+  return (
+    <Show when={hasSavings()}>
+      <div
+        class="rounded-lg border p-4"
+        style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
+      >
+        <div class="mb-3 flex items-center gap-3">
+          <span class="text-xs font-semibold tracking-wide uppercase opacity-60">Context Savings</span>
+          <Show when={hasStrategies()}>
+            <span class="rounded-full px-2 py-0.5 text-[10px]" style={{ background: '#22c55e22', color: '#22c55e' }}>
+              {g()!.strategyRuns} runs
+            </span>
+          </Show>
+        </div>
+
+        {/* Summary row */}
+        <div class="mb-3 grid gap-4" style={{ 'grid-template-columns': 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+          <Show when={hasStrategies()}>
+            <div class="space-y-1">
+              <div class="text-[10px] uppercase opacity-40">Strategy savings</div>
+              <div class="font-mono text-sm" style={{ color: '#22c55e' }}>
+                {fmtSize(g()!.strategyCharsSaved)}
+              </div>
+              <div class="text-[10px] opacity-40">{g()!.strategyMessagesRemoved} msgs pruned</div>
+            </div>
+          </Show>
+          <Show when={hasCompactions()}>
+            <div class="space-y-1">
+              <div class="text-[10px] uppercase opacity-40">Compaction reclaimed</div>
+              <div class="font-mono text-sm" style={{ color: '#3b82f6' }}>
+                {(g()!.totalTokensReclaimed / 1000).toFixed(1)}K tokens
+              </div>
+              <div class="text-[10px] opacity-40">{g()!.compactions} compactions</div>
+            </div>
+          </Show>
+          <Show when={hasStrategies() && hasCompactions()}>
+            <div class="space-y-1">
+              <div class="text-[10px] uppercase opacity-40">Combined savings</div>
+              <div class="font-mono text-sm" style={{ color: '#a855f7' }}>
+                {fmtSize(g()!.strategyCharsSaved)} + {(g()!.totalTokensReclaimed / 1000).toFixed(1)}K tok
+              </div>
+              <div class="text-[10px] opacity-40">vs. doing nothing</div>
+            </div>
+          </Show>
+        </div>
+
+        {/* Per-strategy breakdown */}
+        <Show when={sortedStrategies().length > 0}>
+          <div class="border-t pt-3" style={{ 'border-color': 'var(--c-border)' }}>
+            <div class="mb-2 text-[10px] uppercase opacity-40">By strategy</div>
+            <div class="space-y-1">
+              <For each={sortedStrategies()}>
+                {(s) => (
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="font-mono" style={{ color: 'var(--c-text-muted)' }}>
+                      {s.name}
+                    </span>
+                    <span class="flex gap-3 font-mono">
+                      <span style={{ color: '#22c55e' }}>{fmtSize(s.charsSaved)}</span>
+                      <span style={{ color: 'var(--c-text-muted)' }}>{s.messagesAffected} msgs</span>
+                      <span style={{ color: 'var(--c-text-muted)', opacity: '0.5' }}>×{s.runs}</span>
+                    </span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
+      </div>
+    </Show>
+  )
+}
+
 const StatusTab: Component = () => {
   const [health, setHealth] = createSignal<HealthData | null>(null)
   const [arch, setArch] = createSignal<ArchSummary | null>(null)
   const [sessions, setSessions] = createSignal<ActiveSession[]>([])
+  const [ctxMetrics, setCtxMetrics] = createSignal<ContextMetrics | null>(null)
   const [error, setError] = createSignal<string | null>(null)
 
   let pollTimer: ReturnType<typeof setInterval> | undefined
 
   const load = async () => {
     try {
-      const [h, a, ag] = await Promise.all([
+      const [h, a, ag, cm] = await Promise.all([
         fetchHealth().catch(() => null),
         fetch('/api/system/architecture')
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
         fetch('/api/system/agents/active')
           .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+        fetch('/api/system/metrics')
+          .then((r) => (r.ok ? r.json() : null))
           .catch(() => null)
       ])
       if (h) setHealth(h)
       if (a) setArch(a)
       if (ag) setSessions(ag.sessions ?? [])
+      if (cm) setCtxMetrics(cm)
       setError(null)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load')
@@ -176,6 +288,9 @@ const StatusTab: Component = () => {
           </Show>
         </div>
       </div>
+
+      {/* Context savings */}
+      <ContextSavingsCard metrics={ctxMetrics} />
 
       {/* Active agents quick view */}
       <Show when={sessions().length > 0}>

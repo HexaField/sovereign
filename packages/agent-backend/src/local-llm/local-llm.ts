@@ -855,6 +855,28 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
             `(${pipelineResult.durationMs.toFixed(0)}ms) for ${state.sessionKey}`
         )
         persist(state)
+
+        // Record context strategy metrics
+        if (deps.metrics) {
+          deps.metrics.recordContextStrategy({
+            ts: Date.now(),
+            sessionKey: state.sessionKey,
+            backendKind: KIND,
+            model: state.model,
+            strategies: pipelineResult.strategies.map((r) => ({
+              name: r.strategyName,
+              charsSaved: r.prunedChars,
+              messagesAffected: r.messagesAffected,
+              messagesRemoved: r.messagesRemoved,
+              messagesReplaced: r.messagesReplaced
+            })),
+            originalChars: pipelineResult.totalOriginalChars,
+            prunedChars: pipelineResult.totalPrunedChars,
+            messagesRemoved: pipelineResult.totalRemoved,
+            messagesReplaced: pipelineResult.totalReplaced,
+            durationMs: pipelineResult.durationMs
+          })
+        }
       }
     }
 
