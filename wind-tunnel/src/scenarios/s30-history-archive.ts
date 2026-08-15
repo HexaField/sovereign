@@ -48,6 +48,11 @@ function countMarked(turns: any[], role: string, marker: string): number {
   return turns.filter((t: any) => t.role === role && typeof t.content === 'string' && t.content.includes(marker)).length
 }
 
+/** Count how many history turns match a role (any content). */
+function countRole(turns: any[], role: string): number {
+  return turns.filter((t: any) => t.role === role).length
+}
+
 export const s30HistoryArchive: Scenario = {
   id: 's30',
   name: 'History Archive Preservation',
@@ -203,9 +208,10 @@ async function testLocalLlmHistory(
   const turns1 = history1?.turns ?? history1 ?? []
   metrics.llmTurnsPostStrategies = turns1.length
 
-  // Count user messages with our marker
+  // Count user messages with our marker (deterministic content).
+  // Count assistant messages by role only (mock LLM content varies).
   const userCount1 = countMarked(turns1, 'user', MARKER)
-  const assistantCount1 = countMarked(turns1, 'assistant', MARKER)
+  const assistantCount1 = countRole(turns1, 'assistant')
   metrics.llmUsersPostStrategies = userCount1
   metrics.llmAssistantsPostStrategies = assistantCount1
 
@@ -261,7 +267,7 @@ async function testLocalLlmHistory(
     metrics.llmTurnsPostRecycle = turns2.length
 
     const userCount2 = countMarked(turns2, 'user', MARKER)
-    const assistantCount2 = countMarked(turns2, 'assistant', MARKER)
+    const assistantCount2 = countRole(turns2, 'assistant')
     metrics.llmUsersPostRecycle = userCount2
     metrics.llmAssistantsPostRecycle = assistantCount2
 
