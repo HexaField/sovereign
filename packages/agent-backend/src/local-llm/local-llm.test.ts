@@ -523,6 +523,33 @@ describe('local-llm backend: context budget + recycle', () => {
     expect(budget?.tools?.entries.length).toBe(9)
   })
 
+  it('getSessionMeta.totalTokens matches getContextBudget.session.contextTokens (single source of truth)', async () => {
+    // Both getSessionMeta and getContextBudget must report the same estimated
+    // token count. Previously getSessionMeta used JSON.stringify(messages).length
+    // (inflated ~30-50% by JSON envelope) while compaction used sum-of-content.
+    const { client } = makeFakeClient(textResponse('hi'), textResponse('there'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const key = await backend.createSession('t')
+
+    let idle = waitForIdle(backend)
+    await backend.sendMessage(key, 'hello world')
+    await idle
+    idle = waitForIdle(backend)
+    await backend.sendMessage(key, 'follow-up question with some content')
+    await idle
+
+    const meta = await backend.getSessionMeta(key)
+    const budget = await backend.getContextBudget(key)
+
+    expect(meta).not.toBeNull()
+    expect(budget).not.toBeNull()
+    // Both should report the same token count
+    expect(meta!.totalTokens).toBe(budget!.session.contextTokens)
+    // And the count should be reasonable (positive, not inflated beyond context window)
+    expect(meta!.totalTokens).toBeGreaterThan(0)
+    expect(meta!.totalTokens).toBeLessThan(meta!.contextTokens!)
+  })
+
   it('getContextBudget returns null for an unknown session', async () => {
     const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: makeFakeClient().client })
     expect(await backend.getContextBudget('nope')).toBeNull()

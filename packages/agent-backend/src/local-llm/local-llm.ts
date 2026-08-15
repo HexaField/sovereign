@@ -1123,8 +1123,12 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
   async function getSessionMeta(sessionKey: string): Promise<SessionMeta | null> {
     const state = sessions.get(sessionKey)
     if (!state) return null
-    const totalChars = state.systemPrompt.length + JSON.stringify(state.messages).length
-    const estimatedTokens = estimateTokens(totalChars)
+    // Use the SAME estimator that drives compaction decisions — single source
+    // of truth. The old formula (systemPrompt.length + JSON.stringify(messages).length)
+    // inflated the count by ~30-50% from JSON envelope overhead (keys, braces,
+    // escape sequences) and omitted tool schemas, causing the UI to show more
+    // tokens than the compaction engine tracked.
+    const estimatedTokens = estimateSessionTokens(state)
     return {
       sessionKey,
       model: state.model,
@@ -1227,7 +1231,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
   async function getContextBudget(sessionKey: string): Promise<ContextBudget | null> {
     const state = sessions.get(sessionKey)
     if (!state) return null
-    const sessionChars = JSON.stringify(state.messages).length
+    // Use estimateSessionTokens — the same single source of truth that
+    // drives compaction and getSessionMeta.
     return {
       source: 'sovereign',
       generatedAt: Date.now(),
@@ -1240,7 +1245,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         schemaChars: JSON.stringify(allToolSchemas).length,
         entries: allToolSchemas.map((t) => ({ name: t.function.name, chars: JSON.stringify(t).length }))
       },
-      session: { contextTokens: estimateTokens(state.systemPrompt.length + sessionChars) },
+      session: { contextTokens: estimateSessionTokens(state) },
       disabledTools: [],
       disabledSkills: []
     }
@@ -1264,8 +1269,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     if (state.processing && !opts?.force) return null
     if (!opts?.force && state.lastRecycleAt && Date.now() - state.lastRecycleAt < RECYCLE_MIN_INTERVAL_MS) return null
 
-    const preChars = state.systemPrompt.length + JSON.stringify(state.messages).length
-    const preTokens = estimateTokens(preChars)
+    const preTokens = estimateSessionTokens(state)
 
     const keepFromIndex = Math.max(0, state.messages.length - RECYCLE_KEEP_RECENT_MESSAGES)
     let changed = false
@@ -1277,8 +1281,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       }
     }
 
-    const postChars = state.systemPrompt.length + JSON.stringify(state.messages).length
-    const postTokens = estimateTokens(postChars)
+    const postTokens = estimateSessionTokens(state)
     state.lastRecycleAt = Date.now()
     if (changed) persist(state)
 
@@ -1286,7 +1289,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       preTokens,
       postTokens,
       reclaimedTokens: preTokens - postTokens,
-      reclaimedBytes: preChars - postChars,
+      reclaimedBytes: (preTokens - postTokens) * CHARS_PER_TOKEN_ESTIMATE,
       method: 'native'
     }
   }
