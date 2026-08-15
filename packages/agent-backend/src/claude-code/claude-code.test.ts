@@ -873,6 +873,261 @@ describe('claude-code/SubagentStart + SubagentStop tracking', () => {
 })
 
 /**
+ * Auto-recycle trigger: after the fix, `maybeAutoRecycle` fires INSIDE
+ * the `for await` iterator loop on every `result` message — not deferred
+ * to the `finally` block (which never runs during normal session lifetime
+ * because the SDK iterator stays open). These tests verify the auto-trigger
+ * path executes after turn completion and that the metrics pipeline records
+ * the context snapshot.
+ */
+describe('claude-code/auto-recycle trigger on result message', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('fires maybeAutoRecycle after a result message (records context snapshot via metrics)', async () => {
+    const contextSnapshots: any[] = []
+    const metrics = {
+      recordToolCall: vi.fn(),
+      recordContextSnapshot: vi.fn((s) => contextSnapshots.push(s)),
+      recordCompaction: vi.fn(),
+      recordContextStrategy: vi.fn(),
+      recordRecycle: vi.fn()
+    }
+    // Script the SDK to emit a result with usage tokens. dispatchSdkMessage
+    // calls handleResult which sets state.lastUsage, then the auto-trigger
+    // calls maybeAutoRecycle which reads state.lastUsage and records a
+    // context snapshot.
+    const sdk = stubSdkQuery([
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        usage: {
+          input_tokens: 50000,
+          output_tokens: 100,
+          cache_read_input_tokens: 10000,
+          cache_creation_input_tokens: 5000
+        }
+      }
+    ])
+
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), contextManagement: { recycle: { enabled: true } } },
+      { sdkQuery: sdk, metrics: metrics as any }
+    )
+    await backend.createSession('t', { threadKey: 'auto-recycle-test' })
+    await backend.sendMessage('auto-recycle-test', 'trigger turn')
+
+    // Let the async iterator and maybeAutoRecycle settle
+    await new Promise((r) => setTimeout(r, 100))
+
+    // maybeAutoRecycle ran and recorded a context snapshot — proof the
+    // auto-trigger fires inside the iterator loop, not after loop exit.
+    expect(metrics.recordContextSnapshot).toHaveBeenCalled()
+    const snap = contextSnapshots[0]
+    expect(snap.sessionKey).toBe('auto-recycle-test')
+    expect(snap.totalTokens).toBeGreaterThan(0)
+    expect(snap.fillPercent).toBeGreaterThan(0)
+  })
+
+  it('does NOT fire auto-recycle for subagent sessions (parentSessionKey set)', async () => {
+    const metrics = {
+      recordToolCall: vi.fn(),
+      recordContextSnapshot: vi.fn(),
+      recordCompaction: vi.fn(),
+      recordContextStrategy: vi.fn(),
+      recordRecycle: vi.fn()
+    }
+    // Spin up a parent session first so the subagent can reference it.
+    const stub = capturingSdkQuery()
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      { sdkQuery: stub, metrics: metrics as any }
+    )
+    await backend.createSession('parent', { threadKey: 'parent' })
+    backend.sendMessage('parent', 'hello').catch(() => {})
+    for (let i = 0; i < 20 && !stub.captured.options; i++) await new Promise((r) => setImmediate(r))
+    const parentSessionId = stub.captured.sessionId as string
+
+    // Register a subagent via SubagentStart hook — this sets parentSessionKey
+    const onSubagentStart = getHook(stub.captured.options, 'SubagentStart')
+    await onSubagentStart({
+      hook_event_name: 'SubagentStart',
+      session_id: parentSessionId,
+      agent_id: 'child-no-recycle',
+      agent_type: 'general-purpose'
+    })
+
+    await new Promise((r) => setTimeout(r, 100))
+
+    // The child session state has parentSessionKey set, so the
+    // `!state.parentSessionKey` guard in the iterator loop should skip
+    // auto-recycle entirely. The metrics spy should NOT have been called
+    // for the child session.
+    const childSnaps = metrics.recordContextSnapshot.mock.calls.filter(
+      (args: any[]) => args[0]?.sessionKey === 'child-no-recycle'
+    )
+    expect(childSnaps).toHaveLength(0)
+  })
+
+  it('records accurate context fill percentage against the session contextWindow', async () => {
+    const contextSnapshots: any[] = []
+    const metrics = {
+      recordToolCall: vi.fn(),
+      recordContextSnapshot: vi.fn((s) => contextSnapshots.push(s)),
+      recordCompaction: vi.fn(),
+      recordContextStrategy: vi.fn(),
+      recordRecycle: vi.fn()
+    }
+    const sdk = stubSdkQuery([
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        usage: {
+          input_tokens: 100,
+          output_tokens: 10,
+          cache_read_input_tokens: 50,
+          cache_creation_input_tokens: 50
+        }
+      }
+    ])
+
+    // contextWindow=1000 → fill = (100+50+50)/1000 = 20%
+    const backend = createClaudeCodeBackend(
+      {
+        dataDir,
+        cwd,
+        agentDir: join(dataDir, 'agent'),
+        contextManagement: { recycle: { enabled: true, thresholdPercent: 90 } }
+      },
+      { sdkQuery: sdk, metrics: metrics as any }
+    )
+    await backend.createSession('t', { threadKey: 'fill-pct-test', contextWindow: 1000 } as any)
+    await backend.sendMessage('fill-pct-test', 'go')
+    await new Promise((r) => setTimeout(r, 100))
+
+    expect(contextSnapshots.length).toBeGreaterThan(0)
+    const snap = contextSnapshots[0]
+    // Total = input(100) + cacheRead(50) + cacheCreate(50) = 200
+    expect(snap.totalTokens).toBe(200)
+    expect(snap.contextWindow).toBe(1000)
+    expect(snap.fillPercent).toBeCloseTo(20, 0)
+  })
+})
+
+/**
+ * PostToolUse metrics: the trimmedChars calculation must handle both string
+ * and structured filter returns. Pre-fix, structured returns always measured
+ * as 0 because `typeof filtered === 'string'` excluded objects.
+ */
+describe('claude-code/PostToolUse metrics trimmedChars', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('reports non-zero outputTrimmedChars when the context filter trims a structured Bash output', async () => {
+    const toolCalls: any[] = []
+    const metrics = {
+      recordToolCall: vi.fn((t) => toolCalls.push(t)),
+      recordContextSnapshot: vi.fn(),
+      recordCompaction: vi.fn(),
+      recordContextStrategy: vi.fn(),
+      recordRecycle: vi.fn()
+    }
+    // Generate a large stdout that the context filter will trim (>8KB, >40 lines).
+    const lines = Array.from({ length: 100 }, (_, i) => `line-${i} ${'x'.repeat(200)}`).join('\n')
+    const toolUseId = 'toolu_trim_metrics'
+
+    let capturedHooks: any = null
+    const sdk: any = (args: any) => {
+      capturedHooks = args.options?.hooks
+      return Object.assign(
+        (async function* () {
+          yield {
+            type: 'assistant',
+            parent_tool_use_id: null,
+            message: {
+              content: [{ type: 'tool_use', id: toolUseId, name: 'Bash', input: { command: 'seq 1 100' } }]
+            }
+          }
+          yield {
+            type: 'user',
+            parent_tool_use_id: null,
+            message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'hi\n' }] }
+          }
+          yield { type: 'result', subtype: 'success', result: '', usage: {} }
+        })(),
+        {
+          interrupt: async () => {},
+          setPermissionMode: async () => {},
+          setModel: async () => {},
+          setMaxTurns: async () => {},
+          setMaxThinkingTokens: async () => {},
+          mcpServerStatus: async () => [],
+          supportedCommands: async () => [],
+          supportedModels: async () => [],
+          close: () => {}
+        }
+      )
+    }
+
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), contextManagement: { filter: { enabled: true } } },
+      { sdkQuery: sdk, metrics: metrics as any }
+    )
+    await backend.createSession('t', { threadKey: 'trim-metrics' })
+    await backend.sendMessage('trim-metrics', 'go')
+    await new Promise((r) => setTimeout(r, 50))
+
+    // Manually invoke the PostToolUse hook with a large structured output.
+    expect(capturedHooks).not.toBeNull()
+    const postToolUse = capturedHooks.PostToolUse[0].hooks[0]
+
+    // Fish the backendSessionId from the session file path.
+    const sessionFile = backend.getSessionFilePath!('trim-metrics') ?? ''
+    const backendSessionId =
+      sessionFile
+        .split('/')
+        .pop()
+        ?.replace(/\.jsonl$/, '') ?? ''
+
+    await postToolUse({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'seq 1 100' },
+      tool_response: { stdout: lines, stderr: '', exitCode: 0 },
+      tool_use_id: 'toolu_structured_trim',
+      session_id: backendSessionId
+    })
+
+    // Find the metric recorded for our manually-invoked PostToolUse.
+    const lastBash = toolCalls.filter((t) => t.toolName === 'Bash').pop()
+    expect(lastBash).toBeDefined()
+    // Pre-fix: outputTrimmedChars was always 0 for structured returns.
+    // Post-fix: the filter trims stdout → trimmedChars > 0.
+    expect(lastBash!.outputTrimmedChars).toBeGreaterThan(0)
+  })
+})
+
+/**
  * Integration tests covering the "system config with specific overrides"
  * design — see the top-of-file comment in claude-code.ts. These verify
  * that the SDK options Sovereign hands to `query()` correctly defer to

@@ -862,8 +862,11 @@ export function createClaudeCodeBackend(
       if (state?.contextFilter) {
         filtered = state.contextFilter.filterToolOutput(toolName, inp.tool_response)
       }
-      const filteredStr = typeof filtered === 'string' ? filtered : null
-      const filteredOutputChars = filteredStr != null ? filteredStr.length : rawOutputChars
+      // Measure filter savings — works for both string and structured returns.
+      // When the filter returns an object, JSON.stringify gives the comparable
+      // size against the raw serialised output.
+      const filteredOutputChars =
+        filtered != null ? (typeof filtered === 'string' ? filtered : JSON.stringify(filtered)).length : rawOutputChars
       const trimmedChars = rawOutputChars > filteredOutputChars ? rawOutputChars - filteredOutputChars : 0
 
       // Record tool call metric
@@ -1208,13 +1211,25 @@ export function createClaudeCodeBackend(
     state.liveQuery = q
 
     state.iteratorDone = (async () => {
-      let normalExit = false
       try {
         for await (const msg of q) {
           setActiveSessionKey(state.sessionKey)
           dispatchSdkMessage(msg, state, emitter)
+
+          // Layer 2 auto-trigger: check context fill after each turn
+          // completes. The SDK emits a `result` message at the end of
+          // every assistant turn — this fires WITHIN the iterator loop,
+          // not after it exits (the iterator stays open for the session
+          // lifetime, so post-loop triggers never run during normal
+          // operation). Skip subagent sessions (recycling them mid-flight
+          // strands the parent — that guard also lives in
+          // maybeAutoRecycle itself, this avoids the async call entirely).
+          if (msg?.type === 'result' && !state.parentSessionKey) {
+            maybeAutoRecycle(state).catch((err) => {
+              console.warn('[context-recycle] auto-trigger error:', err)
+            })
+          }
         }
-        normalExit = true
       } catch (err: any) {
         if (err?.name !== 'AbortError') {
           emitter.emit('chat.error', { sessionKey: state.sessionKey, error: err?.message ?? String(err) })
@@ -1229,15 +1244,6 @@ export function createClaudeCodeBackend(
         state.liveQuery = undefined
         state.agentStatus = 'idle'
         emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
-
-        // Layer 2 auto-trigger: check context fill after a normal turn
-        // completion. Skip when the exit came from abort/error/recycle —
-        // those paths already handle cleanup or indicate a broken loop.
-        if (normalExit) {
-          maybeAutoRecycle(state).catch((err) => {
-            console.warn('[context-recycle] auto-trigger error:', err)
-          })
-        }
       }
     })()
 

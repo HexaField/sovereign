@@ -133,7 +133,21 @@ export const s16AutoRecycle: Scenario = {
       metrics.postRecycleTurnError = err?.message
     }
 
-    // 8. Assertions.
+    // 8. Check context-health endpoint for Layer 2 recycle state.
+    let healthRecycleCount = 0
+    try {
+      const health = await client.timed('context-health', () => client.get(`/api/threads/${thread.id}/context-health`))
+      metrics.contextHealth = {
+        layer2Enabled: health?.layer2?.enabled,
+        recycleCount: health?.layer2?.recycleCount,
+        lastRecycleAt: health?.layer2?.lastRecycleAt
+      }
+      healthRecycleCount = health?.layer2?.recycleCount ?? 0
+    } catch {
+      // Endpoint might not exist — degrade gracefully.
+    }
+
+    // 9. Assertions.
     // The auto-recycle might not fire if the JSONL file hasn't been
     // created yet (mock-backed sessions have minimal disk presence).
     // We accept either: (a) recycle fired (lastRecycleAt set), or
@@ -144,8 +158,8 @@ export const s16AutoRecycle: Scenario = {
     return finish({
       passed,
       summary: passed
-        ? `auto-recycle OK — triggered=${recycleTriggered}, session continued post-recycle`
-        : `auto-recycle failed — triggered=${recycleTriggered}, post-recycle turn ok=${postRecycleTurnOk}`,
+        ? `auto-recycle OK — triggered=${recycleTriggered}, recycleCount=${healthRecycleCount}, session continued post-recycle`
+        : `auto-recycle failed — triggered=${recycleTriggered}, recycleCount=${healthRecycleCount}, post-recycle turn ok=${postRecycleTurnOk}`,
       metrics,
       samples: client.samples
     })
