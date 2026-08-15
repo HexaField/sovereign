@@ -440,4 +440,49 @@ describe('WsHandler', () => {
       expect(wsNew.sent.length).toBe(before)
     })
   })
+
+  describe('isDeviceNameConnected', () => {
+    it('returns true when a named device has an active connection', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Alex Phone' }))
+      expect(handler.isDeviceNameConnected('Alex Phone')).toBe(true)
+    })
+
+    it('returns false when no connection carries that name', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Alex Phone' }))
+      expect(handler.isDeviceNameConnected('Alex Desktop')).toBe(false)
+    })
+
+    it('returns false after the named device disconnects', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws = mockWs()
+      handler.handleConnection(ws, 'd1')
+      ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Alex Phone' }))
+      ws.emit('close')
+      expect(handler.isDeviceNameConnected('Alex Phone')).toBe(false)
+    })
+
+    it('returns true when at least one of several tabs under the same name remains connected', () => {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const ws1 = mockWs()
+      const ws2 = mockWs()
+      handler.handleConnection(ws1, 'd1')
+      handler.handleConnection(ws2, 'd2')
+      ws1.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Alex Phone' }))
+      ws2.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Alex Phone' }))
+
+      ws1.emit('close')
+      // d2 still connected under the same name
+      expect(handler.isDeviceNameConnected('Alex Phone')).toBe(true)
+    })
+  })
 })

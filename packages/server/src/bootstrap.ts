@@ -774,8 +774,19 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         ),
       llm: voiceLlm,
       getRecentTurns,
-      sendToDeviceName: (deviceName: string, msg: Record<string, unknown>) =>
-        wsHandler.sendToDeviceName(deviceName, msg as any),
+      sendToDeviceName: (deviceName: string, msg: Record<string, unknown>) => {
+        wsHandler.sendToDeviceName(deviceName, msg as any)
+        // Push fallback — when no WS connection exists for the target device
+        // (phone backgrounded/locked), send a push notification with the
+        // spoken text so the user still receives Hex's reply.
+        if (!wsHandler.isDeviceNameConnected(deviceName) && msg.type === 'voice.tts.audio' && msg.text) {
+          const pushPayload = { type: 'voice.reply', text: msg.text, threadId: msg.threadId }
+          void notificationsModule.pushManager.sendAll(pushPayload)
+          console.log(
+            `[voice-push-fallback] device "${deviceName}" offline — push notification sent: "${String(msg.text).slice(0, 60)}"`
+          )
+        }
+      },
       getDeviceName: (deviceId: string) => wsHandler.getDeviceName(deviceId),
       config: () => {
         const v = configStore.get<SovereignConfig['voice']>('voice')
