@@ -13,6 +13,7 @@
 // server state to agree on a winner.
 
 import type { WsStore } from '../../ws/ws-store.js'
+import { startMediaKeepAlive, updateNowPlaying, isKeepAliveActive } from './media-session.js'
 
 let audioContext: AudioContext | null = null
 let currentSource: AudioBufferSourceNode | null = null
@@ -245,6 +246,14 @@ async function handleIncomingAudio(msg: TtsAudioMessage): Promise<void> {
     console.log(`[tts-player] a sibling tab already claims playback for ${key} — skipping`)
     return
   }
+
+  // Start the media keep-alive on first TTS playback — the voice
+  // interaction serves as the user gesture that satisfies autoplay policy.
+  if (!isKeepAliveActive()) startMediaKeepAlive()
+
+  // Show the spoken text on the lock screen / notification shade
+  if (msg.text) updateNowPlaying(msg.text)
+
   const wavData = base64ToArrayBuffer(msg.audio as string)
   void playAudio(wavData, msg.chunk)
 }

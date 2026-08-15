@@ -29,6 +29,10 @@ export interface WsHandler {
    *  message from that connection. Returns undefined when the device
    *  announced no name. */
   getDeviceName(deviceId: string): string | undefined
+  /** Check whether any live WS connection exists for a given device name.
+   *  Used by the push fallback to detect when TTS audio has nowhere to
+   *  route via WebSocket and should fall back to a push notification. */
+  isDeviceNameConnected(name: string): boolean
 }
 
 export interface WsLike {
@@ -80,6 +84,13 @@ export function createWsHandler(bus: EventBus): WsHandler {
   }
 
   const getDeviceName = (deviceId: string): string | undefined => deviceNames.get(deviceId)
+
+  const isDeviceNameConnected = (name: string): boolean => {
+    for (const [deviceId, storedName] of deviceNames) {
+      if (storedName === name && connections.has(deviceId)) return true
+    }
+    return false
+  }
 
   const broadcast = (msg: WsMessage): void => {
     const data = JSON.stringify(msg)
@@ -249,6 +260,7 @@ export function createWsHandler(bus: EventBus): WsHandler {
     sendBinaryTo,
     getConnectedDevices,
     getChannels,
-    getDeviceName
+    getDeviceName,
+    isDeviceNameConnected
   }
 }

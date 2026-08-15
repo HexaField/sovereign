@@ -37,6 +37,29 @@ self.addEventListener('push', (event) => {
     return
   }
 
+  // Voice reply fallback — the device had no WS connection when Hex
+  // spoke, so the server sent the text via push instead of audio.
+  // Show a notification with Hex's spoken text. Skip when a client
+  // window already has focus (it received the audio via WS).
+  if (data.type === 'voice.reply') {
+    event.waitUntil(
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+        const anyVisible = clients.some((c) => c.visibilityState === 'visible')
+        if (anyVisible) return // client got audio via WS — no notification needed
+
+        return self.registration.showNotification('Hex', {
+          body: data.text || 'Voice reply',
+          tag: 'voice-reply',
+          renotify: true,
+          icon: '/icon-192.png',
+          badge: '/icon-192.png',
+          data: { threadId: data.threadId, type: 'voice.reply' }
+        })
+      })
+    )
+    return
+  }
+
   if (data.type !== 'thread.turn') return
 
   const title = data.title || 'Sovereign'
