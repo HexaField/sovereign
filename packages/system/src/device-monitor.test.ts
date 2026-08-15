@@ -2,36 +2,30 @@ import { describe, it, expect } from 'vitest'
 import { createDeviceMonitor } from './device-monitor.js'
 
 describe('DeviceMonitor', () => {
-  it('collects local device metrics without errors', async () => {
-    const monitor = createDeviceMonitor({
-      devices: [{ label: 'test-local', sshHost: null }],
-      cacheTtlMs: 1000
-    })
+  it('collects local device metrics when tailscale unavailable', async () => {
+    // No tailscale → falls back to local-only collection
+    const monitor = createDeviceMonitor({ cacheTtlMs: 1000 })
     const devices = await monitor.getMetrics()
-    expect(devices).toHaveLength(1)
-    const d = devices[0]
-    expect(d.hostname).toBe('test-local')
-    expect(d.local).toBe(true)
-    expect(d.online).toBe(true)
-    expect(d.collectedAt).toBeGreaterThan(0)
+    expect(devices.length).toBeGreaterThanOrEqual(1)
+    const local = devices.find((d) => d.local)
+    expect(local).toBeDefined()
+    expect(local!.online).toBe(true)
+    expect(local!.collectedAt).toBeGreaterThan(0)
 
     // CPU metrics present
-    expect(d.cpu).toBeDefined()
-    expect(d.cpu!.cores).toBeGreaterThan(0)
-    expect(d.cpu!.loadAvg).toHaveLength(3)
+    expect(local!.cpu).toBeDefined()
+    expect(local!.cpu!.cores).toBeGreaterThan(0)
+    expect(local!.cpu!.loadAvg).toHaveLength(3)
 
     // Memory metrics present
-    expect(d.memory).toBeDefined()
-    expect(d.memory!.totalBytes).toBeGreaterThan(0)
-    expect(d.memory!.usedBytes).toBeGreaterThan(0)
-    expect(d.memory!.usedBytes).toBeLessThanOrEqual(d.memory!.totalBytes)
+    expect(local!.memory).toBeDefined()
+    expect(local!.memory!.totalBytes).toBeGreaterThan(0)
+    expect(local!.memory!.usedBytes).toBeGreaterThan(0)
+    expect(local!.memory!.usedBytes).toBeLessThanOrEqual(local!.memory!.totalBytes)
   })
 
   it('returns cached results within TTL', async () => {
-    const monitor = createDeviceMonitor({
-      devices: [{ label: 'cache-test', sshHost: null }],
-      cacheTtlMs: 60_000
-    })
+    const monitor = createDeviceMonitor({ cacheTtlMs: 60_000 })
     const first = await monitor.getMetrics()
     const second = await monitor.getMetrics()
     // Same reference — served from cache, not re-collected
@@ -39,41 +33,47 @@ describe('DeviceMonitor', () => {
   })
 
   it('refresh bypasses cache', async () => {
-    const monitor = createDeviceMonitor({
-      devices: [{ label: 'refresh-test', sshHost: null }],
-      cacheTtlMs: 60_000
-    })
+    const monitor = createDeviceMonitor({ cacheTtlMs: 60_000 })
     const first = await monitor.getMetrics()
     const refreshed = await monitor.refresh()
     // New collection — different reference
     expect(refreshed).not.toBe(first)
-    expect(refreshed[0].hostname).toBe('refresh-test')
   })
 
-  it('handles unreachable SSH host gracefully', async () => {
+  it('applies overrides to discovered devices', async () => {
+    // Overrides should apply even if tailscale discovery fails (local fallback)
+    const hostname = require('os').hostname()
     const monitor = createDeviceMonitor({
-      devices: [{ label: 'unreachable', sshHost: 'nonexistent-host-12345' }],
-      sshTimeoutMs: 2000
+      overrides: {
+        [hostname]: { label: 'Custom Label', watchServices: ['test-service'] }
+      },
+      cacheTtlMs: 1000
     })
     const devices = await monitor.getMetrics()
-    expect(devices).toHaveLength(1)
-    const d = devices[0]
-    expect(d.hostname).toBe('unreachable')
-    expect(d.online).toBe(false)
-    expect(d.error).toBeDefined()
-  }, 15_000)
+    const local = devices.find((d) => d.local)
+    expect(local).toBeDefined()
+    // Override label applied
+    expect(local!.hostname).toBe('Custom Label')
+  })
 
   it('collects storage mounts on the local device', async () => {
-    const monitor = createDeviceMonitor({
-      devices: [{ label: 'storage-test', sshHost: null }]
-    })
+    const monitor = createDeviceMonitor({ cacheTtlMs: 1000 })
     const devices = await monitor.getMetrics()
-    const d = devices[0]
+    const local = devices.find((d) => d.local)
+    expect(local).toBeDefined()
     // Storage may not exist on all test environments — just verify the shape
-    if (d.storage && d.storage.length > 0) {
-      expect(d.storage[0].mount).toBeDefined()
-      expect(d.storage[0].totalBytes).toBeGreaterThan(0)
-      expect(d.storage[0].usedBytes).toBeGreaterThanOrEqual(0)
+    if (local!.storage && local!.storage.length > 0) {
+      expect(local!.storage[0].mount).toBeDefined()
+      expect(local!.storage[0].totalBytes).toBeGreaterThan(0)
+      expect(local!.storage[0].usedBytes).toBeGreaterThanOrEqual(0)
     }
+  })
+
+  it('works with no config at all', async () => {
+    const monitor = createDeviceMonitor()
+    const devices = await monitor.getMetrics()
+    // Should get at least the local device
+    expect(devices.length).toBeGreaterThanOrEqual(1)
+    expect(devices[0].online).toBe(true)
   })
 })
