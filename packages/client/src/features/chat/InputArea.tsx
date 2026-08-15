@@ -12,6 +12,14 @@ import {
 } from './store.js'
 import { threadKey } from '../threads/store.js'
 import { isRecording, setVoiceState, voiceTimerText, setVoiceTimerText } from '../voice/store.js'
+import {
+  streamingState,
+  startStreaming,
+  pauseStreaming,
+  stopStreaming,
+  initStreaming,
+  hasActiveSession
+} from '../voice/streaming.js'
 import { deviceName } from '../settings/device-name.js'
 
 // ── Constants (exported for tests) ───────────────────────────────────
@@ -356,6 +364,14 @@ export function InputArea(props: InputAreaProps) {
   // ────────────────────────────────────────────────────────────────────────────
 
   const handleSend = async () => {
+    // Stop any active streaming session before sending
+    const hadStreaming = hasActiveSession()
+    if (hadStreaming) {
+      stopStreaming()
+      setVoiceState('idle')
+      setVoiceTimerText('')
+    }
+
     const text = inputValue().trim()
     const files = attachedFiles()
     if (!text && !files.length) return
@@ -395,7 +411,20 @@ export function InputArea(props: InputAreaProps) {
     if (props.onSend) {
       props.onSend(msg, rawFiles.length ? rawFiles : undefined)
     } else {
-      sendMessage(msg)
+      // Tag with voice origin when message contained streaming STT content
+      if (hadStreaming) {
+        const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
+        const name = deviceName()
+        sendMessage(msg, rawFiles.length ? rawFiles : undefined, {
+          origin: {
+            modality: 'voice' as const,
+            ...(deviceId ? { deviceId } : {}),
+            ...(name ? { deviceName: name } : {})
+          }
+        })
+      } else {
+        sendMessage(msg)
+      }
     }
   }
 
@@ -426,100 +455,64 @@ export function InputArea(props: InputAreaProps) {
     }
   }
 
-  // ── Chat-mode recording ──────────────────────────
+  // ── Streaming STT ──────────────────────────────
+  // Mic button toggles streaming transcription. Words appear in the
+  // textarea as spoken. User can pause, edit, resume, then send.
 
-  let mediaRecorder: MediaRecorder | null = null
-  let audioChunks: Blob[] = []
-  let recordTimer: ReturnType<typeof setInterval> | null = null
-  let recordStart = 0
+  // Initialise streaming WS on first render
+  {
+    const mod = import('../../ws/index.js')
+    void mod.then(({ wsStore }) => initStreaming(wsStore))
+  }
 
-  const startChatRec = async () => {
+  const toggleStreaming = async () => {
+    const state = streamingState()
+    if (state === 'streaming') {
+      // Pause — stop mic, keep text for editing
+      pauseStreaming()
+      setVoiceState('idle')
+      setVoiceTimerText('')
+      return
+    }
+
+    if (state === 'paused') {
+      // Resume — start mic again, append to existing text
+      try {
+        setVoiceState('listening')
+        await startStreaming(
+          inputValue(),
+          (fullText) => {
+            setInputValue(fullText)
+            autoResize()
+          },
+          (timerText) => setVoiceTimerText(timerText)
+        )
+      } catch {
+        setVoiceState('idle')
+      }
+      return
+    }
+
+    // Start fresh
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      audioChunks = []
-      const recorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'
-      })
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunks.push(e.data)
-      }
-      recorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop())
-        processChatRec()
-      }
-      recorder.start(100)
-      mediaRecorder = recorder
       setVoiceState('listening')
-      recordStart = Date.now()
-      setVoiceTimerText('0:00')
-
-      recordTimer = setInterval(() => {
-        const s = Math.floor((Date.now() - recordStart) / 1000)
-        setVoiceTimerText(`${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`)
-      }, 200)
+      await startStreaming(
+        inputValue(),
+        (fullText) => {
+          setInputValue(fullText)
+          autoResize()
+        },
+        (timerText) => setVoiceTimerText(timerText)
+      )
     } catch {
-      // mic denied
-    }
-  }
-
-  const stopChatRec = () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop()
-    setVoiceState('idle')
-    if (recordTimer) clearInterval(recordTimer)
-    recordTimer = null
-  }
-
-  const cancelRecording = () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.ondataavailable = () => {}
-      mediaRecorder.onstop = () => {
-        mediaRecorder?.stream?.getTracks().forEach((t) => t.stop())
-      }
-      mediaRecorder.stop()
-    }
-    audioChunks = []
-    setVoiceState('idle')
-    if (recordTimer) clearInterval(recordTimer)
-    recordTimer = null
-  }
-
-  const processChatRec = async () => {
-    if (audioChunks.length === 0) return
-    const blob = new Blob(audioChunks, { type: 'audio/webm' })
-    audioChunks = []
-
-    setVoiceState('processing')
-    try {
-      const form = new FormData()
-      form.append('audio', blob)
-      const res = await fetch('/api/voice/transcribe', { method: 'POST', body: form })
-      if (!res.ok) throw new Error('Transcription failed')
-      const data = await res.json()
-      const text = data.text?.trim() ?? ''
-      if (text) {
-        pushMsgHistory(threadKey(), text)
-        setHistoryIndex(-1)
-        draftText = ''
-        const deviceId = (window as unknown as { __sovereignDeviceId?: string }).__sovereignDeviceId
-        const name = deviceName()
-        sendMessage(text, undefined, {
-          origin: {
-            modality: 'voice' as const,
-            ...(deviceId ? { deviceId } : {}),
-            ...(name ? { deviceName: name } : {})
-          }
-        })
-      }
-    } catch (e) {
-      console.error('Transcription error:', e)
-    } finally {
       setVoiceState('idle')
     }
   }
 
-  const toggleRecording = () => {
-    if (isRecording()) stopChatRec()
-    else startChatRec()
+  const cancelRecording = () => {
+    stopStreaming()
+    setVoiceState('idle')
+    setVoiceTimerText('')
   }
 
   const currentAgentStatus = () => props.agentStatus ?? storeAgentStatus()
@@ -842,13 +835,13 @@ export function InputArea(props: InputAreaProps) {
           </div>
         </Show>
 
-        {/* Text input (hidden when recording) */}
-        <Show when={!isRecording()}>
-          <div class="flex flex-1 items-end gap-1">
+        {/* Text input — always visible (streaming transcript appears here) */}
+        <div class="flex flex-1 items-end gap-1">
+          <div class="relative flex-1">
             <textarea
               ref={textareaRef}
               rows={1}
-              placeholder="Message..."
+              placeholder={streamingState() === 'streaming' ? 'Listening…' : 'Message...'}
               value={inputValue()}
               onInput={(e) => {
                 setInputValue(e.currentTarget.value)
@@ -863,10 +856,10 @@ export function InputArea(props: InputAreaProps) {
                 setTextFocused(false)
                 autoResize()
               }}
-              class="max-h-[120px] flex-1 resize-none rounded-xl px-3.5 py-2.5 font-[inherit] text-sm transition-colors outline-none"
+              class="max-h-[120px] w-full resize-none rounded-xl px-3.5 py-2.5 font-[inherit] text-sm transition-colors outline-none"
               style={{
                 background: 'var(--c-bg)',
-                border: '1px solid var(--c-border)',
+                border: `1px solid ${streamingState() === 'streaming' ? 'var(--c-danger, #ef4444)' : 'var(--c-border)'}`,
                 color: 'var(--c-text)',
                 'min-height': `${INPUT_MIN_HEIGHT}px`
               }}
@@ -875,7 +868,36 @@ export function InputArea(props: InputAreaProps) {
               }}
               disabled={props.disabled}
             />
-            {/* History navigation arrows (mobile) */}
+            {/* Streaming indicator overlay */}
+            <Show when={streamingState() === 'streaming'}>
+              <div class="pointer-events-none absolute top-1 right-2 flex items-center gap-1.5">
+                <div
+                  class="h-1.5 w-1.5 animate-pulse rounded-full"
+                  style={{ background: 'var(--c-danger, #ef4444)' }}
+                />
+                <span class="text-[10px] tabular-nums" style={{ color: 'var(--c-danger, #ef4444)' }}>
+                  {voiceTimerText()}
+                </span>
+              </div>
+            </Show>
+            {/* Paused indicator */}
+            <Show when={streamingState() === 'paused'}>
+              <div class="pointer-events-none absolute top-1 right-2 flex items-center gap-1.5">
+                <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                  paused — tap mic to resume
+                </span>
+                <span
+                  class="pointer-events-auto cursor-pointer text-[10px]"
+                  style={{ color: 'var(--c-danger, #ef4444)' }}
+                  onClick={cancelRecording}
+                >
+                  ✕
+                </span>
+              </div>
+            </Show>
+          </div>
+          {/* History navigation arrows (mobile) */}
+          <Show when={streamingState() === 'idle'}>
             <div class="flex flex-col gap-0.5 md:hidden">
               <button
                 class="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded transition-colors"
@@ -934,28 +956,8 @@ export function InputArea(props: InputAreaProps) {
                 </svg>
               </button>
             </div>
-          </div>
-        </Show>
-
-        {/* Recording bar */}
-        <Show when={isRecording()}>
-          <div
-            class="flex flex-1 items-center gap-2 rounded-xl px-3.5 py-2"
-            style={{ background: 'var(--c-rec-bg, rgba(239,68,68,0.1))' }}
-          >
-            <div class="h-2 w-2 animate-pulse rounded-full" style={{ background: 'var(--c-danger, #ef4444)' }} />
-            <span class="text-[13px] tabular-nums" style={{ color: 'var(--c-danger, #ef4444)' }}>
-              {voiceTimerText()}
-            </span>
-            <span
-              class="ml-auto cursor-pointer px-2 py-1 text-xs"
-              style={{ color: 'var(--c-text-muted)' }}
-              onClick={cancelRecording}
-            >
-              cancel
-            </span>
-          </div>
-        </Show>
+          </Show>
+        </div>
 
         {/* Action buttons */}
         <div
@@ -1033,7 +1035,7 @@ export function InputArea(props: InputAreaProps) {
               'border-color': isRecording() ? 'var(--c-danger, #ef4444)' : 'var(--c-border)',
               color: isRecording() ? 'var(--c-danger, #ef4444)' : 'var(--c-text-muted)'
             }}
-            onClick={toggleRecording}
+            onClick={toggleStreaming}
           >
             <svg
               width="20"
