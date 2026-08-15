@@ -5,6 +5,7 @@ import { type Component } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
 import { activeSystemTab, setActiveSystemTab, type SystemTabId } from '../nav/store.js'
 import StatusTab from './StatusTab'
+import DevicesTab from './DevicesTab'
 import AgentsTab from './AgentsTab'
 import ActivityTab from './ActivityTab'
 import ConfigTab from './ConfigTab'
@@ -21,6 +22,7 @@ export interface SystemTab {
 
 export const SYSTEM_TABS: SystemTab[] = [
   { id: 'status', label: 'Status', component: StatusTab },
+  { id: 'devices', label: 'Devices', component: DevicesTab },
   { id: 'agents', label: 'Agents', component: AgentsTab },
   { id: 'activity', label: 'Activity', component: ActivityTab },
   { id: 'config', label: 'Config', component: ConfigTab },

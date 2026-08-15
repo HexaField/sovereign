@@ -11,6 +11,7 @@ import type { HealthHistory } from './health-history.js'
 import type { RoutingBackend, ActiveSessions } from '@sovereign/agent-backend'
 import type { ContextBudget, EventBus } from '@sovereign/core'
 import type { EventStream } from './event-stream.js'
+import type { DeviceMonitor } from './device-monitor.js'
 import type { WsHandler } from '@sovereign/primitives'
 
 export interface PersonalityInfo {
@@ -45,6 +46,8 @@ export interface SystemRoutesOptions {
   agentDir?: string
   /** Metrics accumulator — when present, `/api/system/metrics` endpoint serves live telemetry. */
   metrics?: import('@sovereign/agent-backend').MetricsAccumulator
+  /** Device monitor — when present, `/api/system/devices/metrics` endpoint serves tailnet device telemetry. */
+  deviceMonitor?: DeviceMonitor
 }
 
 function mockContextBudget(): ContextBudget {
@@ -461,6 +464,28 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
             contextStrategies: metrics.recentContextStrategies().slice(-20)
           }
         })
+      }
+    })
+  }
+
+  // ── Device monitoring ─────────────────────────────────────────────────
+  const deviceMonitor = 'deviceMonitor' in opts ? (opts as SystemRoutesOptions).deviceMonitor : null
+  if (deviceMonitor) {
+    router.get('/api/system/devices/metrics', async (_req, res) => {
+      try {
+        const devices = await deviceMonitor.getMetrics()
+        res.json({ devices, timestamp: new Date().toISOString() })
+      } catch (err: any) {
+        res.status(500).json({ error: err?.message ?? 'collection failed', devices: [] })
+      }
+    })
+
+    router.post('/api/system/devices/refresh', async (_req, res) => {
+      try {
+        const devices = await deviceMonitor.refresh()
+        res.json({ devices, timestamp: new Date().toISOString() })
+      } catch (err: any) {
+        res.status(500).json({ error: err?.message ?? 'refresh failed', devices: [] })
       }
     })
   }

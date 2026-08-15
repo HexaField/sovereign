@@ -82,6 +82,7 @@ import { createVoiceTranscriptionProvider } from '@sovereign/voice'
 import { createSystemModule } from '@sovereign/system'
 import { createSystemRoutes, registerEventsChannel } from '@sovereign/system'
 import { createHealthHistory } from '@sovereign/system'
+import { createDeviceMonitor } from '@sovereign/system'
 import { registerLogsChannel } from '@sovereign/system'
 import { createEventStream } from '@sovereign/system'
 import { wireBusLogging } from '@sovereign/system'
@@ -1187,6 +1188,16 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // Resolve the late-bound ref so the presence append resolver can read
   // health status when the first session starts.
   systemModuleRef = systemModule
+  // Device monitor — collects system metrics from local + remote tailnet devices.
+  // Config comes from `config.json → devices` or falls back to SSH-config-based defaults.
+  const devicesCfg = configStore.get<any[]>('devices') ?? []
+  const deviceMonitor = createDeviceMonitor({
+    devices:
+      devicesCfg.length > 0 ? devicesCfg : [{ label: os.hostname(), sshHost: null, watchServices: ['sovereign'] }],
+    cacheTtlMs: 30_000,
+    sshTimeoutMs: 8_000
+  })
+
   let personalityWatcherActive = !!personalityCompiler
   app.use(
     createSystemRoutes({
@@ -1221,7 +1232,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         getVapidPublicKey: () => notificationsModule.pushManager.getVapidPublicKey()
       },
       agentDir,
-      metrics
+      metrics,
+      deviceMonitor
     })
   )
   registerEventsChannel(wsHandler, eventStream)
