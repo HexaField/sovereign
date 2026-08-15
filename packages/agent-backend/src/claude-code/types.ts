@@ -123,6 +123,9 @@ export interface ClaudeSessionState {
   /** Count of Layer 2 recycles completed this process lifetime. In-memory
    *  only — intentionally not persisted, resets to 0 across a restart. */
   recycleCount?: number
+  /** Count of SDK compactions (auto or manual) this session. Incremented
+   *  by the PostCompact hook. In-memory only — resets on restart. */
+  compactionCount?: number
   /** Abort controller for the in-flight `query()` (if any). */
   abortController?: AbortController
   /** Input-queue write side for streaming input mode. */
