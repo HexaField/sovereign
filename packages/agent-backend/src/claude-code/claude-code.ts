@@ -62,6 +62,7 @@ import {
   readAllClaudeCodeMessages,
   readRecentClaudeCodeMessages,
   computeUsageFromFile,
+  latestUsageFromFile,
   findSessionFile
 } from './history.js'
 import { dispatchSdkMessage } from './events.js'
@@ -1630,7 +1631,8 @@ export function createClaudeCodeBackend(
     if (!state) return null
     let usage = state.lastUsage
     if (!usage && state.sessionFile && fs.existsSync(state.sessionFile)) {
-      const fromFile = computeUsageFromFile(state.sessionFile)
+      // Fallback to the LAST turn's usage from the JSONL (not cumulative sum).
+      const fromFile = latestUsageFromFile(state.sessionFile)
       usage = {
         inputTokens: fromFile.inputTokens,
         outputTokens: fromFile.outputTokens,
@@ -1640,7 +1642,9 @@ export function createClaudeCodeBackend(
       }
     }
     if (!usage) return null
-    const inputTokens = usage.inputTokens ?? 0
+    // Context fill = input + cacheRead + cacheCreate (matches getSessionMeta
+    // and maybeAutoRecycle — single source of truth).
+    const filled = (usage.inputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0)
     return {
       source: 'sovereign',
       generatedAt: Date.now(),
@@ -1648,7 +1652,7 @@ export function createClaudeCodeBackend(
       model: state.model ?? undefined,
       workspaceDir: state.cwd,
       systemPrompt: { chars: 0 },
-      session: { contextTokens: inputTokens },
+      session: { contextTokens: filled },
       fileContents: undefined,
       disabledTools: [],
       disabledSkills: [],
@@ -1750,9 +1754,11 @@ export function createClaudeCodeBackend(
     if (recycleCfg?.skipDuringSubagents !== false && state.liveSubagents.size > 0) return null
 
     // 1. Measure pre-recycle size.
+    //    Use the LAST turn's usage (not cumulative sum) — that represents the
+    //    actual context fill the model saw on its most recent response.
     const preBytes = fs.statSync(state.sessionFile).size
-    const preUsage = computeUsageFromFile(state.sessionFile)
-    const preTokens = preUsage.inputTokens
+    const preUsage = latestUsageFromFile(state.sessionFile)
+    const preTokens = preUsage.inputTokens + preUsage.cacheRead + preUsage.cacheWrite
 
     // 2. Interrupt the live query if one exists (graceful — session stays
     //    resumable). Idle sessions (no liveQuery) skip straight to pruning.
@@ -1817,9 +1823,11 @@ export function createClaudeCodeBackend(
     }
 
     // 6. Measure post-recycle size.
+    //    Usage entries in the JSONL still record pre-prune API values (pruning
+    //    truncates tool_result content, not usage fields). Estimate post-prune
+    //    tokens proportionally from the byte reduction.
     const postBytes = fs.existsSync(state.sessionFile) ? fs.statSync(state.sessionFile).size : 0
-    const postUsage = computeUsageFromFile(state.sessionFile)
-    const postTokens = postUsage.inputTokens
+    const postTokens = preBytes > 0 ? Math.round(preTokens * (postBytes / preBytes)) : 0
 
     // 7. Reset filter dedup state and stamp the recycle time.
     state.contextFilter?.reset()

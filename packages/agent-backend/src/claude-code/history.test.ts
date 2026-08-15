@@ -6,7 +6,8 @@ import {
   normalizeClaudeCodeEntry,
   parseClaudeCodeTurns,
   readAllClaudeCodeMessages,
-  computeUsageFromFile
+  computeUsageFromFile,
+  latestUsageFromFile
 } from './history.js'
 
 describe('claude-code/history', () => {
@@ -216,6 +217,87 @@ describe('claude-code/history', () => {
       expect(usage.cacheRead).toBe(100)
       expect(usage.cacheWrite).toBe(2)
       expect(usage.costUsd).toBeCloseTo(0.01)
+    })
+
+    it('latestUsageFromFile returns only the last turn (not cumulative)', () => {
+      writeFileSync(
+        file,
+        [
+          JSON.stringify({
+            type: 'assistant',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'x' }],
+              usage: {
+                input_tokens: 1000,
+                output_tokens: 50,
+                cache_read_input_tokens: 500,
+                cache_creation_input_tokens: 200
+              }
+            },
+            total_cost_usd: 0.01
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'y' }],
+              usage: {
+                input_tokens: 2000,
+                output_tokens: 80,
+                cache_read_input_tokens: 800,
+                cache_creation_input_tokens: 100
+              }
+            },
+            total_cost_usd: 0.05
+          })
+        ].join('\n') + '\n'
+      )
+      const latest = latestUsageFromFile(file)
+      // Must equal the LAST entry, not the sum.
+      expect(latest.inputTokens).toBe(2000)
+      expect(latest.outputTokens).toBe(80)
+      expect(latest.cacheRead).toBe(800)
+      expect(latest.cacheWrite).toBe(100)
+      expect(latest.costUsd).toBeCloseTo(0.05)
+
+      // Compare against computeUsageFromFile (cumulative) to prove they differ.
+      const cumulative = computeUsageFromFile(file)
+      expect(cumulative.inputTokens).toBe(3000)
+      expect(cumulative.inputTokens).toBeGreaterThan(latest.inputTokens)
+    })
+
+    it('latestUsageFromFile returns zeros for a missing file', () => {
+      const latest = latestUsageFromFile('/nonexistent/session.jsonl')
+      expect(latest.inputTokens).toBe(0)
+      expect(latest.outputTokens).toBe(0)
+      expect(latest.cacheRead).toBe(0)
+      expect(latest.cacheWrite).toBe(0)
+      expect(latest.costUsd).toBe(0)
+    })
+
+    it('latestUsageFromFile skips entries without usage (user messages)', () => {
+      writeFileSync(
+        file,
+        [
+          JSON.stringify({
+            type: 'assistant',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'a' }],
+              usage: { input_tokens: 5000, output_tokens: 100 }
+            }
+          }),
+          JSON.stringify({
+            type: 'user',
+            message: { role: 'user', content: 'follow-up' }
+          })
+        ].join('\n') + '\n'
+      )
+      const latest = latestUsageFromFile(file)
+      // User entries have no usage — latest stays at the assistant entry.
+      expect(latest.inputTokens).toBe(5000)
+      expect(latest.outputTokens).toBe(100)
     })
   })
 })
