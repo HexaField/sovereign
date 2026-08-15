@@ -29,6 +29,7 @@ import { s25LocalLlmRoundtrip } from './s25-local-llm-roundtrip.js'
 import { s26SubagentRouting } from './s26-subagent-routing.js'
 import { s27EventIsolation } from './s27-event-isolation.js'
 import { s28LocalLlmHistory } from './s28-local-llm-history.js'
+import { s29ContextStrategies } from './s29-context-strategies.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -92,5 +93,9 @@ export const ALL_SCENARIOS: Scenario[] = [
   // History persistence — basic send, multi-turn accumulation, compaction
   // survival, compaction summary visibility, post-compaction growth.
   // Regression for toGenericMessages silently dropping system messages.
-  s28LocalLlmHistory
+  s28LocalLlmHistory,
+  // Context strategies — Cozempic-inspired progressive pruning pipeline.
+  // Fills context with large messages, verifies pipeline runs (>20 msgs),
+  // conversation survives pruning. Self-skips when local-llm not enabled.
+  s29ContextStrategies
 ]

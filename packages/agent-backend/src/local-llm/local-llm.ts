@@ -41,6 +41,7 @@ import { createMcpBridge } from './tools/mcp-bridge.js'
 import type { McpBridge, McpBridgeConfig } from './tools/mcp-bridge.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
+import { runContextStrategies } from '../context-strategies/index.js'
 
 const KIND: AgentBackendKind = 'local-llm'
 const PROVIDER = 'local-llm'
@@ -836,6 +837,24 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       const cachedMcpSchemas = mcpBridges.flatMap((b) => b.getCachedSchemas())
       if (cachedMcpSchemas.length > 0 || allToolSchemas.length === staticSchemas.length) {
         allToolSchemas = [...staticSchemas, ...cachedMcpSchemas]
+      }
+    }
+
+    // ── Context strategies (Cozempic-inspired progressive pruning) ────
+    // Run the strategy pipeline BEFORE compaction — it shrinks messages
+    // without information loss (age-decay stubs, dedup, stale-read prune).
+    // Compaction runs on the leaner result and produces a better summary.
+    if (state.messages.length > 20) {
+      const pipelineResult = runContextStrategies(
+        state.messages as import('../context-strategies/types.js').GenericMessage[]
+      )
+      if (pipelineResult.totalPrunedChars > 0 || pipelineResult.totalRemoved > 0) {
+        console.log(
+          `[local-llm] context strategies pruned ${(pipelineResult.totalPrunedChars / 1024).toFixed(0)}KB, ` +
+            `removed ${pipelineResult.totalRemoved}, replaced ${pipelineResult.totalReplaced} ` +
+            `(${pipelineResult.durationMs.toFixed(0)}ms) for ${state.sessionKey}`
+        )
+        persist(state)
       }
     }
 
