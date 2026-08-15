@@ -234,7 +234,7 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
       'sessions_list',
       'List Sovereign sessions/threads visible across enabled backends.',
       {
-        backendKind: z.enum(['pi', 'claude-code']).optional()
+        backendKind: z.enum(['claude-code', 'local-llm']).optional()
       },
       async (args) => {
         const list = await deps.sessions.list(args.backendKind ? { backendKind: args.backendKind } : undefined)
