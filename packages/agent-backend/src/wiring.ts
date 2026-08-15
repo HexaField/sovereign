@@ -18,6 +18,7 @@ import {
   type AskUserQuestionStore
 } from './claude-code/index.js'
 import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.js'
+import { createMetricsAccumulator, type MetricsAccumulator } from './metrics.js'
 import { buildSovereignMcpDeps } from './mcp-deps.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
@@ -87,6 +88,8 @@ export interface AgentBackendWiringResult {
   createSovereignMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
   /** Registry of pending Claude Code `AskUserQuestion` calls awaiting user submission. */
   askUserQuestionStore: AskUserQuestionStore
+  /** Shared metrics accumulator — tool calls, compactions, context snapshots. */
+  metrics: MetricsAccumulator
 }
 
 function makeToolPolicy(orgManager: OrgManager) {
@@ -321,6 +324,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   let claudeCodeBackend: ClaudeCodeBackend | undefined
   let routingBackend!: RoutingBackend
 
+  const metrics = createMetricsAccumulator()
   const sessionsRegistry = createSessionsRegistry(dataDir)
   const activeSessions = createActiveSessions({ dataDir })
   const askUserQuestionStore = createAskUserQuestionStore(bus)
@@ -418,13 +422,15 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
             },
             () => subagentDefaults
           ),
-          resolveDisallowedTools: makeSubagentToolBlocker(threadManager, subagentDefaults.backend ?? undefined)
+          resolveDisallowedTools: makeSubagentToolBlocker(threadManager, subagentDefaults.backend ?? undefined),
+          metrics
         })
         claudeCodeBackend = cc
         return cc
       },
       'local-llm': () => {
         return createLocalLlmBackend(localLlmConfigGetter(configStore, dataDir), {
+          metrics,
           dataDir,
           registry: {
             upsertSession(record: Record<string, unknown>) {
@@ -487,6 +493,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     cronService,
     claudeCodeBackend,
     sessionsRegistry,
+    metrics,
     activeSessions,
     sovereignMcpServer,
     createSovereignMcpInstance: () => createSovereignMcpServer(sharedMcpDeps).instance,

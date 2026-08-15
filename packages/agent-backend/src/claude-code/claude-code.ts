@@ -296,6 +296,8 @@ export interface ClaudeCodeBackendDeps {
    * default (which auto-errors with "Answer questions?").
    */
   askUserQuestionStore?: import('./ask-user-question-store.js').AskUserQuestionStore
+  /** Shared metrics accumulator. Optional — when absent, no metrics emitted. */
+  metrics?: import('../metrics.js').MetricsAccumulator
 }
 
 /** Persisted slice of `ClaudeSessionState` — everything serialisable. Live OS
@@ -669,10 +671,17 @@ export function createClaudeCodeBackend(
       // Acknowledge — no-op. Logged elsewhere via chat.message.sent on the bus.
       return { continue: true }
     }
+    // Track tool start times for duration measurement — keyed by tool_use_id.
+    const toolStartTimes = new Map<string, number>()
+
     const onPreToolUse = async (input: HookInput) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true }
       const inp = input as Extract<HookInput, { hook_event_name: 'PreToolUse' }>
       const state = stateForHook(input)
+
+      // Record start time for metrics duration tracking
+      const toolUseId = (inp as Record<string, unknown>).tool_use_id as string | undefined
+      if (toolUseId) toolStartTimes.set(toolUseId, Date.now())
 
       // Redirect SDK built-in scheduling tools to Sovereign equivalents.
       // Runs before the toolPolicy check so the redirect applies regardless
@@ -813,9 +822,45 @@ export function createClaudeCodeBackend(
     const onPostToolUse = async (input: HookInput) => {
       if (input.hook_event_name !== 'PostToolUse') return { continue: true }
       const state = stateForHook(input)
-      if (!state?.contextFilter) return { continue: true }
       const inp = input as Record<string, unknown>
-      const filtered = state.contextFilter.filterToolOutput((inp.tool_name as string) ?? '', inp.tool_response)
+      const toolName = (inp.tool_name as string) ?? ''
+
+      // Compute duration from PreToolUse timing
+      const toolUseId = (inp.tool_use_id as string) ?? ''
+      const startTime = toolStartTimes.get(toolUseId) ?? Date.now()
+      toolStartTimes.delete(toolUseId)
+      const durationMs = Date.now() - startTime
+
+      // Measure raw I/O chars
+      const inputChars = JSON.stringify(inp.tool_input ?? '').length
+      const rawOutputStr = JSON.stringify(inp.tool_response ?? '')
+      const rawOutputChars = rawOutputStr.length
+
+      // Run context filter (Layer 1)
+      let filtered: unknown | null = null
+      if (state?.contextFilter) {
+        filtered = state.contextFilter.filterToolOutput(toolName, inp.tool_response)
+      }
+      const filteredStr = typeof filtered === 'string' ? filtered : null
+      const filteredOutputChars = filteredStr != null ? filteredStr.length : rawOutputChars
+      const trimmedChars = rawOutputChars > filteredOutputChars ? rawOutputChars - filteredOutputChars : 0
+
+      // Record tool call metric
+      if (deps.metrics && state) {
+        deps.metrics.recordToolCall({
+          ts: Date.now(),
+          sessionKey: state.sessionKey,
+          backendKind: 'claude-code',
+          model: state.model ?? 'unknown',
+          toolName,
+          inputChars,
+          outputChars: rawOutputChars,
+          outputTrimmedChars: trimmedChars,
+          durationMs,
+          isSubagent: !!state.parentSessionKey
+        })
+      }
+
       if (filtered == null) return { continue: true }
       return {
         continue: true,
@@ -1716,6 +1761,19 @@ export function createClaudeCodeBackend(
     if (filled <= 0) return
     const fillPercent = (filled / maxTokens) * 100
 
+    // Record context snapshot after every turn (regardless of recycle decision)
+    if (deps.metrics) {
+      deps.metrics.recordContextSnapshot({
+        ts: Date.now(),
+        sessionKey: state.sessionKey,
+        backendKind: 'claude-code',
+        model: state.model ?? 'unknown',
+        totalTokens: filled,
+        contextWindow: maxTokens,
+        fillPercent
+      })
+    }
+
     if (fillPercent < threshold) return
 
     console.log(
@@ -1723,7 +1781,7 @@ export function createClaudeCodeBackend(
         `(threshold: ${threshold}%), recycling session ${state.sessionKey}`
     )
 
-    const result = await recycleSession(state.sessionKey)
+    const result = await recycleSession(state.sessionKey, { metricsMethod: 'auto-recycle' })
     if (result) {
       console.log(
         `[context-recycle] auto-recycle complete: ` + `${result.reclaimedBytes} bytes reclaimed (${result.method})`
@@ -1738,7 +1796,7 @@ export function createClaudeCodeBackend(
 
   async function recycleSession(
     sessionKey: string,
-    opts?: { force?: boolean }
+    opts?: { force?: boolean; metricsMethod?: 'recycle' | 'auto-recycle' }
   ): Promise<{
     preTokens: number
     postTokens: number
@@ -1871,6 +1929,21 @@ export function createClaudeCodeBackend(
       reclaimedTokens: preTokens - postTokens,
       reclaimedBytes: preBytes - postBytes,
       method
+    }
+
+    // Record compaction metric
+    if (deps.metrics) {
+      deps.metrics.recordCompaction({
+        ts: Date.now(),
+        sessionKey,
+        backendKind: 'claude-code',
+        model: state.model ?? 'unknown',
+        preTokens,
+        postTokens,
+        tokensReclaimed: preTokens - postTokens,
+        method: opts?.metricsMethod ?? 'recycle',
+        isSubagent: !!state.parentSessionKey
+      })
     }
 
     emitter.emit('chat.status', { sessionKey, status: 'idle' })
