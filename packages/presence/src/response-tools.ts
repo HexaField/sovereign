@@ -9,7 +9,7 @@
 // Until that lands, we fall back to a chat broadcast tagged `[voice-stub]`
 // on the target deviceId's chat channel.
 
-import type { MessageOrigin } from '@sovereign/core'
+import type { EventBus, MessageOrigin } from '@sovereign/core'
 import { renderOriginTag } from '@sovereign/core'
 import type { LastOriginTracker } from './last-origin.js'
 
@@ -42,6 +42,9 @@ export interface ChatTextSender {
 }
 
 export interface ResponseToolsDeps {
+  /** Event bus — used to emit `presence.reply` events for the simple
+   *  conversation log (user↔Hex dialogue at the human-interaction level). */
+  bus: EventBus
   lastOrigin: LastOriginTracker
   voice?: VoiceSynth
   ws?: WsBinaryDispatcher
@@ -91,6 +94,16 @@ export function createResponseTools(deps: ResponseToolsDeps): PresenceResponseTo
     return deps.lastOrigin.get(modality)
   }
 
+  /** Emit a presence.reply bus event — feeds the simple conversation log. */
+  function emitReply(modality: 'voice' | 'text' | 'ad4m', text: string): void {
+    deps.bus.emit({
+      type: 'presence.reply',
+      timestamp: new Date().toISOString(),
+      source: 'presence',
+      payload: { modality, text }
+    })
+  }
+
   return {
     async reply_voice(text, opts) {
       const deviceId = opts?.deviceId ?? resolveOrigin('voice')?.deviceId ?? null
@@ -102,14 +115,20 @@ export function createResponseTools(deps: ResponseToolsDeps): PresenceResponseTo
         try {
           const { audio } = await deps.voice.synthesize(text)
           const sent = deps.ws.sendBinaryTo(deviceId, 'voice-tts', audio)
-          if (sent) return { delivered: true, deviceId, audio: true }
+          if (sent) {
+            emitReply('voice', text)
+            return { delivered: true, deviceId, audio: true }
+          }
           return { delivered: false, deviceId, audio: false, reason: 'device-not-connected' }
         } catch (err) {
           // Fall through to text-stub on synthesize failure.
           const reason = (err as Error)?.message ?? 'synth-failed'
           if (deps.ws?.sendTo) {
             const sent = deps.ws.sendTo(deviceId, { type: 'voice-stub', text, reason })
-            if (sent) return { delivered: true, deviceId, audio: false, reason: `fallback:${reason}` }
+            if (sent) {
+              emitReply('voice', text)
+              return { delivered: true, deviceId, audio: false, reason: `fallback:${reason}` }
+            }
           }
           return { delivered: false, deviceId, audio: false, reason }
         }
@@ -118,7 +137,10 @@ export function createResponseTools(deps: ResponseToolsDeps): PresenceResponseTo
       // "[voice-stub] …" in chat without actual TTS.
       if (deps.ws?.sendTo) {
         const sent = deps.ws.sendTo(deviceId, { type: 'voice-stub', text })
-        if (sent) return { delivered: true, deviceId, audio: false, reason: 'voice-backend-not-configured' }
+        if (sent) {
+          emitReply('voice', text)
+          return { delivered: true, deviceId, audio: false, reason: 'voice-backend-not-configured' }
+        }
       }
       return { delivered: false, deviceId, audio: false, reason: 'no-delivery-surface' }
     },
@@ -152,6 +174,7 @@ export function createResponseTools(deps: ResponseToolsDeps): PresenceResponseTo
       }
       try {
         deps.chat.postAssistantTurn(threadId, text)
+        emitReply('text', text)
         return { delivered: true, threadId }
       } catch (err) {
         return { delivered: false, threadId, reason: (err as Error)?.message ?? 'post-failed' }

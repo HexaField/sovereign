@@ -27,6 +27,8 @@ import { threadKey } from '../threads/store.js'
 import { SubagentView } from '../chat/SubagentView.js'
 import type { SubagentNavEntry } from '../chat/SubagentView.js'
 import type { ChatMessage } from '../chat/types.js'
+import { showSimpleView } from '../chat/simple-conversation-store.js'
+import { SimpleConversationView } from '../chat/SimpleConversationView.js'
 
 // Lazy-loaded tabs
 const DashboardView = lazy(() => import('../dashboard/DashboardView.js'))
@@ -99,24 +101,41 @@ function HexTab(props: { messages: () => ChatMessage[] }) {
           />
         }
       >
-        <div
-          style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
+        <Show
+          when={!showSimpleView()}
+          fallback={
+            <div
+              style={{
+                position: 'relative',
+                display: 'flex',
+                'flex-direction': 'column',
+                flex: '1',
+                'min-height': '0'
+              }}
+            >
+              <SimpleConversationView />
+            </div>
+          }
         >
-          <ChatView
-            messages={props.messages()}
-            streamingHtml={streamingHtml()}
-            agentStatus={agentStatus()}
-            liveWork={liveWork()}
-            liveThinkingText={liveThinkingText()}
-            compacting={compacting()}
-            isRetryCountdownActive={isRetryCountdownActive()}
-            retryCountdownSeconds={retryCountdownSeconds()}
-            onViewSubagent={pushSubagent}
-            onSend={sendMessage}
-            onAbort={abortChat}
-            threadKey={threadKey()}
-          />
-        </div>
+          <div
+            style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
+          >
+            <ChatView
+              messages={props.messages()}
+              streamingHtml={streamingHtml()}
+              agentStatus={agentStatus()}
+              liveWork={liveWork()}
+              liveThinkingText={liveThinkingText()}
+              compacting={compacting()}
+              isRetryCountdownActive={isRetryCountdownActive()}
+              retryCountdownSeconds={retryCountdownSeconds()}
+              onViewSubagent={pushSubagent}
+              onSend={sendMessage}
+              onAbort={abortChat}
+              threadKey={threadKey()}
+            />
+          </div>
+        </Show>
         <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
       </Show>
     </div>
