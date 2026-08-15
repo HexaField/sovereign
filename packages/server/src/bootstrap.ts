@@ -1189,11 +1189,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // health status when the first session starts.
   systemModuleRef = systemModule
   // Device monitor — collects system metrics from local + remote tailnet devices.
-  // Config comes from `config.json → devices` or falls back to SSH-config-based defaults.
-  const devicesCfg = configStore.get<any[]>('devices') ?? []
+  // Discovery-first: `tailscale status --json` provides the device registry.
+  // Optional `deviceOverrides` in config let the user set SSH aliases, labels,
+  // watched services, or exclude specific peers — keyed by tailscale HostName.
   const deviceMonitor = createDeviceMonitor({
-    devices:
-      devicesCfg.length > 0 ? devicesCfg : [{ label: os.hostname(), sshHost: null, watchServices: ['sovereign'] }],
+    overrides: configStore.get<Record<string, any>>('deviceOverrides') ?? {},
     cacheTtlMs: 30_000,
     sshTimeoutMs: 8_000
   })

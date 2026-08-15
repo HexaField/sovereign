@@ -1,5 +1,10 @@
 // Device Monitor — collects system metrics from local + remote tailnet devices.
 //
+// Discovery-first: `tailscale status --json` provides the device registry.
+// No manual config needed — all peers appear automatically. Optional
+// `overrides` in config let the user set SSH aliases, custom labels,
+// watched services, or exclude specific peers.
+//
 // Local metrics come from Node.js `os` module and /proc reads.
 // Remote metrics come via SSH (single round-trip per device).
 // Results are cached with a configurable TTL (default 30s).
@@ -66,26 +71,44 @@ export interface DeviceMetrics {
   error?: string
 }
 
-export interface DeviceConfig {
-  /** Human-readable label (e.g. "Arcadia", "Macbook"). */
-  label: string
-  /** SSH config name (e.g. "macbook", "linux"). Null for local. */
-  sshHost: string | null
-  /** OS hint for parser selection. Detected if omitted. */
+/** Optional per-device overrides, keyed by tailscale HostName. */
+export interface DeviceOverride {
+  /** Custom display label (default: tailscale HostName). */
+  label?: string
+  /** SSH config alias (default: tailscale HostName via MagicDNS). */
+  sshHost?: string
+  /** OS hint for parser selection (default: auto-detected from tailscale OS field). */
   osHint?: 'linux' | 'macos'
-  /** Tailscale hostname (for matching with tailscale status). */
-  tailscaleHostname?: string
   /** Services to check (systemd unit names or launchd labels). */
   watchServices?: string[]
+  /** Exclude this device from monitoring entirely. */
+  exclude?: boolean
 }
 
 export interface DeviceMonitorConfig {
-  devices: DeviceConfig[]
+  /** Optional per-device overrides, keyed by tailscale HostName (case-insensitive match). */
+  overrides?: Record<string, DeviceOverride>
   /** Cache TTL in milliseconds (default 30_000). */
   cacheTtlMs?: number
   /** SSH timeout in milliseconds (default 8_000). */
   sshTimeoutMs?: number
 }
+
+/** Internal device descriptor built from tailscale discovery + overrides. */
+interface DiscoveredDevice {
+  hostname: string
+  label: string
+  os: string
+  osHint: 'linux' | 'macos'
+  online: boolean
+  tailscaleIP: string | null
+  local: boolean
+  sshHost: string
+  watchServices: string[]
+}
+
+// OS values that SSH collection cannot handle.
+const SKIP_OS = new Set(['android', 'iOS', 'windows'])
 
 // ── Collection scripts ─────────────────────────────────────────────────
 
@@ -145,7 +168,7 @@ function parseSections(raw: string): Map<string, string> {
   return sections
 }
 
-function parseLinuxMetrics(raw: string, cfg: DeviceConfig): Partial<DeviceMetrics> {
+function parseLinuxMetrics(raw: string, watchServices: string[]): Partial<DeviceMetrics> {
   const s = parseSections(raw)
   const result: Partial<DeviceMetrics> = {}
 
@@ -289,9 +312,9 @@ function parseLinuxMetrics(raw: string, cfg: DeviceConfig): Partial<DeviceMetric
   }
 
   // Services
-  if (cfg.watchServices?.length) {
+  if (watchServices.length > 0) {
     const svcSection = s.get('SERVICES') ?? ''
-    result.services = cfg.watchServices.map((name) => ({
+    result.services = watchServices.map((name) => ({
       name,
       active: svcSection.includes(`${name}:active`) || svcSection.includes(`active (running)`)
     }))
@@ -300,7 +323,7 @@ function parseLinuxMetrics(raw: string, cfg: DeviceConfig): Partial<DeviceMetric
   return result
 }
 
-function parseMacosMetrics(raw: string, _cfg: DeviceConfig): Partial<DeviceMetrics> {
+function parseMacosMetrics(raw: string, _watchServices: string[]): Partial<DeviceMetrics> {
   const s = parseSections(raw)
   const result: Partial<DeviceMetrics> = {}
 
@@ -404,12 +427,12 @@ function parseMacosMetrics(raw: string, _cfg: DeviceConfig): Partial<DeviceMetri
 
 // ── Local collection ───────────────────────────────────────────────────
 
-function collectLocal(cfg: DeviceConfig): DeviceMetrics {
+function collectLocal(label: string, watchServices: string[]): DeviceMetrics {
   const cpus = os.cpus()
   const loadAvg = os.loadavg() as [number, number, number]
 
   const result: DeviceMetrics = {
-    hostname: cfg.label,
+    hostname: label,
     os: `${os.type()} ${os.release()}`,
     online: true,
     tailscaleIP: null,
@@ -492,7 +515,7 @@ function collectLocal(cfg: DeviceConfig): DeviceMetrics {
     /* skip */
   }
 
-  // GPU — try rocm-smi first (Arcadia has AMD iGPU), then nvidia-smi
+  // GPU — try nvidia-smi first, then rocm-smi
   try {
     const gpuOut = execSync(
       'nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu ' +
@@ -559,8 +582,8 @@ function collectLocal(cfg: DeviceConfig): DeviceMetrics {
   }
 
   // Services
-  if (cfg.watchServices?.length) {
-    result.services = cfg.watchServices.map((name) => {
+  if (watchServices.length > 0) {
+    result.services = watchServices.map((name) => {
       try {
         const out = execSync(
           `systemctl --user is-active ${name} 2>/dev/null || systemctl is-active ${name} 2>/dev/null`,
@@ -581,17 +604,16 @@ function collectLocal(cfg: DeviceConfig): DeviceMetrics {
 
 // ── Remote collection (SSH) ────────────────────────────────────────────
 
-function collectRemote(cfg: DeviceConfig, timeoutMs: number): Promise<DeviceMetrics> {
+function collectRemote(device: DiscoveredDevice, timeoutMs: number): Promise<DeviceMetrics> {
   return new Promise((resolve) => {
-    const osHint = cfg.osHint ?? 'linux'
-    const script = osHint === 'macos' ? MACOS_COLLECT_SCRIPT : LINUX_COLLECT_SCRIPT
+    const script = device.osHint === 'macos' ? MACOS_COLLECT_SCRIPT : LINUX_COLLECT_SCRIPT
 
     // Add service checks to the script
     let fullScript = script
-    if (cfg.watchServices?.length) {
-      const svcChecks = cfg.watchServices
+    if (device.watchServices.length > 0) {
+      const svcChecks = device.watchServices
         .map((name) => {
-          if (osHint === 'macos') {
+          if (device.osHint === 'macos') {
             return `launchctl list 2>/dev/null | grep -q "${name}" && echo "${name}:active" || echo "${name}:inactive"`
           }
           return `(systemctl --user is-active ${name} 2>/dev/null || systemctl is-active ${name} 2>/dev/null) | head -1 | xargs -I{} echo "${name}:{}"`
@@ -601,7 +623,7 @@ function collectRemote(cfg: DeviceConfig, timeoutMs: number): Promise<DeviceMetr
     }
 
     const sshArgs = [
-      cfg.sshHost!,
+      device.sshHost,
       '-o',
       'ConnectTimeout=5',
       '-o',
@@ -615,10 +637,10 @@ function collectRemote(cfg: DeviceConfig, timeoutMs: number): Promise<DeviceMetr
 
     const proc = execFile('ssh', sshArgs, { timeout: timeoutMs }, (err, stdout) => {
       const base: DeviceMetrics = {
-        hostname: cfg.label,
-        os: osHint,
+        hostname: device.label,
+        os: device.os,
         online: false,
-        tailscaleIP: null,
+        tailscaleIP: device.tailscaleIP,
         local: false,
         collectedAt: Date.now()
       }
@@ -634,67 +656,131 @@ function collectRemote(cfg: DeviceConfig, timeoutMs: number): Promise<DeviceMetr
       }
 
       base.online = true
-      const parsed = osHint === 'macos' ? parseMacosMetrics(stdout, cfg) : parseLinuxMetrics(stdout, cfg)
+      const parsed =
+        device.osHint === 'macos'
+          ? parseMacosMetrics(stdout, device.watchServices)
+          : parseLinuxMetrics(stdout, device.watchServices)
       resolve({ ...base, ...parsed })
     })
     proc.stdin?.end()
   })
 }
 
+// ── Tailscale discovery ───────────────────────────────────────────────
+
+interface TailscaleNode {
+  HostName: string
+  OS: string
+  TailscaleIPs?: string[]
+  Online?: boolean
+  LastSeen?: string
+}
+
+function mapOsHint(tsOs: string): 'linux' | 'macos' {
+  return tsOs.toLowerCase() === 'macos' ? 'macos' : 'linux'
+}
+
+async function discoverFromTailscale(overrides: Record<string, DeviceOverride>): Promise<DiscoveredDevice[]> {
+  const raw: string = await new Promise((resolve, reject) => {
+    const proc = execFile('tailscale', ['status', '--json'], { timeout: 5000 }, (err, stdout) => {
+      if (err) reject(err)
+      else resolve(stdout)
+    })
+    proc.stdin?.end()
+  })
+  const data = JSON.parse(raw)
+  const devices: DiscoveredDevice[] = []
+  const localHostname = os.hostname().toLowerCase()
+
+  // Helper: build a DiscoveredDevice from a tailscale node
+  const addNode = (node: TailscaleNode, online: boolean) => {
+    const hostname = node.HostName
+    const hostLower = hostname.toLowerCase()
+
+    // Match override by case-insensitive hostname
+    const override =
+      overrides[hostname] ??
+      overrides[hostLower] ??
+      Object.entries(overrides).find(([k]) => k.toLowerCase() === hostLower)?.[1]
+
+    // Skip excluded devices
+    if (override?.exclude) return
+
+    // Skip devices where SSH collection cannot work
+    if (SKIP_OS.has(node.OS)) return
+
+    const isLocal = hostLower === localHostname
+    const ip = node.TailscaleIPs?.[0] ?? null
+
+    devices.push({
+      hostname,
+      label: override?.label ?? hostname,
+      os: node.OS,
+      osHint: override?.osHint ?? mapOsHint(node.OS),
+      online,
+      tailscaleIP: ip,
+      local: isLocal,
+      sshHost: override?.sshHost ?? hostname,
+      watchServices: override?.watchServices ?? []
+    })
+  }
+
+  // Self
+  const self: TailscaleNode | undefined = data.Self
+  if (self) addNode(self, true)
+
+  // Peers
+  for (const peer of Object.values(data.Peer ?? {}) as TailscaleNode[]) {
+    addNode(peer, peer.Online ?? false)
+  }
+
+  return devices
+}
+
 // ── Monitor ────────────────────────────────────────────────────────────
 
-export function createDeviceMonitor(config: DeviceMonitorConfig) {
-  const cacheTtl = config.cacheTtlMs ?? 30_000
-  const sshTimeout = config.sshTimeoutMs ?? 8_000
+export function createDeviceMonitor(config?: DeviceMonitorConfig) {
+  const cacheTtl = config?.cacheTtlMs ?? 30_000
+  const sshTimeout = config?.sshTimeoutMs ?? 8_000
+  const overrides = config?.overrides ?? {}
   let cache: { devices: DeviceMetrics[]; collectedAt: number } | null = null
   let inflight: Promise<DeviceMetrics[]> | null = null
 
-  /** Merge tailscale status into device results for IP + online data. */
-  async function enrichWithTailscale(devices: DeviceMetrics[]): Promise<void> {
-    try {
-      const raw: string = await new Promise((resolve, reject) => {
-        const proc = execFile('tailscale', ['status', '--json'], { timeout: 5000 }, (err, stdout) => {
-          if (err) reject(err)
-          else resolve(stdout)
-        })
-        proc.stdin?.end()
-      })
-      const data = JSON.parse(raw)
-      const allNodes: Array<{ hostname: string; ips: string[]; online: boolean }> = []
-
-      const self = data.Self
-      if (self) allNodes.push({ hostname: self.HostName, ips: self.TailscaleIPs ?? [], online: true })
-
-      for (const peer of Object.values(data.Peer ?? {}) as any[]) {
-        allNodes.push({ hostname: peer.HostName, ips: peer.TailscaleIPs ?? [], online: peer.Online ?? false })
-      }
-
-      for (const device of devices) {
-        const devCfg = config.devices.find((d) => d.label === device.hostname)
-        const tsHostname = devCfg?.tailscaleHostname ?? device.hostname.toLowerCase()
-        const node = allNodes.find((n) => n.hostname.toLowerCase().includes(tsHostname.toLowerCase()))
-        if (node) {
-          device.tailscaleIP = node.ips[0] ?? null
-          // Remote devices: if tailscale says offline and SSH failed, mark offline
-          if (!device.local && !node.online) device.online = false
-        }
-      }
-    } catch {
-      // Tailscale not available — leave IPs as null
-    }
-  }
-
   async function collect(): Promise<DeviceMetrics[]> {
-    const localDevices = config.devices.filter((d) => !d.sshHost)
-    const remoteDevices = config.devices.filter((d) => d.sshHost)
+    let discovered: DiscoveredDevice[]
+    try {
+      discovered = await discoverFromTailscale(overrides)
+    } catch {
+      // Tailscale unavailable — fall back to local-only
+      console.warn('[device-monitor] tailscale unavailable — collecting local metrics only')
+      const hostname = os.hostname()
+      const override = overrides[hostname] ?? overrides[hostname.toLowerCase()]
+      return [collectLocal(override?.label ?? hostname, override?.watchServices ?? ['sovereign'])]
+    }
 
-    // Collect local + all remotes in parallel
-    const results = await Promise.all([
-      ...localDevices.map((d) => Promise.resolve(collectLocal(d))),
-      ...remoteDevices.map((d) => collectRemote(d, sshTimeout))
-    ])
+    // Collect local devices directly, remote devices via SSH (in parallel)
+    const results = await Promise.all(
+      discovered.map((d) => {
+        if (d.local) {
+          const metrics = collectLocal(d.label, d.watchServices)
+          metrics.tailscaleIP = d.tailscaleIP
+          return Promise.resolve(metrics)
+        }
+        if (!d.online) {
+          // Offline peer — return skeleton without attempting SSH
+          return Promise.resolve<DeviceMetrics>({
+            hostname: d.label,
+            os: d.os,
+            online: false,
+            tailscaleIP: d.tailscaleIP,
+            local: false,
+            collectedAt: Date.now()
+          })
+        }
+        return collectRemote(d, sshTimeout)
+      })
+    )
 
-    await enrichWithTailscale(results)
     return results
   }
 
