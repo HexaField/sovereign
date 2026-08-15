@@ -225,15 +225,20 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
   }
 
   /** Stream LLM tokens → split into sentences → synthesise each via TTS
-   *  sequentially as it completes. First audio plays after one sentence
-   *  finishes; subsequent sentences synthesise and send in order so the
-   *  client receives chunks sequentially (no out-of-order arrival). */
+   *  sequentially. Returns the joined summary text so the caller can emit
+   *  `presence.reply` with the real content (not a placeholder).
+   *
+   *  Two phases:
+   *    1. Collect — stream LLM tokens, split into sentences
+   *    2. Deliver — call `onTextReady` with the full text, then synthesise
+   *       and send each sentence's audio in order */
   async function streamSummaryToTts(
     messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>,
     threadId: string,
-    deviceName: string
-  ): Promise<void> {
-    if (!llm.stream || !synthesizeStream) return
+    deviceName: string,
+    onTextReady: (summaryText: string) => void
+  ): Promise<string> {
+    if (!llm.stream || !synthesizeStream) return ''
 
     let accumulated = ''
     // Collect sentences as they split out of the LLM stream, then
@@ -241,7 +246,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     // This ensures chunks arrive at the client in order.
     const sentences: string[] = []
 
-    // Stream LLM tokens — split into sentences as they arrive
+    // Phase 1: stream LLM tokens — split into sentences as they arrive
     for await (const chunk of llm.stream(messages)) {
       const delta = chunk.choices?.[0]?.delta?.content
       if (!delta) continue
@@ -260,9 +265,15 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     const remaining = accumulated.trim()
     if (remaining) sentences.push(remaining)
 
-    if (sentences.length === 0) return
+    if (sentences.length === 0) return ''
 
-    // Synthesise and deliver each sentence sequentially
+    // Notify the caller with the real summary text (between LLM
+    // collection and TTS synthesis — cancels the deferred raw turn
+    // in the simple conversation store before the grace window expires).
+    const summaryText = sentences.join(' ')
+    onTextReady(summaryText)
+
+    // Phase 2: synthesise and deliver each sentence sequentially
     const total = sentences.length
     for (let idx = 0; idx < total; idx++) {
       const sentence = sentences[idx]
@@ -287,6 +298,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     }
 
     console.log(`[voice-response] streaming summary complete: ${total} sentence(s) to ${deviceName}`)
+    return summaryText
   }
 
   async function generateSummary(threadId: string, responseText: string, deviceName: string): Promise<void> {
@@ -318,18 +330,18 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       // When the LLM supports streaming, each sentence gets synthesised
       // and delivered as it completes — first audio after ~1 sentence.
       if (llm.stream && synthesizeStream) {
-        // Notify client
-        sendToDeviceName(deviceName, { type: 'voice.summary.pending', threadId, text: '(streaming)' })
-
-        // Emit the presence log event early (text unavailable until done)
-        bus.emit({
-          type: 'presence.reply',
-          timestamp: new Date().toISOString(),
-          source: 'voice-response',
-          payload: { modality: 'voice', text: '(streaming summary)' }
+        await streamSummaryToTts(messages, threadId, deviceName, (summaryText) => {
+          // Fires after LLM collection but before TTS synthesis —
+          // emits real summary text into the simple conversation and
+          // cancels the deferred raw-turn timer.
+          sendToDeviceName(deviceName, { type: 'voice.summary.pending', threadId, text: summaryText })
+          bus.emit({
+            type: 'presence.reply',
+            timestamp: new Date().toISOString(),
+            source: 'voice-response',
+            payload: { modality: 'voice', text: summaryText }
+          })
         })
-
-        await streamSummaryToTts(messages, threadId, deviceName)
         return
       }
 
