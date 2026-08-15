@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { createSimpleConversation } from './simple-conversation.js'
 
 function makeBus() {
@@ -228,6 +231,112 @@ describe('SimpleConversation', () => {
       payload: { modality: 'text', text: 'Reply without gateway' }
     })
     expect(store.getEntries()).toHaveLength(1)
+    store.shutdown()
+  })
+})
+
+describe('SimpleConversation — persistence', () => {
+  const tmpDirs: string[] = []
+
+  function makeTmpDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'simple-conv-test-'))
+    tmpDirs.push(dir)
+    return dir
+  }
+
+  afterEach(() => {
+    for (const dir of tmpDirs) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true })
+      } catch {
+        /* best effort */
+      }
+    }
+    tmpDirs.length = 0
+  })
+
+  it('persists entries to disk and reloads on next create', async () => {
+    const dir = makeTmpDir()
+    const bus1 = makeBus()
+    const store1 = createSimpleConversation({ bus: bus1, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+
+    bus1.emit({
+      type: 'chat.message.sent',
+      timestamp: '2026-01-01T00:00:00Z',
+      source: 'chat',
+      payload: { threadId: GATEWAY, text: 'Persist me' }
+    })
+
+    // shutdown flushes to disk
+    store1.shutdown()
+
+    // New instance should load from disk
+    const bus2 = makeBus()
+    const store2 = createSimpleConversation({ bus: bus2, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+
+    const entries = store2.getEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0].text).toBe('Persist me')
+    expect(entries[0].role).toBe('user')
+    store2.shutdown()
+  })
+
+  it('appends new entries after reload', async () => {
+    const dir = makeTmpDir()
+    const bus1 = makeBus()
+    const store1 = createSimpleConversation({ bus: bus1, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+
+    bus1.emit({
+      type: 'chat.message.sent',
+      timestamp: '2026-01-01T00:00:00Z',
+      source: 'chat',
+      payload: { threadId: GATEWAY, text: 'First' }
+    })
+    store1.shutdown()
+
+    const bus2 = makeBus()
+    const store2 = createSimpleConversation({ bus: bus2, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+
+    bus2.emit({
+      type: 'presence.reply',
+      timestamp: '2026-01-01T00:00:05Z',
+      source: 'presence',
+      payload: { modality: 'voice', text: 'Second' }
+    })
+    store2.shutdown()
+
+    // Third instance sees both
+    const bus3 = makeBus()
+    const store3 = createSimpleConversation({ bus: bus3, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+    const entries = store3.getEntries()
+    expect(entries).toHaveLength(2)
+    expect(entries.map((e) => e.text)).toEqual(['First', 'Second'])
+    store3.shutdown()
+  })
+
+  it('survives a corrupt file gracefully', () => {
+    const dir = makeTmpDir()
+    fs.writeFileSync(path.join(dir, 'simple-conversation.json'), 'NOT JSON{{{')
+
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+    expect(store.getEntries()).toHaveLength(0)
+    store.shutdown()
+  })
+
+  it('runs in-memory only when dataDir omitted', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+
+    bus.emit({
+      type: 'chat.message.sent',
+      timestamp: '2026-01-01T00:00:00Z',
+      source: 'chat',
+      payload: { threadId: GATEWAY, text: 'Memory only' }
+    })
+
+    expect(store.getEntries()).toHaveLength(1)
+    // No crash on shutdown without dataDir
     store.shutdown()
   })
 })
