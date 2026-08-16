@@ -88,6 +88,16 @@ export interface SovereignToolsDeps {
     close(sessionId: string): Promise<void>
   }
   currentSessionKey?(): string | undefined
+  /** Embeddings service — when provided, registers sovereign_embeddings_* tools. */
+  embeddings?: {
+    search(
+      query: string,
+      opts?: { collection?: string; source?: string; limit?: number }
+    ): Promise<Array<{ content: string; source: string; score: number; metadata: Record<string, unknown> }>>
+    index(content: string, opts: { source: string; collection?: string }): Promise<{ chunksIndexed: number }>
+    listCollections(): Array<{ collection: string; count: number }>
+    healthy(): Promise<boolean>
+  }
 }
 
 // ── Schemas ─────────────────────────────────────────────────────────────
@@ -417,7 +427,71 @@ const webFetchSchema: ToolSchema = {
   }
 }
 
+const embeddingsSearchSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_embeddings_search',
+    description:
+      'Search local embedded content by natural language query. Returns the most semantically similar chunks with relevance scores. All data stays on-machine.',
+    parameters: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: 'Natural language search query.' },
+        collection: { type: 'string', description: 'Filter to a specific collection. Omit to search all.' },
+        source: { type: 'string', description: 'Filter to a specific source (e.g. file path). Omit to search all.' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max results. Default: 10.' }
+      },
+      additionalProperties: false
+    }
+  }
+}
+
+const embeddingsIndexSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_embeddings_index',
+    description:
+      'Index text content into the local vector store for later semantic search. Chunks, embeds locally, and stores.',
+    parameters: {
+      type: 'object',
+      required: ['content', 'source'],
+      properties: {
+        content: { type: 'string', description: 'The text content to index.' },
+        source: { type: 'string', description: 'Source identifier — file path, URL, or label.' },
+        collection: { type: 'string', description: 'Collection to index into. Default: "default".' }
+      },
+      additionalProperties: false
+    }
+  }
+}
+
+const embeddingsCollectionsSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_embeddings_collections',
+    description: 'List all embedding collections with document counts.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }
+  }
+}
+
+const embeddingsHealthSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_embeddings_health',
+    description: 'Check whether the local embedding server (nomic-embed-text) responds.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }
+  }
+}
+
 // ── Exported schemas ────────────────────────────────────────────────────
+
+export const EMBEDDINGS_TOOL_SCHEMAS: ToolSchema[] = [
+  embeddingsSearchSchema,
+  embeddingsIndexSchema,
+  embeddingsCollectionsSchema,
+  embeddingsHealthSchema
+]
 
 export const SOVEREIGN_TOOL_SCHEMAS: ToolSchema[] = [
   cronCreateSchema,
@@ -620,6 +694,36 @@ export function createSovereignToolExecutor(
           } catch (err) {
             return fail(`WebFetch failed: ${(err as Error).message}`)
           }
+        }
+
+        // ── embeddings ────────────────────────────────────────────
+        case 'sovereign_embeddings_search': {
+          if (!deps.embeddings) return fail('Embeddings service not configured.')
+          const limit = typeof input.limit === 'number' ? input.limit : 10
+          const results = await deps.embeddings.search(String(input.query), {
+            collection: input.collection as string | undefined,
+            source: input.source as string | undefined,
+            limit
+          })
+          if (results.length === 0) return okText('No matching content found.')
+          return ok({ results, totalResults: results.length })
+        }
+        case 'sovereign_embeddings_index': {
+          if (!deps.embeddings) return fail('Embeddings service not configured.')
+          const result = await deps.embeddings.index(String(input.content), {
+            source: String(input.source),
+            collection: (input.collection as string) ?? 'default'
+          })
+          return ok({ indexed: true, chunksIndexed: result.chunksIndexed, source: input.source })
+        }
+        case 'sovereign_embeddings_collections': {
+          if (!deps.embeddings) return fail('Embeddings service not configured.')
+          return ok({ collections: deps.embeddings.listCollections() })
+        }
+        case 'sovereign_embeddings_health': {
+          if (!deps.embeddings) return fail('Embeddings service not configured.')
+          const healthy = await deps.embeddings.healthy()
+          return ok({ healthy })
         }
 
         default:

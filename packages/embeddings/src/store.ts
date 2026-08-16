@@ -206,7 +206,7 @@ export class VectorStore {
     // Fetch document metadata for matched IDs, applying collection/source filters
     const placeholders = vecResults.map(() => '?').join(',')
     let filterClause = `id IN (${placeholders})`
-    const params: unknown[] = vecResults.map((r) => r.id)
+    const params: (string | number | Uint8Array | null)[] = vecResults.map((r) => r.id)
 
     if (opts.collection) {
       filterClause += ' AND collection = ?'

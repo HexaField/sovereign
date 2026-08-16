@@ -102,6 +102,21 @@ export interface SovereignToolDeps {
    *  session, `presence_internal_*` gated to the gateway session.
    *  Sourced from `@sovereign/presence` at the wiring layer. */
   presence?: PresenceMcpDeps
+  /** Embeddings service. When set, registers `embeddings_search` and
+   *  `embeddings_index` tools for semantic retrieval over local content. */
+  embeddings?: EmbeddingsToolDeps
+}
+
+/** Subset of @sovereign/embeddings the MCP layer needs. Kept inline so this
+ *  package doesn't depend on @sovereign/embeddings directly. */
+export interface EmbeddingsToolDeps {
+  search(
+    query: string,
+    opts?: { collection?: string; source?: string; limit?: number }
+  ): Promise<Array<{ content: string; source: string; score: number; metadata: Record<string, unknown> }>>
+  index(content: string, opts: { source: string; collection?: string }): Promise<{ chunksIndexed: number }>
+  listCollections(): Array<{ collection: string; count: number }>
+  healthy(): Promise<boolean>
 }
 
 /** Subset of @sovereign/presence the MCP layer needs. Kept inline so this
@@ -466,6 +481,74 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
       }
     )
   ]
+
+  // ── embeddings (only registered when wired) ─────────────────────────────
+  if (deps.embeddings) {
+    const emb = deps.embeddings
+    tools.push(
+      tool(
+        'embeddings_search',
+        'Search local embedded content by natural language query. Returns the most semantically similar chunks with relevance scores. All data stays on-machine — nothing leaves the box.',
+        {
+          query: z.string().describe('Natural language search query.'),
+          collection: z
+            .string()
+            .optional()
+            .describe('Filter to a specific collection (e.g. "daily-notes", "membranes"). Omit to search all.'),
+          source: z
+            .string()
+            .optional()
+            .describe('Filter to a specific source (e.g. a file path). Omit to search all sources.'),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(50)
+            .optional()
+            .default(10)
+            .describe('Maximum number of results to return. Default: 10.')
+        },
+        async (args) => {
+          const results = await emb.search(args.query, {
+            collection: args.collection,
+            source: args.source,
+            limit: args.limit
+          })
+          if (results.length === 0) return okText('No matching content found.')
+          return okJson({ results, totalResults: results.length })
+        }
+      ),
+      tool(
+        'embeddings_index',
+        'Index text content into the local vector store for later semantic search. Chunks the content, embeds it locally, and stores it. Use this to make documents, notes, or any text searchable.',
+        {
+          content: z.string().describe('The text content to index.'),
+          source: z.string().describe('Source identifier — typically a file path, URL, or descriptive label.'),
+          collection: z.string().optional().default('default').describe('Collection to index into. Default: "default".')
+        },
+        async (args) => {
+          const result = await emb.index(args.content, {
+            source: args.source,
+            collection: args.collection
+          })
+          return okJson({ indexed: true, chunksIndexed: result.chunksIndexed, source: args.source })
+        }
+      ),
+      tool('embeddings_collections', 'List all embedding collections with document counts.', {}, async () => {
+        const collections = emb.listCollections()
+        return okJson({ collections })
+      }),
+      tool(
+        'embeddings_health',
+        'Check whether the local embedding server (nomic-embed-text) responds.',
+        {},
+        async () => {
+          const ok = await emb.healthy()
+          return okJson({ healthy: ok })
+        }
+      )
+    )
+  }
 
   // ── presence (only registered when wired) ──────────────────────────────
   // The presence_* tools split by session role. See plans/presence-thread-spec.md.

@@ -20,6 +20,7 @@ import {
 import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.js'
 import { createMetricsAccumulator, type MetricsAccumulator } from './metrics.js'
 import { buildSovereignMcpDeps } from './mcp-deps.js'
+import { createEmbeddingsService } from './embeddings-service.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -335,6 +336,10 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   }
   const hasSubagentDefaults = subagentDefaults.backend || subagentDefaults.model
 
+  // Embeddings — local vector search over on-machine content. The service
+  // initialises lazily (db opens on first tool call, not at boot).
+  const embeddingsService = createEmbeddingsService({ dataDir: input.dataDir })
+
   const sharedMcpDeps = buildSovereignMcpDeps({
     bus,
     routing: new Proxy({} as any, { get: (_t, p) => (routingBackend as any)[p as any] }),
@@ -347,6 +352,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     notificationsModule,
     browserService,
     getClaudeCodeBackend: () => claudeCodeBackend,
+    embeddings: embeddingsService,
     ...(hasSubagentDefaults ? { subagentDefaults } : {}),
     ...(input.presence ? { presence: input.presence } : {})
   })

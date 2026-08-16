@@ -34,7 +34,7 @@ import { createToolExecutor } from './tools/index.js'
 import type { ToolResult } from './tools/index.js'
 import { CORE_TOOL_SCHEMAS } from './tools/schemas.js'
 import type { ToolSchema } from './tools/schemas.js'
-import { SOVEREIGN_TOOL_SCHEMAS, createSovereignToolExecutor } from './tools/sovereign.js'
+import { SOVEREIGN_TOOL_SCHEMAS, EMBEDDINGS_TOOL_SCHEMAS, createSovereignToolExecutor } from './tools/sovereign.js'
 import type { SovereignToolsDeps } from './tools/sovereign.js'
 import { SEMBLE_TOOL_SCHEMAS, createSembleToolExecutor } from './tools/semble.js'
 import { createMcpBridge } from './tools/mcp-bridge.js'
@@ -103,11 +103,13 @@ function defaultSystemPrompt(
   cwd: string,
   hasSovereignTools: boolean,
   hasSemble: boolean,
+  hasEmbeddings: boolean,
   mcpBridgeNames: string[]
 ): string {
   const toolSections: string[] = ['core tools (Read, Write, Edit, Bash, Grep, Glob, LS)']
   if (hasSovereignTools)
     toolSections.push('Sovereign tools (cron, sessions, browser, agents, notifications, planning, WebFetch)')
+  if (hasEmbeddings) toolSections.push('local embeddings (sovereign_embeddings_search, sovereign_embeddings_index)')
   if (hasSemble) toolSections.push('semble code search (semble_search, semble_find_related)')
   if (mcpBridgeNames.length > 0) toolSections.push(`external services (${mcpBridgeNames.join(', ')})`)
 
@@ -125,6 +127,14 @@ function defaultSystemPrompt(
           '',
           'Sovereign tools use the `sovereign_` prefix (e.g. sovereign_cron_create, sovereign_browser_open).',
           'WebFetch fetches content from URLs — use it for HTTP requests.'
+        ]
+      : []),
+    ...(hasEmbeddings
+      ? [
+          '',
+          'Embedding tools search and index local content semantically. All data stays on-machine.',
+          'Use sovereign_embeddings_search to find relevant content by natural language query.',
+          'Use sovereign_embeddings_index to make new content searchable.'
         ]
       : []),
     ...(hasSemble
@@ -332,9 +342,11 @@ export function createLocalLlmBackend(
   // MCP bridge schemas load asynchronously (tool discovery), so the schema
   // list starts with the statically-known tools and gets extended when
   // bridges connect. This keeps the first turn fast.
+  const hasEmbeddings = !!deps.sovereignTools?.embeddings
   const staticSchemas: ToolSchema[] = [
     ...CORE_TOOL_SCHEMAS,
     ...(deps.sovereignTools ? SOVEREIGN_TOOL_SCHEMAS : []),
+    ...(hasEmbeddings ? EMBEDDINGS_TOOL_SCHEMAS : []),
     ...(sembleEnabled ? SEMBLE_TOOL_SCHEMAS : [])
   ]
   let allToolSchemas: ToolSchema[] = [...staticSchemas]
@@ -700,6 +712,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
             cwd,
             !!deps.sovereignTools,
             sembleEnabled,
+            hasEmbeddings,
             mcpBridges.map((b) => b.name)
           ),
         messages: value.messages ?? [],
@@ -759,6 +772,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
           cwd,
           !!deps.sovereignTools,
           sembleEnabled,
+          hasEmbeddings,
           mcpBridges.map((b) => b.name)
         ),
       messages: [],
@@ -827,6 +841,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
           state.cwd,
           !!deps.sovereignTools,
           sembleEnabled,
+          hasEmbeddings,
           mcpBridges.map((b) => b.name)
         )
       )
