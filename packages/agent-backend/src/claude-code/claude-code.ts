@@ -1007,6 +1007,14 @@ export function createClaudeCodeBackend(
       if (input.hook_event_name !== 'PreCompact') return { continue: true }
       const state = stateForHook(input)
       if (!state) return { continue: true }
+      // Archive the full JSONL BEFORE the SDK truncates it for compaction.
+      // Without this, SDK auto-compaction destroys pre-compaction history
+      // with no recovery path. Sovereign's own recycleSession() also
+      // archives, but that only covers explicit recycling — this catches
+      // the SDK's automatic compaction events.
+      if (state.sessionFile && fs.existsSync(state.sessionFile)) {
+        archiveJsonlBeforeRecycle(dataDir, state.backendSessionId, state.sessionFile)
+      }
       emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: true })
       return { continue: true }
     }
@@ -1437,7 +1445,19 @@ export function createClaudeCodeBackend(
     const sk = bareId(sessionKey)
     const state = internal.sessions.get(sk)
     const backendId = state?.backendSessionId ?? sk
-    const archives = listSessionArchives(dataDir, backendId)
+
+    // Primary lookup: archives filed under the current backendSessionId.
+    let archives = listSessionArchives(dataDir, backendId)
+
+    // Secondary: the registry may hold a different backendSessionId (e.g.
+    // after machine migration or SDK session rotation). Check that too.
+    if (archives.length === 0) {
+      const existing = deps.registry?.lookupSession?.(sk)
+      if (existing?.backendSessionId && existing.backendSessionId !== backendId) {
+        archives = listSessionArchives(dataDir, existing.backendSessionId)
+      }
+    }
+
     if (archives.length === 0) return { turns: [], archiveCount: 0 }
 
     // Get the oldest timestamp from live history — archived turns before
@@ -1449,7 +1469,7 @@ export function createClaudeCodeBackend(
     )
 
     // Read all archives, normalize + parse each, collect turns
-    const allArchived: ParsedTurn[] = []
+    const allTurns: ParsedTurn[] = []
     const seenTimestamps = new Set<number>()
 
     for (const archive of archives) {
@@ -1466,13 +1486,13 @@ export function createClaudeCodeBackend(
         // Deduplicate across archives (same turn may appear in multiple snapshots)
         if (turn.timestamp && seenTimestamps.has(turn.timestamp)) continue
         if (turn.timestamp) seenTimestamps.add(turn.timestamp)
-        allArchived.push(turn)
+        allTurns.push(turn)
       }
     }
 
     // Sort chronologically
-    allArchived.sort((a, b) => a.timestamp - b.timestamp)
-    return { turns: allArchived, archiveCount: archives.length }
+    allTurns.sort((a, b) => a.timestamp - b.timestamp)
+    return { turns: allTurns, archiveCount: archives.length }
   }
 
   /**
