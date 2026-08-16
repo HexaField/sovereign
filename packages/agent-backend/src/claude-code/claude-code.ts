@@ -368,7 +368,9 @@ export function createClaudeCodeBackend(
   function resolveMcpServers(): Record<string, any> {
     const cfg = getConfig()
     const servers: Record<string, any> = { ...cfg.mcpServers }
-    if (!servers['sovereign'] && deps.sovereignMcpServer) {
+    // Always override — the in-process instance is the source of truth.
+    // A stale or misconfigured 'sovereign' key in cfg must never shadow it.
+    if (deps.sovereignMcpServer) {
       servers.sovereign = deps.sovereignMcpServer
     }
     return servers
@@ -1238,6 +1240,37 @@ export function createClaudeCodeBackend(
     state.pushUserMessage = (text, attachments) => pump.push(text, attachments)
     state.endInput = () => pump.end()
     state.liveQuery = q
+
+    // Verify sovereign MCP connected after initialization — if missing,
+    // tear down and let the next sendMessage restart with fresh config.
+    q.initializationResult()
+      .then(async () => {
+        try {
+          const statuses = await q.mcpServerStatus()
+          const sovereign = statuses.find((s: any) => s.name === 'sovereign')
+          if (!sovereign || sovereign.status !== 'connected') {
+            console.warn(
+              `[claude-code] sovereign MCP not connected (status: ${sovereign?.status ?? 'missing'}) for session ${state.sessionKey} — tearing down for restart`
+            )
+            try {
+              state.abortController?.abort()
+            } catch {
+              /* ignore */
+            }
+            state.pushUserMessage = undefined
+            state.endInput = undefined
+            state.abortController = undefined
+            state.liveQuery = undefined
+          } else {
+            console.log(`[claude-code] sovereign MCP verified for session ${state.sessionKey}`)
+          }
+        } catch (err) {
+          console.warn(`[claude-code] MCP status check failed for ${state.sessionKey}:`, err)
+        }
+      })
+      .catch(() => {
+        /* init not ready — best effort */
+      })
 
     state.iteratorDone = (async () => {
       try {
