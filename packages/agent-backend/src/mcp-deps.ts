@@ -3,7 +3,7 @@
 // MCP tool wires into the underlying services.
 
 import { randomUUID } from 'node:crypto'
-import type { PresenceMcpDeps, SovereignToolDeps } from './claude-code/mcp-server.js'
+import type { PresenceMcpDeps, EmbeddingsToolDeps, SovereignToolDeps } from './claude-code/mcp-server.js'
 import type { ClaudeCodeBackend } from './claude-code/index.js'
 import type { RoutingBackend } from './factory.js'
 import type { CronService } from '@sovereign/scheduler'
@@ -45,6 +45,9 @@ export interface SovereignMcpDepsInput {
   /** Global subagent defaults — from config `agentBackend.subagentDefaults`.
    *  Thread-level config takes priority; these override the model's request. */
   subagentDefaults?: SubagentDefaults
+  /** Embeddings service. When set, registers embeddings_search/index/collections/health
+   *  tools in both the Claude Code MCP server and the local-llm backend. */
+  embeddings?: EmbeddingsToolDeps
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -236,6 +239,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     currentSessionKey() {
       return getClaudeCodeBackend?.()?.getActiveSessionKey()
     },
-    ...(input.presence ? { presence: input.presence } : {})
+    ...(input.presence ? { presence: input.presence } : {}),
+    ...(input.embeddings ? { embeddings: input.embeddings } : {})
   }
 }

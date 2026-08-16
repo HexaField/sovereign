@@ -24,6 +24,7 @@
     "@sovereign/browser": "workspace:*",
     "@sovereign/config": "workspace:*",
     "@sovereign/core": "workspace:*",
+    "@sovereign/embeddings": "workspace:*",
     "@sovereign/issues": "workspace:*",
     "@sovereign/meetings": "workspace:*",
     "@sovereign/membranes": "workspace:*",

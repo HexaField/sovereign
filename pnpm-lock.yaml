@@ -90,6 +90,9 @@ importers:
       '@sovereign/core':
         specifier: workspace:*
         version: link:../core
+      '@sovereign/embeddings':
+        specifier: workspace:*
+        version: link:../embeddings
       '@sovereign/issues':
         specifier: workspace:*
         version: link:../issues
@@ -408,25 +411,6 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
-    devDependencies:
-      '@types/express':
-        specifier: ^5.0.6
-        version: 5.0.6
-
-  packages/mcp-sidecar:
-    dependencies:
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: 0.3.220
-        version: 0.3.220(@anthropic-ai/sdk@0.96.0(zod@4.3.5))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.5))(zod@4.3.5)
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.4.0
-        version: 1.29.0(zod@4.3.5)
-      express:
-        specifier: ^5.2.1
-        version: 5.2.1
-      zod:
-        specifier: ^4.3.5
-        version: 4.3.5
     devDependencies:
       '@types/express':
         specifier: ^5.0.6
