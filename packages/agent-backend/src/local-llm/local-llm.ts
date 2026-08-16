@@ -301,6 +301,8 @@ export function createLocalLlmBackend(
   const getConfig = typeof configOrGetter === 'function' ? configOrGetter : () => configOrGetter
   const emitter = createBackendEmitter(KIND)
   const sessions = new Map<string, LocalLlmSessionState>()
+  // Parent→child tracking — mirrors claude-code's subagentToParent index.
+  const subagentParents = new Map<string, string>() // childKey → parentKey
   let connectionStatus: BackendConnectionStatus = 'disconnected'
 
   const sessionStore: WriteThroughStore<PersistedLocalLlmSession> = createWriteThroughStore({
@@ -821,7 +823,11 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
   // ── The actual agentic turn ─────────────────────────────────────────
 
-  async function runTurn(state: LocalLlmSessionState, text: string, attachments?: Buffer[]): Promise<void> {
+  async function runTurn(
+    state: LocalLlmSessionState,
+    text: string,
+    attachments?: Buffer[]
+  ): Promise<{ outcome: 'ok' | 'aborted' | 'error'; errorMessage: string }> {
     state.agentStatus = 'working'
     emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'working' })
 
@@ -1210,15 +1216,56 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     }
 
     persist(state)
+    return { outcome, errorMessage }
   }
 
   async function drainQueue(state: LocalLlmSessionState): Promise<void> {
     state.processing = true
     try {
+      let lastResult: { outcome: 'ok' | 'aborted' | 'error'; errorMessage: string } = {
+        outcome: 'ok',
+        errorMessage: ''
+      }
       while (state.pendingQueue.length > 0) {
         const next = state.pendingQueue.shift()!
-        await runTurn(state, next.text, next.attachments)
+        lastResult = await runTurn(state, next.text, next.attachments)
       }
+      // Emit lifecycle event when a subagent session finishes its queue.
+      const parentKey = subagentParents.get(state.sessionKey)
+      if (parentKey) {
+        if (lastResult.outcome === 'error') {
+          emitter.emit('subagent.failed', {
+            parentKey,
+            childKey: state.sessionKey,
+            error: lastResult.errorMessage
+          })
+        } else {
+          const lastAssistant = [...state.messages].reverse().find((m) => m.role === 'assistant')
+          const result = lastAssistant?.content
+            ? typeof lastAssistant.content === 'string'
+              ? lastAssistant.content
+              : JSON.stringify(lastAssistant.content)
+            : ''
+          emitter.emit('subagent.completed', {
+            parentKey,
+            childKey: state.sessionKey,
+            result
+          })
+        }
+        subagentParents.delete(state.sessionKey)
+      }
+    } catch (err) {
+      // Safety net — in case a future change makes runTurn throw again.
+      const parentKey = subagentParents.get(state.sessionKey)
+      if (parentKey) {
+        emitter.emit('subagent.failed', {
+          parentKey,
+          childKey: state.sessionKey,
+          error: String(err)
+        })
+        subagentParents.delete(state.sessionKey)
+      }
+      throw err
     } finally {
       state.processing = false
     }
@@ -1305,6 +1352,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     const childKey = `agent:main:subagent:${randomUUID()}`
     const parentState = sessions.get(parentSessionKey)
 
+    // Track parent→child relationship for lifecycle events.
+    subagentParents.set(childKey, parentSessionKey)
+
     // Build the subagent system prompt: guardrails (SUBAGENT.md) + task.
     let systemPrompt: string | undefined
     if (opts.task) {
@@ -1329,10 +1379,23 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       systemPromptOverride: systemPrompt
     })
 
+    emitter.emit('subagent.spawned', {
+      parentKey: parentSessionKey,
+      childKey,
+      task: opts.task,
+      label: opts.label ?? opts.task
+    })
+
     // Fire-and-forget — matches claude-code's async subagent semantics.
     // The parent doesn't block on the child completing.
     sendMessage(childKey, opts.task).catch((err) => {
       emitter.emit('chat.error', { sessionKey: childKey, error: String(err) })
+      emitter.emit('subagent.failed', {
+        parentKey: parentSessionKey,
+        childKey,
+        error: String(err)
+      })
+      subagentParents.delete(childKey)
     })
 
     return childKey
