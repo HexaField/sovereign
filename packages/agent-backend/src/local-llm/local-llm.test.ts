@@ -544,10 +544,10 @@ describe('local-llm backend: context budget + recycle', () => {
     expect(meta).not.toBeNull()
     expect(budget).not.toBeNull()
     // Both should report the same token count
-    expect(meta!.totalTokens).toBe(budget!.session.contextTokens)
+    expect(meta!.totalTokens).toBe(budget!.session?.contextTokens)
     // And the count should be reasonable (positive, not inflated beyond context window)
     expect(meta!.totalTokens).toBeGreaterThan(0)
-    expect(meta!.totalTokens).toBeLessThan(meta!.contextTokens!)
+    expect(meta!.totalTokens).toBeLessThan(meta!.contextTokens ?? Infinity)
   })
 
   it('getContextBudget returns null for an unknown session', async () => {

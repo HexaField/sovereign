@@ -4,7 +4,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // the module checks `typeof Audio` on import.
 const mockPlay = vi.fn().mockResolvedValue(undefined)
 const mockPause = vi.fn()
-let createdAudioSrc = ''
 let createdAudioLoop = false
 let createdAudioVolume = 1
 
@@ -16,9 +15,7 @@ class MockAudio {
   pause = mockPause
   constructor(src?: string) {
     if (src) this.src = src
-    createdAudioSrc = this.src
     // Expose set values so tests can read them after construction
-    const self = this
     Object.defineProperty(this, 'loop', {
       get: () => createdAudioLoop,
       set: (v: boolean) => {

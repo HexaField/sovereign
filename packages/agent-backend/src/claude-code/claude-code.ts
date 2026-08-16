@@ -62,7 +62,6 @@ import {
   normalizeClaudeCodeEntry,
   readAllClaudeCodeMessages,
   readRecentClaudeCodeMessages,
-  computeUsageFromFile,
   latestUsageFromFile,
   findSessionFile
 } from './history.js'
