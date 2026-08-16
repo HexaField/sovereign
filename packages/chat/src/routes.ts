@@ -214,6 +214,21 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
     }
   })
 
+  // ── Archived (pre-compaction) history ─────────────────────────────────
+  router.get('/api/threads/:threadId/history/archived', async (req, res) => {
+    const threadId = req.params.threadId
+    const sessionKey = chatModule.resolveSessionKey(threadId)
+    try {
+      if (typeof backend.getArchivedHistory !== 'function') {
+        return res.json({ turns: [], archiveCount: 0 })
+      }
+      const result = await backend.getArchivedHistory(sessionKey)
+      res.json(result)
+    } catch {
+      res.json({ turns: [], archiveCount: 0 })
+    }
+  })
+
   // ── SSE endpoint for per-thread live event streaming ──────────────────
   router.get('/api/threads/:threadId/events', async (req, res) => {
     const threadId = req.params.threadId

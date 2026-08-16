@@ -12,6 +12,9 @@ import {
   hasOlderMessages,
   loadingOlder,
   loadOlderMessages,
+  hasArchivedHistory,
+  loadingArchived,
+  loadArchivedHistory,
   streamingText,
   streamingHtml,
   liveWork,
@@ -328,17 +331,29 @@ export function ChatView(props: ChatViewProps) {
         tabindex="0"
         style={{ outline: 'none' }}
       >
-        {/* Load older messages — hidden in summary mode */}
-        {props.mode !== 'summary' && hasOlderMessages() && (
-          <div class="flex items-center justify-center">
-            <button
-              class="rounded-md border border-white/10 px-3 py-1 text-xs hover:bg-white/5"
-              onClick={loadOlderMessages}
-              disabled={loadingOlder()}
-              style={{ color: 'var(--c-text-muted)' }}
-            >
-              {loadingOlder() ? 'Loading older messages…' : 'Load older messages'}
-            </button>
+        {/* Load older / archived messages — hidden in summary mode */}
+        {props.mode !== 'summary' && (hasOlderMessages() || hasArchivedHistory()) && (
+          <div class="flex flex-col items-center justify-center gap-2">
+            {hasOlderMessages() && (
+              <button
+                class="rounded-md border border-white/10 px-3 py-1 text-xs hover:bg-white/5"
+                onClick={loadOlderMessages}
+                disabled={loadingOlder()}
+                style={{ color: 'var(--c-text-muted)' }}
+              >
+                {loadingOlder() ? 'Loading older messages…' : 'Load older messages'}
+              </button>
+            )}
+            {hasArchivedHistory() && !hasOlderMessages() && (
+              <button
+                class="rounded-md border border-amber-500/30 px-3 py-1.5 text-xs hover:bg-amber-500/10"
+                onClick={loadArchivedHistory}
+                disabled={loadingArchived()}
+                style={{ color: 'var(--c-text-muted)' }}
+              >
+                {loadingArchived() ? 'Loading archived history…' : '⟳ Load pre-compaction history'}
+              </button>
+            )}
           </div>
         )}
 
