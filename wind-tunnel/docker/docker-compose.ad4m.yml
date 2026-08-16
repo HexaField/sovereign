@@ -9,9 +9,23 @@
 # boots — so Sovereign's native ad4m waker connects as that same user. The s10
 # scenario then injects a mention on the node and asserts the waker wakes the
 # presence agent AND its presence_reply_ad4m write-back lands back in the channel.
+# The s31 scenario publishes a perspective as a neighbourhood on this same node
+# and proves its links round-trip.
 #
 # The ad4m executor image is external (built by the ad4m repo / ad4m wind
 # tunnel). Set AD4M_EXEC_IMAGE to override; the lane SKIPs if it is absent.
+#
+# Local bootstrap languages, no Holochain — RUN_HOLOCHAIN stays "false" for
+# every scenario this lane runs today. The image is expected to ship a local
+# bootstrap seed (see NETWORK_BOOTSTRAP_SEED below) whose 5 bootstrap
+# languages (agent, perspective, neighbourhood, link, language) back onto
+# ad4m:host storage instead of a Holochain DNA — so agent identity,
+# perspectives, AND neighbourhood creation/sync (s31) all work with the
+# conductor fully disabled. Only a scenario that specifically needs the real
+# Holochain-backed p-diff-sync link language (interop with other AD4M nodes,
+# DHT gossip timing, etc.) would need Holochain — that calls for its own
+# `--ad4m-holochain` lane (RUN_HOLOCHAIN=true, no NETWORK_BOOTSTRAP_SEED
+# override) layered on top of this one, not a change here.
 
 services:
   ad4m:
@@ -23,8 +37,19 @@ services:
       MCP_PORT: "3001"
       RUN_HOLOCHAIN: "false"
       AGENT_PASSPHRASE: "windtunnel-pass"
+      # Local bootstrap seed — the image's own baked-in docker_seed.json
+      # (produced by the ad4m repo's docker/generate-seed.mjs), NOT a mainnet
+      # seed. Its knownLinkLanguages entry is the local, Holochain-free link
+      # language template s31 clones to publish a neighbourhood. This is
+      # already the image's default when RUN_HOLOCHAIN=false and
+      # NETWORK_BOOTSTRAP_SEED is unset (see the ad4m repo's
+      # docker-entrypoint.sh) — set explicitly here so the wind tunnel's
+      # dependency on the image shipping this file is visible and pinned,
+      # not implicit in an upstream default that could change.
+      NETWORK_BOOTSTRAP_SEED: "/opt/ad4m/docker_seed.json"
     ports:
-      # MCP exposed to the host so the s10 scenario can inject + verify.
+      # MCP exposed to the host so the s10 and s31 scenarios can inject +
+      # verify / publish + query.
       - "14561:3001"
 
   ad4m-provision:

@@ -38,20 +38,28 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ad4m lane: overlay the ad4m node + provision step, and point the s10 scenario
-# at the node's host-exposed MCP. Needs an ad4m executor image (AD4M_EXEC_IMAGE,
-# default ad4m-test:latest); s10 self-skips if the node is unreachable.
+# ad4m lane: overlay the ad4m node + provision step, and point the s10/s31
+# scenarios at the node's host-exposed MCP. Needs an ad4m executor image
+# (AD4M_EXEC_IMAGE, default ad4m-test:latest); both self-skip if the node is
+# unreachable. The node runs on local bootstrap languages (RUN_HOLOCHAIN=false
+# + NETWORK_BOOTSTRAP_SEED in docker-compose.ad4m.yml) — no Holochain needed
+# for anything this lane runs today. A future scenario that specifically
+# needs Holochain (interop with other AD4M nodes, DHT gossip, the real
+# p-diff-sync language) should get its own --ad4m-holochain lane instead of
+# changing this one.
 #
-# The ad4m lane runs s10 by itself by default. s9 restarts the Sovereign
-# container mid-suite; s10's waker then races that reconnect, so the two do not
-# share one Sovereign instance. Run the base suite (s1–s9) via plain ./run.sh,
-# the ad4m lane via ./run.sh --ad4m. Pass an explicit --scenario to override.
+# The ad4m lane runs s10 + s31 by default. s9 restarts the Sovereign
+# container mid-suite; s10's waker then races that reconnect, so neither ad4m
+# scenario shares one Sovereign instance with s9. Run the base suite (s1–s9)
+# via plain ./run.sh, the ad4m lane via ./run.sh --ad4m. Pass an explicit
+# --scenario to override.
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 if [[ "$AD4M" == "true" ]]; then
   COMPOSE_ARGS+=(-f "docker/docker-compose.ad4m.yml")
-  # Default the ad4m lane to s10 unless the caller chose scenarios explicitly.
+  # Default the ad4m lane to s10 + s31 unless the caller chose scenarios
+  # explicitly.
   if [[ ! " ${EXTRA_ARGS[*]} " == *" --scenario "* ]]; then
-    EXTRA_ARGS+=(--scenario s10)
+    EXTRA_ARGS+=(--scenario s10,s31)
   fi
   export AD4M_MCP_URL="${AD4M_MCP_URL:-http://localhost:14561}"
   export AD4M_PROVISION_FILE="${AD4M_PROVISION_FILE:-$(pwd)/ad4m/.provision/provision.json}"

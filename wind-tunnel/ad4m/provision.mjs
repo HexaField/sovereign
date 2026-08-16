@@ -8,9 +8,14 @@
 //   ad4m-token.json  — { "token": "<jwt>" }  → Sovereign reads this as its
 //                       ad4m credential at boot (dataDir/ad4m-token.json), so
 //                       its native waker connects as this same user.
-//   provision.json   — { jwt, did, uuid, channel } → the s10 scenario reads
-//                       this (on the host) to inject the mention + verify the
-//                       reply as the exact user/perspective the waker watches.
+//   provision.json   — { jwt, did, uuid, channel, linkLanguageTemplate } →
+//                       the s10 scenario reads jwt/uuid/channel (on the host)
+//                       to inject the mention + verify the reply as the exact
+//                       user/perspective the waker watches. The s31 scenario
+//                       reads linkLanguageTemplate too, to publish a
+//                       neighbourhood on the node's local (non-Holochain)
+//                       link language without hardcoding its
+//                       content-addressed hash.
 //
 // Usage: node provision.mjs <mcpBase> <outDir>
 //   env: ADMIN_CREDENTIAL, AD4M_EMAIL, AD4M_PASSWORD, AD4M_CHANNEL
@@ -83,10 +88,40 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const uuid = persp?.uuid || pick(persp, 'uuid', 'perspectiveUuid')
   if (!uuid) throw new Error(`no perspective uuid: ${JSON.stringify(persp).slice(0, 200)}`)
 
+  // Discover the local (non-Holochain) link language template baked into the
+  // node's bootstrap seed (knownLinkLanguages) so s31 can publish a
+  // neighbourhood without hardcoding a content-addressed language hash. A
+  // fresh executor may not have finished hydrating runtime state from the
+  // seed the instant MCP starts answering — same class of race as the JWT
+  // wait above — so retry briefly before giving up.
+  let linkLanguageTemplate = ''
+  for (let i = 0; i < 10 && !linkLanguageTemplate; i++) {
+    let templates
+    try {
+      templates = await user.callToolJson('list_link_language_templates', {})
+    } catch (e) {
+      templates = { error: String(e?.message ?? e) }
+    }
+    const list = Array.isArray(templates?.templates) ? templates.templates : []
+    linkLanguageTemplate = pick(list[0] || {}, 'address')
+    if (!linkLanguageTemplate) await sleep(2000)
+  }
+  if (!linkLanguageTemplate) {
+    console.error(
+      '[swt-provision] WARNING: no link language templates found (list_link_language_templates returned none) — ' +
+        's31 will fail; check the ad4m-test image ships a local bootstrap seed with knownLinkLanguages'
+    )
+  }
+
   fs.mkdirSync(outDir, { recursive: true })
   fs.writeFileSync(path.join(outDir, 'ad4m-token.json'), JSON.stringify({ token: jwt }))
-  fs.writeFileSync(path.join(outDir, 'provision.json'), JSON.stringify({ jwt, did, uuid, channel: CHANNEL }, null, 2))
-  console.log(`[swt-provision] did=${did} uuid=${uuid} channel=${CHANNEL} — wrote token + manifest to ${outDir}`)
+  fs.writeFileSync(
+    path.join(outDir, 'provision.json'),
+    JSON.stringify({ jwt, did, uuid, channel: CHANNEL, linkLanguageTemplate }, null, 2)
+  )
+  console.log(
+    `[swt-provision] did=${did} uuid=${uuid} channel=${CHANNEL} linkLanguageTemplate=${linkLanguageTemplate || '<none>'} — wrote token + manifest to ${outDir}`
+  )
 })().catch((e) => {
   console.error('[swt-provision] FATAL', e?.stack || e)
   process.exit(1)
