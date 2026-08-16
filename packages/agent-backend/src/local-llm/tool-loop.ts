@@ -38,6 +38,10 @@ export interface ToolLoopDeps {
    *  (core + any schemas loaded via ToolSearch). When set, the tool loop
    *  calls this on each iteration instead of using the static `toolSchemas`. */
   getActiveSchemas?: () => ToolSchema[]
+  /** Called between iterations with the server-reported prompt token count
+   *  and the loop's messages array. The caller can modify messages in place
+   *  (e.g. compact older messages into a summary) to stay within context. */
+  onIterationEnd?: (promptTokens: number, messages: ChatMessage[]) => Promise<void>
 }
 
 export interface ToolLoopResult {
@@ -237,6 +241,14 @@ export async function runToolLoop(
         tool_call_id: toolCallId,
         timestamp: Date.now()
       })
+    }
+
+    // Between iterations: let the caller compact if context grew too large.
+    // This prevents single-turn tool loops from blowing past the context
+    // window without triggering compaction (which otherwise only fires
+    // between sendMessage calls).
+    if (deps.onIterationEnd && lastPromptTokens) {
+      await deps.onIterationEnd(lastPromptTokens, messages)
     }
   }
 
