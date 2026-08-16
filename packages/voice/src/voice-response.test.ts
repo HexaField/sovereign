@@ -245,3 +245,147 @@ describe('voice response — device-name routing', () => {
     vr.shutdown()
   })
 })
+
+// ── TTS override (cross-device sync) ─────────────────────────────────
+
+function emitTtsOverride(
+  bus: EventBus,
+  payload: { threadId: string; enabled: boolean; deviceName?: string | null }
+): void {
+  bus.emit({
+    type: 'voice.tts-override',
+    timestamp: new Date().toISOString(),
+    source: 'ws',
+    payload
+  })
+}
+
+describe('voice response — TTS override toggle', () => {
+  it('emits voice.tts-override.state with enabled=true when toggled on', async () => {
+    const { deps, bus } = createDeps()
+    const vr = createVoiceResponse(deps)
+
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Phone' })
+    await flush()
+
+    const stateEvents = (bus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .map(([e]: any) => e)
+      .filter((e: any) => e.type === 'voice.tts-override.state')
+    expect(stateEvents).toHaveLength(1)
+    expect(stateEvents[0].payload).toMatchObject({
+      threadId: 't1',
+      enabled: true,
+      deviceName: 'Josh Phone'
+    })
+
+    vr.shutdown()
+  })
+
+  it('emits voice.tts-override.state with enabled=false when toggled off', async () => {
+    const { deps, bus } = createDeps()
+    const vr = createVoiceResponse(deps)
+
+    // Turn on first
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Phone' })
+    await flush()
+    ;(bus.emit as ReturnType<typeof vi.fn>).mockClear()
+
+    // Turn off
+    emitTtsOverride(bus, { threadId: 't1', enabled: false })
+    await flush()
+
+    const stateEvents = (bus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .map(([e]: any) => e)
+      .filter((e: any) => e.type === 'voice.tts-override.state')
+    expect(stateEvents).toHaveLength(1)
+    expect(stateEvents[0].payload).toMatchObject({
+      threadId: 't1',
+      enabled: false,
+      deviceName: null
+    })
+
+    vr.shutdown()
+  })
+
+  it('routes TTS to the override device on assistant turn completion (non-voice origin)', async () => {
+    const { deps, bus, sendToDeviceName } = createDeps()
+    const vr = createVoiceResponse(deps)
+
+    // Enable TTS override (no voice message needed)
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Phone' })
+    await flush()
+
+    // Simulate a text-originated assistant turn completing
+    emitTurnCompleted(bus, { threadId: 't1', turn: { role: 'assistant', content: 'Build succeeded.' } })
+    await flush()
+
+    // Summary pipeline should fire for the override device
+    const pendingCall = sendToDeviceName.mock.calls.find(([, msg]: any[]) => msg.type === 'voice.summary.pending')
+    const audioCall = sendToDeviceName.mock.calls.find(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+    expect(pendingCall?.[0]).toBe('Josh Phone')
+    expect(audioCall?.[0]).toBe('Josh Phone')
+
+    vr.shutdown()
+  })
+
+  it('re-toggling from a different device updates the target device', async () => {
+    const { deps, bus, sendToDeviceName } = createDeps()
+    const vr = createVoiceResponse(deps)
+
+    // Toggle on from phone
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Phone' })
+    await flush()
+
+    // Toggle on from desktop (overrides phone)
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Desktop' })
+    await flush()
+
+    // Assistant turn should route to the desktop, not the phone
+    emitTurnCompleted(bus, { threadId: 't1', turn: { role: 'assistant', content: 'Done.' } })
+    await flush()
+
+    const audioCall = sendToDeviceName.mock.calls.find(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+    expect(audioCall?.[0]).toBe('Josh Desktop')
+
+    vr.shutdown()
+  })
+
+  it('does not fire the summary pipeline after TTS override is toggled off', async () => {
+    const { deps, bus, sendToDeviceName } = createDeps()
+    const vr = createVoiceResponse(deps)
+
+    // Toggle on, then off
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Phone' })
+    await flush()
+    emitTtsOverride(bus, { threadId: 't1', enabled: false })
+    await flush()
+    sendToDeviceName.mockClear()
+
+    // Assistant turn — should NOT trigger TTS
+    emitTurnCompleted(bus, { threadId: 't1', turn: { role: 'assistant', content: 'Silent response.' } })
+    await flush()
+
+    expect(sendToDeviceName).not.toHaveBeenCalled()
+    vr.shutdown()
+  })
+
+  it('getTtsOverride returns current state for a thread', () => {
+    const { deps, bus } = createDeps()
+    const vr = createVoiceResponse(deps)
+
+    // Initially off
+    expect(vr.getTtsOverride('t1')).toEqual({ enabled: false, deviceName: null })
+
+    // Toggle on
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Phone' })
+
+    expect(vr.getTtsOverride('t1')).toEqual({ enabled: true, deviceName: 'Josh Phone' })
+
+    // Toggle off
+    emitTtsOverride(bus, { threadId: 't1', enabled: false })
+
+    expect(vr.getTtsOverride('t1')).toEqual({ enabled: false, deviceName: null })
+
+    vr.shutdown()
+  })
+})

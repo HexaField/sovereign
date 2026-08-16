@@ -892,6 +892,19 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       res.json(voiceResponse.getTtsOverride(threadId))
     })
 
+    // Broadcast TTS override state changes to all connected clients so
+    // toggling on one device updates every tab/device in real time.
+    bus.on('voice.tts-override.state', (e) => {
+      const payload = (e.payload ?? {}) as { threadId?: string; enabled?: boolean; deviceName?: string | null }
+      if (!payload.threadId) return
+      wsHandler.broadcastToChannel('chat', {
+        type: 'voice.tts-override.state',
+        threadId: payload.threadId,
+        enabled: payload.enabled,
+        deviceName: payload.deviceName
+      })
+    })
+
     // Expose for shutdown
     ;(app as any).__voiceResponse = voiceResponse
   }
