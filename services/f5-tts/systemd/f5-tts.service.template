@@ -1,0 +1,28 @@
+[Unit]
+Description=F5-TTS voice clone HTTP service (ROCm iGPU)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=@@F5_TTS_DIR@@
+Environment=HOME=@@HOME@@
+Environment=PYTHONUNBUFFERED=1
+Environment=HSA_USE_SVM=0
+Environment=TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+Environment=MIOPEN_LOG_LEVEL=0
+Environment=F5_TTS_HOST=127.0.0.1
+Environment=F5_TTS_PORT=5812
+ExecStart=@@F5_TTS_DIR@@/.venv/bin/python @@F5_TTS_DIR@@/server.py
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+TimeoutStopSec=30
+KillSignal=SIGINT
+StandardOutput=append:@@HOME@@/.sovereign/data/voice/f5-tts.stdout.log
+StandardError=append:@@HOME@@/.sovereign/data/voice/f5-tts.stderr.log
+
+[Install]
+WantedBy=default.target
