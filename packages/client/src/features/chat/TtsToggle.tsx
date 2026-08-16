@@ -1,28 +1,37 @@
 // TTS toggle button — floating control that enables/disables TTS output
 // for the current thread, independent of input modality. Toggling ON
 // from a device routes TTS audio to that device. Toggling OFF silences it.
+//
+// Only the device whose name matches the active override shows the
+// unmuted icon. Other devices show muted (with a hint about which
+// device holds playback).
 
-import { ttsEnabled, ttsDeviceName, toggleTtsOverride } from './tts-override-store.js'
+import { ttsActiveHere, ttsEnabled, ttsDeviceName, toggleTtsOverride } from './tts-override-store.js'
 
 export function TtsToggle() {
-  const active = () => ttsEnabled()
-  const device = () => ttsDeviceName()
+  const activeHere = () => ttsActiveHere()
+  const activeElsewhere = () => ttsEnabled() && !ttsActiveHere()
+  const otherDevice = () => ttsDeviceName()
+
+  const title = () => {
+    if (activeHere()) return `TTS playing here. Click to mute.`
+    if (activeElsewhere()) return `TTS playing on ${otherDevice()}. Click to switch here.`
+    return 'Enable TTS for all responses'
+  }
 
   return (
     <button
       class="inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-full border-none transition-opacity"
       style={{
-        opacity: active() ? 1 : 0.4,
-        color: active() ? '#fff' : 'var(--c-text)',
-        background: active() ? 'var(--c-accent)' : 'transparent'
+        opacity: activeHere() ? 1 : 0.4,
+        color: activeHere() ? '#fff' : 'var(--c-text)',
+        background: activeHere() ? 'var(--c-accent)' : 'transparent'
       }}
       onClick={() => toggleTtsOverride()}
-      title={
-        active() ? `TTS on — playing on ${device() ?? 'this device'}. Click to mute.` : 'Enable TTS for all responses'
-      }
+      title={title()}
     >
-      {active() ? (
-        /* Speaker with sound waves — TTS active */
+      {activeHere() ? (
+        /* Speaker with sound waves — TTS active on THIS device */
         <svg
           width="16"
           height="16"
@@ -38,7 +47,7 @@ export function TtsToggle() {
           <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
         </svg>
       ) : (
-        /* Speaker muted — TTS inactive */
+        /* Speaker muted — TTS inactive or on another device */
         <svg
           width="16"
           height="16"
