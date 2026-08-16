@@ -1001,6 +1001,11 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       return result
     }
 
+    // Track whether mid-loop compaction modified the transcript. When it
+    // does, the post-loop reconciliation must replace state.messages
+    // entirely rather than appending a suffix.
+    let midLoopCompacted = false
+
     const loopDeps: ToolLoopDeps = {
       complete: (msgs, opts) =>
         state.client.complete(toWireMessages(msgs), { tools: opts?.tools, signal: opts?.signal }),
@@ -1010,7 +1015,127 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       // Progressive tool disclosure: each iteration sends core schemas +
       // any schemas the model has loaded via ToolSearch this session.
       getActiveSchemas: () => [...coreSchemas, ...toolSearchRegistry.getLoadedSchemas()],
-      maxIterations: DEFAULT_MAX_ITERATIONS
+      maxIterations: DEFAULT_MAX_ITERATIONS,
+      // Mid-loop compaction: keeps single-turn tool loops from overflowing
+      // the context window without triggering compaction.
+      onIterationEnd: async (promptTokens, loopMessages) => {
+        state.lastPromptTokens = promptTokens
+        const ctxWin = state.contextWindow ?? getConfig().contextWindow
+        const threshold = Math.floor(ctxWin * COMPACT_THRESHOLD_RATIO)
+        if (promptTokens < threshold) return
+        // loopMessages[0] = system message; conversation starts at [1].
+        const conversationLen = loopMessages.length - 1
+        if (conversationLen <= COMPACT_KEEP_RECENT + 2) return
+
+        const conversation = loopMessages.slice(1)
+        const dropCount = findSafeDropCount(conversation, COMPACT_KEEP_RECENT)
+        if (dropCount <= 0) return
+
+        // Emit compaction activity to the UI
+        emitter.emit('chat.work', {
+          sessionKey: state.sessionKey,
+          work: {
+            type: 'tool_call',
+            toolCallId: `mid-compact-${Date.now()}`,
+            name: '_compaction',
+            input: `Mid-loop compaction: ${dropCount} messages (${promptTokens} prompt tokens, threshold ${threshold})`,
+            timestamp: Date.now()
+          } as any
+        })
+
+        // Splice out old conversation messages (keep system at [0])
+        const dropped = loopMessages.splice(1, dropCount)
+
+        // Check for prior compaction summary at the start of dropped segment
+        let priorSummary = ''
+        if (
+          dropped.length > 0 &&
+          dropped[0].role === 'system' &&
+          (dropped[0].content?.startsWith('[CONTEXT COMPACTION') || dropped[0].content?.startsWith('[Compacted'))
+        ) {
+          priorSummary = dropped[0].content
+          dropped.shift()
+        }
+
+        // Generate summary
+        const transcript = buildCompactionTranscript(dropped)
+        let summaryContent: string
+
+        try {
+          const summariseMessages: WireChatMessage[] = [
+            { role: 'system', content: COMPACTION_SYSTEM_PROMPT },
+            ...(priorSummary
+              ? [
+                  {
+                    role: 'user' as const,
+                    content:
+                      'A previous compaction summary exists. UPDATE it with new information from the ' +
+                      'conversation excerpt below — move completed items to "Done", update "In Progress", ' +
+                      'and revise "Next Step". Do not discard prior context that remains relevant.\n\n' +
+                      `Previous summary:\n\n${priorSummary}`
+                  }
+                ]
+              : []),
+            { role: 'user', content: `Summarize this conversation excerpt:\n\n${transcript}` }
+          ]
+          const response = await state.client.complete(summariseMessages, {
+            signal: AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
+          })
+          const rawSummary = response.choices?.[0]?.message?.content?.trim()
+          if (rawSummary && rawSummary.length > 50) {
+            summaryContent = [
+              COMPACTION_SUMMARY_PREFIX,
+              '',
+              extractSummary(rawSummary),
+              '',
+              COMPACTION_SUMMARY_SUFFIX
+            ].join('\n')
+          } else {
+            summaryContent = buildHeuristicSummary(dropped)
+          }
+        } catch (err) {
+          console.error(
+            `[local-llm] mid-loop compaction summary failed for ${state.sessionKey}: ${(err as Error).message}`
+          )
+          summaryContent = buildHeuristicSummary(dropped)
+        }
+
+        // Merge summary into the leading system message to avoid
+        // multi-system-message issues with model templates.
+        loopMessages[0] = {
+          ...loopMessages[0],
+          content: loopMessages[0].content + '\n\n' + summaryContent
+        }
+
+        state.compactionCount = (state.compactionCount ?? 0) + 1
+        midLoopCompacted = true
+
+        emitter.emit('chat.work', {
+          sessionKey: state.sessionKey,
+          work: {
+            type: 'tool_result',
+            toolCallId: `mid-compact-${Date.now()}`,
+            name: '_compaction',
+            output: `Mid-loop compacted ${dropped.length} messages into summary. Compaction #${state.compactionCount}.`,
+            timestamp: Date.now()
+          } as any
+        })
+
+        if (deps.metrics) {
+          const postTokens = promptTokens - estimateTokens(dropped.reduce((n, m) => n + (m.content?.length ?? 0), 0))
+          deps.metrics.recordCompaction({
+            ts: Date.now(),
+            sessionKey: state.sessionKey,
+            backendKind: 'local-llm',
+            model: state.model,
+            preTokens: promptTokens,
+            postTokens: Math.max(postTokens, 0),
+            tokensReclaimed: Math.max(promptTokens - postTokens, 0),
+            method: 'compaction',
+            isSubagent: !!state.parentSessionKey
+          })
+        }
+      }
     }
 
     let finalContent = ''
@@ -1037,7 +1162,14 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       // Whatever the loop appended — on success, on abort, or before a
       // failure — is real conversation state (e.g. a tool call that
       // actually ran) and belongs in the persisted transcript either way.
-      state.messages.push(...transcript.slice(beforeLen))
+      if (midLoopCompacted) {
+        // Mid-loop compaction spliced the transcript — beforeLen is stale.
+        // Replace state.messages with the full conversation from the
+        // transcript (everything after the leading system message).
+        state.messages = transcript.slice(1)
+      } else {
+        state.messages.push(...transcript.slice(beforeLen))
+      }
       state.abortController = undefined
     }
 
