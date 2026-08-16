@@ -266,6 +266,10 @@ interface LocalLlmSessionState {
   abortController?: AbortController
   lastRecycleAt?: number
   compactionCount?: number
+  /** Last server-reported prompt token count from inference — used for
+   *  compaction threshold checks instead of the inaccurate char estimate.
+   *  Updated after each tool-loop completion. */
+  lastPromptTokens?: number
   /** Files Read this session — Write/Edit refuse to touch unread files. Reset on restart. */
   filesRead: Set<string>
   toolExecutor: ReturnType<typeof createToolExecutor>
@@ -451,10 +455,17 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     return (match ? match[1] : raw).trim()
   }
 
-  /** Estimate total token usage for the current session state. Accounts for
-   *  system prompt, tool schemas, and all messages. */
+  /** Estimate total token usage for the current session state.
+   *  Prefers the server-reported prompt token count (exact) over the
+   *  character-based heuristic (4 chars/token, which drastically
+   *  underestimates structured content like JSON and tool calls). */
   function estimateSessionTokens(state: LocalLlmSessionState): number {
-    const toolSchemaChars = JSON.stringify(allToolSchemas).length
+    // Server-reported count from the last completion — most accurate
+    if (state.lastPromptTokens && state.lastPromptTokens > 0) {
+      return state.lastPromptTokens
+    }
+    // Fallback: character-based estimate (inaccurate for structured content)
+    const toolSchemaChars = JSON.stringify(coreSchemas).length
     const systemChars = state.systemPrompt.length
     const messageChars = state.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0)
     return estimateTokens(systemChars + toolSchemaChars + messageChars)
@@ -1011,6 +1022,10 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       const result = await runToolLoop(state.sessionKey, transcript, loopDeps, controller.signal)
       finalContent = result.finalContent
       toolCallCount = result.toolCallCount
+      // Record server-reported prompt tokens for accurate compaction checks
+      if (result.lastPromptTokens) {
+        state.lastPromptTokens = result.lastPromptTokens
+      }
     } catch (err) {
       const isAbort = (err as { name?: string } | undefined)?.name === 'AbortError'
       outcome = isAbort ? 'aborted' : 'error'

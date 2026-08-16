@@ -48,6 +48,9 @@ export interface ToolLoopResult {
   /** Tool calls executed across the whole loop. Lets the caller decide
    *  whether an otherwise textless final turn is still worth surfacing. */
   toolCallCount: number
+  /** Last server-reported prompt token count — the most accurate measure
+   *  of actual context usage. Used by the caller for compaction decisions. */
+  lastPromptTokens?: number
 }
 
 const DEFAULT_MAX_ITERATIONS = 50
@@ -140,6 +143,7 @@ export async function runToolLoop(
   let iterations = 0
   let finalContent = ''
   let toolCallCount = 0
+  let lastPromptTokens: number | undefined
 
   while (iterations < maxIter) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
@@ -151,6 +155,11 @@ export async function runToolLoop(
     const response = await deps.complete(messages, { tools: activeTools, signal })
     const choice = response.choices?.[0]
     if (!choice) break
+
+    // Track server-reported prompt tokens for accurate compaction decisions
+    if (response.usage?.prompt_tokens) {
+      lastPromptTokens = response.usage.prompt_tokens
+    }
 
     // Determine tool calls: prefer the structured `tool_calls` array from
     // the server, but fall back to parsing `<tool_call>` tags from the
@@ -238,5 +247,5 @@ export async function runToolLoop(
     })
   }
 
-  return { messages, finalContent, toolCallCount }
+  return { messages, finalContent, toolCallCount, lastPromptTokens }
 }
