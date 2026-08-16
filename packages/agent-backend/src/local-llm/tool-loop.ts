@@ -29,10 +29,15 @@ export interface ToolLoopDeps {
   executeTool: (name: string, input: Record<string, unknown>) => Promise<ToolResult>
   /** Emit a Sovereign backend event. */
   emit: <K extends keyof AgentBackendEvents>(event: K, data: AgentBackendEvents[K]) => void
-  /** Tool schemas to send with each request. */
+  /** Tool schemas to send with each request. When `getActiveSchemas` is set,
+   *  this serves as the initial/fallback set only. */
   toolSchemas: ToolSchema[]
   /** Maximum loop iterations (prevent infinite tool loops). */
   maxIterations?: number
+  /** Progressive tool disclosure — returns the currently active schema set
+   *  (core + any schemas loaded via ToolSearch). When set, the tool loop
+   *  calls this on each iteration instead of using the static `toolSchemas`. */
+  getActiveSchemas?: () => ToolSchema[]
 }
 
 export interface ToolLoopResult {
@@ -140,7 +145,10 @@ export async function runToolLoop(
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     iterations++
 
-    const response = await deps.complete(messages, { tools: deps.toolSchemas, signal })
+    // Progressive tool disclosure: use dynamically expanded schemas when
+    // available, falling back to the static set.
+    const activeTools = deps.getActiveSchemas ? deps.getActiveSchemas() : deps.toolSchemas
+    const response = await deps.complete(messages, { tools: activeTools, signal })
     const choice = response.choices?.[0]
     if (!choice) break
 

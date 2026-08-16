@@ -39,6 +39,8 @@ import type { SovereignToolsDeps } from './tools/sovereign.js'
 import { SEMBLE_TOOL_SCHEMAS, createSembleToolExecutor } from './tools/semble.js'
 import { createMcpBridge } from './tools/mcp-bridge.js'
 import type { McpBridge, McpBridgeConfig } from './tools/mcp-bridge.js'
+import { toolSearchSchema, createToolSearchRegistry } from './tools/tool-search.js'
+import type { ToolSearchRegistry } from './tools/tool-search.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
 import { runContextStrategies } from '../context-strategies/index.js'
@@ -104,17 +106,22 @@ function defaultSystemPrompt(
   hasSovereignTools: boolean,
   hasSemble: boolean,
   hasEmbeddings: boolean,
-  mcpBridgeNames: string[]
+  mcpBridgeNames: string[],
+  deferredToolCount?: number
 ): string {
-  const toolSections: string[] = ['core tools (Read, Write, Edit, Bash, Grep, Glob, LS)']
+  // Extra capabilities available via ToolSearch — listed in the system prompt
+  // so the model knows they exist and how to access them.
+  const extraCapabilities: string[] = []
   if (hasSovereignTools)
-    toolSections.push('Sovereign tools (cron, sessions, browser, agents, notifications, planning, WebFetch)')
-  if (hasEmbeddings) toolSections.push('local embeddings (sovereign_embeddings_search, sovereign_embeddings_index)')
-  if (hasSemble) toolSections.push('semble code search (semble_search, semble_find_related)')
-  if (mcpBridgeNames.length > 0) toolSections.push(`external services (${mcpBridgeNames.join(', ')})`)
+    extraCapabilities.push('Sovereign (cron, sessions, browser, agents, notifications, planning, WebFetch)')
+  if (hasEmbeddings) extraCapabilities.push('embeddings (semantic search and indexing)')
+  if (hasSemble) extraCapabilities.push('semble (semantic code search)')
+  if (mcpBridgeNames.length > 0) extraCapabilities.push(`external services (${mcpBridgeNames.join(', ')})`)
+
+  const hasDeferred = extraCapabilities.length > 0
 
   return [
-    `You are a helpful assistant with access to a local filesystem, shell, and services through ${toolSections.join(', ')}.`,
+    'You are a helpful assistant with access to a local filesystem and shell through core tools (Read, Write, Edit, Bash, Grep, Glob, LS).',
     '',
     'Rules:',
     '- Read a file before you Write or Edit it.',
@@ -122,33 +129,17 @@ function defaultSystemPrompt(
     '- Use Grep and Glob to find things instead of guessing paths.',
     '- Keep Bash commands short and check their output before proceeding.',
     '- Only call a tool when it is actually needed to answer. Otherwise, answer directly and concisely.',
-    ...(hasSovereignTools
+    ...(hasDeferred
       ? [
           '',
-          'Sovereign tools use the `sovereign_` prefix (e.g. sovereign_cron_create, sovereign_browser_open).',
-          'WebFetch fetches content from URLs — use it for HTTP requests.'
-        ]
-      : []),
-    ...(hasEmbeddings
-      ? [
+          '## Additional tools',
           '',
-          'Embedding tools search and index local content semantically. All data stays on-machine.',
-          'Use sovereign_embeddings_search to find relevant content by natural language query.',
-          'Use sovereign_embeddings_index to make new content searchable.'
-        ]
-      : []),
-    ...(hasSemble
-      ? [
+          `You also have access to ${deferredToolCount ?? 'many'} additional tools via the ToolSearch function.`,
+          'Call ToolSearch with a keyword query to discover and load tools for:',
+          ...extraCapabilities.map((c) => `- ${c}`),
           '',
-          'Semble tools provide semantic code search. Use semble_search for finding code by natural language or symbol name.',
-          'Use semble_find_related to discover similar code given a file and line number.',
-          'Prefer semble over Grep for exploratory searches. Grep remains better for literal string sweeps.'
-        ]
-      : []),
-    ...(mcpBridgeNames.length > 0
-      ? [
-          '',
-          `External MCP tools use their service name as prefix (e.g. ${mcpBridgeNames.map((n) => `${n}_*`).join(', ')}).`
+          'Example: to fetch a web page, call ToolSearch(query: "web fetch"). The matching tools will be returned and become available for subsequent calls.',
+          'Only search for tools when you actually need a capability beyond the core set.'
         ]
       : []),
     '',
@@ -338,28 +329,44 @@ export function createLocalLlmBackend(
   // External MCP bridges (e.g. AD4M) — lazy-connect on first tool call
   const mcpBridges: McpBridge[] = (deps.mcpBridges ?? []).map(createMcpBridge)
 
-  // Assemble tool schemas: core + sovereign + semble + MCP bridges.
-  // MCP bridge schemas load asynchronously (tool discovery), so the schema
-  // list starts with the statically-known tools and gets extended when
-  // bridges connect. This keeps the first turn fast.
+  // ── Progressive tool disclosure ────────────────────────────────────
+  // Core tools (Read/Write/Edit/Bash/Grep/Glob/LS) go on every request.
+  // Everything else (sovereign, semble, embeddings, MCP bridges) sits in
+  // a searchable registry — the model calls ToolSearch to discover and
+  // load them on demand. This keeps the per-request schema payload small
+  // (~7 tools instead of 98+) and avoids blowing the context window.
   const hasEmbeddings = !!deps.sovereignTools?.embeddings
-  const staticSchemas: ToolSchema[] = [
-    ...CORE_TOOL_SCHEMAS,
+
+  /** Schemas sent on every completion call — small, always available. */
+  const coreSchemas: ToolSchema[] = [...CORE_TOOL_SCHEMAS, toolSearchSchema]
+
+  /** Schemas available via ToolSearch — NOT sent on the wire until loaded. */
+  const deferredSchemas: ToolSchema[] = [
     ...(deps.sovereignTools ? SOVEREIGN_TOOL_SCHEMAS : []),
     ...(hasEmbeddings ? EMBEDDINGS_TOOL_SCHEMAS : []),
     ...(sembleEnabled ? SEMBLE_TOOL_SCHEMAS : [])
   ]
-  let allToolSchemas: ToolSchema[] = [...staticSchemas]
 
-  // Kick off MCP bridge discovery (non-blocking)
+  // The registry holds deferred schemas and tracks which ones the model
+  // has loaded via ToolSearch. Per-session registries allow different
+  // sessions to have different active tool sets.
+  let toolSearchRegistry: ToolSearchRegistry = createToolSearchRegistry(deferredSchemas)
+
+  // Legacy flat list — kept for back-compat with callers that read
+  // allToolSchemas directly (e.g. getSessionMeta tool count).
+  let allToolSchemas: ToolSchema[] = [...coreSchemas, ...deferredSchemas]
+
+  // Kick off MCP bridge discovery (non-blocking) — discovered tools go
+  // into the ToolSearch registry, not the core set.
   if (mcpBridges.length > 0) {
     Promise.allSettled(
       mcpBridges.map(async (bridge) => {
         const schemas = await bridge.getSchemas()
         if (schemas.length > 0) {
-          allToolSchemas = [...staticSchemas, ...mcpBridges.flatMap((b) => b.getCachedSchemas())]
+          toolSearchRegistry.addSchemas(schemas)
+          allToolSchemas = [...coreSchemas, ...deferredSchemas, ...mcpBridges.flatMap((b) => b.getCachedSchemas())]
           console.log(
-            `[local-llm] MCP bridge "${bridge.name}" added ${schemas.length} tools (total: ${allToolSchemas.length})`
+            `[local-llm] MCP bridge "${bridge.name}" added ${schemas.length} tools to ToolSearch registry (total searchable: ${toolSearchRegistry.totalAvailable()})`
           )
         }
       })
@@ -713,7 +720,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
             !!deps.sovereignTools,
             sembleEnabled,
             hasEmbeddings,
-            mcpBridges.map((b) => b.name)
+            mcpBridges.map((b) => b.name),
+            toolSearchRegistry.totalAvailable()
           ),
         messages: value.messages ?? [],
         createdAt: value.createdAt,
@@ -848,11 +856,13 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       state.systemPrompt = parts.join('\n\n')
     }
 
-    // Refresh MCP bridge tool schemas — they may have connected since startup
+    // Refresh MCP bridge tool schemas — newly connected bridges get added
+    // to the ToolSearch registry (not the core set sent on every request).
     if (mcpBridges.length > 0) {
       const cachedMcpSchemas = mcpBridges.flatMap((b) => b.getCachedSchemas())
-      if (cachedMcpSchemas.length > 0 || allToolSchemas.length === staticSchemas.length) {
-        allToolSchemas = [...staticSchemas, ...cachedMcpSchemas]
+      if (cachedMcpSchemas.length > 0) {
+        toolSearchRegistry.addSchemas(cachedMcpSchemas)
+        allToolSchemas = [...coreSchemas, ...deferredSchemas, ...cachedMcpSchemas]
       }
     }
 
@@ -929,11 +939,16 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     const beforeLen = transcript.length
 
     // Resolve tool executor — routes tool calls to the correct handler:
+    //   0. ToolSearch → progressive tool disclosure (returns schemas, expands active set)
     //   1. sovereign_ prefix or WebFetch → sovereign executor
     //   2. semble_ prefix → semble CLI executor
     //   3. MCP bridge prefix match → MCP bridge proxy
     //   4. everything else → core tool executor (Read/Write/Edit/Bash/Grep/Glob/LS)
     const executeTool = async (name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+      // ToolSearch — progressive disclosure meta-tool
+      if (name === 'ToolSearch') {
+        return toolSearchRegistry.execute(input)
+      }
       // Sovereign tools
       if (sovereignExecutor && (name.startsWith('sovereign_') || name === 'WebFetch')) {
         return sovereignExecutor(name, input)
@@ -980,7 +995,10 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         state.client.complete(toWireMessages(msgs), { tools: opts?.tools, signal: opts?.signal }),
       executeTool: metricsExecuteTool,
       emit: emitter.emit,
-      toolSchemas: allToolSchemas,
+      toolSchemas: coreSchemas,
+      // Progressive tool disclosure: each iteration sends core schemas +
+      // any schemas the model has loaded via ToolSearch this session.
+      getActiveSchemas: () => [...coreSchemas, ...toolSearchRegistry.getLoadedSchemas()],
       maxIterations: DEFAULT_MAX_ITERATIONS
     }
 
