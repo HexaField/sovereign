@@ -31,6 +31,7 @@ import { s27EventIsolation } from './s27-event-isolation.js'
 import { s28LocalLlmHistory } from './s28-local-llm-history.js'
 import { s29ContextStrategies } from './s29-context-strategies.js'
 import { s30HistoryArchive } from './s30-history-archive.js'
+import { s31SubagentLifecycle } from './s31-subagent-lifecycle.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -102,5 +103,9 @@ export const ALL_SCENARIOS: Scenario[] = [
   // History archive preservation — full user+assistant history survives
   // context strategies and session recycle. Verifies both local-llm and
   // claude-code backends via the history API. Tests archive defence-in-depth.
-  s30HistoryArchive
+  s30HistoryArchive,
+  // Subagent lifecycle — spawned/completed events fire for local-llm
+  // subagents, cross-backend result notification works. Self-skips when
+  // local-llm backend not enabled.
+  s31SubagentLifecycle
 ]

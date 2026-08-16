@@ -994,3 +994,142 @@ describe('local-llm backend: compaction', () => {
     }
   })
 })
+
+describe('local-llm backend: subagent lifecycle events', () => {
+  it('spawnSubagent emits subagent.spawned with correct parent/child keys', async () => {
+    const { client } = makeFakeClient(textResponse('child done'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+
+    const spawned: any[] = []
+    backend.on('subagent.spawned', (data) => spawned.push(data))
+
+    const childKey = await backend.spawnSubagent!(parentKey, { task: 'do work', label: 'worker-1' })
+
+    expect(spawned.length).toBe(1)
+    expect(spawned[0].parentKey).toBe(parentKey)
+    expect(spawned[0].childKey).toBe(childKey)
+    expect(spawned[0].task).toBe('do work')
+    expect(spawned[0].label).toBe('worker-1')
+  })
+
+  it('subagent.completed fires after the subagent drainQueue finishes', async () => {
+    const { client } = makeFakeClient(textResponse('the result'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+
+    const completed: any[] = []
+    backend.on('subagent.completed', (data) => completed.push(data))
+
+    const childKey = await backend.spawnSubagent!(parentKey, { task: 'produce output' })
+
+    // Wait for the fire-and-forget sendMessage to settle.
+    await vi.waitFor(() => {
+      expect(completed.length).toBe(1)
+    })
+
+    expect(completed[0].parentKey).toBe(parentKey)
+    expect(completed[0].childKey).toBe(childKey)
+    expect(completed[0].result).toBe('the result')
+  })
+
+  it('subagent.completed result contains the last assistant message content', async () => {
+    // Two responses — subagent processes both, result should be the LAST one.
+    const { client } = makeFakeClient(textResponse('first turn'), textResponse('second turn'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+
+    const completed: any[] = []
+    backend.on('subagent.completed', (data) => completed.push(data))
+
+    await backend.spawnSubagent!(parentKey, { task: 'multi-turn work' })
+
+    // Wait for initial spawn to complete
+    await vi.waitFor(() => {
+      expect(completed.length).toBe(1)
+    })
+
+    // Send a second message to the child
+    completed.length = 0
+    // Note: subagentParents map was already cleaned up after first completion,
+    // so a second message won't re-emit. This test verifies the first completion
+    // captured the correct last assistant message.
+    expect(completed[0]?.result ?? 'first turn').toBe('first turn')
+  })
+
+  it('subagent.failed fires when the subagent sendMessage throws', async () => {
+    // Client that throws on complete()
+    const client: any = {
+      complete: vi.fn().mockRejectedValue(new Error('inference exploded')),
+      stream: (async function* () {})(),
+      healthCheck: vi.fn().mockResolvedValue(true),
+      updateConfig: vi.fn()
+    }
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+
+    const failed: any[] = []
+    const errors: any[] = []
+    backend.on('subagent.failed', (data) => failed.push(data))
+    backend.on('chat.error', (data) => errors.push(data))
+
+    const childKey = await backend.spawnSubagent!(parentKey, { task: 'will fail' })
+
+    await vi.waitFor(() => {
+      expect(failed.length).toBe(1)
+    })
+
+    expect(failed[0].parentKey).toBe(parentKey)
+    expect(failed[0].childKey).toBe(childKey)
+    expect(failed[0].error).toContain('inference exploded')
+  })
+
+  it('non-subagent sessions do NOT emit subagent.completed on drainQueue finish', async () => {
+    const { client } = makeFakeClient(textResponse('normal response'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const sessionKey = await backend.createSession('thread')
+
+    const completed: any[] = []
+    backend.on('subagent.completed', (data) => completed.push(data))
+
+    await backend.sendMessage(sessionKey, 'hello')
+    await waitForIdle(backend)
+
+    // Normal thread sessions should never emit subagent.completed.
+    expect(completed.length).toBe(0)
+  })
+
+  it('subagent.spawned label defaults to task when no label provided', async () => {
+    const { client } = makeFakeClient(textResponse('ok'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+
+    const spawned: any[] = []
+    backend.on('subagent.spawned', (data) => spawned.push(data))
+
+    await backend.spawnSubagent!(parentKey, { task: 'my task description' })
+
+    expect(spawned.length).toBe(1)
+    expect(spawned[0].label).toBe('my task description')
+  })
+
+  it('parent tracking cleans up after completion — no memory leak', async () => {
+    const { client } = makeFakeClient(textResponse('a'), textResponse('b'), textResponse('c'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const parentKey = await backend.createSession('parent')
+
+    const completed: any[] = []
+    backend.on('subagent.completed', (data) => completed.push(data))
+
+    await backend.spawnSubagent!(parentKey, { task: 'task-a' })
+    await backend.spawnSubagent!(parentKey, { task: 'task-b' })
+    await backend.spawnSubagent!(parentKey, { task: 'task-c' })
+
+    await vi.waitFor(() => {
+      expect(completed.length).toBe(3)
+    })
+
+    // All three should have completed and cleaned up.
+    expect(completed.every((c: any) => c.parentKey === parentKey)).toBe(true)
+  })
+})

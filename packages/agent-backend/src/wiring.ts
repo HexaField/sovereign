@@ -470,6 +470,46 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     }
   })
 
+  // ── Cross-backend subagent completion notification ─────────────────
+  // When a subagent on one backend (e.g. local-llm) completes, and its
+  // parent runs on a different backend (e.g. claude-code), inject a
+  // notification into the parent session so the parent model sees the
+  // result without polling.
+  routingBackend.on('subagent.completed', (data) => {
+    const parentRecord = sessionsRegistry.getBySession(data.parentKey) ?? sessionsRegistry.getByThread(data.parentKey)
+    const childRecord = sessionsRegistry.getBySession(data.childKey) ?? sessionsRegistry.getByThread(data.childKey)
+    if (!parentRecord || !childRecord) return
+    // Only inject when the backends differ — same-backend completions are
+    // already visible to the parent (claude-code via SDK hooks, local-llm
+    // via direct transcript access).
+    if (parentRecord.backendKind === childRecord.backendKind) return
+
+    const label = childRecord.label ?? data.childKey
+    const resultPreview = (data.result ?? '').slice(0, 4000)
+    const notification = `[Task completed: ${label}]\n\n${resultPreview}`
+
+    // Use the routing layer to deliver the notification to the parent's backend.
+    const parentBackend = routingBackend.forSession(data.parentKey)
+    parentBackend.sendMessage(data.parentKey, notification).catch((err) => {
+      console.warn(`[wiring] cross-backend subagent notification failed for ${data.parentKey}:`, err)
+    })
+  })
+
+  routingBackend.on('subagent.failed', (data) => {
+    const parentRecord = sessionsRegistry.getBySession(data.parentKey) ?? sessionsRegistry.getByThread(data.parentKey)
+    const childRecord = sessionsRegistry.getBySession(data.childKey) ?? sessionsRegistry.getByThread(data.childKey)
+    if (!parentRecord || !childRecord) return
+    if (parentRecord.backendKind === childRecord.backendKind) return
+
+    const label = childRecord.label ?? data.childKey
+    const notification = `[Task failed: ${label}]\n\nError: ${data.error}`
+
+    const parentBackend = routingBackend.forSession(data.parentKey)
+    parentBackend.sendMessage(data.parentKey, notification).catch((err) => {
+      console.warn(`[wiring] cross-backend subagent failure notification failed for ${data.parentKey}:`, err)
+    })
+  })
+
   // Cron fires call `injectChatMessage` (resolved lazily so bootstrap can
   // wire `chatModule.handleSend` after this function returns). When unwired,
   // the service falls back to direct routing — preserves test/CI defaults.
