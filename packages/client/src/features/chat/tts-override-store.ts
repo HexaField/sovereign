@@ -11,14 +11,26 @@
 //
 // The toggle carries the device name implicitly — the server resolves it
 // from the WS connection that sent the message. All clients receive the
-// state broadcast, so every tab/device stays in sync.
+// state broadcast so every tab/device stays in sync — but only the device
+// whose name matches the active override shows the unmuted icon.
 
-import { createSignal } from 'solid-js'
+import { createSignal, createMemo } from 'solid-js'
 import type { Accessor } from 'solid-js'
 import type { WsStore } from '../../ws/ws-store.js'
+import { deviceName } from '../settings/device-name.js'
 
+// Raw server state — thread-level, not device-level.
 const [ttsEnabled, setTtsEnabled] = createSignal(false)
 const [ttsDeviceName, setTtsDeviceName] = createSignal<string | null>(null)
+
+/** Derived: TTS override active AND routed to THIS device. */
+export const ttsActiveHere: Accessor<boolean> = createMemo(() => {
+  if (!ttsEnabled()) return false
+  const target = ttsDeviceName()
+  const local = deviceName()
+  if (!target || !local) return false
+  return target === local
+})
 
 let wsRef: WsStore | null = null
 let threadIdRef: string | null = null
@@ -80,21 +92,29 @@ export function initTtsOverrideStore(ws: WsStore, threadKey: Accessor<string>): 
   }
 }
 
-/** Toggle TTS override for the current thread. */
+/** Toggle TTS override for the current thread.
+ *  - Active here → turn OFF (no TTS for anyone)
+ *  - Not active here (off or on another device) → turn ON for this device */
 export function toggleTtsOverride(): void {
   if (!wsRef || !threadIdRef) return
-  const next = !ttsEnabled()
+  const activeHere = ttsActiveHere()
   wsRef.send({
     type: 'voice.tts-override',
     threadId: threadIdRef,
-    enabled: next
+    enabled: !activeHere
   } as any)
-  // Optimistic update — server will confirm via state broadcast
-  setTtsEnabled(next)
+  // Optimistic update — server confirms via state broadcast
+  if (activeHere) {
+    setTtsEnabled(false)
+    setTtsDeviceName(null)
+  } else {
+    setTtsEnabled(true)
+    setTtsDeviceName(deviceName() || null)
+  }
 }
 
-/** Reactive accessor: TTS override currently active for this thread. */
+/** Reactive accessor: TTS override active for the thread (any device). */
 export { ttsEnabled }
 
-/** Reactive accessor: which device receives TTS audio (null = unknown). */
+/** Reactive accessor: which device receives TTS audio (null = none). */
 export { ttsDeviceName }
