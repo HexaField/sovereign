@@ -196,7 +196,7 @@ describe('voice response — device-name routing', () => {
   })
 
   it('emits presence.reply with the summary text for the simple conversation log', async () => {
-    const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
+    const { deps, bus, getDeviceName } = createDeps()
     getDeviceName.mockReturnValue('Josh Phone')
     const vr = createVoiceResponse(deps)
 

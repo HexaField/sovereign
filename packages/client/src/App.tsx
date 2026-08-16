@@ -31,6 +31,7 @@ import { loadMutes } from './features/threads/mute-store.js'
 import { initChatStore } from './features/chat/store.js'
 import { initSummaryStore } from './features/chat/summary-store.js'
 import { initSimpleConversationStore } from './features/chat/simple-conversation-store.js'
+import { initTtsOverrideStore } from './features/chat/tts-override-store.js'
 import { initCronResultsStore } from './features/crons/CronResultsBanner.js'
 import { hasDeviceName, initDeviceNameSync } from './features/settings/device-name.js'
 
@@ -122,6 +123,11 @@ export default function App() {
 
     const cleanupSimpleConversation = initSimpleConversationStore(wsStore, threadKey)
     cleanups.push(cleanupSimpleConversation)
+
+    // TTS override — tracks the speaker toggle state per thread
+    const cleanupTtsOverride = initTtsOverrideStore(wsStore, threadKey)
+    cleanups.push(cleanupTtsOverride)
+
     void loadMutes()
 
     // Listen for sovereign:open-file events from file chips

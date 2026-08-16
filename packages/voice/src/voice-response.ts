@@ -408,7 +408,44 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     }
   }
 
+  // ── TTS override ─────────────────────────────────────────────────
+  // Per-thread override: forces TTS on/off regardless of input modality.
+  // Toggled by the client via the `voice.tts-override` WS message.
+  // When enabled, every assistant turn on that thread triggers the summary
+  // pipeline routed to the specified device name.
+  const ttsOverride = new Map<string, { deviceName: string }>()
+
   // ── Event subscriptions ───────────────────────────────────────────
+
+  // Listen for TTS override toggle from the client
+  bus.on('voice.tts-override', (event) => {
+    const payload = event.payload as {
+      threadId?: string
+      enabled?: boolean
+      deviceName?: string
+    }
+    if (!payload?.threadId) return
+
+    if (payload.enabled && payload.deviceName) {
+      ttsOverride.set(payload.threadId, { deviceName: payload.deviceName })
+      console.log(`[voice-response] TTS override ON for ${payload.threadId} → ${payload.deviceName}`)
+    } else {
+      ttsOverride.delete(payload.threadId)
+      console.log(`[voice-response] TTS override OFF for ${payload.threadId}`)
+    }
+
+    // Broadcast state back so all clients see the toggle
+    bus.emit({
+      type: 'voice.tts-override.state',
+      timestamp: new Date().toISOString(),
+      source: 'voice-response',
+      payload: {
+        threadId: payload.threadId,
+        enabled: ttsOverride.has(payload.threadId),
+        deviceName: ttsOverride.get(payload.threadId)?.deviceName ?? null
+      }
+    })
+  })
 
   // Listen for voice-originated messages entering the chat pipeline
   bus.on('chat.message.sent', (event) => {
@@ -453,17 +490,24 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     if (!payload?.threadId) return
     if (payload.turn?.role !== 'assistant') return
 
-    const origin = pendingVoice.get(payload.threadId)
-    if (!origin) return // Not a voice-originated thread
-
-    // Clear the voice origin — one-shot per message
-    pendingVoice.delete(payload.threadId)
-
     const responseText = payload.turn?.content ?? ''
     if (!responseText) return
 
-    // Fire the summary pipeline (non-blocking)
-    void generateSummary(payload.threadId, responseText, origin.deviceName)
+    // Voice-originated message — one-shot, clear after use
+    const origin = pendingVoice.get(payload.threadId)
+    if (origin) {
+      pendingVoice.delete(payload.threadId)
+      void generateSummary(payload.threadId, responseText, origin.deviceName)
+      return
+    }
+
+    // TTS override — persistent toggle, fires for every assistant turn
+    const override = ttsOverride.get(payload.threadId)
+    if (override) {
+      const cfg = config()
+      if (!cfg.ttsUrl) return
+      void generateSummary(payload.threadId, responseText, override.deviceName)
+    }
   })
 
   // Expire stale voice origins (safety valve — 5 minutes)
@@ -478,12 +522,18 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
   }, 60_000)
 
   return {
+    /** Current TTS override state for a thread (used by WS on-connect replay). */
+    getTtsOverride(threadId: string): { enabled: boolean; deviceName: string | null } {
+      const entry = ttsOverride.get(threadId)
+      return { enabled: !!entry, deviceName: entry?.deviceName ?? null }
+    },
     /** Cleanup — clear timers. */
     shutdown() {
       clearInterval(expiryTimer)
       for (const ctrl of ackAbort.values()) ctrl.abort()
       ackAbort.clear()
       pendingVoice.clear()
+      ttsOverride.clear()
     }
   }
 }

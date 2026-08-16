@@ -990,7 +990,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     ;(app as any).__simpleConversation = simpleConversation
   }
 
-  registerChatWs(wsHandler, chatModule)
+  registerChatWs(wsHandler, chatModule, bus)
   app.use(createChatRoutes(chatModule, backend, dataDir))
   app.use(
     createThreadRoutes(threadManager, createForwardHandler(bus, threadManager), {

@@ -6,6 +6,7 @@ import { threadKey } from '../threads/store.js'
 import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
 import { SummaryBubble } from '../chat/SummaryBubble.js'
+import { TtsToggle } from '../chat/TtsToggle.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -121,8 +122,9 @@ export function Header() {
         </Show>
       </div>
 
-      {/* Rolling conversation summary — gateway thread only. */}
+      {/* Rolling conversation summary + TTS toggle — gateway thread only. */}
       <Show when={onGatewayThread()}>
+        <TtsToggle />
         <SummaryBubble />
       </Show>
 
