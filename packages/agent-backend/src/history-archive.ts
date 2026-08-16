@@ -86,6 +86,64 @@ export function archiveRawToolOutput(
  *
  * @returns The archive file path, or null on failure.
  */
+// ── Read archived history back for UI display ────────────────────────
+
+export interface ArchiveSnapshot {
+  /** Archive file path. */
+  path: string
+  /** Timestamp the snapshot was taken (extracted from filename). */
+  timestamp: number
+  /** File size in bytes. */
+  size: number
+}
+
+/**
+ * List all pre-recycle JSONL snapshots for a session, sorted
+ * oldest-first. Returns empty array when no archives exist.
+ */
+export function listSessionArchives(dataDir: string, sessionId: string): ArchiveSnapshot[] {
+  const dir = path.join(dataDir, 'agent-backend', ARCHIVE_SUBDIR, sessionId, 'pre-recycle')
+  try {
+    if (!fs.existsSync(dir)) return []
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'))
+    return files
+      .map((f) => {
+        const ts = parseInt(f.replace('.jsonl', ''), 10)
+        const fullPath = path.join(dir, f)
+        const stat = fs.statSync(fullPath)
+        return { path: fullPath, timestamp: isNaN(ts) ? 0 : ts, size: stat.size }
+      })
+      .sort((a, b) => a.timestamp - b.timestamp) // oldest first
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Read an archived JSONL file and return its raw entries (unparsed but
+ * JSON-parsed). The caller applies the same normalizer + parser it uses
+ * for the live JSONL.
+ *
+ * @returns Array of raw JSONL entry objects from the archive file.
+ */
+export function readArchiveEntries(archivePath: string): any[] {
+  try {
+    const content = fs.readFileSync(archivePath, 'utf-8')
+    const entries: any[] = []
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        entries.push(JSON.parse(line))
+      } catch {
+        /* skip malformed */
+      }
+    }
+    return entries
+  } catch {
+    return []
+  }
+}
+
 export function archiveMessagesBeforeStrategies(
   dataDir: string,
   sessionKey: string,

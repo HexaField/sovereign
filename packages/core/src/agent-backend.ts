@@ -384,6 +384,9 @@ export interface AgentBackend {
   /** Get conversation history for a session */
   getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }>
   getFullHistory(sessionKey: string): Promise<ParsedTurn[]>
+  /** Load pre-compaction archived history. Returns turns that predate the
+   *  current live history, reconstructed from on-disk JSONL snapshots. */
+  getArchivedHistory?(sessionKey: string): Promise<{ turns: ParsedTurn[]; archiveCount: number }>
   /** Register a callback for backend events */
   on<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void): void
   /** Unregister a callback */

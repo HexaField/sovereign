@@ -59,6 +59,7 @@ import { createBackendEmitter, createWriteThroughFile, createWriteThroughStore }
 import type { WriteThroughFile, WriteThroughStore } from '@sovereign/primitives'
 import {
   parseClaudeCodeTurns,
+  normalizeClaudeCodeEntry,
   readAllClaudeCodeMessages,
   readRecentClaudeCodeMessages,
   computeUsageFromFile,
@@ -74,7 +75,12 @@ import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
 import { parseCozempicOutput } from './cozempic-parser.js'
-import { archiveJsonlBeforeRecycle, archiveRawToolOutput } from '../history-archive.js'
+import {
+  archiveJsonlBeforeRecycle,
+  archiveRawToolOutput,
+  listSessionArchives,
+  readArchiveEntries
+} from '../history-archive.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -1422,6 +1428,54 @@ export function createClaudeCodeBackend(
   }
 
   /**
+   * Load archived (pre-compaction) conversation history.
+   * Reads all pre-recycle JSONL snapshots for a session, merges them,
+   * deduplicates against the current live history by timestamp, and
+   * returns only turns that predate the live history.
+   */
+  async function getArchivedHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; archiveCount: number }> {
+    const sk = bareId(sessionKey)
+    const state = internal.sessions.get(sk)
+    const backendId = state?.backendSessionId ?? sk
+    const archives = listSessionArchives(dataDir, backendId)
+    if (archives.length === 0) return { turns: [], archiveCount: 0 }
+
+    // Get the oldest timestamp from live history — archived turns before
+    // this cutoff represent pre-compaction content.
+    const liveResult = await getHistory(sessionKey)
+    const oldestLiveTs = liveResult.turns.reduce(
+      (min, t) => (t.timestamp && t.timestamp < min ? t.timestamp : min),
+      Infinity
+    )
+
+    // Read all archives, normalize + parse each, collect turns
+    const allArchived: ParsedTurn[] = []
+    const seenTimestamps = new Set<number>()
+
+    for (const archive of archives) {
+      const entries = readArchiveEntries(archive.path)
+      const normalized: any[] = []
+      for (const entry of entries) {
+        const msg = normalizeClaudeCodeEntry(entry)
+        if (msg) normalized.push(msg)
+      }
+      const parsed = parseClaudeCodeTurns(normalized)
+      for (const turn of parsed) {
+        // Skip turns that exist in the live history (overlap zone)
+        if (turn.timestamp >= oldestLiveTs) continue
+        // Deduplicate across archives (same turn may appear in multiple snapshots)
+        if (turn.timestamp && seenTimestamps.has(turn.timestamp)) continue
+        if (turn.timestamp) seenTimestamps.add(turn.timestamp)
+        allArchived.push(turn)
+      }
+    }
+
+    // Sort chronologically
+    allArchived.sort((a, b) => a.timestamp - b.timestamp)
+    return { turns: allArchived, archiveCount: archives.length }
+  }
+
+  /**
    * Resolve the on-disk JSONL for a subagent. The SDK writes subagent files
    * at a nested layout under the parent's session dir:
    *
@@ -2153,6 +2207,7 @@ export function createClaudeCodeBackend(
     createSession,
     getHistory,
     getFullHistory,
+    getArchivedHistory,
     on: emitter.on,
     off: emitter.off,
     capabilities,

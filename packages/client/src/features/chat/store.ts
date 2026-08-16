@@ -23,6 +23,8 @@ export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
 export const [inputValue, _setInputValue] = createSignal('')
 export const [hasOlderMessages, setHasOlderMessages] = createSignal(false)
 export const [loadingOlder, setLoadingOlder] = createSignal(false)
+export const [hasArchivedHistory, setHasArchivedHistory] = createSignal(false)
+export const [loadingArchived, setLoadingArchived] = createSignal(false)
 
 // Live streaming state — completely separate from turns[] (history)
 export const [streamingText, setStreamingText] = createSignal('')
@@ -383,6 +385,48 @@ export function loadOlderMessages(): void {
   ws.send({ type: 'chat.history.full', threadKey } as any)
 }
 
+/** Check whether archived (pre-compaction) history exists for the current thread. */
+export function checkArchivedHistory(): void {
+  const threadKey = currentThreadKey?.() ?? ''
+  if (!threadKey) return
+  fetch(`/api/threads/${encodeURIComponent(threadKey)}/history/archived`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (data && data.turns?.length > 0) {
+        setHasArchivedHistory(true)
+      } else {
+        setHasArchivedHistory(false)
+      }
+    })
+    .catch(() => setHasArchivedHistory(false))
+}
+
+/** Load pre-compaction archived history and prepend to current turns. */
+export function loadArchivedHistory(): void {
+  const threadKey = currentThreadKey?.() ?? ''
+  if (!threadKey || loadingArchived()) return
+  setLoadingArchived(true)
+  fetch(`/api/threads/${encodeURIComponent(threadKey)}/history/archived`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (data?.turns?.length) {
+        const archived = stripOriginPrefixes(data.turns)
+        setTurns((prev) => {
+          // Deduplicate by timestamp — archived turns that share a timestamp
+          // with an existing turn get dropped.
+          const existingTs = new Set(prev.map((t: ParsedTurn) => t.timestamp).filter(Boolean))
+          const unique = archived.filter((t: ParsedTurn) => !t.timestamp || !existingTs.has(t.timestamp))
+          return [...unique, ...prev]
+        })
+        setHasArchivedHistory(false) // Already loaded
+      }
+    })
+    .catch(() => {
+      /* ignore */
+    })
+    .finally(() => setLoadingArchived(false))
+}
+
 export function abortChat(): void {
   const threadKey = currentThreadKey?.() ?? ''
   if (threadKey) ws?.send({ type: 'chat.abort', threadKey } as any)
@@ -429,6 +473,8 @@ function connectSSE(threadKey: string): void {
           if (!historyLoaded) {
             historyLoaded = true
             clearLiveState()
+            // Check for archived pre-compaction history after live loads
+            if (!data.hasMore) checkArchivedHistory()
           }
         }
       })
