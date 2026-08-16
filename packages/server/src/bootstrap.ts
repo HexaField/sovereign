@@ -885,6 +885,13 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       return completion.choices?.[0]?.message?.content?.trim() || ''
     }
 
+    // TTS override state query — clients fetch on thread switch / reconnect
+    app.get('/api/voice/tts-override', (req, res) => {
+      const threadId = req.query.threadId as string
+      if (!threadId) return res.status(400).json({ error: 'threadId query param required' })
+      res.json(voiceResponse.getTtsOverride(threadId))
+    })
+
     // Expose for shutdown
     ;(app as any).__voiceResponse = voiceResponse
   }
