@@ -46,6 +46,10 @@ export interface StreamChunk {
     delta: {
       role?: string
       content?: string | null
+      /** Models with thinking mode (Qwen3.6 etc.) may stream reasoning here
+       *  instead of in `content`. The assembler merges it into content as a
+       *  fallback so downstream code never loses output. */
+      reasoning_content?: string | null
       tool_calls?: Array<{
         index: number
         id?: string
@@ -207,6 +211,12 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
     const msg = st.response.choices[0].message
     if (delta.role) msg.role = delta.role as ChatMessage['role']
     if (delta.content) msg.content = (msg.content ?? '') + delta.content
+    // Fallback: merge reasoning_content into content when the model puts
+    // output there (thinking mode enabled despite config). Without this,
+    // text-only responses from thinking-mode models silently return empty.
+    if (delta.reasoning_content && !delta.content) {
+      msg.content = (msg.content ?? '') + delta.reasoning_content
+    }
 
     // Accumulate tool calls by their stream index
     if (delta.tool_calls) {
