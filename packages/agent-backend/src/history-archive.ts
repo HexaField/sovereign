@@ -120,6 +120,38 @@ export function listSessionArchives(dataDir: string, sessionId: string): Archive
 }
 
 /**
+ * List all pre-recycle snapshots across ALL session IDs that have archives.
+ * Used when the primary session ID lookup misses — sessions can accumulate
+ * archives under different backend session IDs over their lifetime (e.g.
+ * after machine migration or SDK session rotation).
+ */
+export function listAllArchives(dataDir: string): { sessionId: string; snapshots: ArchiveSnapshot[] }[] {
+  const archiveRoot = path.join(dataDir, 'agent-backend', ARCHIVE_SUBDIR)
+  try {
+    if (!fs.existsSync(archiveRoot)) return []
+    const results: { sessionId: string; snapshots: ArchiveSnapshot[] }[] = []
+    for (const entry of fs.readdirSync(archiveRoot)) {
+      const preRecycleDir = path.join(archiveRoot, entry, 'pre-recycle')
+      if (!fs.existsSync(preRecycleDir)) continue
+      const files = fs.readdirSync(preRecycleDir).filter((f) => f.endsWith('.jsonl'))
+      if (files.length === 0) continue
+      const snapshots = files
+        .map((f) => {
+          const ts = parseInt(f.replace('.jsonl', ''), 10)
+          const fullPath = path.join(preRecycleDir, f)
+          const stat = fs.statSync(fullPath)
+          return { path: fullPath, timestamp: isNaN(ts) ? 0 : ts, size: stat.size }
+        })
+        .sort((a, b) => a.timestamp - b.timestamp)
+      results.push({ sessionId: entry, snapshots })
+    }
+    return results
+  } catch {
+    return []
+  }
+}
+
+/**
  * Read an archived JSONL file and return its raw entries (unparsed but
  * JSON-parsed). The caller applies the same normalizer + parser it uses
  * for the live JSONL.
