@@ -39,6 +39,9 @@ function createMockWsHandler(): WsHandler & {
     },
     getDeviceName() {
       return undefined
+    },
+    isDeviceNameConnected() {
+      return false
     }
   }
 }

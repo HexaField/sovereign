@@ -56,7 +56,6 @@ describe('ContextFilter', () => {
       // 60 lines × ~200 chars each ≈ 12KB — exceeds both thresholds.
       // At the old trimMaxLines=100 this would PASS through untrimmed.
       const text = manyLines(60)
-      const halfLines = Math.floor(trimMaxLines / 2)
       const trimmedCount = 60 - trimMaxLines
 
       const result = filter.filterToolOutput('Read', {

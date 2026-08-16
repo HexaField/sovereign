@@ -141,7 +141,8 @@ function createMockWsHandler(): WsHandler {
     sendBinaryTo: vi.fn(() => false),
     getConnectedDevices: vi.fn(() => []),
     getChannels: vi.fn(() => []),
-    getDeviceName: vi.fn(() => undefined)
+    getDeviceName: vi.fn(() => undefined),
+    isDeviceNameConnected: vi.fn(() => false)
   }
 }
 
