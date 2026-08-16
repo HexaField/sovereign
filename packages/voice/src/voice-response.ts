@@ -101,12 +101,16 @@ export const DEFAULT_SUMMARY_SYSTEM = `You summarize assistant responses into br
 Convert the assistant's written response into a concise spoken summary suitable for text-to-speech.
 
 Rules:
+- If the response is already brief and conversational (a short acknowledgment, greeting, or simple confirmation that adds no value when read aloud after the initial voice acknowledgment), respond with exactly "SKIP" and nothing else.
 - Keep it under 3 sentences for short responses, under 5 for longer ones.
 - Strip ALL markdown, code blocks, URLs, file paths, and technical formatting.
 - Rephrase code-heavy content as plain descriptions of what happened.
 - Speak naturally — this gets read aloud.
 - If the response contains a list of items, mention the count and highlight the most important ones.
 - For error reports, state what failed and what to do next.`
+
+/** Sentinel the summary LLM returns when the response needs no TTS. */
+const SKIP_SENTINEL = 'SKIP'
 
 // ── Module ─────────────────────────────────────────────────────────────
 
@@ -270,10 +274,17 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
     if (sentences.length === 0) return ''
 
+    const summaryText = sentences.join(' ')
+
+    // LLM decided this response needs no spoken delivery
+    if (summaryText.trim() === SKIP_SENTINEL) {
+      console.log(`[voice-response] LLM returned SKIP — no TTS for this turn`)
+      return ''
+    }
+
     // Notify the caller with the real summary text (between LLM
     // collection and TTS synthesis — cancels the deferred raw turn
     // in the simple conversation store before the grace window expires).
-    const summaryText = sentences.join(' ')
     onTextReady(summaryText)
 
     // Phase 2: synthesise and deliver each sentence sequentially
@@ -354,6 +365,12 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       const summaryText = completion.choices?.[0]?.message?.content?.trim()
 
       if (!summaryText) return
+
+      // LLM decided this response needs no spoken delivery
+      if (summaryText === SKIP_SENTINEL) {
+        console.log(`[voice-response] LLM returned SKIP — no TTS for this turn`)
+        return
+      }
 
       // Feed the simple conversation log — Hex's spoken response.
       bus.emit({

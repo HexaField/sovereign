@@ -389,3 +389,70 @@ describe('voice response — TTS override toggle', () => {
     vr.shutdown()
   })
 })
+
+// ── SKIP sentinel (trivial responses skip TTS) ──────────────────────
+
+describe('voice response — SKIP sentinel', () => {
+  it('skips TTS when the summary LLM returns SKIP for a trivial response', async () => {
+    const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
+    // Override the LLM to return the SKIP sentinel
+    ;(deps.llm.complete as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      choices: [{ message: { content: 'Spoken text.' } }]
+    }) // ack call
+    ;(deps.llm.complete as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      choices: [{ message: { content: 'SKIP' } }]
+    }) // summary call
+    getDeviceName.mockReturnValue('Josh Phone')
+    const vr = createVoiceResponse(deps)
+
+    emitMessageSent(bus, {
+      threadId: 't1',
+      text: 'thanks',
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    await flush()
+    sendToDeviceName.mockClear()
+
+    // Assistant responds with something trivial like "Good to hear."
+    emitTurnCompleted(bus, { threadId: 't1', turn: { role: 'assistant', content: 'Good to hear.' } })
+    await flush()
+
+    // No summary.pending or summary audio should have been sent
+    const summaryPending = sendToDeviceName.mock.calls.find(([, msg]: any[]) => msg.type === 'voice.summary.pending')
+    const summaryAudio = sendToDeviceName.mock.calls.find(
+      ([, msg]: any[]) => msg.type === 'voice.tts.audio' && msg.kind === 'summary'
+    )
+    expect(summaryPending).toBeUndefined()
+    expect(summaryAudio).toBeUndefined()
+
+    vr.shutdown()
+  })
+
+  it('still delivers TTS when the summary LLM returns real content', async () => {
+    const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
+    getDeviceName.mockReturnValue('Josh Phone')
+    const vr = createVoiceResponse(deps)
+
+    emitMessageSent(bus, {
+      threadId: 't1',
+      text: 'how did the build go?',
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    await flush()
+    sendToDeviceName.mockClear()
+
+    emitTurnCompleted(bus, {
+      threadId: 't1',
+      turn: { role: 'assistant', content: 'Build succeeded with 3 warnings.' }
+    })
+    await flush()
+
+    const summaryAudio = sendToDeviceName.mock.calls.find(
+      ([, msg]: any[]) => msg.type === 'voice.tts.audio' && msg.kind === 'summary'
+    )
+    expect(summaryAudio).toBeDefined()
+    expect(summaryAudio?.[0]).toBe('Josh Phone')
+
+    vr.shutdown()
+  })
+})
