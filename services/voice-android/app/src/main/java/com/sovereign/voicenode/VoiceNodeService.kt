@@ -13,11 +13,11 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.util.Base64
 import android.util.Log
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.ByteString
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.security.SecureRandom
@@ -45,6 +45,9 @@ class VoiceNodeService : Service() {
         const val EXTRA_SERVER_URL = "server_url"
         const val EXTRA_THRESHOLD = "threshold"
         const val ACTION_SCORE_UPDATE = "com.sovereign.voicenode.SCORE_UPDATE"
+        const val ACTION_STATE_CHANGE = "com.sovereign.voicenode.STATE_CHANGE"
+        const val ACTION_TRANSCRIPTION = "com.sovereign.voicenode.TRANSCRIPTION"
+        // States: idle, listening, wake_detected, capturing, sending
     }
 
     private var serverUrl = "https://arcadia.tail300736.ts.net:5801"
@@ -184,20 +187,41 @@ class VoiceNodeService : Service() {
         captureThread = Thread({
             audioRecord?.startRecording()
             Log.i(TAG, "Listening for wake word (server=$serverUrl, device=$deviceId)")
+            broadcastState("listening")
 
             val frame = FloatArray(WakeWordDetector.FRAME_SAMPLES)
             var frameCount = 0
+            // Hard energy gate — ignore frames quieter than ambient noise floor.
+            // Float audio from AudioRecord: 0.003 RMS ≈ -50dB, well below speech.
+            val noiseFloorRms = 0.005f
 
             while (running) {
                 val read = audioRecord?.read(frame, 0, frame.size, AudioRecord.READ_BLOCKING) ?: -1
                 if (read != frame.size) continue
 
-                val score = detector?.detectScore(frame) ?: -1f
                 frameCount++
+
+                // Compute frame energy
+                var sumSq = 0.0
+                for (s in frame) sumSq += s * s
+                val rms = sqrt(sumSq / frame.size).toFloat()
+
+                // Gate: skip detection entirely for quiet frames
+                if (rms < noiseFloorRms) {
+                    if (frameCount % 25 == 0) {
+                        val intent = Intent(ACTION_SCORE_UPDATE)
+                        intent.putExtra("score", 0f)
+                        intent.setPackage(packageName)
+                        sendBroadcast(intent)
+                    }
+                    continue
+                }
+
+                val score = detector?.detectScore(frame) ?: -1f
 
                 // Log score periodically for debugging
                 if (frameCount % 25 == 0 && score >= 0f) {
-                    Log.d(TAG, "Wake score: %.4f (threshold: %.2f)".format(score, 0.5f))
+                    Log.d(TAG, "Wake score: %.4f rms: %.4f (threshold: %.2f)".format(score, rms, 0.5f))
                     // Broadcast to activity for UI display
                     val intent = Intent(ACTION_SCORE_UPDATE)
                     intent.putExtra("score", score)
@@ -206,13 +230,17 @@ class VoiceNodeService : Service() {
                 }
 
                 if (score >= 0.5f) {
-                    Log.i(TAG, "WAKE WORD DETECTED! score=%.3f".format(score))
+                    Log.i(TAG, "WAKE WORD DETECTED! score=%.3f rms=%.4f".format(score, rms))
+                    broadcastState("wake_detected")
                     updateNotification("Capturing speech...")
                     val captured = captureSpeech()
-                    updateNotification("Listening for wake word...")
                     if (captured != null) {
+                        broadcastState("sending")
+                        updateNotification("Sending...")
                         sendAudio(captured)
                     }
+                    broadcastState("listening")
+                    updateNotification("Listening for wake word...")
                 }
             }
         }, "voice-node-detect").also { it.start() }
@@ -223,6 +251,7 @@ class VoiceNodeService : Service() {
      * Returns WAV bytes or null if nothing captured.
      */
     private fun captureSpeech(): ByteArray? {
+        broadcastState("capturing")
         val maxDurationMs = 30_000L
         val silenceTimeoutMs = 1_500L
         val silenceThreshold = 0.01f  // RMS threshold for float audio
@@ -258,6 +287,19 @@ class VoiceNodeService : Service() {
         }
 
         if (frames.isEmpty()) return null
+
+        // Post-capture energy gate — reject if overall RMS stays below speech threshold
+        var totalSumSq = 0.0
+        var totalSamples = 0
+        for (f in frames) {
+            for (s in f) totalSumSq += s * s
+            totalSamples += f.size
+        }
+        val overallRms = sqrt(totalSumSq / totalSamples).toFloat()
+        if (overallRms < 0.01f) {
+            Log.i(TAG, "Captured audio too quiet (rms=%.4f) — discarding".format(overallRms))
+            return null
+        }
 
         // Encode as 16-bit PCM WAV
         return encodeWav(frames)
@@ -321,6 +363,9 @@ class VoiceNodeService : Service() {
                 val responseBody = response.body?.string()
                 if (response.isSuccessful) {
                     Log.i(TAG, "Transcription: $responseBody")
+                    // Extract text from {"text":"..."} and broadcast
+                    val textMatch = Regex(""""text"\s*:\s*"([^"]+)"""").find(responseBody ?: "")
+                    textMatch?.groupValues?.getOrNull(1)?.let { broadcastTranscription(it) }
                 } else {
                     Log.w(TAG, "Transcription failed: ${response.code} $responseBody")
                 }
@@ -341,28 +386,36 @@ class VoiceNodeService : Service() {
         wsClient = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "WebSocket connected to $wsUrl")
-                // Subscribe to voice channel
-                webSocket.send("""{"type":"subscribe","channels":["voice"],"deviceId":"$deviceId"}""")
+                // Subscribe to voice-tts channel so server can push TTS audio
+                webSocket.send("""{"type":"subscribe","channels":["voice-tts"],"deviceId":"$deviceId"}""")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                // JSON fallback — voice-stub delivers text when TTS synth unavailable
                 try {
-                    // Simple JSON parse — avoid pulling in a full JSON library
-                    if (text.contains("\"tts.play\"")) {
-                        // Check device routing
-                        if (text.contains("\"deviceId\"") && !text.contains(deviceId)) return
-
-                        // Extract base64 audio
-                        val audioStart = text.indexOf("\"audio\":\"") + 9
-                        if (audioStart < 9) return
-                        val audioEnd = text.indexOf("\"", audioStart)
-                        val audioB64 = text.substring(audioStart, audioEnd)
-
-                        playAudio(Base64.decode(audioB64, Base64.DEFAULT))
+                    if (text.contains("\"voice-stub\"")) {
+                        val textStart = text.indexOf("\"text\":\"") + 8
+                        if (textStart >= 8) {
+                            val textEnd = text.indexOf("\"", textStart)
+                            val spoken = text.substring(textStart, textEnd)
+                            Log.i(TAG, "Voice stub (text only): $spoken")
+                            broadcastTranscription("[Hex] $spoken")
+                        }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "WS message parse failed", e)
+                    Log.e(TAG, "WS JSON message parse failed", e)
                 }
+            }
+
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                // Binary frame from Sovereign: [1-byte channelId][WAV audio payload]
+                val raw = bytes.toByteArray()
+                if (raw.size < 2) return
+                // Strip the channel ID prefix — the rest is raw WAV audio
+                val audio = raw.copyOfRange(1, raw.size)
+                Log.i(TAG, "TTS audio received: ${audio.size / 1024}KB")
+                broadcastState("tts_playing")
+                playAudio(audio)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -420,6 +473,22 @@ class VoiceNodeService : Service() {
                 Log.e(TAG, "Playback failed", e)
             }
         }.start()
+    }
+
+    // --- State broadcasting ---
+
+    private fun broadcastState(state: String) {
+        val intent = Intent(ACTION_STATE_CHANGE)
+        intent.putExtra("state", state)
+        intent.setPackage(packageName)
+        sendBroadcast(intent)
+    }
+
+    private fun broadcastTranscription(text: String) {
+        val intent = Intent(ACTION_TRANSCRIPTION)
+        intent.putExtra("text", text)
+        intent.setPackage(packageName)
+        sendBroadcast(intent)
     }
 
     // --- Utilities ---
