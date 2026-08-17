@@ -166,6 +166,11 @@ export interface ClaudeSessionState {
      *  hook to force a fresh `tools/list` against every server so the SDK's
      *  deferred-tool catalog doesn't go stale across compact events. */
     setMcpServers?(servers: Record<string, unknown>): Promise<unknown>
+    /** Query per-server MCP connection status. Returns array of
+     *  `{name, status}` per configured MCP server. */
+    mcpServerStatus?(): Promise<Array<{ name: string; status: string; serverInfo?: unknown }>>
+    /** Reconnect a single MCP server by name. */
+    reconnectMcpServer?(serverName: string): Promise<void>
     /** Rich per-category context breakdown. Used by Layer 2 (recycle) to
      *  monitor token accumulation and decide when to trigger a prune cycle. */
     getContextUsage?(): Promise<{

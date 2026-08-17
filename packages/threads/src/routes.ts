@@ -639,6 +639,51 @@ export function createThreadRoutes(
     }
   })
 
+  // ── MCP Status — per-thread MCP server health ──────────────────────
+  // User-triggered check: query MCP server connection status for the
+  // session bound to this thread. Never auto-teardown — previous attempt
+  // at auto-verification caused destructive session teardown on init.
+  router.get('/api/threads/:key/mcp-status', async (req, res) => {
+    const threadKey = req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+    const backend = backendForSession(sessionKey)
+    if (!backend?.getMcpStatus) {
+      return res.json({ servers: [], backendKind: backend?.kind ?? null })
+    }
+
+    try {
+      const servers = await backend.getMcpStatus(sessionKey)
+      res.json({ servers, backendKind: backend.kind })
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? 'MCP status check failed' })
+    }
+  })
+
+  // ── MCP Reconnect — re-establish MCP for a thread's session ────────
+  // User-triggered reconnect: recycles the session or reconnects MCP
+  // bridges depending on the backend type. Must never fire automatically.
+  router.post('/api/threads/:key/mcp-reconnect', async (req, res) => {
+    const threadKey = req.params.key
+    const thread = threadManager.get(threadKey)
+    if (!thread) return res.status(404).json({ error: 'Thread not found' })
+
+    const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+    const backend = backendForSession(sessionKey)
+    if (!backend?.reconnectMcp) {
+      return res.status(400).json({ error: 'Backend does not support MCP reconnect' })
+    }
+
+    try {
+      const result = await backend.reconnectMcp(sessionKey)
+      res.json({ ok: true, ...result })
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message ?? 'MCP reconnect failed' })
+    }
+  })
+
   // ── AskUserQuestion — pending list + submit ──────────────────────────
   // Sovereign holds Claude Code `AskUserQuestion` tool calls open in the
   // agent-backend PreToolUse hook until the user submits answers here. The
