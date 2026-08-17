@@ -69,7 +69,7 @@ import { registerThreadsWs } from '@sovereign/threads'
 import { createForwardHandler } from '@sovereign/threads'
 import { createVoiceModule, createVoiceResponse, DEFAULT_SUMMARY_SYSTEM } from '@sovereign/voice'
 import { createVoiceRoutes } from '@sovereign/voice'
-import { registerVoiceStreamChannel, registerVoiceTtsChannel } from '@sovereign/voice'
+import { registerVoiceStreamChannel } from '@sovereign/voice'
 import { createConversationSummary, createConversationSummaryRoutes } from '@sovereign/voice'
 import { createRecordingsService } from '@sovereign/recordings'
 import { registerRecordingRoutes } from '@sovereign/recordings'
@@ -362,9 +362,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       }
     })
   )
-
-  // ── Voice TTS binary channel — allows reply_voice to push audio to devices ──
-  registerVoiceTtsChannel(wsHandler)
 
   // ── Streaming STT (real-time transcription via WS) ──────────────────
   if (cfg.voice.transcribeUrl) {
