@@ -179,6 +179,8 @@ class VoiceNode:
         silence_timeout: float = 1.5,
         max_capture: float = 30.0,
         input_device: int | None = None,
+        push_to_talk: bool = False,
+        hotkey=None,
     ):
         self.server_url = server_url.rstrip("/")
         self.device_id = device_id
@@ -187,6 +189,8 @@ class VoiceNode:
         self.silence_timeout = silence_timeout
         self.max_capture = max_capture
         self.input_device = input_device
+        self.push_to_talk = push_to_talk
+        self.hotkey = hotkey
         self._running = False
         self._ws = None
 
@@ -202,9 +206,12 @@ class VoiceNode:
         # Start WebSocket listener for TTS playback in background
         ws_task = asyncio.create_task(self._ws_listener())
 
-        # Run the wake word detection loop (blocking on audio)
+        # Run the appropriate activation loop (both block in a thread)
         try:
-            await asyncio.to_thread(self._detection_loop)
+            if self.push_to_talk:
+                await asyncio.to_thread(self._ptt_loop, asyncio.get_event_loop())
+            else:
+                await asyncio.to_thread(self._detection_loop)
         except KeyboardInterrupt:
             log.info("Shutting down...")
         finally:
@@ -273,6 +280,136 @@ class VoiceNode:
             stream.stop_stream()
             stream.close()
             pa.terminate()
+
+    @staticmethod
+    def _parse_hotkey(key_str: str):
+        """Map a human-readable key string to a pynput.keyboard.Key.
+
+        Supports: right_cmd, left_cmd, right_alt, left_alt, right_ctrl,
+        f1 through f20.
+        """
+        import pynput.keyboard
+
+        key_map = {
+            "right_cmd": pynput.keyboard.Key.cmd_right,
+            "left_cmd": pynput.keyboard.Key.cmd_left,
+            "right_alt": pynput.keyboard.Key.alt_right,
+            "left_alt": pynput.keyboard.Key.alt_left,
+            "right_ctrl": pynput.keyboard.Key.ctrl_right,
+            "left_ctrl": pynput.keyboard.Key.ctrl_left,
+        }
+
+        lower = key_str.lower().strip()
+        if lower in key_map:
+            return key_map[lower]
+
+        # Function keys f1–f20
+        if lower.startswith("f") and lower[1:].isdigit():
+            num = int(lower[1:])
+            if 1 <= num <= 20:
+                return getattr(pynput.keyboard.Key, f"f{num}")
+
+        raise ValueError(f"Unsupported hotkey: {key_str}")
+
+    def _ptt_loop(self, loop):
+        """Push-to-talk loop: hold hotkey to record, release to send.
+
+        Runs in a worker thread via asyncio.to_thread. The `loop` argument
+        holds the asyncio event loop for scheduling async sends.
+        """
+        import pyaudio
+        import pynput.keyboard
+
+        target_key = self._parse_hotkey(self.hotkey)
+        log.info("Push-to-talk mode — hold [%s] to speak", self.hotkey)
+
+        pa = pyaudio.PyAudio()
+        recording = False
+        frames = []
+
+        # Callbacks run in pynput's listener thread — keep them minimal.
+        # They only flip the `recording` flag; the main loop handles audio.
+        def _on_press(k):
+            nonlocal recording, frames
+            if k == target_key and not recording:
+                recording = True
+                frames = []
+                log.info("Recording...")
+
+        def _on_release(k):
+            nonlocal recording
+            if k == target_key and recording:
+                recording = False
+
+        listener = pynput.keyboard.Listener(
+            on_press=_on_press,
+            on_release=_on_release,
+        )
+        listener.start()
+
+        try:
+            while self._running:
+                if recording:
+                    # Open mic only while key held — no orange dot otherwise
+                    try:
+                        stream = pa.open(
+                            format=pyaudio.paInt16,
+                            channels=CHANNELS,
+                            rate=SAMPLE_RATE,
+                            input=True,
+                            frames_per_buffer=CHUNK_SAMPLES,
+                            input_device_index=self.input_device,
+                        )
+                        while recording and self._running:
+                            audio_bytes = stream.read(
+                                CHUNK_SAMPLES, exception_on_overflow=False
+                            )
+                            frames.append(audio_bytes)
+                            # Safety cap
+                            duration = len(frames) * CHUNK_SAMPLES / SAMPLE_RATE
+                            if duration >= self.max_capture:
+                                log.info("Max capture reached (%.1fs)", self.max_capture)
+                                recording = False
+                                break
+                        stream.stop_stream()
+                        stream.close()
+                    except Exception as e:
+                        log.error("Mic error during PTT capture: %s", e)
+                        recording = False
+
+                    # Key released (or max cap) — encode and send
+                    if frames:
+                        captured = self._encode_and_capture(frames)
+                        duration = len(frames) * CHUNK_SAMPLES / SAMPLE_RATE
+                        log.info(
+                            "Captured %.1fs (%.1f KB) — sending",
+                            duration,
+                            len(captured) / 1024 if captured else 0,
+                        )
+                        frames = []
+                        if captured:
+                            asyncio.run_coroutine_threadsafe(
+                                self._send_audio(captured), loop
+                            )
+                else:
+                    time.sleep(0.05)
+        finally:
+            listener.stop()
+            listener.join()
+            pa.terminate()
+
+    def _encode_and_capture(self, frames: list) -> bytes | None:
+        """Encode collected frames as WAV bytes (standalone, no stream needed)."""
+        if not frames:
+            return None
+
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(CHANNELS)
+            wf.setsampwidth(FORMAT_WIDTH)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(b"".join(frames))
+        return buf.getvalue()
 
     def _capture_speech(self, stream) -> bytes | None:
         """Record audio after wake word until silence or max duration."""
@@ -465,6 +602,16 @@ def main():
         action="store_true",
         help="List available audio input devices and exit",
     )
+    parser.add_argument(
+        "--push-to-talk",
+        action="store_true",
+        help="Push-to-talk mode: hold hotkey to record instead of wake word detection",
+    )
+    parser.add_argument(
+        "--hotkey",
+        default="right_cmd",
+        help="PTT hotkey name (default: right_cmd). Supports: right_cmd, left_cmd, right_alt, left_alt, right_ctrl, left_ctrl, f1–f20",
+    )
     args = parser.parse_args()
 
     if args.list_devices:
@@ -480,17 +627,32 @@ def main():
         return
 
     device_id = get_or_create_device_id()
-    model_path = find_wake_model(args.model)
 
-    node = VoiceNode(
-        server_url=args.server,
-        device_id=device_id,
-        model_path=model_path,
-        threshold=args.threshold,
-        silence_timeout=args.silence_timeout,
-        max_capture=args.max_capture,
-        input_device=args.input_device,
-    )
+    if args.push_to_talk:
+        # PTT mode — no wake word model needed
+        node = VoiceNode(
+            server_url=args.server,
+            device_id=device_id,
+            model_path="",
+            threshold=args.threshold,
+            silence_timeout=args.silence_timeout,
+            max_capture=args.max_capture,
+            input_device=args.input_device,
+            push_to_talk=True,
+            hotkey=args.hotkey,
+        )
+    else:
+        model_path = find_wake_model(args.model)
+        node = VoiceNode(
+            server_url=args.server,
+            device_id=device_id,
+            model_path=model_path,
+            threshold=args.threshold,
+            silence_timeout=args.silence_timeout,
+            max_capture=args.max_capture,
+            input_device=args.input_device,
+            push_to_talk=False,
+        )
     asyncio.run(node.run())
 
 
