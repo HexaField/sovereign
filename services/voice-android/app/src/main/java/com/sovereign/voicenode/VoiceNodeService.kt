@@ -405,9 +405,15 @@ class VoiceNodeService : Service() {
                         if (audioEnd <= audioStart) return
                         val audioB64 = text.substring(audioStart, audioEnd)
 
-                        Log.i(TAG, "TTS audio received (${audioB64.length / 1024}KB base64)")
+                        // Detect chunked streaming — chunk.index present
+                        val chunkIndexMatch = Regex(""""index"\s*:\s*(\d+)""").find(text)
+                        val chunkIndex = chunkIndexMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: -1
+                        val isChunked = chunkIndex >= 0
+
+                        val kind = if (text.contains("\"ack\"")) "ack" else if (isChunked) "chunk$chunkIndex" else "summary"
+                        Log.i(TAG, "TTS audio received ($kind, ${audioB64.length / 1024}KB base64)")
                         broadcastState("tts_playing")
-                        playAudio(Base64.decode(audioB64, Base64.DEFAULT))
+                        playAudio(Base64.decode(audioB64, Base64.DEFAULT), isChunked, chunkIndex)
 
                         // Also extract text for display
                         val textMatch = Regex(""""text"\s*:\s*"([^"]+)"""").find(text)
@@ -438,43 +444,85 @@ class VoiceNodeService : Service() {
         })
     }
 
-    private fun playAudio(wavData: ByteArray) {
-        Thread {
-            try {
-                // Parse WAV header to get format
-                if (wavData.size < 44) return@Thread
-                val sampleRate = wavData.getIntLE(24)
-                val bitsPerSample = wavData.getShortLE(34).toInt()
-                val dataSize = wavData.getIntLE(40)
+    // --- TTS audio queue — plays clips serially, never overlapping ---
 
-                val encoding = if (bitsPerSample == 16) AudioFormat.ENCODING_PCM_16BIT
-                else AudioFormat.ENCODING_PCM_8BIT
+    private val audioQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    @Volatile private var currentTrack: AudioTrack? = null
+    private var audioThread: Thread? = null
 
-                val track = AudioTrack.Builder()
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .setEncoding(encoding)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(dataSize)
-                    .setTransferMode(AudioTrack.MODE_STATIC)
-                    .build()
+    /** Enqueue a WAV clip. Non-chunked messages (acks) interrupt the current
+     *  clip and flush the queue. Chunked messages (index > 0) append. */
+    private fun playAudio(wavData: ByteArray, isChunked: Boolean = false, chunkIndex: Int = -1) {
+        if (!isChunked || chunkIndex == 0) {
+            // Interrupt: stop current playback and flush pending clips
+            interruptPlayback()
+        }
+        audioQueue.put(wavData)
+        ensureAudioThread()
+    }
 
-                track.write(wavData, 44, dataSize)
-                track.play()
+    private fun interruptPlayback() {
+        audioQueue.clear()
+        currentTrack?.let { track ->
+            try { track.stop() } catch (_: Exception) {}
+            try { track.release() } catch (_: Exception) {}
+        }
+        currentTrack = null
+    }
 
-                // Wait for playback to complete
-                val durationMs = (dataSize.toLong() * 1000) / (sampleRate * bitsPerSample / 8)
-                Thread.sleep(durationMs + 100)
-
-                track.stop()
-                track.release()
-            } catch (e: Exception) {
-                Log.e(TAG, "Playback failed", e)
+    private fun ensureAudioThread() {
+        if (audioThread?.isAlive == true) return
+        audioThread = Thread {
+            while (running || audioQueue.isNotEmpty()) {
+                val wavData = audioQueue.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
+                playOneClip(wavData)
             }
-        }.start()
+            broadcastState("listening")
+        }.apply {
+            name = "tts-playback"
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun playOneClip(wavData: ByteArray) {
+        try {
+            if (wavData.size < 44) return
+            val sampleRate = wavData.getIntLE(24)
+            val bitsPerSample = wavData.getShortLE(34).toInt()
+            val dataSize = wavData.getIntLE(40)
+            if (dataSize <= 0 || 44 + dataSize > wavData.size) return
+
+            val encoding = if (bitsPerSample == 16) AudioFormat.ENCODING_PCM_16BIT
+            else AudioFormat.ENCODING_PCM_8BIT
+
+            val track = AudioTrack.Builder()
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .setEncoding(encoding)
+                        .build()
+                )
+                .setBufferSizeInBytes(dataSize)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
+
+            currentTrack = track
+            track.write(wavData, 44, dataSize)
+            track.play()
+
+            // Wait for playback to complete
+            val durationMs = (dataSize.toLong() * 1000) / (sampleRate * bitsPerSample / 8)
+            Thread.sleep(durationMs + 100)
+
+            track.stop()
+            track.release()
+            currentTrack = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Playback failed", e)
+            currentTrack = null
+        }
     }
 
     // --- State broadcasting ---
