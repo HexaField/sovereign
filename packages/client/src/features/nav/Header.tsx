@@ -2,7 +2,7 @@ import { createMemo, createSignal, Show, onMount, onCleanup } from 'solid-js'
 import { agentIcon, agentName } from '../../lib/identity.js'
 import { HealthPopover, overallHealth, initHealthPolling } from '../connection/HealthPopover.js'
 import { activeView, toggleMode, activeAgentTab, setActiveAgentTab, type AgentTab } from '../nav/store.js'
-import { threadKey } from '../threads/store.js'
+import { threadKey, switchThread } from '../threads/store.js'
 import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
 import { SummaryBubble } from '../chat/SummaryBubble.js'
@@ -70,7 +70,17 @@ export function Header() {
   onMount(() => {
     const cleanup = initHealthPolling()
     onCleanup(cleanup)
-    void getPresenceGatewayThreadId().then((id) => setPresenceGatewayId(id))
+    void getPresenceGatewayThreadId().then((id) => {
+      setPresenceGatewayId(id)
+      // Cold-load fix: when the page loads directly in agent mode (e.g. a
+      // bookmarked URL or a reload), the nav-store transition logic that
+      // normally switches to the gateway thread never fires — the view
+      // initialises as 'agent' rather than transitioning workspace→agent.
+      // Ensure we land on the gateway thread regardless.
+      if (id && activeView() === 'agent' && threadKey() !== id) {
+        switchThread(id)
+      }
+    })
   })
 
   // Gates the summary bubble — it only ever holds data for the gateway
