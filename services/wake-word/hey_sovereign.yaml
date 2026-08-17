@@ -37,10 +37,10 @@ output_dir: "./training_output"
 rir_paths:
   - "./training_data/mit_rirs"
 
-# Background noise
+# Background noise (MUSAN — speech, music, noise)
 background_paths:
-  - "./training_data/audioset_16k"
-  - "./training_data/fma"
+  - "./training_data/musan/noise"
+  - "./training_data/musan/music"
 background_paths_duplication_rate:
   - 1
   - 1

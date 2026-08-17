@@ -111,42 +111,26 @@ def download_data():
     else:
         log.info("RIRs already present: %s", rir_dir)
 
-    # 2. Background noise — AudioSet (1 partition, direct tar download)
-    audioset_dir = DATA_DIR / "audioset_16k"
-    if not audioset_dir.exists():
-        log.info("Downloading AudioSet background noise...")
-        raw_dir = DATA_DIR / "audioset_raw"
-        raw_dir.mkdir(exist_ok=True)
-        tar_file = raw_dir / "bal_train09.tar"
-        if not tar_file.exists():
+    # 2. Background noise — MUSAN (speech, music, noise — ~11GB uncompressed)
+    #    Reliable, well-maintained, and commonly used for audio augmentation.
+    noise_dir = DATA_DIR / "musan"
+    if not noise_dir.exists():
+        log.info("Downloading MUSAN background noise dataset...")
+        musan_tar = DATA_DIR / "musan.tar.gz"
+        if not musan_tar.exists():
             _wget(
-                "https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/data/bal_train09.tar",
-                str(tar_file),
+                "https://www.openslr.org/resources/17/musan.tar.gz",
+                str(musan_tar),
             )
-        subprocess.run(["tar", "-xf", str(tar_file), "-C", str(raw_dir)], check=True)
-        _convert_audio_dir(raw_dir, audioset_dir, ext="*.flac")
+        subprocess.run(
+            ["tar", "-xzf", str(musan_tar), "-C", str(DATA_DIR)], check=True
+        )
+        log.info(
+            "MUSAN: %d files across speech/music/noise",
+            sum(1 for _ in noise_dir.rglob("*.wav")),
+        )
     else:
-        log.info("AudioSet already present: %s", audioset_dir)
-
-    # 3. Background noise — Free Music Archive
-    #    Clone a small subset via the HF API (avoids streaming audio decode issues)
-    fma_dir = DATA_DIR / "fma"
-    if not fma_dir.exists():
-        log.info("Downloading FMA background music...")
-        fma_repo = DATA_DIR / "fma_repo"
-        if not fma_repo.exists():
-            # Download a small sample — the full dataset runs too large
-            subprocess.run([
-                "git", "clone", "--depth", "1",
-                "https://huggingface.co/datasets/rudraml/fma",
-                str(fma_repo),
-            ], check=True, env={**os.environ, "GIT_LFS_SKIP_SMUDGE": "0"})
-        _convert_audio_dir(fma_repo, fma_dir, ext="*.mp3")
-        if not list(fma_dir.glob("*.wav")):
-            _convert_audio_dir(fma_repo, fma_dir, ext="*.flac")
-        log.info("FMA clips: %d", len(list(fma_dir.glob("*.wav"))))
-    else:
-        log.info("FMA already present: %s", fma_dir)
+        log.info("MUSAN already present: %s", noise_dir)
 
     # 4. Pre-computed features (ACAV100M — ~17GB)
     features_file = DATA_DIR / "openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
