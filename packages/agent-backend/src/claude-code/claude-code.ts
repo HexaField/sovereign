@@ -1243,27 +1243,39 @@ export function createClaudeCodeBackend(
 
     // Verify sovereign MCP connected after initialization — if missing,
     // tear down and let the next sendMessage restart with fresh config.
+    // 'pending' is a normal transient status right after init while the
+    // in-process MCP handshake completes, so poll briefly before treating
+    // it as a real failure — a single immediate sample raced the handshake
+    // and tore down every session on its first message.
+    const MCP_VERIFY_POLL_MS = 200
+    const MCP_VERIFY_TIMEOUT_MS = 5000
     q.initializationResult()
       .then(async () => {
+        const deadline = Date.now() + MCP_VERIFY_TIMEOUT_MS
         try {
-          const statuses = await q.mcpServerStatus()
-          const sovereign = statuses.find((s: any) => s.name === 'sovereign')
-          if (!sovereign || sovereign.status !== 'connected') {
-            console.warn(
-              `[claude-code] sovereign MCP not connected (status: ${sovereign?.status ?? 'missing'}) for session ${state.sessionKey} — tearing down for restart`
-            )
-            try {
-              state.abortController?.abort()
-            } catch {
-              /* ignore */
+          let sovereign: { status?: string } | undefined
+          for (;;) {
+            const statuses = await q.mcpServerStatus()
+            sovereign = statuses.find((s: any) => s.name === 'sovereign')
+            if (sovereign?.status === 'connected') {
+              console.log(`[claude-code] sovereign MCP verified for session ${state.sessionKey}`)
+              return
             }
-            state.pushUserMessage = undefined
-            state.endInput = undefined
-            state.abortController = undefined
-            state.liveQuery = undefined
-          } else {
-            console.log(`[claude-code] sovereign MCP verified for session ${state.sessionKey}`)
+            if (sovereign?.status !== 'pending' || Date.now() >= deadline) break
+            await new Promise((resolve) => setTimeout(resolve, MCP_VERIFY_POLL_MS))
           }
+          console.warn(
+            `[claude-code] sovereign MCP not connected (status: ${sovereign?.status ?? 'missing'}) for session ${state.sessionKey} — tearing down for restart`
+          )
+          try {
+            state.abortController?.abort()
+          } catch {
+            /* ignore */
+          }
+          state.pushUserMessage = undefined
+          state.endInput = undefined
+          state.abortController = undefined
+          state.liveQuery = undefined
         } catch (err) {
           console.warn(`[claude-code] MCP status check failed for ${state.sessionKey}:`, err)
         }
