@@ -77,5 +77,23 @@ export function createVoiceRoutes(voice: VoiceModule, deps?: VoiceRouteDeps): Ro
     res.sendFile(modelFile, { root: modelDir })
   })
 
+  // Serve preprocessor models needed for on-device wake word detection.
+  // OpenWakeWord uses a 3-stage pipeline: melspectrogram → embedding → wake word.
+  // Remote devices (Android, Pi) need all three to run inference locally.
+  router.get('/api/voice/wake-model/:name', (req: Request, res: Response) => {
+    const allowed = ['melspectrogram.onnx', 'embedding_model.onnx', 'wake_word.onnx']
+    const name = req.params.name
+    if (!allowed.includes(name)) {
+      res.status(400).json({ error: `Unknown model: ${name}` })
+      return
+    }
+    const modelDir = join(homedir(), '.sovereign', 'data', 'voice')
+    if (!existsSync(join(modelDir, name))) {
+      res.status(404).json({ error: `Model not found: ${name}` })
+      return
+    }
+    res.sendFile(name, { root: modelDir })
+  })
+
   return router
 }

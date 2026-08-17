@@ -116,33 +116,40 @@ class VoiceNodeService : Service() {
     }
 
     /**
-     * Download the wake word model from the Sovereign server.
-     * Saves to app-local storage for subsequent launches.
+     * Download all ONNX models needed for the wake word pipeline.
+     * OpenWakeWord uses 3 stages: melspectrogram → embedding → wake word.
      */
     private fun downloadModel(): Boolean {
-        val url = "$serverUrl/api/voice/wake-model"
-        Log.i(TAG, "Downloading wake word model from $url")
-        updateNotification("Downloading wake word model...")
+        Log.i(TAG, "Downloading wake word pipeline models from $serverUrl")
+        updateNotification("Downloading wake word models...")
 
-        return try {
-            val request = Request.Builder().url(url).build()
-            val response = httpClient.newCall(request).execute()
-            if (response.isSuccessful) {
-                val body = response.body ?: return false
-                val modelFile = java.io.File(filesDir, "wake_word.onnx")
-                modelFile.outputStream().use { out ->
-                    body.byteStream().use { it.copyTo(out) }
-                }
-                Log.i(TAG, "Model downloaded: ${modelFile.length()} bytes")
-                true
-            } else {
-                Log.w(TAG, "Model download failed: ${response.code}")
-                false
+        for (modelName in WakeWordDetector.MODEL_FILES) {
+            if (java.io.File(filesDir, modelName).let { it.exists() && it.length() > 0 }) {
+                Log.i(TAG, "Model already cached: $modelName")
+                continue
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Model download error", e)
-            false
+
+            val url = "$serverUrl/api/voice/wake-model/$modelName"
+            try {
+                val request = Request.Builder().url(url).build()
+                val response = httpClient.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body ?: return false
+                    val modelFile = java.io.File(filesDir, modelName)
+                    modelFile.outputStream().use { out ->
+                        body.byteStream().use { it.copyTo(out) }
+                    }
+                    Log.i(TAG, "Downloaded $modelName: ${modelFile.length()} bytes")
+                } else {
+                    Log.w(TAG, "Download failed for $modelName: ${response.code}")
+                    return false
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Download error for $modelName", e)
+                return false
+            }
         }
+        return true
     }
 
     override fun onDestroy() {
