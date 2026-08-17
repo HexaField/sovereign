@@ -283,10 +283,15 @@ class VoiceNode:
 
     @staticmethod
     def _parse_hotkey(key_str: str):
-        """Map a human-readable key string to a pynput.keyboard.Key.
+        """Parse a hotkey string into a list of pynput Key objects.
 
-        Supports: right_cmd, left_cmd, right_alt, left_alt, right_ctrl,
-        f1 through f20.
+        Supports single keys and combos joined with '+':
+            right_cmd          → [Key.cmd_r]
+            left_cmd+right_cmd → [Key.cmd_l, Key.cmd_r]
+            ctrl+left_alt+left_cmd → [Key.ctrl, Key.alt_l, Key.cmd_l]
+
+        Key names: right_cmd, left_cmd, cmd, right_alt, left_alt, alt,
+        right_ctrl, left_ctrl, ctrl, f1–f20.
         """
         import pynput.keyboard
 
@@ -302,47 +307,61 @@ class VoiceNode:
             "ctrl": pynput.keyboard.Key.ctrl,
         }
 
-        lower = key_str.lower().strip()
-        if lower in key_map:
-            return key_map[lower]
+        parts = [p.lower().strip() for p in key_str.split("+")]
+        result = []
+        for part in parts:
+            if part in key_map:
+                result.append(key_map[part])
+            elif part.startswith("f") and part[1:].isdigit():
+                num = int(part[1:])
+                if 1 <= num <= 20:
+                    result.append(getattr(pynput.keyboard.Key, f"f{num}"))
+                else:
+                    raise ValueError(f"Unsupported function key: {part}")
+            else:
+                raise ValueError(f"Unsupported hotkey component: {part}")
 
-        # Function keys f1–f20
-        if lower.startswith("f") and lower[1:].isdigit():
-            num = int(lower[1:])
-            if 1 <= num <= 20:
-                return getattr(pynput.keyboard.Key, f"f{num}")
-
-        raise ValueError(f"Unsupported hotkey: {key_str}")
+        if not result:
+            raise ValueError(f"Empty hotkey: {key_str}")
+        return result
 
     def _ptt_loop(self, loop):
-        """Push-to-talk loop: hold hotkey to record, release to send.
+        """Push-to-talk loop: hold hotkey combo to record, release to send.
 
         Runs in a worker thread via asyncio.to_thread. The `loop` argument
         holds the asyncio event loop for scheduling async sends.
+
+        Supports single keys and combos. For combos, all keys must stay
+        held to keep recording. Releasing any combo key stops capture.
         """
         import pyaudio
         import pynput.keyboard
 
-        target_key = self._parse_hotkey(self.hotkey)
+        target_keys = set(self._parse_hotkey(self.hotkey))
         log.info("Push-to-talk mode — hold [%s] to speak", self.hotkey)
 
         pa = pyaudio.PyAudio()
         recording = False
         frames = []
+        held_keys = set()  # Track which combo keys stay held
 
-        # Callbacks run in pynput's listener thread — keep them minimal.
-        # They only flip the `recording` flag; the main loop handles audio.
         def _on_press(k):
             nonlocal recording, frames
-            if k == target_key and not recording:
-                recording = True
-                frames = []
-                log.info("Recording...")
+            if k in target_keys:
+                held_keys.add(k)
+                # Start recording when all combo keys appear held
+                if held_keys >= target_keys and not recording:
+                    recording = True
+                    frames = []
+                    log.info("Recording...")
 
         def _on_release(k):
             nonlocal recording
-            if k == target_key and recording:
-                recording = False
+            if k in target_keys:
+                held_keys.discard(k)
+                # Stop recording when any combo key lifts
+                if recording:
+                    recording = False
 
         listener = pynput.keyboard.Listener(
             on_press=_on_press,
