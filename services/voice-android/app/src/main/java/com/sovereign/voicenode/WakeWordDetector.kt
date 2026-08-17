@@ -5,6 +5,7 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.util.Log
+import java.io.File
 import java.nio.FloatBuffer
 
 /**
@@ -19,23 +20,52 @@ import java.nio.FloatBuffer
  */
 class WakeWordDetector(
     context: Context,
-    private val modelName: String = "wake_word.onnx",
+    modelName: String = "wake_word.onnx",
     private val threshold: Float = 0.5f,
 ) {
     companion object {
         private const val TAG = "WakeWordDetector"
         const val FRAME_SAMPLES = 1280  // 80ms at 16kHz
         const val SAMPLE_RATE = 16000
+
+        /**
+         * Check whether a wake word model exists — either bundled in
+         * assets or previously downloaded to app storage.
+         */
+        fun hasModel(context: Context, modelName: String = "wake_word.onnx"): Boolean {
+            // Check app-local cache first
+            val cached = File(context.filesDir, modelName)
+            if (cached.exists() && cached.length() > 0) return true
+
+            // Check bundled assets
+            return try {
+                context.assets.open(modelName).use { true }
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val session: OrtSession
 
     init {
-        // Load model from assets
-        val modelBytes = context.assets.open(modelName).use { it.readBytes() }
+        val modelBytes = loadModel(context, modelName)
         session = env.createSession(modelBytes)
         Log.i(TAG, "Wake word model loaded: $modelName (inputs=${session.inputNames})")
+    }
+
+    private fun loadModel(context: Context, name: String): ByteArray {
+        // Prefer app-local cache (downloaded from Sovereign server)
+        val cached = File(context.filesDir, name)
+        if (cached.exists() && cached.length() > 0) {
+            Log.i(TAG, "Loading model from cache: ${cached.absolutePath}")
+            return cached.readBytes()
+        }
+
+        // Fall back to bundled assets
+        Log.i(TAG, "Loading model from assets: $name")
+        return context.assets.open(name).use { it.readBytes() }
     }
 
     /**

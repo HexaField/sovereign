@@ -74,13 +74,59 @@ class VoiceNodeService : Service() {
         acquireWakeLock()
 
         if (!running) {
-            running = true
-            detector = WakeWordDetector(this, threshold = threshold)
-            startDetection()
-            connectWebSocket()
+            // Download model from Sovereign if not cached locally
+            if (!WakeWordDetector.hasModel(this)) {
+                Thread {
+                    if (downloadModel()) {
+                        running = true
+                        detector = WakeWordDetector(this, threshold = threshold)
+                        startDetection()
+                        connectWebSocket()
+                    } else {
+                        Log.e(TAG, "No wake word model available — stopping service")
+                        updateNotification("No wake word model — download from server failed")
+                        stopSelf()
+                    }
+                }.start()
+            } else {
+                running = true
+                detector = WakeWordDetector(this, threshold = threshold)
+                startDetection()
+                connectWebSocket()
+            }
         }
 
         return START_STICKY
+    }
+
+    /**
+     * Download the wake word model from the Sovereign server.
+     * Saves to app-local storage for subsequent launches.
+     */
+    private fun downloadModel(): Boolean {
+        val url = "$serverUrl/api/voice/wake-model"
+        Log.i(TAG, "Downloading wake word model from $url")
+        updateNotification("Downloading wake word model...")
+
+        return try {
+            val request = Request.Builder().url(url).build()
+            val response = httpClient.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body ?: return false
+                val modelFile = java.io.File(filesDir, "wake_word.onnx")
+                modelFile.outputStream().use { out ->
+                    body.byteStream().use { it.copyTo(out) }
+                }
+                Log.i(TAG, "Model downloaded: ${modelFile.length()} bytes")
+                true
+            } else {
+                Log.w(TAG, "Model download failed: ${response.code}")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Model download error", e)
+            false
+        }
     }
 
     override fun onDestroy() {

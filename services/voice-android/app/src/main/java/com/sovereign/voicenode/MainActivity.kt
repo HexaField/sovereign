@@ -59,6 +59,8 @@ class MainActivity : AppCompatActivity() {
         getSharedPreferences("sovereign_voice", MODE_PRIVATE)
             .edit().putString("server_url", url).apply()
 
+        val hasModel = WakeWordDetector.hasModel(this)
+
         val intent = Intent(this, VoiceNodeService::class.java).apply {
             putExtra(VoiceNodeService.EXTRA_SERVER_URL, url)
         }
@@ -66,7 +68,8 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, intent)
         serviceRunning = true
         toggleButton.text = "Stop"
-        statusText.text = "Listening for wake word..."
+        statusText.text = if (hasModel) "Listening for wake word..."
+            else "Downloading wake word model from server..."
     }
 
     private fun stopVoiceService() {
