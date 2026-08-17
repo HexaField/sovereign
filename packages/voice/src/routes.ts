@@ -8,7 +8,12 @@ import type { Request, Response } from 'express'
 import type { VoiceModule } from './voice.js'
 import multer from 'multer'
 
-export function createVoiceRoutes(voice: VoiceModule): Router {
+export interface VoiceRouteDeps {
+  /** Forward transcribed text into the presence pipeline for the agent to process. */
+  forwardToPresence?: (text: string, opts?: { deviceId?: string }) => Promise<{ delivered: boolean }>
+}
+
+export function createVoiceRoutes(voice: VoiceModule, deps?: VoiceRouteDeps): Router {
   const router = Router()
   const upload = multer({ storage: multer.memoryStorage() })
 
@@ -19,8 +24,16 @@ export function createVoiceRoutes(voice: VoiceModule): Router {
         res.status(400).json({ error: 'No audio file provided' })
         return
       }
+      const deviceId = req.body?.deviceId as string | undefined
       const result = await voice.transcribe(file.buffer, file.mimetype)
       res.json({ text: result.text })
+
+      // Forward transcription into the presence pipeline so the agent sees it
+      if (deps?.forwardToPresence && result.text?.trim()) {
+        deps
+          .forwardToPresence(result.text, deviceId ? { deviceId } : undefined)
+          .catch((err: Error) => console.warn('[voice] presence forward failed:', err.message))
+      }
     } catch (err: any) {
       if (err.message === 'No transcription URL configured') {
         res.status(503).json({ error: 'Transcription service not configured' })

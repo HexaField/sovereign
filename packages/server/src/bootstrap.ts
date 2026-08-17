@@ -351,7 +351,17 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     const next = configStore.get<SovereignConfig['voice']>('voice')
     voiceModule.updateConfig({ transcribeUrl: next.transcribeUrl || undefined, ttsUrl: next.ttsUrl || undefined })
   })
-  app.use(createVoiceRoutes(voiceModule))
+  // Late-binding: presenceModule + chatModule create after voice routes,
+  // so capture a mutable ref that gets filled once both initialise.
+  let voiceForward: ((text: string, opts?: { deviceId?: string }) => Promise<{ delivered: boolean }>) | undefined
+  app.use(
+    createVoiceRoutes(voiceModule, {
+      forwardToPresence: (text, opts) => {
+        if (!voiceForward) return Promise.resolve({ delivered: false })
+        return voiceForward(text, opts)
+      }
+    })
+  )
 
   // ── Streaming STT (real-time transcription via WS) ──────────────────
   if (cfg.voice.transcribeUrl) {
@@ -538,6 +548,24 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     gatewayLabel: 'presence',
     autoCreateMembraneId: cfg.seed?.membraneId || 'personal'
   })
+  // Fill the late-binding ref so voice transcriptions reach the gateway thread.
+  // Voice node transcriptions go to the gateway (same as dashboard voice) —
+  // the user expects to see their spoken message as a user turn in the main chat.
+  voiceForward = async (text, opts) => {
+    const gatewayId = presenceModule.gatewayThreadId()
+    if (!gatewayId) return { delivered: false }
+    try {
+      await chatHandleHolder.sendToThread(gatewayId, text, {
+        modality: 'voice',
+        ...(opts?.deviceId ? { deviceId: opts.deviceId } : {})
+      })
+      return { delivered: true }
+    } catch (err) {
+      console.warn('[voice] gateway forward failed:', (err as Error)?.message)
+      return { delivered: false }
+    }
+  }
+
   const presenceMcpDeps = {
     internalThreadId: () => presenceModule.internalThreadId(),
     gatewayThreadId: () => presenceModule.gatewayThreadId(),
