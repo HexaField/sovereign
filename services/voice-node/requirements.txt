@@ -1,0 +1,5 @@
+openwakeword>=0.4.0
+pyaudio>=0.2.14
+numpy>=1.24.0
+websockets>=12.0
+aiohttp>=3.9.0

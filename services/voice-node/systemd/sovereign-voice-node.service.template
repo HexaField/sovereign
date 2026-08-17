@@ -1,0 +1,19 @@
+[Unit]
+Description=Sovereign Voice Node — wake word detection and audio pipe
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@@VOICE_NODE_DIR@@
+ExecStart=@@VOICE_NODE_DIR@@/.venv/bin/python @@VOICE_NODE_DIR@@/voice_node.py --server @@SOVEREIGN_URL@@
+Restart=on-failure
+RestartSec=10
+
+Environment=HOME=@@HOME@@
+Environment=SOVEREIGN_URL=@@SOVEREIGN_URL@@
+
+StandardOutput=append:@@HOME@@/.sovereign/data/voice/voice-node.stdout.log
+StandardError=append:@@HOME@@/.sovereign/data/voice/voice-node.stderr.log
+
+[Install]
+WantedBy=default.target
