@@ -353,6 +353,16 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   })
   app.use(createVoiceRoutes(voiceModule))
 
+  // Serve the trained wake word model for remote voice nodes (Android, Pi)
+  app.get('/api/voice/wake-model', (_req, res) => {
+    const wakeModelPath = path.join(os.homedir(), '.sovereign', 'data', 'voice', 'wake_word.onnx')
+    if (!fs.existsSync(wakeModelPath)) {
+      res.status(404).json({ error: 'No wake word model available' })
+      return
+    }
+    res.sendFile(wakeModelPath)
+  })
+
   // ── Streaming STT (real-time transcription via WS) ──────────────────
   if (cfg.voice.transcribeUrl) {
     registerVoiceStreamChannel({
