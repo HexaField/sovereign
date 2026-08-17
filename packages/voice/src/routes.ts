@@ -52,14 +52,16 @@ export function createVoiceRoutes(voice: VoiceModule): Router {
 
   // Serve the trained wake word model for remote devices (Android, Pi)
   router.get('/api/voice/wake-model', (_req: Request, res: Response) => {
-    const modelPath = join(homedir(), '.sovereign', 'data', 'voice', 'wake_word.onnx')
-    if (!existsSync(modelPath)) {
+    const modelDir = join(homedir(), '.sovereign', 'data', 'voice')
+    const modelFile = 'wake_word.onnx'
+    if (!existsSync(join(modelDir, modelFile))) {
       res.status(404).json({
         error: 'No wake word model available. Train one first: services/wake-word/train.py'
       })
       return
     }
-    res.sendFile(modelPath)
+    // Express 5 sendFile requires root option for path resolution
+    res.sendFile(modelFile, { root: modelDir })
   })
 
   return router
