@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sovereign.voice-node</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@@VOICE_NODE_DIR@@/.venv/bin/python</string>
+        <string>@@VOICE_NODE_DIR@@/voice_node.py</string>
+        <string>--server</string>
+        <string>@@SOVEREIGN_URL@@</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@@VOICE_NODE_DIR@@</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>@@HOME@@</string>
+        <key>SOVEREIGN_URL</key>
+        <string>@@SOVEREIGN_URL@@</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>@@HOME@@/.sovereign/data/voice/voice-node.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>@@HOME@@/.sovereign/data/voice/voice-node.stderr.log</string>
+</dict>
+</plist>

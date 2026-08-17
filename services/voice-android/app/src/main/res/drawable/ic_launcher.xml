@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder icon — hexagon shape matching the ⬡ identity -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#2196F3"
+        android:pathData="M54,20 L84,37 L84,71 L54,88 L24,71 L24,37 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30 L74,42 L74,66 L54,78 L34,66 L34,42 Z" />
+</vector>

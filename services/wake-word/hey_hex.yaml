@@ -1,0 +1,66 @@
+# OpenWakeWord training config for "Hey Hex" wake word
+# Run: python train_hey_hex.py
+
+model_name: "hey_hex"
+
+target_phrase:
+  - "hey hex"
+
+# Specific phrases to avoid false-positives on
+custom_negative_phrases:
+  - "hey rex"
+  - "hey tech"
+  - "hey text"
+  - "hey next"
+  - "hey check"
+  - "hey flex"
+  - "hay bex"
+  - "hey dex"
+
+# 50k synthetic clips — good balance of quality and training speed
+n_samples: 50000
+n_samples_val: 5000
+
+# Piper TTS generation
+tts_batch_size: 50
+augmentation_batch_size: 16
+
+piper_sample_generator_path: "./piper-sample-generator"
+output_dir: "./training_output"
+
+# Room impulse responses
+rir_paths:
+  - "./training_data/mit_rirs"
+
+# Background noise
+background_paths:
+  - "./training_data/audioset_16k"
+  - "./training_data/fma"
+background_paths_duplication_rate:
+  - 1
+  - 1
+
+# Pre-computed features for training
+false_positive_validation_data_path: "./training_data/validation_set_features.npy"
+
+# Augmentation — reuse each clip 2x for diversity via random augmentation
+augmentation_rounds: 2
+
+feature_data_files:
+  "ACAV100M_sample": "./training_data/openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
+
+batch_n_per_class:
+  "ACAV100M_sample": 1024
+  "adversarial_negative": 50
+  "positive": 50
+
+# Model architecture
+model_type: "dnn"
+layer_size: 32
+
+# Training parameters
+steps: 50000
+max_negative_weight: 1500
+target_false_positives_per_hour: 0.2
+target_accuracy: 0.7
+target_recall: 0.5

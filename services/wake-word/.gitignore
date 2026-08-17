@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+training_data/
+training_output/
+piper-sample-generator/
+openwakeword-train/
+*.onnx
+*.npy
+*.log
