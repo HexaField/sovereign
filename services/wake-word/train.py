@@ -300,8 +300,8 @@ def main():
     parser.add_argument(
         "--config",
         type=Path,
-        default=BASE_DIR / "hey_hex.yaml",
-        help="Training config YAML (default: hey_hex.yaml)",
+        default=BASE_DIR / "hey_sovereign.yaml",
+        help="Training config YAML (default: hey_sovereign.yaml)",
     )
     parser.add_argument(
         "--step",
