@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""Train the "Hey Hex" wake word model using OpenWakeWord's automated pipeline.
+"""Train a custom wake word model using OpenWakeWord's automated pipeline.
 
 This script handles the full lifecycle:
   1. Download required training data (RIRs, background noise, features)
   2. Set up Piper TTS for synthetic data generation
-  3. Generate synthetic "hey hex" clips
+  3. Generate synthetic wake-phrase clips
   4. Augment clips with noise and reverb
   5. Train the model
   6. Export to ONNX
 
+The wake phrase comes from the training config YAML (target_phrase field).
+Each Sovereign instance trains its own wake word matching the configured
+assistant name.
+
 Run:
     cd services/wake-word
-    .venv/bin/python train_hey_hex.py [--step generate|augment|train|all]
+    .venv/bin/python train.py --config my_wake_word.yaml
+    .venv/bin/python train.py --config my_wake_word.yaml --step train
 
 Outputs:
-    training_output/hey_hex.onnx   — the trained wake word model
+    training_output/<model_name>.onnx   — the trained wake word model
 """
 import argparse
 import logging
@@ -25,6 +30,7 @@ from pathlib import Path
 
 import numpy as np
 import scipy.io.wavfile
+import yaml
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,9 +39,19 @@ logging.basicConfig(
 log = logging.getLogger("train")
 
 BASE_DIR = Path(__file__).parent
-CONFIG_PATH = BASE_DIR / "hey_hex.yaml"
 DATA_DIR = BASE_DIR / "training_data"
 OUTPUT_DIR = BASE_DIR / "training_output"
+
+
+def load_config(config_path: Path) -> dict:
+    """Load and validate a training config YAML."""
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+    if "model_name" not in cfg:
+        raise ValueError(f"Config {config_path} must specify 'model_name'")
+    if "target_phrase" not in cfg:
+        raise ValueError(f"Config {config_path} must specify 'target_phrase'")
+    return cfg
 
 
 def _wget(url: str, dest: str):
@@ -189,7 +205,7 @@ def setup_piper():
     log.info("Piper TTS ready: %s", piper_dir)
 
 
-def run_training_step(step: str):
+def run_training_step(step: str, config_path: Path):
     """Run a single step of the OpenWakeWord training pipeline."""
     train_script = BASE_DIR / "openwakeword-train" / "openwakeword" / "train.py"
     if not train_script.exists():
@@ -243,13 +259,13 @@ def run_training_step(step: str):
     if not flag:
         raise ValueError(f"Unknown step: {step}")
 
-    log.info("Running training step: %s", step)
+    log.info("Running training step: %s (config: %s)", step, config_path.name)
     subprocess.run(
         [
             sys.executable,
             str(train_script),
             "--training_config",
-            str(CONFIG_PATH),
+            str(config_path),
             flag,
         ],
         check=True,
@@ -257,27 +273,36 @@ def run_training_step(step: str):
     )
 
 
-def install_model():
-    """Copy the trained model to the standard location."""
-    model_src = OUTPUT_DIR / "hey_hex.onnx"
+def install_model(config: dict):
+    """Copy the trained model to the standard Sovereign voice data directory."""
+    model_name = config["model_name"]
+    model_src = OUTPUT_DIR / f"{model_name}.onnx"
     if not model_src.exists():
         log.error("Trained model not found at %s", model_src)
         return False
 
     # Install to the voice data directory
     voice_dir = Path.home() / ".sovereign" / "data" / "voice"
-    model_dst = voice_dir / "hey_hex.onnx"
+    model_dst = voice_dir / "wake_word.onnx"
     voice_dir.mkdir(parents=True, exist_ok=True)
 
     import shutil
 
     shutil.copy2(str(model_src), str(model_dst))
-    log.info("Model installed to %s", model_dst)
+    log.info("Model installed to %s (from %s)", model_dst, model_name)
     return True
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train the Hey Hex wake word model")
+    parser = argparse.ArgumentParser(
+        description="Train a custom wake word model for Sovereign"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=BASE_DIR / "hey_hex.yaml",
+        help="Training config YAML (default: hey_hex.yaml)",
+    )
     parser.add_argument(
         "--step",
         choices=["download", "setup", "generate", "augment", "train", "install", "all"],
@@ -286,6 +311,16 @@ def main():
     )
     args = parser.parse_args()
 
+    config = load_config(args.config)
+    phrase = config.get("target_phrase", ["(unknown)"])
+    if isinstance(phrase, list):
+        phrase = phrase[0]
+    log.info(
+        "Training wake word model: %s (phrase: %r)",
+        config["model_name"],
+        phrase,
+    )
+
     if args.step in ("download", "all"):
         download_data()
 
@@ -293,16 +328,16 @@ def main():
         setup_piper()
 
     if args.step in ("generate", "all"):
-        run_training_step("generate")
+        run_training_step("generate", args.config)
 
     if args.step in ("augment", "all"):
-        run_training_step("augment")
+        run_training_step("augment", args.config)
 
     if args.step in ("train", "all"):
-        run_training_step("train")
+        run_training_step("train", args.config)
 
     if args.step in ("install", "all"):
-        install_model()
+        install_model(config)
 
     log.info("Done.")
 

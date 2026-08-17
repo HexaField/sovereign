@@ -2,9 +2,12 @@
 """Sovereign voice node — always-on wake word detection + audio pipe.
 
 Runs on Raspberry Pi, macOS, or any Linux box with a microphone.
-Listens for the wake word ("Hey Hex" by default), captures speech after
-detection, sends it to Sovereign for transcription, and plays back TTS
-responses from Sovereign via WebSocket.
+Listens for the configured wake word, captures speech after detection,
+sends it to Sovereign for transcription, and plays back TTS responses
+from Sovereign via WebSocket.
+
+The wake phrase depends on which model the user trained. Each Sovereign
+instance trains its own wake word matching the assistant name.
 
 Architecture:
     Mic → OpenWakeWord (wake detect) → VAD capture → POST /api/voice/transcribe
@@ -59,23 +62,35 @@ def get_or_create_device_id() -> str:
 
 
 def find_wake_model(model_path: str | None) -> str:
-    """Resolve the wake word model path."""
+    """Resolve the wake word model path.
+
+    Search order:
+      1. Explicit --model argument or WAKE_MODEL env var
+      2. ~/.sovereign/data/voice/wake_word.onnx (installed by train.py)
+      3. Any .onnx file in the wake-word training output directory
+      4. Bundled 'hey_mycroft' fallback for development
+    """
     if model_path and os.path.exists(model_path):
         return model_path
 
-    # Check standard locations
-    candidates = [
-        Path.home() / ".sovereign" / "data" / "voice" / "hey_hex.onnx",
-        Path(__file__).parent.parent / "wake-word" / "training_output" / "hey_hex.onnx",
-    ]
-    for p in candidates:
-        if p.exists():
-            return str(p)
+    # Standard installed location (train.py --step install writes here)
+    installed = Path.home() / ".sovereign" / "data" / "voice" / "wake_word.onnx"
+    if installed.exists():
+        return str(installed)
+
+    # Check training output for any trained model
+    training_dir = Path(__file__).parent.parent / "wake-word" / "training_output"
+    if training_dir.exists():
+        onnx_files = list(training_dir.glob("*.onnx"))
+        if onnx_files:
+            chosen = onnx_files[0]
+            log.info("Using trained model from build output: %s", chosen.name)
+            return str(chosen)
 
     # Fall back to bundled pre-trained model for development
     log.warning(
         "No custom wake word model found. Using bundled 'hey_mycroft' for development. "
-        "Train the 'hey_hex' model via services/wake-word/train_hey_hex.py"
+        "Train a custom model via: services/wake-word/train.py --config <your_config>.yaml"
     )
     return "hey_mycroft_v0.1"
 

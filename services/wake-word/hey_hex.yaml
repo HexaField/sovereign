@@ -1,5 +1,10 @@
-# OpenWakeWord training config for "Hey Hex" wake word
-# Run: python train_hey_hex.py
+# Example wake word training config — "Hey Hex"
+#
+# Each Sovereign instance trains a wake word matching its assistant name.
+# Copy this file and change target_phrase + model_name for a different
+# wake phrase (e.g. "hey nova", "ok computer", "hey sovereign").
+#
+# Run: python train.py --config hey_hex.yaml
 
 model_name: "hey_hex"
 

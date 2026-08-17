@@ -13,10 +13,13 @@ import java.nio.FloatBuffer
  * OpenWakeWord expects 16kHz mono float32 frames of 1280 samples (80ms).
  * The model produces a confidence score per frame; when it crosses the
  * threshold, the wake word has been detected.
+ *
+ * The model name depends on which wake phrase the user trained —
+ * each Sovereign instance configures its own.
  */
 class WakeWordDetector(
     context: Context,
-    private val modelName: String = "hey_hex.onnx",
+    private val modelName: String = "wake_word.onnx",
     private val threshold: Float = 0.5f,
 ) {
     companion object {
