@@ -225,8 +225,15 @@ class VoiceNode:
 
         # Load wake word model
         oww = Model(wakeword_models=[self.model_path], inference_framework="onnx")
-        model_names = list(oww.prediction_buffer.keys())
+
+        # Model names register in oww.models at construction time.
+        # prediction_buffer only populates after the first predict() call.
+        model_names = list(oww.models.keys())
         log.info("Wake word models loaded: %s", model_names)
+
+        if not model_names:
+            log.error("No wake word models registered — check model file.")
+            return
 
         pa = pyaudio.PyAudio()
         stream = pa.open(
