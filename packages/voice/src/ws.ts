@@ -31,6 +31,19 @@ export interface VoiceStreamChannelDeps {
   transcribeUrl: string
 }
 
+/**
+ * Register the voice-tts binary channel so `sendBinaryTo(deviceId, 'voice-tts', audio)`
+ * can deliver synthesized audio to remote devices (Android, Pi, browser).
+ * Must be called during bootstrap — without this, reply_voice falls back to text-only.
+ */
+export function registerVoiceTtsChannel(ws: WsHandlerLike): void {
+  ws.registerChannel('voice-tts', {
+    serverMessages: [],
+    clientMessages: [],
+    binary: true
+  })
+}
+
 export function registerVoiceStreamChannel(deps: VoiceStreamChannelDeps): void {
   const { ws, transcribeUrl } = deps
   const manager = createStreamingManager()
