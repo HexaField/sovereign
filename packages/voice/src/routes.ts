@@ -10,7 +10,10 @@ import multer from 'multer'
 
 export interface VoiceRouteDeps {
   /** Forward transcribed text into the presence pipeline for the agent to process. */
-  forwardToPresence?: (text: string, opts?: { deviceId?: string }) => Promise<{ delivered: boolean }>
+  forwardToPresence?: (
+    text: string,
+    opts?: { deviceId?: string; deviceName?: string }
+  ) => Promise<{ delivered: boolean }>
 }
 
 export function createVoiceRoutes(voice: VoiceModule, deps?: VoiceRouteDeps): Router {
@@ -25,13 +28,19 @@ export function createVoiceRoutes(voice: VoiceModule, deps?: VoiceRouteDeps): Ro
         return
       }
       const deviceId = req.body?.deviceId as string | undefined
+      const deviceName = req.body?.deviceName as string | undefined
       const result = await voice.transcribe(file.buffer, file.mimetype)
       res.json({ text: result.text })
 
-      // Forward transcription into the presence pipeline so the agent sees it
+      // Forward transcription into the presence pipeline so the agent sees it.
+      // deviceName carries through to the voice-response pipeline so TTS
+      // audio routes back to the originating device via sendToDeviceName.
       if (deps?.forwardToPresence && result.text?.trim()) {
+        const opts: { deviceId?: string; deviceName?: string } = {}
+        if (deviceId) opts.deviceId = deviceId
+        if (deviceName) opts.deviceName = deviceName
         deps
-          .forwardToPresence(result.text, deviceId ? { deviceId } : undefined)
+          .forwardToPresence(result.text, opts)
           .catch((err: Error) => console.warn('[voice] presence forward failed:', err.message))
       }
     } catch (err: any) {

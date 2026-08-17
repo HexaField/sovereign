@@ -353,6 +353,7 @@ class VoiceNodeService : Service() {
                         wavData.toRequestBody("audio/wav".toMediaType())
                     )
                     .addFormDataPart("deviceId", deviceId)
+                    .addFormDataPart("deviceName", DEVICE_NAME)
                     .build()
 
                 val request = Request.Builder()

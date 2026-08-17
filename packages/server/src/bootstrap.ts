@@ -557,7 +557,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     try {
       await chatHandleHolder.sendToThread(gatewayId, text, {
         modality: 'voice',
-        ...(opts?.deviceId ? { deviceId: opts.deviceId } : {})
+        ...(opts?.deviceId ? { deviceId: opts.deviceId } : {}),
+        ...(opts?.deviceName ? { deviceName: opts.deviceName } : {})
       })
       return { delivered: true }
     } catch (err) {
