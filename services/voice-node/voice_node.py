@@ -132,6 +132,41 @@ def find_wake_model(model_path: str | None) -> str:
     return str(fallback)
 
 
+def ensure_preprocessor_models():
+    """Download openwakeword's required preprocessor models if missing.
+
+    openwakeword v0.6+ no longer bundles melspectrogram.onnx and the
+    embedding model. They must exist in the package's resources/models
+    directory before any Model() can load.
+
+    Calls download_models with a dummy name so that only the feature
+    extraction and VAD models get fetched (those always download),
+    without pulling every wake word model.
+    """
+    try:
+        import openwakeword
+
+        models_dir = Path(openwakeword.__file__).parent / "resources" / "models"
+        melspec = models_dir / "melspectrogram.onnx"
+
+        if melspec.exists():
+            return  # Already present
+
+        log.info("Downloading openwakeword preprocessor models (first run)...")
+        from openwakeword.utils import download_models
+
+        # Pass a single model name — the function always fetches feature +
+        # VAD models regardless, so we avoid downloading all wake words.
+        download_models(
+            model_names=["hey_jarvis"],
+            target_directory=str(models_dir),
+        )
+        log.info("Preprocessor models ready in %s", models_dir)
+    except Exception as e:
+        log.error("Failed to download preprocessor models: %s", e)
+        raise
+
+
 class VoiceNode:
     """Main voice node — wake word detection, capture, and playback."""
 
@@ -184,6 +219,9 @@ class VoiceNode:
         """Synchronous loop: listen for wake word, capture, send."""
         import pyaudio
         from openwakeword.model import Model
+
+        # Ensure preprocessor models exist (melspectrogram + embedding)
+        ensure_preprocessor_models()
 
         # Load wake word model
         oww = Model(wakeword_models=[self.model_path], inference_framework="onnx")
