@@ -291,12 +291,15 @@ class VoiceNode:
         import pynput.keyboard
 
         key_map = {
-            "right_cmd": pynput.keyboard.Key.cmd_right,
-            "left_cmd": pynput.keyboard.Key.cmd_left,
-            "right_alt": pynput.keyboard.Key.alt_right,
-            "left_alt": pynput.keyboard.Key.alt_left,
-            "right_ctrl": pynput.keyboard.Key.ctrl_right,
-            "left_ctrl": pynput.keyboard.Key.ctrl_left,
+            "right_cmd": pynput.keyboard.Key.cmd_r,
+            "left_cmd": pynput.keyboard.Key.cmd_l,
+            "cmd": pynput.keyboard.Key.cmd,
+            "right_alt": pynput.keyboard.Key.alt_r,
+            "left_alt": pynput.keyboard.Key.alt_l,
+            "alt": pynput.keyboard.Key.alt,
+            "right_ctrl": pynput.keyboard.Key.ctrl_r,
+            "left_ctrl": pynput.keyboard.Key.ctrl_l,
+            "ctrl": pynput.keyboard.Key.ctrl,
         }
 
         lower = key_str.lower().strip()
