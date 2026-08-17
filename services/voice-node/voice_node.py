@@ -87,7 +87,7 @@ def find_wake_model(model_path: str | None) -> str:
             log.info("Using trained model from build output: %s", chosen.name)
             return str(chosen)
 
-    # Download a pre-trained model for development
+    # Download a pre-trained fallback model for development
     log.warning(
         "No custom wake word model found — downloading 'hey_jarvis' pre-trained model. "
         "Train a custom model via: services/wake-word/train.py --config <your_config>.yaml"
@@ -95,17 +95,40 @@ def find_wake_model(model_path: str | None) -> str:
     fallback = Path.home() / ".sovereign" / "data" / "voice" / "wake_word.onnx"
     fallback.parent.mkdir(parents=True, exist_ok=True)
     if not fallback.exists():
-        import urllib.request
-
-        url = "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/resources/models/hey_jarvis_v0.1.onnx"
-        log.info("Downloading fallback model from %s", url)
+        # Use openwakeword's built-in downloader (models hosted on GitHub Releases)
         try:
-            urllib.request.urlretrieve(url, str(fallback))
-            log.info("Fallback model saved to %s", fallback)
+            from openwakeword.utils import download_models
+
+            model_dir = str(fallback.parent)
+            log.info("Downloading pre-trained models via openwakeword to %s", model_dir)
+            download_models(model_names=["hey_jarvis"], target_directory=model_dir)
+
+            # The downloader saves as hey_jarvis_v0.1.onnx — symlink to generic name
+            downloaded = fallback.parent / "hey_jarvis_v0.1.onnx"
+            if downloaded.exists() and not fallback.exists():
+                import shutil
+
+                shutil.copy2(str(downloaded), str(fallback))
+                log.info("Fallback model ready at %s", fallback)
+            elif not downloaded.exists():
+                raise FileNotFoundError(f"Expected {downloaded} after download")
         except Exception as e:
-            log.error("Download failed: %s", e)
-            log.error("No wake word model available. Supply one via --model or train a custom model.")
-            sys.exit(1)
+            log.error("openwakeword download failed: %s — trying direct URL", e)
+            # Direct fallback from GitHub Releases
+            import urllib.request
+
+            url = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_jarvis_v0.1.onnx"
+            log.info("Downloading from %s", url)
+            try:
+                urllib.request.urlretrieve(url, str(fallback))
+                log.info("Fallback model saved to %s", fallback)
+            except Exception as e2:
+                log.error("Direct download also failed: %s", e2)
+                log.error(
+                    "No wake word model available. Supply one via --model "
+                    "or train a custom model."
+                )
+                sys.exit(1)
     return str(fallback)
 
 
