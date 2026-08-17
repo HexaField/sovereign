@@ -346,6 +346,15 @@ export interface ContextManagementStatus {
 }
 
 /**
+ * Per-MCP-server connection status — used by the health popover.
+ */
+export interface McpServerStatus {
+  name: string
+  status: 'connected' | 'disconnected' | 'unknown'
+  error?: string
+}
+
+/**
  * Declared capabilities of a backend — drives routing and feature toggles.
  */
 export interface BackendCapabilities {
@@ -444,6 +453,20 @@ export interface AgentBackend {
    * when the backend tracks no live state for the given session key.
    */
   getContextManagementStatus?(sessionKey: string): Promise<ContextManagementStatus | null>
+
+  /**
+   * OPTIONAL — query MCP server connection status for a session. Returns
+   * per-server name+status so the UI can show which MCP servers are live.
+   * Backends that don't run MCP servers omit this entirely.
+   */
+  getMcpStatus?(sessionKey: string): Promise<McpServerStatus[]>
+
+  /**
+   * OPTIONAL — attempt to reconnect MCP servers for a session. Returns
+   * the list of servers that were reconnected. Must be user-triggered
+   * and non-blocking — never auto-teardown on init.
+   */
+  reconnectMcp?(sessionKey: string): Promise<{ reconnected: string[]; failed: string[] }>
 
   /** OPTIONAL — backends that natively support subagents implement this. */
   spawnSubagent?(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string>

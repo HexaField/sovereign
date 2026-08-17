@@ -40,6 +40,12 @@ export interface ContextManagementHealth {
   layer3: { enabled: boolean }
 }
 
+export interface McpHealth {
+  status: 'ok' | 'degraded' | 'down' | 'unknown'
+  servers: Array<{ name: string; status: 'connected' | 'disconnected' | 'unknown' }>
+  backendKind: string | null
+}
+
 export type OverallHealth = 'ok' | 'degraded' | 'error'
 
 const CONTEXT_MGMT_HEALTH_UNKNOWN: ContextManagementHealth = {
@@ -57,6 +63,60 @@ const [agentsHealth, setAgentsHealth] = createSignal<AgentsCensusHealth>({
 })
 const [externalHealth, setExternalHealth] = createSignal<ExternalServiceHealth[]>([])
 const [contextMgmtHealth, setContextMgmtHealth] = createSignal<ContextManagementHealth>(CONTEXT_MGMT_HEALTH_UNKNOWN)
+const [mcpHealth, setMcpHealth] = createSignal<McpHealth>({ status: 'unknown', servers: [], backendKind: null })
+const [mcpChecking, setMcpChecking] = createSignal(false)
+const [mcpReconnecting, setMcpReconnecting] = createSignal(false)
+
+/** User-triggered MCP status check for the current thread. */
+export function checkMcpStatus(): void {
+  const key = threadKey()
+  if (!key || mcpChecking()) return
+  setMcpChecking(true)
+  fetch(`/api/threads/${encodeURIComponent(key)}/mcp-status`, {
+    signal: AbortSignal.timeout(5000)
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (!data) {
+        setMcpHealth({ status: 'unknown', servers: [], backendKind: null })
+        return
+      }
+      const servers: McpHealth['servers'] = data.servers ?? []
+      const allConnected = servers.length > 0 && servers.every((s: any) => s.status === 'connected')
+      const anyDisconnected = servers.some((s: any) => s.status === 'disconnected')
+      const status: McpHealth['status'] = allConnected
+        ? 'ok'
+        : anyDisconnected
+          ? servers.every((s: any) => s.status === 'disconnected')
+            ? 'down'
+            : 'degraded'
+          : 'unknown'
+      setMcpHealth({ status, servers, backendKind: data.backendKind ?? null })
+    })
+    .catch(() => setMcpHealth({ status: 'unknown', servers: [], backendKind: null }))
+    .finally(() => setMcpChecking(false))
+}
+
+/** User-triggered MCP reconnect for the current thread. */
+export function reconnectMcp(): void {
+  const key = threadKey()
+  if (!key || mcpReconnecting()) return
+  setMcpReconnecting(true)
+  fetch(`/api/threads/${encodeURIComponent(key)}/mcp-reconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(15000)
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (data?.ok) {
+        // Re-check status after reconnect
+        setTimeout(checkMcpStatus, 1000)
+      }
+    })
+    .catch(() => {})
+    .finally(() => setMcpReconnecting(false))
+}
 
 export const overallHealth = (): OverallHealth => {
   const conn = connectionStatus()
@@ -277,6 +337,34 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
 
   // Hover tooltip — trim/dedup counts and reclaim totals don't fit the
   // single-line detail column, so they surface on hover instead.
+  const mcpRow = createMemo(() => {
+    const h = mcpHealth()
+    if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'not checked' }
+    if (h.status === 'ok') {
+      return { status: 'ok' as const, detail: `${h.servers.length} server${h.servers.length === 1 ? '' : 's'}` }
+    }
+    const disconnected = h.servers.filter((s) => s.status === 'disconnected')
+    if (h.status === 'down') return { status: 'error' as const, detail: 'disconnected' }
+    return { status: 'warning' as const, detail: `${disconnected.length} disconnected` }
+  })
+
+  const mcpTooltip = createMemo(() => {
+    const h = mcpHealth()
+    if (h.servers.length === 0) return 'Click "Check" to query MCP connection status'
+    return h.servers.map((s) => `${s.name}: ${s.status}`).join('\n')
+  })
+
+  const mcpAction = createMemo(() => {
+    const h = mcpHealth()
+    const checking = mcpChecking()
+    const reconnecting = mcpReconnecting()
+    // Show "Reconnect" when any server disconnected; otherwise show "Check"
+    if (h.status === 'down' || h.status === 'degraded') {
+      return { label: 'Reconnect', onClick: reconnectMcp, loading: reconnecting }
+    }
+    return { label: 'Check', onClick: checkMcpStatus, loading: checking }
+  })
+
   const ctxMgmtTooltip = createMemo(() => {
     const h = contextMgmtHealth()
     const l1 = h.layer1.enabled
@@ -318,6 +406,13 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
               status={ctxMgmtRow().status}
               detail={ctxMgmtRow().detail}
               title={ctxMgmtTooltip()}
+            />
+            <StatusRow
+              label="MCP Servers"
+              status={mcpRow().status}
+              detail={mcpRow().detail}
+              title={mcpTooltip()}
+              action={mcpAction()}
             />
             <For each={externalHealth()}>
               {(svc) => (

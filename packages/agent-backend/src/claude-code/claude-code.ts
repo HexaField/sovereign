@@ -1746,6 +1746,75 @@ export function createClaudeCodeBackend(
     }
   }
 
+  /** Query MCP server connection status for a Claude Code session.
+   *  The SDK's `mcpServerStatus()` returns an array of `{name, status}`.
+   *  Falls back to config-derived server names with 'unknown'. */
+  async function getMcpStatus(sessionKey: string): Promise<import('@sovereign/core').McpServerStatus[]> {
+    const state = internal.sessions.get(sessionKey)
+    if (!state) return []
+    const mcpServers = resolveMcpServers()
+    const serverNames = Object.keys(mcpServers)
+    if (!state.liveQuery?.mcpServerStatus) {
+      // No live query or SDK build lacks mcpServerStatus — report unknown
+      return serverNames.map((name) => ({ name, status: 'unknown' as const }))
+    }
+    try {
+      const sdkStatus = await state.liveQuery.mcpServerStatus()
+      if (Array.isArray(sdkStatus)) {
+        // SDK returns [{name, status: 'connected'|'failed'|'needs-auth'|'pending'|'disabled'}]
+        // Map to our simpler three-state model
+        return sdkStatus.map((entry: { name: string; status: string }) => {
+          const status =
+            entry.status === 'connected'
+              ? ('connected' as const)
+              : entry.status === 'failed' || entry.status === 'disabled'
+                ? ('disconnected' as const)
+                : ('unknown' as const)
+          return { name: entry.name, status }
+        })
+      }
+    } catch {
+      // mcpServerStatus() threw — fall through to unknown
+    }
+    return serverNames.map((name) => ({ name, status: 'unknown' as const }))
+  }
+
+  /** Reconnect MCP servers for a Claude Code session.
+   *  Uses the SDK's `reconnectMcpServer()` per server when available,
+   *  falls back to session recycle. */
+  async function reconnectMcp(sessionKey: string): Promise<{ reconnected: string[]; failed: string[] }> {
+    const state = internal.sessions.get(sessionKey)
+    if (!state) return { reconnected: [], failed: [] }
+    const mcpServers = resolveMcpServers()
+    const serverNames = Object.keys(mcpServers)
+
+    // Prefer per-server reconnect via SDK when available
+    if (state.liveQuery?.reconnectMcpServer) {
+      const reconnected: string[] = []
+      const failed: string[] = []
+      for (const name of serverNames) {
+        try {
+          await state.liveQuery.reconnectMcpServer(name)
+          reconnected.push(name)
+        } catch {
+          failed.push(name)
+        }
+      }
+      return { reconnected, failed }
+    }
+
+    // Fallback: recycle the session for a fresh MCP connection
+    try {
+      if (recycleSession) {
+        await recycleSession(sessionKey, { force: true })
+      }
+      return { reconnected: serverNames, failed: [] }
+    } catch (err: any) {
+      console.warn(`[claude-code] MCP reconnect via recycle failed for ${sessionKey}:`, err?.message)
+      return { reconnected: [], failed: serverNames }
+    }
+  }
+
   async function setSessionModel(sessionKey: string, provider: string, model: string) {
     // Accept empty provider as a shortcut for "anthropic" so the UI can pass
     // bare aliases when callers haven't reconciled the prefix yet.
@@ -2249,6 +2318,8 @@ export function createClaudeCodeBackend(
     listSubagents,
     getSessionMeta,
     getContextManagementStatus,
+    getMcpStatus,
+    reconnectMcp,
     setSessionModel,
     listAvailableModels,
     setSessionEffort,

@@ -1679,6 +1679,31 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     return map
   }
 
+  /** Query MCP bridge connection status. */
+  async function getMcpStatus(): Promise<import('@sovereign/core').McpServerStatus[]> {
+    return mcpBridges.map((bridge) => ({
+      name: bridge.name,
+      status: bridge.connected ? ('connected' as const) : ('disconnected' as const),
+      ...(bridge.error ? { error: bridge.error } : {})
+    }))
+  }
+
+  /** Reconnect all MCP bridges. */
+  async function reconnectMcp(): Promise<{ reconnected: string[]; failed: string[] }> {
+    const reconnected: string[] = []
+    const failed: string[] = []
+    for (const bridge of mcpBridges) {
+      try {
+        await bridge.reconnect()
+        reconnected.push(bridge.name)
+      } catch (err: any) {
+        console.warn(`[local-llm] MCP bridge "${bridge.name}" reconnect failed:`, err?.message)
+        failed.push(bridge.name)
+      }
+    }
+    return { reconnected, failed }
+  }
+
   const backend: LocalLlmBackend = {
     kind: KIND,
     connect,
@@ -1697,6 +1722,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     listSubagents,
     spawnSubagent,
     getSessionMeta,
+    getMcpStatus,
+    reconnectMcp,
     setSessionModel,
     listAvailableModels,
     setSessionContextWindow,
