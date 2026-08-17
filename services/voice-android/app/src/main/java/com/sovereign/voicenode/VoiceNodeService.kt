@@ -46,7 +46,7 @@ class VoiceNodeService : Service() {
         const val EXTRA_THRESHOLD = "threshold"
     }
 
-    private var serverUrl = "https://hub:5801"
+    private var serverUrl = "https://hub.example-tailnet.ts.net:5801"
     private var deviceId = ""
     private var wakeLock: PowerManager.WakeLock? = null
 

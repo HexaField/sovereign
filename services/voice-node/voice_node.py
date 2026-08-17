@@ -484,15 +484,8 @@ class VoiceNode:
         log.info("Sending %.1f KB audio to %s", len(wav_data) / 1024, url)
 
         try:
-            # Skip TLS verification for Tailscale Serve's internal certs
-            import ssl
-
-            ssl_ctx = ssl.create_default_context()
-            if self.server_url.startswith("https://"):
-                ssl_ctx.check_hostname = False
-                ssl_ctx.verify_mode = ssl.CERT_NONE
-
-            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+            # Disable TLS verification for Tailscale Serve's internal certs
+            connector = aiohttp.TCPConnector(ssl=False)
             async with aiohttp.ClientSession(connector=connector) as session:
                 form = aiohttp.FormData()
                 form.add_field(
@@ -521,10 +514,10 @@ class VoiceNode:
         ws_url = self.server_url.replace("http://", "ws://").replace("https://", "wss://")
         ws_url += "/ws"
 
-        # Skip TLS verification for Tailscale Serve's internal certs
+        # Disable TLS verification for Tailscale Serve's internal certs
         ssl_ctx = None
         if ws_url.startswith("wss://"):
-            ssl_ctx = ssl.create_default_context()
+            ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = ssl.CERT_NONE
 
