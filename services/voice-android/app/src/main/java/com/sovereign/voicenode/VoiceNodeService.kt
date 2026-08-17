@@ -13,11 +13,11 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Base64
 import android.util.Log
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import okio.ByteString
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.security.SecureRandom
@@ -47,7 +47,9 @@ class VoiceNodeService : Service() {
         const val ACTION_SCORE_UPDATE = "com.sovereign.voicenode.SCORE_UPDATE"
         const val ACTION_STATE_CHANGE = "com.sovereign.voicenode.STATE_CHANGE"
         const val ACTION_TRANSCRIPTION = "com.sovereign.voicenode.TRANSCRIPTION"
-        // States: idle, listening, wake_detected, capturing, sending
+        // States: idle, listening, wake_detected, capturing, sending, tts_playing
+        // Device name announced to the server — TTS routes by this name
+        const val DEVICE_NAME = "Josh Phone"
     }
 
     private var serverUrl = "https://arcadia.tail300736.ts.net:5801"
@@ -386,36 +388,35 @@ class VoiceNodeService : Service() {
         wsClient = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "WebSocket connected to $wsUrl")
-                // Subscribe to voice-tts channel so server can push TTS audio
-                webSocket.send("""{"type":"subscribe","channels":["voice-tts"],"deviceId":"$deviceId"}""")
+                // Announce device name — the existing TTS system routes by name
+                // via sendToDeviceName, not by channel subscription
+                webSocket.send("""{"type":"ws.device-name","deviceName":"$DEVICE_NAME","deviceId":"$deviceId"}""")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                // JSON fallback — voice-stub delivers text when TTS synth unavailable
                 try {
-                    if (text.contains("\"voice-stub\"")) {
-                        val textStart = text.indexOf("\"text\":\"") + 8
-                        if (textStart >= 8) {
-                            val textEnd = text.indexOf("\"", textStart)
-                            val spoken = text.substring(textStart, textEnd)
-                            Log.i(TAG, "Voice stub (text only): $spoken")
-                            broadcastTranscription("[Hex] $spoken")
+                    // voice.tts.audio — base64-encoded WAV pushed by the voice-response pipeline
+                    if (text.contains("\"voice.tts.audio\"")) {
+                        // Extract base64 audio
+                        val audioStart = text.indexOf("\"audio\":\"") + 9
+                        if (audioStart < 9) return
+                        val audioEnd = text.indexOf("\"", audioStart)
+                        if (audioEnd <= audioStart) return
+                        val audioB64 = text.substring(audioStart, audioEnd)
+
+                        Log.i(TAG, "TTS audio received (${audioB64.length / 1024}KB base64)")
+                        broadcastState("tts_playing")
+                        playAudio(Base64.decode(audioB64, Base64.DEFAULT))
+
+                        // Also extract text for display
+                        val textMatch = Regex(""""text"\s*:\s*"([^"]+)"""").find(text)
+                        textMatch?.groupValues?.getOrNull(1)?.let {
+                            broadcastTranscription("[Hex] $it")
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "WS JSON message parse failed", e)
+                    Log.e(TAG, "WS message parse failed", e)
                 }
-            }
-
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                // Binary frame from Sovereign: [1-byte channelId][WAV audio payload]
-                val raw = bytes.toByteArray()
-                if (raw.size < 2) return
-                // Strip the channel ID prefix — the rest is raw WAV audio
-                val audio = raw.copyOfRange(1, raw.size)
-                Log.i(TAG, "TTS audio received: ${audio.size / 1024}KB")
-                broadcastState("tts_playing")
-                playAudio(audio)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
