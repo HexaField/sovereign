@@ -2,10 +2,12 @@
 
 Always-on wake word detection and audio pipe for Sovereign. Runs on Raspberry Pi, macOS, or any Linux box with a microphone.
 
+Each Sovereign instance trains a wake word matching the configured assistant name — the voice node loads whichever model the user trained.
+
 ## How it works
 
-1. **Listen** — OpenWakeWord detects "Hey Hex" (or a custom wake phrase)
-2. **Capture** — Records speech after wake word until silence
+1. **Listen** — OpenWakeWord runs the trained wake word model
+2. **Capture** — Records speech after detection until silence
 3. **Send** — POSTs the audio to Sovereign's `/api/voice/transcribe`
 4. **Receive** — WebSocket connection receives TTS playback events
 5. **Play** — Plays audio responses through the system speaker
@@ -42,18 +44,19 @@ launchctl load ~/Library/LaunchAgents/com.sovereign.voice-node.plist
 
 ## Wake word model
 
-The node looks for the trained model in this order:
+The node searches for a trained model in this order:
 
 1. `--model` argument or `WAKE_MODEL` env var
-2. `~/.sovereign/data/voice/hey_hex.onnx`
-3. `services/wake-word/training_output/hey_hex.onnx`
+2. `~/.sovereign/data/voice/wake_word.onnx` (installed by `train.py`)
+3. Any `.onnx` file in `services/wake-word/training_output/`
 4. Falls back to bundled `hey_mycroft` for development
 
-Train the custom "Hey Hex" model:
+Train a custom wake word:
 
 ```bash
 cd ../wake-word
-.venv/bin/python train_hey_hex.py
+# Edit the YAML to set your wake phrase, then:
+.venv/bin/python train.py --config my_assistant.yaml
 ```
 
 ## Device ID

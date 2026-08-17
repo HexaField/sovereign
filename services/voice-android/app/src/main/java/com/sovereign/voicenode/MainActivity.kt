@@ -66,7 +66,7 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, intent)
         serviceRunning = true
         toggleButton.text = "Stop"
-        statusText.text = "Listening for \"Hey Hex\"..."
+        statusText.text = "Listening for wake word..."
     }
 
     private fun stopVoiceService() {

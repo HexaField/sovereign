@@ -2,6 +2,8 @@
 
 Lightweight Android companion app for always-on wake word detection. Runs as a foreground service with ONNX Runtime inference — minimal battery impact since the model processes small 80ms audio frames.
 
+The wake phrase depends on which model the user trained — each Sovereign instance configures its own assistant name and wake word.
+
 ## How it works
 
 1. Foreground service captures mic audio continuously
@@ -13,7 +15,7 @@ Lightweight Android companion app for always-on wake word detection. Runs as a f
 
 ## Setup
 
-1. Copy the wake word model to `app/src/main/assets/hey_hex.onnx` (or use the default `hey_mycroft` fallback for testing)
+1. Copy the trained wake word model to `app/src/main/assets/wake_word.onnx` (or use the default `hey_mycroft` fallback for testing)
 
 2. Build with Android Studio or Gradle:
 
