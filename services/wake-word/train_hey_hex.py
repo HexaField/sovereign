@@ -25,7 +25,6 @@ from pathlib import Path
 
 import numpy as np
 import scipy.io.wavfile
-import yaml
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,90 +38,96 @@ DATA_DIR = BASE_DIR / "training_data"
 OUTPUT_DIR = BASE_DIR / "training_output"
 
 
-def download_data():
-    """Download required training datasets from HuggingFace."""
-    import datasets
+def _wget(url: str, dest: str):
+    """Download a file via wget with resume support."""
+    subprocess.run(["wget", "-c", "-O", dest, url], check=True)
 
+
+def _convert_audio_dir(src_dir: Path, dst_dir: Path, ext: str = "*.flac"):
+    """Convert audio files to 16kHz 16-bit WAV using soundfile + librosa."""
+    import soundfile as sf
+    import librosa
+
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    files = list(src_dir.rglob(ext))
+    log.info("Converting %d audio files to 16kHz WAV...", len(files))
+    for f in files:
+        try:
+            audio, sr = sf.read(str(f))
+            if sr != 16000:
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+            name = f.stem + ".wav"
+            out_path = dst_dir / name
+            scipy.io.wavfile.write(
+                str(out_path), 16000, (audio * 32767).astype(np.int16)
+            )
+        except Exception as e:
+            log.warning("Skip %s: %s", f.name, e)
+    log.info("Converted: %d WAV files in %s", len(list(dst_dir.glob("*.wav"))), dst_dir)
+
+
+def download_data():
+    """Download required training datasets."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. Room impulse responses (MIT)
+    # 1. Room impulse responses (MIT) — clone the HF repo directly
     rir_dir = DATA_DIR / "mit_rirs"
     if not rir_dir.exists():
         log.info("Downloading MIT room impulse responses...")
-        rir_dir.mkdir()
-        rir_dataset = datasets.load_dataset(
-            "davidscripka/MIT_environmental_impulse_responses",
-            split="train",
-            streaming=True,
-        )
-        for row in rir_dataset:
-            name = row["audio"]["path"].split("/")[-1]
-            scipy.io.wavfile.write(
-                str(rir_dir / name),
-                16000,
-                (row["audio"]["array"] * 32767).astype(np.int16),
-            )
-        log.info("RIRs downloaded: %d files", len(list(rir_dir.glob("*.wav"))))
+        rir_repo = DATA_DIR / "mit_rirs_repo"
+        if not rir_repo.exists():
+            subprocess.run([
+                "git", "clone", "--depth", "1",
+                "https://huggingface.co/datasets/davidscripka/MIT_environmental_impulse_responses",
+                str(rir_repo),
+            ], check=True)
+        # Find and convert audio files
+        audio_dir = rir_repo / "data"
+        if not audio_dir.exists():
+            audio_dir = rir_repo  # dataset might store files at root
+        _convert_audio_dir(rir_repo, rir_dir, ext="*.wav")
+        # If no WAVs found, try other formats
+        if not list(rir_dir.glob("*.wav")):
+            for ext in ("*.flac", "*.mp3", "*.ogg"):
+                _convert_audio_dir(rir_repo, rir_dir, ext=ext)
+        count = len(list(rir_dir.glob("*.wav")))
+        log.info("RIRs: %d files", count)
     else:
         log.info("RIRs already present: %s", rir_dir)
 
-    # 2. Background noise — AudioSet (1 partition)
+    # 2. Background noise — AudioSet (1 partition, direct tar download)
     audioset_dir = DATA_DIR / "audioset_16k"
     if not audioset_dir.exists():
         log.info("Downloading AudioSet background noise...")
-        audioset_dir.mkdir()
         raw_dir = DATA_DIR / "audioset_raw"
         raw_dir.mkdir(exist_ok=True)
         tar_file = raw_dir / "bal_train09.tar"
         if not tar_file.exists():
-            subprocess.run(
-                [
-                    "wget",
-                    "-O",
-                    str(tar_file),
-                    "https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/data/bal_train09.tar",
-                ],
-                check=True,
+            _wget(
+                "https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/data/bal_train09.tar",
+                str(tar_file),
             )
         subprocess.run(["tar", "-xf", str(tar_file), "-C", str(raw_dir)], check=True)
-        # Convert to 16kHz
-        audio_files = list((raw_dir / "audio").glob("**/*.flac"))
-        ds = datasets.Dataset.from_dict({"audio": [str(f) for f in audio_files]})
-        ds = ds.cast_column("audio", datasets.Audio(sampling_rate=16000))
-        for row in ds:
-            name = row["audio"]["path"].split("/")[-1].replace(".flac", ".wav")
-            scipy.io.wavfile.write(
-                str(audioset_dir / name),
-                16000,
-                (row["audio"]["array"] * 32767).astype(np.int16),
-            )
-        log.info("AudioSet clips: %d", len(list(audioset_dir.glob("*.wav"))))
+        _convert_audio_dir(raw_dir, audioset_dir, ext="*.flac")
     else:
         log.info("AudioSet already present: %s", audioset_dir)
 
-    # 3. Background noise — Free Music Archive (2 hours)
+    # 3. Background noise — Free Music Archive
+    #    Clone a small subset via the HF API (avoids streaming audio decode issues)
     fma_dir = DATA_DIR / "fma"
     if not fma_dir.exists():
-        log.info("Downloading FMA background music (2 hours)...")
-        fma_dir.mkdir()
-        fma_dataset = datasets.load_dataset(
-            "rudraml/fma", name="small", split="train", streaming=True
-        )
-        fma_iter = iter(
-            fma_dataset.cast_column("audio", datasets.Audio(sampling_rate=16000))
-        )
-        n_clips = 2 * 3600 // 30  # 2 hours of 30s clips
-        for i in range(n_clips):
-            try:
-                row = next(fma_iter)
-            except StopIteration:
-                break
-            name = row["audio"]["path"].split("/")[-1].replace(".mp3", ".wav")
-            scipy.io.wavfile.write(
-                str(fma_dir / name),
-                16000,
-                (row["audio"]["array"] * 32767).astype(np.int16),
-            )
+        log.info("Downloading FMA background music...")
+        fma_repo = DATA_DIR / "fma_repo"
+        if not fma_repo.exists():
+            # Download a small sample — the full dataset runs too large
+            subprocess.run([
+                "git", "clone", "--depth", "1",
+                "https://huggingface.co/datasets/rudraml/fma",
+                str(fma_repo),
+            ], check=True, env={**os.environ, "GIT_LFS_SKIP_SMUDGE": "0"})
+        _convert_audio_dir(fma_repo, fma_dir, ext="*.mp3")
+        if not list(fma_dir.glob("*.wav")):
+            _convert_audio_dir(fma_repo, fma_dir, ext="*.flac")
         log.info("FMA clips: %d", len(list(fma_dir.glob("*.wav"))))
     else:
         log.info("FMA already present: %s", fma_dir)
@@ -131,14 +136,9 @@ def download_data():
     features_file = DATA_DIR / "openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
     if not features_file.exists():
         log.info("Downloading ACAV100M features (~17GB, this takes a while)...")
-        subprocess.run(
-            [
-                "wget",
-                "-O",
-                str(features_file),
-                "https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/openwakeword_features_ACAV100M_2000_hrs_16bit.npy",
-            ],
-            check=True,
+        _wget(
+            "https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/openwakeword_features_ACAV100M_2000_hrs_16bit.npy",
+            str(features_file),
         )
     else:
         log.info("ACAV100M features already present: %s", features_file)
@@ -147,14 +147,9 @@ def download_data():
     val_file = DATA_DIR / "validation_set_features.npy"
     if not val_file.exists():
         log.info("Downloading validation set features...")
-        subprocess.run(
-            [
-                "wget",
-                "-O",
-                str(val_file),
-                "https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/validation_set_features.npy",
-            ],
-            check=True,
+        _wget(
+            "https://huggingface.co/datasets/davidscripka/openwakeword_features/resolve/main/validation_set_features.npy",
+            str(val_file),
         )
     else:
         log.info("Validation features already present: %s", val_file)
@@ -224,16 +219,17 @@ def run_training_step(step: str):
                 "torch",
                 "torchinfo",
                 "torchmetrics",
-                "speechbrain==0.5.14",
+                "speechbrain",
                 "audiomentations",
                 "torch-audiomentations",
                 "acoustics",
                 "pronouncing",
                 "datasets",
                 "deep-phonemizer",
-                "piper-phonemize",
                 "webrtcvad",
                 "mutagen",
+                "soundfile",
+                "librosa",
             ],
             check=True,
         )
