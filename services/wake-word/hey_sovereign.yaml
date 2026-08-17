@@ -1,26 +1,26 @@
-# Example wake word training config — "Hey Hex"
+# Default wake word training config — "Hey Sovereign"
 #
-# Each Sovereign instance trains a wake word matching its assistant name.
-# Copy this file and change target_phrase + model_name for a different
-# wake phrase (e.g. "hey nova", "ok computer", "hey sovereign").
+# Ships as the generic default. Each Sovereign instance should copy this
+# file and customise the wake phrase to match the assistant name
+# (e.g. "hey hex", "hey nova", "ok computer").
 #
-# Run: python train.py --config hey_hex.yaml
+# Run: python train.py --config hey_sovereign.yaml
 
-model_name: "hey_hex"
+model_name: "hey_sovereign"
 
 target_phrase:
-  - "hey hex"
+  - "hey sovereign"
 
 # Specific phrases to avoid false-positives on
 custom_negative_phrases:
-  - "hey rex"
-  - "hey tech"
-  - "hey text"
-  - "hey next"
-  - "hey check"
-  - "hey flex"
-  - "hay bex"
-  - "hey dex"
+  - "hey sovereignty"
+  - "hey suffering"
+  - "hey sudden"
+  - "hey something"
+  - "hey southern"
+  - "hey softening"
+  - "a sovereign"
+  - "the sovereign"
 
 # 50k synthetic clips — good balance of quality and training speed
 n_samples: 50000

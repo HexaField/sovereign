@@ -11,24 +11,24 @@ python3 -m venv .venv
     audiomentations torch-audiomentations acoustics pronouncing \
     datasets deep-phonemizer webrtcvad mutagen scipy soundfile librosa pyyaml
 
-# Train using the included example config
-.venv/bin/python train.py --config hey_hex.yaml
+# Train using the default config ("hey sovereign")
+.venv/bin/python train.py
 
 # Or create your own config for a different wake phrase
-cp hey_hex.yaml my_assistant.yaml
-# Edit my_assistant.yaml: change target_phrase + model_name + negatives
-.venv/bin/python train.py --config my_assistant.yaml
+cp hey_sovereign.yaml hey_nova.yaml
+# Edit hey_nova.yaml: change target_phrase + model_name + negatives
+.venv/bin/python train.py --config hey_nova.yaml
 ```
 
 ### Run steps individually
 
 ```bash
-.venv/bin/python train.py --config hey_hex.yaml --step download   # ~17GB data
-.venv/bin/python train.py --config hey_hex.yaml --step setup       # Piper TTS
-.venv/bin/python train.py --config hey_hex.yaml --step generate    # Synthetic clips
-.venv/bin/python train.py --config hey_hex.yaml --step augment     # Noise + reverb
-.venv/bin/python train.py --config hey_hex.yaml --step train       # Train model
-.venv/bin/python train.py --config hey_hex.yaml --step install     # Deploy to Sovereign
+.venv/bin/python train.py --step download   # ~17GB data
+.venv/bin/python train.py --step setup       # Piper TTS
+.venv/bin/python train.py --step generate    # Synthetic clips
+.venv/bin/python train.py --step augment     # Noise + reverb
+.venv/bin/python train.py --step train       # Train model
+.venv/bin/python train.py --step install     # Deploy to Sovereign
 ```
 
 ## Output
@@ -38,7 +38,7 @@ cp hey_hex.yaml my_assistant.yaml
 
 ## Creating a custom wake phrase
 
-1. Copy `hey_hex.yaml` and rename it
+1. Copy `hey_sovereign.yaml` and rename it
 2. Change `model_name` to match your phrase (e.g. `hey_nova`)
 3. Change `target_phrase` to your wake phrase (e.g. `["hey nova"]`)
 4. Update `custom_negative_phrases` with phonetically similar words
