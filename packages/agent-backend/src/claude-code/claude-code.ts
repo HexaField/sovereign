@@ -692,6 +692,10 @@ export function createClaudeCodeBackend(
   function buildHooks(): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
     const onSessionStart = async (input: HookInput) => {
       if (input.hook_event_name !== 'SessionStart') return { continue: true }
+      // Don't emit idle on compact/resume — the model may still have an active
+      // turn. Only emit idle on genuine session starts (startup, clear, fork).
+      const source = (input as Record<string, unknown>).source as string | undefined
+      if (source === 'compact' || source === 'resume') return { continue: true }
       const state = stateForHook(input)
       if (state) emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
       return { continue: true }
