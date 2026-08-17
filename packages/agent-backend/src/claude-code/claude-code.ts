@@ -1241,48 +1241,18 @@ export function createClaudeCodeBackend(
     state.endInput = () => pump.end()
     state.liveQuery = q
 
-    // Verify sovereign MCP connected after initialization — if missing,
-    // tear down and let the next sendMessage restart with fresh config.
-    // 'pending' is a normal transient status right after init while the
-    // in-process MCP handshake completes, so poll briefly before treating
-    // it as a real failure — a single immediate sample raced the handshake
-    // and tore down every session on its first message.
-    const MCP_VERIFY_POLL_MS = 200
-    const MCP_VERIFY_TIMEOUT_MS = 5000
-    q.initializationResult()
-      .then(async () => {
-        const deadline = Date.now() + MCP_VERIFY_TIMEOUT_MS
-        try {
-          let sovereign: { status?: string } | undefined
-          for (;;) {
-            const statuses = await q.mcpServerStatus()
-            sovereign = statuses.find((s: any) => s.name === 'sovereign')
-            if (sovereign?.status === 'connected') {
-              console.log(`[claude-code] sovereign MCP verified for session ${state.sessionKey}`)
-              return
-            }
-            if (sovereign?.status !== 'pending' || Date.now() >= deadline) break
-            await new Promise((resolve) => setTimeout(resolve, MCP_VERIFY_POLL_MS))
-          }
-          console.warn(
-            `[claude-code] sovereign MCP not connected (status: ${sovereign?.status ?? 'missing'}) for session ${state.sessionKey} — tearing down for restart`
-          )
-          try {
-            state.abortController?.abort()
-          } catch {
-            /* ignore */
-          }
-          state.pushUserMessage = undefined
-          state.endInput = undefined
-          state.abortController = undefined
-          state.liveQuery = undefined
-        } catch (err) {
-          console.warn(`[claude-code] MCP status check failed for ${state.sessionKey}:`, err)
-        }
-      })
-      .catch(() => {
-        /* init not ready — best effort */
-      })
+    // DISABLED (see d71931c / follow-up 72067a2): post-init sovereign MCP
+    // verification never observed 'connected' even with a 5s poll, and
+    // tore every session down on its first message — worse than the stale-
+    // tools bug it was meant to fix. Layer 1 (resolveMcpServers() always
+    // overriding the 'sovereign' entry with the in-process instance) is
+    // untouched and still runs. Revisit: figure out why mcpServerStatus()
+    // never reports 'connected' for the in-process sovereign server before
+    // re-enabling teardown-on-failure.
+    // eslint-disable-next-line no-empty-function
+    void q.initializationResult().catch(() => {
+      /* init not ready — best effort, no-op */
+    })
 
     state.iteratorDone = (async () => {
       try {
