@@ -262,13 +262,6 @@ export function startWaker(
   // ONCE per perspective — so a reconnect that re-subscribes does NOT re-baseline
   // and swallow mentions that arrived meanwhile.
   const baselinedUuids = new Set<string>()
-  // querySparql polling safety-net per perspective. The SDK re-opens the WS on
-  // a drop but does NOT re-register the server-side SPARQL subscription, so the
-  // live push subscription silently dies on reconnect. querySparql is a plain
-  // RPC (WS reconnects lazily for it) and keeps working — polling guarantees
-  // delivery regardless of push-subscription health.
-  const pollTimers = new Map<string, ReturnType<typeof setInterval>>()
-  const MENTION_POLL_INTERVAL_MS = 4000
   let lastClient: Ad4mTypedClient | null = null
   let agentIdentity: AgentIdentity | null = null
 
@@ -319,9 +312,9 @@ export function startWaker(
   }
 
   /**
-   * Process a mention-query result — from the live push subscription OR the
-   * querySparql polling safety-net. Deduplicates by message SOURCE address,
-   * debounces (2 s), resolves body + parents, and emits the wake.
+   * Process a mention-query result from the live push subscription.
+   * Deduplicates by message SOURCE address, debounces (2 s), resolves
+   * body + parents, and emits the wake.
    *
    * Baselines ONCE per perspective per process: the first observation with no
    * persisted state seeds the seen-set without emitting (avoids a flood on first
@@ -401,17 +394,15 @@ export function startWaker(
   }
 
   /**
-   * Subscribe to @mention events for a perspective using a SPARQL live query,
-   * backed by a querySparql polling safety-net.
+   * Subscribe to @mention events for a perspective using a SPARQL live query.
    *
    * Only fires when a new message body contains the agent's DID or profile name(s)
    * as a substring. Deduplicates by message SOURCE address; persists seen
    * addresses so reconnects/restarts don't re-fire old mentions.
    *
-   * The push subscription gives low latency; the poll guarantees delivery even
-   * when the SDK's WS drops the server-side subscription on reconnect (it does
-   * not re-register it). The poll uses clientManager.getClient() so it survives
-   * client swaps, and is created once per perspective.
+   * The SDK's QuerySubscriptionProxy re-registers the server-side subscription
+   * automatically on WebSocket reconnect (PR #899), so no polling safety-net
+   * is needed.
    */
   function subscribeToMentions(client: Ad4mTypedClient, uuid: string, identity: AgentIdentity) {
     if (subscribedInSession.has(uuid)) return
@@ -441,23 +432,6 @@ export function startWaker(
     proxy.onResult((result: unknown) => {
       void processMentionResult(client, uuid, result)
     })
-
-    // Polling safety-net — reliable even when the push subscription dies.
-    if (!pollTimers.has(uuid)) {
-      pollTimers.set(
-        uuid,
-        setInterval(async () => {
-          const c = clientManager.getClient()
-          if (!c) return
-          try {
-            const result = await (c.perspective as any).querySparql(uuid, query)
-            await processMentionResult(c, uuid, result)
-          } catch {
-            /* transient — next tick retries */
-          }
-        }, MENTION_POLL_INTERVAL_MS)
-      )
-    }
 
     proxies.set(uuid, proxy)
     console.log(
