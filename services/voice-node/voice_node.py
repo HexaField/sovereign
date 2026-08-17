@@ -87,12 +87,26 @@ def find_wake_model(model_path: str | None) -> str:
             log.info("Using trained model from build output: %s", chosen.name)
             return str(chosen)
 
-    # Fall back to bundled pre-trained model for development
+    # Download a pre-trained model for development
     log.warning(
-        "No custom wake word model found. Using bundled 'hey_mycroft' for development. "
+        "No custom wake word model found — downloading 'hey_jarvis' pre-trained model. "
         "Train a custom model via: services/wake-word/train.py --config <your_config>.yaml"
     )
-    return "hey_mycroft_v0.1"
+    fallback = Path.home() / ".sovereign" / "data" / "voice" / "wake_word.onnx"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    if not fallback.exists():
+        import urllib.request
+
+        url = "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/resources/models/hey_jarvis_v0.1.onnx"
+        log.info("Downloading fallback model from %s", url)
+        try:
+            urllib.request.urlretrieve(url, str(fallback))
+            log.info("Fallback model saved to %s", fallback)
+        except Exception as e:
+            log.error("Download failed: %s", e)
+            log.error("No wake word model available. Supply one via --model or train a custom model.")
+            sys.exit(1)
+    return str(fallback)
 
 
 class VoiceNode:
