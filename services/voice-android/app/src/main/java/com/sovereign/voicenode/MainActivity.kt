@@ -1,7 +1,10 @@
 package com.sovereign.voicenode
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -27,6 +30,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var toggleButton: Button
 
     private var serviceRunning = false
+
+    private val scoreReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val score = intent.getFloatExtra("score", -1f)
+            if (score >= 0f) {
+                runOnUiThread {
+                    statusText.text = "Listening — score: %.4f".format(score)
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,6 +84,13 @@ class MainActivity : AppCompatActivity() {
         toggleButton.text = "Stop"
         statusText.text = if (hasModel) "Listening for wake word..."
             else "Downloading wake word model from server..."
+
+        val filter = IntentFilter(VoiceNodeService.ACTION_SCORE_UPDATE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(scoreReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(scoreReceiver, filter)
+        }
     }
 
     private fun stopVoiceService() {
@@ -77,6 +98,7 @@ class MainActivity : AppCompatActivity() {
         serviceRunning = false
         toggleButton.text = "Start"
         statusText.text = "Stopped"
+        try { unregisterReceiver(scoreReceiver) } catch (_: Exception) {}
     }
 
     private fun requestPermissions() {
@@ -103,6 +125,11 @@ class MainActivity : AppCompatActivity() {
                 PERM_REQUEST,
             )
         }
+    }
+
+    override fun onDestroy() {
+        try { unregisterReceiver(scoreReceiver) } catch (_: Exception) {}
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(

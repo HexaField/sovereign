@@ -131,6 +131,43 @@ class WakeWordDetector(
     }
 
     /**
+     * Same as detect() but returns the raw score instead of a boolean.
+     * Returns -1f if not enough data accumulated yet.
+     */
+    fun detectScore(audioFrame: FloatArray): Float {
+        require(audioFrame.size == FRAME_SAMPLES) {
+            "Expected $FRAME_SAMPLES samples, got ${audioFrame.size}"
+        }
+
+        val melFrames = runMelSpectrogram(audioFrame)
+        for (frame in melFrames) {
+            melAccumulator.addLast(frame)
+        }
+
+        if (melAccumulator.size < MEL_FRAMES) return -1f
+
+        while (melAccumulator.size > MEL_FRAMES) {
+            melAccumulator.removeFirst()
+        }
+        val embedding = runEmbedding()
+
+        embeddingWindow.addLast(embedding)
+        while (embeddingWindow.size > WINDOW_SIZE) {
+            embeddingWindow.removeFirst()
+        }
+
+        if (embeddingWindow.size < WINDOW_SIZE) return -1f
+
+        val score = runWakeWord()
+        if (score >= threshold) {
+            Log.i(TAG, "Wake word detected! score=%.3f threshold=%.3f".format(score, threshold))
+            embeddingWindow.clear()
+            melAccumulator.clear()
+        }
+        return score
+    }
+
+    /**
      * Run the melspectrogram model on raw audio.
      * Input: [1, FRAME_SAMPLES] float32
      * Output: [time, 1, ?, 32] — extract the mel frames (each is 32 bands)

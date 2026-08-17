@@ -44,6 +44,7 @@ class VoiceNodeService : Service() {
         private const val NOTIFICATION_ID = 1
         const val EXTRA_SERVER_URL = "server_url"
         const val EXTRA_THRESHOLD = "threshold"
+        const val ACTION_SCORE_UPDATE = "com.sovereign.voicenode.SCORE_UPDATE"
     }
 
     private var serverUrl = "https://arcadia.tail300736.ts.net:5801"
@@ -185,12 +186,27 @@ class VoiceNodeService : Service() {
             Log.i(TAG, "Listening for wake word (server=$serverUrl, device=$deviceId)")
 
             val frame = FloatArray(WakeWordDetector.FRAME_SAMPLES)
+            var frameCount = 0
 
             while (running) {
                 val read = audioRecord?.read(frame, 0, frame.size, AudioRecord.READ_BLOCKING) ?: -1
                 if (read != frame.size) continue
 
-                if (detector?.detect(frame) == true) {
+                val score = detector?.detectScore(frame) ?: -1f
+                frameCount++
+
+                // Log score periodically for debugging
+                if (frameCount % 25 == 0 && score >= 0f) {
+                    Log.d(TAG, "Wake score: %.4f (threshold: %.2f)".format(score, 0.5f))
+                    // Broadcast to activity for UI display
+                    val intent = Intent(ACTION_SCORE_UPDATE)
+                    intent.putExtra("score", score)
+                    intent.setPackage(packageName)
+                    sendBroadcast(intent)
+                }
+
+                if (score >= 0.5f) {
+                    Log.i(TAG, "WAKE WORD DETECTED! score=%.3f".format(score))
                     updateNotification("Capturing speech...")
                     val captured = captureSpeech()
                     updateNotification("Listening for wake word...")
