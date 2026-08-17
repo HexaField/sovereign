@@ -38,7 +38,7 @@ class MainActivity : AppCompatActivity() {
 
         // Load saved server URL
         val prefs = getSharedPreferences("sovereign_voice", MODE_PRIVATE)
-        serverInput.setText(prefs.getString("server_url", "http://arcadia:5801"))
+        serverInput.setText(prefs.getString("server_url", "https://arcadia:5801"))
 
         toggleButton.setOnClickListener {
             if (serviceRunning) stopVoiceService()
