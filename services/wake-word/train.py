@@ -191,10 +191,9 @@ def setup_piper():
 
 def run_training_step(step: str, config_path: Path):
     """Run a single step of the OpenWakeWord training pipeline."""
-    train_script = BASE_DIR / "openwakeword-train" / "openwakeword" / "train.py"
+    oww_dir = BASE_DIR / "openwakeword-train"
+    train_script = oww_dir / "openwakeword" / "train.py"
     if not train_script.exists():
-        # Clone the full OpenWakeWord repo for training
-        oww_dir = BASE_DIR / "openwakeword-train"
         if not oww_dir.exists():
             log.info("Cloning OpenWakeWord for training scripts...")
             subprocess.run(
@@ -244,6 +243,14 @@ def run_training_step(step: str, config_path: Path):
         raise ValueError(f"Unknown step: {step}")
 
     log.info("Running training step: %s (config: %s)", step, config_path.name)
+
+    # The OWW training script imports from the cloned repo, not the pip package.
+    # Set PYTHONPATH so the repo's openwakeword module takes precedence.
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(oww_dir) + os.pathsep + env.get("PYTHONPATH", "")
+    # AMD iGPU (Strix Halo) requires HSA_USE_SVM=0 for ROCm PyTorch
+    env.setdefault("HSA_USE_SVM", "0")
+
     subprocess.run(
         [
             sys.executable,
@@ -254,6 +261,7 @@ def run_training_step(step: str, config_path: Path):
         ],
         check=True,
         cwd=str(BASE_DIR),
+        env=env,
     )
 
 

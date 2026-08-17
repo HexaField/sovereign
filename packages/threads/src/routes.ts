@@ -970,13 +970,14 @@ export function createThreadRoutes(
     }
   })
 
-  // Subagent history — fetch chat history for a subagent session key
+  // Thread / subagent history — fetch chat history for a session
   const subagentHistoryCache = new Map<string, { data: any; ts: number }>()
   const SUBAGENT_CACHE_TTL = 5000
 
   router.get('/api/threads/:key/history', async (req, res) => {
     try {
-      const sessionKey = req.params.key.startsWith('agent:') ? req.params.key : `agent:main:subagent:${req.params.key}`
+      const threadKey = req.params.key
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
       const cached = subagentHistoryCache.get(sessionKey)
       if (cached && Date.now() - cached.ts < SUBAGENT_CACHE_TTL) {
         return res.json({ history: cached.data })
