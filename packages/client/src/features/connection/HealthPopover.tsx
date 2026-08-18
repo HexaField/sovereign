@@ -375,7 +375,7 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
   // single-line detail column, so they surface on hover instead.
   const mcpRow = createMemo(() => {
     const h = mcpHealth()
-    if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'not checked' }
+    if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'checking…' }
     if (h.status === 'ok') {
       return { status: 'ok' as const, detail: `${h.servers.length} server${h.servers.length === 1 ? '' : 's'}` }
     }
@@ -392,13 +392,12 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
 
   const mcpAction = createMemo(() => {
     const h = mcpHealth()
-    const checking = mcpChecking()
     const reconnecting = mcpReconnecting()
-    // Show "Reconnect" when any server disconnected; otherwise show "Check"
+    // Show "Reconnect" only when disconnected — status auto-polls now
     if (h.status === 'down' || h.status === 'degraded') {
       return { label: 'Reconnect', onClick: reconnectMcp, loading: reconnecting }
     }
-    return { label: 'Check', onClick: checkMcpStatus, loading: checking }
+    return null
   })
 
   const ctxMgmtTooltip = createMemo(() => {
@@ -448,7 +447,7 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
               status={mcpRow().status}
               detail={mcpRow().detail}
               title={mcpTooltip()}
-              action={mcpAction()}
+              action={mcpAction() ?? undefined}
             />
             <For each={externalHealth()}>
               {(svc) => (
