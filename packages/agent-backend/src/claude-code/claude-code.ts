@@ -1345,6 +1345,10 @@ export function createClaudeCodeBackend(
       reasoningEffort?: ReasoningEffort
       contextWindow?: number
       orgId?: string
+      /** Prior conversation history — accepted by the interface but not used
+       *  by Claude Code; the CLI manages its own conversation context.
+       *  Future: inject a summary of prior conversation into the system prompt. */
+      seedHistory?: ParsedTurn[]
     }
   ) {
     const backendSessionId = randomUUID()

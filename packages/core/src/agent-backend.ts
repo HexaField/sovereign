@@ -302,6 +302,10 @@ export interface CreateSessionOptions {
   /** Context window size in tokens. Values above 200k enable the 1M-context beta. */
   contextWindow?: number
   systemPromptOverride?: string
+  /** Prior conversation history to seed into the session. Used when migrating
+   *  a thread from one backend to another — the new backend receives the old
+   *  conversation so the model has context and the UI shows history. */
+  seedHistory?: ParsedTurn[]
 }
 
 /**
