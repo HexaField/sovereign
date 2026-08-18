@@ -34,15 +34,16 @@ interface AgentRow {
   meta: SessionMeta | null
 }
 
-const MEMBRANE_COLORS: Record<string, string> = {
-  personal: '#8b5cf6',
-  coasys: '#3b82f6',
-  atlas: '#10b981',
-  connectionengine: '#f59e0b'
+interface MembraneOption {
+  id: string
+  name: string
+  color?: string
+  icon?: string
 }
 
-function membraneColor(id: string): string {
-  return MEMBRANE_COLORS[id] ?? '#6b7280'
+function membraneColor(id: string, membranes: MembraneOption[]): string {
+  const m = membranes.find((x) => x.id === id)
+  return m?.color ?? '#6b7280'
 }
 
 function formatRelativeTime(ms: number): string {
@@ -82,8 +83,42 @@ const AgentsTab: Component = () => {
   const [threads, setThreads] = createSignal<Thread[]>([])
   const [activeSessions, setActiveSessions] = createSignal<ActiveSession[]>([])
   const [metaMap, setMetaMap] = createSignal<Map<string, SessionMeta>>(new Map())
+  const [membranes, setMembranes] = createSignal<MembraneOption[]>([])
+  const [editingMembrane, setEditingMembrane] = createSignal<string | null>(null)
   const [loading, setLoading] = createSignal(true)
   const [error, setError] = createSignal<string | null>(null)
+
+  const loadMembranes = async () => {
+    try {
+      const res = await fetch('/api/membranes')
+      if (res.ok) {
+        const data = await res.json()
+        setMembranes(data.membranes ?? [])
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  const assignMembrane = async (threadId: string, membraneId: string | null) => {
+    try {
+      await fetch(`/api/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        // Empty string clears the membrane (falsy in UI checks)
+        body: JSON.stringify({ membraneId: membraneId ?? '' })
+      })
+      setEditingMembrane(null)
+      loadThreadsAndSessions()
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // Close membrane dropdown on outside click
+  function handleGlobalClick() {
+    if (editingMembrane()) setEditingMembrane(null)
+  }
 
   const loadThreadsAndSessions = async () => {
     try {
@@ -124,10 +159,13 @@ const AgentsTab: Component = () => {
   let pollTimer: ReturnType<typeof setInterval> | undefined
 
   onMount(() => {
+    loadMembranes()
     loadThreadsAndSessions()
     pollTimer = setInterval(loadThreadsAndSessions, 5_000)
+    document.addEventListener('click', handleGlobalClick)
     onCleanup(() => {
       if (pollTimer) clearInterval(pollTimer)
+      document.removeEventListener('click', handleGlobalClick)
     })
   })
 
@@ -214,6 +252,7 @@ const AgentsTab: Component = () => {
             const kindColor = KIND_COLORS[t.kind ?? ''] ?? '#6b7280'
             const memId = active?.membraneId ?? t.membraneId
             const label = active?.label ?? t.label ?? t.id
+            const mColor = memId ? membraneColor(memId, membranes()) : '#6b7280'
 
             return (
               <div
@@ -255,14 +294,79 @@ const AgentsTab: Component = () => {
                           {t.kind}
                         </span>
                       </Show>
-                      <Show when={memId}>
-                        <span
-                          class="rounded px-1.5 py-0.5 text-[10px] font-medium"
-                          style={{ background: `${membraneColor(memId!)}22`, color: membraneColor(memId!) }}
+                      {/* Membrane badge — click to edit */}
+                      <div class="relative">
+                        <Show
+                          when={memId}
+                          fallback={
+                            <button
+                              class="rounded border border-dashed px-1.5 py-0.5 text-[10px] opacity-40 hover:opacity-70"
+                              style={{ 'border-color': 'var(--c-text-muted)', color: 'var(--c-text-muted)' }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditingMembrane(editingMembrane() === t.id ? null : t.id)
+                              }}
+                              title="Assign membrane"
+                            >
+                              + membrane
+                            </button>
+                          }
                         >
-                          {memId}
-                        </span>
-                      </Show>
+                          <button
+                            class="rounded px-1.5 py-0.5 text-[10px] font-medium hover:ring-1 hover:ring-white/20"
+                            style={{ background: `${mColor}22`, color: mColor }}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditingMembrane(editingMembrane() === t.id ? null : t.id)
+                            }}
+                            title="Change membrane"
+                          >
+                            {membranes().find((m) => m.id === memId)?.name ?? memId}
+                          </button>
+                        </Show>
+                        <Show when={editingMembrane() === t.id}>
+                          <div
+                            class="absolute top-full left-0 z-50 mt-1 min-w-[140px] rounded-lg border py-1 shadow-lg"
+                            style={{
+                              background: 'var(--c-bg-raised, var(--c-bg))',
+                              'border-color': 'var(--c-border)'
+                            }}
+                          >
+                            <For each={membranes()}>
+                              {(m) => (
+                                <button
+                                  class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-white/5"
+                                  style={{
+                                    color: m.id === memId ? (m.color ?? 'var(--c-text)') : 'var(--c-text)',
+                                    'font-weight': m.id === memId ? '600' : '400'
+                                  }}
+                                  onClick={() => assignMembrane(t.id, m.id)}
+                                >
+                                  <span
+                                    class="inline-block h-2 w-2 shrink-0 rounded-full"
+                                    style={{ background: m.color ?? '#6b7280' }}
+                                  />
+                                  {m.name}
+                                </button>
+                              )}
+                            </For>
+                            <Show when={memId}>
+                              <div class="mx-2 my-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+                              <button
+                                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-white/5"
+                                style={{ color: 'var(--c-text-muted)' }}
+                                onClick={() => assignMembrane(t.id, null)}
+                              >
+                                <span
+                                  class="inline-block h-2 w-2 shrink-0 rounded-full border"
+                                  style={{ 'border-color': 'var(--c-text-muted)' }}
+                                />
+                                None
+                              </button>
+                            </Show>
+                          </div>
+                        </Show>
+                      </div>
                       <Show when={isActive && meta?.model}>
                         <span class="text-[10px] opacity-50">{meta!.model}</span>
                       </Show>
