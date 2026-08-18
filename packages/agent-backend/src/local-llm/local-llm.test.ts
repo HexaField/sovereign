@@ -993,6 +993,123 @@ describe('local-llm backend: compaction', () => {
       expect(hasLegacyRef).toBe(true)
     }
   })
+
+  it('mid-loop compaction summary persists in state.messages for future turns', async () => {
+    // Regression: mid-loop compaction (onIterationEnd) merged the summary
+    // into loopMessages[0] (the system message in the transcript), but
+    // post-loop reconciliation did state.messages = transcript.slice(1),
+    // dropping the enriched system message and losing the summary.
+    const config = { ...makeConfig(), contextWindow: 4096 }
+    const sessionKey = 'midloop-persist-test'
+    const stateDir = path.join(dataDir, 'agent-backend', 'local-llm-state')
+    fs.mkdirSync(stateDir, { recursive: true })
+
+    // Seed 14 user/assistant messages — enough for COMPACT_KEEP_RECENT (10)
+    // plus messages to drop. Each message ~200 chars to stay modest.
+    const seededMessages = Array.from({ length: 14 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `msg-${i} ${'x'.repeat(200)}`,
+      timestamp: Date.now() - 10000 + i * 100
+    }))
+
+    fs.writeFileSync(
+      path.join(stateDir, `${sessionKey}.json`),
+      JSON.stringify({
+        version: 1,
+        data: {
+          sessionKey,
+          backendSessionId: 'bsid-midloop',
+          cwd: tmpDir,
+          model: 'test-model',
+          systemPrompt: 'You help.',
+          messages: seededMessages,
+          createdAt: Date.now() - 20000,
+          updatedAt: Date.now() - 1000
+        }
+      })
+    )
+
+    const SUMMARY_MARKER = 'MIDLOOP_PERSIST_MARKER'
+    const COMPACTION_SUMMARY = `<summary>\n1. **Goal:** ${SUMMARY_MARKER} — verify mid-loop summary survives post-loop reconciliation.\n</summary>`
+
+    let didReturnToolCall = false
+    const complete = vi.fn().mockImplementation((msgs: Array<{ role: string; content: string }>) => {
+      // Detect compaction summary call — system prompt contains the engine prompt
+      const sysMsg = msgs.find((m: { role: string }) => m.role === 'system')
+      if (sysMsg?.content?.includes('context compaction engine')) {
+        return Promise.resolve(textResponse(COMPACTION_SUMMARY))
+      }
+
+      // First non-compaction call: return a tool call with high prompt_tokens
+      // to trigger onIterationEnd → mid-loop compaction
+      if (!didReturnToolCall) {
+        didReturnToolCall = true
+        return Promise.resolve({
+          id: 'r',
+          model: 'test-model',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'tc1',
+                    type: 'function',
+                    function: { name: 'Bash', arguments: JSON.stringify({ command: 'echo ok' }) }
+                  }
+                ]
+              },
+              finish_reason: 'tool_calls'
+            }
+          ],
+          usage: { prompt_tokens: 3200, completion_tokens: 50, total_tokens: 3250 }
+        })
+      }
+
+      // Everything else: text response
+      return Promise.resolve(textResponse('ack'))
+    })
+
+    const client: InferenceClient = {
+      complete: complete as unknown as InferenceClient['complete'],
+      stream: (async function* () {})() as unknown as InferenceClient['stream'],
+      healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
+      updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
+    }
+
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+
+    // Turn 1: triggers mid-loop compaction via tool call with high prompt_tokens
+    const idle1 = waitForIdle(backend)
+    await backend.sendMessage(sessionKey, 'trigger compaction')
+    await idle1
+
+    // Verify compaction fired
+    const meta = await backend.getSessionMeta(sessionKey)
+    expect(meta?.compactionCount).toBeGreaterThan(0)
+
+    // Turn 2: follow-up message — the wire system message should contain
+    // the compaction summary from the mid-loop compaction (proving it persisted)
+    const idle2 = waitForIdle(backend)
+    await backend.sendMessage(sessionKey, 'follow-up question')
+    await idle2
+
+    // Find the follow-up turn's complete() call — it should have the
+    // compaction summary merged into the system message
+    const allCalls = complete.mock.calls
+    // The last call that isn't a compaction engine call is the follow-up turn
+    const followUpCall = [...allCalls].reverse().find((call) => {
+      const msgs = call[0] as Array<{ role: string; content: string }>
+      const sys = msgs.find((m) => m.role === 'system')
+      return sys && !sys.content.includes('context compaction engine')
+    })
+    expect(followUpCall).toBeDefined()
+    const wireSys = (followUpCall![0] as Array<{ role: string; content: string }>).find((m) => m.role === 'system')
+    // The compaction summary marker must appear in the follow-up's system message
+    expect(wireSys?.content).toContain(SUMMARY_MARKER)
+  })
 })
 
 describe('local-llm backend: subagent lifecycle events', () => {

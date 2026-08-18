@@ -292,6 +292,7 @@ interface PersistedLocalLlmSession {
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
+  lastPromptTokens?: number
 }
 
 export function createLocalLlmBackend(
@@ -706,7 +707,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       systemPrompt: state.systemPrompt,
       messages: state.messages,
       createdAt: state.createdAt,
-      updatedAt: state.updatedAt
+      updatedAt: state.updatedAt,
+      lastPromptTokens: state.lastPromptTokens
     })
   }
 
@@ -739,6 +741,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         messages: value.messages ?? [],
         createdAt: value.createdAt,
         updatedAt: value.updatedAt,
+        lastPromptTokens: value.lastPromptTokens,
         pendingQueue: [],
         processing: false,
         filesRead,
@@ -1011,6 +1014,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     // does, the post-loop reconciliation must replace state.messages
     // entirely rather than appending a suffix.
     let midLoopCompacted = false
+    let midLoopCompactionSummary: string | null = null
 
     const loopDeps: ToolLoopDeps = {
       complete: (msgs, opts) =>
@@ -1112,6 +1116,10 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
           ...loopMessages[0],
           content: loopMessages[0].content + '\n\n' + summaryContent
         }
+
+        // Capture the summary so post-loop reconciliation can restore it
+        // (transcript[0] gets dropped by slice(1) below).
+        midLoopCompactionSummary = summaryContent
 
         state.compactionCount = (state.compactionCount ?? 0) + 1
         midLoopCompacted = true
@@ -1228,6 +1236,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
           content: loopMessages[0].content + '\n\n' + summaryContent
         }
 
+        // Capture the summary so post-loop reconciliation can restore it.
+        midLoopCompactionSummary = summaryContent
+
         state.compactionCount = (state.compactionCount ?? 0) + 1
         midLoopCompacted = true
 
@@ -1290,6 +1301,16 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         // Replace state.messages with the full conversation from the
         // transcript (everything after the leading system message).
         state.messages = transcript.slice(1)
+        // Preserve compaction summary for future turns — without this, the
+        // summary merged into transcript[0] (system message) gets dropped
+        // by slice(1) and the model loses all pre-compaction context.
+        if (midLoopCompactionSummary) {
+          state.messages.unshift({
+            role: 'system',
+            content: midLoopCompactionSummary,
+            timestamp: Date.now()
+          })
+        }
       } else {
         state.messages.push(...transcript.slice(beforeLen))
       }
