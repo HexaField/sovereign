@@ -286,6 +286,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       presence?: 'internal' | 'gateway' | null
       subagentBackend?: string | null
       subagentModel?: string | null
+      model?: string | null
     }
   ): ThreadInfo | undefined {
     const thread = threads.get(id)
@@ -301,6 +302,10 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     if (patch.subagentModel !== undefined) {
       if (patch.subagentModel === null) delete thread.subagentModel
       else thread.subagentModel = patch.subagentModel
+    }
+    if (patch.model !== undefined) {
+      if (patch.model === null) delete thread.model
+      else thread.model = patch.model
     }
     if (patch.presence !== undefined) {
       if (patch.presence === null) {

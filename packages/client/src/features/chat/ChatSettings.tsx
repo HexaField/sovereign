@@ -129,7 +129,7 @@ export function ChatSettingsButton() {
       if (infoRes.ok) {
         const data = await infoRes.json()
         setInfo(data)
-        const current = data.modelProvider && data.model ? `${data.modelProvider}/${data.model}` : (data.model ?? '')
+        const current = data.model ?? ''
         setSelectedModel(current)
         setSelectedEffort(data.reasoningEffort ?? '')
         if (data.backendKind) {

@@ -353,7 +353,8 @@ export function createThreadRoutes(
       contextWindow: bodyContextWindow,
       presence: bodyPresence,
       subagentBackend: bodySubagentBackend,
-      subagentModel: bodySubagentModel
+      subagentModel: bodySubagentModel,
+      model: bodyModel
     } = req.body
     // Translate legacy `orgId` body field. Empty/`_global` → empty array
     // so a PATCH with `orgId: '_global'` actually moves a thread to global.
@@ -392,7 +393,8 @@ export function createThreadRoutes(
         ...(bodyContextWindow !== undefined ? { contextWindow } : {}),
         ...presencePatch,
         ...(bodySubagentBackend !== undefined ? { subagentBackend: bodySubagentBackend ?? null } : {}),
-        ...(bodySubagentModel !== undefined ? { subagentModel: bodySubagentModel ?? null } : {})
+        ...(bodySubagentModel !== undefined ? { subagentModel: bodySubagentModel ?? null } : {}),
+        ...(bodyModel !== undefined ? { model: bodyModel ?? null } : {})
       })
     } catch (err) {
       return res.status(400).json({ error: (err as Error).message })
@@ -878,6 +880,7 @@ export function createThreadRoutes(
       const provider = slashIdx > 0 ? model.slice(0, slashIdx) : ''
       const modelName = slashIdx > 0 ? model.slice(slashIdx + 1) : model
       await backend.setSessionModel(sessionKey, provider, modelName)
+      threadManager.update(threadKey, { model: modelName })
       res.json({ success: true, model, thread })
     } catch (err) {
       res.status(500).json({ error: 'Failed to update model', detail: (err as Error).message })
@@ -918,6 +921,7 @@ export function createThreadRoutes(
       await targetBackend.createSession(thread.label, {
         threadKey,
         kind: 'thread',
+        ...(thread.model ? { model: { provider: '', model: thread.model } } : {}),
         ...(thread.contextWindow ? { contextWindow: thread.contextWindow } : {}),
         ...(seedHistory.length > 0 ? { seedHistory } : {})
       })
