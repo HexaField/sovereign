@@ -133,12 +133,16 @@ export const overallHealth = (): OverallHealth => {
   const ctxMgmt = contextMgmtHealth()
   if (ctxMgmt.healthy === false) return 'degraded'
 
+  // MCP servers disconnected means tools unavailable — degrade health.
+  const mcp = mcpHealth()
+  if (mcp.status === 'down' || mcp.status === 'degraded') return 'degraded'
+
   if (conn === 'connecting' || conn === 'authenticating' || semble.status === 'down' || anyExtDown) return 'degraded'
   return 'ok'
 }
 
 export function initHealthPolling(): () => void {
-  let ctxMgmtTimer: ReturnType<typeof setInterval> | undefined
+  let pollTimer: ReturnType<typeof setInterval> | undefined
 
   wsStore.subscribe(['system'])
   const offHealth = wsStore.on('system.health', (msg: Record<string, unknown>) => {
@@ -186,13 +190,45 @@ export function initHealthPolling(): () => void {
       .catch(() => {})
   }
 
-  pollContextHealth()
-  ctxMgmtTimer = setInterval(pollContextHealth, 15_000)
+  /** Automatic MCP status poll — same endpoint as the manual check but
+   *  fires silently on the health-poll interval. Does not set the
+   *  `mcpChecking` signal (that's for user-initiated feedback). */
+  function pollMcpStatus() {
+    const key = threadKey()
+    if (!key) return
+    fetch(`/api/threads/${encodeURIComponent(key)}/mcp-status`, {
+      signal: AbortSignal.timeout(5000)
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data) return
+        const servers: McpHealth['servers'] = data.servers ?? []
+        const allConnected = servers.length > 0 && servers.every((s: any) => s.status === 'connected')
+        const anyDisconnected = servers.some((s: any) => s.status === 'disconnected')
+        const status: McpHealth['status'] = allConnected
+          ? 'ok'
+          : anyDisconnected
+            ? servers.every((s: any) => s.status === 'disconnected')
+              ? 'down'
+              : 'degraded'
+            : 'unknown'
+        setMcpHealth({ status, servers, backendKind: data.backendKind ?? null })
+      })
+      .catch(() => {})
+  }
+
+  function pollAll() {
+    pollContextHealth()
+    pollMcpStatus()
+  }
+
+  pollAll()
+  pollTimer = setInterval(pollAll, 15_000)
 
   return () => {
     offHealth()
     wsStore.unsubscribe(['system'])
-    if (ctxMgmtTimer) clearInterval(ctxMgmtTimer)
+    if (pollTimer) clearInterval(pollTimer)
   }
 }
 
@@ -350,7 +386,7 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
 
   const mcpTooltip = createMemo(() => {
     const h = mcpHealth()
-    if (h.servers.length === 0) return 'Click "Check" to query MCP connection status'
+    if (h.servers.length === 0) return 'Waiting for MCP status…'
     return h.servers.map((s) => `${s.name}: ${s.status}`).join('\n')
   })
 
