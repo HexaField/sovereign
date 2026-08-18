@@ -390,12 +390,21 @@ export interface AgentBackend {
   switchSession(sessionKey: string): Promise<void>
   /** Create a new session */
   createSession(label?: string, opts?: CreateSessionOptions): Promise<string>
-  /** Get conversation history for a session */
-  getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }>
+  /** Get conversation history for a session, optionally paginated.
+   *  `before` — cursor: return only turns with timestamp < this value.
+   *  `limit` — page size (default: all when no cursor, 50 when cursor set). */
+  getHistory(
+    sessionKey: string,
+    opts?: { before?: number; limit?: number }
+  ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number }>
   getFullHistory(sessionKey: string): Promise<ParsedTurn[]>
-  /** Load pre-compaction archived history. Returns turns that predate the
-   *  current live history, reconstructed from on-disk JSONL snapshots. */
-  getArchivedHistory?(sessionKey: string): Promise<{ turns: ParsedTurn[]; archiveCount: number }>
+  /** Load pre-compaction archived history, optionally paginated.
+   *  `before` — cursor: return only turns with timestamp < this value.
+   *  `limit` — page size (default 50). */
+  getArchivedHistory?(
+    sessionKey: string,
+    opts?: { before?: number; limit?: number }
+  ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number; archiveCount: number }>
   /** Register a callback for backend events */
   on<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void): void
   /** Unregister a callback */

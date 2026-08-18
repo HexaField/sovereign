@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from 'solid-js'
+import { createEffect, createSignal, For, Show, onCleanup } from 'solid-js'
 import type { WorkItem, AgentStatus, AskUserQuestionResult } from '@sovereign/core'
 import { parseAskUserQuestionResult, isAskUserQuestionToolName } from '@sovereign/core/ask-user-question'
 import type { ChatMessage } from './types.js'
@@ -9,12 +9,9 @@ import { AskUserQuestionCard } from './AskUserQuestionCard.js'
 import { pendingQuestions, submitAnswers } from './questions-store.js'
 import { CronResultsBanner } from '../crons/CronResultsBanner.js'
 import {
-  hasOlderMessages,
-  loadingOlder,
-  loadOlderMessages,
-  hasArchivedHistory,
-  loadingArchived,
-  loadArchivedHistory,
+  hasMoreHistory,
+  loadingMore,
+  loadOlderPage,
   streamingText,
   streamingHtml,
   liveWork,
@@ -331,30 +328,42 @@ export function ChatView(props: ChatViewProps) {
         tabindex="0"
         style={{ outline: 'none' }}
       >
-        {/* Load older / archived messages — hidden in summary mode */}
-        {props.mode !== 'summary' && (hasOlderMessages() || hasArchivedHistory()) && (
-          <div class="flex flex-col items-center justify-center gap-2">
-            {hasOlderMessages() && (
-              <button
-                class="rounded-md border border-white/10 px-3 py-1 text-xs hover:bg-white/5"
-                onClick={loadOlderMessages}
-                disabled={loadingOlder()}
-                style={{ color: 'var(--c-text-muted)' }}
-              >
-                {loadingOlder() ? 'Loading older messages…' : 'Load older messages'}
-              </button>
-            )}
-            {hasArchivedHistory() && !hasOlderMessages() && (
-              <button
-                class="rounded-md border border-amber-500/30 px-3 py-1.5 text-xs hover:bg-amber-500/10"
-                onClick={loadArchivedHistory}
-                disabled={loadingArchived()}
-                style={{ color: 'var(--c-text-muted)' }}
-              >
-                {loadingArchived() ? 'Loading archived history…' : '⟳ Load pre-compaction history'}
-              </button>
-            )}
-          </div>
+        {/* Infinite scroll sentinel — triggers loadOlderPage when visible */}
+        {props.mode !== 'summary' && (
+          <Show when={hasMoreHistory()}>
+            <div
+              ref={(el: HTMLDivElement) => {
+                const observer = new IntersectionObserver(
+                  (entries) => {
+                    if (entries[0]?.isIntersecting && !loadingMore()) {
+                      // Save scroll state before prepending
+                      const sh = scrollRef?.scrollHeight ?? 0
+                      loadOlderPage()
+                      // After DOM update, restore scroll position so the
+                      // viewport stays anchored to the same content
+                      requestAnimationFrame(() => {
+                        if (scrollRef) {
+                          const delta = scrollRef.scrollHeight - sh
+                          scrollRef.scrollTop += delta
+                        }
+                      })
+                    }
+                  },
+                  { root: scrollRef, rootMargin: '200px 0px 0px 0px' }
+                )
+                observer.observe(el)
+                onCleanup(() => observer.disconnect())
+              }}
+              class="flex items-center justify-center py-2"
+              style={{ 'min-height': '1px' }}
+            >
+              <Show when={loadingMore()}>
+                <div class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading older messages…
+                </div>
+              </Show>
+            </div>
+          </Show>
         )}
 
         {/* Cron Results Banner — hidden in summary mode */}

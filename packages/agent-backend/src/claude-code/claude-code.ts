@@ -1439,11 +1439,40 @@ export function createClaudeCodeBackend(
     setActiveSessionKey(sessionKey)
   }
 
-  async function getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }> {
+  async function getHistory(
+    sessionKey: string,
+    opts?: { before?: number; limit?: number }
+  ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number }> {
     const filePath = sessionFilePath(sessionKey)
     if (!filePath || !fs.existsSync(filePath)) return { turns: [], hasMore: false }
-    const { messages, hasMore } = readRecentClaudeCodeMessages(filePath, 2000)
-    return { turns: parseClaudeCodeTurns(messages), hasMore }
+
+    // When paginating backwards with a cursor, read the full file to reach
+    // earlier turns. Without a cursor, the tail read suffices.
+    let allTurns: ParsedTurn[]
+    let hasMoreRaw: boolean
+    if (opts?.before) {
+      const messages = readAllClaudeCodeMessages(filePath)
+      allTurns = parseClaudeCodeTurns(messages)
+      hasMoreRaw = false
+    } else {
+      const { messages, hasMore } = readRecentClaudeCodeMessages(filePath, 2000)
+      allTurns = parseClaudeCodeTurns(messages)
+      hasMoreRaw = hasMore
+    }
+
+    // Apply cursor filter
+    let filtered = allTurns
+    if (opts?.before) {
+      filtered = allTurns.filter((t) => t.timestamp < opts.before!)
+    }
+
+    // Paginate: take the last `limit` turns
+    const limit = opts?.limit ?? (opts?.before ? 50 : filtered.length)
+    const hasMore = filtered.length > limit || hasMoreRaw
+    const page = filtered.length > limit ? filtered.slice(-limit) : filtered
+    const oldestTimestamp = page.length > 0 ? page[0].timestamp : undefined
+
+    return { turns: page, hasMore, oldestTimestamp }
   }
 
   async function getFullHistory(sessionKey: string): Promise<ParsedTurn[]> {
@@ -1459,7 +1488,10 @@ export function createClaudeCodeBackend(
    * deduplicates against the current live history by timestamp, and
    * returns only turns that predate the live history.
    */
-  async function getArchivedHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; archiveCount: number }> {
+  async function getArchivedHistory(
+    sessionKey: string,
+    opts?: { before?: number; limit?: number }
+  ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number; archiveCount: number }> {
     const sk = bareId(sessionKey)
     const state = internal.sessions.get(sk)
     const backendId = state?.backendSessionId ?? sk
@@ -1476,7 +1508,7 @@ export function createClaudeCodeBackend(
       }
     }
 
-    if (archives.length === 0) return { turns: [], archiveCount: 0 }
+    if (archives.length === 0) return { turns: [], hasMore: false, archiveCount: 0 }
 
     // Get the oldest timestamp from live history — archived turns before
     // this cutoff represent pre-compaction content.
@@ -1510,7 +1542,20 @@ export function createClaudeCodeBackend(
 
     // Sort chronologically
     allTurns.sort((a, b) => a.timestamp - b.timestamp)
-    return { turns: allTurns, archiveCount: archives.length }
+
+    // Apply cursor filter
+    let filtered = allTurns
+    if (opts?.before) {
+      filtered = allTurns.filter((t) => t.timestamp < opts.before!)
+    }
+
+    // Paginate: take the last `limit` turns
+    const limit = opts?.limit ?? 50
+    const hasMore = filtered.length > limit
+    const page = filtered.length > limit ? filtered.slice(-limit) : filtered
+    const oldestTimestamp = page.length > 0 ? page[0].timestamp : undefined
+
+    return { turns: page, hasMore, oldestTimestamp, archiveCount: archives.length }
   }
 
   /**

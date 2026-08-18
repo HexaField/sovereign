@@ -21,10 +21,12 @@ export const [agentDurationText, setAgentDurationText] = createSignal('')
 export const [isRetryCountdownActive, setRetryActive] = createSignal(false)
 export const [retryCountdownSeconds, setRetrySeconds] = createSignal(0)
 export const [inputValue, _setInputValue] = createSignal('')
-export const [hasOlderMessages, setHasOlderMessages] = createSignal(false)
-export const [loadingOlder, setLoadingOlder] = createSignal(false)
-export const [hasArchivedHistory, setHasArchivedHistory] = createSignal(false)
-export const [loadingArchived, setLoadingArchived] = createSignal(false)
+export const [hasMoreHistory, setHasMoreHistory] = createSignal(false)
+export const [loadingMore, setLoadingMore] = createSignal(false)
+/** Cursor for the next page of history — timestamp of the oldest loaded turn. */
+export const [oldestCursor, setOldestCursor] = createSignal<number | undefined>(undefined)
+/** Track whether we've exhausted live history and should fetch from archives. */
+export const [liveHistoryExhausted, setLiveHistoryExhausted] = createSignal(false)
 
 // Live streaming state — completely separate from turns[] (history)
 export const [streamingText, setStreamingText] = createSignal('')
@@ -273,8 +275,10 @@ function resetState(): void {
   clearRetryCountdown()
   stopDurationTimer()
   suppressLifecycleUntil = 0
-  setHasOlderMessages(false)
-  setLoadingOlder(false)
+  setHasMoreHistory(false)
+  setLoadingMore(false)
+  setOldestCursor(undefined)
+  setLiveHistoryExhausted(false)
   recentUserMessages.clear()
   setServerQueue([])
   setTtsDeliveredTurns(new Set<number>())
@@ -378,53 +382,74 @@ export function forceSendQueuedMessage(id: string): void {
   })
 }
 
-export function loadOlderMessages(): void {
+/**
+ * Unified infinite-scroll paginator — loads the next page of older history.
+ * Seamlessly transitions from live JSONL history into pre-compaction archives
+ * when live runs out.
+ */
+export function loadOlderPage(): void {
   const threadKey = currentThreadKey?.() ?? ''
-  if (!ws || loadingOlder() || !hasOlderMessages() || !threadKey) return
-  setLoadingOlder(true)
-  ws.send({ type: 'chat.history.full', threadKey } as any)
-}
+  if (!threadKey || loadingMore() || !hasMoreHistory()) return
+  setLoadingMore(true)
 
-/** Check whether archived (pre-compaction) history exists for the current thread. */
-export function checkArchivedHistory(): void {
-  const threadKey = currentThreadKey?.() ?? ''
-  if (!threadKey) return
-  fetch(`/api/threads/${encodeURIComponent(threadKey)}/history/archived`)
+  const cursor = oldestCursor()
+  const params = new URLSearchParams()
+  if (cursor) params.set('before', String(cursor))
+  params.set('limit', '50')
+
+  // Decide which endpoint to hit — live history first, archives when exhausted
+  const endpoint = liveHistoryExhausted()
+    ? `/api/threads/${encodeURIComponent(threadKey)}/history/archived?${params}`
+    : `/api/threads/${encodeURIComponent(threadKey)}/history?${params}`
+
+  fetch(endpoint)
     .then((r) => (r.ok ? r.json() : null))
     .then((data) => {
-      if (data && data.turns?.length > 0) {
-        setHasArchivedHistory(true)
-      } else {
-        setHasArchivedHistory(false)
+      if (!data) {
+        setHasMoreHistory(false)
+        return
       }
-    })
-    .catch(() => setHasArchivedHistory(false))
-}
 
-/** Load pre-compaction archived history and prepend to current turns. */
-export function loadArchivedHistory(): void {
-  const threadKey = currentThreadKey?.() ?? ''
-  if (!threadKey || loadingArchived()) return
-  setLoadingArchived(true)
-  fetch(`/api/threads/${encodeURIComponent(threadKey)}/history/archived`)
-    .then((r) => (r.ok ? r.json() : null))
-    .then((data) => {
-      if (data?.turns?.length) {
-        const archived = stripOriginPrefixes(data.turns)
+      const fetchedTurns: ParsedTurn[] = data.turns ?? []
+
+      if (fetchedTurns.length > 0) {
+        const older = stripOriginPrefixes(fetchedTurns)
         setTurns((prev) => {
-          // Deduplicate by timestamp — archived turns that share a timestamp
-          // with an existing turn get dropped.
+          // Deduplicate by timestamp
           const existingTs = new Set(prev.map((t: ParsedTurn) => t.timestamp).filter(Boolean))
-          const unique = archived.filter((t: ParsedTurn) => !t.timestamp || !existingTs.has(t.timestamp))
+          const unique = older.filter((t: ParsedTurn) => !t.timestamp || !existingTs.has(t.timestamp))
           return [...unique, ...prev]
         })
-        setHasArchivedHistory(false) // Already loaded
+        // Update cursor to the oldest turn in the new page
+        if (data.oldestTimestamp) {
+          setOldestCursor(data.oldestTimestamp)
+        }
+      }
+
+      if (data.hasMore) {
+        setHasMoreHistory(true)
+      } else if (!liveHistoryExhausted()) {
+        // Live history exhausted — check if archives exist by probing the
+        // archived endpoint with the current cursor
+        setLiveHistoryExhausted(true)
+        const archiveParams = new URLSearchParams()
+        if (data.oldestTimestamp) archiveParams.set('before', String(data.oldestTimestamp))
+        archiveParams.set('limit', '1')
+        fetch(`/api/threads/${encodeURIComponent(threadKey)}/history/archived?${archiveParams}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((archiveData) => {
+            setHasMoreHistory(archiveData?.turns?.length > 0 || archiveData?.hasMore)
+          })
+          .catch(() => setHasMoreHistory(false))
+      } else {
+        // Archives also exhausted
+        setHasMoreHistory(false)
       }
     })
     .catch(() => {
       /* ignore */
     })
-    .finally(() => setLoadingArchived(false))
+    .finally(() => setLoadingMore(false))
 }
 
 export function abortChat(): void {
@@ -469,12 +494,30 @@ function connectSSE(threadKey: string): void {
           // gap-triggered fetchHistory would otherwise wipe it. See
           // `merge-history.ts` for the rule.
           setTurns((prev) => mergeFetchedHistory(prev, stripOriginPrefixes(data.turns)))
-          setHasOlderMessages(data.hasMore ?? false)
+          setHasMoreHistory(data.hasMore ?? false)
+          setLiveHistoryExhausted(false)
+          // Set cursor from the oldest turn in the initial load
+          if (data.oldestTimestamp) {
+            setOldestCursor(data.oldestTimestamp)
+          } else if (data.turns.length > 0) {
+            setOldestCursor(data.turns[0].timestamp)
+          }
           if (!historyLoaded) {
             historyLoaded = true
             clearLiveState()
-            // Check for archived pre-compaction history after live loads
-            if (!data.hasMore) checkArchivedHistory()
+            // If live history has no more pages, probe archives to determine
+            // whether hasMoreHistory should remain true
+            if (!data.hasMore) {
+              fetch(`/api/threads/${encodeURIComponent(threadKey)}/history/archived?limit=1`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((archiveData) => {
+                  if (archiveData?.turns?.length > 0) {
+                    setHasMoreHistory(true)
+                    setLiveHistoryExhausted(true)
+                  }
+                })
+                .catch(() => {})
+            }
           }
         }
       })
@@ -519,8 +562,8 @@ function connectSSE(threadKey: string): void {
   eventSource.addEventListener('history', (e) => {
     const data = JSON.parse((e as MessageEvent).data)
     setTurns(stripOriginPrefixes(data.turns ?? []))
-    setHasOlderMessages(data.hasMore ?? false)
-    setLoadingOlder(false)
+    setHasMoreHistory(data.hasMore ?? false)
+    setLoadingMore(false)
     clearLiveState()
   })
 
@@ -745,8 +788,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
     ws.on('chat.session.info', (msg: any) => {
       if (msg.threadKey && msg.threadKey !== _threadKey()) return
       const history: ParsedTurn[] = stripOriginPrefixes(msg.history ?? [])
-      setHasOlderMessages(msg.hasMore ?? false)
-      setLoadingOlder(false)
+      setHasMoreHistory(msg.hasMore ?? false)
+      setLoadingMore(false)
       setTurns(history)
       clearLiveState()
     })
