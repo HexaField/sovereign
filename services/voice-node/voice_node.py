@@ -181,9 +181,11 @@ class VoiceNode:
         input_device: int | None = None,
         push_to_talk: bool = False,
         hotkey=None,
+        device_name: str | None = None,
     ):
         self.server_url = server_url.rstrip("/")
         self.device_id = device_id
+        self.device_name = device_name or platform.node()
         self.model_path = model_path
         self.threshold = threshold
         self.silence_timeout = silence_timeout
@@ -198,10 +200,11 @@ class VoiceNode:
         """Main event loop."""
         self._running = True
         log.info("Voice node starting")
-        log.info("  Server:    %s", self.server_url)
-        log.info("  Device ID: %s", self.device_id)
-        log.info("  Model:     %s", self.model_path)
-        log.info("  Threshold: %.2f", self.threshold)
+        log.info("  Server:      %s", self.server_url)
+        log.info("  Device ID:   %s", self.device_id)
+        log.info("  Device name: %s", self.device_name)
+        log.info("  Model:       %s", self.model_path)
+        log.info("  Threshold:   %.2f", self.threshold)
 
         # Start WebSocket listener for TTS playback in background
         ws_task = asyncio.create_task(self._ws_listener())
@@ -495,6 +498,7 @@ class VoiceNode:
                     content_type="audio/wav",
                 )
                 form.add_field("deviceId", self.device_id)
+                form.add_field("deviceName", self.device_name)
 
                 async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status == 200:
@@ -525,13 +529,14 @@ class VoiceNode:
             try:
                 log.info("Connecting WebSocket to %s", ws_url)
                 async with websockets.connect(ws_url, ssl=ssl_ctx) as ws:
-                    # Subscribe to voice channel
+                    # Announce device name — TTS routes by name via
+                    # sendToDeviceName (same protocol as Android/web clients)
                     await ws.send(json.dumps({
-                        "type": "subscribe",
-                        "channels": ["voice"],
+                        "type": "ws.device-name",
+                        "deviceName": self.device_name,
                         "deviceId": self.device_id,
                     }))
-                    log.info("WebSocket connected — listening for TTS events")
+                    log.info("WebSocket connected — announced as '%s', listening for TTS events", self.device_name)
 
                     async for raw in ws:
                         try:
@@ -539,8 +544,13 @@ class VoiceNode:
                         except json.JSONDecodeError:
                             continue
 
-                        if msg.get("type") == "tts.play":
-                            # Check device routing
+                        msg_type = msg.get("type")
+                        # voice.tts.audio — from the voice-response pipeline
+                        # (ack and summary TTS, routed by sendToDeviceName)
+                        if msg_type == "voice.tts.audio":
+                            await self._play_audio(msg)
+                        # Legacy tts.play — kept for backward compat
+                        elif msg_type == "tts.play":
                             target = msg.get("deviceId")
                             if target and target != self.device_id:
                                 continue
@@ -644,6 +654,11 @@ def main():
         default="right_cmd",
         help="PTT hotkey name (default: right_cmd). Supports: right_cmd, left_cmd, right_alt, left_alt, right_ctrl, left_ctrl, f1–f20",
     )
+    parser.add_argument(
+        "--device-name",
+        default=os.environ.get("DEVICE_NAME", platform.node()),
+        help="Friendly device name for TTS routing (default: $DEVICE_NAME or hostname)",
+    )
     args = parser.parse_args()
 
     if args.list_devices:
@@ -672,6 +687,7 @@ def main():
             input_device=args.input_device,
             push_to_talk=True,
             hotkey=args.hotkey,
+            device_name=args.device_name,
         )
     else:
         model_path = find_wake_model(args.model)
@@ -684,6 +700,7 @@ def main():
             max_capture=args.max_capture,
             input_device=args.input_device,
             push_to_talk=False,
+            device_name=args.device_name,
         )
     asyncio.run(node.run())
 
