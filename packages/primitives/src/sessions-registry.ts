@@ -33,6 +33,8 @@ export interface ThreadSessionRecord {
   effort?: ReasoningEffort
   /** Per-session context window size in tokens. Values above 200k enable the 1M beta. */
   contextWindow?: number
+  /** Backend that previously owned this session, if it was switched. */
+  previousBackendKind?: AgentBackendKind
 }
 
 export interface SessionsRegistry {
@@ -134,6 +136,10 @@ export function createSessionsRegistry(dataDir: string, options: Options = {}): 
         model: input.model ?? existing?.model,
         effort: input.effort ?? existing?.effort,
         contextWindow: input.contextWindow ?? existing?.contextWindow,
+        previousBackendKind:
+          existing && existing.backendKind !== input.backendKind
+            ? existing.backendKind
+            : ((input as any).previousBackendKind ?? existing?.previousBackendKind),
         createdAt: existing?.createdAt ?? input.createdAt ?? now,
         updatedAt: now
       }

@@ -1462,7 +1462,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
   async function createSession(label?: string, opts?: CreateSessionOptions): Promise<string> {
     const sessionKey = opts?.threadKey?.trim() || randomUUID()
-    ensureSession(sessionKey, {
+    const isNew = !sessions.has(sessionKey)
+    const state = ensureSession(sessionKey, {
       cwd: opts?.cwd,
       model: opts?.model?.model,
       label,
@@ -1470,6 +1471,22 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       contextWindow: opts?.contextWindow,
       systemPromptOverride: opts?.systemPromptOverride
     })
+
+    // Seed prior conversation history when migrating from another backend.
+    // Only apply to newly created sessions — if ensureSession returned an
+    // existing session, the history is already there.
+    if (isNew && opts?.seedHistory && opts.seedHistory.length > 0 && state.messages.length === 0) {
+      for (const turn of opts.seedHistory) {
+        if (turn.role === 'user' || turn.role === 'assistant') {
+          state.messages.push({
+            role: turn.role as 'user' | 'assistant',
+            content: turn.content,
+            timestamp: turn.timestamp
+          })
+        }
+      }
+      persist(state)
+    }
     // Mirror the session binding into the shared registry so the routing
     // layer resolves this session to local-llm on future lookups.
     deps.registry?.upsertSession({

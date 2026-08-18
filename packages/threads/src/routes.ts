@@ -9,6 +9,7 @@ import {
   type AgentBackend,
   type AgentBackendKind,
   type BackendRouter,
+  type ParsedTurn,
   type SessionSummary,
   type SubagentSummary,
   type ThreadSessionBinding
@@ -901,13 +902,26 @@ export function createThreadRoutes(
     }
 
     try {
-      // Create a new session on the target backend, bound to this thread.
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+
+      // Read full history from the CURRENT backend BEFORE switching.
+      // This preserves the conversation for the new backend.
+      let seedHistory: ParsedTurn[] = []
+      try {
+        const currentBackend = routing.forSession(sessionKey)
+        seedHistory = await currentBackend.getFullHistory(sessionKey)
+      } catch {
+        // Old backend may not have history — proceed without seed
+      }
+
+      // Create session on the target backend, seeded with prior conversation
       await targetBackend.createSession(thread.label, {
         threadKey,
         kind: 'thread',
-        ...(thread.contextWindow ? { contextWindow: thread.contextWindow } : {})
+        ...(thread.contextWindow ? { contextWindow: thread.contextWindow } : {}),
+        ...(seedHistory.length > 0 ? { seedHistory } : {})
       })
+
       // Update the registry binding so future messages route to the new backend.
       routing.bindThread({
         threadKey,
