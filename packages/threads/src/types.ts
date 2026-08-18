@@ -84,6 +84,8 @@ export interface ThreadManager {
       subagentBackend?: string | null
       /** Set to a model id to override subagent model; `null` to clear. */
       subagentModel?: string | null
+      /** Set the thread's preferred model; `null` to clear. */
+      model?: string | null
     }
   ): ThreadInfo | undefined
   /** Returns the single thread carrying the given presence role, or null when

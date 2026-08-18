@@ -76,6 +76,13 @@ export interface ThreadInfo {
    * Unset = backend default.
    */
   subagentModel?: string
+  /**
+   * Preferred model for this thread's own inference session.
+   * When set, session creation / rehydration uses this model instead
+   * of the backend default. Updated via PATCH /api/threads/:key/model.
+   * Format: bare model id (e.g. `'qwen3.8-27b-rocmfp4'`).
+   */
+  model?: string
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus
