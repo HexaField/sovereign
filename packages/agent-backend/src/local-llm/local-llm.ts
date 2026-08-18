@@ -34,7 +34,12 @@ import { createToolExecutor } from './tools/index.js'
 import type { ToolResult } from './tools/index.js'
 import { CORE_TOOL_SCHEMAS } from './tools/schemas.js'
 import type { ToolSchema } from './tools/schemas.js'
-import { SOVEREIGN_TOOL_SCHEMAS, EMBEDDINGS_TOOL_SCHEMAS, createSovereignToolExecutor } from './tools/sovereign.js'
+import {
+  SOVEREIGN_TOOL_SCHEMAS,
+  EMBEDDINGS_TOOL_SCHEMAS,
+  PRESENCE_TOOL_SCHEMAS,
+  createSovereignToolExecutor
+} from './tools/sovereign.js'
 import type { SovereignToolsDeps } from './tools/sovereign.js'
 import { SEMBLE_TOOL_SCHEMAS, createSembleToolExecutor } from './tools/semble.js'
 import { createMcpBridge } from './tools/mcp-bridge.js'
@@ -343,6 +348,7 @@ export function createLocalLlmBackend(
   // load them on demand. This keeps the per-request schema payload small
   // (~7 tools instead of 98+) and avoids blowing the context window.
   const hasEmbeddings = !!deps.sovereignTools?.embeddings
+  const hasPresence = !!deps.sovereignTools?.presence
 
   /** Schemas sent on every completion call — small, always available. */
   const coreSchemas: ToolSchema[] = [...CORE_TOOL_SCHEMAS, toolSearchSchema]
@@ -350,6 +356,7 @@ export function createLocalLlmBackend(
   /** Schemas available via ToolSearch — NOT sent on the wire until loaded. */
   const deferredSchemas: ToolSchema[] = [
     ...(deps.sovereignTools ? SOVEREIGN_TOOL_SCHEMAS : []),
+    ...(hasPresence ? PRESENCE_TOOL_SCHEMAS : []),
     ...(hasEmbeddings ? EMBEDDINGS_TOOL_SCHEMAS : []),
     ...(sembleEnabled ? SEMBLE_TOOL_SCHEMAS : [])
   ]

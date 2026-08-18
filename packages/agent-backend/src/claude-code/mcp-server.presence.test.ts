@@ -1,16 +1,14 @@
 // Tests for presence-tool registration and session-role gating in the
 // Sovereign MCP server. Verifies that:
-//  - All 7 presence tools appear when deps.presence exists
-//  - Internal-only tools refuse calls from a gateway session
-//  - Gateway-only tools refuse calls from an internal session
-//  - Both tool sets work from their intended session
+//  - All 5 presence tools appear when deps.presence exists
+//  - Internal-only tools refuse calls from a non-internal session
+//  - All tools work from the internal session
 
 import { describe, it, expect, vi } from 'vitest'
 import { createSovereignMcpServer, type SovereignToolDeps, type PresenceMcpDeps } from './mcp-server.js'
 
 const INTERNAL_ID = 'aaaa-internal'
 const GATEWAY_ID = 'bbbb-gateway'
-const OTHER_ID = 'cccc-other'
 
 function makePresence(overrides: Partial<PresenceMcpDeps> = {}): PresenceMcpDeps {
   return {
@@ -23,12 +21,8 @@ function makePresence(overrides: Partial<PresenceMcpDeps> = {}): PresenceMcpDeps
     },
     tools: {
       reply_voice: vi.fn().mockResolvedValue({ delivered: true }),
-      reply_ad4m: vi.fn().mockResolvedValue({ delivered: true }),
-      reply_text: vi.fn().mockResolvedValue({ delivered: true }),
-      reply_webhook: vi.fn().mockResolvedValue({ delivered: false, reason: 'not-implemented' })
+      reply_ad4m: vi.fn().mockResolvedValue({ delivered: true })
     },
-    forwardToInternal: vi.fn().mockResolvedValue({ delivered: true }),
-    internalHistory: vi.fn().mockResolvedValue({ turns: [{ role: 'user', content: 'hello' }] }),
     resolveThreadId: vi.fn().mockImplementation((id: string) => id),
     ...overrides
   }
@@ -81,26 +75,20 @@ function invokeHandler(tools: Record<string, any>, name: string, args: Record<st
   return handler(args, {})
 }
 
-const PRESENCE_INTERNAL_TOOLS = [
+const PRESENCE_TOOLS = [
   'presence_reply_voice',
   'presence_reply_ad4m',
-  'presence_reply_text',
-  'presence_reply_webhook',
   'presence_watch',
   'presence_unwatch',
   'presence_watched'
 ]
 
-const PRESENCE_GATEWAY_TOOLS = ['presence_internal_send', 'presence_internal_history']
-
-const ALL_PRESENCE_TOOLS = [...PRESENCE_INTERNAL_TOOLS, ...PRESENCE_GATEWAY_TOOLS]
-
 describe('mcp-server presence tools', () => {
-  it('registers all 9 presence tools when deps.presence exists', () => {
+  it('registers all 5 presence tools when deps.presence exists', () => {
     const deps = makeDeps({ presence: makePresence() })
     const tools = getTools(deps)
     const names = Object.keys(tools)
-    for (const expected of ALL_PRESENCE_TOOLS) {
+    for (const expected of PRESENCE_TOOLS) {
       expect(names, `missing tool: ${expected}`).toContain(expected)
     }
   })
@@ -109,13 +97,13 @@ describe('mcp-server presence tools', () => {
     const deps = makeDeps({ presence: undefined })
     const tools = getTools(deps)
     const names = Object.keys(tools)
-    for (const absent of ALL_PRESENCE_TOOLS) {
+    for (const absent of PRESENCE_TOOLS) {
       expect(names, `should not include: ${absent}`).not.toContain(absent)
     }
   })
 
-  describe('internal-only tools refuse from gateway session', () => {
-    for (const toolName of PRESENCE_INTERNAL_TOOLS) {
+  describe('internal-only tools refuse from non-internal session', () => {
+    for (const toolName of PRESENCE_TOOLS) {
       it(`${toolName} refuses from gateway session`, async () => {
         const deps = makeDeps({
           presence: makePresence(),
@@ -123,7 +111,6 @@ describe('mcp-server presence tools', () => {
         })
         const tools = getTools(deps)
         const minArgs: Record<string, unknown> = {}
-        if (toolName === 'presence_reply_webhook') minArgs.source = 'test'
         if (toolName.includes('reply')) minArgs.text = 'hello'
         if (toolName === 'presence_watch' || toolName === 'presence_unwatch') minArgs.threadId = 't1'
         const result = await invokeHandler(tools, toolName, minArgs)
@@ -172,33 +159,6 @@ describe('mcp-server presence tools', () => {
       })
     })
 
-    it('presence_reply_text calls the text reply handler', async () => {
-      const presence = makePresence()
-      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
-      const tools = getTools(deps)
-      await invokeHandler(tools, 'presence_reply_text', { text: 'hello user' })
-      expect(presence.tools.reply_text).toHaveBeenCalledWith('hello user', undefined)
-    })
-
-    it('presence_reply_text resolves threadId via resolveThreadId', async () => {
-      const presence = makePresence({
-        resolveThreadId: vi.fn().mockReturnValue('resolved-uuid')
-      })
-      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
-      const tools = getTools(deps)
-      await invokeHandler(tools, 'presence_reply_text', { text: 'broadcast', threadId: 'my-label' })
-      expect(presence.resolveThreadId).toHaveBeenCalledWith('my-label')
-      expect(presence.tools.reply_text).toHaveBeenCalledWith('broadcast', { threadId: 'resolved-uuid' })
-    })
-
-    it('presence_reply_webhook calls the webhook reply handler', async () => {
-      const presence = makePresence()
-      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
-      const tools = getTools(deps)
-      await invokeHandler(tools, 'presence_reply_webhook', { text: 'ack', source: 'github-webhook' })
-      expect(presence.tools.reply_webhook).toHaveBeenCalledWith('ack', { source: 'github-webhook' })
-    })
-
     it('presence_watch adds a thread with reason', async () => {
       const presence = makePresence()
       const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
@@ -226,60 +186,6 @@ describe('mcp-server presence tools', () => {
       const tools = getTools(deps)
       await invokeHandler(tools, 'presence_watched', {})
       expect(presence.watch.list).toHaveBeenCalled()
-    })
-  })
-
-  describe('gateway-only tools refuse from internal session', () => {
-    for (const toolName of PRESENCE_GATEWAY_TOOLS) {
-      it(`${toolName} refuses from internal session`, async () => {
-        const deps = makeDeps({
-          presence: makePresence(),
-          currentSessionKey: () => INTERNAL_ID
-        })
-        const tools = getTools(deps)
-        const result = await invokeHandler(tools, toolName, { text: 'hello', limit: 5 })
-        expect(JSON.stringify(result.content)).toContain('this tool can only be used from the gateway session')
-      })
-    }
-  })
-
-  describe('gateway-only tools succeed from gateway session', () => {
-    it('presence_internal_send forwards to internal', async () => {
-      const presence = makePresence()
-      const deps = makeDeps({ presence, currentSessionKey: () => GATEWAY_ID })
-      const tools = getTools(deps)
-      await invokeHandler(tools, 'presence_internal_send', { text: 'remember this' })
-      expect(presence.forwardToInternal).toHaveBeenCalledWith('remember this', undefined)
-    })
-
-    it('presence_internal_send passes deviceId when provided', async () => {
-      const presence = makePresence()
-      const deps = makeDeps({ presence, currentSessionKey: () => GATEWAY_ID })
-      const tools = getTools(deps)
-      await invokeHandler(tools, 'presence_internal_send', { text: 'from phone', deviceId: 'phone-1' })
-      expect(presence.forwardToInternal).toHaveBeenCalledWith('from phone', { deviceId: 'phone-1' })
-    })
-
-    it('presence_internal_history reads internal turns', async () => {
-      const presence = makePresence()
-      const deps = makeDeps({ presence, currentSessionKey: () => GATEWAY_ID })
-      const tools = getTools(deps)
-      const result = await invokeHandler(tools, 'presence_internal_history', { limit: 10 })
-      expect(presence.internalHistory).toHaveBeenCalledWith(10)
-      const text = JSON.parse(result.content[0].text)
-      expect(text.turns).toBeDefined()
-    })
-  })
-
-  describe('gateway-only tools refuse from unrelated session', () => {
-    it('presence_internal_send refuses from an unrelated thread', async () => {
-      const deps = makeDeps({
-        presence: makePresence(),
-        currentSessionKey: () => OTHER_ID
-      })
-      const tools = getTools(deps)
-      const result = await invokeHandler(tools, 'presence_internal_send', { text: 'test' })
-      expect(JSON.stringify(result.content)).toContain('this tool can only be used from the gateway session')
     })
   })
 })

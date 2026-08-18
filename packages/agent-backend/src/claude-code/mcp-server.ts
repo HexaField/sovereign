@@ -134,13 +134,7 @@ export interface PresenceMcpDeps {
   tools: {
     reply_voice(text: string, opts?: { deviceId?: string }): Promise<unknown>
     reply_ad4m(text: string, opts?: { perspectiveUuid?: string; channelAddress?: string }): Promise<unknown>
-    reply_text(text: string, opts?: { threadId?: string }): Promise<unknown>
-    reply_webhook(text: string, opts: { source: string }): Promise<unknown>
   }
-  /** Forward a text-modality inbound into the internal thread from the gateway. */
-  forwardToInternal(text: string, opts?: { deviceId?: string }): Promise<{ delivered: boolean }>
-  /** Read the last N turns of the internal thread, for the gateway agent's situational awareness. */
-  internalHistory(limit?: number): Promise<{ turns: Array<{ role: string; content: string }> }>
   /** Optional: resolve a thread id by label so the agent can `presence_watch` by name. */
   resolveThreadId?(idOrLabel: string): string | undefined
 }
@@ -568,10 +562,6 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
     function ensureInternal() {
       return refuseFor('internal', presence.internalThreadId())
     }
-    function ensureGateway() {
-      return refuseFor('gateway', presence.gatewayThreadId())
-    }
-
     // ── Internal-only tools (reply + watch) ─────────────────────────────
     tools.push(
       tool(
@@ -610,35 +600,6 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
         }
       ),
       tool(
-        'presence_reply_text',
-        'Post a normal chat turn — defaults to the GATEWAY thread so the user sees your reply in their primary chat surface. Pass `threadId` to broadcast into another thread. Only callable from the presence-internal thread.',
-        {
-          text: z.string(),
-          threadId: z.string().optional().describe('Target thread id or label. Defaults to the gateway thread.')
-        },
-        async (args) => {
-          const refusal = ensureInternal()
-          if (refusal) return refusal
-          const resolved = args.threadId ? (presence.resolveThreadId?.(args.threadId) ?? args.threadId) : undefined
-          const result = await presence.tools.reply_text(args.text, resolved ? { threadId: resolved } : undefined)
-          return okJson(result)
-        }
-      ),
-      tool(
-        'presence_reply_webhook',
-        'Stub — reaches back to a webhook source. Currently returns { delivered: false, reason: "not-implemented" }. Only callable from the presence-internal thread.',
-        {
-          text: z.string(),
-          source: z.string().describe('Webhook source identifier carried in the inbound origin.')
-        },
-        async (args) => {
-          const refusal = ensureInternal()
-          if (refusal) return refusal
-          const result = await presence.tools.reply_webhook(args.text, { source: args.source })
-          return okJson(result)
-        }
-      ),
-      tool(
         'presence_watch',
         'Watch a thread — its assistant turns will be summarised into the next inbound digest. Only callable from the presence-internal thread.',
         {
@@ -673,40 +634,6 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
           const refusal = ensureInternal()
           if (refusal) return refusal
           return okJson({ watched: presence.watch.list() })
-        }
-      )
-    )
-
-    // ── Gateway-only tools (forward + read internal state) ──────────────
-    tools.push(
-      tool(
-        'presence_internal_send',
-        'Forward a text message into the internal (presence-internal) thread as a text-modality inbound. Use this when the user asks you to remember something, watch a thread, take an action with the ambient tools, etc. Only callable from the gateway thread.',
-        {
-          text: z.string(),
-          deviceId: z.string().optional().describe('Originating deviceId, if relevant for reply routing.')
-        },
-        async (args) => {
-          const refusal = ensureGateway()
-          if (refusal) return refusal
-          const result = await presence.forwardToInternal(
-            args.text,
-            args.deviceId ? { deviceId: args.deviceId } : undefined
-          )
-          return okJson(result)
-        }
-      ),
-      tool(
-        'presence_internal_history',
-        "Peek at the internal thread's recent turns. Useful for summarising Hex's ambient activity to the user. Only callable from the gateway thread.",
-        {
-          limit: z.number().int().min(1).max(100).optional().default(20)
-        },
-        async (args) => {
-          const refusal = ensureGateway()
-          if (refusal) return refusal
-          const result = await presence.internalHistory(args.limit)
-          return okJson(result)
         }
       )
     )

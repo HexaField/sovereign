@@ -576,18 +576,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       list: () => presenceModule.watchStore.list()
     },
     tools: presenceModule.tools,
-    forwardToInternal: (text: string, opts?: { deviceId?: string }) => presenceModule.forwardToInternal(text, opts),
-    internalHistory: async (limit?: number) => {
-      const id = presenceModule.internalThreadId()
-      if (!id) return { turns: [] }
-      try {
-        const { turns } = await routingBackend.forSession(id).getHistory(id)
-        const sliced = turns.slice(-(limit ?? 20))
-        return { turns: sliced.map((t: any) => ({ role: t.role, content: t.content })) }
-      } catch {
-        return { turns: [] }
-      }
-    },
     resolveThreadId: (idOrLabel: string) => threadManager.resolve(idOrLabel)?.id
   }
   // Presence files live alongside the personality sources in configDir
