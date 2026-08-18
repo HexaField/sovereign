@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { runToolLoop, type ChatMessage, type ToolLoopDeps } from './tool-loop.js'
-import type { CompletionResponse } from './inference.js'
+import { ContextOverflowError, type CompletionResponse } from './inference.js'
 
 function response(
   message: { content: string | null; tool_calls?: CompletionResponse['choices'][number]['message']['tool_calls'] },
@@ -178,5 +178,39 @@ describe('runToolLoop', () => {
     const emit = vi.fn()
     await runToolLoop('sess', [userMsg('hi')], baseDeps({ complete, emit }))
     expect(emit.mock.calls.some((c) => c[0] === 'chat.stream')).toBe(false)
+  })
+
+  it('catches ContextOverflowError, calls onContextOverflow, and retries', async () => {
+    // First call: overflow. After compaction: success.
+    const complete = vi
+      .fn()
+      .mockRejectedValueOnce(new ContextOverflowError(400, 'exceeds the available context size'))
+      .mockResolvedValueOnce(response({ content: 'Done after compaction.' }))
+    const onContextOverflow = vi.fn().mockResolvedValue(true)
+    const emit = vi.fn()
+    const deps = baseDeps({ complete, emit, onContextOverflow })
+    const messages = [userMsg('do something big')]
+
+    const result = await runToolLoop('sess', messages, deps)
+
+    expect(onContextOverflow).toHaveBeenCalledTimes(1)
+    expect(complete).toHaveBeenCalledTimes(2) // overflow + retry
+    expect(result.finalContent).toBe('Done after compaction.')
+  })
+
+  it('re-throws ContextOverflowError when onContextOverflow returns false', async () => {
+    const complete = vi.fn().mockRejectedValue(new ContextOverflowError(400, 'exceeds the available context size'))
+    const onContextOverflow = vi.fn().mockResolvedValue(false)
+    const deps = baseDeps({ complete, onContextOverflow })
+
+    await expect(runToolLoop('sess', [userMsg('overflow')], deps)).rejects.toThrow(ContextOverflowError)
+    expect(onContextOverflow).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-throws ContextOverflowError when no onContextOverflow handler exists', async () => {
+    const complete = vi.fn().mockRejectedValue(new ContextOverflowError(400, 'exceeds the available context size'))
+    const deps = baseDeps({ complete })
+
+    await expect(runToolLoop('sess', [userMsg('overflow')], deps)).rejects.toThrow(ContextOverflowError)
   })
 })

@@ -1141,6 +1141,123 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
             isSubagent: !!state.parentSessionKey
           })
         }
+      },
+
+      // Emergency compaction — triggered when the server rejects a request
+      // because context exceeds n_ctx. Forces compaction regardless of the
+      // threshold estimate (which may have underestimated).
+      onContextOverflow: async (loopMessages) => {
+        const conversationLen = loopMessages.length - 1
+        if (conversationLen <= COMPACT_KEEP_RECENT + 2) return false
+
+        const conversation = loopMessages.slice(1)
+        const dropCount = findSafeDropCount(conversation, COMPACT_KEEP_RECENT)
+        if (dropCount <= 0) return false
+
+        console.warn(
+          `[local-llm] emergency compaction: dropping ${dropCount} messages after context overflow for ${state.sessionKey}`
+        )
+
+        // Emit compaction activity
+        emitter.emit('chat.work', {
+          sessionKey: state.sessionKey,
+          work: {
+            type: 'tool_call',
+            toolCallId: `overflow-compact-${Date.now()}`,
+            name: '_compaction',
+            input: `Emergency compaction: context overflow, dropping ${dropCount} messages`,
+            timestamp: Date.now()
+          } as any
+        })
+
+        const dropped = conversation.splice(0, dropCount)
+        loopMessages.length = 1 // keep system message
+        loopMessages.push(...conversation)
+
+        // Check for prior compaction summary
+        let priorSummary = ''
+        if (
+          dropped.length > 0 &&
+          dropped[0].role === 'system' &&
+          (dropped[0].content?.startsWith('[CONTEXT COMPACTION') || dropped[0].content?.startsWith('[Compacted'))
+        ) {
+          priorSummary = dropped[0].content!
+          dropped.shift()
+        }
+
+        const transcript = buildCompactionTranscript(dropped)
+        let summaryContent: string
+
+        try {
+          const summariseMessages: WireChatMessage[] = [
+            { role: 'system', content: COMPACTION_SYSTEM_PROMPT },
+            ...(priorSummary
+              ? [
+                  {
+                    role: 'user' as const,
+                    content:
+                      'A previous compaction summary exists. UPDATE it with new information from the ' +
+                      'conversation excerpt below — move completed items to "Done", update "In Progress", ' +
+                      'and revise "Next Step". Do not discard prior context that remains relevant.\n\n' +
+                      `Previous summary:\n\n${priorSummary}`
+                  }
+                ]
+              : []),
+            { role: 'user', content: `Summarize this conversation excerpt:\n\n${transcript}` }
+          ]
+          const response = await state.client.complete(summariseMessages, {
+            signal: AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
+          })
+          const rawSummary = response.choices?.[0]?.message?.content?.trim()
+          if (rawSummary && rawSummary.length > 50) {
+            const extracted = extractSummary(rawSummary)
+            summaryContent = [COMPACTION_SUMMARY_PREFIX, '', extracted, '', COMPACTION_SUMMARY_SUFFIX].join('\n')
+          } else {
+            summaryContent = buildHeuristicSummary(dropped)
+          }
+        } catch (err) {
+          console.error(
+            `[local-llm] emergency compaction summary failed for ${state.sessionKey}: ${(err as Error).message}`
+          )
+          summaryContent = buildHeuristicSummary(dropped)
+        }
+
+        // Merge summary into the leading system message (same approach as mid-loop)
+        loopMessages[0] = {
+          ...loopMessages[0],
+          content: loopMessages[0].content + '\n\n' + summaryContent
+        }
+
+        state.compactionCount = (state.compactionCount ?? 0) + 1
+        midLoopCompacted = true
+
+        emitter.emit('chat.work', {
+          sessionKey: state.sessionKey,
+          work: {
+            type: 'tool_result',
+            toolCallId: `overflow-compact-${Date.now()}`,
+            name: '_compaction',
+            output: `Emergency compacted ${dropped.length} messages into summary. Compaction #${state.compactionCount}.`,
+            timestamp: Date.now()
+          } as any
+        })
+
+        if (deps.metrics) {
+          deps.metrics.recordCompaction({
+            ts: Date.now(),
+            sessionKey: state.sessionKey,
+            backendKind: 'local-llm',
+            model: state.model,
+            preTokens: state.lastPromptTokens ?? 0,
+            postTokens: 0, // unknown until next inference
+            tokensReclaimed: 0,
+            method: 'compaction',
+            isSubagent: !!state.parentSessionKey
+          })
+        }
+
+        persist(state)
+        return true
       }
     }
 
