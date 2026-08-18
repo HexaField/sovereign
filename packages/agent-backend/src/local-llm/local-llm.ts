@@ -564,7 +564,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
   async function maybeCompact(state: LocalLlmSessionState, contextWindow: number): Promise<void> {
     const estimatedTokens = estimateSessionTokens(state)
-    const threshold = Math.floor(contextWindow * COMPACT_THRESHOLD_RATIO)
+    const threshold = getConfig().compactThreshold ?? Math.floor(contextWindow * COMPACT_THRESHOLD_RATIO)
     if (estimatedTokens < threshold) return
     if (state.messages.length <= COMPACT_KEEP_RECENT + 2) return
 
@@ -1031,7 +1031,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       onIterationEnd: async (promptTokens, loopMessages) => {
         state.lastPromptTokens = promptTokens
         const ctxWin = state.contextWindow ?? getConfig().contextWindow
-        const threshold = Math.floor(ctxWin * COMPACT_THRESHOLD_RATIO)
+        const threshold = getConfig().compactThreshold ?? Math.floor(ctxWin * COMPACT_THRESHOLD_RATIO)
         if (promptTokens < threshold) return
         // loopMessages[0] = system message; conversation starts at [1].
         const conversationLen = loopMessages.length - 1

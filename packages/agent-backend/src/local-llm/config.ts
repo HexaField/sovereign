@@ -14,6 +14,10 @@ export interface LocalLlmConfig {
   model: string
   /** Maximum context window in tokens — used for the usage bar, not enforced on the wire. */
   contextWindow: number
+  /** Compact when prompt tokens exceed this value. When unset, falls back to
+   *  contextWindow × 0.75. Set this to control the compaction trigger point
+   *  independently of the context window (e.g. compact at 100K in a 131K window). */
+  compactThreshold?: number
   /** Sampling temperature. */
   temperature: number
   /** Maximum output tokens per completion. */
@@ -45,6 +49,7 @@ interface RawLocalLlmConfig {
   baseUrl?: string
   model?: string
   contextWindow?: number
+  compactThreshold?: number
   temperature?: number
   maxTokens?: number
   timeoutMs?: number
@@ -70,6 +75,7 @@ export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: strin
     baseUrl: cfg.baseUrl?.trim() || 'http://localhost:8080',
     model: cfg.model?.trim() || 'default',
     contextWindow: cfg.contextWindow ?? 32768,
+    compactThreshold: cfg.compactThreshold,
     temperature: cfg.temperature ?? 0.1,
     maxTokens: cfg.maxTokens ?? 4096,
     timeoutMs: cfg.timeoutMs ?? 600_000,
