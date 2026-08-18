@@ -98,6 +98,22 @@ export interface SovereignToolsDeps {
     listCollections(): Array<{ collection: string; count: number }>
     healthy(): Promise<boolean>
   }
+  /** Presence-thread integration. When provided, registers presence_reply_voice,
+   *  presence_reply_ad4m, presence_watch/unwatch/watched tools (gated to
+   *  the internal thread). */
+  presence?: {
+    internalThreadId(): string | null
+    tools: {
+      reply_voice(text: string, opts?: { deviceId?: string }): Promise<unknown>
+      reply_ad4m(text: string, opts?: { perspectiveUuid?: string; channelAddress?: string }): Promise<unknown>
+    }
+    watch: {
+      add(threadId: string, reason?: string): { threadId: string; reason?: string; addedAt: string }
+      remove(threadId: string): boolean
+      list(): Array<{ threadId: string; reason?: string; addedAt: string }>
+    }
+    resolveThreadId?(idOrLabel: string): string | undefined
+  }
 }
 
 // ── Schemas ─────────────────────────────────────────────────────────────
@@ -484,6 +500,90 @@ const embeddingsHealthSchema: ToolSchema = {
   }
 }
 
+const presenceReplyVoiceSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_presence_reply_voice',
+    description:
+      'Synthesize a voice (TTS) reply to the last voice-origin device, or an explicit deviceId. Only callable from the presence-internal thread.',
+    parameters: {
+      type: 'object',
+      required: ['text'],
+      properties: {
+        text: { type: 'string', description: 'The spoken reply text — keep it short and conversational.' },
+        deviceId: { type: 'string', description: 'Override the target deviceId (defaults to the last voice origin).' }
+      },
+      additionalProperties: false
+    }
+  }
+}
+
+const presenceReplyAd4mSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_presence_reply_ad4m',
+    description:
+      'Post a reply into the AD4M channel of the last ad4m-origin message (or explicit perspective/channel). Only callable from the presence-internal thread.',
+    parameters: {
+      type: 'object',
+      required: ['text'],
+      properties: {
+        text: { type: 'string' },
+        perspectiveUuid: { type: 'string' },
+        channelAddress: { type: 'string' }
+      },
+      additionalProperties: false
+    }
+  }
+}
+
+const presenceWatchSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_presence_watch',
+    description:
+      'Watch a thread — its assistant turns will be summarised into the next inbound digest. Only callable from the presence-internal thread.',
+    parameters: {
+      type: 'object',
+      required: ['threadId'],
+      properties: {
+        threadId: { type: 'string', description: 'Thread id (UUID) or label.' },
+        reason: { type: 'string', description: 'Short note about why this thread is being watched.' }
+      },
+      additionalProperties: false
+    }
+  }
+}
+
+const presenceUnwatchSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_presence_unwatch',
+    description: 'Stop watching a thread. Only callable from the presence-internal thread.',
+    parameters: {
+      type: 'object',
+      required: ['threadId'],
+      properties: {
+        threadId: { type: 'string', description: 'Thread id (UUID) or label.' }
+      },
+      additionalProperties: false
+    }
+  }
+}
+
+const presenceWatchedSchema: ToolSchema = {
+  type: 'function',
+  function: {
+    name: 'sovereign_presence_watched',
+    description: 'List threads currently watched. Only callable from the presence-internal thread.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  }
+}
+
 // ── Exported schemas ────────────────────────────────────────────────────
 
 export const EMBEDDINGS_TOOL_SCHEMAS: ToolSchema[] = [
@@ -511,6 +611,14 @@ export const SOVEREIGN_TOOL_SCHEMAS: ToolSchema[] = [
   browserActSchema,
   browserCloseSchema,
   webFetchSchema
+]
+
+export const PRESENCE_TOOL_SCHEMAS: ToolSchema[] = [
+  presenceReplyVoiceSchema,
+  presenceReplyAd4mSchema,
+  presenceWatchSchema,
+  presenceUnwatchSchema,
+  presenceWatchedSchema
 ]
 
 // ── Executor ────────────────────────────────────────────────────────────
@@ -724,6 +832,68 @@ export function createSovereignToolExecutor(
           if (!deps.embeddings) return fail('Embeddings service not configured.')
           const healthy = await deps.embeddings.healthy()
           return ok({ healthy })
+        }
+
+        // ── presence ──────────────────────────────────────────────
+        case 'sovereign_presence_reply_voice': {
+          if (!deps.presence) return fail('presence tools not available')
+          const currentKey = deps.currentSessionKey?.()
+          const internalId = deps.presence.internalThreadId()
+          if (!currentKey || !internalId || currentKey !== internalId) {
+            return fail('this tool can only be used from the presence-internal session')
+          }
+          const result = await deps.presence.tools.reply_voice(
+            String(input.text),
+            input.deviceId ? { deviceId: String(input.deviceId) } : undefined
+          )
+          return ok(result)
+        }
+        case 'sovereign_presence_reply_ad4m': {
+          if (!deps.presence) return fail('presence tools not available')
+          const currentKey = deps.currentSessionKey?.()
+          const internalId = deps.presence.internalThreadId()
+          if (!currentKey || !internalId || currentKey !== internalId) {
+            return fail('this tool can only be used from the presence-internal session')
+          }
+          const opts: { perspectiveUuid?: string; channelAddress?: string } = {}
+          if (input.perspectiveUuid) opts.perspectiveUuid = String(input.perspectiveUuid)
+          if (input.channelAddress) opts.channelAddress = String(input.channelAddress)
+          const result = await deps.presence.tools.reply_ad4m(
+            String(input.text),
+            Object.keys(opts).length ? opts : undefined
+          )
+          return ok(result)
+        }
+        case 'sovereign_presence_watch': {
+          if (!deps.presence) return fail('presence tools not available')
+          const currentKey = deps.currentSessionKey?.()
+          const internalId = deps.presence.internalThreadId()
+          if (!currentKey || !internalId || currentKey !== internalId) {
+            return fail('this tool can only be used from the presence-internal session')
+          }
+          const resolved = deps.presence.resolveThreadId?.(String(input.threadId)) ?? String(input.threadId)
+          const entry = deps.presence.watch.add(resolved, input.reason as string | undefined)
+          return ok({ watched: entry })
+        }
+        case 'sovereign_presence_unwatch': {
+          if (!deps.presence) return fail('presence tools not available')
+          const currentKey = deps.currentSessionKey?.()
+          const internalId = deps.presence.internalThreadId()
+          if (!currentKey || !internalId || currentKey !== internalId) {
+            return fail('this tool can only be used from the presence-internal session')
+          }
+          const resolved = deps.presence.resolveThreadId?.(String(input.threadId)) ?? String(input.threadId)
+          const removed = deps.presence.watch.remove(resolved)
+          return ok({ removed })
+        }
+        case 'sovereign_presence_watched': {
+          if (!deps.presence) return fail('presence tools not available')
+          const currentKey = deps.currentSessionKey?.()
+          const internalId = deps.presence.internalThreadId()
+          if (!currentKey || !internalId || currentKey !== internalId) {
+            return fail('this tool can only be used from the presence-internal session')
+          }
+          return ok({ watched: deps.presence.watch.list() })
         }
 
         default:
