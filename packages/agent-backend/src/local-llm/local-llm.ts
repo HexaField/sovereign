@@ -1469,7 +1469,6 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
   async function createSession(label?: string, opts?: CreateSessionOptions): Promise<string> {
     const sessionKey = opts?.threadKey?.trim() || randomUUID()
-    const isNew = !sessions.has(sessionKey)
     const state = ensureSession(sessionKey, {
       cwd: opts?.cwd,
       model: opts?.model?.model,
@@ -1480,9 +1479,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     })
 
     // Seed prior conversation history when migrating from another backend.
-    // Only apply to newly created sessions — if ensureSession returned an
-    // existing session, the history is already there.
-    if (isNew && opts?.seedHistory && opts.seedHistory.length > 0 && state.messages.length === 0) {
+    // Apply whenever the session has no messages — covers both fresh sessions
+    // and stale ones left empty by a previous backend switch.
+    if (opts?.seedHistory && opts.seedHistory.length > 0 && state.messages.length === 0) {
       for (const turn of opts.seedHistory) {
         if (turn.role === 'user' || turn.role === 'assistant') {
           state.messages.push({
