@@ -183,24 +183,33 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
   router.get('/api/threads/:threadId/history', async (req, res) => {
     const threadId = req.params.threadId
     const sessionKey = chatModule.resolveSessionKey(threadId)
+    const before = req.query.before ? Number(req.query.before) : undefined
+    const limit = req.query.limit ? Number(req.query.limit) : undefined
+    const paginationOpts = before || limit ? { before, limit } : undefined
 
-    // Check response cache first
-    const cached = historyResponseCache.get(threadId)
-    if (cached && Date.now() - cached.timestamp < HISTORY_CACHE_TTL) {
-      const json = JSON.stringify(cached.data)
-      const etag = `"${crypto.createHash('md5').update(json).digest('hex')}"`
-      if (req.headers['if-none-match'] === etag) {
-        return res.status(304).end()
+    // Only use cache for initial loads (no cursor) — paginated requests bypass
+    if (!paginationOpts) {
+      const cached = historyResponseCache.get(threadId)
+      if (cached && Date.now() - cached.timestamp < HISTORY_CACHE_TTL) {
+        const json = JSON.stringify(cached.data)
+        const etag = `"${crypto.createHash('md5').update(json).digest('hex')}"`
+        if (req.headers['if-none-match'] === etag) {
+          return res.status(304).end()
+        }
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('ETag', etag)
+        return res.send(json)
       }
-      res.setHeader('Content-Type', 'application/json')
-      res.setHeader('ETag', etag)
-      return res.send(json)
     }
 
     try {
-      const result = await backend.getHistory(sessionKey)
-      const data = { turns: result.turns, hasMore: result.hasMore }
-      historyResponseCache.set(threadId, { data, timestamp: Date.now() })
+      const result = await backend.getHistory(sessionKey, paginationOpts)
+      const data = { turns: result.turns, hasMore: result.hasMore, oldestTimestamp: result.oldestTimestamp }
+
+      // Cache only non-paginated initial loads
+      if (!paginationOpts) {
+        historyResponseCache.set(threadId, { data, timestamp: Date.now() })
+      }
       const json = JSON.stringify(data)
       const etag = `"${crypto.createHash('md5').update(json).digest('hex')}"`
       if (req.headers['if-none-match'] === etag) {
@@ -218,14 +227,17 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
   router.get('/api/threads/:threadId/history/archived', async (req, res) => {
     const threadId = req.params.threadId
     const sessionKey = chatModule.resolveSessionKey(threadId)
+    const before = req.query.before ? Number(req.query.before) : undefined
+    const limit = req.query.limit ? Number(req.query.limit) : undefined
+    const paginationOpts = before || limit ? { before, limit } : undefined
     try {
       if (typeof backend.getArchivedHistory !== 'function') {
-        return res.json({ turns: [], archiveCount: 0 })
+        return res.json({ turns: [], hasMore: false, archiveCount: 0 })
       }
-      const result = await backend.getArchivedHistory(sessionKey)
+      const result = await backend.getArchivedHistory(sessionKey, paginationOpts)
       res.json(result)
     } catch {
-      res.json({ turns: [], archiveCount: 0 })
+      res.json({ turns: [], hasMore: false, archiveCount: 0 })
     }
   })
 

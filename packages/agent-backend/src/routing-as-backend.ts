@@ -54,16 +54,19 @@ export function routingAsBackend(routing: RoutingBackend): AgentBackend {
     async createSession(label, opts) {
       return await def().createSession(label, opts)
     },
-    async getHistory(sessionKey): Promise<{ turns: ParsedTurn[]; hasMore: boolean }> {
-      return await forSession(sessionKey).getHistory(sessionKey)
+    async getHistory(sessionKey, opts?): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number }> {
+      return await forSession(sessionKey).getHistory(sessionKey, opts)
     },
     async getFullHistory(sessionKey): Promise<ParsedTurn[]> {
       return await forSession(sessionKey).getFullHistory(sessionKey)
     },
-    async getArchivedHistory(sessionKey): Promise<{ turns: ParsedTurn[]; archiveCount: number }> {
+    async getArchivedHistory(
+      sessionKey,
+      opts?
+    ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number; archiveCount: number }> {
       const b = forSession(sessionKey)
-      if (!b.getArchivedHistory) return { turns: [], archiveCount: 0 }
-      return await b.getArchivedHistory(sessionKey)
+      if (!b.getArchivedHistory) return { turns: [], hasMore: false, archiveCount: 0 }
+      return await b.getArchivedHistory(sessionKey, opts)
     },
     on<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void) {
       routing.on(event, handler)

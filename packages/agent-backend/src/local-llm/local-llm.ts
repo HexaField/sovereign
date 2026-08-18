@@ -1401,12 +1401,27 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     return childKey
   }
 
-  async function getHistory(sessionKey: string): Promise<{ turns: ParsedTurn[]; hasMore: boolean }> {
+  async function getHistory(
+    sessionKey: string,
+    opts?: { before?: number; limit?: number }
+  ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number }> {
     const state = sessions.get(sessionKey)
     if (!state) return { turns: [], hasMore: false }
-    const hasMore = state.messages.length > HISTORY_LIMIT
-    const windowed = hasMore ? state.messages.slice(-HISTORY_LIMIT) : state.messages
-    return { turns: parseTurns(toGenericMessages(windowed)), hasMore }
+    const allTurns = parseTurns(toGenericMessages(state.messages))
+
+    // Apply cursor filter
+    let filtered = allTurns
+    if (opts?.before) {
+      filtered = allTurns.filter((t) => t.timestamp < opts.before!)
+    }
+
+    // Apply limit
+    const limit = opts?.limit ?? (opts?.before ? 50 : HISTORY_LIMIT)
+    const hasMore = filtered.length > limit
+    const page = filtered.length > limit ? filtered.slice(-limit) : filtered
+    const oldestTimestamp = page.length > 0 ? page[0].timestamp : undefined
+
+    return { turns: page, hasMore, oldestTimestamp }
   }
 
   async function getFullHistory(sessionKey: string): Promise<ParsedTurn[]> {
