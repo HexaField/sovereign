@@ -1245,18 +1245,27 @@ export function createClaudeCodeBackend(
     state.endInput = () => pump.end()
     state.liveQuery = q
 
-    // DISABLED (see d71931c / follow-up 72067a2): post-init sovereign MCP
-    // verification never observed 'connected' even with a 5s poll, and
-    // tore every session down on its first message — worse than the stale-
-    // tools bug it was meant to fix. Layer 1 (resolveMcpServers() always
-    // overriding the 'sovereign' entry with the in-process instance) is
-    // untouched and still runs. Revisit: figure out why mcpServerStatus()
-    // never reports 'connected' for the in-process sovereign server before
-    // re-enabling teardown-on-failure.
-    // eslint-disable-next-line no-empty-function
-    void q.initializationResult().catch(() => {
-      /* init not ready — best effort, no-op */
-    })
+    // After SDK init completes, force MCP server re-registration via
+    // setMcpServers(). This handles the post-restart case: the SDK resumes
+    // from JSONL and connects to MCP servers, but if a server restarted
+    // (e.g. Sovereign itself), the connection may be stale. Forcing a
+    // setMcpServers() call makes the SDK redo `tools/list` against every
+    // configured server — same pattern as post-compaction rehydration.
+    //
+    // NOTE: d71931c/72067a2 disabled a teardown-on-failure check here.
+    // This does NOT tear down or recycle — it only re-registers servers.
+    void q
+      .initializationResult()
+      .then(async () => {
+        try {
+          await q.setMcpServers?.(resolveMcpServers())
+        } catch {
+          // SDK builds without setMcpServers or init not ready — best effort.
+        }
+      })
+      .catch(() => {
+        /* init not ready — best effort, no-op */
+      })
 
     state.iteratorDone = (async () => {
       try {
@@ -1829,15 +1838,15 @@ export function createClaudeCodeBackend(
   }
 
   /** Reconnect MCP servers for a Claude Code session.
-   *  Uses the SDK's `reconnectMcpServer()` per server when available,
-   *  falls back to session recycle. */
+   *  Uses per-server `reconnectMcpServer()` or `setMcpServers()` re-registration.
+   *  Never recycles sessions — recycle is destructive and risks data loss. */
   async function reconnectMcp(sessionKey: string): Promise<{ reconnected: string[]; failed: string[] }> {
     const state = internal.sessions.get(sessionKey)
     if (!state) return { reconnected: [], failed: [] }
     const mcpServers = resolveMcpServers()
     const serverNames = Object.keys(mcpServers)
 
-    // Prefer per-server reconnect via SDK when available
+    // Strategy 1: per-server reconnect via SDK (most targeted)
     if (state.liveQuery?.reconnectMcpServer) {
       const reconnected: string[] = []
       const failed: string[] = []
@@ -1852,16 +1861,19 @@ export function createClaudeCodeBackend(
       return { reconnected, failed }
     }
 
-    // Fallback: recycle the session for a fresh MCP connection
-    try {
-      if (recycleSession) {
-        await recycleSession(sessionKey, { force: true })
+    // Strategy 2: force full MCP re-registration (same as post-compaction)
+    if (state.liveQuery?.setMcpServers) {
+      try {
+        await state.liveQuery.setMcpServers(mcpServers)
+        return { reconnected: serverNames, failed: [] }
+      } catch {
+        return { reconnected: [], failed: serverNames }
       }
-      return { reconnected: serverNames, failed: [] }
-    } catch (err: any) {
-      console.warn(`[claude-code] MCP reconnect via recycle failed for ${sessionKey}:`, err?.message)
-      return { reconnected: [], failed: serverNames }
     }
+
+    // No live query — session idle. MCP will re-establish on next sendMessage
+    // when startSessionLoop passes resolveMcpServers() to the SDK.
+    return { reconnected: [], failed: [] }
   }
 
   async function setSessionModel(sessionKey: string, provider: string, model: string) {
