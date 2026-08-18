@@ -6,7 +6,12 @@
 
 import { randomUUID } from 'node:crypto'
 import type { AgentBackendEvents, WorkItem } from '@sovereign/core'
-import type { ChatMessage as WireChatMessage, CompletionResponse, ToolSchema } from './inference.js'
+import {
+  ContextOverflowError,
+  type ChatMessage as WireChatMessage,
+  type CompletionResponse,
+  type ToolSchema
+} from './inference.js'
 import type { ToolResult } from './tools/index.js'
 
 /**
@@ -42,6 +47,10 @@ export interface ToolLoopDeps {
    *  and the loop's messages array. The caller can modify messages in place
    *  (e.g. compact older messages into a summary) to stay within context. */
   onIterationEnd?: (promptTokens: number, messages: ChatMessage[]) => Promise<void>
+  /** Called when the server rejects a request due to context overflow.
+   *  The callback must compact messages in place to reduce context size.
+   *  Returns true when compaction succeeded and the loop should retry. */
+  onContextOverflow?: (messages: ChatMessage[]) => Promise<boolean>
 }
 
 export interface ToolLoopResult {
@@ -156,7 +165,24 @@ export async function runToolLoop(
     // Progressive tool disclosure: use dynamically expanded schemas when
     // available, falling back to the static set.
     const activeTools = deps.getActiveSchemas ? deps.getActiveSchemas() : deps.toolSchemas
-    const response = await deps.complete(messages, { tools: activeTools, signal })
+    let response: CompletionResponse
+    try {
+      response = await deps.complete(messages, { tools: activeTools, signal })
+    } catch (err) {
+      if (err instanceof ContextOverflowError && deps.onContextOverflow) {
+        deps.emit('chat.error', {
+          sessionKey,
+          error: `Context overflow detected — triggering emergency compaction`
+        })
+        const compacted = await deps.onContextOverflow(messages)
+        if (compacted) {
+          // Retry this iteration after compaction shrank the transcript
+          iterations--
+          continue
+        }
+      }
+      throw err
+    }
     const choice = response.choices?.[0]
     if (!choice) break
 

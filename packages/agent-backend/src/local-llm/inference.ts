@@ -2,6 +2,20 @@
 // Self-contained — does not import from @sovereign/summary to avoid
 // cross-package coupling.
 
+/** Thrown when the inference server rejects a request because the prompt
+ *  exceeds the configured context window (n_ctx). The tool loop catches
+ *  this to trigger emergency compaction and retry. */
+export class ContextOverflowError extends Error {
+  readonly statusCode: number
+  readonly serverMessage: string
+  constructor(statusCode: number, serverMessage: string) {
+    super(`Context overflow: prompt exceeds available context window (server returned ${statusCode})`)
+    this.name = 'ContextOverflowError'
+    this.statusCode = statusCode
+    this.serverMessage = serverMessage
+  }
+}
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | null
@@ -101,7 +115,11 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
       messages,
       temperature: state.temperature,
       max_tokens: state.maxTokens,
-      stream: true
+      stream: true,
+      // Request usage stats in the final streaming chunk — without this,
+      // the server omits prompt_tokens/completion_tokens and the backend
+      // can't make accurate compaction decisions.
+      stream_options: { include_usage: true }
     }
     if (opts?.tools?.length) {
       body.tools = opts.tools
@@ -134,6 +152,11 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
       // ones — a graceful fallback the server-side parser lacks.
       if (!res.ok && body.tools) {
         const errText = await res.text().catch(() => '')
+        if (errText.includes('exceed_context_size_error') || errText.includes('exceeds the available context size')) {
+          // Context overflow — surface as a typed error so the tool loop
+          // can trigger compaction and retry instead of dying.
+          throw new ContextOverflowError(res.status, errText)
+        }
         if (errText.includes('Failed to parse tool call arguments')) {
           const retryBody = { ...body }
           delete retryBody.tools
@@ -150,6 +173,9 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
       }
       if (!res.ok) {
         const text = await res.text().catch(() => '')
+        if (text.includes('exceed_context_size_error') || text.includes('exceeds the available context size')) {
+          throw new ContextOverflowError(res.status, text)
+        }
         throw new Error(`Inference stream failed: ${res.status} — ${text}`)
       }
       if (!res.body) throw new Error('No response body for streaming request')
