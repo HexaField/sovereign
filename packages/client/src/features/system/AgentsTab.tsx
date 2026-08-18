@@ -115,11 +115,6 @@ const AgentsTab: Component = () => {
     }
   }
 
-  // Close membrane dropdown on outside click
-  function handleGlobalClick() {
-    if (editingMembrane()) setEditingMembrane(null)
-  }
-
   const loadThreadsAndSessions = async () => {
     try {
       const [thrRes, activeRes] = await Promise.all([
@@ -162,10 +157,8 @@ const AgentsTab: Component = () => {
     loadMembranes()
     loadThreadsAndSessions()
     pollTimer = setInterval(loadThreadsAndSessions, 5_000)
-    document.addEventListener('click', handleGlobalClick)
     onCleanup(() => {
       if (pollTimer) clearInterval(pollTimer)
-      document.removeEventListener('click', handleGlobalClick)
     })
   })
 
@@ -300,12 +293,9 @@ const AgentsTab: Component = () => {
                           when={memId}
                           fallback={
                             <button
-                              class="rounded border border-dashed px-1.5 py-0.5 text-[10px] opacity-40 hover:opacity-70"
+                              class="cursor-pointer rounded border border-dashed px-1.5 py-0.5 text-[10px] opacity-40 hover:opacity-70"
                               style={{ 'border-color': 'var(--c-text-muted)', color: 'var(--c-text-muted)' }}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setEditingMembrane(editingMembrane() === t.id ? null : t.id)
-                              }}
+                              on:click={() => setEditingMembrane(editingMembrane() === t.id ? null : t.id)}
                               title="Assign membrane"
                             >
                               + membrane
@@ -313,18 +303,17 @@ const AgentsTab: Component = () => {
                           }
                         >
                           <button
-                            class="rounded px-1.5 py-0.5 text-[10px] font-medium hover:ring-1 hover:ring-white/20"
+                            class="cursor-pointer rounded px-1.5 py-0.5 text-[10px] font-medium hover:ring-1 hover:ring-white/20"
                             style={{ background: `${mColor}22`, color: mColor }}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setEditingMembrane(editingMembrane() === t.id ? null : t.id)
-                            }}
+                            on:click={() => setEditingMembrane(editingMembrane() === t.id ? null : t.id)}
                             title="Change membrane"
                           >
                             {membranes().find((m) => m.id === memId)?.name ?? memId}
                           </button>
                         </Show>
                         <Show when={editingMembrane() === t.id}>
+                          {/* Backdrop — catches outside clicks without SolidJS delegation conflicts */}
+                          <div class="fixed inset-0 z-40" on:click={() => setEditingMembrane(null)} />
                           <div
                             class="absolute top-full left-0 z-50 mt-1 min-w-[140px] rounded-lg border py-1 shadow-lg"
                             style={{
@@ -340,7 +329,7 @@ const AgentsTab: Component = () => {
                                     color: m.id === memId ? (m.color ?? 'var(--c-text)') : 'var(--c-text)',
                                     'font-weight': m.id === memId ? '600' : '400'
                                   }}
-                                  onClick={() => assignMembrane(t.id, m.id)}
+                                  on:click={() => assignMembrane(t.id, m.id)}
                                 >
                                   <span
                                     class="inline-block h-2 w-2 shrink-0 rounded-full"
@@ -355,7 +344,7 @@ const AgentsTab: Component = () => {
                               <button
                                 class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-white/5"
                                 style={{ color: 'var(--c-text-muted)' }}
-                                onClick={() => assignMembrane(t.id, null)}
+                                on:click={() => assignMembrane(t.id, null)}
                               >
                                 <span
                                   class="inline-block h-2 w-2 shrink-0 rounded-full border"
