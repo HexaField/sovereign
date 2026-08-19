@@ -145,9 +145,7 @@ export function createAiSdkInferenceClient(initialConfig: InferenceClientConfig)
           if (body.stream) {
             body.stream_options = { include_usage: true }
           }
-          if (state.thinking === false) {
-            body.chat_template_kwargs = { enable_thinking: false }
-          }
+          body.chat_template_kwargs = { enable_thinking: state.thinking !== false }
           init = { ...init, body: JSON.stringify(body) }
         } catch {
           /* non-JSON body — pass through */
