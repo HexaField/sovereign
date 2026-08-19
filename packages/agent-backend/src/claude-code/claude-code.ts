@@ -1274,18 +1274,21 @@ export function createClaudeCodeBackend(
           setActiveSessionKey(state.sessionKey)
           dispatchSdkMessage(msg, state, emitter)
 
-          // Layer 2 auto-trigger: check context fill after each turn
-          // completes. The SDK emits a `result` message at the end of
-          // every assistant turn — this fires WITHIN the iterator loop,
-          // not after it exits (the iterator stays open for the session
-          // lifetime, so post-loop triggers never run during normal
-          // operation). Skip subagent sessions (recycling them mid-flight
-          // strands the parent — that guard also lives in
-          // maybeAutoRecycle itself, this avoids the async call entirely).
-          if (msg?.type === 'result' && !state.parentSessionKey) {
-            maybeAutoRecycle(state).catch((err) => {
-              console.warn('[context-recycle] auto-trigger error:', err)
-            })
+          // After each completed turn, sync the CC session JSONL into the
+          // shared history log so it stays current without waiting for a
+          // backend switch. Runs BEFORE auto-recycle — recycling may rotate
+          // the session file, so capture the current state first.
+          if (msg?.type === 'result') {
+            syncToHistoryLog(state)
+            // Layer 2 auto-trigger: check context fill after each turn
+            // completes. Skip subagent sessions (recycling them mid-flight
+            // strands the parent — that guard also lives in
+            // maybeAutoRecycle itself, this avoids the async call entirely).
+            if (!state.parentSessionKey) {
+              maybeAutoRecycle(state).catch((err) => {
+                console.warn('[context-recycle] auto-trigger error:', err)
+              })
+            }
           }
         }
       } catch (err: any) {
@@ -1394,6 +1397,28 @@ export function createClaudeCodeBackend(
     }
     emitter.emit('session.info', { sessionKey, label, history: [] })
     return sessionKey
+  }
+
+  /** Sync the CC session JSONL into the shared history log.
+   *  Called after each SDK `result` message so the permanent log stays
+   *  current without waiting for a backend switch. Uses timestamp-based
+   *  dedup via mergeIntoHistoryLog — repeated calls produce no duplicates. */
+  function syncToHistoryLog(state: ClaudeSessionState): void {
+    try {
+      const filePath = sessionFilePath(state.sessionKey)
+      if (!filePath || !fs.existsSync(filePath)) return
+      const messages = readAllClaudeCodeMessages(filePath)
+      const turns = parseClaudeCodeTurns(messages)
+      if (turns.length === 0) return
+      const logEntries = turns.map((t) => ({
+        role: t.role,
+        content: t.content,
+        timestamp: t.timestamp
+      }))
+      mergeIntoHistoryLog(dataDir, state.sessionKey, logEntries)
+    } catch (err) {
+      console.warn('[history-log] CC sync error:', err)
+    }
   }
 
   async function sendMessage(sessionKey: string, text: string, attachments?: Buffer[]) {

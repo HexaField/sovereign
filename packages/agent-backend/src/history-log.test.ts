@@ -8,7 +8,8 @@ import {
   appendBatchToHistoryLog,
   readHistoryLog,
   historyLogExists,
-  seedHistoryLog
+  seedHistoryLog,
+  mergeIntoHistoryLog
 } from './history-log.js'
 
 let dataDir: string
@@ -207,6 +208,141 @@ describe('seedHistoryLog', () => {
 
     const result = readHistoryLog(dataDir, 'seed-read')
     expect(result).toEqual(messages)
+  })
+})
+
+describe('mergeIntoHistoryLog', () => {
+  it('creates log and writes all messages when log does not exist', () => {
+    const messages = [
+      { role: 'user', content: 'hello', timestamp: 1000 },
+      { role: 'assistant', content: 'hi', timestamp: 2000 }
+    ]
+    mergeIntoHistoryLog(dataDir, 'merge-fresh', messages)
+
+    const result = readHistoryLog(dataDir, 'merge-fresh')
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual(messages[0])
+    expect(result[1]).toEqual(messages[1])
+  })
+
+  it('skips messages with timestamps already in the log', () => {
+    appendToHistoryLog(dataDir, 'merge-dedup', { role: 'user', content: 'existing', timestamp: 1000 })
+
+    mergeIntoHistoryLog(dataDir, 'merge-dedup', [
+      { role: 'user', content: 'existing', timestamp: 1000 },
+      { role: 'assistant', content: 'new reply', timestamp: 2000 }
+    ])
+
+    const result = readHistoryLog(dataDir, 'merge-dedup')
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual({ role: 'user', content: 'existing', timestamp: 1000 })
+    expect(result[1]).toEqual({ role: 'assistant', content: 'new reply', timestamp: 2000 })
+  })
+
+  it('appends messages without timestamps (treated as always-new)', () => {
+    appendToHistoryLog(dataDir, 'merge-no-ts', { role: 'user', content: 'first' })
+
+    mergeIntoHistoryLog(dataDir, 'merge-no-ts', [
+      { role: 'assistant', content: 'no timestamp here' },
+      { role: 'user', content: 'also no timestamp' }
+    ])
+
+    const result = readHistoryLog(dataDir, 'merge-no-ts')
+    expect(result).toHaveLength(3)
+    expect(result[1].content).toBe('no timestamp here')
+    expect(result[2].content).toBe('also no timestamp')
+  })
+
+  it('empty array produces no file', () => {
+    mergeIntoHistoryLog(dataDir, 'merge-empty', [])
+    expect(historyLogExists(dataDir, 'merge-empty')).toBe(false)
+  })
+
+  it('handles mixed existing and new timestamps', () => {
+    appendBatchToHistoryLog(dataDir, 'merge-mixed', [
+      { role: 'user', content: 'a', timestamp: 100 },
+      { role: 'assistant', content: 'b', timestamp: 200 }
+    ])
+
+    mergeIntoHistoryLog(dataDir, 'merge-mixed', [
+      { role: 'user', content: 'a', timestamp: 100 },
+      { role: 'assistant', content: 'b', timestamp: 200 },
+      { role: 'user', content: 'c', timestamp: 300 },
+      { role: 'assistant', content: 'd', timestamp: 400 }
+    ])
+
+    const result = readHistoryLog(dataDir, 'merge-mixed')
+    expect(result).toHaveLength(4)
+    expect(result[0]).toEqual({ role: 'user', content: 'a', timestamp: 100 })
+    expect(result[1]).toEqual({ role: 'assistant', content: 'b', timestamp: 200 })
+    expect(result[2]).toEqual({ role: 'user', content: 'c', timestamp: 300 })
+    expect(result[3]).toEqual({ role: 'assistant', content: 'd', timestamp: 400 })
+  })
+
+  it('idempotent: calling twice with same data produces no duplicates', () => {
+    const messages = [
+      { role: 'user', content: 'one', timestamp: 1000 },
+      { role: 'assistant', content: 'two', timestamp: 2000 },
+      { role: 'user', content: 'three', timestamp: 3000 }
+    ]
+    mergeIntoHistoryLog(dataDir, 'merge-idem', messages)
+    mergeIntoHistoryLog(dataDir, 'merge-idem', messages)
+
+    const result = readHistoryLog(dataDir, 'merge-idem')
+    expect(result).toHaveLength(3)
+  })
+
+  it('preserves message shape through merge', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: null,
+        timestamp: 5000,
+        tool_calls: [{ id: 'tc_1', type: 'function', function: { name: 'Read', arguments: '{}' } }],
+        metadata: { tokens: 100, model: 'test-model' }
+      },
+      {
+        role: 'user',
+        content: 'follow-up',
+        timestamp: 6000,
+        extra_field: [1, 2, 3]
+      }
+    ]
+    mergeIntoHistoryLog(dataDir, 'merge-shape', messages)
+
+    const result = readHistoryLog(dataDir, 'merge-shape')
+    expect(result).toHaveLength(2)
+    expect(result[0]).toEqual(messages[0])
+    expect(result[0].tool_calls[0].id).toBe('tc_1')
+    expect(result[0].metadata).toEqual({ tokens: 100, model: 'test-model' })
+    expect(result[0].content).toBeNull()
+    expect(result[1]).toEqual(messages[1])
+    expect(result[1].extra_field).toEqual([1, 2, 3])
+  })
+
+  it('cross-backend simulation: local-llm seed then CC merge', () => {
+    const seeded = [
+      { role: 'system', content: 'system prompt', timestamp: 100 },
+      { role: 'user', content: 'local user msg', timestamp: 200 },
+      { role: 'assistant', content: 'local reply', timestamp: 300 }
+    ]
+    seedHistoryLog(dataDir, 'merge-cross', seeded)
+
+    const ccMessages = [
+      { role: 'user', content: 'local user msg', timestamp: 200 },
+      { role: 'assistant', content: 'local reply', timestamp: 300 },
+      { role: 'user', content: 'cc user msg', timestamp: 400 },
+      { role: 'assistant', content: 'cc reply', timestamp: 500 }
+    ]
+    mergeIntoHistoryLog(dataDir, 'merge-cross', ccMessages)
+
+    const result = readHistoryLog(dataDir, 'merge-cross')
+    expect(result).toHaveLength(5)
+    expect(result[0]).toEqual(seeded[0])
+    expect(result[1]).toEqual(seeded[1])
+    expect(result[2]).toEqual(seeded[2])
+    expect(result[3]).toEqual({ role: 'user', content: 'cc user msg', timestamp: 400 })
+    expect(result[4]).toEqual({ role: 'assistant', content: 'cc reply', timestamp: 500 })
   })
 })
 
