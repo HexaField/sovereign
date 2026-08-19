@@ -138,7 +138,7 @@ describe('createCustomFetch — stream_options injection', () => {
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
   })
 
-  it('does not inject chat_template_kwargs when thinking is true', async () => {
+  it('injects chat_template_kwargs with enable_thinking: true when thinking is true', async () => {
     fetchSpy.mockResolvedValue(
       new Response(sseStream('ok'), {
         status: 200,
@@ -161,6 +161,6 @@ describe('createCustomFetch — stream_options injection', () => {
     expect(call).toBeDefined()
     const body = JSON.parse((call as any)[1].body)
     expect(body.stream_options).toEqual({ include_usage: true })
-    expect(body.chat_template_kwargs).toBeUndefined()
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
   })
 })
