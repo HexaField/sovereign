@@ -55,6 +55,7 @@ import {
   appendBatchToHistoryLog,
   readHistoryLog,
   seedHistoryLog,
+  mergeIntoHistoryLog,
   historyLogExists
 } from '../history-log.js'
 
@@ -1544,6 +1545,16 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         }
       }
       persist(state)
+      // Merge the incoming history into the log so getHistory (which prefers
+      // the log) returns the full conversation after a backend switch.
+      // mergeIntoHistoryLog deduplicates by timestamp — safe across repeated
+      // switches and when the log already has entries from a prior era.
+      const logMessages = opts.seedHistory.map((t) => ({
+        role: t.role,
+        content: t.content,
+        timestamp: t.timestamp
+      }))
+      mergeIntoHistoryLog(deps.dataDir, sessionKey, logMessages)
     }
     // Mirror the session binding into the shared registry so the routing
     // layer resolves this session to local-llm on future lookups.
