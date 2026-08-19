@@ -1,7 +1,7 @@
 // AI SDK-backed inference client for the local-llm backend.
 //
 // Drop-in replacement for createInferenceClient — same external API
-// (complete, stream, healthCheck, updateConfig) but uses the Vercel AI SDK
+// (complete, healthCheck, updateConfig) but uses the Vercel AI SDK
 // v7 internally. The tool loop, progressive disclosure, and all downstream
 // code remain unchanged.
 //

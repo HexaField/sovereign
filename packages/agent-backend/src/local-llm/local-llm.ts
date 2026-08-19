@@ -1042,6 +1042,10 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     // entirely rather than appending a suffix.
     let midLoopCompacted = false
     let midLoopCompactionSummary: string | null = null
+    // Total messages dropped by mid-loop + emergency compaction. Used to
+    // adjust beforeLen so only loop-added messages get appended to the
+    // history log (not the surviving old messages already in the log).
+    let midLoopTotalDropped = 0
 
     const loopDeps: ToolLoopDeps = {
       complete: (msgs, opts) =>
@@ -1085,6 +1089,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
         // Splice out old conversation messages (keep system at [0])
         const dropped = loopMessages.splice(1, dropCount)
+        midLoopTotalDropped += dropCount
 
         // Check for prior compaction summary at the start of dropped segment
         let priorSummary = ''
@@ -1212,6 +1217,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         archiveMessagesBeforeStrategies(deps.dataDir, state.sessionKey, state.messages)
 
         const dropped = conversation.splice(0, dropCount)
+        midLoopTotalDropped += dropCount
         loopMessages.length = 1 // keep system message
         loopMessages.push(...conversation)
 
@@ -1345,9 +1351,14 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
             timestamp: Date.now()
           })
         }
-        // Append conversation messages (not system/compaction) to the
-        // permanent history log — they survive compaction and session recycling.
-        const conversationMsgsForLog = newMsgs.filter((m) => m.role !== 'system')
+        // Append only messages ADDED during this turn's tool loop to the
+        // permanent history log. Messages from prior turns + this turn's
+        // user message were already appended earlier (line 865 / prior turns).
+        // Compaction spliced midLoopTotalDropped messages out of the
+        // transcript, so adjust beforeLen to find the loop-added boundary.
+        const adjustedStart = Math.max(1, beforeLen - midLoopTotalDropped)
+        const newTurnMsgs = transcript.slice(adjustedStart)
+        const conversationMsgsForLog = newTurnMsgs.filter((m) => m.role !== 'system')
         if (conversationMsgsForLog.length > 0) {
           appendBatchToHistoryLog(deps.dataDir, state.sessionKey, conversationMsgsForLog)
         }
