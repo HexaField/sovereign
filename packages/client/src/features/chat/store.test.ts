@@ -260,6 +260,53 @@ describe('§3.2 Chat Store', () => {
     expect(typeof initChatStore).toBe('function')
   })
 
+  // ── Thread filtering: threadKey vs threadId ──
+  // The server sends `threadId` on broadcast events (e.g. session.info via
+  // the backend event proxy), but the client historically only checked
+  // `msg.threadKey`. This caused cross-tab history contamination: every tab
+  // accepted every session.info because the filter never matched.
+  describe('chat.session.info thread filtering', () => {
+    it('MUST filter out chat.session.info with a different threadId (not threadKey)', () => {
+      setTurns([{ role: 'user', content: 'original', timestamp: 1, workItems: [], thinkingBlocks: [] }])
+      const history: ParsedTurn[] = [
+        { role: 'user', content: 'wrong thread', timestamp: 2, workItems: [], thinkingBlocks: [] }
+      ]
+      // Server sends threadId, not threadKey — this must still get filtered
+      ws._emit('chat.session.info', { type: 'chat.session.info', threadId: 'other-thread', history })
+      expect(turns().length).toBe(1)
+      expect(turns()[0].content).toBe('original')
+    })
+
+    it('MUST accept chat.session.info with matching threadId', () => {
+      setTurns([{ role: 'user', content: 'original', timestamp: 1, workItems: [], thinkingBlocks: [] }])
+      const history: ParsedTurn[] = [
+        { role: 'user', content: 'same thread', timestamp: 2, workItems: [], thinkingBlocks: [] }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', threadId: 'main', history })
+      expect(turns().length).toBe(1)
+      expect(turns()[0].content).toBe('same thread')
+    })
+
+    it('MUST filter out chat.session.info with a different threadKey', () => {
+      setTurns([{ role: 'user', content: 'original', timestamp: 1, workItems: [], thinkingBlocks: [] }])
+      const history: ParsedTurn[] = [
+        { role: 'user', content: 'wrong thread', timestamp: 2, workItems: [], thinkingBlocks: [] }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', threadKey: 'other-thread', history })
+      expect(turns().length).toBe(1)
+      expect(turns()[0].content).toBe('original')
+    })
+
+    it('MUST accept chat.session.info with no thread identifier (backward compat)', () => {
+      const history: ParsedTurn[] = [
+        { role: 'user', content: 'no thread id', timestamp: 2, workItems: [], thinkingBlocks: [] }
+      ]
+      ws._emit('chat.session.info', { type: 'chat.session.info', history })
+      expect(turns().length).toBe(1)
+      expect(turns()[0].content).toBe('no thread id')
+    })
+  })
+
   // chat.ts prepends a one-word `[modality]\n` tag to text sent to the
   // agent; the SDK persists exactly what it received, so a history reload
   // reads the tag back out of the JSONL. The store strips it and sets
