@@ -176,6 +176,43 @@ export function readArchiveEntries(archivePath: string): any[] {
   }
 }
 
+/**
+ * List all pre-strategy JSON snapshots for a session, sorted oldest-first.
+ * These are written by local-llm before context strategies / compaction
+ * modify the messages array. Format: JSON array of ChatMessage objects.
+ */
+export function listStrategyArchives(dataDir: string, sessionId: string): ArchiveSnapshot[] {
+  const dir = path.join(dataDir, 'agent-backend', ARCHIVE_SUBDIR, sessionId, 'pre-strategy')
+  try {
+    if (!fs.existsSync(dir)) return []
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'))
+    return files
+      .map((f) => {
+        const ts = parseInt(f.replace('.json', ''), 10)
+        const fullPath = path.join(dir, f)
+        const stat = fs.statSync(fullPath)
+        return { path: fullPath, timestamp: isNaN(ts) ? 0 : ts, size: stat.size }
+      })
+      .sort((a, b) => a.timestamp - b.timestamp) // oldest first
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Read a pre-strategy archive file. Returns the raw ChatMessage array.
+ * Unlike readArchiveEntries (JSONL), these files contain a single JSON array.
+ */
+export function readStrategyArchive(archivePath: string): any[] {
+  try {
+    const content = fs.readFileSync(archivePath, 'utf-8')
+    const parsed = JSON.parse(content)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 export function archiveMessagesBeforeStrategies(
   dataDir: string,
   sessionKey: string,

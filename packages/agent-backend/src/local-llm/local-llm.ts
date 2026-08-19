@@ -49,7 +49,7 @@ import type { ToolSearchRegistry } from './tools/tool-search.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
 import { runContextStrategies } from '../context-strategies/index.js'
-import { archiveMessagesBeforeStrategies } from '../history-archive.js'
+import { archiveMessagesBeforeStrategies, listStrategyArchives, readStrategyArchive } from '../history-archive.js'
 
 const KIND: AgentBackendKind = 'local-llm'
 const PROVIDER = 'local-llm'
@@ -590,6 +590,12 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       } as any
     })
 
+    // Archive full message array before the splice destroys old messages.
+    // The pre-strategy archive (line ~903) only runs when messages.length > 20,
+    // but compaction can fire with as few as 13 messages. This ensures no data
+    // loss regardless of message count.
+    archiveMessagesBeforeStrategies(deps.dataDir, state.sessionKey, state.messages)
+
     const dropped = state.messages.splice(0, dropCount)
 
     // Check for an existing compaction summary — include it in the prompt
@@ -1060,6 +1066,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
           } as any
         })
 
+        // Archive state.messages before mid-loop compaction destroys old turns.
+        archiveMessagesBeforeStrategies(deps.dataDir, state.sessionKey, state.messages)
+
         // Splice out old conversation messages (keep system at [0])
         const dropped = loopMessages.splice(1, dropCount)
 
@@ -1184,6 +1193,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
             timestamp: Date.now()
           } as any
         })
+
+        // Archive state.messages before emergency compaction destroys old turns.
+        archiveMessagesBeforeStrategies(deps.dataDir, state.sessionKey, state.messages)
 
         const dropped = conversation.splice(0, dropCount)
         loopMessages.length = 1 // keep system message
@@ -1591,6 +1603,55 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     return parseTurns(toGenericMessages(state.messages))
   }
 
+  async function getArchivedHistory(
+    sessionKey: string,
+    opts?: { before?: number; limit?: number }
+  ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number; archiveCount: number }> {
+    const archives = listStrategyArchives(deps.dataDir, sessionKey)
+    if (archives.length === 0) return { turns: [], hasMore: false, archiveCount: 0 }
+
+    // Get the oldest timestamp from live history — archived turns before
+    // this cutoff represent pre-compaction content.
+    const liveState = sessions.get(sessionKey)
+    const liveTurns = liveState ? parseTurns(toGenericMessages(liveState.messages)) : []
+    const oldestLiveTs = liveTurns.reduce((min, t) => (t.timestamp && t.timestamp < min ? t.timestamp : min), Infinity)
+
+    // Read all archives, parse each, collect turns that predate live history
+    const allTurns: ParsedTurn[] = []
+    const seenTimestamps = new Set<number>()
+
+    for (const archive of archives) {
+      const messages = readStrategyArchive(archive.path)
+      if (messages.length === 0) continue
+      const parsed = parseTurns(toGenericMessages(messages))
+      for (const turn of parsed) {
+        // Skip turns that exist in the live history (overlap zone)
+        if (turn.timestamp >= oldestLiveTs) continue
+        // Deduplicate across archives (same turn appears in multiple snapshots)
+        if (turn.timestamp && seenTimestamps.has(turn.timestamp)) continue
+        if (turn.timestamp) seenTimestamps.add(turn.timestamp)
+        allTurns.push(turn)
+      }
+    }
+
+    // Sort chronologically
+    allTurns.sort((a, b) => a.timestamp - b.timestamp)
+
+    // Apply cursor filter
+    let filtered = allTurns
+    if (opts?.before) {
+      filtered = allTurns.filter((t) => t.timestamp < opts.before!)
+    }
+
+    // Paginate: take the last `limit` turns
+    const limit = opts?.limit ?? 50
+    const hasMore = filtered.length > limit
+    const page = filtered.length > limit ? filtered.slice(-limit) : filtered
+    const oldestTimestamp = page.length > 0 ? page[0].timestamp : undefined
+
+    return { turns: page, hasMore, oldestTimestamp, archiveCount: archives.length }
+  }
+
   function capabilities(): BackendCapabilities {
     return {
       subagents: 'sovereign-orchestrated',
@@ -1890,6 +1951,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     switchSession,
     createSession,
     getHistory,
+    getArchivedHistory,
     getFullHistory,
     on: emitter.on,
     off: emitter.off,
