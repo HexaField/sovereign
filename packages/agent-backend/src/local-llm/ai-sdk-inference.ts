@@ -55,21 +55,21 @@ function toModelMessages(messages: ChatMessage[]): { system: string; core: Model
 
     if (m.role === 'assistant') {
       const parts: Array<
-        { type: 'text'; text: string } | { type: 'tool-call'; toolCallId: string; toolName: string; args: unknown }
+        { type: 'text'; text: string } | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
       > = []
       if (m.content) parts.push({ type: 'text', text: m.content })
       for (const tc of m.tool_calls ?? []) {
-        let args: unknown = {}
+        let input: unknown = {}
         try {
-          args = JSON.parse(tc.function.arguments)
+          input = JSON.parse(tc.function.arguments)
         } catch {
-          args = {}
+          input = {}
         }
         parts.push({
           type: 'tool-call',
           toolCallId: tc.id,
           toolName: tc.function.name,
-          args
+          input
         })
       }
       // AI SDK requires non-empty content
