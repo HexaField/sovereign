@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createClaudeCodeBackend } from './claude-code.js'
+import { readHistoryLog, historyLogExists } from '../history-log.js'
 
 /**
  * Stub `sdkQuery` so we never spawn the real Claude Code runtime in tests.
@@ -1220,5 +1221,254 @@ describe('claude-code/system-config-with-overrides wiring', () => {
       expect(matchers!.length, `${event} should have exactly 1 Sovereign matcher`).toBe(1)
       expect(typeof matchers![0]?.hooks?.[0]).toBe('function')
     }
+  })
+})
+
+/**
+ * History-log sync: the CC backend syncs its session JSONL into the shared
+ * append-only history log after every SDK `result` message. This closes the
+ * asymmetry where local-llm wrote to the log on every turn but CC only
+ * wrote during backend switches.
+ */
+describe('claude-code/history-log sync on result message', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  /** Write CC JSONL entries at the path sessionFilePath resolves to. */
+  function writeCcJsonl(agentDir: string, cwdPath: string, sessionId: string, entries: any[]): void {
+    const encoded = resolve(cwdPath).replace(/[/.]/g, '-')
+    const projectsDir = join(agentDir, 'projects', encoded)
+    mkdirSync(projectsDir, { recursive: true })
+    const filePath = join(projectsDir, `${sessionId}.jsonl`)
+    writeFileSync(filePath, entries.map((e) => JSON.stringify(e)).join('\n') + '\n')
+  }
+
+  it('syncs CC JSONL to history log after a result message', async () => {
+    const upserts: any[] = []
+    const sdk = stubSdkQuery([{ type: 'result', subtype: 'success', result: 'done' }])
+
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      {
+        sdkQuery: sdk,
+        registry: {
+          upsertSession: (r: any) => upserts.push(r),
+          lookupSession: () => null
+        }
+      }
+    )
+    await backend.createSession('t', { threadKey: 'sync-test' })
+
+    // Registry captured the backendSessionId during createSession
+    const sessionId = upserts[0].backendSessionId
+
+    // Plant a CC JSONL at the expected path with two turns
+    writeCcJsonl(join(dataDir, 'agent'), cwd, sessionId, [
+      { type: 'user', message: { content: 'hello world' }, timestamp: 1000 },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'hi there' }] }, timestamp: 2000 }
+    ])
+
+    // Send a message — stub yields result → syncToHistoryLog fires
+    await backend.sendMessage('sync-test', 'trigger')
+    await new Promise((r) => setTimeout(r, 150))
+
+    // The shared history log should now contain the synced turns
+    expect(historyLogExists(dataDir, 'sync-test')).toBe(true)
+    const log = readHistoryLog(dataDir, 'sync-test')
+    expect(log.length).toBeGreaterThanOrEqual(2)
+    const userEntry = log.find((m: any) => m.role === 'user')
+    const assistantEntry = log.find((m: any) => m.role === 'assistant')
+    expect(userEntry).toBeDefined()
+    expect(userEntry.content).toContain('hello world')
+    expect(userEntry.timestamp).toBe(1000)
+    expect(assistantEntry).toBeDefined()
+    expect(assistantEntry.content).toContain('hi there')
+    expect(assistantEntry.timestamp).toBe(2000)
+  })
+
+  it('deduplicates on repeated result messages (idempotent sync)', async () => {
+    const upserts: any[] = []
+    // Two result messages in sequence — sync should fire twice but not duplicate
+    const sdk = stubSdkQuery([
+      { type: 'result', subtype: 'success', result: 'done' },
+      { type: 'result', subtype: 'success', result: 'done again' }
+    ])
+
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      {
+        sdkQuery: sdk,
+        registry: {
+          upsertSession: (r: any) => upserts.push(r),
+          lookupSession: () => null
+        }
+      }
+    )
+    await backend.createSession('t', { threadKey: 'dedup-test' })
+    const sessionId = upserts[0].backendSessionId
+
+    writeCcJsonl(join(dataDir, 'agent'), cwd, sessionId, [
+      { type: 'user', message: { content: 'q' }, timestamp: 3000 },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'a' }] }, timestamp: 4000 }
+    ])
+
+    await backend.sendMessage('dedup-test', 'trigger')
+    await new Promise((r) => setTimeout(r, 150))
+
+    const log = readHistoryLog(dataDir, 'dedup-test')
+    // Should have exactly 2 entries despite two result messages triggering sync
+    const userEntries = log.filter((m: any) => m.role === 'user')
+    const assistantEntries = log.filter((m: any) => m.role === 'assistant')
+    expect(userEntries).toHaveLength(1)
+    expect(assistantEntries).toHaveLength(1)
+  })
+
+  it('does not create a history log when CC JSONL does not exist', async () => {
+    const sdk = stubSdkQuery([{ type: 'result', subtype: 'success', result: 'done' }])
+
+    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: sdk })
+    await backend.createSession('t', { threadKey: 'no-jsonl-test' })
+
+    // Do NOT write a CC JSONL — sessionFilePath returns a path that doesn't exist
+    await backend.sendMessage('no-jsonl-test', 'trigger')
+    await new Promise((r) => setTimeout(r, 150))
+
+    // No history log should be created
+    expect(historyLogExists(dataDir, 'no-jsonl-test')).toBe(false)
+  })
+
+  it('preserves seedHistory in the log and merges CC turns on top', async () => {
+    const upserts: any[] = []
+    const sdk = stubSdkQuery([{ type: 'result', subtype: 'success', result: 'done' }])
+
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      {
+        sdkQuery: sdk,
+        registry: {
+          upsertSession: (r: any) => upserts.push(r),
+          lookupSession: () => null
+        }
+      }
+    )
+
+    // Simulate a backend switch: createSession with seedHistory (from local-llm era)
+    await backend.createSession('t', {
+      threadKey: 'seed-merge-test',
+      seedHistory: [
+        { role: 'user', content: 'old question', timestamp: 100 },
+        { role: 'assistant', content: 'old answer', timestamp: 200 }
+      ]
+    } as any)
+
+    const sessionId = upserts[0].backendSessionId
+
+    // Plant CC JSONL with new turns (different timestamps)
+    writeCcJsonl(join(dataDir, 'agent'), cwd, sessionId, [
+      { type: 'user', message: { content: 'new question' }, timestamp: 500 },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'new answer' }] }, timestamp: 600 }
+    ])
+
+    await backend.sendMessage('seed-merge-test', 'trigger')
+    await new Promise((r) => setTimeout(r, 150))
+
+    // History log should contain BOTH seeded and CC-synced entries
+    const log = readHistoryLog(dataDir, 'seed-merge-test')
+    expect(log.length).toBeGreaterThanOrEqual(4)
+    expect(log.some((m: any) => m.content === 'old question')).toBe(true)
+    expect(log.some((m: any) => m.content === 'old answer')).toBe(true)
+    expect(log.some((m: any) => m.content?.includes('new question'))).toBe(true)
+    expect(log.some((m: any) => m.content?.includes('new answer'))).toBe(true)
+  })
+
+  it('getHistory falls back to history log when CC JSONL does not exist', async () => {
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      {
+        sdkQuery: stubSdkQuery(),
+        registry: {
+          upsertSession: () => {},
+          lookupSession: () => null
+        }
+      }
+    )
+    await backend.createSession('t', {
+      threadKey: 'fallback-test',
+      seedHistory: [
+        { role: 'user', content: 'seeded message', timestamp: 7000 },
+        { role: 'assistant', content: 'seeded reply', timestamp: 8000 }
+      ]
+    } as any)
+
+    // No CC JSONL exists — getHistory should fall through to the history log
+    const { turns } = await backend.getHistory('fallback-test')
+    expect(turns.length).toBeGreaterThanOrEqual(2)
+    expect(turns.some((t) => t.content === 'seeded message')).toBe(true)
+    expect(turns.some((t) => t.content === 'seeded reply')).toBe(true)
+  })
+
+  it('getFullHistory falls back to history log when CC JSONL does not exist', async () => {
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      {
+        sdkQuery: stubSdkQuery(),
+        registry: {
+          upsertSession: () => {},
+          lookupSession: () => null
+        }
+      }
+    )
+    await backend.createSession('t', {
+      threadKey: 'full-fallback-test',
+      seedHistory: [
+        { role: 'user', content: 'q1', timestamp: 9000 },
+        { role: 'assistant', content: 'a1', timestamp: 9500 },
+        { role: 'user', content: 'q2', timestamp: 10000 },
+        { role: 'assistant', content: 'a2', timestamp: 10500 }
+      ]
+    } as any)
+
+    const turns = await backend.getFullHistory('full-fallback-test')
+    expect(turns).toHaveLength(4)
+    expect(turns[0].content).toBe('q1')
+    expect(turns[1].content).toBe('a1')
+    expect(turns[2].content).toBe('q2')
+    expect(turns[3].content).toBe('a2')
+  })
+
+  it('createSession with seedHistory populates history log via mergeIntoHistoryLog', async () => {
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      {
+        sdkQuery: stubSdkQuery(),
+        registry: {
+          upsertSession: () => {},
+          lookupSession: () => null
+        }
+      }
+    )
+    await backend.createSession('t', {
+      threadKey: 'seed-write-test',
+      seedHistory: [
+        { role: 'user', content: 'migrated q', timestamp: 5000 },
+        { role: 'assistant', content: 'migrated a', timestamp: 5500 }
+      ]
+    } as any)
+
+    // The log should exist immediately after createSession (no sendMessage needed)
+    expect(historyLogExists(dataDir, 'seed-write-test')).toBe(true)
+    const log = readHistoryLog(dataDir, 'seed-write-test')
+    expect(log).toHaveLength(2)
+    expect(log[0]).toMatchObject({ role: 'user', content: 'migrated q', timestamp: 5000 })
+    expect(log[1]).toMatchObject({ role: 'assistant', content: 'migrated a', timestamp: 5500 })
   })
 })
