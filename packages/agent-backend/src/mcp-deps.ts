@@ -64,6 +64,24 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     getClaudeCodeBackend
   } = input
 
+  /** Resolve a user-facing session/thread key to the canonical session key
+   *  used by the owning backend. The registry stores the authoritative
+   *  mapping; when a bare thread UUID matches a registry entry, its
+   *  `record.sessionKey` is returned. When no registry entry exists, fall
+   *  back to the legacy `agent:main:thread:` prefix convention so existing
+   *  Claude Code sessions still work. */
+  function resolveSessionKey(sessionKey: string): string {
+    if (sessionKey === 'main') return 'agent:main:main'
+    if (sessionKey.startsWith('agent:')) return sessionKey
+
+    // Bare UUID — check registry first (local-llm sessions use the bare key)
+    const record = routing.registry.getByThread(sessionKey) ?? routing.registry.getBySession(sessionKey)
+    if (record) return record.sessionKey
+
+    // No registry entry — assume Claude Code convention
+    return `agent:main:thread:${sessionKey}`
+  }
+
   return {
     cron: {
       createUserMessageCron: async (o) => cronService.createUserMessageCron(o),
@@ -85,19 +103,11 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         return out
       },
       async send(sessionKey, text) {
-        const key = sessionKey.startsWith('agent:')
-          ? sessionKey
-          : sessionKey === 'main'
-            ? 'agent:main:main'
-            : `agent:main:thread:${sessionKey}`
+        const key = resolveSessionKey(sessionKey)
         await routing.forSession(key).sendMessage(key, text)
       },
       async history(sessionKey, limit) {
-        const key = sessionKey.startsWith('agent:')
-          ? sessionKey
-          : sessionKey === 'main'
-            ? 'agent:main:main'
-            : `agent:main:thread:${sessionKey}`
+        const key = resolveSessionKey(sessionKey)
         const { turns } = await routing.forSession(key).getHistory(key)
         return turns.slice(-(limit ?? 20)).map((t: any) => ({ role: t.role, content: t.content }))
       }

@@ -67,11 +67,24 @@ export function createBackend(config: MultiBackendConfig): RoutingBackend {
    *
    * Strategy:
    *   1) Registry lookup — explicit bindings always win.
+   *      When the key carries an `agent:main:thread:` prefix and the full
+   *      key misses, strip the prefix and retry with the bare UUID.
+   *      This bridges the mcp-deps session-key normalisation (which always
+   *      adds the prefix) with backends that store bare UUIDs (local-llm).
    *   2) Configured default — `SOVEREIGN_DEFAULT_BACKEND` is the user's
    *      authoritative choice for unbound `agent:*` keys.
    */
   function resolveBackend(sessionKey: string): AgentBackend {
-    const record = config.registry.getBySession(sessionKey) ?? config.registry.getByThread(sessionKey)
+    let record = config.registry.getBySession(sessionKey) ?? config.registry.getByThread(sessionKey)
+
+    // Fallback: strip the `agent:main:thread:` prefix and retry with the
+    // bare UUID. The MCP `sessions.send()` always adds the prefix, but
+    // local-llm sessions register under bare thread UUIDs.
+    if (!record && sessionKey.startsWith('agent:main:thread:')) {
+      const bare = sessionKey.slice('agent:main:thread:'.length)
+      record = config.registry.getBySession(bare) ?? config.registry.getByThread(bare)
+    }
+
     if (record) {
       const inst = instances.get(record.backendKind)
       if (inst) return inst.backend
