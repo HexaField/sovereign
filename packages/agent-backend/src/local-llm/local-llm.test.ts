@@ -1102,6 +1102,50 @@ describe('local-llm backend: compaction', () => {
     // The compaction summary marker must appear in the follow-up's system message
     expect(wireSys?.content).toContain(SUMMARY_MARKER)
   })
+
+  it('history log contains no duplicate user messages after compaction', async () => {
+    const config = { ...makeConfig(), contextWindow: 4096 }
+    const complete = vi.fn().mockImplementation((msgs: Array<{ role: string; content: string }>) => {
+      const sysMsg = msgs.find((m) => m.role === 'system')
+      if (sysMsg?.content.includes('context compaction engine')) {
+        return Promise.resolve(
+          textResponse(
+            '<summary>\n1. **Goal:** Test history dedup.\n3. **Progress:**\n   - **Done:** Messages sent.\n</summary>'
+          )
+        )
+      }
+      return Promise.resolve(textResponse('ack'))
+    })
+    const client: InferenceClient = {
+      complete: complete as unknown as InferenceClient['complete'],
+      healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
+      updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
+    }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+    const key = await backend.createSession('t')
+
+    const messageCount = 8
+    for (let i = 0; i < messageCount; i++) {
+      const idle = waitForIdle(backend)
+      await backend.sendMessage(key, `msg-${i}-${'x'.repeat(2000)}`)
+      await idle
+    }
+
+    // Compaction must have fired
+    const meta = await backend.getSessionMeta(key)
+    expect(meta?.compactionCount ?? 0).toBeGreaterThan(0)
+
+    // getHistory reads from the permanent history log — check for dupes
+    const { turns } = await backend.getHistory(key, { limit: 200 })
+    const userTurns = turns.filter((t) => t.role === 'user')
+    // Each sendMessage should produce exactly one user turn in the log
+    expect(userTurns.length).toBe(messageCount)
+
+    // Verify no content duplicates — each msg-N should appear exactly once
+    const contents = userTurns.map((t) => t.content.slice(0, 10))
+    const unique = new Set(contents)
+    expect(unique.size).toBe(messageCount)
+  })
 })
 
 describe('local-llm backend: subagent lifecycle events', () => {
