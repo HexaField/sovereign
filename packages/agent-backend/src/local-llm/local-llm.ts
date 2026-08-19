@@ -28,7 +28,7 @@ import type {
 import { createBackendEmitter, createWriteThroughStore, parseTurns } from '@sovereign/primitives'
 import type { WriteThroughStore } from '@sovereign/primitives'
 import type { LocalLlmConfig } from './config.js'
-import { createInferenceClient } from './inference.js'
+import { createAiSdkInferenceClient } from './ai-sdk-inference.js'
 import type { ChatMessage as WireChatMessage, InferenceClient } from './inference.js'
 import { createToolExecutor } from './tools/index.js'
 import type { ToolResult } from './tools/index.js'
@@ -50,6 +50,13 @@ import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
 import { runContextStrategies } from '../context-strategies/index.js'
 import { archiveMessagesBeforeStrategies, listStrategyArchives, readStrategyArchive } from '../history-archive.js'
+import {
+  appendToHistoryLog,
+  appendBatchToHistoryLog,
+  readHistoryLog,
+  seedHistoryLog,
+  historyLogExists
+} from '../history-log.js'
 
 const KIND: AgentBackendKind = 'local-llm'
 const PROVIDER = 'local-llm'
@@ -321,7 +328,7 @@ export function createLocalLlmBackend(
   function makeClient(model: string): InferenceClient {
     if (deps.inferenceClient) return deps.inferenceClient
     const cfg = getConfig()
-    return createInferenceClient({
+    return createAiSdkInferenceClient({
       baseUrl: cfg.baseUrl,
       model,
       temperature: cfg.temperature,
@@ -766,6 +773,12 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         }),
         client: makeClient(model)
       })
+      // Seed the history log from existing messages — one-time migration
+      // for sessions that predate the permanent log. seedHistoryLog is
+      // a no-op when the log file already exists.
+      if (value.messages?.length) {
+        seedHistoryLog(deps.dataDir, key, value.messages)
+      }
     }
   }
   rehydrate()
@@ -849,6 +862,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
     const userMsg: ChatMessage = { role: 'user', content: buildUserContent(text, attachments), timestamp: Date.now() }
     state.messages.push(userMsg)
+    appendToHistoryLog(deps.dataDir, state.sessionKey, userMsg)
     persist(state)
 
     const controller = new AbortController()
@@ -1319,7 +1333,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         // Mid-loop compaction spliced the transcript — beforeLen is stale.
         // Replace state.messages with the full conversation from the
         // transcript (everything after the leading system message).
-        state.messages = transcript.slice(1)
+        const newMsgs = transcript.slice(1)
+        state.messages = newMsgs
         // Preserve compaction summary for future turns — without this, the
         // summary merged into transcript[0] (system message) gets dropped
         // by slice(1) and the model loses all pre-compaction context.
@@ -1330,8 +1345,22 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
             timestamp: Date.now()
           })
         }
+        // Append conversation messages (not system/compaction) to the
+        // permanent history log — they survive compaction and session recycling.
+        const conversationMsgsForLog = newMsgs.filter((m) => m.role !== 'system')
+        if (conversationMsgsForLog.length > 0) {
+          appendBatchToHistoryLog(deps.dataDir, state.sessionKey, conversationMsgsForLog)
+        }
       } else {
-        state.messages.push(...transcript.slice(beforeLen))
+        const newTurnMsgs = transcript.slice(beforeLen)
+        state.messages.push(...newTurnMsgs)
+        // Append new turn messages to the permanent history log.
+        // Skip system-role messages (compaction summaries) — the log
+        // preserves original conversation only.
+        const conversationMsgsForLog = newTurnMsgs.filter((m) => m.role !== 'system')
+        if (conversationMsgsForLog.length > 0) {
+          appendBatchToHistoryLog(deps.dataDir, state.sessionKey, conversationMsgsForLog)
+        }
       }
       state.abortController = undefined
     }
@@ -1580,7 +1609,17 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
   ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number }> {
     const state = sessions.get(sessionKey)
     if (!state) return { turns: [], hasMore: false }
-    const allTurns = parseTurns(toGenericMessages(state.messages))
+
+    // Prefer the permanent history log — it contains every message ever
+    // sent, unaffected by compaction. Falls back to state.messages for
+    // sessions that predate the log.
+    let allTurns: ParsedTurn[]
+    if (historyLogExists(deps.dataDir, sessionKey)) {
+      const logMessages = readHistoryLog(deps.dataDir, sessionKey) as ChatMessage[]
+      allTurns = parseTurns(toGenericMessages(logMessages))
+    } else {
+      allTurns = parseTurns(toGenericMessages(state.messages))
+    }
 
     // Apply cursor filter
     let filtered = allTurns
@@ -1598,6 +1637,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
   }
 
   async function getFullHistory(sessionKey: string): Promise<ParsedTurn[]> {
+    // Returns the current LLM context view (state.messages) — includes
+    // compaction summaries and pruning effects. For the full unpruned
+    // UI history, use getHistory() which reads from the history log.
     const state = sessions.get(sessionKey)
     if (!state) return []
     return parseTurns(toGenericMessages(state.messages))
