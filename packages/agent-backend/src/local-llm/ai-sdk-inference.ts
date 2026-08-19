@@ -136,10 +136,18 @@ export function createAiSdkInferenceClient(initialConfig: InferenceClientConfig)
     return async function customFetch(url: RequestInfo | URL, init?: RequestInit): Promise<Response> {
       // Inject chat_template_kwargs for thinking mode control.
       // llama.cpp uses this non-standard field to toggle chain-of-thought.
-      if (state.thinking === false && init?.body && typeof init.body === 'string') {
+      if (init?.body && typeof init.body === 'string') {
         try {
           const body = JSON.parse(init.body)
-          body.chat_template_kwargs = { enable_thinking: false }
+          // Request usage stats in the final streaming chunk — without this,
+          // llama.cpp omits prompt_tokens/completion_tokens and compaction
+          // threshold checks fall back to an inaccurate char estimate.
+          if (body.stream) {
+            body.stream_options = { include_usage: true }
+          }
+          if (state.thinking === false) {
+            body.chat_template_kwargs = { enable_thinking: false }
+          }
           init = { ...init, body: JSON.stringify(body) }
         } catch {
           /* non-JSON body — pass through */
