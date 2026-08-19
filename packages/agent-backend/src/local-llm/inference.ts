@@ -137,50 +137,90 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
 
     try {
       const url = `${state.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`
-      let res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal
-      })
 
-      // llama-server returns 500 when it fails to parse the model's tool
-      // call arguments as JSON (e.g. truncated output hitting max_tokens).
-      // Retry without the `tools` parameter so the server returns raw text
-      // instead of crashing. Our parseToolCallsFromText() in tool-loop.ts
-      // extracts valid <tool_call> tags from the text and skips malformed
-      // ones — a graceful fallback the server-side parser lacks.
-      if (!res.ok && body.tools) {
-        const errText = await res.text().catch(() => '')
-        if (errText.includes('exceed_context_size_error') || errText.includes('exceeds the available context size')) {
-          // Context overflow — surface as a typed error so the tool loop
-          // can trigger compaction and retry instead of dying.
-          throw new ContextOverflowError(res.status, errText)
+      // Retry on transient connection failures (TCP drop during long prefill).
+      // Only retries TypeError from fetch — not AbortError, ContextOverflowError,
+      // or HTTP-level errors.
+      const MAX_RETRIES = 3
+      const BASE_DELAY_MS = 2000
+      let res!: Response
+      let lastError: unknown
+
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (attempt > 0) {
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1)
+          console.warn(
+            `[local-llm] inference fetch failed (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delay}ms...`
+          )
+          await new Promise((r) => setTimeout(r, delay))
+          const healthy = await healthCheck()
+          if (!healthy) {
+            console.warn('[local-llm] inference server unreachable, skipping retry')
+            throw lastError
+          }
         }
-        if (errText.includes('Failed to parse tool call arguments')) {
-          const retryBody = { ...body }
-          delete retryBody.tools
-          delete retryBody.tool_choice
+        try {
           res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(retryBody),
+            body: JSON.stringify(body),
             signal: controller.signal
           })
-        } else {
-          throw new Error(`Inference stream failed: ${res.status} — ${errText}`)
-        }
-      }
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        if (text.includes('exceed_context_size_error') || text.includes('exceeds the available context size')) {
-          throw new ContextOverflowError(res.status, text)
-        }
-        throw new Error(`Inference stream failed: ${res.status} — ${text}`)
-      }
-      if (!res.body) throw new Error('No response body for streaming request')
 
-      const reader = res.body.getReader()
+          // llama-server returns 500 when it fails to parse the model's tool
+          // call arguments as JSON (e.g. truncated output hitting max_tokens).
+          // Retry without the `tools` parameter so the server returns raw text
+          // instead of crashing. Our parseToolCallsFromText() in tool-loop.ts
+          // extracts valid <tool_call> tags from the text and skips malformed
+          // ones — a graceful fallback the server-side parser lacks.
+          if (!res.ok && body.tools) {
+            const errText = await res.text().catch(() => '')
+            if (
+              errText.includes('exceed_context_size_error') ||
+              errText.includes('exceeds the available context size')
+            ) {
+              // Context overflow — surface as a typed error so the tool loop
+              // can trigger compaction and retry instead of dying.
+              throw new ContextOverflowError(res.status, errText)
+            }
+            if (errText.includes('Failed to parse tool call arguments')) {
+              const retryBody = { ...body }
+              delete retryBody.tools
+              delete retryBody.tool_choice
+              res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(retryBody),
+                signal: controller.signal
+              })
+            } else {
+              throw new Error(`Inference stream failed: ${res.status} — ${errText}`)
+            }
+          }
+          if (!res.ok) {
+            const text = await res.text().catch(() => '')
+            if (text.includes('exceed_context_size_error') || text.includes('exceeds the available context size')) {
+              throw new ContextOverflowError(res.status, text)
+            }
+            throw new Error(`Inference stream failed: ${res.status} — ${text}`)
+          }
+          if (!res.body) throw new Error('No response body for streaming request')
+
+          break // fetch + validation succeeded — proceed to streaming read
+        } catch (err) {
+          lastError = err
+          // Only retry transient TCP/connection failures from fetch itself
+          const isTransient =
+            err instanceof TypeError &&
+            /fetch failed|ECONNRESET|ECONNREFUSED|socket hang up/i.test((err as Error).message)
+          if (!isTransient) throw err
+          if (attempt === MAX_RETRIES) throw err
+          // Continue to next retry attempt
+        }
+      }
+
+      // Non-null assertion: the retry loop above throws if res.body was null
+      const reader = res.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
 
