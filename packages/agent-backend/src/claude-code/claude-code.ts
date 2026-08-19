@@ -80,6 +80,7 @@ import {
   listSessionArchives,
   readArchiveEntries
 } from '../history-archive.js'
+import { readHistoryLog, historyLogExists, mergeIntoHistoryLog } from '../history-log.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -1380,6 +1381,17 @@ export function createClaudeCodeBackend(
         /* read-only cwd in tests */
       }
     }
+    // CC doesn't inject seedHistory into its own context (the SDK manages
+    // conversation state), but persist to the shared history log so that
+    // getHistory can surface the prior conversation after a backend switch.
+    if (opts?.seedHistory && opts.seedHistory.length > 0) {
+      const logMessages = opts.seedHistory.map((t) => ({
+        role: t.role,
+        content: t.content,
+        timestamp: t.timestamp
+      }))
+      mergeIntoHistoryLog(dataDir, sessionKey, logMessages)
+    }
     emitter.emit('session.info', { sessionKey, label, history: [] })
     return sessionKey
   }
@@ -1457,20 +1469,34 @@ export function createClaudeCodeBackend(
     opts?: { before?: number; limit?: number }
   ): Promise<{ turns: ParsedTurn[]; hasMore: boolean; oldestTimestamp?: number }> {
     const filePath = sessionFilePath(sessionKey)
-    if (!filePath || !fs.existsSync(filePath)) return { turns: [], hasMore: false }
 
-    // When paginating backwards with a cursor, read the full file to reach
-    // earlier turns. Without a cursor, the tail read suffices.
     let allTurns: ParsedTurn[]
-    let hasMoreRaw: boolean
-    if (opts?.before) {
-      const messages = readAllClaudeCodeMessages(filePath)
-      allTurns = parseClaudeCodeTurns(messages)
-      hasMoreRaw = false
+    let hasMoreRaw = false
+
+    if (filePath && fs.existsSync(filePath)) {
+      // When paginating backwards with a cursor, read the full file to reach
+      // earlier turns. Without a cursor, the tail read suffices.
+      if (opts?.before) {
+        const messages = readAllClaudeCodeMessages(filePath)
+        allTurns = parseClaudeCodeTurns(messages)
+      } else {
+        const { messages, hasMore } = readRecentClaudeCodeMessages(filePath, 2000)
+        allTurns = parseClaudeCodeTurns(messages)
+        hasMoreRaw = hasMore
+      }
+    } else if (historyLogExists(dataDir, sessionKey)) {
+      // Fallback: read from the shared history log — covers sessions that
+      // were created on another backend (e.g. local-llm) and switched to CC.
+      const logMessages = readHistoryLog(dataDir, sessionKey)
+      allTurns = logMessages.map((m: any) => ({
+        role: m.role ?? 'user',
+        content: typeof m.content === 'string' ? m.content : '',
+        timestamp: m.timestamp ?? 0,
+        workItems: [],
+        thinkingBlocks: []
+      }))
     } else {
-      const { messages, hasMore } = readRecentClaudeCodeMessages(filePath, 2000)
-      allTurns = parseClaudeCodeTurns(messages)
-      hasMoreRaw = hasMore
+      return { turns: [], hasMore: false }
     }
 
     // Apply cursor filter
@@ -1490,9 +1516,22 @@ export function createClaudeCodeBackend(
 
   async function getFullHistory(sessionKey: string): Promise<ParsedTurn[]> {
     const filePath = sessionFilePath(sessionKey)
-    if (!filePath || !fs.existsSync(filePath)) return []
-    const messages = readAllClaudeCodeMessages(filePath)
-    return parseClaudeCodeTurns(messages)
+    if (filePath && fs.existsSync(filePath)) {
+      const messages = readAllClaudeCodeMessages(filePath)
+      return parseClaudeCodeTurns(messages)
+    }
+    // Fallback: read from the shared history log when no CC session file exists.
+    if (historyLogExists(dataDir, sessionKey)) {
+      const logMessages = readHistoryLog(dataDir, sessionKey)
+      return logMessages.map((m: any) => ({
+        role: m.role ?? 'user',
+        content: typeof m.content === 'string' ? m.content : '',
+        timestamp: m.timestamp ?? 0,
+        workItems: [],
+        thinkingBlocks: []
+      }))
+    }
+    return []
   }
 
   /**

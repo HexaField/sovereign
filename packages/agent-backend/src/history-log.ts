@@ -88,3 +88,26 @@ export function seedHistoryLog(dataDir: string, sessionKey: string, messages: un
   if (historyLogExists(dataDir, sessionKey)) return
   appendBatchToHistoryLog(dataDir, sessionKey, messages)
 }
+
+/** Merge messages into an existing history log, deduplicating by timestamp.
+ *  Used during backend switches: the outgoing backend's full history gets
+ *  merged into the log so turns from both eras are preserved. When the log
+ *  doesn't exist yet, all messages are written (equivalent to seedHistoryLog).
+ *  When it does exist, only messages with timestamps not already in the log
+ *  get appended. */
+export function mergeIntoHistoryLog(dataDir: string, sessionKey: string, messages: unknown[]): void {
+  if (messages.length === 0) return
+  const existing = readHistoryLog(dataDir, sessionKey)
+  const seen = new Set<number>()
+  for (const m of existing) {
+    const ts = (m as any)?.timestamp
+    if (typeof ts === 'number') seen.add(ts)
+  }
+  const fresh = messages.filter((m) => {
+    const ts = (m as any)?.timestamp
+    return typeof ts !== 'number' || !seen.has(ts)
+  })
+  if (fresh.length > 0) {
+    appendBatchToHistoryLog(dataDir, sessionKey, fresh)
+  }
+}
