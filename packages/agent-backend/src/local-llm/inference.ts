@@ -89,6 +89,15 @@ export interface InferenceClientConfig {
   thinking?: boolean
 }
 
+/** The inference client contract -- every implementation must provide these.
+ *  `stream` was removed because no consumer calls it; the tool loop and
+ *  local-llm backend use `complete()` exclusively. */
+export interface InferenceClient {
+  complete(messages: ChatMessage[], opts?: { tools?: ToolSchema[]; signal?: AbortSignal }): Promise<CompletionResponse>
+  healthCheck(): Promise<boolean>
+  updateConfig(patch: Partial<InferenceClientConfig>): void
+}
+
 export function createInferenceClient(initialConfig: InferenceClientConfig) {
   // Mutable state so hot-swap actually works.
   const state = { ...initialConfig }
@@ -324,5 +333,3 @@ export function createInferenceClient(initialConfig: InferenceClientConfig) {
 
   return { complete, stream, healthCheck, updateConfig }
 }
-
-export type InferenceClient = ReturnType<typeof createInferenceClient>

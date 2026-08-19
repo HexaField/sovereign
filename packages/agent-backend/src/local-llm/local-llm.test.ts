@@ -68,7 +68,6 @@ function makeFakeClient(...responses: CompletionResponse[]): {
   for (const r of responses) complete.mockResolvedValueOnce(r)
   const client: InferenceClient = {
     complete: complete as unknown as InferenceClient['complete'],
-    stream: (async function* () {})() as unknown as InferenceClient['stream'],
     healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
     updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
   }
@@ -86,7 +85,6 @@ function makePendingClient(): { client: InferenceClient; release: (r: Completion
   })
   const client: InferenceClient = {
     complete: complete as unknown as InferenceClient['complete'],
-    stream: (async function* () {})() as unknown as InferenceClient['stream'],
     healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
     updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
   }
@@ -399,7 +397,6 @@ describe('local-llm backend: errors', () => {
     const complete = vi.fn().mockRejectedValue(new Error('connection refused'))
     const client: InferenceClient = {
       complete: complete as unknown as InferenceClient['complete'],
-      stream: (async function* () {})() as unknown as InferenceClient['stream'],
       healthCheck: vi.fn().mockResolvedValue(false) as unknown as InferenceClient['healthCheck'],
       updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
     }
@@ -454,7 +451,6 @@ describe('local-llm backend: connect/disconnect', () => {
   it('connect() reports error status when the server is unreachable', async () => {
     const client: InferenceClient = {
       complete: vi.fn() as unknown as InferenceClient['complete'],
-      stream: (async function* () {})() as unknown as InferenceClient['stream'],
       healthCheck: vi.fn().mockResolvedValue(false) as unknown as InferenceClient['healthCheck'],
       updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
     }
@@ -807,7 +803,6 @@ describe('local-llm backend: compaction', () => {
     })
     const client: InferenceClient = {
       complete: complete as unknown as InferenceClient['complete'],
-      stream: (async function* () {})() as unknown as InferenceClient['stream'],
       healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
       updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
     }
@@ -848,7 +843,6 @@ describe('local-llm backend: compaction', () => {
     })
     const client: InferenceClient = {
       complete: complete as unknown as InferenceClient['complete'],
-      stream: (async function* () {})() as unknown as InferenceClient['stream'],
       healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
       updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
     }
@@ -894,7 +888,6 @@ describe('local-llm backend: compaction', () => {
     })
     const client: InferenceClient = {
       complete: complete as unknown as InferenceClient['complete'],
-      stream: (async function* () {})() as unknown as InferenceClient['stream'],
       healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
       updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
     }
@@ -1074,7 +1067,6 @@ describe('local-llm backend: compaction', () => {
 
     const client: InferenceClient = {
       complete: complete as unknown as InferenceClient['complete'],
-      stream: (async function* () {})() as unknown as InferenceClient['stream'],
       healthCheck: vi.fn().mockResolvedValue(true) as unknown as InferenceClient['healthCheck'],
       updateConfig: vi.fn() as unknown as InferenceClient['updateConfig']
     }
@@ -1178,7 +1170,6 @@ describe('local-llm backend: subagent lifecycle events', () => {
     // Client that throws on complete()
     const client: any = {
       complete: vi.fn().mockRejectedValue(new Error('inference exploded')),
-      stream: (async function* () {})(),
       healthCheck: vi.fn().mockResolvedValue(true),
       updateConfig: vi.fn()
     }
