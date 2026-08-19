@@ -545,7 +545,13 @@ export function createChatModule(
       const isSubagentEvent =
         eventName === 'subagent.spawned' || eventName === 'subagent.completed' || eventName === 'subagent.failed'
 
-      if (wsHandler && (threadId || isSubagentEvent)) {
+      // session.info carries full history — never broadcast to all clients.
+      // It serves as a directed response to chat.history.full requests
+      // (via handleFullHistory → sendTo), so broadcasting it causes every
+      // tab to replace its turns with the new session's history.
+      const skipBroadcast = eventName === 'session.info'
+
+      if (wsHandler && !skipBroadcast && (threadId || isSubagentEvent)) {
         wsHandler.broadcastToChannel('chat', {
           type: wsType,
           ...data,

@@ -786,7 +786,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // the only WS chat message the client still consumes.
   unsubs.push(
     ws.on('chat.session.info', (msg: any) => {
-      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      const msgThread = msg.threadKey ?? msg.threadId
+      if (msgThread && msgThread !== _threadKey()) return
       const history: ParsedTurn[] = stripOriginPrefixes(msg.history ?? [])
       setHasMoreHistory(msg.hasMore ?? false)
       setLoadingMore(false)
@@ -815,7 +816,8 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // Thread event routing (still via WS)
   unsubs.push(
     ws.on('thread.event.routed' as any, (msg: any) => {
-      if (msg.threadKey && msg.threadKey !== _threadKey()) return
+      const msgThread = msg.threadKey ?? msg.threadId
+      if (msgThread && msgThread !== _threadKey()) return
       const entity = msg.entityBinding
       const evtType = msg.event?.type ?? 'unknown'
       const text = `[${msg.classification ?? 'NOTIFY'}] ${evtType} on ${entity?.entityType ?? ''}:${entity?.entityRef ?? ''}`
