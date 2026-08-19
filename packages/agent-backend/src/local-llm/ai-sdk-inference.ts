@@ -19,14 +19,7 @@ import { streamText, jsonSchema, tool as aiTool } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import type { ModelMessage, ToolSet } from 'ai'
 import { ContextOverflowError } from './inference.js'
-import type {
-  ChatMessage,
-  CompletionResponse,
-  InferenceClientConfig,
-  StreamChunk,
-  ToolCall,
-  ToolSchema
-} from './inference.js'
+import type { ChatMessage, CompletionResponse, InferenceClientConfig, ToolCall, ToolSchema } from './inference.js'
 
 const MAX_RETRIES = 3
 const BASE_DELAY_MS = 2000
@@ -336,13 +329,5 @@ export function createAiSdkInferenceClient(initialConfig: InferenceClientConfig)
     Object.assign(state, patch)
   }
 
-  // stream() stub — required by InferenceClient type but not called by
-  // any consumer. The tool loop uses complete(), which streams internally.
-  async function* rawStream(): AsyncGenerator<StreamChunk> {
-    throw new Error('AI SDK adapter does not support raw streaming — use complete()')
-  }
-
-  return { complete, stream: rawStream, healthCheck, updateConfig }
+  return { complete, healthCheck, updateConfig }
 }
-
-export type AiSdkInferenceClient = ReturnType<typeof createAiSdkInferenceClient>
