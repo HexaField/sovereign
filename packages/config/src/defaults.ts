@@ -45,7 +45,8 @@ export const defaults: SovereignConfig = {
       sandbox: {
         allowedCwds: [home ? path.join(home, 'workspaces') : ''],
         bashTimeout: 120000
-      }
+      },
+      endpoints: []
     }
   },
   summary: {

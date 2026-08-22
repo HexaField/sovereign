@@ -48,6 +48,7 @@ import { toolSearchSchema, createToolSearchRegistry } from './tools/tool-search.
 import type { ToolSearchRegistry } from './tools/tool-search.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
+import { resolveEndpoint, resolveDefaultEndpoint } from './endpoint-resolver.js'
 import { runContextStrategies } from '../context-strategies/index.js'
 import { archiveMessagesBeforeStrategies, listStrategyArchives, readStrategyArchive } from '../history-archive.js'
 import {
@@ -332,17 +333,13 @@ export function createLocalLlmBackend(
     label: 'local-llm-state'
   })
 
-  function makeClient(model: string, reasoning?: import('./inference.js').ReasoningConfig): InferenceClient {
+  function makeClient(model: string, reasoningOverride?: import('./inference.js').ReasoningConfig): InferenceClient {
     if (deps.inferenceClient) return deps.inferenceClient
     const cfg = getConfig()
-    return createAiSdkInferenceClient({
-      baseUrl: cfg.baseUrl,
-      model,
-      temperature: cfg.temperature,
-      maxTokens: cfg.maxTokens,
-      timeoutMs: cfg.timeoutMs,
-      reasoning: reasoning ?? cfg.reasoning
-    })
+    const resolved = resolveEndpoint(model, cfg)
+    // Per-session reasoning (e.g. from setSessionEffort) overrides the endpoint config.
+    const effectiveConfig = reasoningOverride ? { ...resolved.config, reasoning: reasoningOverride } : resolved.config
+    return createAiSdkInferenceClient(effectiveConfig)
   }
 
   // ── Tool schemas + executors ──────────────────────────────────────
@@ -1522,9 +1519,31 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
   async function connect(): Promise<void> {
     setConnectionStatus('connecting')
+    const cfg = getConfig()
     const reachable = await probeClient.healthCheck()
-    if (reachable) setConnectionStatus('connected')
-    else setConnectionStatus('error', `Could not reach inference server at ${getConfig().baseUrl}`)
+    if (reachable) {
+      setConnectionStatus('connected')
+      // Probe secondary endpoints in background — unreachable ones are logged
+      // but do not fail the overall connection (the primary is responsive).
+      if ((cfg.endpoints ?? []).length > 1) {
+        for (const ep of (cfg.endpoints ?? []).slice(1)) {
+          const epModel = ep.defaultModel ?? ep.models[0] ?? cfg.model
+          const epClient = makeClient(epModel)
+          void epClient
+            .healthCheck()
+            .then((ok) => {
+              if (!ok) console.warn(`[local-llm] endpoint "${ep.id}" unreachable at ${ep.baseUrl}`)
+            })
+            .catch(() => {
+              console.warn(`[local-llm] endpoint "${ep.id}" health check failed`)
+            })
+        }
+      }
+    } else {
+      // Report the primary endpoint URL in the error.
+      const primaryUrl = (cfg.endpoints ?? []).length > 0 ? cfg.endpoints[0].baseUrl : cfg.baseUrl
+      setConnectionStatus('error', `Could not reach inference server at ${primaryUrl}`)
+    }
   }
 
   async function disconnect(): Promise<void> {
@@ -1855,9 +1874,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     const state = sessions.get(sessionKey)
     if (!state) return
     state.model = model
-    // Safe to hot-swap in place — this client is exclusively this session's,
-    // never shared, so there's no race with a concurrent request on another session.
-    state.client.updateConfig({ model })
+    // Re-create the client for the new model — it may route to a different endpoint
+    // with a different baseUrl. Per-session reasoning overrides are preserved.
+    state.client = makeClient(model, state.reasoning)
     persist(state)
   }
 
@@ -1908,7 +1927,74 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
   }> {
     const cfg = getConfig()
 
-    // ── 1. Read on-disk model registry (e.g. llama.cpp models.json) ──────
+    // ── 0. Endpoint-declared catalog (multi-endpoint path) ────────────────
+    // When endpoints are configured, they define the available model set.
+    // The modelsRegistry supplements with richer metadata (labels, quant)
+    // but does not add new models or change which endpoint serves them.
+    const endpoints = cfg.endpoints ?? []
+    if (endpoints.length > 0) {
+      const catalog: ModelCatalogEntry[] = []
+      const seenIds = new Set<string>()
+
+      for (const ep of endpoints) {
+        for (const modelId of ep.models) {
+          if (!seenIds.has(modelId)) {
+            seenIds.add(modelId)
+            catalog.push({
+              id: modelId,
+              provider: PROVIDER,
+              family: ep.id,
+              familyLabel: ep.label ?? ep.id,
+              version: null,
+              versionLabel: 'default'
+            })
+          }
+        }
+      }
+
+      // Merge registry metadata into endpoint-declared entries where available.
+      if (cfg.modelsRegistry) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(cfg.modelsRegistry, 'utf-8')) as {
+            models?: Record<string, { label?: string; quant?: string }>
+          }
+          if (raw.models) {
+            for (const [key, entry] of Object.entries(raw.models)) {
+              const existing = catalog.find((c) => c.id === key)
+              if (existing) {
+                // Enrich endpoint-declared entry with registry metadata.
+                if (entry.label) existing.familyLabel = entry.label
+                if (entry.quant) {
+                  existing.version = entry.quant
+                  existing.versionLabel = entry.quant
+                }
+              } else {
+                // Registry model not declared in any endpoint — include it.
+                if (!seenIds.has(key)) {
+                  seenIds.add(key)
+                  catalog.push({
+                    id: key,
+                    provider: PROVIDER,
+                    family: key,
+                    familyLabel: entry.label ?? key,
+                    version: entry.quant ?? null,
+                    versionLabel: entry.quant ?? 'default'
+                  })
+                }
+              }
+            }
+          }
+        } catch {
+          // Registry unreadable — endpoint-only catalog is fine.
+        }
+      }
+
+      const models = catalog.map((m) => m.id)
+      const defaultModel = endpoints[0].defaultModel ?? endpoints[0].models[0] ?? cfg.model
+      return { models, defaultModel: defaultModel || null, catalog }
+    }
+
+    // ── 1. Read on-disk model registry (single-endpoint / no endpoints) ───
     // The registry holds all installed models — the running inference server
     // only reports the single currently-loaded model via /v1/models.
     if (cfg.modelsRegistry) {
@@ -2050,9 +2136,13 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
   }
 
   function getDeviceInfo(): DeviceInfo {
+    const cfg = getConfig()
+    // Report the primary (first) endpoint URL. When no endpoints are configured,
+    // fall back to the flat baseUrl field.
+    const primaryUrl = (cfg.endpoints ?? []).length > 0 ? cfg.endpoints[0].baseUrl : cfg.baseUrl
     return {
       backendKind: KIND,
-      deviceId: `local-llm@${getConfig().baseUrl}`,
+      deviceId: `local-llm@${primaryUrl}`,
       connectionStatus
     }
   }

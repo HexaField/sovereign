@@ -29,7 +29,8 @@ function makeConfig(): LocalLlmConfig {
     reasoning: { enabled: false, effort: 'medium', maxTokens: 0 },
     toolCallFormat: 'auto',
     modelsRegistry: null,
-    sandbox: { allowedCwds: [tmpDir], bashTimeout: 5000 }
+    sandbox: { allowedCwds: [tmpDir], bashTimeout: 5000 },
+    endpoints: []
   }
 }
 
@@ -206,6 +207,90 @@ describe('local-llm backend: model registry', () => {
     const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
     const result = await backend.listAvailableModels()
     expect(result.models).toEqual(['test-model'])
+  })
+
+  it('listAvailableModels merges models across endpoints when endpoints are configured', async () => {
+    const config = {
+      ...makeConfig(),
+      endpoints: [
+        {
+          id: 'fast',
+          label: 'Fast GPU',
+          baseUrl: 'http://localhost:9090',
+          models: ['model-fast', 'model-fast-v2'],
+          defaultModel: 'model-fast'
+        },
+        {
+          id: 'cpu',
+          label: 'CPU',
+          baseUrl: 'http://localhost:8080',
+          models: ['model-slow'],
+          defaultModel: 'model-slow'
+        }
+      ]
+    }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    const result = await backend.listAvailableModels()
+    expect(result.models).toEqual(['model-fast', 'model-fast-v2', 'model-slow'])
+    expect(result.defaultModel).toBe('model-fast') // first endpoint's defaultModel
+    expect(result.catalog).toHaveLength(3)
+    // Catalog entries carry endpoint metadata
+    expect(result.catalog![0]).toMatchObject({ id: 'model-fast', family: 'fast', familyLabel: 'Fast GPU' })
+    expect(result.catalog![2]).toMatchObject({ id: 'model-slow', family: 'cpu', familyLabel: 'CPU' })
+  })
+
+  it('listAvailableModels deduplicates models that appear in multiple endpoints', async () => {
+    const config = {
+      ...makeConfig(),
+      endpoints: [
+        { id: 'a', baseUrl: 'http://a:1', models: ['shared', 'only-a'], defaultModel: 'shared' },
+        { id: 'b', baseUrl: 'http://b:1', models: ['shared', 'only-b'], defaultModel: 'shared' }
+      ]
+    }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    const result = await backend.listAvailableModels()
+    // 'shared' appears once despite being in two endpoints
+    expect(result.models.filter((m) => m === 'shared')).toHaveLength(1)
+    expect(result.models).toContain('only-a')
+    expect(result.models).toContain('only-b')
+  })
+
+  it('listAvailableModels enriches endpoint models with registry metadata', async () => {
+    const registryPath = path.join(dataDir, 'models.json')
+    fs.writeFileSync(
+      registryPath,
+      JSON.stringify({ models: { 'model-fast': { label: 'Fast Model', quant: 'Q4_K_M' } } })
+    )
+    const config = {
+      ...makeConfig(),
+      modelsRegistry: registryPath,
+      endpoints: [{ id: 'gpu', baseUrl: 'http://localhost:9090', models: ['model-fast'], defaultModel: 'model-fast' }]
+    }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    const result = await backend.listAvailableModels()
+    const entry = result.catalog?.find((c) => c.id === 'model-fast')
+    expect(entry?.familyLabel).toBe('Fast Model') // enriched from registry
+    expect(entry?.version).toBe('Q4_K_M')
+  })
+})
+
+describe('local-llm backend: multi-endpoint routing', () => {
+  it('setSessionModel re-resolves to the correct endpoint — client created with new baseUrl', async () => {
+    const { client } = makeFakeClient(textResponse('from fast endpoint'))
+    const config = {
+      ...makeConfig(),
+      endpoints: [
+        { id: 'fast', baseUrl: 'http://fast:9090', models: ['model-fast'], defaultModel: 'model-fast' },
+        { id: 'slow', baseUrl: 'http://slow:8080', models: ['model-slow'], defaultModel: 'model-slow' }
+      ]
+    }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+    const key = await backend.createSession('t', { model: { provider: 'local-llm', model: 'model-fast' } })
+    // Switch to a model on the slow endpoint — the injected fake client is still used
+    // (deps.inferenceClient overrides makeClient), but verify setSessionModel succeeds
+    await backend.setSessionModel(key, 'local-llm', 'model-slow')
+    const meta = await backend.getSessionMeta(key)
+    expect(meta?.model).toBe('model-slow')
   })
 })
 

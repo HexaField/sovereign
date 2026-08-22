@@ -10,6 +10,36 @@ import type { ReasoningConfig } from './inference.js'
 
 export type { ReasoningConfig }
 
+// ── Per-endpoint override block ───────────────────────────────────────────
+
+/** Per-endpoint overrides merged on top of the flat localLlm defaults. */
+export interface EndpointOverrides {
+  temperature?: number
+  maxTokens?: number
+  contextWindow?: number
+  compactThreshold?: number
+  timeoutMs?: number
+  reasoning?: { enabled?: boolean; effort?: string; maxTokens?: number }
+}
+
+/** A single named inference endpoint. */
+export interface EndpointConfig {
+  /** Unique identifier used for routing and logging (e.g. "rocmfpx", "cpu"). */
+  id: string
+  /** Human-readable label shown in the UI model picker. */
+  label?: string
+  /** Base URL for this endpoint's OpenAI-compatible API. */
+  baseUrl: string
+  /** Model ids served by this endpoint. Matched against the session model. */
+  models: string[]
+  /** Default model for new sessions routed here. Falls back to models[0]. */
+  defaultModel?: string
+  /** Per-endpoint overrides applied on top of the flat localLlm defaults. */
+  overrides?: EndpointOverrides
+}
+
+// ── Main config type ──────────────────────────────────────────────────────
+
 export interface LocalLlmConfig {
   /** Base URL for the OpenAI-compatible inference server (llama.cpp / ollama / vLLM). */
   baseUrl: string
@@ -46,7 +76,16 @@ export interface LocalLlmConfig {
     /** Maximum ms a Bash command may run before being killed. */
     bashTimeout: number
   }
+  /**
+   * Named inference endpoints. When empty, a single endpoint is synthesised
+   * from the flat baseUrl/model fields for backward compatibility.
+   * When populated, the backend routes each model request to the endpoint whose
+   * `models` array contains it.
+   */
+  endpoints: EndpointConfig[]
 }
+
+// ── Raw (un-normalised) config from the store ─────────────────────────────
 
 interface RawLocalLlmConfig {
   baseUrl?: string
@@ -70,7 +109,24 @@ interface RawLocalLlmConfig {
     allowedCwds?: string[]
     bashTimeout?: number
   }
+  endpoints?: Array<{
+    id?: string
+    label?: string
+    baseUrl?: string
+    models?: string[]
+    defaultModel?: string
+    overrides?: {
+      temperature?: number
+      maxTokens?: number
+      contextWindow?: number
+      compactThreshold?: number
+      timeoutMs?: number
+      reasoning?: { enabled?: boolean; effort?: string; maxTokens?: number }
+    }
+  }>
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────
 
 const DEFAULT_REASONING: ReasoningConfig = {
   enabled: false,
@@ -97,6 +153,25 @@ function resolveReasoning(cfg: RawLocalLlmConfig): ReasoningConfig {
   return DEFAULT_REASONING
 }
 
+/** Normalise the raw `endpoints` array into typed EndpointConfig[].
+ *  Filters out entries with no baseUrl and assigns auto-generated ids when
+ *  the id field is missing. */
+function resolveEndpoints(raw: RawLocalLlmConfig['endpoints']): EndpointConfig[] {
+  if (!raw || raw.length === 0) return []
+  return raw
+    .filter((ep) => ep.baseUrl?.trim())
+    .map((ep, i) => ({
+      id: ep.id?.trim() || `endpoint-${i}`,
+      label: ep.label,
+      baseUrl: ep.baseUrl!.trim(),
+      models: Array.isArray(ep.models) ? ep.models.filter((m) => typeof m === 'string' && m.trim()) : [],
+      defaultModel: ep.defaultModel?.trim() || undefined,
+      overrides: ep.overrides
+    }))
+}
+
+// ── Public API ────────────────────────────────────────────────────────────
+
 export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: string): LocalLlmConfig {
   // `dataDir` isn't consumed by this resolver today — the local-llm backend's
   // own state directory is derived by the caller (see local-llm.ts, which
@@ -121,7 +196,8 @@ export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: strin
     sandbox: {
       allowedCwds: cfg.sandbox?.allowedCwds ?? (home ? [path.join(home, 'workspaces')] : []),
       bashTimeout: cfg.sandbox?.bashTimeout ?? 120000
-    }
+    },
+    endpoints: resolveEndpoints(cfg.endpoints)
   }
 }
 

@@ -68,6 +68,34 @@ export interface SovereignConfig {
         /** Maximum Bash execution time in ms. */
         bashTimeout: number
       }
+      /**
+       * Named inference endpoints. When empty (the default), a single endpoint
+       * is synthesised from the flat `baseUrl`/`model` fields for backward compat.
+       * When populated, the backend routes each model request to the endpoint whose
+       * `models` array contains it — enabling ROCmFPX, CPU fallback, remote vLLM,
+       * etc. without editing the flat fields or restarting the server.
+       */
+      endpoints: Array<{
+        /** Unique identifier used for routing and logging (e.g. "rocmfpx", "cpu"). */
+        id: string
+        /** Human-readable label shown in the UI model picker. */
+        label?: string
+        /** Base URL for this endpoint's OpenAI-compatible API. */
+        baseUrl: string
+        /** Model ids served by this endpoint. Matched against the session model. */
+        models: string[]
+        /** Default model for new sessions routed to this endpoint. */
+        defaultModel?: string
+        /** Per-endpoint overrides applied on top of the flat localLlm defaults. */
+        overrides?: {
+          temperature?: number
+          maxTokens?: number
+          contextWindow?: number
+          compactThreshold?: number
+          timeoutMs?: number
+          reasoning?: { enabled?: boolean; effort?: string; maxTokens?: number }
+        }
+      }>
     }
   }
   /** Running summary service — maintains per-thread rolling summaries via a local model. */
