@@ -71,10 +71,6 @@ export interface AgentBackendWiringInput {
    *  BOTH presence threads (internal + gateway). Carries the AD4M knowledge
    *  graph schema, tools reference, and usage patterns. */
   presenceKnowledgeFile?: string
-  /** Late-bound health summary for the internal presence thread. Called at
-   *  session-start time (not at wiring time) so the system module can
-   *  populate before any session fires. */
-  presenceGetHealthSummary?: () => string | undefined
 }
 
 export interface AgentBackendWiringResult {
@@ -179,9 +175,6 @@ export function makePresenceAwareAppendResolver(
     personalityFile?: string
     memoryFile?: string
     knowledgeFile?: string
-    /** Late-bound health summary — called when the session starts (not at
-     *  wiring time). Returns a formatted string or undefined to skip. */
-    getHealthSummary?: () => string | undefined
   },
   /** Late-bound resolver for global subagent defaults (resolved at call time,
    *  not wiring time, so config changes take effect without a restart). */
@@ -196,7 +189,7 @@ export function makePresenceAwareAppendResolver(
     const internalId = presence.internalThreadId()
     const gatewayId = presence.gatewayThreadId()
 
-    // Internal thread gets personality + memory + knowledge + health.
+    // Internal thread gets personality + memory.
     if (threadKey && internalId && threadKey === internalId) {
       if (presence.personalityFile) {
         try {
@@ -212,17 +205,6 @@ export function makePresenceAwareAppendResolver(
           if (txt) parts.push(`# Presence memory\n\n${txt}`)
         } catch {
           /* missing — skip silently */
-        }
-      }
-
-      // Health summary — injected at session start so the LLM knows
-      // which external services are available right now.
-      if (presence.getHealthSummary) {
-        try {
-          const summary = presence.getHealthSummary()
-          if (summary) parts.push(summary)
-        } catch {
-          /* health unavailable — skip silently */
         }
       }
     }
@@ -423,8 +405,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
               personalityFile: input.presencePersonalityFile,
               memoryFile: input.presenceMemoryFile,
-              knowledgeFile: input.presenceKnowledgeFile,
-              getHealthSummary: input.presenceGetHealthSummary
+              knowledgeFile: input.presenceKnowledgeFile
             },
             () => subagentDefaults
           ),
@@ -456,8 +437,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               gatewayThreadId: () => input.presence?.gatewayThreadId() ?? null,
               personalityFile: input.presencePersonalityFile,
               memoryFile: input.presenceMemoryFile,
-              knowledgeFile: input.presenceKnowledgeFile,
-              getHealthSummary: input.presenceGetHealthSummary
+              knowledgeFile: input.presenceKnowledgeFile
             },
             () => subagentDefaults
           ),

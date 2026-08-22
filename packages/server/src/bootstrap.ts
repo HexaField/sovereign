@@ -584,30 +584,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const presenceMemoryFile = path.join(configDir, 'PRESENCE_MEMORY.md')
   const presenceKnowledgeFile = path.join(configDir, 'PRESENCE_KNOWLEDGE.md')
 
-  // Late-bound health summary — the system module does not exist yet at
-  // wiring time. The getter runs only when a session starts (well after
-  // boot completes), so the ref will have resolved by then.
-  let systemModuleRef: import('@sovereign/system').SystemModule | undefined
-  const presenceGetHealthSummary = (): string | undefined => {
-    if (!systemModuleRef) return undefined
-    const h = systemModuleRef.getHealth()
-    const lines: string[] = ['# Service health at session start', '']
-    lines.push(`Uptime: ${h.connection.uptime}s`)
-    lines.push(`Agent backend: ${h.connection.agentBackend}`)
-    if (h.services?.external?.length) {
-      lines.push('', '## External services', '')
-      for (const svc of h.services.external) {
-        const icon = svc.status === 'ok' ? '✓' : '✗'
-        lines.push(`- ${icon} **${svc.label}** (port ${svc.port}): ${svc.status}`)
-      }
-    }
-    if (h.services?.semble) {
-      const s = h.services.semble
-      lines.push(`- Semble: ${s.status}${s.version ? ` v${s.version}` : ''}`)
-    }
-    return lines.join('\n')
-  }
-
   // Agent backend (the only construction cycle)
   const {
     routingBackend,
@@ -636,8 +612,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     presence: presenceMcpDeps,
     presencePersonalityFile,
     presenceMemoryFile,
-    presenceKnowledgeFile,
-    presenceGetHealthSummary
+    presenceKnowledgeFile
   })
   app.use(createSchedulerRoutes(scheduler, cronService))
 
@@ -1222,9 +1197,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     // Honour SEMBLE_BIN for non-standard installs; empty string opts out.
     sembleBin: process.env.SEMBLE_BIN ?? 'semble'
   })
-  // Resolve the late-bound ref so the presence append resolver can read
-  // health status when the first session starts.
-  systemModuleRef = systemModule
   // Device monitor — collects system metrics from local + remote tailnet devices.
   // Discovery-first: `tailscale status --json` provides the device registry.
   // Optional `deviceOverrides` in config let the user set SSH aliases, labels,
