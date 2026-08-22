@@ -131,7 +131,7 @@ function defaultSystemPrompt(
     extraCapabilities.push('Sovereign (cron, sessions, browser, agents, notifications, planning, WebFetch)')
   if (hasEmbeddings) extraCapabilities.push('embeddings (semantic search and indexing)')
   if (hasSemble) extraCapabilities.push('semble (semantic code search)')
-  if (mcpBridgeNames.length > 0) extraCapabilities.push(`external services (${mcpBridgeNames.join(', ')})`)
+  if (mcpBridgeNames.length > 0) extraCapabilities.push('external services')
 
   const hasDeferred = extraCapabilities.length > 0
 
