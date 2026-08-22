@@ -79,6 +79,41 @@ export const schema = {
                 bashTimeout: { type: 'number', minimum: 0 }
               },
               additionalProperties: false
+            },
+            endpoints: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  label: { type: 'string' },
+                  baseUrl: { type: 'string' },
+                  models: { type: 'array', items: { type: 'string' } },
+                  defaultModel: { type: 'string' },
+                  overrides: {
+                    type: 'object',
+                    properties: {
+                      temperature: { type: 'number', minimum: 0, maximum: 2 },
+                      maxTokens: { type: 'number', minimum: 1 },
+                      contextWindow: { type: 'number', minimum: 1 },
+                      compactThreshold: { type: 'number', minimum: 1 },
+                      timeoutMs: { type: 'number', minimum: 1000 },
+                      reasoning: {
+                        type: 'object',
+                        properties: {
+                          enabled: { type: 'boolean' },
+                          effort: { type: 'string' },
+                          maxTokens: { type: 'number', minimum: 0 }
+                        },
+                        additionalProperties: false
+                      }
+                    },
+                    additionalProperties: false
+                  }
+                },
+                required: ['id', 'baseUrl', 'models'],
+                additionalProperties: false
+              }
             }
           },
           additionalProperties: false
