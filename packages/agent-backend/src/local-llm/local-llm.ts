@@ -200,11 +200,23 @@ function buildUserContent(text: string, attachments?: Buffer[]): string {
   return text ? `${text}\n\n${note}` : note
 }
 
-/** Strip local-only fields (`timestamp`, `reasoning`) before sending a
- *  message array over the wire. Both fields are meaningful only on-disk and
- *  must never reach the inference server. */
+/** Serialize messages for the inference server.
+ *
+ *  - Strips local-only `timestamp` (never sent over wire).
+ *  - Re-embeds `reasoning` into the assistant content so the reconstructed
+ *    prompt matches the server's KV-cached token sequence byte-for-byte.
+ *    Without this, the wire content is `{text}` while the cache holds
+ *    `<think>\n{reasoning}\n</think>\n\n{text}`, causing a prefix mismatch
+ *    every turn and defeating KV cache reuse entirely.
+ */
 function toWireMessages(messages: ChatMessage[]): WireChatMessage[] {
-  return messages.map(({ timestamp: _timestamp, reasoning: _reasoning, ...rest }) => rest)
+  return messages.map(({ timestamp: _timestamp, reasoning, ...rest }) => {
+    if (rest.role === 'assistant' && reasoning && typeof rest.content === 'string') {
+      // Re-embed the thinking block so the token sequence matches the cache.
+      return { ...rest, content: `<think>\n${reasoning}\n</think>\n\n${rest.content}` }
+    }
+    return rest
+  })
 }
 
 /**
