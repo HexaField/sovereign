@@ -6,6 +6,9 @@
 
 import path from 'node:path'
 import type { ConfigStore } from '@sovereign/config'
+import type { ReasoningConfig } from './inference.js'
+
+export type { ReasoningConfig }
 
 export interface LocalLlmConfig {
   /** Base URL for the OpenAI-compatible inference server (llama.cpp / ollama / vLLM). */
@@ -25,10 +28,10 @@ export interface LocalLlmConfig {
   /** Per-completion timeout in ms. At ~20 t/s decode, 32k tokens needs ~27 min.
    *  Default 600000 (10 min). The old 60s default starved slow models of output. */
   timeoutMs: number
-  /** Enable model thinking (e.g. Qwen3 `<think>` blocks). When false, passes
-   *  `chat_template_kwargs: { enable_thinking: false }` to the server and adds
-   *  a system prompt instruction. Thinking tokens consume output budget. */
-  thinking: boolean
+  /** Reasoning/thinking mode configuration. Controls chain-of-thought via
+   *  chat_template_kwargs on llama.cpp servers. Derived from the raw config's
+   *  `reasoning` block; falls back to the deprecated `thinking` boolean. */
+  reasoning: ReasoningConfig
   /** Tool-call format detection: auto | openai | hermes. Reserved for future prompt-format branching. */
   toolCallFormat: string
   /** Path to a JSON model registry (e.g. `~/.local/share/llama.cpp/models.json`).
@@ -53,13 +56,45 @@ interface RawLocalLlmConfig {
   temperature?: number
   maxTokens?: number
   timeoutMs?: number
+  /** @deprecated Use `reasoning` instead. Auto-synthesised into a ReasoningConfig. */
   thinking?: boolean
+  /** Reasoning/thinking mode configuration. Takes precedence over `thinking`. */
+  reasoning?: {
+    enabled?: boolean
+    effort?: string
+    maxTokens?: number
+  }
   toolCallFormat?: string
   modelsRegistry?: string
   sandbox?: {
     allowedCwds?: string[]
     bashTimeout?: number
   }
+}
+
+const DEFAULT_REASONING: ReasoningConfig = {
+  enabled: false,
+  effort: 'medium',
+  maxTokens: 2048
+}
+
+/** Normalise raw config into a ReasoningConfig. Handles three cases:
+ *  1. `reasoning` block present — use it (with defaults for missing fields).
+ *  2. Only `thinking: boolean` present — synthesise from it (deprecated path).
+ *  3. Neither — use DEFAULT_REASONING. */
+function resolveReasoning(cfg: RawLocalLlmConfig): ReasoningConfig {
+  if (cfg.reasoning) {
+    return {
+      enabled: cfg.reasoning.enabled ?? DEFAULT_REASONING.enabled,
+      effort: cfg.reasoning.effort?.trim() || DEFAULT_REASONING.effort,
+      maxTokens: cfg.reasoning.maxTokens ?? DEFAULT_REASONING.maxTokens
+    }
+  }
+  if (typeof cfg.thinking === 'boolean') {
+    // Legacy path: thinking:true → reasoning enabled with defaults
+    return { ...DEFAULT_REASONING, enabled: cfg.thinking }
+  }
+  return DEFAULT_REASONING
 }
 
 export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: string): LocalLlmConfig {
@@ -79,7 +114,7 @@ export function localLlmConfigFromStore(configStore: ConfigStore, dataDir: strin
     temperature: cfg.temperature ?? 0.1,
     maxTokens: cfg.maxTokens ?? 4096,
     timeoutMs: cfg.timeoutMs ?? 600_000,
-    thinking: cfg.thinking !== false,
+    reasoning: resolveReasoning(cfg),
     toolCallFormat: cfg.toolCallFormat?.trim() || 'auto',
     modelsRegistry:
       cfg.modelsRegistry?.trim() || (home ? path.join(home, '.local', 'share', 'llama.cpp', 'models.json') : null),

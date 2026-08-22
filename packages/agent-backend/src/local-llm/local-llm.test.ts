@@ -26,7 +26,7 @@ function makeConfig(): LocalLlmConfig {
     temperature: 0.1,
     maxTokens: 1024,
     timeoutMs: 60_000,
-    thinking: true,
+    reasoning: { enabled: false, effort: 'medium', maxTokens: 0 },
     toolCallFormat: 'auto',
     modelsRegistry: null,
     sandbox: { allowedCwds: [tmpDir], bashTimeout: 5000 }
@@ -1283,5 +1283,109 @@ describe('local-llm backend: subagent lifecycle events', () => {
 
     // All three should have completed and cleaned up.
     expect(completed.every((c: any) => c.parentKey === parentKey)).toBe(true)
+  })
+})
+
+describe('local-llm backend: reasoning / thinking', () => {
+  it('getSessionMeta reports thinkingLevel "off" when reasoning disabled', async () => {
+    const config = { ...makeConfig(), reasoning: { enabled: false, effort: 'medium', maxTokens: 0 } }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    const key = await backend.createSession('t')
+    const meta = await backend.getSessionMeta(key)
+    expect(meta?.thinkingLevel).toBe('off')
+    expect(meta?.reasoningEffort).toBeNull()
+  })
+
+  it('getSessionMeta reports thinkingLevel matching effort when reasoning enabled', async () => {
+    const config = { ...makeConfig(), reasoning: { enabled: true, effort: 'high', maxTokens: 0 } }
+    const backend = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    const key = await backend.createSession('t')
+    const meta = await backend.getSessionMeta(key)
+    expect(meta?.thinkingLevel).toBe('high')
+    expect(meta?.reasoningEffort).toBe('high')
+  })
+
+  it('listAvailableEfforts returns the three effort levels', async () => {
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: makeFakeClient().client })
+    const result = await backend.listAvailableEfforts?.()
+    expect(result?.efforts).toEqual(['low', 'medium', 'high'])
+  })
+
+  it('setSessionEffort enables reasoning and updates effort on the session', async () => {
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: makeFakeClient().client })
+    const key = await backend.createSession('t')
+
+    // Initially off
+    const before = await backend.getSessionMeta(key)
+    expect(before?.thinkingLevel).toBe('off')
+
+    // Enable via setSessionEffort
+    await backend.setSessionEffort?.(key, 'low')
+
+    const after = await backend.getSessionMeta(key)
+    expect(after?.thinkingLevel).toBe('low')
+    expect(after?.reasoningEffort).toBe('low')
+  })
+
+  it('setSessionEffort on unknown session is a safe no-op', async () => {
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: makeFakeClient().client })
+    await expect(backend.setSessionEffort?.('nope', 'medium')).resolves.toBeUndefined()
+  })
+
+  it('chat.turn includes thinkingBlocks when the model produced reasoning content', async () => {
+    const responseWithReasoning: CompletionResponse = {
+      id: 'r',
+      model: 'test-model',
+      choices: [{ index: 0, message: { role: 'assistant', content: 'Final answer.' }, finish_reason: 'stop' }],
+      reasoning: 'I thought about it carefully first.'
+    }
+    const { client } = makeFakeClient(responseWithReasoning)
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+
+    const thinkingBlocks: string[][] = []
+    backend.on('chat.turn', (d) => thinkingBlocks.push(d.turn.thinkingBlocks ?? []))
+
+    const key = await backend.createSession('t')
+    const idle = waitForIdle(backend)
+    await backend.sendMessage(key, 'think about this')
+    await idle
+
+    expect(thinkingBlocks).toHaveLength(1)
+    expect(thinkingBlocks[0]).toHaveLength(1)
+    expect(thinkingBlocks[0][0]).toBe('I thought about it carefully first.')
+  })
+
+  it('chat.turn has empty thinkingBlocks when no reasoning was produced', async () => {
+    const { client } = makeFakeClient(textResponse('Plain answer.'))
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+
+    const thinkingBlocks: string[][] = []
+    backend.on('chat.turn', (d) => thinkingBlocks.push(d.turn.thinkingBlocks ?? []))
+
+    const key = await backend.createSession('t')
+    const idle = waitForIdle(backend)
+    await backend.sendMessage(key, 'no thinking please')
+    await idle
+
+    expect(thinkingBlocks).toHaveLength(1)
+    expect(thinkingBlocks[0]).toHaveLength(0)
+  })
+
+  it('reasoning persists across backend restart (rehydration)', async () => {
+    const config = { ...makeConfig(), reasoning: { enabled: true, effort: 'low', maxTokens: 1024 } }
+    const { client } = makeFakeClient(textResponse('answer'))
+    const backendA = createLocalLlmBackend(config, { dataDir, inferenceClient: client })
+    const key = await backendA.createSession('reasoning-test')
+    // Send a message to populate and persist state
+    const idle = waitForIdle(backendA)
+    await backendA.sendMessage(key, 'hi')
+    await idle
+    backendA.flushState()
+
+    // Rehydrate
+    const backendB = createLocalLlmBackend(config, { dataDir, inferenceClient: makeFakeClient().client })
+    const meta = await backendB.getSessionMeta(key)
+    expect(meta?.thinkingLevel).toBe('low')
+    expect(meta?.reasoningEffort).toBe('low')
   })
 })

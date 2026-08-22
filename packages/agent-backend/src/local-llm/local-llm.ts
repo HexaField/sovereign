@@ -198,9 +198,11 @@ function buildUserContent(text: string, attachments?: Buffer[]): string {
   return text ? `${text}\n\n${note}` : note
 }
 
-/** Strip the local-only `timestamp` field before sending a message array over the wire. */
+/** Strip local-only fields (`timestamp`, `reasoning`) before sending a
+ *  message array over the wire. Both fields are meaningful only on-disk and
+ *  must never reach the inference server. */
 function toWireMessages(messages: ChatMessage[]): WireChatMessage[] {
-  return messages.map(({ timestamp: _timestamp, ...rest }) => rest)
+  return messages.map(({ timestamp: _timestamp, reasoning: _reasoning, ...rest }) => rest)
 }
 
 /**
@@ -289,6 +291,9 @@ interface LocalLlmSessionState {
   /** Bound to this session's own model — never shared across sessions, so a
    *  setSessionModel on one session can't race a concurrent request on another. */
   client: InferenceClient
+  /** Per-session reasoning config — starts from the global config default and
+   *  can be updated via setSessionEffort or setSessionReasoning. */
+  reasoning: import('./inference.js').ReasoningConfig
 }
 
 /** Persisted subset of `LocalLlmSessionState` — everything serialisable. */
@@ -306,6 +311,7 @@ interface PersistedLocalLlmSession {
   createdAt: number
   updatedAt: number
   lastPromptTokens?: number
+  reasoning?: import('./inference.js').ReasoningConfig
 }
 
 export function createLocalLlmBackend(
@@ -326,7 +332,7 @@ export function createLocalLlmBackend(
     label: 'local-llm-state'
   })
 
-  function makeClient(model: string): InferenceClient {
+  function makeClient(model: string, reasoning?: import('./inference.js').ReasoningConfig): InferenceClient {
     if (deps.inferenceClient) return deps.inferenceClient
     const cfg = getConfig()
     return createAiSdkInferenceClient({
@@ -335,7 +341,7 @@ export function createLocalLlmBackend(
       temperature: cfg.temperature,
       maxTokens: cfg.maxTokens,
       timeoutMs: cfg.timeoutMs,
-      thinking: cfg.thinking
+      reasoning: reasoning ?? cfg.reasoning
     })
   }
 
@@ -729,7 +735,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       messages: state.messages,
       createdAt: state.createdAt,
       updatedAt: state.updatedAt,
-      lastPromptTokens: state.lastPromptTokens
+      lastPromptTokens: state.lastPromptTokens,
+      reasoning: state.reasoning
     })
   }
 
@@ -738,6 +745,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     for (const { key, value } of sessionStore.entries()) {
       const cwd = value.cwd || cfg.sandbox.allowedCwds[0] || process.cwd()
       const model = value.model || cfg.model
+      // Restore persisted reasoning override; fall back to global config default.
+      const reasoning = value.reasoning ?? cfg.reasoning
       const filesRead = new Set<string>() // nothing survives the process boundary
       sessions.set(key, {
         sessionKey: value.sessionKey,
@@ -763,6 +772,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         createdAt: value.createdAt,
         updatedAt: value.updatedAt,
         lastPromptTokens: value.lastPromptTokens,
+        reasoning,
         pendingQueue: [],
         processing: false,
         filesRead,
@@ -772,7 +782,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
           filesRead,
           cwd
         }),
-        client: makeClient(model)
+        client: makeClient(model, reasoning)
       })
       // Seed the history log from existing messages — one-time migration
       // for sessions that predate the permanent log. seedHistoryLog is
@@ -807,6 +817,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     const cfg = getConfig()
     const cwd = path.resolve(opts?.cwd?.trim() || cfg.sandbox.allowedCwds[0] || process.cwd())
     const model = opts?.model?.trim() || cfg.model
+    const reasoning = cfg.reasoning
     const filesRead = new Set<string>()
     const state: LocalLlmSessionState = {
       sessionKey,
@@ -829,6 +840,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       messages: [],
       createdAt: now,
       updatedAt: now,
+      reasoning,
       pendingQueue: [],
       processing: false,
       filesRead,
@@ -838,7 +850,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         filesRead,
         cwd
       }),
-      client: makeClient(model)
+      client: makeClient(model, reasoning)
     }
     sessions.set(sessionKey, state)
     persist(state)
@@ -1048,6 +1060,11 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     // history log (not the surviving old messages already in the log).
     let midLoopTotalDropped = 0
 
+    // Accumulate thinking blocks emitted during this turn. Populated by the
+    // onThinking callback and included in the final chat.turn event so the
+    // UI can render thinking alongside the assistant response.
+    const turnThinkingBlocks: string[] = []
+
     const loopDeps: ToolLoopDeps = {
       complete: (msgs, opts) =>
         state.client.complete(toWireMessages(msgs), { tools: opts?.tools, signal: opts?.signal }),
@@ -1058,6 +1075,10 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       // any schemas the model has loaded via ToolSearch this session.
       getActiveSchemas: () => [...coreSchemas, ...toolSearchRegistry.getLoadedSchemas()],
       maxIterations: DEFAULT_MAX_ITERATIONS,
+      // Collect thinking blocks per-turn so the final chat.turn event carries them.
+      onThinking: (content: string) => {
+        turnThinkingBlocks.push(content)
+      },
       // Mid-loop compaction: keeps single-turn tool loops from overflowing
       // the context window without triggering compaction.
       onIterationEnd: async (promptTokens, loopMessages) => {
@@ -1389,7 +1410,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
         content,
         timestamp: Date.now(),
         workItems: [],
-        thinkingBlocks: [],
+        thinkingBlocks: turnThinkingBlocks,
         ...(outcome === 'error' ? { sendFailed: true } : {})
       }
       emitter.emit('chat.turn', { sessionKey: state.sessionKey, turn })
@@ -1775,6 +1796,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     // escape sequences) and omitted tool schemas, causing the UI to show more
     // tokens than the compaction engine tracked.
     const estimatedTokens = estimateSessionTokens(state)
+    const r = state.reasoning
     return {
       sessionKey,
       model: state.model,
@@ -1784,8 +1806,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       inputTokens: estimatedTokens,
       outputTokens: null,
       compactionCount: state.compactionCount ?? 0,
-      thinkingLevel: null,
-      reasoningEffort: null,
+      // Surface actual reasoning state so the UI can display it
+      thinkingLevel: r.enabled ? r.effort : 'off',
+      reasoningEffort: r.enabled ? mapToReasoningEffort(r.effort) : null,
       task: null,
       label: state.label ?? null,
       parentKey: state.parentSessionKey ?? null,
@@ -1808,6 +1831,46 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     // never shared, so there's no race with a concurrent request on another session.
     state.client.updateConfig({ model })
     persist(state)
+  }
+
+  /** Map a Sovereign ReasoningEffort level to a Qwen3-compatible effort string.
+   *  Qwen3 supports 'low' | 'medium' | 'high'; higher Sovereign tiers map to 'high'. */
+  function mapEffortToQwen(effort: import('@sovereign/core').ReasoningEffort): string {
+    if (effort === 'low') return 'low'
+    if (effort === 'medium') return 'medium'
+    // high, xhigh, max all map to 'high' on Qwen3
+    return 'high'
+  }
+
+  /** Map a Qwen3-style effort string back to a Sovereign ReasoningEffort. */
+  function mapToReasoningEffort(effort: string): import('@sovereign/core').ReasoningEffort {
+    if (effort === 'low') return 'low'
+    if (effort === 'medium') return 'medium'
+    return 'high'
+  }
+
+  async function setSessionEffort(
+    sessionKey: string,
+    effort: import('@sovereign/core').ReasoningEffort
+  ): Promise<void> {
+    const state = sessions.get(sessionKey)
+    if (!state) return
+    const mapped = mapEffortToQwen(effort)
+    // Choosing an effort level also enables reasoning — no point setting an
+    // effort on a session where thinking is disabled.
+    state.reasoning = { ...state.reasoning, enabled: true, effort: mapped }
+    state.client.updateConfig({ reasoning: state.reasoning })
+    persist(state)
+  }
+
+  async function listAvailableEfforts(): Promise<{
+    efforts: import('@sovereign/core').ReasoningEffort[]
+    defaultEffort: import('@sovereign/core').ReasoningEffort
+  }> {
+    return {
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: mapToReasoningEffort(getConfig().reasoning.effort)
+    }
   }
 
   async function listAvailableModels(): Promise<{
@@ -2028,6 +2091,8 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     reconnectMcp,
     setSessionModel,
     listAvailableModels,
+    setSessionEffort,
+    listAvailableEfforts,
     setSessionContextWindow,
     getContextBudget,
     recycleSession,

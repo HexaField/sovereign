@@ -59,7 +59,18 @@ export const schema = {
             temperature: { type: 'number', minimum: 0, maximum: 2 },
             maxTokens: { type: 'number', minimum: 1 },
             timeoutMs: { type: 'number', minimum: 1000 },
+            /** @deprecated — use reasoning instead; kept for backward-compat deserialization */
             thinking: { type: 'boolean' },
+            reasoning: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean' },
+                effort: { type: 'string', enum: ['low', 'medium', 'high'] },
+                maxTokens: { type: 'number', minimum: 0 }
+              },
+              required: ['enabled', 'effort', 'maxTokens'],
+              additionalProperties: false
+            },
             toolCallFormat: { type: 'string' },
             sandbox: {
               type: 'object',

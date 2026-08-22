@@ -785,7 +785,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       temperature: 0.3,
       maxTokens: 150,
       timeoutMs: 15_000,
-      thinking: false
+      reasoning: { enabled: false, effort: 'medium', maxTokens: 0 }
     })
 
     const voiceResponse = createVoiceResponse({
@@ -945,7 +945,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       temperature: 0.3,
       maxTokens: 200,
       timeoutMs: 20_000,
-      thinking: false
+      reasoning: { enabled: false, effort: 'medium', maxTokens: 0 }
     })
 
     const conversationSummary = createConversationSummary({

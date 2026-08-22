@@ -45,8 +45,20 @@ export interface SovereignConfig {
       maxTokens: number
       /** Per-completion timeout in ms. Default 600000 (10 min). */
       timeoutMs: number
-      /** Enable model thinking (Qwen3 `<think>` blocks). Default true. */
-      thinking: boolean
+      /**
+       * @deprecated Use `reasoning` instead. When set and `reasoning` is absent,
+       * the config layer synthesises `reasoning: { enabled: thinking, effort: 'medium', maxTokens: 2048 }`.
+       */
+      thinking?: boolean
+      /** Reasoning/thinking mode configuration. Takes precedence over `thinking`. */
+      reasoning?: {
+        /** When true, sends enable_thinking: true to the server. */
+        enabled: boolean
+        /** Effort level (Qwen3: 'low' | 'medium' | 'high'). Only sent when enabled. */
+        effort: 'low' | 'medium' | 'high'
+        /** Hard cap on reasoning tokens per completion. 0 = no cap. */
+        maxTokens: number
+      }
       /** Tool-call format detection: auto | openai | hermes. */
       toolCallFormat: string
       /** Sandbox restrictions for the Bash tool. */
