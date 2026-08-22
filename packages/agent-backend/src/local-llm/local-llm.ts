@@ -49,6 +49,7 @@ import type { ToolSearchRegistry } from './tools/tool-search.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
 import { resolveEndpoint, resolveDefaultEndpoint } from './endpoint-resolver.js'
+import { EndpointQueue } from './endpoint-queue.js'
 import { runContextStrategies } from '../context-strategies/index.js'
 import { archiveMessagesBeforeStrategies, listStrategyArchives, readStrategyArchive } from '../history-archive.js'
 import {
@@ -325,6 +326,46 @@ export function createLocalLlmBackend(
   // Parent→child tracking — mirrors claude-code's subagentToParent index.
   const subagentParents = new Map<string, string>() // childKey → parentKey
   let connectionStatus: BackendConnectionStatus = 'disconnected'
+
+  // ── Per-endpoint inference queue ──────────────────────────────────────────
+  // One EndpointQueue per endpoint id — serialises complete() calls so only
+  // maxConcurrent request(s) hit the server simultaneously. Default 1 matches
+  // --parallel 1 on the server: one in-flight request at a time.
+  //
+  // Priority tiers: 'high' (interactive user turns), 'normal' (tool loop),
+  // 'low' (compaction summaries / subagent turns). Within a tier, requests
+  // with fewer estimated tokens sort first so brief pings don't wait on large
+  // contexts — maximising KV cache reuse for the longer session.
+  const _endpointQueues = new Map<string, EndpointQueue>()
+
+  function _getEndpointQueue(endpointId: string): EndpointQueue {
+    let q = _endpointQueues.get(endpointId)
+    if (!q) {
+      q = new EndpointQueue(1)
+      _endpointQueues.set(endpointId, q)
+    }
+    return q
+  }
+
+  /** Queue a complete() call through the appropriate endpoint queue.
+   *  Resolves the target endpoint from the session model at call time
+   *  (model may change via setSessionModel between turns). */
+  function _runQueued<T>(
+    state: LocalLlmSessionState,
+    fn: () => Promise<T>,
+    opts: { signal?: AbortSignal; priority: 'high' | 'normal' | 'low' }
+  ): Promise<T> {
+    const resolved = resolveEndpoint(state.model, getConfig())
+    const queue = _getEndpointQueue(resolved.id)
+    return queue.run(fn, {
+      signal: opts.signal,
+      priority: opts.priority,
+      // Prefer the server-reported token count (exact); fall back to the
+      // character-based estimate. Shorter contexts sort earlier within a tier,
+      // improving overall KV cache hit rates.
+      estimatedTokens: state.lastPromptTokens ?? estimateSessionTokens(state)
+    })
+  }
 
   const sessionStore: WriteThroughStore<PersistedLocalLlmSession> = createWriteThroughStore({
     dirPath: path.join(deps.dataDir, 'agent-backend', 'local-llm-state'),
@@ -650,9 +691,12 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
           content: `Summarize this conversation excerpt:\n\n${transcript}`
         }
       ]
-      const response = await state.client.complete(summariseMessages, {
-        signal: AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
-      })
+      const compactSignal1 = AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
+      const response = await _runQueued(
+        state,
+        () => state.client.complete(summariseMessages, { signal: compactSignal1 }),
+        { signal: compactSignal1, priority: 'low' }
+      )
 
       const rawSummary = response.choices?.[0]?.message?.content?.trim()
       if (rawSummary && rawSummary.length > 50) {
@@ -1080,7 +1124,12 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
 
     const loopDeps: ToolLoopDeps = {
       complete: (msgs, opts) =>
-        state.client.complete(toWireMessages(msgs), { tools: opts?.tools, signal: opts?.signal }),
+        _runQueued(
+          state,
+          () => state.client.complete(toWireMessages(msgs), { tools: opts?.tools, signal: opts?.signal }),
+          // Subagent turns yield to interactive sessions within their tier.
+          { signal: opts?.signal, priority: state.parentSessionKey ? 'low' : 'normal' }
+        ),
       executeTool: metricsExecuteTool,
       emit: emitter.emit,
       toolSchemas: coreSchemas,
@@ -1158,9 +1207,12 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
               : []),
             { role: 'user', content: `Summarize this conversation excerpt:\n\n${transcript}` }
           ]
-          const response = await state.client.complete(summariseMessages, {
-            signal: AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
-          })
+          const compactSignal2 = AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
+          const response = await _runQueued(
+            state,
+            () => state.client.complete(summariseMessages, { signal: compactSignal2 }),
+            { signal: compactSignal2, priority: 'low' }
+          )
           const rawSummary = response.choices?.[0]?.message?.content?.trim()
           if (rawSummary && rawSummary.length > 50) {
             summaryContent = [
@@ -1287,9 +1339,12 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
               : []),
             { role: 'user', content: `Summarize this conversation excerpt:\n\n${transcript}` }
           ]
-          const response = await state.client.complete(summariseMessages, {
-            signal: AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
-          })
+          const compactSignal3 = AbortSignal.timeout(COMPACT_SUMMARY_TIMEOUT_MS)
+          const response = await _runQueued(
+            state,
+            () => state.client.complete(summariseMessages, { signal: compactSignal3 }),
+            { signal: compactSignal3, priority: 'low' }
+          )
           const rawSummary = response.choices?.[0]?.message?.content?.trim()
           if (rawSummary && rawSummary.length > 50) {
             const extracted = extractSummary(rawSummary)
