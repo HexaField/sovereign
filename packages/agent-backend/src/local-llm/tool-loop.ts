@@ -1,8 +1,7 @@
 // Tool-calling loop — sends messages to the inference server, executes tool
 // calls, feeds results back, repeats until the model stops calling tools.
 // Emits Sovereign AgentBackendEvents throughout so the UI sees live
-// tool_call/tool_result activity while the loop runs, not just the final
-// answer.
+// tool_call/tool_result/thinking activity while the loop runs.
 
 import { randomUUID } from 'node:crypto'
 import type { AgentBackendEvents, WorkItem } from '@sovereign/core'
@@ -16,12 +15,18 @@ import type { ToolResult } from './tools/index.js'
 
 /**
  * A chat message as stored in a local-llm session: the OpenAI wire shape
- * plus a `timestamp`, used to reconstruct ParsedTurn history from the
- * persisted transcript (see `toGenericMessages` in local-llm.ts). Strip
- * `timestamp` before sending a message array over the wire.
+ * plus local-only fields (`timestamp`, `reasoning`) used to reconstruct
+ * ParsedTurn history from the persisted transcript.
+ *
+ * Strip `timestamp` and `reasoning` before sending over the wire via
+ * `toWireMessages` in local-llm.ts.
  */
 export interface ChatMessage extends WireChatMessage {
   timestamp: number
+  /** Reasoning/thinking content produced alongside this assistant message.
+   *  Local-only — never sent on the wire. Stored so the caller can populate
+   *  ParsedTurn.thinkingBlocks from history and emit chat.work thinking events. */
+  reasoning?: string
 }
 
 export interface ToolLoopDeps {
@@ -51,6 +56,12 @@ export interface ToolLoopDeps {
    *  The callback must compact messages in place to reduce context size.
    *  Returns true when compaction succeeded and the loop should retry. */
   onContextOverflow?: (messages: ChatMessage[]) => Promise<boolean>
+  /** Called when a completion produces reasoning/thinking content.
+   *  Receives the full reasoning block for the current iteration.
+   *  The tool loop also emits a chat.work thinking event automatically —
+   *  this callback is for callers that want to accumulate blocks separately
+   *  (e.g. to populate ParsedTurn.thinkingBlocks on the final turn). */
+  onThinking?: (content: string) => void
 }
 
 export interface ToolLoopResult {
@@ -135,6 +146,33 @@ function parseToolCallsFromText(
   return calls.length > 0 ? calls : undefined
 }
 
+/** Extract `<think>...</think>` blocks from model content text, returning
+ *  the thinking text and the content with those blocks removed.
+ *
+ *  Some servers (particularly llama.cpp with --reasoning off but thinking
+ *  jinja template active) embed thinking directly in the content stream
+ *  rather than emitting separate reasoning-delta events. This extracts
+ *  those blocks before they get stripped by stripModelMetaTags, so the
+ *  thinking content reaches the chat.work event. */
+function extractEmbeddedThinking(text: string): { thinking: string; content: string } {
+  let thinking = ''
+  let content = text
+  const THINK_RE = /<think>([\s\S]*?)<\/think>/g
+  let match: RegExpExecArray | null
+  const parts: string[] = []
+  let lastIndex = 0
+  while ((match = THINK_RE.exec(text)) !== null) {
+    parts.push(text.slice(lastIndex, match.index))
+    thinking += (thinking ? '\n' : '') + match[1].trim()
+    lastIndex = match.index + match[0].length
+  }
+  if (thinking) {
+    parts.push(text.slice(lastIndex))
+    content = parts.join('').trim()
+  }
+  return { thinking, content }
+}
+
 /** Strip `<think>...</think>` blocks and `<tool_call>` tags from text,
  *  returning only the user-facing content. Models that do chain-of-thought
  *  (Qwen3 etc.) wrap reasoning in `<think>` tags — remove those so the
@@ -191,6 +229,36 @@ export async function runToolLoop(
       lastPromptTokens = response.usage.prompt_tokens
     }
 
+    // ── Thinking / reasoning content ────────────────────────────────
+    // Combine API-level reasoning (from reasoning-delta events) with any
+    // <think> blocks embedded in the content stream (for servers that
+    // don't separate them). Emit a thinking work item so the UI renders
+    // it alongside tool calls.
+
+    const rawContent = choice.message?.content ?? null
+
+    // Extract <think> blocks from content BEFORE stripping (so we capture them)
+    const { thinking: embeddedThinking, content: contentWithoutThink } = rawContent
+      ? extractEmbeddedThinking(rawContent)
+      : { thinking: '', content: '' }
+
+    // Merge API reasoning + embedded thinking into one block
+    const fullReasoning = [response.reasoning, embeddedThinking].filter(Boolean).join('\n').trim()
+
+    if (fullReasoning) {
+      // Notify caller so it can accumulate thinking blocks per-turn
+      deps.onThinking?.(fullReasoning)
+
+      deps.emit('chat.work', {
+        sessionKey,
+        work: {
+          type: 'thinking',
+          output: fullReasoning.slice(0, MAX_TOOL_RESULT_CHARS_FOR_UI),
+          timestamp: Date.now()
+        } as WorkItem
+      })
+    }
+
     // Determine tool calls: prefer the structured `tool_calls` array from
     // the server, but fall back to parsing `<tool_call>` tags from the
     // text content when the server doesn't do its own extraction.
@@ -198,19 +266,22 @@ export async function runToolLoop(
       ...tc,
       id: tc.id || randomUUID()
     }))
-    const rawContent = choice.message?.content ?? null
 
-    if ((!resolvedToolCalls || resolvedToolCalls.length === 0) && rawContent) {
-      resolvedToolCalls = parseToolCallsFromText(rawContent)
+    // Use content-without-think for tool call parsing (think blocks already removed)
+    const rawContentForTools = contentWithoutThink || rawContent
+    if ((!resolvedToolCalls || resolvedToolCalls.length === 0) && rawContentForTools) {
+      resolvedToolCalls = parseToolCallsFromText(rawContentForTools)
     }
 
-    // Strip thinking/tool_call tags from user-facing content.
-    const cleanContent = rawContent ? stripModelMetaTags(rawContent) : null
+    // Strip remaining meta tags (tool_call tags) from user-facing content
+    const cleanContent = contentWithoutThink ? stripModelMetaTags(contentWithoutThink) : null
 
     const assistantMsg: ChatMessage = {
       role: 'assistant',
       content: cleanContent,
       tool_calls: resolvedToolCalls,
+      // Store reasoning for history reconstruction (populates thinkingBlocks)
+      reasoning: fullReasoning || undefined,
       timestamp: Date.now()
     }
     messages.push(assistantMsg)
@@ -279,6 +350,39 @@ export async function runToolLoop(
   }
 
   if (iterations >= maxIter) {
+    // Force a synthesis turn — one final no-tools completion so the user
+    // always gets an answer instead of silence when the loop hits its cap.
+    // Best-effort: if the synthesis fails, the error still fires below.
+    try {
+      messages.push({
+        role: 'system',
+        content:
+          'You have reached the maximum number of tool calls for this turn. ' +
+          'Write a concise summary of what you accomplished and any remaining work. ' +
+          'Do not call any more tools.',
+        timestamp: Date.now()
+      })
+      if (!signal?.aborted) {
+        const synthesis = await deps.complete(messages, { signal })
+        const synText = synthesis.choices?.[0]?.message?.content
+        if (synText) {
+          const clean = stripModelMetaTags(synText)
+          if (clean) {
+            finalContent = clean
+            deps.emit('chat.stream', { sessionKey, text: clean })
+            messages.push({
+              role: 'assistant',
+              content: clean,
+              reasoning: synthesis.reasoning,
+              timestamp: Date.now()
+            })
+          }
+        }
+      }
+    } catch {
+      /* synthesis failed — fall through to error event */
+    }
+
     deps.emit('chat.error', {
       sessionKey,
       error: `Tool loop reached the maximum of ${maxIter} iterations without a final answer.`

@@ -1,6 +1,6 @@
 // AI SDK-backed inference client for the local-llm backend.
 //
-// Drop-in replacement for createInferenceClient — same external API
+// Drop-in replacement for the old createInferenceClient — same external API
 // (complete, healthCheck, updateConfig) but uses the Vercel AI SDK
 // v7 internally. The tool loop, progressive disclosure, and all downstream
 // code remain unchanged.
@@ -10,7 +10,7 @@
 // SSE-based client.
 //
 // Custom fetch layer handles:
-//   - chat_template_kwargs injection (thinking mode control)
+//   - chat_template_kwargs injection (reasoning mode control)
 //   - ContextOverflowError detection (before AI SDK retries)
 //   - Tool parse failure detection (retry without tools)
 //   - Transient connection retry with health check
@@ -130,12 +130,14 @@ export function createAiSdkInferenceClient(initialConfig: InferenceClientConfig)
     }
   }
 
-  /** Custom fetch that handles thinking-mode injection, server-specific
+  /** Custom fetch that handles reasoning-mode injection, server-specific
    *  errors, and transient connection retries. */
   function createCustomFetch(): typeof globalThis.fetch {
     return async function customFetch(url: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-      // Inject chat_template_kwargs for thinking mode control.
-      // llama.cpp uses this non-standard field to toggle chain-of-thought.
+      // Inject reasoning control fields into the request body.
+      // llama.cpp uses chat_template_kwargs as a non-standard field that
+      // passes variables directly into the Jinja chat template, controlling
+      // whether the model uses chain-of-thought and with what constraints.
       if (init?.body && typeof init.body === 'string') {
         try {
           const body = JSON.parse(init.body)
@@ -145,7 +147,12 @@ export function createAiSdkInferenceClient(initialConfig: InferenceClientConfig)
           if (body.stream) {
             body.stream_options = { include_usage: true }
           }
-          body.chat_template_kwargs = { enable_thinking: state.thinking !== false }
+          const { enabled, effort, maxTokens: maxReasoningTokens } = state.reasoning
+          body.chat_template_kwargs = {
+            enable_thinking: enabled,
+            ...(enabled && effort ? { reasoning_effort: effort } : {}),
+            ...(enabled && maxReasoningTokens > 0 ? { max_reasoning_tokens: maxReasoningTokens } : {})
+          }
           init = { ...init, body: JSON.stringify(body) }
         } catch {
           /* non-JSON body — pass through */
@@ -327,7 +334,12 @@ export function createAiSdkInferenceClient(initialConfig: InferenceClientConfig)
             completion_tokens: (usage as any).outputTokens ?? 0,
             total_tokens: (usage as any).totalTokens ?? 0
           }
-        : undefined
+        : undefined,
+      // Reasoning content collected from reasoning-delta events. The tool loop
+      // uses this to emit chat.work thinking events and store thinking blocks
+      // in the persisted transcript. Empty string coerced to undefined so
+      // callers can use a simple truthiness check.
+      reasoning: reasoning || undefined
     }
   }
 

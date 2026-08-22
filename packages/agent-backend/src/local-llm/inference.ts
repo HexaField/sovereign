@@ -1,6 +1,10 @@
-// OpenAI-compatible inference client for the local-llm backend.
+// OpenAI-compatible inference types for the local-llm backend.
 // Self-contained — does not import from @sovereign/summary to avoid
 // cross-package coupling.
+//
+// NOTE: The createInferenceClient raw-SSE implementation was removed in
+// Phase 2 cleanup. The AI SDK client (ai-sdk-inference.ts) is the sole
+// production client. This file now holds shared types + ContextOverflowError.
 
 /** Thrown when the inference server rejects a request because the prompt
  *  exceeds the configured context window (n_ctx). The tool loop catches
@@ -51,8 +55,48 @@ export interface CompletionResponse {
   }>
   model: string
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  /** Full reasoning/thinking content produced by this completion, if any.
+   *  Populated when the model emits reasoning-delta events (thinking mode enabled)
+   *  or embeds <think>...</think> blocks in the content stream. */
+  reasoning?: string
 }
 
+/** Reasoning/thinking configuration for a single inference client instance.
+ *  Controls chain-of-thought output via chat_template_kwargs on llama.cpp servers
+ *  (and the equivalent field on other OpenAI-compatible endpoints). */
+export interface ReasoningConfig {
+  /** When true, sends enable_thinking: true to the server. */
+  enabled: boolean
+  /** Effort level passed as reasoning_effort to the server.
+   *  Qwen3 supports 'low' | 'medium' | 'high'. Only sent when enabled is true. */
+  effort: string
+  /** Hard cap on reasoning tokens per completion, sent as max_reasoning_tokens.
+   *  Prevents the model from consuming the entire output budget on thinking.
+   *  Set to 0 to send no cap. */
+  maxTokens: number
+}
+
+export interface InferenceClientConfig {
+  baseUrl: string
+  model: string
+  contextWindow?: number
+  temperature: number
+  maxTokens: number
+  timeoutMs?: number
+  /** Reasoning/thinking mode configuration.
+   *  Controls chain-of-thought via chat_template_kwargs on llama.cpp servers. */
+  reasoning: ReasoningConfig
+}
+
+/** The inference client contract — every implementation must provide these. */
+export interface InferenceClient {
+  complete(messages: ChatMessage[], opts?: { tools?: ToolSchema[]; signal?: AbortSignal }): Promise<CompletionResponse>
+  healthCheck(): Promise<boolean>
+  updateConfig(patch: Partial<InferenceClientConfig>): void
+}
+
+/** @deprecated Streaming chunk type — retained for code that references StreamChunk
+ *  in comments or historical context. No longer emitted by the production client. */
 export interface StreamChunk {
   id: string
   choices: Array<{
@@ -60,7 +104,7 @@ export interface StreamChunk {
     delta: {
       role?: string
       content?: string | null
-      /** Models with thinking mode (Qwen3.6 etc.) may stream reasoning here
+      /** Models with thinking mode (Qwen3.x etc.) may stream reasoning here
        *  instead of in `content`. The assembler merges it into content as a
        *  fallback so downstream code never loses output. */
       reasoning_content?: string | null
@@ -75,261 +119,4 @@ export interface StreamChunk {
   }>
   model: string
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
-}
-
-export interface InferenceClientConfig {
-  baseUrl: string
-  model: string
-  temperature: number
-  maxTokens: number
-  timeoutMs?: number
-  /** When false, passes `chat_template_kwargs: { enable_thinking: false }` to
-   *  the server. Saves output tokens on models that do chain-of-thought
-   *  (Qwen3.6, etc.). Default true. */
-  thinking?: boolean
-}
-
-/** The inference client contract -- every implementation must provide these.
- *  `stream` was removed because no consumer calls it; the tool loop and
- *  local-llm backend use `complete()` exclusively. */
-export interface InferenceClient {
-  complete(messages: ChatMessage[], opts?: { tools?: ToolSchema[]; signal?: AbortSignal }): Promise<CompletionResponse>
-  healthCheck(): Promise<boolean>
-  updateConfig(patch: Partial<InferenceClientConfig>): void
-}
-
-export function createInferenceClient(initialConfig: InferenceClientConfig) {
-  // Mutable state so hot-swap actually works.
-  const state = { ...initialConfig }
-
-  async function complete(
-    messages: ChatMessage[],
-    opts?: { tools?: ToolSchema[]; signal?: AbortSignal }
-  ): Promise<CompletionResponse> {
-    // Always stream internally to keep the TCP connection alive during
-    // long generations. Collect chunks and assemble a CompletionResponse.
-    const assembled = assembleEmpty()
-    for await (const chunk of stream(messages, opts)) {
-      assembleChunk(assembled, chunk)
-    }
-    return assembled.response
-  }
-
-  async function* stream(
-    messages: ChatMessage[],
-    opts?: { tools?: ToolSchema[]; signal?: AbortSignal }
-  ): AsyncGenerator<StreamChunk> {
-    const body: Record<string, unknown> = {
-      model: state.model,
-      messages,
-      temperature: state.temperature,
-      max_tokens: state.maxTokens,
-      stream: true,
-      // Request usage stats in the final streaming chunk — without this,
-      // the server omits prompt_tokens/completion_tokens and the backend
-      // can't make accurate compaction decisions.
-      stream_options: { include_usage: true }
-    }
-    if (opts?.tools?.length) {
-      body.tools = opts.tools
-      body.tool_choice = 'auto'
-    }
-    if (state.thinking === false) {
-      body.chat_template_kwargs = { enable_thinking: false }
-    }
-
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), state.timeoutMs ?? 600_000)
-    if (opts?.signal) {
-      opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
-    }
-
-    try {
-      const url = `${state.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`
-
-      // Retry on transient connection failures (TCP drop during long prefill).
-      // Only retries TypeError from fetch — not AbortError, ContextOverflowError,
-      // or HTTP-level errors.
-      const MAX_RETRIES = 3
-      const BASE_DELAY_MS = 2000
-      let res!: Response
-      let lastError: unknown
-
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (attempt > 0) {
-          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1)
-          console.warn(
-            `[local-llm] inference fetch failed (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delay}ms...`
-          )
-          await new Promise((r) => setTimeout(r, delay))
-          const healthy = await healthCheck()
-          if (!healthy) {
-            console.warn('[local-llm] inference server unreachable, skipping retry')
-            throw lastError
-          }
-        }
-        try {
-          res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: controller.signal
-          })
-
-          // llama-server returns 500 when it fails to parse the model's tool
-          // call arguments as JSON (e.g. truncated output hitting max_tokens).
-          // Retry without the `tools` parameter so the server returns raw text
-          // instead of crashing. Our parseToolCallsFromText() in tool-loop.ts
-          // extracts valid <tool_call> tags from the text and skips malformed
-          // ones — a graceful fallback the server-side parser lacks.
-          if (!res.ok && body.tools) {
-            const errText = await res.text().catch(() => '')
-            if (
-              errText.includes('exceed_context_size_error') ||
-              errText.includes('exceeds the available context size')
-            ) {
-              // Context overflow — surface as a typed error so the tool loop
-              // can trigger compaction and retry instead of dying.
-              throw new ContextOverflowError(res.status, errText)
-            }
-            if (errText.includes('Failed to parse tool call arguments')) {
-              const retryBody = { ...body }
-              delete retryBody.tools
-              delete retryBody.tool_choice
-              res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(retryBody),
-                signal: controller.signal
-              })
-            } else {
-              throw new Error(`Inference stream failed: ${res.status} — ${errText}`)
-            }
-          }
-          if (!res.ok) {
-            const text = await res.text().catch(() => '')
-            if (text.includes('exceed_context_size_error') || text.includes('exceeds the available context size')) {
-              throw new ContextOverflowError(res.status, text)
-            }
-            throw new Error(`Inference stream failed: ${res.status} — ${text}`)
-          }
-          if (!res.body) throw new Error('No response body for streaming request')
-
-          break // fetch + validation succeeded — proceed to streaming read
-        } catch (err) {
-          lastError = err
-          // Only retry transient TCP/connection failures from fetch itself
-          const isTransient =
-            err instanceof TypeError &&
-            /fetch failed|ECONNRESET|ECONNREFUSED|socket hang up/i.test((err as Error).message)
-          if (!isTransient) throw err
-          if (attempt === MAX_RETRIES) throw err
-          // Continue to next retry attempt
-        }
-      }
-
-      // Non-null assertion: the retry loop above throws if res.body was null
-      const reader = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-
-        for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed || trimmed === 'data: [DONE]') continue
-          if (!trimmed.startsWith('data: ')) continue
-          try {
-            yield JSON.parse(trimmed.slice(6)) as StreamChunk
-          } catch {
-            /* skip malformed */
-          }
-        }
-      }
-    } finally {
-      clearTimeout(timer)
-    }
-  }
-
-  // ── Stream → CompletionResponse assembly ────────────────────────
-  // Collects SSE chunks into a single non-streaming response shape.
-
-  interface AssemblyState {
-    response: CompletionResponse
-    toolCalls: Map<number, ToolCall> // keyed by chunk.tool_calls[].index
-  }
-
-  function assembleEmpty(): AssemblyState {
-    return {
-      response: {
-        id: '',
-        choices: [{ index: 0, message: { role: 'assistant', content: '' }, finish_reason: null }],
-        model: state.model
-      },
-      toolCalls: new Map()
-    }
-  }
-
-  function assembleChunk(st: AssemblyState, chunk: StreamChunk): void {
-    if (chunk.id) st.response.id = chunk.id
-    if (chunk.model) st.response.model = chunk.model
-    if (chunk.usage) st.response.usage = chunk.usage
-
-    const delta = chunk.choices?.[0]?.delta
-    if (!delta) return
-
-    const msg = st.response.choices[0].message
-    if (delta.role) msg.role = delta.role as ChatMessage['role']
-    if (delta.content) msg.content = (msg.content ?? '') + delta.content
-    // Fallback: merge reasoning_content into content when the model puts
-    // output there (thinking mode enabled despite config). Without this,
-    // text-only responses from thinking-mode models silently return empty.
-    if (delta.reasoning_content && !delta.content) {
-      msg.content = (msg.content ?? '') + delta.reasoning_content
-    }
-
-    // Accumulate tool calls by their stream index
-    if (delta.tool_calls) {
-      for (const tc of delta.tool_calls) {
-        let existing = st.toolCalls.get(tc.index)
-        if (!existing) {
-          existing = { id: tc.id ?? '', type: 'function', function: { name: '', arguments: '' } }
-          st.toolCalls.set(tc.index, existing)
-        }
-        if (tc.id) existing.id = tc.id
-        if (tc.function?.name) existing.function.name += tc.function.name
-        if (tc.function?.arguments) existing.function.arguments += tc.function.arguments
-      }
-    }
-
-    const reason = chunk.choices?.[0]?.finish_reason
-    if (reason) {
-      st.response.choices[0].finish_reason = reason
-      // Finalise tool_calls on the message
-      if (st.toolCalls.size > 0) {
-        msg.tool_calls = [...st.toolCalls.values()]
-      }
-    }
-  }
-
-  async function healthCheck(): Promise<boolean> {
-    try {
-      const url = `${state.baseUrl.replace(/\/+$/, '')}/v1/models`
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
-      return res.ok
-    } catch {
-      return false
-    }
-  }
-
-  function updateConfig(patch: Partial<InferenceClientConfig>): void {
-    Object.assign(state, patch)
-  }
-
-  return { complete, stream, healthCheck, updateConfig }
 }
