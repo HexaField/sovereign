@@ -881,6 +881,22 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     const controller = new AbortController()
     state.abortController = controller
 
+    // Per-turn timeout — driven by config.timeoutMs (default 600s / 10 min).
+    // Aborts via the same controller as user-initiated aborts so every code
+    // path that checks signal.aborted picks it up. The isTurnTimeout flag on
+    // the reason lets the catch block distinguish timeout (→ visible error) from
+    // an explicit user abort (→ silent '(stopped)' turn).
+    const turnTimeoutMs = getConfig().timeoutMs
+    const turnTimeoutHandle = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        console.warn(`[local-llm] turn timed out after ${turnTimeoutMs / 1000}s for ${state.sessionKey} — aborting`)
+        const reason = Object.assign(new Error(`Turn timed out after ${turnTimeoutMs / 1000}s`), {
+          isTurnTimeout: true
+        })
+        controller.abort(reason)
+      }
+    }, turnTimeoutMs)
+
     // Refresh the system prompt each turn — reads live files (personality,
     // membrane CONTEXT.md, repo AGENTS.md/CLAUDE.md) that change between turns.
     // Skip for subagent sessions — they keep their lean task-focused prompt.
@@ -1348,12 +1364,24 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
       }
     } catch (err) {
       const isAbort = (err as { name?: string } | undefined)?.name === 'AbortError'
-      outcome = isAbort ? 'aborted' : 'error'
-      if (!isAbort) {
+      if (isAbort) {
+        // Distinguish a per-turn timeout (isTurnTimeout=true on the abort reason)
+        // from an explicit user abort. Timeouts surface as errors so the user sees
+        // a message in the thread; explicit aborts stay silent ('(stopped)').
+        const reason = controller.signal.reason
+        const isTimeout = (reason as { isTurnTimeout?: boolean } | undefined)?.isTurnTimeout === true
+        outcome = isTimeout ? 'error' : 'aborted'
+        if (isTimeout) {
+          errorMessage = (reason as Error)?.message ?? `Turn timed out`
+          emitter.emit('chat.error', { sessionKey: state.sessionKey, error: errorMessage })
+        }
+      } else {
+        outcome = 'error'
         errorMessage = (err as Error)?.message ?? String(err)
         emitter.emit('chat.error', { sessionKey: state.sessionKey, error: errorMessage })
       }
     } finally {
+      clearTimeout(turnTimeoutHandle)
       // Whatever the loop appended — on success, on abort, or before a
       // failure — is real conversation state (e.g. a tool call that
       // actually ran) and belongs in the persisted transcript either way.

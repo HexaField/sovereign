@@ -309,13 +309,27 @@ describe('§2.4 Chat Module (Server)', () => {
     )
   })
 
-  it('MUST proxy chat.session.info events to subscribed clients via WS', async () => {
+  it('MUST proxy chat.session.info events to SSE subscribers — NOT broadcast (point-to-point only)', async () => {
+    // session.info carries full history. Broadcasting it to all clients
+    // would cause every open tab to replace its turns — so it is deliberately
+    // skipped from the broadcast path and sent point-to-point via sendTo.
+    // Verify the event still reaches chatEvents (SSE subscribers) but NOT broadcastToChannel.
     const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+
+    const received: Record<string, unknown>[] = []
+    chatModule.chatEvents.on('chat.session.info', (d: Record<string, unknown>) => received.push(d))
+
     emitBackendEvent(backend, 'session.info', { sessionKey, history: [] })
-    expect(wsHandler.broadcastToChannel).toHaveBeenCalledWith(
-      'chat',
-      expect.objectContaining({ type: 'chat.session.info', threadId })
+
+    // Must reach SSE subscribers via chatEvents
+    expect(received).toHaveLength(1)
+    expect(received[0]).toMatchObject({ sessionKey, threadId })
+    // Must NOT be broadcast to all WS clients
+    const broadcastCalls = (wsHandler.broadcastToChannel as ReturnType<typeof vi.fn>).mock.calls
+    const sessionInfoBroadcast = broadcastCalls.find(
+      (c: unknown[]) => (c[1] as { type?: string })?.type === 'chat.session.info'
     )
+    expect(sessionInfoBroadcast).toBeUndefined()
   })
 
   it('MUST respect Phase 3 WS scoping — client subscribed with threadId scope only receives events for that thread', async () => {
@@ -836,6 +850,61 @@ describe('§2.4 Chat Module (Server)', () => {
       const ok = await chatModule.forceSend(failedItem!.id)
       expect(ok).toBe(true)
       expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'will fail')
+    })
+  })
+
+  describe('stuck-status recovery', () => {
+    it('aborts the backend, clears the in-flight gate, and emits chat.error after the timeout', async () => {
+      // Must enable fake timers BEFORE creating the chat module so the
+      // module's setInterval is registered on the fake clock and fires
+      // when we advance time with vi.advanceTimersByTimeAsync.
+      vi.useFakeTimers()
+      try {
+        const localBackend = createMockBackend()
+        const localWs = createMockWsHandler()
+        const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stuck-test-'))
+        try {
+          let sessCounter = 0
+          ;(localBackend.createSession as ReturnType<typeof vi.fn>).mockImplementation(
+            async () => `session-stuck-${++sessCounter}`
+          )
+          const localChat = createChatModule(bus, localBackend, threadManager, {
+            dataDir: localDir,
+            wsHandler: localWs
+          })
+          const { threadId, sessionKey } = await localChat.handleSessionCreate()
+
+          // Emit 'working' status from the backend — starts the stuck clock
+          const fns = localBackend._handlers.get('chat.status')
+          if (fns) for (const fn of fns) fn({ sessionKey, status: 'working' })
+
+          const chatErrors: Array<{ threadId: string; error: string }> = []
+          localChat.chatEvents.on('chat.error', (d: Record<string, unknown>) =>
+            chatErrors.push(d as unknown as { threadId: string; error: string })
+          )
+
+          // Advance past the 30-minute stuck timeout + one 30-second check cycle
+          const STUCK_MS = 30 * 60 * 1000
+          await vi.advanceTimersByTimeAsync(STUCK_MS + 30_000 + 1)
+
+          // Backend abort must have been called to unblock state.processing
+          expect(localBackend.abort).toHaveBeenCalledWith(sessionKey)
+
+          // A visible chat.error should surface so the thread isn't silently abandoned
+          expect(chatErrors).toHaveLength(1)
+          expect(chatErrors[0].error).toContain('unresponsive')
+
+          // WS clients should also see the error
+          expect(localWs.broadcastToChannel).toHaveBeenCalledWith(
+            'chat',
+            expect.objectContaining({ type: 'chat.error', threadId })
+          )
+        } finally {
+          fs.rmSync(localDir, { recursive: true, force: true })
+        }
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })

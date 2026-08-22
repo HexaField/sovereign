@@ -303,3 +303,92 @@ describe('createAiSdkInferenceClient — reasoning passthrough', () => {
     expect(await client.healthCheck()).toBe(false)
   })
 })
+
+describe('reasoning capability detection', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+  let originalFetch: typeof globalThis.fetch
+  let warnSpy: ReturnType<typeof vi.fn>
+  let originalWarn: typeof console.warn
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch
+    originalWarn = console.warn
+    fetchSpy = vi.fn()
+    warnSpy = vi.fn()
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch
+    console.warn = warnSpy as unknown as typeof console.warn
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    console.warn = originalWarn
+  })
+
+  /** SSE stream that includes a reasoning_content chunk followed by a text chunk. */
+  function reasoningStream(thinkingText: string, replyText: string): ReadableStream<Uint8Array> {
+    const enc = new TextEncoder()
+    const thinkChunk = {
+      id: 'c1',
+      object: 'chat.completion.chunk',
+      model: 'test-model',
+      choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: thinkingText }, finish_reason: null }]
+    }
+    const textChunk = {
+      id: 'c1',
+      object: 'chat.completion.chunk',
+      model: 'test-model',
+      choices: [{ index: 0, delta: { content: replyText }, finish_reason: null }]
+    }
+    const done = {
+      id: 'c1',
+      object: 'chat.completion.chunk',
+      model: 'test-model',
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+    }
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(enc.encode(`data: ${JSON.stringify(thinkChunk)}\n\n`))
+        controller.enqueue(enc.encode(`data: ${JSON.stringify(textChunk)}\n\n`))
+        controller.enqueue(enc.encode(`data: ${JSON.stringify(done)}\n\n`))
+        controller.enqueue(enc.encode('data: [DONE]\n\n'))
+        controller.close()
+      }
+    })
+  }
+
+  it('warns when thinking content arrives while reasoning.enabled is false', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(reasoningStream('I am thinking...', 'Here is my answer.'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    )
+
+    const client = createAiSdkInferenceClient(
+      makeConfig({ reasoning: { enabled: false, effort: 'medium', maxTokens: 0 } })
+    )
+    const result = await client.complete([{ role: 'user', content: 'hi' }])
+
+    // Warning must fire to indicate the server ignores chat_template_kwargs
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('chat_template_kwargs'))
+
+    // Text response still works — reasoning merges into text only if no text content
+    expect(result.choices[0].message.content).toBe('Here is my answer.')
+  })
+
+  it('does not warn when reasoning content arrives with reasoning.enabled true', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(reasoningStream('Thinking...', 'Answer.'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    )
+
+    const client = createAiSdkInferenceClient(
+      makeConfig({ reasoning: { enabled: true, effort: 'medium', maxTokens: 2048 } })
+    )
+    await client.complete([{ role: 'user', content: 'hi' }])
+
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('chat_template_kwargs'))
+  })
+})

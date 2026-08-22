@@ -420,7 +420,7 @@ const webFetchSchema: ToolSchema = {
     name: 'WebFetch',
     description:
       'Fetch content from a URL. Returns the response body as text. Supports GET, POST, PUT, PATCH, DELETE. ' +
-      'Response body is truncated to 100KB.',
+      'Response body is truncated to 20KB per call — make multiple targeted requests rather than fetching large pages whole.',
     parameters: {
       type: 'object',
       required: ['url'],
@@ -623,7 +623,9 @@ export const PRESENCE_TOOL_SCHEMAS: ToolSchema[] = [
 
 // ── Executor ────────────────────────────────────────────────────────────
 
-const MAX_WEBFETCH_BODY_CHARS = 100_000
+// Per-call body cap: keeps any single WebFetch from dominating the context window.
+// At 20 KB × typical tool-loop depth, total WebFetch budget stays well under 100 KB.
+const MAX_WEBFETCH_BODY_CHARS = 20_000
 const WEBFETCH_TIMEOUT_MS = 30_000
 
 function bareThreadKey(key: string): string {
