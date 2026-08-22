@@ -368,6 +368,56 @@ describe('local-llm backend: sendMessage (tool calling)', () => {
   })
 })
 
+describe('local-llm backend: turn timeout', () => {
+  it('per-turn timeout fires chat.error and emits a sendFailed turn', async () => {
+    vi.useFakeTimers()
+    try {
+      const { client } = makePendingClient()
+      // makeConfig() sets timeoutMs: 60_000 — that value drives the per-turn timeout
+      const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+      const errors: string[] = []
+      const turns: Array<{ content: string; sendFailed?: boolean }> = []
+      backend.on('chat.error', (d) => errors.push(d.error))
+      backend.on('chat.turn', (d) => turns.push(d.turn))
+
+      const key = await backend.createSession('t')
+      await backend.sendMessage(key, 'hang forever')
+      // Let the async turn reach the pending complete() call
+      await vi.advanceTimersByTimeAsync(10)
+      // Advance past the 60s timeout configured in makeConfig()
+      await vi.advanceTimersByTimeAsync(61_000)
+
+      expect(errors).toHaveLength(1)
+      expect(errors[0]).toContain('timed out')
+      // Timeout surfaces as a sendFailed turn so the user sees something in the thread
+      expect(turns).toHaveLength(1)
+      expect(turns[0].sendFailed).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('explicit abort() produces silent (stopped) — no chat.error, no sendFailed turn', async () => {
+    const { client } = makePendingClient()
+    const backend = createLocalLlmBackend(makeConfig(), { dataDir, inferenceClient: client })
+    const errors: string[] = []
+    const turns: Array<{ content: string; sendFailed?: boolean }> = []
+    backend.on('chat.error', (d) => errors.push(d.error))
+    backend.on('chat.turn', (d) => turns.push(d.turn))
+
+    const key = await backend.createSession('t')
+    const idle = waitForIdle(backend)
+    await backend.sendMessage(key, 'hi')
+    await new Promise((r) => setTimeout(r, 20)) // let runTurn reach the pending complete()
+    await backend.abort(key)
+    await idle
+
+    // Explicit abort: no error, no visible turn in the thread
+    expect(errors).toHaveLength(0)
+    expect(turns).toHaveLength(0)
+  })
+})
+
 describe('local-llm backend: abort', () => {
   it('abort() stops an in-flight turn, returns to idle, and emits no error turn', async () => {
     const { client } = makePendingClient()

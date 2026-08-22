@@ -300,6 +300,19 @@ export function createAiSdkInferenceClient(initialConfig: InferenceClientConfig)
       }
     }
 
+    // Warn when the server returns thinking/reasoning content even though
+    // reasoning.enabled is false. This indicates the server ignores the
+    // chat_template_kwargs field (e.g. an older llama.cpp build, ollama,
+    // or a non-llama inference server). The model will silently think on
+    // every request, consuming context budget and slowing responses.
+    if (reasoning && !state.reasoning.enabled) {
+      console.warn(
+        '[ai-sdk] received reasoning/thinking content but reasoning.enabled is false — ' +
+          'the inference server may not support chat_template_kwargs (enable_thinking control). ' +
+          'Upgrade llama.cpp to b5000+ or switch to a model without built-in thinking mode.'
+      )
+    }
+
     // Merge reasoning into text when the model only produces reasoning
     // content (thinking mode enabled, Qwen3.x puts output in reasoning_content).
     // Without this, text-only responses from thinking-mode models appear empty.

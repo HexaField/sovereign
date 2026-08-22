@@ -385,6 +385,32 @@ export function createChatModule(
           wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadId, status: 'idle' })
         }
         chatEvents.emit('chat.status', { threadId, status: 'idle' })
+
+        // Abort the backend so state.processing resets and new sends can flow
+        // through. Without this, the local-llm drainQueue keeps its
+        // state.processing=true flag set and silently drops every subsequent
+        // sendMessage on that session.
+        const stuckSessionKey = threadToSession.get(threadId)
+        if (stuckSessionKey) {
+          void backend.abort(stuckSessionKey)
+        }
+
+        // Clear the chat-layer in-flight gate so pumpQueue can dispatch
+        // any messages that arrived while the turn was stuck.
+        completeInFlight(threadId)
+
+        // Surface a visible error so the thread doesn't appear silently
+        // abandoned. The user can send a new message to continue.
+        const stuckSecs = Math.round((now - changedAt) / 1000)
+        const errorData = {
+          threadId,
+          error: `Agent was unresponsive for ${stuckSecs}s — turn abandoned. Send a new message to continue.`,
+          retryAfterMs: 0
+        }
+        if (wsHandler) {
+          wsHandler.broadcastToChannel('chat', { type: 'chat.error', ...errorData })
+        }
+        chatEvents.emit('chat.error', errorData)
       }
     }
   }, 30_000) // Check every 30s
