@@ -114,7 +114,16 @@ export const schema = {
                 required: ['id', 'baseUrl', 'models'],
                 additionalProperties: false
               }
-            }
+            },
+            compactThreshold: { type: 'number', minimum: 1 }
+          },
+          additionalProperties: false
+        },
+        subagentDefaults: {
+          type: 'object',
+          properties: {
+            backend: { type: 'string' },
+            model: { type: 'string' }
           },
           additionalProperties: false
         }
@@ -258,6 +267,19 @@ export const schema = {
         maxSummaryWords: { type: 'number', minimum: 1 }
       },
       additionalProperties: false
+    },
+    deviceOverrides: {
+      type: 'object',
+      additionalProperties: {
+        type: 'object',
+        properties: {
+          label: { type: 'string' },
+          sshHost: { type: 'string' },
+          osHint: { type: 'string' },
+          watchServices: { type: 'array', items: { type: 'string' } }
+        },
+        additionalProperties: false
+      }
     }
   },
   additionalProperties: false
