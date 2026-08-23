@@ -353,7 +353,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   })
   // Late-binding: presenceModule + chatModule create after voice routes,
   // so capture a mutable ref that gets filled once both initialise.
-  let voiceForward: ((text: string, opts?: { deviceId?: string }) => Promise<{ delivered: boolean }>) | undefined
+  let voiceForward:
+    | ((text: string, opts?: { deviceId?: string; deviceName?: string }) => Promise<{ delivered: boolean }>)
+    | undefined
   app.use(
     createVoiceRoutes(voiceModule, {
       forwardToPresence: (text, opts) => {
