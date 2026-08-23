@@ -36,10 +36,13 @@ interface QueueEntry {
 const PRIORITY_ORDER: Record<QueuePriority, number> = { high: 0, normal: 1, low: 2 }
 
 export class EndpointQueue {
+  readonly maxConcurrent: number
   private readonly _queue: QueueEntry[] = []
   private _running = 0
 
-  constructor(readonly maxConcurrent = 1) {}
+  constructor(maxConcurrent = 1) {
+    this.maxConcurrent = maxConcurrent
+  }
 
   /** Enqueue `fn` and return a Promise that resolves or rejects with its
    *  result. The call may wait if all maxConcurrent slots are busy. */
