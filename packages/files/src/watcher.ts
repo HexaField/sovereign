@@ -100,8 +100,9 @@ export function createMultiRootFileWatcher(bus: EventBus, rootPaths: string[]): 
       watcher.on('change', (p) => emitChange('file.changed', p))
       watcher.on('unlink', (p) => emitChange('file.deleted', p))
       watcher.on('unlinkDir', (p) => emitChange('file.deleted', p))
-      watcher.on('error', (err) => {
-        console.error(`[file-watcher] Error:`, err.message)
+      watcher.on('error', (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[file-watcher] Error:`, msg)
       })
 
       isWatching = true
