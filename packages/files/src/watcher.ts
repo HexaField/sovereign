@@ -1,10 +1,16 @@
-// File watcher — watches for filesystem changes and emits bus events
+// File watcher — watches for filesystem changes and emits bus events.
+// Uses chokidar so that IGNORE_PATTERNS are applied at watch-registration
+// time, not just at event-filter time. The old fs.watch({ recursive: true })
+// approach registered an inotify watch on every subdirectory in the tree
+// (including .git/objects, node_modules, dist, …) and exhausted the kernel's
+// inotify limit (fs.inotify.max_user_watches) with 7+ large org roots.
 
-import fs from 'node:fs'
 import path from 'node:path'
+import { watch as chokidarWatch } from 'chokidar'
+import type { FSWatcher } from 'chokidar'
 import type { EventBus } from '@sovereign/core'
 
-const IGNORE_PATTERNS = [
+const IGNORE_SEGMENTS = new Set([
   '.git',
   'node_modules',
   '.DS_Store',
@@ -16,12 +22,26 @@ const IGNORE_PATTERNS = [
   '.nuxt',
   '__pycache__',
   '.turbo',
-  '.cache'
-]
+  '.cache',
+  '.venv',
+  '.venv-gpu',
+  'venv',
+  'results', // SNN experiment result JSON files
+  'target', // Rust build artefacts
+  '.codegraph', // CodeGraph SQLite DB (has its own watcher)
+  '.mypy_cache',
+  '.pytest_cache',
+  'coverage'
+])
 
+/**
+ * Returns true if ANY segment of `filePath` matches an ignored directory name.
+ * Used as chokidar's `ignored` predicate — applied before a watch gets registered,
+ * so excluded directories never consume inotify descriptors.
+ */
 function shouldIgnore(filePath: string): boolean {
   const parts = filePath.split(path.sep)
-  return parts.some((p) => IGNORE_PATTERNS.includes(p))
+  return parts.some((p) => IGNORE_SEGMENTS.has(p))
 }
 
 export interface FileWatcher {
@@ -36,33 +56,22 @@ export function createFileWatcher(bus: EventBus, rootPath: string): FileWatcher 
 
 /**
  * Watch multiple root directories for filesystem changes.
- * Each root gets its own `fs.watch` instance; events carry the
+ * Each root shares a single chokidar instance; events carry the
  * originating root so subscribers can resolve relative paths.
  */
 export function createMultiRootFileWatcher(bus: EventBus, rootPaths: string[]): FileWatcher {
-  const watchers: fs.FSWatcher[] = []
+  let watcher: FSWatcher | null = null
   let isWatching = false
-
-  // Debounce map: fullPath -> timeout
-  const pending = new Map<string, NodeJS.Timeout>()
-  const DEBOUNCE_MS = 100
 
   const now = () => new Date().toISOString()
 
-  function emitChange(root: string, filePath: string) {
-    const fullPath = path.isAbsolute(filePath) ? filePath : path.join(root, filePath)
+  function rootFor(filePath: string): string {
+    return rootPaths.find((r) => filePath.startsWith(r + path.sep) || filePath === r) ?? rootPaths[0]
+  }
+
+  function emitChange(eventType: 'file.changed' | 'file.deleted', fullPath: string) {
+    const root = rootFor(fullPath)
     const relativePath = path.relative(root, fullPath)
-
-    if (shouldIgnore(relativePath)) return
-
-    let eventType: string
-    try {
-      fs.statSync(fullPath)
-      eventType = 'file.changed'
-    } catch {
-      eventType = 'file.deleted'
-    }
-
     bus.emit({
       type: eventType,
       timestamp: now(),
@@ -71,47 +80,41 @@ export function createMultiRootFileWatcher(bus: EventBus, rootPaths: string[]): 
     })
   }
 
-  function makeHandler(root: string) {
-    return (_eventType: string, filename: string | null) => {
-      if (!filename) return
-      const key = path.join(root, filename)
-
-      const existing = pending.get(key)
-      if (existing) clearTimeout(existing)
-
-      pending.set(
-        key,
-        setTimeout(() => {
-          pending.delete(key)
-          emitChange(root, filename)
-        }, DEBOUNCE_MS)
-      )
-    }
-  }
-
   return {
     start() {
-      if (isWatching) return
-      for (const root of rootPaths) {
-        try {
-          const w = fs.watch(root, { recursive: true }, makeHandler(root))
-          w.on('error', (err) => {
-            console.error(`[file-watcher] Error on ${root}:`, err.message)
-          })
-          watchers.push(w)
-        } catch (err: any) {
-          console.error(`[file-watcher] Failed to start on ${root}:`, err.message)
-        }
-      }
-      isWatching = watchers.length > 0
+      if (isWatching || rootPaths.length === 0) return
+
+      watcher = chokidarWatch(rootPaths, {
+        // Apply ignore patterns at watch-registration time — chokidar will not
+        // descend into (or add inotify watches for) any path that matches.
+        ignored: shouldIgnore,
+        persistent: true,
+        ignoreInitial: true, // don't flood the bus for existing files on start
+        followSymlinks: false,
+        ignorePermissionErrors: true,
+        // Debounce rapid file writes (e.g. editor save sequences) into a single event.
+        awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
+      })
+
+      watcher.on('add', (p) => emitChange('file.changed', p))
+      watcher.on('change', (p) => emitChange('file.changed', p))
+      watcher.on('unlink', (p) => emitChange('file.deleted', p))
+      watcher.on('unlinkDir', (p) => emitChange('file.deleted', p))
+      watcher.on('error', (err) => {
+        console.error(`[file-watcher] Error:`, err.message)
+      })
+
+      isWatching = true
     },
+
     stop() {
-      for (const w of watchers) w.close()
-      watchers.length = 0
-      for (const timer of pending.values()) clearTimeout(timer)
-      pending.clear()
+      if (watcher) {
+        watcher.close()
+        watcher = null
+      }
       isWatching = false
     },
+
     watching() {
       return isWatching
     }
