@@ -48,7 +48,7 @@ import { toolSearchSchema, createToolSearchRegistry } from './tools/tool-search.
 import type { ToolSearchRegistry } from './tools/tool-search.js'
 import { runToolLoop } from './tool-loop.js'
 import type { ChatMessage, ToolLoopDeps } from './tool-loop.js'
-import { resolveEndpoint, resolveDefaultEndpoint } from './endpoint-resolver.js'
+import { resolveEndpoint } from './endpoint-resolver.js'
 import { EndpointQueue } from './endpoint-queue.js'
 import { runContextStrategies } from '../context-strategies/index.js'
 import { archiveMessagesBeforeStrategies, listStrategyArchives, readStrategyArchive } from '../history-archive.js'
