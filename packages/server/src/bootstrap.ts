@@ -632,15 +632,31 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       if (sessionId && sessions.has(sessionId)) {
         return sessions.get(sessionId)!.handleRequest(req, res, req.body)
       }
+      // Stale or unknown session ID — MCP spec §6.4 requires 404 so the client
+      // knows to reinitialize rather than treat the request as malformed (400).
+      if (sessionId && !sessions.has(sessionId)) {
+        console.warn(`[mcp] Unknown session ${sessionId} — returning 404 so client reinitializes`)
+        return res.status(404).json({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Session not found — please reinitialize' },
+          id: null
+        })
+      }
       if (!sessionId && isInit(req.body)) {
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() })
         const server = createSovereignMcpInstance()
         await server.connect(transport)
         transport.onclose = () => {
-          if (transport.sessionId) sessions.delete(transport.sessionId)
+          if (transport.sessionId) {
+            console.log(`[mcp] Session ${transport.sessionId} closed`)
+            sessions.delete(transport.sessionId)
+          }
         }
         await transport.handleRequest(req, res, req.body)
-        if (transport.sessionId) sessions.set(transport.sessionId, transport)
+        if (transport.sessionId) {
+          sessions.set(transport.sessionId, transport)
+          console.log(`[mcp] Session ${transport.sessionId} initialized (${sessions.size} active)`)
+        }
         return
       }
       res.status(400).json({
