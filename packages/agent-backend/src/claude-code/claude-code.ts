@@ -346,6 +346,12 @@ export function createClaudeCodeBackend(
     subagentToParent: new Map()
   }
 
+  // In-progress guard for recycleSession — prevents double-trigger from the
+  // interrupted-result race: when recycleSession calls liveQuery.interrupt(),
+  // the SDK emits a second `result` message which fires a concurrent
+  // maybeAutoRecycle before the first recycle updates state.lastRecycleAt.
+  const recyclingInProgress = new Set<string>()
+
   // Reverse index from the SDK's session_id (backendSessionId) to our session
   // state. Every SDK hook input carries `session_id` — using this map to
   // resolve the owning session is race-free, unlike the legacy `activeSessionKey`
@@ -1037,12 +1043,27 @@ export function createClaudeCodeBackend(
       // every configured server — recovers `mcp__sovereign__*` tools after
       // both auto-compact and manual `/compact`.
       // See plans/claude-code-mcp-rehydration-bug.md for the bug history.
+      const sk = state.sessionKey
+      const lq = state.liveQuery
       try {
-        await state.liveQuery?.setMcpServers?.(resolveMcpServers())
+        await lq?.setMcpServers?.(resolveMcpServers())
+        console.log(`[mcp-rehydrate] PostCompact OK for ${sk} (compaction #${state.compactionCount})`)
       } catch (err) {
-        // SDK builds without setMcpServers will throw or be undefined.
-        // Best-effort — the next session loop start re-registers anyway.
-        console.error('[claude-code] PostCompact MCP rehydration failed:', (err as Error)?.message ?? err)
+        // setMcpServers can clear the catalog before repopulating — a throw
+        // midway leaves the agent with no deferred tools. Retry once to recover.
+        console.warn(`[mcp-rehydrate] PostCompact attempt 1 failed for ${sk}:`, (err as Error)?.message ?? err)
+        try {
+          await new Promise((r) => setTimeout(r, 2000))
+          if (state.liveQuery === lq) {
+            await lq?.setMcpServers?.(resolveMcpServers())
+            console.log(`[mcp-rehydrate] PostCompact retry OK for ${sk}`)
+          }
+        } catch (err2) {
+          console.error(
+            `[mcp-rehydrate] PostCompact retry failed for ${sk} — agent will lack deferred MCP tools:`,
+            (err2 as Error)?.message ?? err2
+          )
+        }
       }
       // Cozempic post-compaction prune — run standard-tier strategies on the
       // JSONL to clean up pre-compaction residue (tool-use-result-strip,
@@ -1258,14 +1279,32 @@ export function createClaudeCodeBackend(
     void q
       .initializationResult()
       .then(async () => {
+        const sk = state.sessionKey
         try {
           await q.setMcpServers?.(resolveMcpServers())
-        } catch {
-          // SDK builds without setMcpServers or init not ready — best effort.
+          console.log(`[mcp-rehydrate] post-start OK for ${sk}`)
+        } catch (err) {
+          // setMcpServers can clear the catalog before repopulating — a throw
+          // midway leaves the agent with no deferred tools. Retry once to
+          // recover, then log for observability.
+          console.warn(`[mcp-rehydrate] post-start attempt 1 failed for ${sk}:`, (err as Error)?.message ?? err)
+          try {
+            await new Promise((r) => setTimeout(r, 2000))
+            await q.setMcpServers?.(resolveMcpServers())
+            console.log(`[mcp-rehydrate] post-start retry OK for ${sk}`)
+          } catch (err2) {
+            console.error(
+              `[mcp-rehydrate] post-start retry failed for ${sk} — agent will lack deferred MCP tools:`,
+              (err2 as Error)?.message ?? err2
+            )
+          }
         }
       })
-      .catch(() => {
-        /* init not ready — best effort, no-op */
+      .catch((err) => {
+        console.warn(
+          `[mcp-rehydrate] initializationResult rejected for ${state.sessionKey}:`,
+          (err as Error)?.message ?? err
+        )
       })
 
     state.iteratorDone = (async () => {
@@ -2196,142 +2235,153 @@ export function createClaudeCodeBackend(
       if (state.lastRecycleAt && Date.now() - state.lastRecycleAt < minInterval) return null
     }
 
-    // Skip when subagents run (interrupting the parent strands them).
-    if (recycleCfg?.skipDuringSubagents !== false && state.liveSubagents.size > 0) return null
+    // In-progress guard: the double-trigger race fires a second maybeAutoRecycle
+    // when liveQuery.interrupt() causes the SDK to emit an interrupted `result`
+    // message. The first recycler adds sessionKey synchronously (before its first
+    // await), so the second call always sees it and bails out.
+    if (recyclingInProgress.has(sessionKey)) return null
+    recyclingInProgress.add(sessionKey)
 
-    // 1. Measure pre-recycle size.
-    //    Use the LAST turn's usage (not cumulative sum) — that represents the
-    //    actual context fill the model saw on its most recent response.
-    const preBytes = fs.statSync(state.sessionFile).size
-    const preUsage = latestUsageFromFile(state.sessionFile)
-    const preTokens = preUsage.inputTokens + preUsage.cacheRead + preUsage.cacheWrite
+    try {
+      // Skip when subagents run (interrupting the parent strands them).
+      if (recycleCfg?.skipDuringSubagents !== false && state.liveSubagents.size > 0) return null
 
-    // 2. Interrupt the live query if one exists (graceful — session stays
-    //    resumable). Idle sessions (no liveQuery) skip straight to pruning.
-    if (state.liveQuery) {
-      emitter.emit('chat.status', { sessionKey, status: 'idle' })
-      try {
-        await state.liveQuery.interrupt()
-      } catch {
-        // Fall through — hard abort as fallback.
+      // 1. Measure pre-recycle size.
+      //    Use the LAST turn's usage (not cumulative sum) — that represents the
+      //    actual context fill the model saw on its most recent response.
+      const preBytes = fs.statSync(state.sessionFile).size
+      const preUsage = latestUsageFromFile(state.sessionFile)
+      const preTokens = preUsage.inputTokens + preUsage.cacheRead + preUsage.cacheWrite
+
+      // 2. Interrupt the live query if one exists (graceful — session stays
+      //    resumable). Idle sessions (no liveQuery) skip straight to pruning.
+      if (state.liveQuery) {
+        emitter.emit('chat.status', { sessionKey, status: 'idle' })
         try {
-          state.abortController?.abort()
+          await state.liveQuery.interrupt()
         } catch {
-          /* ignore */
-        }
-      }
-
-      // 3. Wait for the iterator to complete (the for-await-of loop in
-      //    startSessionLoop exits cleanly after interrupt). Cap at 10s so
-      //    a stuck iterator never blocks the cleanup endpoint indefinitely.
-      if (state.iteratorDone) {
-        try {
-          await Promise.race([
-            state.iteratorDone,
-            new Promise((_, reject) => setTimeout(() => reject(new Error('iterator-timeout')), 10_000))
-          ])
-        } catch {
-          // Timed out or errored — force-abort and move on.
+          // Fall through — hard abort as fallback.
           try {
             state.abortController?.abort()
           } catch {
             /* ignore */
           }
         }
+
+        // 3. Wait for the iterator to complete (the for-await-of loop in
+        //    startSessionLoop exits cleanly after interrupt). Cap at 10s so
+        //    a stuck iterator never blocks the cleanup endpoint indefinitely.
+        if (state.iteratorDone) {
+          try {
+            await Promise.race([
+              state.iteratorDone,
+              new Promise((_, reject) => setTimeout(() => reject(new Error('iterator-timeout')), 10_000))
+            ])
+          } catch {
+            // Timed out or errored — force-abort and move on.
+            try {
+              state.abortController?.abort()
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+
+        // 4. Reset pump bindings so startSessionLoop can re-create them.
+        state.pushUserMessage = undefined
+        state.endInput = undefined
+        state.abortController = undefined
+        state.liveQuery = undefined
       }
 
-      // 4. Reset pump bindings so startSessionLoop can re-create them.
-      state.pushUserMessage = undefined
-      state.endInput = undefined
-      state.abortController = undefined
-      state.liveQuery = undefined
-    }
+      // 4b. Archive the full JSONL BEFORE any pruning modifies it.
+      //     The archive preserves the complete, unmodified conversation
+      //     history as a write-once snapshot. Pruning only affects the
+      //     working JSONL that the SDK reads for context.
+      archiveJsonlBeforeRecycle(dataDir, state.backendSessionId, state.sessionFile)
 
-    // 4b. Archive the full JSONL BEFORE any pruning modifies it.
-    //     The archive preserves the complete, unmodified conversation
-    //     history as a write-once snapshot. Pruning only affects the
-    //     working JSONL that the SDK reads for context.
-    archiveJsonlBeforeRecycle(dataDir, state.backendSessionId, state.sessionFile)
+      // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
+      let method: 'cozempic' | 'native' = 'native'
+      const rx = recycleCfg?.prescription ?? 'standard'
 
-    // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
-    let method: 'cozempic' | 'native' = 'native'
-    const rx = recycleCfg?.prescription ?? 'standard'
+      try {
+        const { execFileSync } = await import('node:child_process')
+        const cozStdout = execFileSync('cozempic', ['treat', state.backendSessionId, '-rx', rx, '--execute'], {
+          timeout: 30_000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          encoding: 'utf-8'
+        })
+        method = 'cozempic'
 
-    try {
-      const { execFileSync } = await import('node:child_process')
-      const cozStdout = execFileSync('cozempic', ['treat', state.backendSessionId, '-rx', rx, '--execute'], {
-        timeout: 30_000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        encoding: 'utf-8'
-      })
-      method = 'cozempic'
-
-      // Record context strategy metrics from cozempic output
-      if (deps.metrics && cozStdout) {
-        const parsed = parseCozempicOutput(cozStdout)
-        if (parsed) {
-          deps.metrics.recordContextStrategy({
-            ts: Date.now(),
-            sessionKey,
-            backendKind: 'claude-code',
-            model: state.model ?? 'unknown',
-            ...parsed
-          })
+        // Record context strategy metrics from cozempic output
+        if (deps.metrics && cozStdout) {
+          const parsed = parseCozempicOutput(cozStdout)
+          if (parsed) {
+            deps.metrics.recordContextStrategy({
+              ts: Date.now(),
+              sessionKey,
+              backendKind: 'claude-code',
+              model: state.model ?? 'unknown',
+              ...parsed
+            })
+          }
+        }
+      } catch {
+        // Cozempic unavailable or failed — native fallback: truncate old
+        // tool_result blocks in the JSONL directly.
+        try {
+          nativePruneJsonl(state.sessionFile)
+        } catch (e) {
+          console.warn('[context-recycle] native prune failed:', e)
         }
       }
-    } catch {
-      // Cozempic unavailable or failed — native fallback: truncate old
-      // tool_result blocks in the JSONL directly.
-      try {
-        nativePruneJsonl(state.sessionFile)
-      } catch (e) {
-        console.warn('[context-recycle] native prune failed:', e)
-      }
-    }
 
-    // 6. Measure post-recycle size.
-    //    Usage entries in the JSONL still record pre-prune API values (pruning
-    //    truncates tool_result content, not usage fields). Estimate post-prune
-    //    tokens proportionally from the byte reduction.
-    const postBytes = fs.existsSync(state.sessionFile) ? fs.statSync(state.sessionFile).size : 0
-    const postTokens = preBytes > 0 ? Math.round(preTokens * (postBytes / preBytes)) : 0
+      // 6. Measure post-recycle size.
+      //    Usage entries in the JSONL still record pre-prune API values (pruning
+      //    truncates tool_result content, not usage fields). Estimate post-prune
+      //    tokens proportionally from the byte reduction.
+      const postBytes = fs.existsSync(state.sessionFile) ? fs.statSync(state.sessionFile).size : 0
+      const postTokens = preBytes > 0 ? Math.round(preTokens * (postBytes / preBytes)) : 0
 
-    // 7. Reset filter dedup state and stamp the recycle time.
-    state.contextFilter?.reset()
-    state.lastRecycleAt = Date.now()
-    state.recycleCount = (state.recycleCount ?? 0) + 1
-    state.lastUsage = undefined
+      // 7. Reset filter dedup state and stamp the recycle time.
+      state.contextFilter?.reset()
+      state.lastRecycleAt = Date.now()
+      state.recycleCount = (state.recycleCount ?? 0) + 1
+      state.lastUsage = undefined
 
-    // 8. Resume the session — the next sendMessage triggers
-    //    startSessionLoop which sees the existing sessionFile and
-    //    passes `resume: backendSessionId` to the SDK.
-    persistState(state)
+      // 8. Resume the session — the next sendMessage triggers
+      //    startSessionLoop which sees the existing sessionFile and
+      //    passes `resume: backendSessionId` to the SDK.
+      persistState(state)
 
-    const result = {
-      preTokens,
-      postTokens,
-      reclaimedTokens: preTokens - postTokens,
-      reclaimedBytes: preBytes - postBytes,
-      method
-    }
-
-    // Record compaction metric
-    if (deps.metrics) {
-      deps.metrics.recordCompaction({
-        ts: Date.now(),
-        sessionKey,
-        backendKind: 'claude-code',
-        model: state.model ?? 'unknown',
+      const result = {
         preTokens,
         postTokens,
-        tokensReclaimed: preTokens - postTokens,
-        method: opts?.metricsMethod ?? 'recycle',
-        isSubagent: !!state.parentSessionKey
-      })
-    }
+        reclaimedTokens: preTokens - postTokens,
+        reclaimedBytes: preBytes - postBytes,
+        method
+      }
 
-    emitter.emit('chat.status', { sessionKey, status: 'idle' })
-    return result
+      // Record compaction metric
+      if (deps.metrics) {
+        deps.metrics.recordCompaction({
+          ts: Date.now(),
+          sessionKey,
+          backendKind: 'claude-code',
+          model: state.model ?? 'unknown',
+          preTokens,
+          postTokens,
+          tokensReclaimed: preTokens - postTokens,
+          method: opts?.metricsMethod ?? 'recycle',
+          isSubagent: !!state.parentSessionKey
+        })
+      }
+
+      emitter.emit('chat.status', { sessionKey, status: 'idle' })
+      return result
+    } finally {
+      recyclingInProgress.delete(sessionKey)
+    }
   }
 
   /**
