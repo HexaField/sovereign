@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createClaudeCodeBackend } from './claude-code.js'
@@ -1033,6 +1034,118 @@ describe('claude-code/auto-recycle trigger on result message', () => {
     expect(snap.totalTokens).toBe(200)
     expect(snap.contextWindow).toBe(1000)
     expect(snap.fillPercent).toBeCloseTo(20, 0)
+  })
+})
+
+/**
+ * Double-trigger guard: concurrent recycleSession calls on the same session
+ * must not both run — the second should return null (blocked by the
+ * recyclingInProgress Set). This regression test covers the race where
+ * liveQuery.interrupt() emits an extra `result` message that fires a second
+ * maybeAutoRecycle before the first recycle updates state.lastRecycleAt.
+ */
+describe('claude-code/recycleSession double-trigger guard', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('returns null for the second concurrent recycleSession call on the same session', async () => {
+    const compactions: any[] = []
+    const metrics = {
+      recordToolCall: vi.fn(),
+      recordContextSnapshot: vi.fn(),
+      recordCompaction: vi.fn((c: any) => compactions.push(c)),
+      recordContextStrategy: vi.fn(),
+      recordRecycle: vi.fn()
+    }
+
+    // SDK that keeps the session alive with a live query (generator awaits
+    // indefinitely until interrupt() is called). The interrupt is async so
+    // recycleSession yields at `await liveQuery.interrupt()` — creating a
+    // window where the second concurrent call checks the in-progress guard.
+    let resolveInterrupt: (() => void) | undefined
+    const sdk: any = (_args: any) => {
+      const gen = (async function* () {
+        // Wait until interrupted — keeps liveQuery alive in the session.
+        await new Promise<void>((r) => {
+          resolveInterrupt = r
+        })
+      })()
+      return Object.assign(gen, {
+        interrupt: vi.fn(async () => {
+          resolveInterrupt?.()
+        }),
+        setPermissionMode: vi.fn(async () => {}),
+        setModel: vi.fn(async () => {}),
+        setMaxTurns: vi.fn(async () => {}),
+        setMaxThinkingTokens: vi.fn(async () => {}),
+        mcpServerStatus: vi.fn(async () => []),
+        setMcpServers: vi.fn(async () => {}),
+        initializationResult: vi.fn(async () => ({})),
+        supportedCommands: vi.fn(async () => []),
+        supportedModels: vi.fn(async () => []),
+        close: vi.fn(() => {})
+      })
+    }
+
+    const agentDir = join(dataDir, 'agent')
+    const backend = createClaudeCodeBackend(
+      {
+        dataDir,
+        cwd,
+        agentDir,
+        contextManagement: { recycle: { enabled: true, thresholdPercent: 50 } }
+      },
+      { sdkQuery: sdk, metrics: metrics as any }
+    )
+
+    await backend.createSession('t', { threadKey: 'double-trigger' })
+    backend.sendMessage('double-trigger', 'hello').catch(() => {})
+
+    // Let the session loop start and liveQuery become active.
+    await new Promise((r) => setTimeout(r, 50))
+
+    // Write a JSONL with enough tokens (150K on 200K window = 75%) so
+    // recycleSession passes the token-fill threshold check.
+    const sessionFilePath = backend.getSessionFilePath('double-trigger')
+    expect(sessionFilePath).not.toBeNull()
+    mkdirSync(dirname(sessionFilePath!), { recursive: true })
+    writeFileSync(
+      sessionFilePath!,
+      JSON.stringify({
+        message: {
+          usage: {
+            input_tokens: 150000,
+            output_tokens: 100,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0
+          }
+        }
+      }) + '\n'
+    )
+
+    // Fire two concurrent recycleSession calls.
+    // Call A: executes synchronously, adds sessionKey to recyclingInProgress,
+    //   then yields at `await liveQuery.interrupt()`.
+    // Call B: starts synchronously immediately after Call A yields, sees the
+    //   sessionKey already in recyclingInProgress → returns null.
+    const [r1, r2] = await Promise.all([
+      backend.recycleSession('double-trigger'),
+      backend.recycleSession('double-trigger')
+    ])
+
+    // Exactly one call should succeed; the other returns null.
+    const nonNull = [r1, r2].filter((r) => r !== null)
+    expect(nonNull).toHaveLength(1)
+    expect(metrics.recordCompaction).toHaveBeenCalledTimes(1)
   })
 })
 
