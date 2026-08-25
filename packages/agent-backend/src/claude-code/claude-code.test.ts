@@ -1115,7 +1115,12 @@ describe('claude-code/recycleSession double-trigger guard', () => {
 
     // Write a JSONL with enough tokens (150K on 200K window = 75%) so
     // recycleSession passes the token-fill threshold check.
-    const sessionFilePath = backend.getSessionFilePath('double-trigger')
+    // Both getSessionFilePath and recycleSession are optional on AgentBackend;
+    // assert non-null to satisfy TS — createClaudeCodeBackend always provides them.
+    const getSessionFilePath = backend.getSessionFilePath!.bind(backend)
+    const recycleSessionFn = backend.recycleSession!.bind(backend)
+
+    const sessionFilePath = getSessionFilePath('double-trigger')
     expect(sessionFilePath).not.toBeNull()
     mkdirSync(dirname(sessionFilePath!), { recursive: true })
     writeFileSync(
@@ -1137,10 +1142,7 @@ describe('claude-code/recycleSession double-trigger guard', () => {
     //   then yields at `await liveQuery.interrupt()`.
     // Call B: starts synchronously immediately after Call A yields, sees the
     //   sessionKey already in recyclingInProgress → returns null.
-    const [r1, r2] = await Promise.all([
-      backend.recycleSession('double-trigger'),
-      backend.recycleSession('double-trigger')
-    ])
+    const [r1, r2] = await Promise.all([recycleSessionFn('double-trigger'), recycleSessionFn('double-trigger')])
 
     // Exactly one call should succeed; the other returns null.
     const nonNull = [r1, r2].filter((r) => r !== null)

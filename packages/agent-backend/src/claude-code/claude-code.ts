@@ -74,6 +74,7 @@ import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
 import { parseCozempicOutput } from './cozempic-parser.js'
+import { trimJsonlToLastCompaction } from './jsonl-trim.js'
 import {
   archiveJsonlBeforeRecycle,
   archiveRawToolOutput,
@@ -2334,6 +2335,24 @@ export function createClaudeCodeBackend(
         } catch (e) {
           console.warn('[context-recycle] native prune failed:', e)
         }
+      }
+
+      // 5b. Compact-boundary trim — runs after cozempic/native prune.
+      //     Removes all pre-compaction content from the JSONL, keeping only
+      //     the last compact_boundary + its anchor entry + post-boundary content.
+      //     This prevents unbounded JSONL growth when cozempic has already
+      //     stripped all tool_result blocks (reclaimed ≤ 0 byte case).
+      //     The compacted summary (first message after the boundary) already
+      //     contains the full conversation context, so no agent memory is lost.
+      try {
+        const trimmedBytes = trimJsonlToLastCompaction(state.sessionFile)
+        if (trimmedBytes > 1_024 * 1_024) {
+          // Only log when the trim reclaims a meaningful amount — small files
+          // that cozempic already handled well don't need noise in the logs.
+          console.log(`[context-recycle] compact-boundary trim: ${(trimmedBytes / 1_024 / 1_024).toFixed(1)} MB freed`)
+        }
+      } catch (e) {
+        console.warn('[context-recycle] compact-boundary trim failed:', e)
       }
 
       // 6. Measure post-recycle size.
