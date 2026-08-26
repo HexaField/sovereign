@@ -1245,7 +1245,6 @@ export function createClaudeCodeBackend(
     const abort = new AbortController()
     state.abortController = abort
 
-    const resumeExisting = state.sessionFile && fs.existsSync(state.sessionFile)
     // Per-session context. Two layers, both injected via `systemPrompt.append`:
     //   1. Global personality — `~/.claude/CLAUDE.md` (compiled by the
     //      Sovereign personality compiler). Loaded by Sovereign here because
@@ -1274,24 +1273,33 @@ export function createClaudeCodeBackend(
     // would override that token and break OAuth. Non-Claude models (qwen, etc.)
     // have no existing auth flow, so injecting a LiteLLM key is safe and
     // necessary. familyForModel returns null for unrecognised (non-Claude) ids.
+    //
+    // When LiteLLM env injection applies, always start a fresh session rather
+    // than resuming an existing JSONL. The SDK ignores the `env` option when
+    // resuming an active subprocess — a new subprocess is required to pick up
+    // the ANTHROPIC_BASE_URL change. Conversation history is preserved via the
+    // shared history-log system independently of the Claude Code JSONL.
     const isNonClaudeModel = state.model != null && familyForModel(state.model) === null
-    const litellmEnv =
-      cfgAtStart.litellm && isNonClaudeModel
-        ? {
-            env: {
-              ...process.env,
-              ANTHROPIC_BASE_URL: cfgAtStart.litellm.url,
-              ANTHROPIC_API_KEY: cfgAtStart.litellm.apiKey ?? 'litellm'
-            } as Record<string, string>
-          }
-        : {}
+    const useLiteLlm = !!(cfgAtStart.litellm && isNonClaudeModel)
+    const resumeExisting = !useLiteLlm && !!(state.sessionFile && fs.existsSync(state.sessionFile))
+    const litellmEnv = useLiteLlm
+      ? {
+          env: {
+            ...process.env,
+            ANTHROPIC_BASE_URL: cfgAtStart.litellm!.url,
+            ANTHROPIC_API_KEY: cfgAtStart.litellm!.apiKey ?? 'litellm'
+          } as Record<string, string>
+        }
+      : {}
 
     const sdkOptions: SdkOptions = {
       cwd: state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
       abortController: abort,
       model: state.model ?? undefined,
-      effort: state.effort,
+      // Non-Claude models (local inference via LiteLLM) don't support the
+      // Claude-specific reasoning effort parameter — drop it for those sessions.
+      effort: useLiteLlm ? undefined : state.effort,
       ...(betas.length > 0 ? { betas } : {}),
       allowedTools: cfgAtStart.defaultTools ?? DEFAULT_TOOLS,
       ...(disallowedTools && disallowedTools.length > 0 ? { disallowedTools } : {}),

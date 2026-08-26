@@ -1669,4 +1669,43 @@ describe('claude-code/litellm env injection', () => {
     // Must include PATH from process.env
     expect(opts.env?.PATH).toBe(process.env.PATH)
   })
+
+  it('forces a fresh session (sessionId not resume) when LiteLLM is active — even if JSONL exists', async () => {
+    // When LiteLLM env injection is active, the SDK must start a new subprocess
+    // so the ANTHROPIC_BASE_URL env var is picked up. Resuming an existing
+    // subprocess bypasses the new env. We verify `resume` is never passed.
+    const stub = capturingSdkQuery()
+    const litellm = { url: 'http://localhost:4000' }
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), litellm },
+      { sdkQuery: stub }
+    )
+    const modelArg = { provider: 'anthropic', model: 'qwen3.8-27b' }
+    await backend.createSession('s', { threadKey: 'lm-resume-test', model: modelArg })
+
+    // Simulate an existing JSONL (as if the session had run before).
+    const sessionFilePath = (backend as any).getSessionFilePath?.('lm-resume-test') as string | undefined
+    if (sessionFilePath) {
+      mkdirSync(dirname(sessionFilePath), { recursive: true })
+      writeFileSync(sessionFilePath, '') // empty JSONL, just needs to exist
+    }
+
+    backend.sendMessage('lm-resume-test', 'hi').catch(() => {})
+    for (let i = 0; i < 20 && !stub.captured.options; i++) await new Promise((r) => setImmediate(r))
+    if (!stub.captured.options) throw new Error('query() never invoked')
+
+    // Must use sessionId (fresh start), NOT resume, because LiteLLM env requires new subprocess
+    expect(stub.captured.options.sessionId).toBeDefined()
+    expect(stub.captured.options.resume).toBeUndefined()
+  })
+
+  it('drops reasoning effort for non-Claude models (local inference does not support it)', async () => {
+    // Claude's reasoning_effort parameter causes 500 errors on llama-server.
+    // Sovereign must not forward it when the session routes through LiteLLM.
+    const opts = await captureOptionsForModel('qwen3.8-27b', {
+      url: 'http://localhost:4000',
+      apiKey: 'litellm'
+    })
+    expect(opts.effort).toBeUndefined()
+  })
 })
