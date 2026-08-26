@@ -1,0 +1,55 @@
+# LiteLLM proxy configuration — Arcadia (primary machine)
+#
+# Routes Anthropic Messages API requests from Sovereign's claude-code backend
+# to local inference backends by model name. This proxy ONLY handles sessions
+# using non-Claude models — Claude sessions bypass it entirely and continue
+# using their normal OAuth auth to api.anthropic.com.
+#
+# Sovereign injects ANTHROPIC_BASE_URL=http://localhost:4000 into the SDK
+# subprocess ONLY when the session model is unrecognised by familyForModel
+# (i.e. not a claude-* model). Claude threads retain their existing auth flow.
+#
+# This proxy sits at :4000, Anthropic-compat endpoint at /v1/messages.
+# llama-server (OpenAI compat) runs at :9090.
+#
+# Usage:
+#   litellm --config services/litellm/litellm.yaml --port 4000
+#   # or via systemd: systemctl --user start litellm
+
+model_list:
+  # ── Local inference (Qwen via llama-server on :9090) ───────────────────
+  # Model names here are what Sovereign threads are configured to use.
+  # litellm_params.model uses the ID reported by llama-server's /v1/models.
+  # Current llama-server model: Qwen3.8-27B-ROCmFP4-FAST.gguf
+
+  - model_name: "qwen3.8-27b"
+    litellm_params:
+      model: "openai/Qwen3.8-27B-ROCmFP4-FAST.gguf"
+      api_base: "http://localhost:9090/v1"
+      api_key: "unused"
+
+  # Bare alias — threads can set model: qwen for the current local default
+  - model_name: "qwen"
+    litellm_params:
+      model: "openai/Qwen3.8-27B-ROCmFP4-FAST.gguf"
+      api_base: "http://localhost:9090/v1"
+      api_key: "unused"
+
+  # Mac Studio M5 Ultra — add entries here when it arrives (1.2TB/s)
+  # - model_name: "qwen3.6-35b"
+  #   litellm_params:
+  #     model: "openai/Qwen3.6-35B-A3B-Q4_K_M"
+  #     api_base: "http://mac-studio:9090/v1"
+  #     api_key: "unused"
+
+litellm_settings:
+  # Drop unsupported params rather than erroring — needed when the SDK sends
+  # Anthropic-specific fields that the OpenAI-compat backends don't accept.
+  drop_params: true
+  # Master key: Sovereign's SDK subprocess authenticates to this proxy using
+  # ANTHROPIC_API_KEY=litellm. Since Claude sessions never reach this proxy
+  # (Sovereign only injects env vars for non-Claude models), there is no need
+  # to forward a real Anthropic key from here.
+  master_key: "litellm"
+  # Log level: INFO in production, DEBUG for troubleshooting
+  set_verbose: false

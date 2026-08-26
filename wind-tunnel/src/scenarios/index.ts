@@ -32,6 +32,7 @@ import { s28LocalLlmHistory } from './s28-local-llm-history.js'
 import { s29ContextStrategies } from './s29-context-strategies.js'
 import { s30HistoryArchive } from './s30-history-archive.js'
 import { s31SubagentLifecycle } from './s31-subagent-lifecycle.js'
+import { s32LiteLlmRoundtrip } from './s32-litellm-roundtrip.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -107,5 +108,10 @@ export const ALL_SCENARIOS: Scenario[] = [
   // Subagent lifecycle — spawned/completed events fire for local-llm
   // subagents, cross-backend result notification works. Self-skips when
   // local-llm backend not enabled.
-  s31SubagentLifecycle
+  s31SubagentLifecycle,
+  // LiteLLM proxy roundtrip — env injection (ANTHROPIC_BASE_URL → litellm.url)
+  // routes claude-code SDK via the proxy. Verifies non-Claude model selection,
+  // Anthropic-format requests reach the proxy, full WS event lifecycle.
+  // Self-skips unless run with --litellm (SWT_LITELLM_URL env var must be set).
+  s32LiteLlmRoundtrip
 ]
