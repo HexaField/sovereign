@@ -80,6 +80,18 @@ export function claudeCodeConfigFromStore(
       cleanup?: Record<string, unknown>
     }>('contextManagement') ?? undefined
 
+  // LiteLLM proxy — env vars take precedence over config store so the overlay
+  // can be injected per-run (e.g. from a Docker Compose env section or systemd
+  // EnvironmentFile) without touching persisted config.
+  const litellmUrl =
+    process.env.SOVEREIGN_LITELLM_URL?.trim() ||
+    configStore.get<string>('agentBackend.claudeCode.litellm.url')?.trim() ||
+    undefined
+  const litellmApiKey =
+    process.env.SOVEREIGN_LITELLM_API_KEY?.trim() ||
+    configStore.get<string>('agentBackend.claudeCode.litellm.apiKey')?.trim() ||
+    undefined
+
   return {
     dataDir,
     configDir,
@@ -88,7 +100,8 @@ export function claudeCodeConfigFromStore(
     defaultModel,
     modelContextWindows,
     mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
-    contextManagement
+    contextManagement,
+    litellm: litellmUrl ? { url: litellmUrl, apiKey: litellmApiKey } : undefined
   }
 }
 

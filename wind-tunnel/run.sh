@@ -25,6 +25,7 @@ NO_BUILD=false
 KEEP=false
 AD4M=false
 BENCHMARK=false
+LITELLM=false
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -34,6 +35,7 @@ while [[ $# -gt 0 ]]; do
     --native)    echo "✗ REFUSED — --native removed. The wind tunnel runs in Docker only." >&2; exit 1 ;;
     --benchmark) BENCHMARK=true; shift ;;
     --ad4m)      AD4M=true; shift ;;
+    --litellm)   LITELLM=true; shift ;;
     *)           EXTRA_ARGS+=("$1"); shift ;;
   esac
 done
@@ -71,6 +73,20 @@ fi
 if [[ "$BENCHMARK" == "true" ]]; then
   COMPOSE_ARGS+=(-f "docker/docker-compose.benchmark.yml")
   export SWT_BENCHMARK_MODE=1
+fi
+
+# LiteLLM lane: overlay config that sets SOVEREIGN_LITELLM_URL so Sovereign
+# injects ANTHROPIC_BASE_URL into SDK subprocess env. In the wind tunnel,
+# mock-llm acts as the litellm endpoint (it handles Anthropic format natively).
+# For a test against a real LiteLLM + local model, run litellm separately on
+# the host and pass SWT_LITELLM_URL=http://localhost:4000 explicitly.
+if [[ "$LITELLM" == "true" ]]; then
+  COMPOSE_ARGS+=(-f "docker/docker-compose.litellm.yml")
+  export SWT_LITELLM_URL="${SWT_LITELLM_URL:-http://localhost:8900}"
+  # Default s32 unless caller specified scenarios
+  if [[ ! " ${EXTRA_ARGS[*]} " == *" --scenario "* ]]; then
+    EXTRA_ARGS+=(--scenario s32)
+  fi
 fi
 
 # Install deps if needed

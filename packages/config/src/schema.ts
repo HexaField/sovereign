@@ -46,6 +46,15 @@ export const schema = {
             modelContextWindows: {
               type: 'object',
               additionalProperties: { type: 'number' }
+            },
+            litellm: {
+              type: 'object',
+              properties: {
+                url: { type: 'string' },
+                apiKey: { type: 'string' }
+              },
+              required: ['url'],
+              additionalProperties: false
             }
           },
           additionalProperties: false

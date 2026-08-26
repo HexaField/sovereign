@@ -49,6 +49,25 @@ export interface ClaudeCodeConfig {
    * to swap the SDK shim.
    */
   inProcessOnly?: boolean
+  /**
+   * LiteLLM proxy configuration. When set, the Claude Code backend routes all
+   * sessions through the proxy by injecting `ANTHROPIC_BASE_URL` into the SDK
+   * subprocess environment. LiteLLM receives Anthropic Messages API requests
+   * and translates them to any configured backend (e.g. a local llama-server).
+   * Model names in thread config drive LiteLLM's routing rules — use vendor/
+   * model strings like `qwen3.6-35b` to target local inference, or omit to fall
+   * back to the proxy's default. Claude model names route through normally when
+   * LiteLLM is configured to forward them to the real Anthropic API.
+   */
+  litellm?: {
+    /** Base URL of the LiteLLM proxy (e.g. 'http://localhost:4000'). */
+    url: string
+    /**
+     * API key forwarded as `ANTHROPIC_API_KEY` to the subprocess.
+     * LiteLLM accepts any non-empty string; defaults to 'litellm'.
+     */
+    apiKey?: string
+  }
   /** Context management settings — filter, recycle, cleanup. Comes from
    *  `configStore.get('contextManagement')`. */
   contextManagement?: {

@@ -170,6 +170,39 @@ function familyForModel(model: string | null | undefined): string | null {
 }
 
 /**
+ * Fetch model list from a LiteLLM proxy's `/v1/models` endpoint and convert
+ * to `ModelCatalogEntry[]`. Returns an empty array on any fetch/parse error
+ * so callers can fall back to the static catalog gracefully. LiteLLM returns
+ * OpenAI-compat format: `{ data: [{ id, ... }, ...] }`.
+ */
+async function fetchLiteLlmModels(proxyUrl: string): Promise<ModelCatalogEntry[]> {
+  try {
+    const url = proxyUrl.replace(/\/$/, '') + '/v1/models'
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) return []
+    const json = (await res.json()) as { data?: Array<{ id: string; display_name?: string }> }
+    const items = Array.isArray(json?.data) ? json.data : []
+    return items
+      .filter((m) => m?.id && typeof m.id === 'string')
+      .map((m) => {
+        const id = m.id as string
+        // Attempt family resolution; returns null for non-Claude ids.
+        const family = familyForModel(id) ?? 'external'
+        return {
+          id: `${PROVIDER}/${id}`,
+          provider: PROVIDER,
+          family,
+          familyLabel: m.display_name ?? id,
+          version: null,
+          versionLabel: m.display_name ?? id
+        } satisfies ModelCatalogEntry
+      })
+  } catch {
+    return []
+  }
+}
+
+/**
  * Read the user's global Claude Code personality file
  * (`~/.claude/CLAUDE.md`). Sovereign's personality compiler writes here.
  * Loaded explicitly because `settingSources` drops the `'project'` source
@@ -1230,6 +1263,29 @@ export function createClaudeCodeBackend(
     const betas: SdkBeta[] = effectiveContextWindow > DEFAULT_CONTEXT_WINDOW ? ['context-1m-2025-08-07'] : []
     const sessionMcpServers = resolveMcpServers()
     const disallowedTools = deps?.resolveDisallowedTools?.(state.sessionKey)
+    // LiteLLM proxy: inject ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY into the
+    // subprocess environment so the Anthropic SDK inside the Claude Code CLI
+    // routes to the proxy instead of api.anthropic.com. The `env` field
+    // REPLACES the subprocess environment entirely (SDK design), so spread
+    // process.env first to preserve PATH, HOME, and other required vars.
+    //
+    // IMPORTANT: only inject for non-Claude model sessions. Claude models use
+    // Claude.ai OAuth auth stored in ~/.claude — injecting ANTHROPIC_API_KEY
+    // would override that token and break OAuth. Non-Claude models (qwen, etc.)
+    // have no existing auth flow, so injecting a LiteLLM key is safe and
+    // necessary. familyForModel returns null for unrecognised (non-Claude) ids.
+    const isNonClaudeModel = state.model != null && familyForModel(state.model) === null
+    const litellmEnv =
+      cfgAtStart.litellm && isNonClaudeModel
+        ? {
+            env: {
+              ...process.env,
+              ANTHROPIC_BASE_URL: cfgAtStart.litellm.url,
+              ANTHROPIC_API_KEY: cfgAtStart.litellm.apiKey ?? 'litellm'
+            } as Record<string, string>
+          }
+        : {}
+
     const sdkOptions: SdkOptions = {
       cwd: state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
@@ -1253,6 +1309,7 @@ export function createClaudeCodeBackend(
       allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
       ...(combinedAppend ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: combinedAppend } } : {}),
+      ...litellmEnv,
       stderr: (line: string) => console.error(`[claude-code cli] ${line}`)
     } as SdkOptions
 
@@ -2021,7 +2078,7 @@ export function createClaudeCodeBackend(
     // `getSessionMeta` (`${modelProvider}/${model}`) only lines up with the
     // dropdown options when these are prefixed too — otherwise the current
     // model never appears as the selected option.
-    const catalog: ModelCatalogEntry[] = MODEL_CATALOG.flatMap((c) =>
+    const staticCatalog: ModelCatalogEntry[] = MODEL_CATALOG.flatMap((c) =>
       c.versions.map((v) => ({
         id: `${PROVIDER}/${v.id}`,
         provider: PROVIDER,
@@ -2031,10 +2088,19 @@ export function createClaudeCodeBackend(
         versionLabel: v.versionLabel
       }))
     )
+
+    // When LiteLLM is configured, augment the static catalog with models
+    // reported by the proxy. Proxy models that share an id with a static entry
+    // are de-duplicated (static wins — it carries richer family/version data).
+    const cfg = getConfig()
+    const dynamicModels = cfg.litellm ? await fetchLiteLlmModels(cfg.litellm.url) : []
+    const staticIds = new Set(staticCatalog.map((e) => e.id))
+    const catalog: ModelCatalogEntry[] = [...staticCatalog, ...dynamicModels.filter((e) => !staticIds.has(e.id))]
+
     return {
       models: catalog.map((e) => e.id),
       defaultModel: (() => {
-        const model = getConfig().defaultModel ?? DEFAULT_MODEL_FALLBACK
+        const model = cfg.defaultModel ?? DEFAULT_MODEL_FALLBACK
         return `${PROVIDER}/${bareModelName(model)}`
       })(),
       catalog

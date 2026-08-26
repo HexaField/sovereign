@@ -1,0 +1,20 @@
+[Unit]
+Description=LiteLLM proxy — routes Sovereign claude-code sessions to local inference
+After=network.target llama-server.service
+Wants=llama-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=@@SERVICE_DIR@@
+# Claude sessions bypass this proxy entirely — they use OAuth auth directly.
+# Only non-Claude model sessions (qwen, etc.) route through here.
+# No ANTHROPIC_API_KEY needed here; litellm.yaml sets master_key=litellm.
+ExecStart=@@HOME@@/.local/bin/litellm --config @@SERVICE_DIR@@/litellm.yaml --port 4000 --host 127.0.0.1
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=litellm
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,21 @@
+# LiteLLM overlay — activates the litellm proxy path in the wind tunnel.
+#
+# Usage:
+#   ./run.sh --litellm                  # run s32 against mock-llm as proxy
+#   ./run.sh --litellm --scenario s32   # explicit
+#
+# In this overlay, mock-llm acts as the litellm endpoint (it already handles
+# Anthropic Messages API format). Sovereign is configured with
+# SOVEREIGN_LITELLM_URL=http://mock-llm:8900, which it injects as
+# ANTHROPIC_BASE_URL into the Claude Code SDK subprocess.
+#
+# For a real LiteLLM + local model test:
+#   Run litellm on the host (e.g. `litellm --config litellm.yaml --port 4000`)
+#   then pass SWT_LITELLM_URL=http://localhost:4000 before ./run.sh --litellm.
+#   The overlay below sets SOVEREIGN_LITELLM_URL via host.docker.internal.
+
+services:
+  sovereign:
+    environment:
+      # Route claude-code SDK through the litellm proxy (mock-llm in wind tunnel).
+      SOVEREIGN_LITELLM_URL: "http://mock-llm:8900"

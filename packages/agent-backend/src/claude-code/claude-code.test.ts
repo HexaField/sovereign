@@ -1587,3 +1587,86 @@ describe('claude-code/history-log sync on result message', () => {
     expect(log[1]).toMatchObject({ role: 'assistant', content: 'migrated a', timestamp: 5500 })
   })
 })
+
+// ── LiteLLM env injection ─────────────────────────────────────────────────────
+// Verifies that ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY are injected into
+// sdkOptions.env when the session model is non-Claude and litellm is configured,
+// and that Claude sessions are NOT affected (preserving OAuth auth flow).
+
+describe('claude-code/litellm env injection', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-litellm-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-litellm-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  /** Capture sdkOptions for a session with a given model and config. */
+  async function captureOptionsForModel(model: string | undefined, litellm?: { url: string; apiKey?: string }) {
+    const stub = capturingSdkQuery()
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), litellm },
+      { sdkQuery: stub }
+    )
+    // createSession accepts model as { provider, model } — wrap the string form.
+    const modelArg = model ? { provider: 'anthropic', model } : undefined
+    await backend.createSession('s', { threadKey: 'lm-test', model: modelArg })
+    backend.sendMessage('lm-test', 'hi').catch(() => {})
+    for (let i = 0; i < 20 && !stub.captured.options; i++) await new Promise((r) => setImmediate(r))
+    if (!stub.captured.options) throw new Error('query() never invoked')
+    return stub.captured.options
+  }
+
+  it('injects ANTHROPIC_BASE_URL for a non-Claude model when litellm is configured', async () => {
+    const opts = await captureOptionsForModel('qwen3.8-27b', {
+      url: 'http://localhost:4000',
+      apiKey: 'test-litellm-key'
+    })
+    expect(opts.env).toBeDefined()
+    expect(opts.env.ANTHROPIC_BASE_URL).toBe('http://localhost:4000')
+    expect(opts.env.ANTHROPIC_API_KEY).toBe('test-litellm-key')
+  })
+
+  it('defaults apiKey to "litellm" when not specified', async () => {
+    const opts = await captureOptionsForModel('qwen', { url: 'http://proxy:4000' })
+    expect(opts.env?.ANTHROPIC_API_KEY).toBe('litellm')
+  })
+
+  it('does NOT inject env for a Claude model — preserves OAuth auth', async () => {
+    const opts = await captureOptionsForModel('claude-opus-4-6', {
+      url: 'http://localhost:4000',
+      apiKey: 'litellm'
+    })
+    // Claude models must not get env override — they use OAuth from ~/.claude
+    const envBase = opts.env?.ANTHROPIC_BASE_URL
+    expect(envBase).toBeUndefined()
+  })
+
+  it('does NOT inject env when litellm is not configured', async () => {
+    const opts = await captureOptionsForModel('qwen3.8-27b', undefined)
+    // No litellm config → no env injection regardless of model
+    const envBase = opts.env?.ANTHROPIC_BASE_URL
+    expect(envBase).toBeUndefined()
+  })
+
+  it('does NOT inject env when model is null (default model)', async () => {
+    const opts = await captureOptionsForModel(undefined, {
+      url: 'http://localhost:4000',
+      apiKey: 'litellm'
+    })
+    // null model → familyForModel(null) = null, but isNonClaudeModel = false (null check)
+    const envBase = opts.env?.ANTHROPIC_BASE_URL
+    expect(envBase).toBeUndefined()
+  })
+
+  it('spreads process.env so PATH and other vars are preserved', async () => {
+    const opts = await captureOptionsForModel('qwen', { url: 'http://proxy:4000' })
+    // Must include PATH from process.env
+    expect(opts.env?.PATH).toBe(process.env.PATH)
+  })
+})
