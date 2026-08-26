@@ -19,21 +19,36 @@
 model_list:
   # ── Local inference (Qwen via llama-server on :9090) ───────────────────
   # Model names here are what Sovereign threads are configured to use.
-  # litellm_params.model uses the ID reported by llama-server's /v1/models.
-  # Current llama-server model: Qwen3.8-27B-ROCmFP4-FAST.gguf
+  # litellm_params.model must use openai/ prefix for OpenAI-compat backends.
+  #
+  # use_responses_api: false — CRITICAL. Prevents LiteLLM from routing to
+  # /v1/responses when the incoming request contains thinking/reasoning params.
+  # Without this, LiteLLM translates Anthropic thinking → reasoning_effort:
+  # "high", which llama-server's Jinja template rejects (only xhigh/medium/low
+  # are valid). Forcing chat/completions routes avoids this entirely.
 
   - model_name: "qwen3.8-27b"
     litellm_params:
-      model: "openai/Qwen3.8-27B-ROCmFP4-FAST.gguf"
+      model: "openai/qwen3.8-27b"
       api_base: "http://localhost:9090/v1"
       api_key: "unused"
+      use_responses_api: false
+    model_info:
+      mode: "chat"
+      supports_function_calling: true
+      supports_extended_thinking: false
 
   # Bare alias — threads can set model: qwen for the current local default
   - model_name: "qwen"
     litellm_params:
-      model: "openai/Qwen3.8-27B-ROCmFP4-FAST.gguf"
+      model: "openai/qwen3.8-27b"
       api_base: "http://localhost:9090/v1"
       api_key: "unused"
+      use_responses_api: false
+    model_info:
+      mode: "chat"
+      supports_function_calling: true
+      supports_extended_thinking: false
 
   # Mac Studio M5 Ultra — add entries here when it arrives (1.2TB/s)
   # - model_name: "qwen3.6-35b"
@@ -41,6 +56,11 @@ model_list:
   #     model: "openai/Qwen3.6-35B-A3B-Q4_K_M"
   #     api_base: "http://mac-studio:9090/v1"
   #     api_key: "unused"
+  #     use_responses_api: false
+  #   model_info:
+  #     mode: "chat"
+  #     supports_function_calling: true
+  #     supports_extended_thinking: false
 
 litellm_settings:
   # Drop unsupported params rather than erroring — needed when the SDK sends
@@ -51,5 +71,11 @@ litellm_settings:
   # (Sovereign only injects env vars for non-Claude models), there is no need
   # to forward a real Anthropic key from here.
   master_key: "litellm"
-  # Log level: INFO in production, DEBUG for troubleshooting
+  # Log level: INFO in production, DEBUG for troubleshooting.
   set_verbose: false
+  # CRITICAL: Force chat/completions routing for all providers including openai/*.
+  # Without this, LiteLLM routes openai/* models through the Responses API
+  # (/v1/responses), which translates Anthropic thinking→reasoning_effort:"high".
+  # llama-server's Jinja template rejects "high" (only xhigh/medium/low valid).
+  # Chat/completions avoids the Responses API entirely.
+  use_chat_completions_url_for_anthropic_messages: true
