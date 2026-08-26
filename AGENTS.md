@@ -155,3 +155,47 @@ Thread deletion sets `archived: true` (soft delete). `listThreads()` passes `?ac
 ### Docker config
 
 Sovereign runs on port 5801 inside Docker, exposed as 5811 on the host (avoids conflict with the live service). TLS disabled. Personality off. `ANTHROPIC_BASE_URL` points at the mock LLM container.
+
+## LiteLLM proxy (local inference routing)
+
+`services/litellm/` contains the LiteLLM proxy that routes non-Claude model sessions to local inference backends.
+
+### How it works
+
+Sovereign's claude-code backend detects non-Claude models via `familyForModel()`. When a session uses an unrecognised model (e.g. `qwen3.8-27b`), it sets `ANTHROPIC_BASE_URL=http://localhost:4000` and `ANTHROPIC_API_KEY=litellm` in the Claude Code CLI subprocess env. The Claude Code CLI then sends all Anthropic SDK calls to LiteLLM at `:4000` instead of `api.anthropic.com`. Claude sessions bypass the proxy entirely.
+
+### Session handling for LiteLLM threads
+
+Non-Claude threads always start a **fresh session** (`--session-id`) regardless of existing JSONL files. The SDK ignores `env` when resuming a subprocess — a fresh subprocess is required to pick up the `ANTHROPIC_BASE_URL` env injection. History is preserved via the shared history-log system.
+
+`effort` (extended thinking budget) is set to `undefined` for non-Claude sessions — local models do not accept Anthropic thinking parameters.
+
+### LiteLLM config (`services/litellm/litellm.yaml`)
+
+Critical settings:
+
+- `use_chat_completions_url_for_anthropic_messages: true` — forces chat/completions routing for all providers including `openai/*`. Without this, LiteLLM routes `openai/*` models (like `openai/qwen3.8-27b`) through the Responses API, which translates `thinking.budget_tokens` → `reasoning_effort: "high"`. llama-server's Jinja template only accepts `xhigh`/`medium`/`low` → 500 error.
+- `drop_params: true` — drops unsupported Anthropic-specific params cleanly.
+- `model_info.supports_extended_thinking: false` — signals the model does not support extended thinking.
+
+### Service setup (Arcadia — primary machine)
+
+```bash
+# Start the proxy
+systemctl --user start litellm
+# or manually:
+litellm --config services/litellm/litellm.yaml --port 4000 --host 127.0.0.1
+
+# Verify routing
+curl -s -X POST http://localhost:4000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "x-api-key: litellm" \
+  -d '{"model":"qwen3.8-27b","max_tokens":50,"messages":[{"role":"user","content":"Say: LITELLM_WORKS"}]}'
+```
+
+### Known gotcha — corrupted JSONL history
+
+If a prior LiteLLM session failed with a 500 error (e.g. the `reasoning_effort: "high"` issue), the thread JSONL may contain messages in an unusual order (system messages after user/assistant pairs). llama-server's Jinja template enforces "system message must be at the beginning". Symptom: `POST /v1/messages?beta=true` → 500 "System message must be at the beginning."
+
+Fix: delete the JSONL file for the affected thread (`~/.claude/projects/.../<backendSessionId>.jsonl`). The fresh-session fix in Sovereign's claude-code backend (`resumeExisting = !useLiteLlm && ...`) prevents new LiteLLM sessions from accumulating corrupted history.
