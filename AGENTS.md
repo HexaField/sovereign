@@ -207,3 +207,15 @@ After a Sovereign rebuild, old Claude CLI subprocesses survive as orphans (repar
 **Fix (dfedbef):** The `stderr` callback now sets a `sessionConflict` flag on that message. `initializationResult.catch` scans `/proc` for a subprocess holding the session ID and sends SIGTERM. The `iteratorDone` catch suppresses the generic `chat.error` emission. The session resets to idle; the next `sendMessage` retries cleanly after the orphan exits.
 
 **Betas removed:** The `context-1m-2025-08-07` beta was previously passed for sessions with context windows > 200 k, but Sovereign uses Claude.ai OAuth exclusively, which does not support custom betas. The CLI ignored it and logged a warning on every session start. betas is now always empty.
+
+## POST /api/threads model field (7314d20)
+
+`POST /api/threads` previously ignored the `model` field in the request body. Any thread created with an explicit model (e.g. `model: "qwen3.8-27b"`) silently fell through to `DEFAULT_MODEL_FALLBACK` ("claude-opus-4-6"), making LiteLLM routing untestable via the REST API.
+
+**Fix:** Three-part change in `packages/threads/src/`:
+
+- `threads.ts create()` — added `model?: string` to opts and included it in the constructed `ThreadInfo`.
+- `threads.ts projectToV2()` — added `model` to the schema-load whitelist so the field survives a restart.
+- `routes.ts POST /api/threads` — extracts `model` from `req.body`, normalises it (strips a `provider/` prefix if present), passes the bare id to `threadManager.create()` and to `createSession()` as `{ provider: 'anthropic', model: bareId }`.
+
+The `PATCH /api/threads/:key/model` route and `update()` were already correct — only `create()` and the POST route needed fixing.
