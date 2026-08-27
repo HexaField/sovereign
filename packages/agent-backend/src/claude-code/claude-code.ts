@@ -1240,6 +1240,45 @@ export function createClaudeCodeBackend(
     }
   }
 
+  /**
+   * Kill any Claude CLI subprocess that holds the given session ID (orphan
+   * from a previous Sovereign process). Scans /proc directly so we kill by
+   * exact PID rather than using pkill with a broad pattern.
+   *
+   * Called when the CLI stderr reports "Session ID <id> is already in use" —
+   * the old subprocess survived Sovereign's shutdown and will block any resume
+   * attempt until it exits or is killed.
+   */
+  async function killOrphanedClaudeSession(sessionId: string): Promise<void> {
+    try {
+      const entries = fs.readdirSync('/proc')
+      const myPid = process.pid
+      for (const entry of entries) {
+        if (!/^\d+$/.test(entry)) continue
+        const pid = parseInt(entry, 10)
+        if (pid === myPid) continue
+        try {
+          // cmdline entries are NUL-separated; includes the binary and all flags
+          const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+          if (cmdline.includes(sessionId)) {
+            try {
+              process.kill(pid, 'SIGTERM')
+              console.log(
+                `[claude-code] killed orphaned session subprocess PID ${pid} (session ${sessionId.slice(0, 8)}…)`
+              )
+            } catch {
+              // Process already exited or permission denied — ignore
+            }
+          }
+        } catch {
+          // /proc/<pid>/cmdline unreadable — process exited or permission denied
+        }
+      }
+    } catch {
+      // /proc not available or scan failed — ignore
+    }
+  }
+
   function startSessionLoop(state: ClaudeSessionState): InputPump {
     const pump = makeInputPump(state.backendSessionId)
     const abort = new AbortController()
@@ -1259,7 +1298,13 @@ export function createClaudeCodeBackend(
     const membraneAppend = deps?.resolveAppendSystemPrompt?.(state.sessionKey)
     const combinedAppend = [globalPersonality, membraneAppend].filter(Boolean).join('\n\n')
     const effectiveContextWindow = state.contextWindow ?? contextWindowFor(state.model)
-    const betas: SdkBeta[] = effectiveContextWindow > DEFAULT_CONTEXT_WINDOW ? ['context-1m-2025-08-07'] : []
+    // NOTE: The context-1m-2025-08-07 beta enables extended context windows but
+    // requires API-key auth. Sovereign exclusively uses Claude.ai OAuth, so
+    // passing betas generates a spurious "Custom betas are only available for
+    // API key users" warning on every session start without providing any
+    // benefit. Leave betas empty for all sessions.
+    const betas: SdkBeta[] = []
+    void effectiveContextWindow // referenced above for future use when betas become available via OAuth
     const sessionMcpServers = resolveMcpServers()
     const disallowedTools = deps?.resolveDisallowedTools?.(state.sessionKey)
     // LiteLLM proxy: inject ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY into the
@@ -1281,6 +1326,10 @@ export function createClaudeCodeBackend(
     // shared history-log system independently of the Claude Code JSONL.
     const isNonClaudeModel = state.model != null && familyForModel(state.model) === null
     const useLiteLlm = !!(cfgAtStart.litellm && isNonClaudeModel)
+    // Mutable flag set by the stderr handler when the CLI reports a session-ID
+    // conflict. Used by initializationResult.catch and iteratorDone.catch to
+    // suppress generic error emissions and trigger orphan cleanup instead.
+    let sessionConflict = false
     const resumeExisting = !useLiteLlm && !!(state.sessionFile && fs.existsSync(state.sessionFile))
     const litellmEnv = useLiteLlm
       ? {
@@ -1318,7 +1367,16 @@ export function createClaudeCodeBackend(
       includePartialMessages: false,
       ...(combinedAppend ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: combinedAppend } } : {}),
       ...litellmEnv,
-      stderr: (line: string) => console.error(`[claude-code cli] ${line}`)
+      stderr: (line: string) => {
+        console.error(`[claude-code cli] ${line}`)
+        // Detect "Session ID <id> is already in use" — means an orphaned
+        // subprocess from a previous Sovereign instance holds this session.
+        // The conflict flag signals the iterator-done handler to kill the
+        // orphan rather than surfacing a generic error to the user.
+        if (line.includes('Session ID') && line.includes('already in use')) {
+          sessionConflict = true
+        }
+      }
     } as SdkOptions
 
     let q: SdkQuery
@@ -1366,11 +1424,18 @@ export function createClaudeCodeBackend(
           }
         }
       })
-      .catch((err) => {
-        console.warn(
-          `[mcp-rehydrate] initializationResult rejected for ${state.sessionKey}:`,
-          (err as Error)?.message ?? err
-        )
+      .catch(async (err) => {
+        const msg = (err as Error)?.message ?? String(err)
+        console.warn(`[mcp-rehydrate] initializationResult rejected for ${state.sessionKey}:`, msg)
+        // Session-ID conflict: an orphaned subprocess from the previous Sovereign
+        // instance holds this session. Kill it so the next sendMessage retry
+        // can start cleanly. The iterator-done handler will reset state to idle.
+        if (sessionConflict) {
+          console.warn(
+            `[claude-code] session conflict — killing orphaned subprocess for ${state.backendSessionId.slice(0, 8)}…`
+          )
+          await killOrphanedClaudeSession(state.backendSessionId)
+        }
       })
 
     state.iteratorDone = (async () => {
@@ -1398,7 +1463,17 @@ export function createClaudeCodeBackend(
         }
       } catch (err: any) {
         if (err?.name !== 'AbortError') {
-          emitter.emit('chat.error', { sessionKey: state.sessionKey, error: err?.message ?? String(err) })
+          if (sessionConflict) {
+            // Session-ID conflict: the orphaned subprocess kill is running in
+            // initializationResult.catch — don't surface this as a user-visible
+            // error. The session resets to idle here, and the next sendMessage
+            // retries cleanly once the orphan has exited.
+            console.warn(
+              `[claude-code] session conflict iterator exit for ${state.sessionKey} — suppressing chat.error (orphan kill in progress)`
+            )
+          } else {
+            emitter.emit('chat.error', { sessionKey: state.sessionKey, error: err?.message ?? String(err) })
+          }
         }
       } finally {
         // Reset pump bindings so the next sendMessage starts a fresh query loop
