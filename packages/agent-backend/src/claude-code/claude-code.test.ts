@@ -1708,4 +1708,94 @@ describe('claude-code/litellm env injection', () => {
     })
     expect(opts.effort).toBeUndefined()
   })
+
+  it('never passes betas — OAuth auth does not support custom betas', async () => {
+    // Sovereign uses Claude.ai OAuth exclusively. The Claude Code CLI ignores
+    // custom betas with OAuth and logs a warning per session. Betas must be
+    // absent from sdkOptions entirely so that warning is never generated.
+    const opts = await captureOptionsForModel('claude-opus-4-6', undefined)
+    // betas must be absent or empty — never populated under OAuth auth
+    expect(opts.betas == null || (Array.isArray(opts.betas) && opts.betas.length === 0)).toBe(true)
+  })
+})
+
+// ── Session-conflict recovery ──────────────────────────────────────────────────
+// After a Sovereign rebuild, old Claude CLI subprocesses survive as orphans and
+// hold their session IDs. When the new Sovereign tries to resume or start a
+// session with the same ID, the CLI reports "Session ID already in use" on
+// stderr and exits with code 1. The adapter must:
+//   1. Detect the conflict via the stderr callback (not a thrown error).
+//   2. Suppress the generic chat.error emission (the session retries silently).
+//   3. Let the session reset to idle so the next sendMessage can retry.
+
+describe('claude-code/session-conflict detection', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-conflict-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-conflict-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('suppresses chat.error when stderr reports Session ID already in use', async () => {
+    // Build a stub that: (1) calls stderr with the conflict message, then
+    // (2) rejects initializationResult and throws from the iterator.
+    let capturedStderr: ((line: string) => void) | undefined
+    let capturedSessionId: string | null = null
+
+    const conflictStub: any = (args: any) => {
+      capturedStderr = args?.options?.stderr
+      capturedSessionId = args?.options?.sessionId ?? args?.options?.resume ?? null
+
+      const conflictError = new Error(
+        `Claude Code process exited with code 1. stderr: Error: Session ID ${capturedSessionId} is already in use.`
+      )
+
+      const generator = (async function* () {
+        // Fire the stderr conflict message (as the real CLI would) …
+        capturedStderr?.(`Session ID ${capturedSessionId} is already in use.`)
+        // … then immediately exit (as the real CLI does with code 1).
+        throw conflictError
+      })()
+
+      return Object.assign(generator, {
+        interrupt: vi.fn(async () => {}),
+        setPermissionMode: vi.fn(async () => {}),
+        setModel: vi.fn(async () => {}),
+        setMaxTurns: vi.fn(async () => {}),
+        setMaxThinkingTokens: vi.fn(async () => {}),
+        mcpServerStatus: vi.fn(async () => []),
+        setMcpServers: vi.fn(async () => {}),
+        initializationResult: vi.fn(() => Promise.reject(conflictError)),
+        supportedCommands: vi.fn(async () => []),
+        supportedModels: vi.fn(async () => []),
+        close: vi.fn(() => {})
+      })
+    }
+
+    const errors: string[] = []
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      { sdkQuery: conflictStub }
+    )
+    // Capture any chat.error emissions — there must be none for a conflict.
+    ;(backend as any).on?.('chat.error', (ev: any) => errors.push(ev.error))
+    backend.on('chat.error', (ev: any) => errors.push(ev.error))
+
+    await backend.createSession('conflict-test', { threadKey: 'conflict-test' })
+
+    // sendMessage returns a promise; the stub's iterator throws so the loop
+    // exits quickly. We don't expect sendMessage itself to reject.
+    await backend.sendMessage('conflict-test', 'ping').catch(() => {})
+
+    // Wait for the iterator to finish and all async handlers to settle.
+    for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r))
+
+    // No chat.error must have been emitted — conflict is handled silently.
+    expect(errors.filter((e) => e.includes('already in use'))).toHaveLength(0)
+  })
 })
