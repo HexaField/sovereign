@@ -199,3 +199,11 @@ curl -s -X POST http://localhost:4000/v1/messages \
 If a prior LiteLLM session failed with a 500 error (e.g. the `reasoning_effort: "high"` issue), the thread JSONL may contain messages in an unusual order (system messages after user/assistant pairs). llama-server's Jinja template enforces "system message must be at the beginning". Symptom: `POST /v1/messages?beta=true` → 500 "System message must be at the beginning."
 
 Fix: delete the JSONL file for the affected thread (`~/.claude/projects/.../<backendSessionId>.jsonl`). The fresh-session fix in Sovereign's claude-code backend (`resumeExisting = !useLiteLlm && ...`) prevents new LiteLLM sessions from accumulating corrupted history.
+
+## Post-rebuild session-conflict recovery
+
+After a Sovereign rebuild, old Claude CLI subprocesses survive as orphans (reparented to init) and continue holding their session IDs. When the new Sovereign tries to resume the same session, the CLI reports "Session ID already in use" on stderr and exits with code 1. Before dfedbef this caused `initializationResult` to reject before `setMcpServers` ran, leaving MCP tools uninitialised for the session.
+
+**Fix (dfedbef):** The `stderr` callback now sets a `sessionConflict` flag on that message. `initializationResult.catch` scans `/proc` for a subprocess holding the session ID and sends SIGTERM. The `iteratorDone` catch suppresses the generic `chat.error` emission. The session resets to idle; the next `sendMessage` retries cleanly after the orphan exits.
+
+**Betas removed:** The `context-1m-2025-08-07` beta was previously passed for sessions with context windows > 200 k, but Sovereign uses Claude.ai OAuth exclusively, which does not support custom betas. The CLI ignored it and logged a warning on every session start. betas is now always empty.
