@@ -228,7 +228,15 @@ if len(system_msgs) > 1:
     new_messages = [{"role": "system", "content": merged_content}] + non_system_msgs
 ```
 
-**⚠️ Upgrade warning:** Running `uv tool upgrade litellm` will overwrite this patch. Re-apply the block above after every LiteLLM upgrade before restarting the service.
+**⚠️ Upgrade warning:** Running `uv tool upgrade litellm` overwrites the patch. Re-apply after every upgrade:
+
+```bash
+python3 services/litellm/patch-litellm.py          # apply (idempotent)
+python3 services/litellm/patch-litellm.py --check  # verify
+systemctl --user restart litellm
+```
+
+The fix lives on the fork at [HexaField/litellm — fix/consolidate-mid-turn-system-messages](https://github.com/HexaField/litellm/tree/fix/consolidate-mid-turn-system-messages). The patch script (`services/litellm/patch-litellm.py`) applies the same fix idempotently to the installed package regardless of version.
 
 ## Post-rebuild session-conflict recovery
 
