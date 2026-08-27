@@ -291,11 +291,19 @@ export function createThreadRoutes(
       presence: bodyPresence,
       subagentBackend: bodySubagentBackend,
       subagentModel: bodySubagentModel,
+      model: bodyModelRaw,
       cwd
     } = req.body ?? {}
     const workspaceIds = bodyWorkspaceIds ?? (legacyOrgId && legacyOrgId !== '_global' ? [legacyOrgId] : undefined)
     const contextWindow = typeof bodyContextWindow === 'number' && bodyContextWindow > 0 ? bodyContextWindow : undefined
     const presenceRole = bodyPresence === 'internal' || bodyPresence === 'gateway' ? bodyPresence : undefined
+    // Normalise model: strip a provider prefix if the caller sent "provider/model".
+    const bodyModelSlash =
+      typeof bodyModelRaw === 'string' && bodyModelRaw.includes('/')
+        ? bodyModelRaw.slice(bodyModelRaw.indexOf('/') + 1)
+        : typeof bodyModelRaw === 'string' && bodyModelRaw
+          ? bodyModelRaw
+          : undefined
     let thread
     try {
       thread = threadManager.create({
@@ -306,7 +314,8 @@ export function createThreadRoutes(
         contextWindow,
         ...(presenceRole ? { presence: presenceRole } : {}),
         ...(typeof bodySubagentBackend === 'string' ? { subagentBackend: bodySubagentBackend } : {}),
-        ...(typeof bodySubagentModel === 'string' ? { subagentModel: bodySubagentModel } : {})
+        ...(typeof bodySubagentModel === 'string' ? { subagentModel: bodySubagentModel } : {}),
+        ...(bodyModelSlash ? { model: bodyModelSlash } : {})
       })
     } catch (err) {
       return res.status(400).json({ error: (err as Error).message })
@@ -328,7 +337,8 @@ export function createThreadRoutes(
             kind: 'thread',
             ...(typeof cwd === 'string' && cwd ? { cwd } : {}),
             ...(sessionOrgId ? { orgId: sessionOrgId } : {}),
-            ...(contextWindow ? { contextWindow } : {})
+            ...(contextWindow ? { contextWindow } : {}),
+            ...(bodyModelSlash ? { model: { provider: 'anthropic', model: bodyModelSlash } } : {})
           })
         } catch (err: any) {
           console.error(`[threads] failed to bind thread "${thread.id}" to backend "${backendKind}":`, err.message)
