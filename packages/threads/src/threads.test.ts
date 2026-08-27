@@ -813,4 +813,40 @@ describe('ThreadManager', () => {
       expect(t?.subagentModel).toBe('qwen3.6-35b-a3b')
     })
   })
+
+  describe('thread-level model override', () => {
+    it('create() stores a bare model id', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'model-thread', model: 'qwen3.8-27b' })
+      expect(t.model).toBe('qwen3.8-27b')
+    })
+
+    it('create() without model leaves model undefined', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'no-model-thread' })
+      expect(t.model).toBeUndefined()
+    })
+
+    it('update() sets model', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'updatable-model' })
+      const updated = tm.update(t.id, { model: 'claude-opus-5' })
+      expect(updated?.model).toBe('claude-opus-5')
+    })
+
+    it('update() with null clears model', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const t = tm.create({ label: 'clearable-model', model: 'qwen3.8-27b' })
+      const cleared = tm.update(t.id, { model: null })
+      expect(cleared?.model).toBeUndefined()
+    })
+
+    it('persists model across instances', () => {
+      const tm1 = createThreadManager(bus, dataDir)
+      const t = tm1.create({ label: 'persisted-model', model: 'qwen3.8-27b' })
+      const tm2 = createThreadManager(bus, dataDir)
+      const reloaded = tm2.get(t.id)
+      expect(reloaded?.model).toBe('qwen3.8-27b')
+    })
+  })
 })

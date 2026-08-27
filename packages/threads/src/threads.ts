@@ -86,6 +86,7 @@ function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
     contextWindow: typeof raw.contextWindow === 'number' && raw.contextWindow > 0 ? raw.contextWindow : undefined,
     subagentBackend: typeof raw.subagentBackend === 'string' ? raw.subagentBackend : undefined,
     subagentModel: typeof raw.subagentModel === 'string' ? raw.subagentModel : undefined,
+    model: typeof raw.model === 'string' ? raw.model : undefined,
     // Migrate legacy `presence: true` (boolean) → `presence: 'internal'`.
     // String roles pass through untouched; anything else is dropped.
     presence:
@@ -200,6 +201,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     presence?: 'internal' | 'gateway'
     subagentBackend?: string
     subagentModel?: string
+    model?: string
   }): ThreadInfo {
     if (!opts.label?.trim()) {
       throw new Error('ThreadManager.create: label is required (UUID model — labels carry the display name)')
@@ -227,6 +229,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       presence: opts.presence,
       subagentBackend: opts.subagentBackend,
       subagentModel: opts.subagentModel,
+      ...(opts.model ? { model: opts.model } : {}),
       lastActivity: now,
       unreadCount: 0,
       agentStatus: 'idle',
