@@ -115,6 +115,15 @@ const AgentsTab: Component = () => {
     }
   }
 
+  const archiveThread = async (id: string) => {
+    try {
+      const res = await fetch(`/api/threads/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      if (res.ok) loadThreadsAndSessions()
+    } catch {
+      /* best-effort */
+    }
+  }
+
   const loadThreadsAndSessions = async () => {
     try {
       const [thrRes, activeRes] = await Promise.all([
@@ -249,7 +258,7 @@ const AgentsTab: Component = () => {
 
             return (
               <div
-                class="rounded-lg border p-3 transition-colors"
+                class="group rounded-lg border p-3 transition-colors"
                 style={{
                   background: isActive ? 'var(--c-bg-raised)' : 'var(--c-surface, var(--c-bg))',
                   'border-color': isActive
@@ -403,12 +412,33 @@ const AgentsTab: Component = () => {
                       <Show when={isActive && meta?.reasoningEffort}>
                         <span class="opacity-60">effort: {meta!.reasoningEffort}</span>
                       </Show>
-                      <Show when={t.lastActivity}>
-                        <span class="ml-auto flex items-center gap-1 opacity-60">
-                          <ClockIcon class="h-3 w-3" />
-                          {formatRelativeTime(t.lastActivity!)}
-                        </span>
-                      </Show>
+                      <div class="ml-auto flex items-center gap-2">
+                        <Show when={t.lastActivity}>
+                          <span class="flex items-center gap-1 opacity-60">
+                            <ClockIcon class="h-3 w-3" />
+                            {formatRelativeTime(t.lastActivity!)}
+                          </span>
+                        </Show>
+                        <button
+                          class="opacity-0 transition-opacity group-hover:opacity-50 hover:!opacity-100"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'var(--c-text-muted)',
+                            'font-size': '11px',
+                            padding: '0 2px',
+                            'line-height': '1'
+                          }}
+                          title="Archive thread"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            archiveThread(t.id)
+                          }}
+                        >
+                          🗃
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
