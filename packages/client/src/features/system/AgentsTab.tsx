@@ -127,7 +127,7 @@ const AgentsTab: Component = () => {
   const loadThreadsAndSessions = async () => {
     try {
       const [thrRes, activeRes] = await Promise.all([
-        fetch('/api/threads?active=true').then((r) => (r.ok ? r.json() : { threads: [] })),
+        fetch('/api/threads').then((r) => (r.ok ? r.json() : { threads: [] })),
         fetch('/api/system/agents/active').then((r) => (r.ok ? r.json() : { sessions: [] }))
       ])
       const thr: Thread[] = thrRes.threads ?? thrRes ?? []

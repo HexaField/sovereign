@@ -120,8 +120,9 @@ export function createThreadRoutes(
     else if (req.query.orgId) filter.workspaceId = req.query.orgId
     if (req.query.membraneId) filter.membraneId = req.query.membraneId
     if (req.query.projectId) filter.projectId = req.query.projectId
-    if (req.query.active) filter.active = req.query.active === 'true'
-    const threads = threadManager.list(Object.keys(filter).length > 0 ? (filter as never) : undefined)
+    // Exclude archived threads by default; caller opts in with ?active=false.
+    filter.active = req.query.active !== 'false'
+    const threads = threadManager.list(filter as never)
 
     // Overlay lastActivity from each backend's `getActivityMap()` so the
     // sort reflects on-disk freshness even when the thread registry hasn't
