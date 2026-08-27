@@ -194,11 +194,41 @@ curl -s -X POST http://localhost:4000/v1/messages \
   -d '{"model":"qwen3.8-27b","max_tokens":50,"messages":[{"role":"user","content":"Say: LITELLM_WORKS"}]}'
 ```
 
-### Known gotcha — corrupted JSONL history
+### Known gotcha — mid-turn system message injection (patched in LiteLLM)
 
-If a prior LiteLLM session failed with a 500 error (e.g. the `reasoning_effort: "high"` issue), the thread JSONL may contain messages in an unusual order (system messages after user/assistant pairs). llama-server's Jinja template enforces "system message must be at the beginning". Symptom: `POST /v1/messages?beta=true` → 500 "System message must be at the beginning."
+**Symptom:** `POST /v1/messages?beta=true` → 500 "Jinja Exception: System message must be at the beginning." on every request from a qwen/LiteLLM session.
 
-Fix: delete the JSONL file for the affected thread (`~/.claude/projects/.../<backendSessionId>.jsonl`). The fresh-session fix in Sovereign's claude-code backend (`resumeExisting = !useLiteLlm && ...`) prevents new LiteLLM sessions from accumulating corrupted history.
+**Root cause:** Claude Code CLI injects MCP Server Instructions as a `{"role": "system"}` entry within the Anthropic `messages` array on every API call (not just the first). LiteLLM's `translate_anthropic_messages_to_openai` appended this at its original position via `_translate_midturn_system_message_to_openai`. After `_add_system_message_to_messages` placed the main system prompt at position 0, the resulting OpenAI-format message array had structure `[system, user, system]`. llama-server's Jinja template rejects any system message after position 0.
+
+**Fix — LiteLLM patch (applied to installed package):**
+
+File: `$UV_TOOLS_DIR/litellm/lib/python3.12/site-packages/litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py`
+
+In `translate_anthropic_to_openai`, after the call to `_add_system_message_to_messages` (around line 1090), insert:
+
+```python
+## CONSOLIDATE SYSTEM MESSAGES
+# Some SDK clients (e.g. Claude Code CLI) inject mid-turn system messages
+# within the messages array (e.g. MCP server instructions, system-reminders).
+# OpenAI-compat backends that use Jinja chat templates (llama-server) require
+# ALL system content to appear in a single message at position 0 — a system
+# message at any later index raises "System message must be at the beginning."
+# Fix: collect all system messages, merge their content into the leading system
+# entry, and remove the duplicates from the sequence.
+system_msgs = [m for m in new_messages if isinstance(m, dict) and m.get("role") == "system"]
+if len(system_msgs) > 1:
+    non_system_msgs = [m for m in new_messages if not (isinstance(m, dict) and m.get("role") == "system")]
+    merged_content: list = []
+    for sm in system_msgs:
+        content = sm.get("content", "")
+        if isinstance(content, str):
+            merged_content.append({"type": "text", "text": content})
+        elif isinstance(content, list):
+            merged_content.extend(content)
+    new_messages = [{"role": "system", "content": merged_content}] + non_system_msgs
+```
+
+**⚠️ Upgrade warning:** Running `uv tool upgrade litellm` will overwrite this patch. Re-apply the block above after every LiteLLM upgrade before restarting the service.
 
 ## Post-rebuild session-conflict recovery
 
