@@ -75,6 +75,13 @@ interface ThreadStatusItem {
 
 const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
 
+// ── Archive thread (server-side soft delete) ──────────────────────────
+
+export async function archiveThread(key: string): Promise<boolean> {
+  const res = await fetch(`${BASE}api/threads/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  return res.ok
+}
+
 async function fetchSessionTree(): Promise<SessionNode[]> {
   try {
     const res = await fetch(`${BASE}api/sessions/tree`)
@@ -174,6 +181,7 @@ function SessionRow(props: {
   hidden?: boolean
   onHide?: (key: string) => void
   onUnhide?: (key: string) => void
+  onArchive?: (key: string) => void
 }) {
   const [expanded, setExpanded] = createSignal(props.node.kind === 'main' || props.node.kind === 'thread')
   const [errorsExpanded, setErrorsExpanded] = createSignal(false)
@@ -360,6 +368,25 @@ function SessionRow(props: {
               ✕
             </button>
           </Show>
+          <Show when={props.onArchive}>
+            <button
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 transition-colors group-hover:opacity-100"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--c-text-muted)',
+                cursor: 'pointer',
+                'font-size': '11px'
+              }}
+              title="Archive thread"
+              onClick={(e) => {
+                e.stopPropagation()
+                props.onArchive!(props.node.key)
+              }}
+            >
+              🗃
+            </button>
+          </Show>
         </Show>
       </div>
 
@@ -522,6 +549,18 @@ export function ThreadDrawer(props: ThreadDrawerProps) {
     refetch()
   }
 
+  const handleArchive = async (key: string) => {
+    const ok = await archiveThread(key)
+    if (!ok) return
+    // Navigate away from the archived thread
+    if ((props.activeKey() || threadKey()) === key) {
+      const url = new URL(globalThis.location.href)
+      url.searchParams.delete('thread')
+      globalThis.history.pushState({}, '', url)
+    }
+    refetch()
+  }
+
   // Extract main's children into proper sections (from session tree)
   const sections = () => {
     const roots = tree() || []
@@ -630,6 +669,7 @@ export function ThreadDrawer(props: ThreadDrawerProps) {
                 now={now()}
                 threadStatus={threadStatusMap()}
                 onHide={hideThread}
+                onArchive={handleArchive}
               />
             )}
           </For>
@@ -759,6 +799,7 @@ export function ThreadDrawer(props: ThreadDrawerProps) {
                     threadStatus={threadStatusMap()}
                     hidden={true}
                     onUnhide={unhideThread}
+                    onArchive={handleArchive}
                   />
                 )}
               </For>
