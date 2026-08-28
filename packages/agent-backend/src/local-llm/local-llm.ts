@@ -939,16 +939,22 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     // path that checks signal.aborted picks it up. The isTurnTimeout flag on
     // the reason lets the catch block distinguish timeout (→ visible error) from
     // an explicit user abort (→ silent '(stopped)' turn).
+    //
+    // Subagent sessions have NO turn timeout — local inference is slow and the
+    // task duration is unbounded. Failures still propagate to the parent via the
+    // subagent.failed event in the catch block below.
     const turnTimeoutMs = getConfig().timeoutMs
-    const turnTimeoutHandle = setTimeout(() => {
-      if (!controller.signal.aborted) {
-        console.warn(`[local-llm] turn timed out after ${turnTimeoutMs / 1000}s for ${state.sessionKey} — aborting`)
-        const reason = Object.assign(new Error(`Turn timed out after ${turnTimeoutMs / 1000}s`), {
-          isTurnTimeout: true
-        })
-        controller.abort(reason)
-      }
-    }, turnTimeoutMs)
+    const turnTimeoutHandle = state.parentSessionKey
+      ? undefined
+      : setTimeout(() => {
+          if (!controller.signal.aborted) {
+            console.warn(`[local-llm] turn timed out after ${turnTimeoutMs / 1000}s for ${state.sessionKey} — aborting`)
+            const reason = Object.assign(new Error(`Turn timed out after ${turnTimeoutMs / 1000}s`), {
+              isTurnTimeout: true
+            })
+            controller.abort(reason)
+          }
+        }, turnTimeoutMs)
 
     // Refresh the system prompt each turn — reads live files (personality,
     // membrane CONTEXT.md, repo AGENTS.md/CLAUDE.md) that change between turns.
