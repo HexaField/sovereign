@@ -2286,6 +2286,20 @@ export function createClaudeCodeBackend(
     // Skip subagent sessions — recycling them mid-flight strands the parent.
     if (state.parentSessionKey) return
 
+    // Cooldown guard — hoisted here (before logging) so rapid re-triggers are
+    // silently skipped rather than appearing as misleading "auto-trigger" log
+    // entries. This is the primary defence against the tight loop where
+    // mcp-rehydrate injects MCP server instructions immediately after a recycle,
+    // pushing context back above threshold and firing another recycle before the
+    // session has accumulated any real new content.
+    //
+    // The inner check inside recycleSession acts as a secondary guard, but it
+    // only fires if lastRecycleAt survives state transitions (not guaranteed when
+    // the subprocess restarts). This guard fires on the same in-memory state
+    // object that the recycle itself modified.
+    const minInterval = recycleCfg?.minIntervalMs ?? 300_000
+    if (state.lastRecycleAt && Date.now() - state.lastRecycleAt < minInterval) return
+
     // Use the session's actual context window (set per-thread), falling back
     // to the model's default. Most Claude sessions use 200K, not 1M — using
     // the real value makes the threshold meaningful.
