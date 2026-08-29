@@ -22,6 +22,11 @@ export interface DeviceMetrics {
   tailscaleIP: string | null
   local: boolean
 
+  diskTree?: Array<{
+    path: string
+    sizeBytes: number
+  }>
+
   cpu?: {
     cores: number
     usagePercent: number
@@ -155,6 +160,26 @@ echo "@@TEMP@@"
 echo "none"
 echo "@@SERVICES@@"
 `.trim()
+
+// Disk tree scripts — run separately in the background, not in the main round-trip.
+// Using bash -s (stdin) for the same reason as LINUX_COLLECT_SCRIPT.
+const LINUX_DISKTREE_SCRIPT = 'timeout 10 du -x --max-depth=1 / 2>/dev/null | sort -rn | head -20; true'
+const MACOS_DISKTREE_SCRIPT = 'timeout 10 du -xd 1 / 2>/dev/null | sort -rn | head -20; true'
+
+function parseDiskTree(raw: string, blockSize: number): Array<{ path: string; sizeBytes: number }> {
+  return raw
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const tab = line.indexOf('\t')
+      if (tab < 0) return null
+      const units = parseInt(line.slice(0, tab).trim())
+      const path = line.slice(tab + 1).trim()
+      return { path, sizeBytes: (units || 0) * blockSize }
+    })
+    .filter((e): e is { path: string; sizeBytes: number } => e !== null && e.path !== '/')
+    .sort((a, b) => b.sizeBytes - a.sizeBytes)
+}
 
 // ── Parsers ────────────────────────────────────────────────────────────
 
@@ -622,6 +647,11 @@ function collectRemote(device: DiscoveredDevice, timeoutMs: number): Promise<Dev
       fullScript += '\n' + svcChecks
     }
 
+    // Use `bash -s` (reads from stdin) rather than `bash -c <script>`.
+    // SSH joins all post-hostname arguments with spaces before sending them to
+    // the remote shell — so a multi-line script passed as a single -c argument
+    // gets split at the first newline and only the first line runs under bash.
+    // Piping via stdin avoids the remote-shell parsing entirely.
     const sshArgs = [
       device.sshHost,
       '-o',
@@ -631,8 +661,7 @@ function collectRemote(device: DiscoveredDevice, timeoutMs: number): Promise<Dev
       '-o',
       'BatchMode=yes',
       'bash',
-      '-c',
-      JSON.stringify(fullScript)
+      '-s'
     ]
 
     const proc = execFile('ssh', sshArgs, { timeout: timeoutMs }, (err, stdout) => {
@@ -662,6 +691,8 @@ function collectRemote(device: DiscoveredDevice, timeoutMs: number): Promise<Dev
           : parseLinuxMetrics(stdout, device.watchServices)
       resolve({ ...base, ...parsed })
     })
+    // Write the script to stdin and close it — bash -s reads from there.
+    proc.stdin?.write(fullScript)
     proc.stdin?.end()
   })
 }
@@ -670,6 +701,7 @@ function collectRemote(device: DiscoveredDevice, timeoutMs: number): Promise<Dev
 
 interface TailscaleNode {
   HostName: string
+  DNSName?: string
   OS: string
   TailscaleIPs?: string[]
   Online?: boolean
@@ -712,6 +744,11 @@ async function discoverFromTailscale(overrides: Record<string, DeviceOverride>):
     const isLocal = hostLower === localHostname
     const ip = node.TailscaleIPs?.[0] ?? null
 
+    // Use DNS name (without trailing dot) as the default SSH target — it resolves
+    // reliably via MagicDNS and avoids hostnames that contain spaces or apostrophes.
+    const dnsName = node.DNSName?.replace(/\.$/, '') ?? null
+    const defaultSshHost = dnsName ?? hostname
+
     devices.push({
       hostname,
       label: override?.label ?? hostname,
@@ -720,7 +757,7 @@ async function discoverFromTailscale(overrides: Record<string, DeviceOverride>):
       online,
       tailscaleIP: ip,
       local: isLocal,
-      sshHost: override?.sshHost ?? hostname,
+      sshHost: override?.sshHost ?? defaultSshHost,
       watchServices: override?.watchServices ?? []
     })
   }
@@ -737,6 +774,59 @@ async function discoverFromTailscale(overrides: Record<string, DeviceOverride>):
   return devices
 }
 
+// ── Disk tree background collection ────────────────────────────────────
+
+/** Collect disk tree asynchronously for one device. Never rejects. */
+function collectDiskTreeBg(
+  device: DiscoveredDevice,
+  sshTimeout: number
+): Promise<Array<{ path: string; sizeBytes: number }>> {
+  return new Promise((resolve) => {
+    if (device.local) {
+      // Local: run du async without blocking the main collection cycle
+      const script = LINUX_DISKTREE_SCRIPT
+      const proc = execFile('bash', ['-c', script], { timeout: 12_000 }, (err, stdout) => {
+        if (err) {
+          resolve([])
+          return
+        }
+        resolve(parseDiskTree(stdout, 1024)) // du on Linux outputs KB
+      })
+      proc.stdin?.end()
+    } else if (device.online) {
+      // Remote: separate SSH call with just the du script
+      const script = device.osHint === 'macos' ? MACOS_DISKTREE_SCRIPT : LINUX_DISKTREE_SCRIPT
+      const blockSize = device.osHint === 'macos' ? 512 : 1024
+      const proc = execFile(
+        'ssh',
+        [
+          device.sshHost,
+          '-o',
+          'ConnectTimeout=5',
+          '-o',
+          'StrictHostKeyChecking=no',
+          '-o',
+          'BatchMode=yes',
+          'bash',
+          '-s'
+        ],
+        { timeout: sshTimeout + 6_000 }, // allow extra time for du on remote
+        (err, stdout) => {
+          if (err) {
+            resolve([])
+            return
+          }
+          resolve(parseDiskTree(stdout, blockSize))
+        }
+      )
+      proc.stdin?.write(script)
+      proc.stdin?.end()
+    } else {
+      resolve([])
+    }
+  })
+}
+
 // ── Monitor ────────────────────────────────────────────────────────────
 
 export function createDeviceMonitor(config?: DeviceMonitorConfig) {
@@ -746,18 +836,32 @@ export function createDeviceMonitor(config?: DeviceMonitorConfig) {
   let cache: { devices: DeviceMetrics[]; collectedAt: number } | null = null
   let inflight: Promise<DeviceMetrics[]> | null = null
 
-  async function collect(): Promise<DeviceMetrics[]> {
-    let discovered: DiscoveredDevice[]
-    try {
-      discovered = await discoverFromTailscale(overrides)
-    } catch {
-      // Tailscale unavailable — fall back to local-only
-      console.warn('[device-monitor] tailscale unavailable — collecting local metrics only')
-      const hostname = os.hostname()
-      const override = overrides[hostname] ?? overrides[hostname.toLowerCase()]
-      return [collectLocal(override?.label ?? hostname, override?.watchServices ?? ['sovereign'])]
-    }
+  // Disk tree cache — updated in the background every 5 minutes, not every 30s.
+  // Keyed by device label. diskTreeInFlight prevents duplicate concurrent jobs.
+  const diskTreeCache = new Map<string, Array<{ path: string; sizeBytes: number }>>()
+  const diskTreeInFlight = new Set<string>()
 
+  function scheduleDiskTree(discovered: DiscoveredDevice[]): void {
+    const ttl = 5 * 60_000
+    for (const d of discovered) {
+      const key = d.label
+      if (diskTreeInFlight.has(key)) continue
+      if (diskTreeCache.has(key)) continue // use TTL refresh only — revisit when cache is invalidated
+      diskTreeInFlight.add(key)
+      collectDiskTreeBg(d, sshTimeout)
+        .then((entries) => {
+          diskTreeCache.set(key, entries)
+          // Schedule a refresh after TTL so results don't grow stale
+          setTimeout(() => diskTreeCache.delete(key), ttl).unref()
+        })
+        .catch(() => {
+          /* swallow */
+        })
+        .finally(() => diskTreeInFlight.delete(key))
+    }
+  }
+
+  async function collect(discovered: DiscoveredDevice[]): Promise<DeviceMetrics[]> {
     // Collect local devices directly, remote devices via SSH (in parallel)
     const results = await Promise.all(
       discovered.map((d) => {
@@ -781,7 +885,30 @@ export function createDeviceMonitor(config?: DeviceMonitorConfig) {
       })
     )
 
+    // Merge any cached disk tree results into the fresh metrics
+    for (const m of results) {
+      const tree = diskTreeCache.get(m.hostname)
+      if (tree) m.diskTree = tree
+    }
+
+    // Fire background disk tree jobs for devices that don't have results yet
+    scheduleDiskTree(discovered)
+
     return results
+  }
+
+  async function runCollect(): Promise<DeviceMetrics[]> {
+    let discovered: DiscoveredDevice[]
+    try {
+      discovered = await discoverFromTailscale(overrides)
+    } catch {
+      // Tailscale unavailable — fall back to local-only
+      console.warn('[device-monitor] tailscale unavailable — collecting local metrics only')
+      const hostname = os.hostname()
+      const override = overrides[hostname] ?? overrides[hostname.toLowerCase()]
+      return [collectLocal(override?.label ?? hostname, override?.watchServices ?? ['sovereign'])]
+    }
+    return collect(discovered)
   }
 
   /** Get cached or fresh device metrics. Deduplicates concurrent requests. */
@@ -793,7 +920,7 @@ export function createDeviceMonitor(config?: DeviceMonitorConfig) {
     // Deduplicate concurrent collections
     if (inflight) return inflight
 
-    inflight = collect()
+    inflight = runCollect()
       .then((devices) => {
         cache = { devices, collectedAt: Date.now() }
         inflight = null
