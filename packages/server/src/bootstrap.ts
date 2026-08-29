@@ -595,6 +595,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     sessionsRegistry,
     activeSessions,
     createSovereignMcpInstance,
+    createSubagentMcpInstance,
     askUserQuestionStore,
     metrics
   } = wireAgentBackend({
@@ -677,6 +678,63 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       res.status(200).end()
     })
     console.log('[sovereign] MCP HTTP endpoint ready at /api/mcp')
+  }
+
+  // Sovereign MCP — subagent-scoped endpoint. Exposes only the 5 tools
+  // subagents actually need (browser + embeddings). Keeps the schema payload
+  // small so local-LLM subagents spend less prefill time on irrelevant tools.
+  {
+    const sessions = new Map<string, StreamableHTTPServerTransport>()
+    const isInit = (body: any) => typeof body === 'object' && body !== null && body.method === 'initialize'
+
+    async function handleSubagentMcp(req: any, res: any) {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined
+      if (sessionId && sessions.has(sessionId)) {
+        return sessions.get(sessionId)!.handleRequest(req, res, req.body)
+      }
+      if (sessionId && !sessions.has(sessionId)) {
+        console.warn(`[mcp/subagent] Unknown session ${sessionId} — returning 404 so client reinitializes`)
+        return res.status(404).json({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Session not found — please reinitialize' },
+          id: null
+        })
+      }
+      if (!sessionId && isInit(req.body)) {
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() })
+        const server = createSubagentMcpInstance()
+        await server.connect(transport)
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            console.log(`[mcp/subagent] Session ${transport.sessionId} closed`)
+            sessions.delete(transport.sessionId)
+          }
+        }
+        await transport.handleRequest(req, res, req.body)
+        if (transport.sessionId) {
+          sessions.set(transport.sessionId, transport)
+          console.log(`[mcp/subagent] Session ${transport.sessionId} initialized (${sessions.size} active)`)
+        }
+        return
+      }
+      res.status(400).json({
+        jsonrpc: '2.0',
+        error: { code: -32600, message: 'Bad MCP request — missing session or not initialize' },
+        id: null
+      })
+    }
+
+    app.post('/api/mcp/subagent', handleSubagentMcp)
+    app.get('/api/mcp/subagent', handleSubagentMcp)
+    app.delete('/api/mcp/subagent', (req: any, res: any) => {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined
+      if (sessionId) {
+        sessions.get(sessionId)?.close()
+        sessions.delete(sessionId)
+      }
+      res.status(200).end()
+    })
+    console.log('[sovereign] MCP HTTP endpoint ready at /api/mcp/subagent (5 tools)')
   }
 
   // Chat + threads (after routing/cron exist)

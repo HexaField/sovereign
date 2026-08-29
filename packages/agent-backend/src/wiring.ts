@@ -13,6 +13,7 @@ import {
   createClaudeCodeBackend,
   claudeCodeConfigGetter,
   createSovereignMcpServer,
+  SUBAGENT_SOVEREIGN_TOOLS,
   createAskUserQuestionStore,
   type ClaudeCodeBackend,
   type AskUserQuestionStore
@@ -83,6 +84,8 @@ export interface AgentBackendWiringResult {
   sovereignMcpServer: import('@anthropic-ai/claude-agent-sdk').McpSdkServerConfigWithInstance
   /** Creates a fresh McpServer instance bound to the same live deps — use for per-session HTTP transport. */
   createSovereignMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
+  /** Creates a filtered McpServer instance exposing only the 5 subagent-safe tools (browser + embeddings). */
+  createSubagentMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
   /** Registry of pending Claude Code `AskUserQuestion` calls awaiting user submission. */
   askUserQuestionStore: AskUserQuestionStore
   /** Shared metrics accumulator — tool calls, compactions, context snapshots. */
@@ -523,6 +526,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     activeSessions,
     sovereignMcpServer,
     createSovereignMcpInstance: () => createSovereignMcpServer(sharedMcpDeps).instance,
+    createSubagentMcpInstance: () =>
+      createSovereignMcpServer(sharedMcpDeps, { include: SUBAGENT_SOVEREIGN_TOOLS }).instance,
     askUserQuestionStore
   }
 }
