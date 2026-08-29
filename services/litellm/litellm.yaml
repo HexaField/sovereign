@@ -50,17 +50,38 @@ model_list:
       supports_function_calling: true
       supports_extended_thinking: false
 
-  # Mac Studio M5 Ultra — add entries here when it arrives (1.2TB/s)
-  # - model_name: "qwen3.6-35b"
+  # ── Gemma 4 26B-A4B QAT — target subagent model ────────────────────────
+  # Strix Halo: ~110 t/s with matched QAT MTP head (SleepingRobots benchmark).
+  # GGUF: unsloth/gemma-4-26B-A4B-it-qat-GGUF (UD-Q4_K_XL) + separate Q4_0 MTP head.
+  # Enable once the model is loaded into llama-server (currently serving qwen3.8-27b).
+  # Update llama-server service file to point at Gemma 4 GGUF, then uncomment below.
+  # - model_name: "gemma4-26b"
   #   litellm_params:
-  #     model: "openai/Qwen3.6-35B-A3B-Q4_K_M"
-  #     api_base: "http://mac-studio:9090/v1"
+  #     model: "openai/gemma-4-26b-it-qat"
+  #     api_base: "http://localhost:9090/v1"
   #     api_key: "unused"
   #     use_responses_api: false
   #   model_info:
   #     mode: "chat"
   #     supports_function_calling: true
   #     supports_extended_thinking: false
+
+  # ── Qwen3.6-35B-A3B ROCmFP4 — fallback option ──────────────────────────
+  # Strix Halo: ~86-101 t/s with MTP (plunderstruck/Qwen3.6-35B-A3B-MTP-ROCmFP4-GGUF).
+  # Dropped previously for quality reasons (MoE 3B active too weak for subagents).
+  # Uncomment to test alongside Gemma 4 once either model is loaded.
+  # - model_name: "qwen3.6-35b"
+  #   litellm_params:
+  #     model: "openai/Qwen3.6-35B-A3B-Q4_K_M"
+  #     api_base: "http://localhost:9090/v1"
+  #     api_key: "unused"
+  #     use_responses_api: false
+  #   model_info:
+  #     mode: "chat"
+  #     supports_function_calling: true
+  #     supports_extended_thinking: false
+
+  # Mac Studio M5 Ultra — add entries here when it arrives (1.2TB/s)
 
 litellm_settings:
   # Drop unsupported params rather than erroring — needed when the SDK sends

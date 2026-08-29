@@ -1799,3 +1799,120 @@ describe('claude-code/session-conflict detection', () => {
     expect(errors.filter((e) => e.includes('already in use'))).toHaveLength(0)
   })
 })
+
+describe('claude-code/spawnSubagent — local model path', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-spawn-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-spawn-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('creates an independent session (not Task tool message) for a non-Claude model', async () => {
+    const stub = capturingSdkQuery()
+    const spawned: any[] = []
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), litellm: { url: 'http://localhost:4000' } },
+      { sdkQuery: stub }
+    )
+    backend.on('subagent.spawned', (ev) => spawned.push(ev))
+
+    // Create the parent session (Claude model)
+    await backend.createSession('parent', { threadKey: 'parent-thread' })
+    backend.sendMessage('parent-thread', 'start').catch(() => {})
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
+
+    // Spawn a subagent with a non-Claude (local) model
+    const childKey = await backend.spawnSubagent('parent-thread', {
+      task: 'implement a sorting function',
+      label: 'sort-task',
+      model: { provider: 'local-llm', model: 'qwen3.8-27b' }
+    })
+
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
+
+    // Must NOT be the placeholder key (Task tool path)
+    expect(childKey).not.toMatch(/pending/)
+    // Must use the subagent prefix
+    expect(childKey).toMatch(/^agent:main:subagent:/)
+
+    // A subagent.spawned event must have fired
+    expect(spawned).toHaveLength(1)
+    expect(spawned[0].childKey).toBe(childKey)
+    expect(spawned[0].parentKey).toBe('parent-thread')
+    expect(spawned[0].task).toBe('implement a sorting function')
+  })
+
+  it('returns the <pending> placeholder for a Claude model (native Task tool path)', async () => {
+    const stub = capturingSdkQuery()
+    const messages: string[] = []
+    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stub })
+
+    await backend.createSession('parent', { threadKey: 'parent-thread-cc' })
+    backend.sendMessage('parent-thread-cc', 'start').catch(() => {})
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
+
+    // Capture messages pushed to the parent
+    const parentState = (backend as any).internal?.sessions?.get('parent-thread-cc')
+
+    const childKey = await backend.spawnSubagent('parent-thread-cc', {
+      task: 'do something',
+      model: { provider: 'claude-code', model: 'claude-haiku-4-5-20251001' }
+    })
+
+    // Claude model → pending placeholder
+    expect(childKey).toMatch(/agent:main:subagent:<pending>/)
+  })
+
+  it('slim personality log fires for local-model subagent session start', async () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'sov-cc-cfg-'))
+    const stub = capturingSdkQuery()
+    // Write a SUBAGENT.md so readSubagentPersonality has something to read
+    writeFileSync(join(configDir, 'SUBAGENT.md'), '# Subagent guardrails\n\nDo not rm -rf.')
+    const logLines: string[] = []
+    const origLog = console.log
+    console.log = (...args: any[]) => {
+      const line = args.join(' ')
+      if (line.includes('[claude-code] subagent')) logLines.push(line)
+      origLog(...args)
+    }
+
+    try {
+      const backend = createClaudeCodeBackend(
+        {
+          dataDir,
+          cwd,
+          agentDir: join(dataDir, 'agent'),
+          configDir,
+          litellm: { url: 'http://localhost:4000' }
+        },
+        { sdkQuery: stub }
+      )
+
+      // Create parent session
+      await backend.createSession('parent', { threadKey: 'parent-log' })
+      backend.sendMessage('parent-log', 'start').catch(() => {})
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
+
+      // Spawn local-model subagent
+      await backend.spawnSubagent('parent-log', {
+        task: 'check types',
+        model: { provider: 'local-llm', model: 'qwen3.8-27b' }
+      })
+      // Trigger the child session loop
+      for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r))
+
+      // A log line mentioning slim personality must appear
+      const slimLog = logLines.find((l) => l.includes('slim(SUBAGENT.md'))
+      expect(slimLog).toBeDefined()
+    } finally {
+      console.log = origLog
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+})

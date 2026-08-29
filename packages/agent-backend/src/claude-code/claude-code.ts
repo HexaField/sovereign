@@ -218,6 +218,21 @@ function readGlobalPersonality(agentDir: string): string {
   }
 }
 
+/**
+ * Read the compact subagent guardrails file (`${configDir}/SUBAGENT.md`).
+ * Used instead of the full CLAUDE.md (27K chars) for local-model subagents —
+ * those sessions run on small/fast models where large system prompts hurt TTFT.
+ * Returns empty string when the file is missing or configDir is not set.
+ */
+function readSubagentPersonality(configDir: string | undefined): string {
+  if (!configDir) return ''
+  try {
+    return fs.readFileSync(path.join(configDir, 'SUBAGENT.md'), 'utf8').trim()
+  } catch {
+    return ''
+  }
+}
+
 const SUBAGENT_SESSION_PREFIX = 'agent:main:subagent:'
 const THREAD_SESSION_PREFIX = 'agent:main:thread:'
 
@@ -1292,11 +1307,28 @@ export function createClaudeCodeBackend(
     //   2. Membrane prelude — per-thread CONTEXT.md resolved by the membrane
     //      manager, scoped to the thread's membrane id.
     // Both are joined and appended onto the `claude_code` preset.
+    //
+    // Exception: local-model subagents (non-Claude model + parentSessionKey set)
+    // use the compact SUBAGENT.md guardrails instead of the full CLAUDE.md.
+    // At 15 t/s decode, a 27K-char system prompt is 7–30 seconds of wasted
+    // prefill. SUBAGENT.md covers the same operational rules in <2K chars.
     const cfgAtStart = getConfig()
     const cfgAgentDir = cfgAtStart.agentDir ?? defaultAgentDir(home)
-    const globalPersonality = readGlobalPersonality(cfgAgentDir)
-    const membraneAppend = deps?.resolveAppendSystemPrompt?.(state.sessionKey)
+    const isNonClaudeModel = state.model != null && familyForModel(state.model) === null
+    const isLocalSubagent = !!state.parentSessionKey && isNonClaudeModel
+    const globalPersonality = isLocalSubagent
+      ? readSubagentPersonality(cfgAtStart.configDir)
+      : readGlobalPersonality(cfgAgentDir)
+    // Membrane context is orchestrator-level — subagents don't need it.
+    const membraneAppend = isLocalSubagent ? undefined : deps?.resolveAppendSystemPrompt?.(state.sessionKey)
     const combinedAppend = [globalPersonality, membraneAppend].filter(Boolean).join('\n\n')
+    if (state.parentSessionKey) {
+      console.log(
+        `[claude-code] subagent ${state.sessionKey}: ` +
+          `personality=${isLocalSubagent ? `slim(SUBAGENT.md,${globalPersonality.length}chars)` : `full(CLAUDE.md,${globalPersonality.length}chars)`} ` +
+          `combinedAppend=${combinedAppend.length}chars`
+      )
+    }
     const effectiveContextWindow = state.contextWindow ?? contextWindowFor(state.model)
     // NOTE: The context-1m-2025-08-07 beta enables extended context windows but
     // requires API-key auth. Sovereign exclusively uses Claude.ai OAuth, so
@@ -1324,7 +1356,6 @@ export function createClaudeCodeBackend(
     // resuming an active subprocess — a new subprocess is required to pick up
     // the ANTHROPIC_BASE_URL change. Conversation history is preserved via the
     // shared history-log system independently of the Claude Code JSONL.
-    const isNonClaudeModel = state.model != null && familyForModel(state.model) === null
     const useLiteLlm = !!(cfgAtStart.litellm && isNonClaudeModel)
     // Mutable flag set by the stderr handler when the CLI reports a session-ID
     // conflict. Used by initializationResult.catch and iteratorDone.catch to
@@ -2630,17 +2661,56 @@ export function createClaudeCodeBackend(
   }
 
   async function spawnSubagent(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string> {
-    // The SDK's native Task tool is the canonical path. To synthesize a
-    // Sovereign-tracked spawn we send a user-message into the parent
-    // session asking for a Task; the SubagentStart hook will register the
-    // child and emit `subagent.spawned`. Returns a placeholder child key
-    // that the caller can match against the emitted event.
-    const state = internal.sessions.get(parentSessionKey)
-    if (!state) throw new Error(`claude-code: parent session ${parentSessionKey} unknown`)
-    getOrStartSession(state)
+    const parentState = internal.sessions.get(parentSessionKey)
+    if (!parentState) throw new Error(`claude-code: parent session ${parentSessionKey} unknown`)
+
+    const subagentModel = opts.model?.model
+    const isLocalModel = subagentModel != null && familyForModel(subagentModel) === null
+
+    if (isLocalModel) {
+      // Non-Claude model → create an independent claude-code session that routes
+      // through LiteLLM. Task-spawned subagents inherit the parent subprocess
+      // environment, which only gets ANTHROPIC_BASE_URL when the parent itself
+      // is non-Claude — bypassing the Task tool sidesteps that constraint.
+      // The independent session runs startSessionLoop with its own model, which
+      // triggers LiteLLM routing and the slim SUBAGENT.md personality.
+      const childBackendId = randomUUID()
+      const childKey = `${SUBAGENT_SESSION_PREFIX}${childBackendId}`
+
+      const childState = ensureSessionState({
+        sessionKey: childKey,
+        backendSessionId: childBackendId,
+        cwd: parentState.cwd,
+        model: subagentModel,
+        label: opts.label,
+        parentSessionKey
+      })
+      persistRegistry(childState, childKey)
+      internal.subagentToParent.set(childBackendId, parentSessionKey)
+
+      emitter.emit('session.info', { sessionKey: childKey, label: opts.label, history: [] })
+
+      sendMessage(childKey, opts.task).catch((err) => {
+        emitter.emit('chat.error', { sessionKey: childKey, error: String(err) })
+        emitter.emit('subagent.failed', { parentKey: parentSessionKey, childKey, error: String(err) })
+        internal.subagentToParent.delete(childBackendId)
+      })
+
+      emitter.emit('subagent.spawned', {
+        parentKey: parentSessionKey,
+        childKey,
+        task: opts.task,
+        label: opts.label ?? opts.task
+      })
+      return childKey
+    }
+
+    // Claude model → delegate to the native Task tool. The parent subprocess
+    // handles the spawn; the SubagentStart hook registers the child session.
+    getOrStartSession(parentState)
     setActiveSessionKey(parentSessionKey)
     const text = `Use the Task tool to spawn a subagent.\n\nTask: ${opts.task}\n${opts.label ? `Label: ${opts.label}\n` : ''}`
-    state.pushUserMessage?.(text)
+    parentState.pushUserMessage?.(text)
     // We don't know the agent_id yet — the hook will register on SubagentStart.
     return `${SUBAGENT_SESSION_PREFIX}<pending>`
   }
