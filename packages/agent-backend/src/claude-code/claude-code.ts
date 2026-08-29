@@ -424,10 +424,17 @@ export function createClaudeCodeBackend(
   function resolveMcpServers(): Record<string, any> {
     const cfg = getConfig()
     const servers: Record<string, any> = { ...cfg.mcpServers }
-    // Always override — the in-process instance is the source of truth.
-    // A stale or misconfigured 'sovereign' key in cfg must never shadow it.
-    if (deps.sovereignMcpServer) {
-      servers.sovereign = deps.sovereignMcpServer
+    // Sovereign tools: connect via the HTTP MCP endpoint on the Sovereign server.
+    // The former approach (McpSdkServerConfigWithInstance) failed because the SDK
+    // runs as a subprocess — the in-process McpServer instance in the parent process
+    // is not accessible across the process boundary, so the SDK reported it as
+    // 'failed'. The /api/mcp StreamableHTTP endpoint on port 5801 is accessible
+    // from the subprocess over loopback and uses the same Sovereign modules.
+    // alwaysLoad: true keeps sovereign tools in context at turn 1 (no ToolSearch).
+    servers.sovereign = {
+      type: 'http' as const,
+      url: 'http://localhost:5801/api/mcp',
+      alwaysLoad: true
     }
     return servers
   }
