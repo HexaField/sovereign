@@ -1401,6 +1401,14 @@ export function createClaudeCodeBackend(
       effort: useLiteLlm ? undefined : state.effort,
       ...(betas.length > 0 ? { betas } : {}),
       allowedTools: cfgAtStart.defaultTools ?? DEFAULT_TOOLS,
+      // For local-model subagents: also filter at the schema-injection level.
+      // The SDK default injects ALL built-in schemas regardless of allowedTools —
+      // Workflow, Agent, WebFetch, Task*, Cron*, Monitor, etc. cost ~30k tokens
+      // that the local model processes but can never invoke. `tools` (schema-level)
+      // restricts which schemas get injected; `allowedTools` (permission-level)
+      // restricts which can execute. Apply both for local subagents so the model
+      // only sees schemas for the 7 tools it actually has access to.
+      ...(isLocalSubagent ? { tools: cfgAtStart.defaultTools ?? DEFAULT_TOOLS } : {}),
       ...(disallowedTools && disallowedTools.length > 0 ? { disallowedTools } : {}),
       mcpServers: sessionMcpServers,
       hooks: buildHooks(),
