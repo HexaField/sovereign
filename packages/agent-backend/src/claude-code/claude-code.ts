@@ -420,8 +420,10 @@ export function createClaudeCodeBackend(
   const dataDir = initConfig.dataDir
 
   /** Build the MCP server map from the latest config + deps.  Called per
-   *  session creation so a refreshed AD4M token takes effect immediately. */
-  function resolveMcpServers(): Record<string, any> {
+   *  session creation so a refreshed AD4M token takes effect immediately.
+   *  When `isSubagent` is true, AD4M is excluded — subagents are implementation
+   *  workers and have no need for the social/neighbourhood layer. */
+  function resolveMcpServers(isSubagent = false): Record<string, any> {
     const cfg = getConfig()
     const servers: Record<string, any> = { ...cfg.mcpServers }
     // Sovereign tools: connect via the HTTP MCP endpoint on the Sovereign server.
@@ -435,6 +437,11 @@ export function createClaudeCodeBackend(
       type: 'http' as const,
       url: 'http://localhost:5801/api/mcp',
       alwaysLoad: true
+    }
+    // Subagents don't need AD4M — removing it reduces context overhead and
+    // prevents unnecessary neighbourhood connections in implementation workers.
+    if (isSubagent) {
+      delete servers.ad4m
     }
     return servers
   }
@@ -1101,8 +1108,9 @@ export function createClaudeCodeBackend(
       // See plans/claude-code-mcp-rehydration-bug.md for the bug history.
       const sk = state.sessionKey
       const lq = state.liveQuery
+      const isSubagent = !!state.parentSessionKey
       try {
-        await lq?.setMcpServers?.(resolveMcpServers())
+        await lq?.setMcpServers?.(resolveMcpServers(isSubagent))
         console.log(`[mcp-rehydrate] PostCompact OK for ${sk} (compaction #${state.compactionCount})`)
       } catch (err) {
         // setMcpServers can clear the catalog before repopulating — a throw
@@ -1111,7 +1119,7 @@ export function createClaudeCodeBackend(
         try {
           await new Promise((r) => setTimeout(r, 2000))
           if (state.liveQuery === lq) {
-            await lq?.setMcpServers?.(resolveMcpServers())
+            await lq?.setMcpServers?.(resolveMcpServers(isSubagent))
             console.log(`[mcp-rehydrate] PostCompact retry OK for ${sk}`)
           }
         } catch (err2) {
@@ -1344,7 +1352,7 @@ export function createClaudeCodeBackend(
     // benefit. Leave betas empty for all sessions.
     const betas: SdkBeta[] = []
     void effectiveContextWindow // referenced above for future use when betas become available via OAuth
-    const sessionMcpServers = resolveMcpServers()
+    const sessionMcpServers = resolveMcpServers(!!state.parentSessionKey)
     const disallowedTools = deps?.resolveDisallowedTools?.(state.sessionKey)
     // LiteLLM proxy: inject ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY into the
     // subprocess environment so the Anthropic SDK inside the Claude Code CLI
@@ -1443,7 +1451,7 @@ export function createClaudeCodeBackend(
       .then(async () => {
         const sk = state.sessionKey
         try {
-          await q.setMcpServers?.(resolveMcpServers())
+          await q.setMcpServers?.(resolveMcpServers(!!state.parentSessionKey))
           console.log(`[mcp-rehydrate] post-start OK for ${sk}`)
         } catch (err) {
           // setMcpServers can clear the catalog before repopulating — a throw
@@ -1452,7 +1460,7 @@ export function createClaudeCodeBackend(
           console.warn(`[mcp-rehydrate] post-start attempt 1 failed for ${sk}:`, (err as Error)?.message ?? err)
           try {
             await new Promise((r) => setTimeout(r, 2000))
-            await q.setMcpServers?.(resolveMcpServers())
+            await q.setMcpServers?.(resolveMcpServers(!!state.parentSessionKey))
             console.log(`[mcp-rehydrate] post-start retry OK for ${sk}`)
           } catch (err2) {
             console.error(
