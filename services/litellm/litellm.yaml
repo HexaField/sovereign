@@ -27,16 +27,25 @@ model_list:
   # "high", which llama-server's Jinja template rejects (only xhigh/medium/low
   # are valid). Forcing chat/completions routes avoids this entirely.
 
+  # Currently serving: Qwen3.6-35B-A3B ROCmFP4-STRIX (llama-server-rocmfpx.service)
+  # ~53-65 t/s with MTP. Model name kept as qwen3.8-27b for routing continuity.
+  # chat_template_kwargs.enable_thinking=false: disables Qwen3 thinking blocks at
+  # the Jinja template level (correct method; --reasoning off breaks generation).
   - model_name: "qwen3.8-27b"
     litellm_params:
       model: "openai/qwen3.8-27b"
       api_base: "http://localhost:9090/v1"
       api_key: "unused"
       use_responses_api: false
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
     model_info:
       mode: "chat"
       supports_function_calling: true
       supports_extended_thinking: false
+      max_input_tokens: 200000
+      max_output_tokens: 8192
 
   # Bare alias — threads can set model: qwen for the current local default
   - model_name: "qwen"
@@ -45,10 +54,15 @@ model_list:
       api_base: "http://localhost:9090/v1"
       api_key: "unused"
       use_responses_api: false
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
     model_info:
       mode: "chat"
       supports_function_calling: true
       supports_extended_thinking: false
+      max_input_tokens: 200000
+      max_output_tokens: 8192
 
   # ── Gemma 4 26B-A4B QAT — target subagent model ────────────────────────
   # Strix Halo: ~110 t/s with matched QAT MTP head (SleepingRobots benchmark).
