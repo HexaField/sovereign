@@ -173,7 +173,22 @@ function resolveThreadKey(explicit: string | undefined, deps: SovereignToolDeps)
   )
 }
 
-export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerConfigWithInstance {
+/** Tools exposed to subagents (local-LLM workers). Deliberately narrow —
+ *  subagents do implementation work and only need browser automation and
+ *  local semantic search. Orchestration tools (cron, sessions, agents,
+ *  presence, planning, orgs) stay on the main thread. */
+export const SUBAGENT_SOVEREIGN_TOOLS = [
+  'browser_open',
+  'browser_act',
+  'browser_close',
+  'embeddings_search',
+  'embeddings_index'
+] as const
+
+export function createSovereignMcpServer(
+  deps: SovereignToolDeps,
+  opts?: { include?: readonly string[] }
+): McpSdkServerConfigWithInstance {
   const tools: any[] = [
     // ── cron ──────────────────────────────────────────────────────────────
     tool(
@@ -639,12 +654,14 @@ export function createSovereignMcpServer(deps: SovereignToolDeps): McpSdkServerC
     )
   }
 
+  const filteredTools = opts?.include ? tools.filter((t) => opts.include!.includes(t.name)) : tools
+
   return createSdkMcpServer({
     name: 'sovereign',
     version: '1.0.0',
     instructions:
       "Sovereign-native tools. Use these to interact with the user's threads, agents, cron jobs, notifications, planning, orgs, and meetings. The user expects you to reach for these instead of asking them to relay information by hand.",
-    tools,
+    tools: filteredTools,
     alwaysLoad: true
   })
 }

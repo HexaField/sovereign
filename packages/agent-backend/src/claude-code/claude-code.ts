@@ -433,9 +433,13 @@ export function createClaudeCodeBackend(
     // 'failed'. The /api/mcp StreamableHTTP endpoint on port 5801 is accessible
     // from the subprocess over loopback and uses the same Sovereign modules.
     // alwaysLoad: true keeps sovereign tools in context at turn 1 (no ToolSearch).
+    // Sovereign tools: connect via the HTTP MCP endpoint.
+    // Subagents get the filtered /api/mcp/subagent endpoint (5 tools only:
+    // browser + embeddings). Main sessions get the full /api/mcp endpoint (all tools).
+    // alwaysLoad: true keeps sovereign tools in context at turn 1 (no ToolSearch).
     servers.sovereign = {
       type: 'http' as const,
-      url: 'http://localhost:5801/api/mcp',
+      url: isSubagent ? 'http://localhost:5801/api/mcp/subagent' : 'http://localhost:5801/api/mcp',
       alwaysLoad: true
     }
     // Subagents don't need AD4M — removing it reduces context overhead and
