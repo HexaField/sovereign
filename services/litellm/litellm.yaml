@@ -40,6 +40,11 @@ model_list:
       extra_body:
         chat_template_kwargs:
           enable_thinking: false
+      # Cap output tokens so generation completes within the request_timeout.
+      # At ~47 t/s, 8192 tokens ≈ 174s — well under the 1800s timeout.
+      # Without this cap the SDK requests n_predict=32000 (~680s), which
+      # previously caused every request to time out.
+      max_tokens: 8192
     model_info:
       mode: "chat"
       supports_function_calling: true
@@ -57,6 +62,7 @@ model_list:
       extra_body:
         chat_template_kwargs:
           enable_thinking: false
+      max_tokens: 8192
     model_info:
       mode: "chat"
       supports_function_calling: true
@@ -101,6 +107,9 @@ litellm_settings:
   # Drop unsupported params rather than erroring — needed when the SDK sends
   # Anthropic-specific fields that the OpenAI-compat backends don't accept.
   drop_params: true
+  # Timeout for requests to llama-server. Default (~600s) fires before 32k-token
+  # responses finish at ~47 t/s (~680s). Set to 1800s (30min) to cover worst case.
+  request_timeout: 1800
   # Master key: Sovereign's SDK subprocess authenticates to this proxy using
   # ANTHROPIC_API_KEY=litellm. Since Claude sessions never reach this proxy
   # (Sovereign only injects env vars for non-Claude models), there is no need
