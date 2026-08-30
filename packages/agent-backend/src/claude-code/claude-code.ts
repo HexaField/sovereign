@@ -1392,7 +1392,13 @@ export function createClaudeCodeBackend(
       : {}
 
     const sdkOptions: SdkOptions = {
-      cwd: state.cwd,
+      // Local-model subagents: override cwd to ~/workspaces so the SDK project-
+      // hash lookup returns a path with no associated auto-memory. The default
+      // cwd (~/.sovereign) has ~5.4k tokens of project memory that gets injected
+      // into every subagent turn — irrelevant research notes, sovereign internals
+      // — none of which helps the subagent with its task. Subagents work in
+      // specific repos via absolute paths and can cd where they need.
+      cwd: isLocalSubagent ? path.join(home, 'workspaces') : state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
       abortController: abort,
       model: state.model ?? undefined,
@@ -1412,14 +1418,16 @@ export function createClaudeCodeBackend(
       ...(disallowedTools && disallowedTools.length > 0 ? { disallowedTools } : {}),
       mcpServers: sessionMcpServers,
       hooks: buildHooks(),
-      // User + local only. Project-level settings deliberately skipped —
-      // cozempic's installer mirrors user hooks into <cwd>/.claude/settings.json,
-      // and loading both causes every cozempic shell command to fire twice
-      // per event. With this list, the project file exists on disk (cozempic
-      // keeps recreating it) but the CLI never reads it. Global CLAUDE.md
-      // is loaded above via `globalPersonality` to compensate for the
-      // CLAUDE.md walk-up that the `'project'` source would have provided.
-      settingSources: ['user', 'local'],
+      // Settings sources:
+      //   - 'project' always excluded: cozempic mirrors user hooks into
+      //     <cwd>/.claude/settings.json, causing double-fires on every event.
+      //   - 'user' excluded for local-model subagents: the 'user' source causes
+      //     the SDK to read ~/.claude/CLAUDE.md (~7k tokens) AND project memory
+      //     (~5.4k tokens) and inject both as <system-reminder> blocks on every
+      //     user turn — 12k tokens the subagent has no use for. Local subagents
+      //     get SUBAGENT.md instead via systemPrompt.append (combinedAppend above).
+      //   - Top-level sessions keep 'user' so CLAUDE.md + memory load normally.
+      settingSources: isLocalSubagent ? ['local'] : ['user', 'local'],
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
