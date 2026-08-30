@@ -1431,7 +1431,19 @@ export function createClaudeCodeBackend(
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
-      ...(combinedAppend ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: combinedAppend } } : {}),
+      // Local-model subagents: bypass the claude_code preset entirely and use
+      // SUBAGENT.md as the raw system prompt. The preset injects ~5.5k chars of
+      // security policy, pronoun guidance, memory-system instructions, model
+      // catalogue, and context-management docs that subagents have no use for.
+      // SUBAGENT.md already covers the harness essentials (tool behaviour, code
+      // quality, constraints). Top-level sessions keep the full preset + append.
+      ...(isLocalSubagent
+        ? combinedAppend
+          ? { systemPrompt: combinedAppend }
+          : {}
+        : combinedAppend
+          ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: combinedAppend } }
+          : {}),
       ...litellmEnv,
       stderr: (line: string) => {
         console.error(`[claude-code cli] ${line}`)
