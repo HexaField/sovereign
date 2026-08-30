@@ -1828,7 +1828,7 @@ describe('claude-code/spawnSubagent — local model path', () => {
     for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
 
     // Spawn a subagent with a non-Claude (local) model
-    const childKey = await backend.spawnSubagent('parent-thread', {
+    const childKey = await backend.spawnSubagent!('parent-thread', {
       task: 'implement a sorting function',
       label: 'sort-task',
       model: { provider: 'local-llm', model: 'qwen3.8-27b' }
@@ -1850,17 +1850,13 @@ describe('claude-code/spawnSubagent — local model path', () => {
 
   it('returns the <pending> placeholder for a Claude model (native Task tool path)', async () => {
     const stub = capturingSdkQuery()
-    const messages: string[] = []
     const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stub })
 
     await backend.createSession('parent', { threadKey: 'parent-thread-cc' })
     backend.sendMessage('parent-thread-cc', 'start').catch(() => {})
     for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
 
-    // Capture messages pushed to the parent
-    const parentState = (backend as any).internal?.sessions?.get('parent-thread-cc')
-
-    const childKey = await backend.spawnSubagent('parent-thread-cc', {
+    const childKey = await backend.spawnSubagent!('parent-thread-cc', {
       task: 'do something',
       model: { provider: 'claude-code', model: 'claude-haiku-4-5-20251001' }
     })
@@ -1900,7 +1896,7 @@ describe('claude-code/spawnSubagent — local model path', () => {
       for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
 
       // Spawn local-model subagent
-      await backend.spawnSubagent('parent-log', {
+      await backend.spawnSubagent!('parent-log', {
         task: 'check types',
         model: { provider: 'local-llm', model: 'qwen3.8-27b' }
       })
