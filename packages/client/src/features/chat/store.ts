@@ -211,7 +211,13 @@ function startSlotsPolling(): void {
       .then((r) => (r.ok ? r.json() : null))
       .then((slots) => {
         const slot = Array.isArray(slots) ? slots[0] : null
-        if (!slot) {
+        // Only expose prefill data when the slot is actively processing.
+        // state===1 and is_processing===true both mean "llama-server is running
+        // inference right now". Without this guard the idle slot (is_processing:
+        // false) would show a stale progress fraction while a cloud LLM handles
+        // the request — data we do not have and must not display.
+        const slotActive: boolean = slot?.is_processing === true || slot?.state === 1
+        if (!slot || !slotActive) {
           setPrefillProgress(null)
           return
         }
