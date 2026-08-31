@@ -373,6 +373,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     enabled: enabledBackends,
     default: defaultKind,
     registry: sessionsRegistry,
+    enabledKinds: () =>
+      (configStore.get<AgentBackendKind[]>('agentBackend.enabled') as AgentBackendKind[]) ?? enabledBackends,
     factories: {
       'claude-code': () => {
         const cc = createClaudeCodeBackend(claudeCodeConfigGetter(configStore, dataDir, input.configDir), {
