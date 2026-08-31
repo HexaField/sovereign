@@ -138,4 +138,59 @@ describe('createBackend / RoutingBackend', () => {
     })
     expect(routing.forSession('agent:main:thread:legacy').kind).toBe('pi')
   })
+
+  describe('enabledKinds live filter', () => {
+    it('all() returns only backends matching the live enabled list', () => {
+      const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
+      let liveEnabled: AgentBackendKind[] = ['claude-code', 'pi']
+
+      const routing = createBackend({
+        enabled: ['claude-code', 'pi'],
+        default: 'claude-code',
+        registry,
+        factories: { 'claude-code': () => makeStub('claude-code'), pi: () => makeStub('pi') },
+        enabledKinds: () => liveEnabled
+      })
+
+      expect(routing.all().map((b) => b.kind)).toEqual(['claude-code', 'pi'])
+
+      // Simulate removing pi from config at runtime — no restart needed.
+      liveEnabled = ['claude-code']
+      expect(routing.all().map((b) => b.kind)).toEqual(['claude-code'])
+    })
+
+    it('all() returns all instantiated backends when enabledKinds is omitted', () => {
+      const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
+      const routing = createBackend({
+        enabled: ['claude-code', 'pi'],
+        default: 'claude-code',
+        registry,
+        factories: { 'claude-code': () => makeStub('claude-code'), pi: () => makeStub('pi') }
+      })
+
+      expect(routing.all().map((b) => b.kind)).toEqual(['claude-code', 'pi'])
+    })
+
+    it('forSession still routes correctly to a backend excluded from all()', () => {
+      // A session bound to a disabled backend must still be served — it was
+      // already running when the config changed. Removing from all() only
+      // hides it from listing (e.g. the UI dropdown); it does not destroy it.
+      const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
+      registry.upsert({ threadKey: 'pi-thread', sessionKey: 'agent:main:thread:pi-thread', backendKind: 'pi' })
+      let liveEnabled: AgentBackendKind[] = ['claude-code']
+
+      const routing = createBackend({
+        enabled: ['claude-code', 'pi'],
+        default: 'claude-code',
+        registry,
+        factories: { 'claude-code': () => makeStub('claude-code'), pi: () => makeStub('pi') },
+        enabledKinds: () => liveEnabled
+      })
+
+      // pi excluded from listing...
+      expect(routing.all().map((b) => b.kind)).toEqual(['claude-code'])
+      // ...but existing session still routes to it.
+      expect(routing.forSession('agent:main:thread:pi-thread').kind).toBe('pi')
+    })
+  })
 })

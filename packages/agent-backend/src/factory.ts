@@ -21,6 +21,11 @@ export interface MultiBackendConfig {
   factories: Partial<Record<AgentBackendKind, () => AgentBackend>>
   /** Sovereign-owned thread→backend registry. */
   registry: SessionsRegistry
+  /** Optional live getter for the enabled list. When provided, `all()` filters
+   *  instantiated backends by the current value so config changes (e.g. removing
+   *  a backend from `agentBackend.enabled`) take effect without a process restart.
+   *  Falls back to the static `enabled` list when not supplied. */
+  enabledKinds?: () => AgentBackendKind[]
 }
 
 export interface RoutingBackend {
@@ -123,7 +128,9 @@ export function createBackend(config: MultiBackendConfig): RoutingBackend {
   const routing: RoutingBackend = {
     registry: config.registry,
     all() {
-      return [...instances.values()]
+      const live = config.enabledKinds?.()
+      if (!live) return [...instances.values()]
+      return [...instances.values()].filter((i) => live.includes(i.kind))
     },
     default: defaultBackend,
     forSession: resolveBackend,
