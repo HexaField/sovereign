@@ -17,7 +17,9 @@ import {
   liveWork,
   liveThinkingText,
   serverQueue,
-  sendError
+  sendError,
+  agentError,
+  prefillProgress
 } from './store.js'
 import { QueueIndicator } from './QueueIndicator.js'
 import { ChatIcon } from '../../ui/icons.js'
@@ -502,6 +504,12 @@ export function ChatView(props: ChatViewProps) {
               }
               return liveThinkingText() || 'Thinking'
             }
+            // Prefill progress — shown when the LLM is still processing the
+            // prompt (not yet generating). Disappears once streaming begins.
+            const pct = () => {
+              const p = prefillProgress()
+              return p !== null && !streamingText() ? Math.round(p * 100) : null
+            }
             return (
               <div class="flex items-start gap-2 px-2 py-1.5" style={{ color: 'var(--c-text-muted)' }}>
                 <span
@@ -515,7 +523,7 @@ export function ChatView(props: ChatViewProps) {
                     'white-space': 'nowrap'
                   }}
                 >
-                  {label()}
+                  {pct() !== null ? `Prefill ${pct()}%` : label()}
                 </span>
                 <span class="thinking-dots mt-0.5 text-xs">⋯</span>
               </div>
@@ -541,6 +549,22 @@ export function ChatView(props: ChatViewProps) {
       <Show when={sendError()}>
         <div class="px-4 py-1 text-xs" style={{ color: 'var(--c-error, #e74c3c)' }}>
           ⚠ Send failed: {sendError()} — try again.
+        </div>
+      </Show>
+
+      {/* Agent error banner — persists across reloads until the agent
+          completes a new turn or status returns to idle. */}
+      <Show when={agentError()}>
+        <div
+          class="mx-2 mb-1 flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
+          style={{
+            background: 'color-mix(in srgb, var(--c-error, #e74c3c) 12%, var(--c-bg-raised))',
+            border: '1px solid color-mix(in srgb, var(--c-error, #e74c3c) 40%, transparent)',
+            color: 'var(--c-error, #e74c3c)'
+          }}
+        >
+          <span style={{ flex: 'none', 'margin-top': '1px' }}>⚠</span>
+          <span style={{ 'word-break': 'break-word' }}>{agentError()}</span>
         </div>
       </Show>
 
