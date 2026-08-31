@@ -1079,7 +1079,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   }
 
   registerChatWs(wsHandler, chatModule, bus)
-  app.use(createChatRoutes(chatModule, backend, dataDir))
+  // Pass the llama-server base URL so /api/llm/slots can proxy slot status for
+  // the client's prefill-progress indicator. The URL is read from config at
+  // startup; updating localLlm.baseUrl requires a restart.
+  const chatRoutesLlamaUrl = configStore.get<string>('agentBackend.localLlm.baseUrl') ?? undefined
+  app.use(createChatRoutes(chatModule, backend, dataDir, { llamaBaseUrl: chatRoutesLlamaUrl }))
   app.use(
     createThreadRoutes(threadManager, createForwardHandler(bus, threadManager), {
       chatModule,

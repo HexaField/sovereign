@@ -50,6 +50,15 @@ export const [ttsDeliveredTurns, setTtsDeliveredTurns] = createSignal<Set<number
 /** Last send error — set on POST failure, cleared on next successful send or after 8 seconds. */
 export const [sendError, setSendError] = createSignal<string | null>(null)
 
+/** Persistent agent-side error — set from SSE `error` events, cleared when the
+ *  agent successfully completes a new turn or the status returns to idle.
+ *  Survives page reload (server replays it on SSE reconnect). */
+export const [agentError, setAgentError] = createSignal<string | null>(null)
+
+/** Prefill progress 0–1 while the LLM processes the prompt, null otherwise.
+ *  Polled from /api/llm/slots while agentStatus is 'working'. */
+export const [prefillProgress, setPrefillProgress] = createSignal<number | null>(null)
+
 function draftKey(threadKey: string): string {
   return `sovereign:draft:${threadKey}`
 }
@@ -189,11 +198,50 @@ function clearStreamingState(): void {
   setLiveThinkingText('')
 }
 
+// ── LLM slot polling for prefill progress ────────────────────────────────────
+// Polls /api/llm/slots every 500ms while the agent is working to compute what
+// fraction of the prompt has been processed. Stops (and clears) on idle/turn.
+
+let slotsPolltimer: ReturnType<typeof setInterval> | null = null
+
+function startSlotsPolling(): void {
+  if (slotsPolltimer) return
+  slotsPolltimer = setInterval(() => {
+    fetch('/api/llm/slots')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((slots) => {
+        const slot = Array.isArray(slots) ? slots[0] : null
+        if (!slot) {
+          setPrefillProgress(null)
+          return
+        }
+        const total: number = slot.n_prompt_tokens ?? 0
+        const processed: number = slot.n_prompt_tokens_processed ?? 0
+        if (total > 0 && processed < total) {
+          setPrefillProgress(processed / total)
+        } else {
+          setPrefillProgress(null)
+        }
+      })
+      .catch(() => setPrefillProgress(null))
+  }, 500)
+}
+
+function stopSlotsPolling(): void {
+  if (slotsPolltimer) {
+    clearInterval(slotsPolltimer)
+    slotsPolltimer = null
+  }
+  setPrefillProgress(null)
+}
+
 /** Clear ALL live state including liveWork. Call only after liveWork
  *  has been merged into the completed turn (see the SSE `turn` handler). */
 function clearLiveState(): void {
   clearStreamingState()
   setLiveWork([])
+  stopSlotsPolling()
+  setAgentError(null)
 }
 
 /** Clean text: strip thinking blocks and directive tags */
@@ -575,8 +623,10 @@ function connectSSE(threadKey: string): void {
     setAgentStatus(data.status)
     if (data.status === 'working' || data.status === 'thinking') {
       if (!agentWorkingStartTime()) startDurationTimer()
+      startSlotsPolling()
     } else {
       stopDurationTimer()
+      stopSlotsPolling()
       if (data.status === 'idle') {
         // Clear streaming text/html/thinking but preserve liveWork —
         // the SSE `turn` event arrives AFTER `status: idle` (both
@@ -584,6 +634,9 @@ function connectSSE(threadKey: string): void {
         // first). The turn handler needs liveWork to populate the
         // completed turn's workItems before clearing it.
         clearStreamingState()
+        // Clear the persistent error — agent went idle cleanly (not via a
+        // turn completion, e.g. after stuck-status reset).
+        setAgentError(null)
       }
     }
   })
@@ -694,8 +747,10 @@ function connectSSE(threadKey: string): void {
   // ── error ──
   // EventSource fires native 'error' on connection loss but auto-reconnects;
   // we don't show a banner for that (always-online assumption — the page
-  // wouldn't be running if the server were genuinely gone). We DO still
-  // honour custom error events with a retryAfterMs body (rate-limit hint).
+  // wouldn't be running if the server were genuinely gone). Custom error events
+  // carry structured payloads: `error` sets the persistent agent-error banner
+  // (survives reload via server-side SSE replay); `retryAfterMs` shows the
+  // rate-limit countdown.
   eventSource.addEventListener('error', (e) => {
     const me = e as MessageEvent
     if (!me.data) return
@@ -703,6 +758,9 @@ function connectSSE(threadKey: string): void {
       const data = JSON.parse(me.data)
       if (data.retryAfterMs) {
         startRetryCountdown(data.retryAfterMs / 1000)
+      }
+      if (data.error) {
+        setAgentError(data.error as string)
       }
     } catch {
       /* native connection-loss error has no payload */

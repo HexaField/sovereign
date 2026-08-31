@@ -45,12 +45,47 @@ function createChatDraftStore(dataDir: string) {
   }
 }
 
-export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, dataDir: string): Router {
+export interface ChatRoutesOptions {
+  /** Base URL of the llama-server (e.g. http://127.0.0.1:9090).
+   *  When provided, GET /api/llm/slots is exposed as a thin proxy so the
+   *  client can poll prefill progress without knowing the internal URL. */
+  llamaBaseUrl?: string
+}
+
+export function createChatRoutes(
+  chatModule: ChatModule,
+  backend: AgentBackend,
+  dataDir: string,
+  opts?: ChatRoutesOptions
+): Router {
   const router = Router()
   const draftStore = createChatDraftStore(dataDir)
 
   router.get('/api/chat/status', (_req, res) => {
     res.json({ status: backend.status() })
+  })
+
+  // ── LLM slot status — proxied from llama-server for prefill progress ──
+  // Returns raw /slots response from llama-server so the client can compute
+  // prefill % without needing to know the internal llama-server URL.
+  // Returns 503 when llamaBaseUrl is not configured or the server is down.
+  router.get('/api/llm/slots', async (_req, res) => {
+    const base = opts?.llamaBaseUrl
+    if (!base) {
+      res.status(503).json({ error: 'llm endpoint not configured' })
+      return
+    }
+    try {
+      const r = await fetch(`${base}/slots`)
+      if (!r.ok) {
+        res.status(r.status).json({ error: 'upstream error' })
+        return
+      }
+      const data = await r.json()
+      res.json(data)
+    } catch {
+      res.status(503).json({ error: 'llm unreachable' })
+    }
   })
 
   // Context budget for a thread — resolves threadId → sessionKey, then
@@ -319,6 +354,12 @@ export function createChatRoutes(chatModule: ChatModule, backend: AgentBackend, 
       }
       // Ensure the JSONL poll is running for this thread
       chatModule.ensurePolling(threadId, activeStatus)
+    }
+    // Replay the last error even when status is idle — the error persists until
+    // the agent successfully completes a new turn, so a page reload must still
+    // show it even if the thread has returned to idle after the failure.
+    if (live.lastError) {
+      send('error', { error: live.lastError, threadId, replay: true })
     }
 
     // Subscribe to chat-level events (includes backend events + JSONL-polled work)

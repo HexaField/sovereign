@@ -44,6 +44,9 @@ interface LiveStateEntry {
   work?: WorkItem[]
   streamText?: string
   statusChangedAt?: number
+  /** Last error seen for this thread. Survives SSE reconnect so a reload still
+   *  shows the error. Cleared when the agent starts a new turn or goes idle. */
+  lastError?: string
 }
 
 const LIVE_STATE_SCHEMA_VERSION = 1
@@ -84,7 +87,7 @@ export interface ChatModule {
   /** Chat-level event emitter for SSE subscriptions. Events have threadId resolved. */
   chatEvents: EventEmitter
   /** Get cached live state for a thread (for SSE replay on connect) */
-  getLiveState(threadId: string): { status?: string; work?: any[]; streamText?: string }
+  getLiveState(threadId: string): { status?: string; work?: any[]; streamText?: string; lastError?: string }
   /** Ensure the JSONL poll is running for a thread — call when SSE connects */
   ensurePolling(threadId: string, forceStatus?: string): void
   /** Track SSE client connect/disconnect for a thread */
@@ -435,6 +438,7 @@ export function createChatModule(
   const currentStatus = new Map<string, string>()
   const currentWork = new Map<string, any[]>()
   const currentStreamText = new Map<string, string>()
+  const currentError = new Map<string, string>()
 
   // Hydrate the in-memory caches from disk on boot.
   for (const { key, value } of liveStateStore.entries()) {
@@ -442,6 +446,7 @@ export function createChatModule(
     if (value.work) currentWork.set(key, value.work)
     if (value.streamText) currentStreamText.set(key, value.streamText)
     if (value.statusChangedAt) statusChangedAt.set(key, value.statusChangedAt)
+    if (value.lastError) currentError.set(key, value.lastError)
   }
 
   function persistLiveState(threadId: string): void {
@@ -449,9 +454,11 @@ export function createChatModule(
     const work = currentWork.get(threadId)
     const streamText = currentStreamText.get(threadId)
     const changedAt = statusChangedAt.get(threadId)
+    const lastError = currentError.get(threadId)
     // No active state for this thread — remove the per-thread file so the
-    // directory mirrors `currently-non-idle` semantics.
-    if (!status && (!work || work.length === 0) && !streamText) {
+    // directory mirrors `currently-non-idle` semantics. Keep the file when an
+    // error exists so the banner survives a page reload (via SSE replay).
+    if (!status && (!work || work.length === 0) && !streamText && !lastError) {
       liveStateStore.remove(threadId)
       return
     }
@@ -459,7 +466,8 @@ export function createChatModule(
       status,
       work,
       streamText,
-      statusChangedAt: changedAt
+      statusChangedAt: changedAt,
+      lastError
     })
   }
 
@@ -601,6 +609,42 @@ export function createChatModule(
       }
     })
   }
+
+  // ── Persistent error state — survives SSE reconnect ──────────────────
+  // chat.error events arrive from two sources:
+  //   1. Backend errors forwarded through the backend.on loop above (which
+  //      sets threadId via sessionToThread lookup).
+  //   2. Stuck-status recovery (emitted directly on chatEvents with threadId).
+  // Handle both by listening on chatEvents, the common exit point for both.
+  chatEvents.on('chat.error', (data: Record<string, unknown>) => {
+    const threadId = data.threadId as string | undefined
+    if (!threadId) return
+    const error = data.error as string | undefined
+    if (!error) return
+    currentError.set(threadId, error)
+    persistLiveState(threadId)
+  })
+
+  // Clear the persisted error when the agent goes idle or a new turn arrives.
+  // These events come from both the backend.on loop and direct chatEvents.emit
+  // calls (e.g. the stuck-status reset emits 'idle' directly on chatEvents).
+  chatEvents.on('chat.status', (data: Record<string, unknown>) => {
+    if (data.status !== 'idle') return
+    const threadId = data.threadId as string | undefined
+    if (!threadId || !currentError.has(threadId)) return
+    currentError.delete(threadId)
+    persistLiveState(threadId)
+  })
+
+  chatEvents.on('chat.turn', (data: Record<string, unknown>) => {
+    const turn = data.turn as { role?: string } | undefined
+    if (turn?.role !== 'assistant') return
+    const threadId = data.threadId as string | undefined
+    if (!threadId || !currentError.has(threadId)) return
+    currentError.delete(threadId)
+    // persistLiveState already called by the backend.on chat.turn handler above
+    // — no need to call it again here.
+  })
 
   // ── JSONL polling for live tool calls ──────────────────────────────
   // The gateway WS doesn't stream tool_call/tool_result events.
@@ -1041,7 +1085,8 @@ export function createChatModule(
     getLiveState: (threadId: string) => ({
       status: currentStatus.get(threadId),
       work: currentWork.get(threadId),
-      streamText: currentStreamText.get(threadId)
+      streamText: currentStreamText.get(threadId),
+      lastError: currentError.get(threadId)
     }),
     /** Ensure the JSONL poll is running for a thread — call when SSE connects */
     ensurePolling: (threadId: string, forceStatus?: string) => {
