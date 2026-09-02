@@ -11,6 +11,9 @@ import {
   retryCountdownSeconds
 } from './store.js'
 import { threadKey } from '../threads/store.js'
+import type { SlashCommand } from './slash-commands.js'
+import { isSlashQuery, filterCommands, buildCommandText, moveIndex } from './slash-commands.js'
+import { SlashCommandPicker } from './SlashCommandPicker.js'
 import { isRecording, setVoiceState, voiceTimerText, setVoiceTimerText } from '../voice/store.js'
 import {
   streamingState,
@@ -334,6 +337,27 @@ export function InputArea(props: InputAreaProps) {
     if (e.dataTransfer?.files.length) handleUploadFiles(e.dataTransfer.files)
   }
 
+  // ── Slash-command picker ───────────────────────────────────────────────────
+  const [slashCommandIndex, setSlashCommandIndex] = createSignal(-1)
+
+  /** Currently filtered commands derived from the live input value. */
+  const slashCommands = () => filterCommands(inputValue())
+
+  /** True when the picker should be visible. */
+  const slashPickerOpen = () => isSlashQuery(inputValue()) && slashCommands().length > 0
+
+  // Reset keyboard selection when the picker closes or the command list changes.
+  createEffect(() => {
+    if (!slashPickerOpen()) setSlashCommandIndex(-1)
+  })
+
+  const handleSelectSlashCommand = (cmd: SlashCommand) => {
+    setInputValue(buildCommandText(cmd))
+    setSlashCommandIndex(-1)
+    autoResize()
+    // Return focus to the textarea so the user can type arguments immediately.
+    setTimeout(() => textareaRef?.focus(), 0)
+  }
   // ── AD4M slash command ─────────────────────────────────────────────────────
   const [commandStatus, setCommandStatus] = createSignal<{ ok: boolean; text: string } | null>(null)
 
@@ -434,6 +458,37 @@ export function InputArea(props: InputAreaProps) {
   const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 
   const handleKey = (e: KeyboardEvent) => {
+    // Slash-command picker takes priority over all other keyboard handling.
+    if (slashPickerOpen()) {
+      const cmds = slashCommands()
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashCommandIndex(moveIndex(slashCommandIndex(), 'down', cmds.length))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashCommandIndex(moveIndex(slashCommandIndex(), 'up', cmds.length))
+        return
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        const idx = slashCommandIndex()
+        if (idx >= 0 && idx < cmds.length) {
+          handleSelectSlashCommand(cmds[idx])
+        } else if (cmds.length === 1) {
+          // Auto-select when exactly one command matches.
+          handleSelectSlashCommand(cmds[0])
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setInputValue('')
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
       e.preventDefault()
       handleSend()
@@ -739,6 +794,15 @@ export function InputArea(props: InputAreaProps) {
           'max-sm:items-stretch max-sm:gap-2': textFocused()
         }}
       >
+        {/* Slash-command picker — appears above input when first char is "/" */}
+        <Show when={slashPickerOpen()}>
+          <SlashCommandPicker
+            commands={slashCommands()}
+            selectedIndex={slashCommandIndex()}
+            onSelect={handleSelectSlashCommand}
+          />
+        </Show>
+
         {/* Scratchpad popup */}
         <Show when={scratchpadOpen()}>
           <div
@@ -867,6 +931,7 @@ export function InputArea(props: InputAreaProps) {
               value={inputValue()}
               onInput={(e) => {
                 setInputValue(e.currentTarget.value)
+                setSlashCommandIndex(-1)
                 autoResize()
               }}
               onKeyDown={handleKey}
