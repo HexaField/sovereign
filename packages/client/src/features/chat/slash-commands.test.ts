@@ -234,5 +234,23 @@ describe('§UI.SlashCommands', () => {
       const ad4m = SLASH_COMMANDS.find((c) => c.command === 'ad4m')
       expect(ad4m?.usage).toBeTruthy()
     })
+
+    it('skill commands are registered in the picker', () => {
+      const tokens = SLASH_COMMANDS.map((c) => c.command)
+      expect(tokens).toContain('asd-ste100')
+      expect(tokens).toContain('plain-writing')
+      expect(tokens).toContain('word-roots')
+      expect(tokens).toContain('electron-cdp')
+      expect(tokens).toContain('svg-infographic')
+      expect(tokens).toContain('cozempic')
+    })
+
+    it('all skill commands include a usage hint', () => {
+      const skillCommands = ['asd-ste100', 'plain-writing', 'word-roots', 'electron-cdp', 'svg-infographic', 'cozempic']
+      for (const token of skillCommands) {
+        const cmd = SLASH_COMMANDS.find((c) => c.command === token)
+        expect(cmd?.usage, `${token} should have a usage hint`).toBeTruthy()
+      }
+    })
   })
 })

@@ -9,15 +9,53 @@ export interface SlashCommand {
 }
 
 /**
- * The canonical list of client-side slash commands.
- * Only commands that the UI handles locally belong here — commands forwarded
- * to the agent as plain text should NOT be listed.
+ * The canonical list of client-side slash commands — two kinds:
+ *
+ * LOCAL — intercepted and handled in the browser before the text reaches the
+ * agent. Currently only /ad4m. These require a matching handler in InputArea.
+ *
+ * SKILL — forwarded to the agent as plain text. The agent reads the
+ * corresponding `~/.claude/commands/<name>.md` skill file and executes it.
+ * List these here so they appear in the picker for discoverability.
  */
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
+  // ── Local commands (handled in browser) ─────────────────────────────────
   {
     command: 'ad4m',
     description: 'Connect or disconnect an AD4M neighbourhood',
     usage: '/ad4m watch|unwatch <neighbourhood://url>'
+  },
+
+  // ── Skill commands (forwarded to agent) ─────────────────────────────────
+  {
+    command: 'asd-ste100',
+    description: 'Rewrite text into ASD-STE100 Simplified Technical English',
+    usage: '/asd-ste100 <text to rewrite>'
+  },
+  {
+    command: 'plain-writing',
+    description: 'De-AI-ify prose — remove AI tells and restore a human voice',
+    usage: '/plain-writing <draft to rewrite>'
+  },
+  {
+    command: 'word-roots',
+    description: 'Query the Greek/Latin word roots database — etymology and root meanings',
+    usage: '/word-roots <root, word, or concept>'
+  },
+  {
+    command: 'electron-cdp',
+    description: 'Control an Electron app (VS Code, Cursor, Discord…) via Chrome DevTools Protocol',
+    usage: '/electron-cdp <app and what to do>'
+  },
+  {
+    command: 'svg-infographic',
+    description: 'Create a minimal SVG infographic for a GitHub README',
+    usage: '/svg-infographic <description of what to show>'
+  },
+  {
+    command: 'cozempic',
+    description: 'Diagnose and prune bloated Claude Code context',
+    usage: '/cozempic <treat|reload|guard|doctor>'
   }
 ]
 
