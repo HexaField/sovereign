@@ -1340,6 +1340,137 @@ describe('claude-code/system-config-with-overrides wiring', () => {
 })
 
 /**
+ * Stop and Notification hook — background task lifecycle.
+ *
+ * The Stop hook fires when the agent finishes a turn. With background tasks
+ * (shell, monitor, subagent) still pending, marking idle at that point gives
+ * users a false "done" signal: they see idle status and send a message that
+ * conflicts with the pending notification delivery, destroying the background
+ * work. The SDK provides `background_tasks[]` on StopHookInput to distinguish
+ * "session done" from "paused waiting for background work."
+ *
+ * The Notification hook fires when a background task completes and is about to
+ * be delivered to the agent. Marking working at that point ensures the UI shows
+ * activity rather than staying at the false idle set by a prior Stop event.
+ */
+describe('claude-code/Stop and Notification hooks — background task lifecycle', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-stop-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  /** Spin up a session and wait for query() to be called, then return the hooks. */
+  async function spinUpWithHooks() {
+    const stub = capturingSdkQuery()
+    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stub })
+    await backend.createSession('s', { threadKey: 's' })
+    backend.sendMessage('s', 'hi').catch(() => {})
+    for (let i = 0; i < 20 && !stub.captured.options; i++) {
+      await new Promise((r) => setImmediate(r))
+    }
+    if (!stub.captured.options) throw new Error('query() never invoked')
+    const sessionId = stub.captured.sessionId as string
+    return { backend, stub, sessionId, options: stub.captured.options }
+  }
+
+  it('onStop with no background_tasks emits chat.status:idle', async () => {
+    const { backend, options, sessionId } = await spinUpWithHooks()
+    const onStop = getHook(options, 'Stop')
+    const statusEvents: string[] = []
+    backend.on('chat.status', (d: any) => statusEvents.push(d.status))
+
+    await onStop({ hook_event_name: 'Stop', session_id: sessionId, stop_hook_active: false, background_tasks: [] })
+
+    expect(statusEvents).toContain('idle')
+  })
+
+  it('onStop with pending background_tasks skips idle emission (session stays working)', async () => {
+    const { backend, options, sessionId } = await spinUpWithHooks()
+    const onStop = getHook(options, 'Stop')
+    const statusEvents: string[] = []
+    backend.on('chat.status', (d: any) => statusEvents.push(d.status))
+
+    // Working status already set by sendMessage; capture that baseline first
+    statusEvents.length = 0
+
+    await onStop({
+      hook_event_name: 'Stop',
+      session_id: sessionId,
+      stop_hook_active: false,
+      // Simulate one in-flight shell background task
+      background_tasks: [{ id: 'task-1', type: 'shell', status: 'running', description: 'sleep 5' }]
+    })
+
+    // Stop must NOT emit idle when background tasks are pending
+    expect(statusEvents).not.toContain('idle')
+  })
+
+  it('onStop with undefined background_tasks (older SDK) still emits idle', async () => {
+    const { backend, options, sessionId } = await spinUpWithHooks()
+    const onStop = getHook(options, 'Stop')
+    const statusEvents: string[] = []
+    backend.on('chat.status', (d: any) => statusEvents.push(d.status))
+
+    // Omit background_tasks entirely — should fall back to marking idle
+    await onStop({ hook_event_name: 'Stop', session_id: sessionId, stop_hook_active: false })
+
+    expect(statusEvents).toContain('idle')
+  })
+
+  it('onNotification emits chat.status:working so the UI shows activity', async () => {
+    const { backend, options, sessionId } = await spinUpWithHooks()
+    const onStop = getHook(options, 'Stop')
+    const onNotification = getHook(options, 'Notification')
+    const statusEvents: string[] = []
+    backend.on('chat.status', (d: any) => statusEvents.push(d.status))
+
+    // First drive the session to idle via Stop (no pending tasks)
+    await onStop({ hook_event_name: 'Stop', session_id: sessionId, stop_hook_active: false, background_tasks: [] })
+    expect(statusEvents).toContain('idle')
+
+    statusEvents.length = 0
+
+    // Background task fires — Notification hook should set working
+    await onNotification({
+      hook_event_name: 'Notification',
+      session_id: sessionId,
+      message: '<task-notification>task_id: task-1\n\nOutput: done</task-notification>',
+      notification_type: 'task_completed'
+    })
+
+    expect(statusEvents).toContain('working')
+  })
+
+  it('onNotification is idempotent when session is already working', async () => {
+    const { backend, options, sessionId } = await spinUpWithHooks()
+    const onNotification = getHook(options, 'Notification')
+    const statusEvents: string[] = []
+    backend.on('chat.status', (d: any) => statusEvents.push(d.status))
+
+    // sendMessage already emitted working; clear the baseline
+    statusEvents.length = 0
+
+    // Notification fires while session is already working — should NOT double-emit
+    await onNotification({
+      hook_event_name: 'Notification',
+      session_id: sessionId,
+      message: '<task-notification>done</task-notification>',
+      notification_type: 'task_completed'
+    })
+
+    // No additional working event should be emitted (idempotent guard)
+    expect(statusEvents).toHaveLength(0)
+  })
+})
+
+/**
  * History-log sync: the CC backend syncs its session JSONL into the shared
  * append-only history log after every SDK `result` message. This closes the
  * asymmetry where local-llm wrote to the log on every turn but CC only
