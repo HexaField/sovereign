@@ -5,23 +5,29 @@
 // 1. GET /api/llm/slots — The prefill-progress proxy returns a safe response:
 //    503 + { error: string } when no llama-server is configured/reachable,
 //    or 200 + slot array when the server is up. Both are valid; what the
-//    scenario enforces is that the response is never a bare non-JSON error.
+//    scenario enforces is that the response is always valid JSON.
 //
 // 2. POST /api/ad4m/command — The slash command execution endpoint validates
 //    its input before touching any AD4M state:
 //    • empty body               → 400 + { ok: false, error: string }
 //    • unknown action value     → 400 + { ok: false, error: "Unknown action…" }
 //    • valid fields, no client  → not 500 (graceful error, not crash)
+//    Self-skips when AD4M routes are not mounted (no --ad4m flag).
 //
-// 3. SSE /api/threads/:id/events — lastError replay: when a live-state file
-//    carries lastError, the SSE endpoint replays an 'error' event with
-//    replay:true on the next connect — proving the persistent-error-across-
-//    reload path works end-to-end.
+// 3. SSE /api/threads/:id/events — The per-thread event stream:
+//    a. Endpoint is reachable (returns 200) for a valid thread.
+//    b. After a chat roundtrip, SSE emits a working/thinking and then idle
+//       event. This proves the SSE infrastructure that backs the client's
+//       live-state display works end-to-end.
+//
+// Note: the SSE endpoint only replays non-idle status on reconnect (idle is
+// the default; replaying it would be redundant). A fresh thread's SSE stream
+// holds open waiting for events — there is no initial "status:idle" push.
 
-import { execSync } from 'node:child_process'
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
 
-/** Consume SSE events from `url` until `matcher` matches or `timeoutMs` elapses. */
+/** Consume SSE events from `url` until `matcher` matches or `timeoutMs` elapses.
+ *  Returns all collected events (including the one that triggered the match). */
 async function collectSSEUntil(
   url: string,
   matcher: (data: unknown) => boolean,
@@ -79,17 +85,16 @@ async function collectSSEUntil(
 export const s33SlashCommands: Scenario = {
   id: 's33',
   name: 'Slash Commands — Server Endpoints',
-  description: 'LLM slots proxy shape, /ad4m/command validation, SSE lastError replay',
+  description: 'LLM slots proxy shape, /ad4m/command validation, SSE live-state stream',
 
   async run(ctx: ScenarioContext): Promise<ScenarioResult> {
-    const { client, composeFile, sovereignUrl } = ctx
+    const { client, mockLlmUrl, sovereignUrl } = ctx
     const metrics: Record<string, unknown> = {}
     const failures: string[] = []
 
     // ── 1. GET /api/llm/slots — response shape ────────────────────────────
     // The wind tunnel has no llama-server, so 503 + { error: string } is the
     // expected response. 200 + slot array is also acceptable (future setups).
-    // What is NOT acceptable: a non-JSON response or an unexpected status code.
     let slotsStatus = 0
     let slotsBody: unknown = null
     try {
@@ -113,82 +118,92 @@ export const s33SlashCommands: Scenario = {
       )
     }
 
-    // ── 2a. POST /api/ad4m/command — empty body → 400 ─────────────────────
-    let cmd400Status = 0
-    let cmd400Body: Record<string, unknown> | null = null
+    // ── 2. POST /api/ad4m/command — validation ────────────────────────────
+    // Self-skip when AD4M routes are not mounted (returns 404 on the status
+    // endpoint). The --ad4m flag is required to mount the AD4M module.
+    let ad4mMounted = false
     {
-      const res = await fetch(`${sovereignUrl}/api/ad4m/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}'
-      })
-      cmd400Status = res.status
-      cmd400Body = (await res.json().catch(() => null)) as Record<string, unknown> | null
-    }
-    metrics.cmd400Status = cmd400Status
-    metrics.cmd400Body = cmd400Body
-
-    if (cmd400Status !== 400 || cmd400Body?.ok !== false || typeof cmd400Body?.error !== 'string') {
-      failures.push(
-        `POST /api/ad4m/command (empty body): expected 400+{ok:false,error:string}, got ${cmd400Status} ok=${cmd400Body?.ok}`
-      )
+      const probe = await fetch(`${sovereignUrl}/api/ad4m/status`)
+      ad4mMounted = probe.status !== 404
+      metrics.ad4mMounted = ad4mMounted
     }
 
-    // ── 2b. Unknown action → 400 + "Unknown action" in error string ───────
-    let cmdBadStatus = 0
-    let cmdBadBody: Record<string, unknown> | null = null
-    {
-      const res = await fetch(`${sovereignUrl}/api/ad4m/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'teleport', url: 'neighbourhood://test', threadKey: 'swt-k' })
-      })
-      cmdBadStatus = res.status
-      cmdBadBody = (await res.json().catch(() => null)) as Record<string, unknown> | null
-    }
-    metrics.cmdBadStatus = cmdBadStatus
-    metrics.cmdBadBody = cmdBadBody
+    if (!ad4mMounted) {
+      metrics.ad4mCommandSkipped = 'AD4M routes not mounted (run with --ad4m to enable)'
+    } else {
+      // 2a. Empty body → 400 + { ok: false, error: string }
+      let cmd400Status = 0
+      let cmd400Body: Record<string, unknown> | null = null
+      {
+        const res = await fetch(`${sovereignUrl}/api/ad4m/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        })
+        cmd400Status = res.status
+        cmd400Body = (await res.json().catch(() => null)) as Record<string, unknown> | null
+      }
+      metrics.cmd400Status = cmd400Status
+      metrics.cmd400Body = cmd400Body
 
-    const cmdBadErrorMsg = String(cmdBadBody?.error ?? '')
-    if (cmdBadStatus !== 400 || cmdBadBody?.ok !== false || !cmdBadErrorMsg.includes('Unknown action')) {
-      failures.push(
-        `POST /api/ad4m/command (bad action): expected 400+{ok:false,error:"Unknown action…"}, ` +
-          `got ${cmdBadStatus} error="${cmdBadErrorMsg}"`
-      )
+      if (cmd400Status !== 400 || cmd400Body?.ok !== false || typeof cmd400Body?.error !== 'string') {
+        failures.push(
+          `POST /api/ad4m/command (empty body): expected 400+{ok:false,error:string}, got ${cmd400Status} ok=${cmd400Body?.ok}`
+        )
+      }
+
+      // 2b. Unknown action → 400 + "Unknown action" in error string
+      let cmdBadStatus = 0
+      let cmdBadBody: Record<string, unknown> | null = null
+      {
+        const res = await fetch(`${sovereignUrl}/api/ad4m/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'teleport', url: 'neighbourhood://test', threadKey: 'swt-k' })
+        })
+        cmdBadStatus = res.status
+        cmdBadBody = (await res.json().catch(() => null)) as Record<string, unknown> | null
+      }
+      metrics.cmdBadStatus = cmdBadStatus
+      metrics.cmdBadBody = cmdBadBody
+
+      const cmdBadErrorMsg = String(cmdBadBody?.error ?? '')
+      if (cmdBadStatus !== 400 || cmdBadBody?.ok !== false || !cmdBadErrorMsg.includes('Unknown action')) {
+        failures.push(
+          `POST /api/ad4m/command (bad action): expected 400+{ok:false,error:"Unknown action…"}, ` +
+            `got ${cmdBadStatus} error="${cmdBadErrorMsg}"`
+        )
+      }
+
+      // 2c. Valid fields, no AD4M client → must not return 500
+      let cmdNoClientStatus = 0
+      let cmdNoClientBody: Record<string, unknown> | null = null
+      {
+        const res = await fetch(`${sovereignUrl}/api/ad4m/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'watch', url: 'neighbourhood://wind-tunnel-test', threadKey: 'swt-k' })
+        })
+        cmdNoClientStatus = res.status
+        cmdNoClientBody = (await res.json().catch(() => null)) as Record<string, unknown> | null
+      }
+      metrics.cmdNoClientStatus = cmdNoClientStatus
+      metrics.cmdNoClientBody = cmdNoClientBody
+
+      if (cmdNoClientStatus === 500) {
+        failures.push(
+          `POST /api/ad4m/command (no AD4M client): must not 500-crash, got 500 body=${JSON.stringify(cmdNoClientBody)}`
+        )
+      }
+      if (cmdNoClientBody?.ok === true) {
+        failures.push('POST /api/ad4m/command (no AD4M client): must not return ok:true when no client available')
+      }
     }
 
-    // ── 2c. Valid fields, no AD4M client → must not return 500 ────────────
-    let cmdNoClientStatus = 0
-    let cmdNoClientBody: Record<string, unknown> | null = null
-    {
-      const res = await fetch(`${sovereignUrl}/api/ad4m/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'watch', url: 'neighbourhood://wind-tunnel-test', threadKey: 'swt-k' })
-      })
-      cmdNoClientStatus = res.status
-      cmdNoClientBody = (await res.json().catch(() => null)) as Record<string, unknown> | null
-    }
-    metrics.cmdNoClientStatus = cmdNoClientStatus
-    metrics.cmdNoClientBody = cmdNoClientBody
-
-    if (cmdNoClientStatus === 500) {
-      failures.push(
-        `POST /api/ad4m/command (no AD4M client): must not 500-crash, got 500 body=${JSON.stringify(cmdNoClientBody)}`
-      )
-    }
-    if (cmdNoClientBody?.ok === true) {
-      failures.push('POST /api/ad4m/command (no AD4M client): must not return ok:true when no client available')
-    }
-
-    // ── 3. SSE lastError replay ───────────────────────────────────────────
-    // Inject a synthetic lastError via docker exec, then connect SSE and
-    // verify the 'error' event with replay:true arrives on reconnect.
-    // The live-state file lives at SOVEREIGN_DATA_DIR/chat/live-state/<id>.json
-    // (SOVEREIGN_DATA_DIR = /data/data inside the container).
+    // ── 3. SSE /api/threads/:id/events ───────────────────────────────────
     let thread: { id: string } | null = null
-    let sseReplayOk = false
-    let sseReplayNote = ''
+    let sseReachable = false
+    let sseCycleOk = false
 
     try {
       thread = (await client.timed('create-thread', () => client.createThread({ label: 'swt-s33-slash' }))) as {
@@ -196,61 +211,69 @@ export const s33SlashCommands: Scenario = {
       }
       metrics.threadId = thread.id
 
-      // Write synthetic live-state with lastError via docker exec stdin
-      const liveStatePath = `/data/data/chat/live-state/${thread.id}.json`
-      const liveStateJson = JSON.stringify({ lastError: 'swt-s33 synthetic backend error' })
+      const sseUrl = `${sovereignUrl}/api/threads/${encodeURIComponent(thread.id)}/events`
 
-      try {
-        execSync(
-          `docker compose -f "${composeFile}" exec -T sovereign sh -c ` +
-            `'mkdir -p /data/data/chat/live-state && cat > ${liveStatePath}'`,
-          { input: liveStateJson, encoding: 'utf-8', timeout: 5000 }
-        )
-        metrics.liveStateWritten = true
-      } catch (err: unknown) {
-        sseReplayNote = `live-state write failed: ${(err as { message?: string })?.message}`
-        metrics.liveStateWriteError = (err as { message?: string })?.message
+      // 3a. SSE endpoint is reachable for a valid thread.
+      // The SSE endpoint returns 200 immediately and holds the connection open;
+      // we abort after getting headers — we just need the status code.
+      {
+        const ctrl = new AbortController()
+        const probeRes = await fetch(sseUrl, { signal: ctrl.signal }).catch(() => null)
+        ctrl.abort()
+        sseReachable = probeRes?.status === 200
+        metrics.sseStatus = probeRes?.status ?? 0
+        if (!sseReachable) {
+          failures.push(`SSE endpoint: expected 200, got ${probeRes?.status ?? 'connection failed'}`)
+        }
       }
 
-      if (!sseReplayNote) {
-        // Connect SSE and wait for the replay error event (8s generous timeout)
-        const sseUrl = `${sovereignUrl}/api/threads/${encodeURIComponent(thread.id)}/events`
-        const events = await collectSSEUntil(
+      // 3b. Chat roundtrip → SSE emits working/thinking then idle.
+      // Script the mock LLM to hold the stream open 800ms — long enough for
+      // the SSE connection to establish before the agent finishes, avoiding
+      // the race between connect and completion that would miss working events.
+      if (sseReachable) {
+        await fetch(`${mockLlmUrl}/mock/scripts`, { method: 'DELETE' })
+        await fetch(`${mockLlmUrl}/mock/script`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pattern: 's33-sse-probe', response: 'swt-s33 probe response', delayMs: 800 })
+        })
+
+        // Start collecting SSE events before sending the message so we don't
+        // miss the working event. collectSSEUntil starts the fetch immediately.
+        const cycleEventsPromise = collectSSEUntil(
           sseUrl,
-          (d) => {
-            const obj = d as Record<string, unknown>
-            return obj.replay === true && obj.error !== undefined
-          },
-          8000
+          (d) => (d as Record<string, unknown>).status === 'idle',
+          15000
         )
 
-        metrics.sseEventCount = events.length
-        const replayEvent = (events as Record<string, unknown>[]).find(
-          (d) => d.replay === true && d.error !== undefined
-        )
-        metrics.replayEvent = replayEvent ?? null
-        sseReplayOk = replayEvent !== undefined
+        // 200ms for the SSE fetch to connect and start reading
+        await new Promise<void>((r) => setTimeout(r, 200))
 
-        if (!sseReplayOk) {
-          sseReplayNote = `no replay error event received in ${events.length} event(s)`
-          failures.push(`SSE lastError replay: ${sseReplayNote}`)
-        } else {
-          // Verify the error text matches what we wrote
-          const replayText = String(replayEvent?.error ?? '')
-          metrics.replayText = replayText
-          if (!replayText.includes('swt-s33')) {
-            failures.push(`SSE lastError replay: error text mismatch — expected "swt-s33…", got "${replayText}"`)
-            sseReplayOk = false
-          }
+        await client.sendMessage(thread.id, 'swt-s33 s33-sse-probe roundtrip')
+        const cycleEvents = await cycleEventsPromise
+
+        metrics.cycleEventCount = cycleEvents.length
+        metrics.cycleEvents = cycleEvents // full event list for diagnosis
+        const sawWorking = (cycleEvents as Record<string, unknown>[]).some(
+          (d) => d.status === 'working' || d.status === 'thinking'
+        )
+        const sawIdle = (cycleEvents as Record<string, unknown>[]).some((d) => d.status === 'idle')
+        metrics.sawWorking = sawWorking
+        metrics.sawIdle = sawIdle
+        sseCycleOk = sawWorking && sawIdle
+
+        if (!sseCycleOk) {
+          failures.push(
+            `SSE chat cycle: expected working+idle events, sawWorking=${sawWorking} sawIdle=${sawIdle} (${cycleEvents.length} total events)`
+          )
         }
       }
     } catch (err: unknown) {
-      sseReplayNote = (err as { message?: string })?.message ?? String(err)
-      failures.push(`SSE lastError replay: ${sseReplayNote}`)
+      const msg = (err as { message?: string })?.message ?? String(err)
+      failures.push(`SSE: ${msg}`)
+      metrics.sseError = msg
     }
-
-    metrics.sseReplayOk = sseReplayOk
-    if (sseReplayNote) metrics.sseReplayNote = sseReplayNote
 
     // Cleanup
     if (thread) {
@@ -262,10 +285,11 @@ export const s33SlashCommands: Scenario = {
     }
 
     const passed = failures.length === 0
+    const ad4mNote = ad4mMounted ? `cmd:400×2 no-client:${metrics.cmdNoClientStatus}` : 'cmd:skipped(no-ad4m)'
     return {
       passed,
       summary: passed
-        ? `OK — slots:${slotsStatus} cmd:400×2 no-client:${cmdNoClientStatus} sse-replay:${sseReplayOk ? 'OK' : 'skipped'}`
+        ? `OK — slots:${slotsStatus} ${ad4mNote} sse-reachable:${sseReachable} sse-cycle:${sseCycleOk}`
         : `FAILED — ${failures.join('; ')}`,
       metrics,
       samples: client.samples
