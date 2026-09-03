@@ -1171,13 +1171,36 @@ export function createClaudeCodeBackend(
       if (input.hook_event_name !== 'Stop') return { continue: true }
       const state = stateForHook(input)
       if (!state) return { continue: true }
+      // The SDK provides background_tasks[] on StopHookInput. When tasks are
+      // still pending the session stays alive — the SDK will fire Notification
+      // for each one and continue the for-await loop. Marking idle here would
+      // show a false "done" status while background work is in flight, causing
+      // users to send premature messages that conflict with the pending
+      // notification delivery and destroy the background work.
+      const inp = input as Extract<HookInput, { hook_event_name: 'Stop' }>
+      const hasPendingTasks = (inp.background_tasks?.length ?? 0) > 0
+      if (hasPendingTasks) return { continue: true }
       if (state.agentStatus !== 'idle') {
         state.agentStatus = 'idle'
         emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
       }
       return { continue: true }
     }
-    const onNotification = async (_input: HookInput) => ({ continue: true })
+    const onNotification = async (input: HookInput) => {
+      if (input.hook_event_name !== 'Notification') return { continue: true }
+      // A background task (shell, monitor, subagent) completed and the SDK is
+      // about to deliver the notification to the agent. Mark working immediately
+      // so the UI shows activity — Stop may have set idle after the prior turn,
+      // and the gap between Stop and the notification arriving is where users
+      // incorrectly assume the session is fully done and send a message that
+      // interrupts the pending delivery.
+      const state = stateForHook(input)
+      if (state && state.agentStatus !== 'working') {
+        state.agentStatus = 'working'
+        emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'working' })
+      }
+      return { continue: true }
+    }
     const onSessionEnd = async (input: HookInput) => {
       if (input.hook_event_name !== 'SessionEnd') return { continue: true }
       const state = stateForHook(input)
