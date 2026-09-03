@@ -33,6 +33,7 @@ import { s29ContextStrategies } from './s29-context-strategies.js'
 import { s30HistoryArchive } from './s30-history-archive.js'
 import { s31SubagentLifecycle } from './s31-subagent-lifecycle.js'
 import { s32LiteLlmRoundtrip } from './s32-litellm-roundtrip.js'
+import { s33SlashCommands } from './s33-slash-commands.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -113,5 +114,9 @@ export const ALL_SCENARIOS: Scenario[] = [
   // routes claude-code SDK via the proxy. Verifies non-Claude model selection,
   // Anthropic-format requests reach the proxy, full WS event lifecycle.
   // Self-skips unless run with --litellm (SWT_LITELLM_URL env var must be set).
-  s32LiteLlmRoundtrip
+  s32LiteLlmRoundtrip,
+  // Slash commands — server endpoints. Verifies the LLM slots proxy shape,
+  // /api/ad4m/command input validation, and SSE lastError replay. Proves all
+  // server-side components of the slash command picker feature work end-to-end.
+  s33SlashCommands
 ]
