@@ -191,7 +191,7 @@ describe('makeSubagentToolBlocker', () => {
     expect(blocker('thread-e')).toEqual(['Agent', 'Workflow', 'SendMessage'])
   })
 
-  it('thread-level claude-code overrides global non-claude-code default (allows native)', () => {
+  it('thread-level claude-code overrides global non-claude-code default (allows native when no non-Claude model)', () => {
     const blocker = makeSubagentToolBlocker(
       stubThreads({ 'thread-f': { subagentBackend: 'claude-code' } }),
       'local-llm'
@@ -205,5 +205,36 @@ describe('makeSubagentToolBlocker', () => {
       'claude-code'
     )!
     expect(blocker('thread-g')).toEqual(['Agent', 'Workflow', 'SendMessage'])
+  })
+
+  // LiteLLM path — claude-code backend with non-Claude model means subagents
+  // route through LiteLLM, not native claude-code. Agent/Workflow/SendMessage
+  // must be blocked so the model uses agents_spawn instead.
+  it('blocks SDK tools when claude-code backend is used with a non-Claude model (LiteLLM path)', () => {
+    const blocker = makeSubagentToolBlocker(
+      stubThreads({ 'thread-h': { subagentBackend: 'claude-code', subagentModel: 'qwen3.8-27b' } })
+    )!
+    expect(blocker('thread-h')).toEqual(['Agent', 'Workflow', 'SendMessage'])
+  })
+
+  it('blocks SDK tools when global defaults specify claude-code + non-Claude model', () => {
+    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-i': {} }), 'claude-code', 'qwen3.8-27b')!
+    expect(blocker('thread-i')).toEqual(['Agent', 'Workflow', 'SendMessage'])
+  })
+
+  it('allows native when claude-code backend is used with an explicit Claude model', () => {
+    const blocker = makeSubagentToolBlocker(
+      stubThreads({ 'thread-j': { subagentBackend: 'claude-code', subagentModel: 'claude-sonnet-4-5' } })
+    )!
+    expect(blocker('thread-j')).toBeUndefined()
+  })
+
+  it('thread-level Claude model override with non-Claude global model allows native', () => {
+    const blocker = makeSubagentToolBlocker(
+      stubThreads({ 'thread-k': { subagentBackend: 'claude-code', subagentModel: 'claude-opus-4-6' } }),
+      'claude-code',
+      'qwen3.8-27b'
+    )!
+    expect(blocker('thread-k')).toBeUndefined()
   })
 })
