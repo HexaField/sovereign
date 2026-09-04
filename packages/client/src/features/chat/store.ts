@@ -913,8 +913,10 @@ export function initChatStore(_threadKey: Accessor<string>, wsStore?: WsStore): 
   // Visibility change — SSE auto-reconnects, but if we want fresh data on visibility:
   const onVisibility = () => {
     if (document.visibilityState === 'visible') {
+      // Clear the "unread" badge — user is back on the tab.
+      // Do NOT clear the spinner: it tracks agent-running state, not
+      // tab-visibility state, and should stay until the agent goes idle.
       clearFaviconBadge()
-      clearFaviconSpinner()
       const key = _threadKey()
       // SSE auto-reconnects and sends fresh history, but if it's already connected
       // and we just want a refresh while idle, we can re-connect
