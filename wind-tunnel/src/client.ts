@@ -18,6 +18,7 @@ export class SovereignClient {
   private wsResolvers: Array<{
     channel: string
     type?: string
+    predicate?: (data: any) => boolean
     resolve: (data: any) => void
     reject: (err: Error) => void
     timer: ReturnType<typeof setTimeout>
@@ -95,7 +96,7 @@ export class SovereignClient {
           // Check waiting resolvers
           for (let i = this.wsResolvers.length - 1; i >= 0; i--) {
             const w = this.wsResolvers[i]
-            if (data.type && (!w.type || w.type === data.type)) {
+            if (data.type && (!w.type || w.type === data.type) && (!w.predicate || w.predicate(data))) {
               clearTimeout(w.timer)
               w.resolve(data)
               this.wsResolvers.splice(i, 1)
@@ -109,10 +110,10 @@ export class SovereignClient {
     })
   }
 
-  /** Wait for a WS message matching the given type. Rejects after timeoutMs. */
-  waitForWs(type: string, timeoutMs = 10000): Promise<any> {
+  /** Wait for a WS message matching the given type (and optional predicate). Rejects after timeoutMs. */
+  waitForWs(type: string, timeoutMs = 10000, predicate?: (data: any) => boolean): Promise<any> {
     // Check buffered messages first
-    const existing = this.wsMessages.find((m) => m.data.type === type)
+    const existing = this.wsMessages.find((m) => m.data.type === type && (!predicate || predicate(m.data)))
     if (existing) {
       this.wsMessages.splice(this.wsMessages.indexOf(existing), 1)
       return Promise.resolve(existing.data)
@@ -120,12 +121,12 @@ export class SovereignClient {
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        const idx = this.wsResolvers.findIndex((w) => w.type === type)
+        const idx = this.wsResolvers.findIndex((w) => w.type === type && w.predicate === predicate)
         if (idx >= 0) this.wsResolvers.splice(idx, 1)
         reject(new Error(`WS timeout waiting for "${type}" after ${timeoutMs}ms`))
       }, timeoutMs)
 
-      this.wsResolvers.push({ channel: '', type, resolve, reject, timer })
+      this.wsResolvers.push({ channel: '', type, predicate, resolve, reject, timer })
     })
   }
 

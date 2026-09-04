@@ -68,7 +68,13 @@ export const s34FileAttachments: Scenario = {
     let turnContent = ''
     if (sendOk) {
       try {
-        const turnMsg = await client.timed('wait-for-turn', () => client.waitForWs('chat.turn', 30000))
+        const turnMsg = await client.timed('wait-for-turn', () =>
+          // Filter by threadId AND role===assistant — Sovereign emits a synthetic
+          // user turn immediately at dispatch time (before the LLM is called).
+          // Catching that turn instead of the assistant reply causes the log check
+          // to run before the image request reaches the mock LLM.
+          client.waitForWs('chat.turn', 30000, (d) => d.threadId === thread.id && d.turn?.role === 'assistant')
+        )
         gotTurn = true
         turnContent = turnMsg?.turn?.content ?? ''
         metrics.turnContent = turnContent
