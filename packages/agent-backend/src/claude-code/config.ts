@@ -48,18 +48,41 @@ export function claudeCodeConfigFromStore(
   // Inject semble MCP so every Sovereign-spawned session has code search via
   // mcp__semble__search / mcp__semble__find_related without relying on the
   // user's ~/.claude.json (which the SDK's settingSources may not surface).
+  // alwaysLoad: true makes schemas available at turn 1 (no ToolSearch step).
   // Opt out with SEMBLE_MCP=off; override the launch command with SEMBLE_MCP_CMD.
   const sembleOff = (process.env.SEMBLE_MCP ?? '').trim().toLowerCase() === 'off'
   if (!sembleOff) {
     const cmd = (process.env.SEMBLE_MCP_CMD ?? '').trim()
     if (cmd) {
       const parts = cmd.split(/\s+/)
-      mcpServers['semble'] = { type: 'stdio', command: parts[0], args: parts.slice(1) }
+      mcpServers['semble'] = { type: 'stdio', command: parts[0], args: parts.slice(1), alwaysLoad: true }
     } else {
       mcpServers['semble'] = {
         type: 'stdio',
         command: 'uvx',
-        args: ['--from', 'semble[mcp]==0.5.4', 'semble']
+        args: ['--from', 'semble[mcp]==0.5.4', 'semble'],
+        alwaysLoad: true
+      }
+    }
+  }
+
+  // Inject codegraph MCP for structural code intelligence — callers, call
+  // graphs, blast radius, symbol definitions. Runs per-project: only repos
+  // with a .codegraph/ index respond to queries; others return empty results.
+  // alwaysLoad: true keeps the schema in context at turn 1 (1 tool, ~200 tokens).
+  // Opt out with CODEGRAPH_MCP=off; override the launch command with CODEGRAPH_MCP_CMD.
+  const codegraphOff = (process.env.CODEGRAPH_MCP ?? '').trim().toLowerCase() === 'off'
+  if (!codegraphOff) {
+    const cmd = (process.env.CODEGRAPH_MCP_CMD ?? '').trim()
+    if (cmd) {
+      const parts = cmd.split(/\s+/)
+      mcpServers['codegraph'] = { type: 'stdio', command: parts[0], args: parts.slice(1), alwaysLoad: true }
+    } else {
+      mcpServers['codegraph'] = {
+        type: 'stdio',
+        command: 'codegraph',
+        args: ['serve', '--mcp'],
+        alwaysLoad: true
       }
     }
   }
