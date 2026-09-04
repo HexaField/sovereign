@@ -83,6 +83,71 @@ describe('file chip — markdown link resolution', () => {
   })
 })
 
+describe('injectCodeLinks — URL linkification inside inline code', () => {
+  it('wraps a bare https URL inside an inline code span in an <a> tag', () => {
+    const result = renderMarkdown('Visit `https://example.com` for docs.')
+    expect(result).toContain('<code>')
+    expect(result).toContain('<a href="https://example.com" target="_blank" rel="noopener noreferrer">')
+  })
+
+  it('wraps a bare http URL inside an inline code span', () => {
+    const result = renderMarkdown('`http://localhost:3000`')
+    expect(result).toContain('<a href="http://localhost:3000"')
+  })
+
+  it('preserves the <code> wrapper so styling and copy-button still apply', () => {
+    const result = renderMarkdown('`https://example.com`')
+    expect(result).toContain('<code>')
+    expect(result).toContain('</code>')
+    // The <a> must appear inside the <code>
+    const codeStart = result.indexOf('<code>')
+    const codeEnd = result.indexOf('</code>')
+    const linkStart = result.indexOf('<a href="https://example.com"')
+    expect(linkStart).toBeGreaterThan(codeStart)
+    expect(linkStart).toBeLessThan(codeEnd)
+  })
+
+  it('does not linkify URLs inside fenced code blocks', () => {
+    const result = renderMarkdown('```\nhttps://example.com\n```')
+    expect(result).toContain('<pre>')
+    // Must not inject <a> inside a pre block
+    const preContent = result.slice(result.indexOf('<pre>'), result.indexOf('</pre>'))
+    expect(preContent).not.toContain('<a href=')
+  })
+
+  it('leaves inline code without URLs unchanged', () => {
+    const result = renderMarkdown('`npm install`')
+    expect(result).toContain('<code>npm install</code>')
+    expect(result).not.toContain('<a href=')
+  })
+
+  it('trims trailing punctuation from the linked URL', () => {
+    const result = renderMarkdown('See `https://example.com/path.`')
+    expect(result).toContain('href="https://example.com/path"')
+    expect(result).not.toContain('href="https://example.com/path."')
+  })
+
+  it('decodes HTML-escaped ampersands in the href attribute', () => {
+    // marked HTML-escapes & to &amp; inside code spans
+    const result = renderMarkdown('`https://example.com/path?a=1&b=2`')
+    // href should have real & (decoded), display text keeps &amp; (escaped)
+    expect(result).toContain('href="https://example.com/path?a=1&b=2"')
+  })
+
+  it('handles multiple URLs in one code span', () => {
+    const result = renderMarkdown('`https://one.com and https://two.com`')
+    const linkCount = (result.match(/<a href=/g) || []).length
+    expect(linkCount).toBe(2)
+  })
+
+  it('does not re-wrap URLs that are already inside an <a> tag from file chip injection', () => {
+    // A plain markdown link does not produce a <code> tag, so no double-wrapping possible
+    const result = renderMarkdown('[https://example.com](https://example.com)')
+    const linkCount = (result.match(/<a href=/g) || []).length
+    expect(linkCount).toBe(1)
+  })
+})
+
 describe('file chip — tilde path expansion', () => {
   it('chips a markdown link with ~/... path even without cached home dir', () => {
     // Phase 0 handles markdown links: [label](path). ~/... paths get chipped
