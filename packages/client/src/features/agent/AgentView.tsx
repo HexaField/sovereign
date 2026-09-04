@@ -7,7 +7,7 @@
 // the chat store (already initialised at App level) follows that signal
 // and reconnects automatically.
 
-import { Switch, Match, Show, lazy, Suspense, createSignal } from 'solid-js'
+import { Switch, Match, Show, lazy, Suspense, createSignal, createMemo } from 'solid-js'
 import { activeAgentTab } from '../nav/store.js'
 import { ChatView } from '../chat/ChatView.js'
 import { InputArea } from '../chat/InputArea.js'
@@ -88,8 +88,13 @@ function HexTab(props: { messages: () => ChatMessage[] }) {
 
   /** Convert simple conversation entries to ChatMessage[] for the summary
    *  mode ChatView. Maps 'hex' → 'assistant', string timestamps → numbers,
-   *  and fills empty workItems/thinkingBlocks. */
-  const summaryMessages = (): ChatMessage[] =>
+   *  and fills empty workItems/thinkingBlocks.
+   *
+   *  Using createMemo so Solid.js tracks `simpleConversationEntries()` as
+   *  an explicit reactive dependency — avoids a stale-closure issue that
+   *  can occur when a plain function is evaluated inside a prop ternary
+   *  nested inside Switch/Match. */
+  const summaryMessages = createMemo((): ChatMessage[] =>
     simpleConversationEntries().map((entry) => ({
       turn: {
         role: entry.role === 'hex' ? ('assistant' as const) : ('user' as const),
@@ -100,6 +105,13 @@ function HexTab(props: { messages: () => ChatMessage[] }) {
         origin: entry.modality !== 'text' ? { modality: entry.modality } : undefined
       }
     }))
+  )
+
+  /** Memoized display messages — switches between the full turn list and
+   *  the simplified conversation when the toggle fires. createMemo gives
+   *  Solid a stable reactive node to subscribe to, ensuring ChatView's
+   *  `For each` re-renders immediately when showSimpleView changes. */
+  const displayMessages = createMemo((): ChatMessage[] => (showSimpleView() ? summaryMessages() : props.messages()))
 
   return (
     <div class="flex h-full flex-col">
@@ -119,7 +131,7 @@ function HexTab(props: { messages: () => ChatMessage[] }) {
           style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
         >
           <ChatView
-            messages={showSimpleView() ? summaryMessages() : props.messages()}
+            messages={displayMessages()}
             streamingHtml={showSimpleView() ? '' : streamingHtml()}
             agentStatus={agentStatus()}
             liveWork={showSimpleView() ? [] : liveWork()}
