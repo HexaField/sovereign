@@ -130,6 +130,21 @@ function HexTab(props: { messages: () => ChatMessage[] }) {
         <div
           style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
         >
+          {/* Simple-view mode strip — visible only in summary mode so the
+              user always knows which view is active. */}
+          <Show when={showSimpleView()}>
+            <div
+              class="flex shrink-0 items-center justify-center gap-1.5 px-3 py-1 text-xs"
+              style={{
+                background: 'color-mix(in srgb, var(--c-accent) 12%, var(--c-bg-raised))',
+                'border-bottom': '1px solid color-mix(in srgb, var(--c-accent) 30%, var(--c-border))',
+                color: 'var(--c-accent)'
+              }}
+            >
+              <span>⬡</span>
+              <span>Simple conversation — voice exchanges only</span>
+            </div>
+          </Show>
           <ChatView
             messages={displayMessages()}
             streamingHtml={showSimpleView() ? '' : streamingHtml()}
