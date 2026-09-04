@@ -287,6 +287,51 @@ function injectFileChips(html: string): string {
   return result
 }
 
+/** URL pattern used for link injection inside inline code spans. */
+const CODE_URL_RE = /https?:\/\/[^\s<>"'`]+/g
+
+/**
+ * Wrap bare URLs that appear inside inline `<code>` spans in clickable `<a>`
+ * tags. The `<code>` wrapper is preserved so hover-copy and code styling still
+ * apply. Fenced code blocks (`<pre>`) are never modified.
+ *
+ * HTML entities in the matched URL (e.g. `&amp;` from marked's escaping) are
+ * decoded before use as the `href` so the browser receives a clean URL, while
+ * the visible text keeps the escaped form and renders correctly.
+ */
+function injectCodeLinks(html: string): string {
+  // Protect <pre> blocks — never linkify fenced code
+  const preSlots: string[] = []
+  let result = html.replace(/<pre[\s\S]*?<\/pre>/gi, (m) => {
+    preSlots.push(m)
+    return `\x01PRE${preSlots.length - 1}\x01`
+  })
+
+  // Wrap bare URLs inside inline <code> spans
+  result = result.replace(/<code([^>]*)>([\s\S]*?)<\/code>/gi, (match, attrs: string, inner: string) => {
+    // Skip content that already has child elements (file chips, links, etc.)
+    if (inner.includes('<')) return match
+    const linked = inner.replace(CODE_URL_RE, (rawUrl) => {
+      // Trim trailing punctuation that is unlikely to be part of the URL
+      const trimmed = rawUrl.replace(/[.,;:!?)}\]]+$/, '')
+      if (!trimmed) return rawUrl
+      // Decode HTML entities for the href so the browser gets the real URL
+      const href = trimmed
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer">${trimmed}</a>`
+    })
+    if (linked === inner) return match
+    return `<code${attrs}>${linked}</code>`
+  })
+
+  // Restore <pre> blocks
+  result = result.replace(/\x01PRE(\d+)\x01/g, (_, i) => preSlots[Number(i)])
+  return result
+}
+
 /**
  * Convert markdown text to HTML.
  */
@@ -296,6 +341,7 @@ export function renderMarkdown(text: string): string {
   try {
     let html = marked.parse(text, { async: false }) as string
     html = injectFileChips(html)
+    html = injectCodeLinks(html)
     return html
   } catch {
     return escapeHtml(text)
