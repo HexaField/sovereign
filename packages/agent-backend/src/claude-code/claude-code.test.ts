@@ -2042,4 +2042,44 @@ describe('claude-code/spawnSubagent — local model path', () => {
       rmSync(configDir, { recursive: true, force: true })
     }
   })
+
+  it('uses ~/workspaces cwd for local-model subagent — JSONL path regression', async () => {
+    // Regression: spawnSubagent used to stamp the child session's cwd with
+    // parentState.cwd (e.g. ~/.sovereign). The subprocess runs with
+    // ~/workspaces. The mismatch meant state.sessionFile pointed to
+    // ~/.claude/projects/<parent-cwd-encoded>/<id>.jsonl while the SDK wrote
+    // to ~/.claude/projects/-home-...-workspaces/<id>.jsonl, so getHistory
+    // returned nothing for every LiteLLM subagent thread.
+    const home = process.env.HOME ?? ''
+    const stub = capturingSdkQuery()
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), litellm: { url: 'http://localhost:4000' } },
+      { sdkQuery: stub }
+    )
+
+    await backend.createSession('parent', { threadKey: 'parent-jpath' })
+    backend.sendMessage('parent-jpath', 'start').catch(() => {})
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
+
+    const childKey = await backend.spawnSubagent!('parent-jpath', {
+      task: 'analyse code quality',
+      model: { provider: 'local-llm', model: 'qwen3.8-27b' }
+    })
+
+    // Even before the JSONL exists on disk, getSessionFilePath must return a
+    // path rooted in ~/workspaces (state.sessionFile was pre-stamped from cwd).
+    const agentDir = join(dataDir, 'agent')
+    const filePath = backend.getSessionFilePath!(childKey)
+
+    // The pre-stamped path is always non-null; check its directory component.
+    expect(filePath).not.toBeNull()
+    if (filePath !== null) {
+      // The encoded path must contain 'workspaces' (from ~/workspaces cwd)
+      expect(filePath).toContain('workspaces')
+      // The path must NOT be rooted in the parent's (test-temp) cwd
+      expect(filePath).not.toContain(cwd)
+      // It must be under the configured agentDir's projects/ tree
+      expect(filePath).toContain(join(agentDir, 'projects'))
+    }
+  })
 })
