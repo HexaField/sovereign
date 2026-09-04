@@ -803,8 +803,21 @@ export function createChatModule(
   // the child). Translate that into a chat.status event for the parent's
   // thread so the UI clears its "working" indicator.
   backend.on('subagent.spawned', (data) => {
-    const parentKey = data.parentKey
-    const threadId = parentKey ? sessionToThread.get(parentKey) : undefined
+    const parentKey = data.parentKey as string | undefined
+    const childKey = data.childKey as string | undefined
+    const threadId = parentKey ? sessionToThread.get(parentKey as string) : undefined
+
+    // Register the child session key so that events during execution
+    // (chat.status, chat.work, chat.turn, etc.) get routed to any SSE
+    // client that opens the subagent thread. Without this, the live state
+    // cache is never populated and getHistory is the only source of truth
+    // — which fails for LiteLLM subagents until the JSONL path bug is fixed.
+    // For consistency, register even for native subagents; resolveSessionKey
+    // would set the same mapping on first SSE connect anyway.
+    if (childKey) {
+      setMapping(childKey, childKey)
+    }
+
     if (!threadId) return
     if (wsHandler) {
       wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadId, status: 'idle' })

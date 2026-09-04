@@ -2747,10 +2747,17 @@ export function createClaudeCodeBackend(
       const childBackendId = randomUUID()
       const childKey = `${SUBAGENT_SESSION_PREFIX}${childBackendId}`
 
+      // Local-model subagents run as independent Claude Code processes with
+      // cwd = ~/workspaces (see startSessionLoop — isLocalSubagent overrides
+      // state.cwd). The SDK writes the JSONL under that cwd's project dir
+      // (~/.claude/projects/-home-josh-workspaces/<id>.jsonl), not under the
+      // parent's project dir. ensureSessionState must use the same cwd so that
+      // state.sessionFile resolves to the correct location; using parentState.cwd
+      // here stamps the wrong path and makes getHistory return nothing.
       const childState = ensureSessionState({
         sessionKey: childKey,
         backendSessionId: childBackendId,
-        cwd: parentState.cwd,
+        cwd: path.join(home, 'workspaces'),
         model: subagentModel,
         label: opts.label,
         parentSessionKey
