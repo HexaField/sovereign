@@ -180,6 +180,14 @@ export function createChatModule(
   // queue lives on the client).
   const messageQueue = createMessageQueue(dataDir)
 
+  // Transient sidecar for file attachments. Keyed by queue item id.
+  // Attachments are binary — persisting them in the queue's JSON files would
+  // be prohibitively large. Instead we hold them in memory alongside the queue
+  // item and pass them to backend.sendMessage at dispatch time. If the server
+  // restarts while an attachment-bearing item is queued, the text still sends
+  // (queue persists to disk) but the binary is lost — same as before this fix.
+  const attachmentSidecar = new Map<string, Buffer[]>() // queue item id → buffers
+
   /** Threads with an in-flight send (queue head is in 'sending' status, agent
    * is processing). Used so dispatcher does not double-send while an
    * adapter+agent are mid-turn. */
@@ -252,8 +260,19 @@ export function createChatModule(
       textToSend = `[${modalityTag}]\n${head.text}`
     }
 
+    // Retrieve and consume any file attachments stored for this queue item.
+    // Only splice the third argument in when there are actual buffers — the
+    // backend's sendMessage signature is (key, text, attachments?) and tests
+    // that assert on call arity must not see a spurious `undefined` third arg.
+    const queuedAttachments = attachmentSidecar.get(head.id)
+    attachmentSidecar.delete(head.id)
+
     try {
-      await backend.sendMessage(sessionKey, textToSend)
+      await backend.sendMessage(
+        sessionKey,
+        textToSend,
+        ...(queuedAttachments?.length ? [queuedAttachments] : ([] as []))
+      )
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error(`[chat] queue send failed for ${threadId} (${head.id}): ${errMsg}`)
@@ -848,7 +867,7 @@ export function createChatModule(
   async function handleSend(
     threadIdOrLabel: string,
     text: string,
-    _attachments?: Buffer[],
+    attachments?: Buffer[],
     opts?: SendOptions
   ): Promise<void> {
     if (!threadIdOrLabel) return // No thread — don't send
@@ -874,6 +893,14 @@ export function createChatModule(
     // Then attempt to pump the queue — if the agent is idle this fires
     // immediately; if not, it'll fire when chat.status → 'idle' arrives.
     const queued = messageQueue.enqueue(threadId, text, opts?.origin ? { origin: opts.origin } : undefined)
+
+    // Stash binary attachments in the transient sidecar keyed by the queue
+    // item's id. pumpQueue retrieves them at dispatch time and passes them to
+    // backend.sendMessage. Deduped sends (queued.deduplicated) never reach the
+    // backend so we skip storing for them.
+    if (attachments?.length && !queued.deduplicated) {
+      attachmentSidecar.set(queued.id, attachments)
+    }
     if (opts?.synthRole && !queued.deduplicated) {
       synthRoleById.set(queued.id, opts.synthRole)
     }

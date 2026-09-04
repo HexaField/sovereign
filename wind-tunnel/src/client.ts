@@ -199,6 +199,19 @@ export class SovereignClient {
     return this.post('/api/chat/send', { threadId, message, ...opts })
   }
 
+  /** Send a message with binary file attachments (base64-encoded). */
+  sendMessageWithAttachments(
+    threadId: string,
+    message: string,
+    attachments: Array<{ data: string; mediaType?: string }>
+  ): Promise<any> {
+    return this.post('/api/chat/send', {
+      threadId,
+      message,
+      attachments: attachments.map((a) => a.data)
+    })
+  }
+
   chatStatus(): Promise<any> {
     return this.get('/api/chat/status')
   }

@@ -191,6 +191,17 @@ describe('§2.4 Chat Module (Server)', () => {
     expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'hello')
   })
 
+  it('MUST pass file attachments through to backend.sendMessage — regression: _attachments was dead', async () => {
+    // Regression: handleSend used to silently drop the attachments parameter
+    // (it was named `_attachments` as an intentional no-op). The buffers were
+    // converted from base64 in the route handler but never reached the SDK.
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const buf = Buffer.from('fake-image-bytes')
+    await chatModule.handleSend(threadId, 'here is an image', [buf])
+    // Third arg MUST be present with the buffer array
+    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'here is an image', [buf])
+  })
+
   // Regression: in the bare-UUID model the client/cron may address a thread by
   // a label or a stale `#thread=<label>` hash. handleSend + resolveSessionKey
   // MUST resolve that to the canonical thread id, or the message routes to a
