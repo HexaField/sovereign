@@ -74,6 +74,7 @@ import { threadKey } from '../threads/store.js'
 import { wsStore } from '../../ws/index.js'
 import { draftsStore } from '../drafts/index.js'
 import type { ChatMessage } from '../chat/types.js'
+import { showSimpleView, simpleConversationEntries } from '../chat/simple-conversation-store.js'
 
 // Subagent navigation stack — shared across all chat panels
 const [subagentNavStack, setSubagentNavStack] = createSignal<SubagentNavEntry[]>([])
@@ -367,6 +368,21 @@ const ReopenButton: Component<{ side: 'left' | 'right'; onClick: () => void }> =
 }
 
 // §3.5 — Right Panel Chat (now functional)
+/** Convert simple conversation entries to ChatMessage[] for the summary view.
+ *  Shared across all chat rendering paths (ChatPanel, ExpandedChatView, HexTab). */
+function summaryMessages(): ChatMessage[] {
+  return simpleConversationEntries().map((entry) => ({
+    turn: {
+      role: entry.role === 'hex' ? ('assistant' as const) : ('user' as const),
+      content: entry.text,
+      timestamp: new Date(entry.timestamp).getTime(),
+      workItems: [],
+      thinkingBlocks: [],
+      origin: entry.modality !== 'text' ? { modality: entry.modality } : undefined
+    }
+  }))
+}
+
 const ChatPanel: Component = () => {
   // Init chat store for the active thread
   onMount(() => {
@@ -386,13 +402,15 @@ const ChatPanel: Component = () => {
     side: 'right'
   })
 
-  // Build messages from turns
+  // Build messages from turns — switches to summary view when toggled
   const messages = createMemo((): ChatMessage[] =>
     turns().map((t) => ({
       turn: t,
       pending: t.pending
     }))
   )
+  const displayMessages = createMemo((): ChatMessage[] => (showSimpleView() ? summaryMessages() : messages()))
+  const simple = () => showSimpleView()
 
   return (
     <>
@@ -437,18 +455,19 @@ const ChatPanel: Component = () => {
               }}
             >
               <ChatView
-                messages={messages()}
-                streamingHtml={streamingHtml()}
+                messages={displayMessages()}
+                streamingHtml={simple() ? '' : streamingHtml()}
                 agentStatus={agentStatus()}
-                liveWork={liveWork()}
+                liveWork={simple() ? [] : liveWork()}
                 liveThinkingText={liveThinkingText()}
-                compacting={compacting()}
-                isRetryCountdownActive={isRetryCountdownActive()}
-                retryCountdownSeconds={retryCountdownSeconds()}
+                compacting={simple() ? false : compacting()}
+                isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
+                retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
                 onSend={sendMessage}
                 onAbort={abortChat}
                 threadKey={threadKey()}
                 onViewSubagent={pushSubagent}
+                mode={simple() ? 'summary' : 'full'}
               />
             </div>
 
@@ -475,6 +494,8 @@ const ExpandedChatView: Component = () => {
       pending: t.pending
     }))
   )
+  const displayMessages = createMemo((): ChatMessage[] => (showSimpleView() ? summaryMessages() : messages()))
+  const simple = () => showSimpleView()
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
@@ -494,18 +515,19 @@ const ExpandedChatView: Component = () => {
           style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
         >
           <ChatView
-            messages={messages()}
-            streamingHtml={streamingHtml()}
+            messages={displayMessages()}
+            streamingHtml={simple() ? '' : streamingHtml()}
             agentStatus={agentStatus()}
-            liveWork={liveWork()}
+            liveWork={simple() ? [] : liveWork()}
             liveThinkingText={liveThinkingText()}
-            compacting={compacting()}
-            isRetryCountdownActive={isRetryCountdownActive()}
-            retryCountdownSeconds={retryCountdownSeconds()}
+            compacting={simple() ? false : compacting()}
+            isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
+            retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
             onSend={sendMessage}
             onAbort={abortChat}
             threadKey={threadKey()}
             onViewSubagent={pushSubagent}
+            mode={simple() ? 'summary' : 'full'}
           />
         </div>
 
@@ -528,6 +550,8 @@ const MobileChatPanel: Component = () => {
       pending: t.pending
     }))
   )
+  const displayMessages = createMemo((): ChatMessage[] => (showSimpleView() ? summaryMessages() : messages()))
+  const simple = () => showSimpleView()
 
   return (
     <div class="flex h-full flex-col">
@@ -544,18 +568,19 @@ const MobileChatPanel: Component = () => {
         }
       >
         <ChatView
-          messages={messages()}
-          streamingHtml={streamingHtml()}
+          messages={displayMessages()}
+          streamingHtml={simple() ? '' : streamingHtml()}
           agentStatus={agentStatus()}
-          liveWork={liveWork()}
+          liveWork={simple() ? [] : liveWork()}
           liveThinkingText={liveThinkingText()}
-          compacting={compacting()}
-          isRetryCountdownActive={isRetryCountdownActive()}
-          retryCountdownSeconds={retryCountdownSeconds()}
+          compacting={simple() ? false : compacting()}
+          isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
+          retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
           onSend={sendMessage}
           onAbort={abortChat}
           threadKey={threadKey()}
           onViewSubagent={pushSubagent}
+          mode={simple() ? 'summary' : 'full'}
         />
 
         <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
