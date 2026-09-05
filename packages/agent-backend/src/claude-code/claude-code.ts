@@ -1234,9 +1234,36 @@ export function createClaudeCodeBackend(
   // `setModel()`. We feed user messages into the input async-iterable as
   // they arrive.
   interface InputPump {
-    push(text: string, attachments?: Buffer[]): void
+    push(text: string, attachments?: import('@sovereign/core').Attachment[]): void
     end(): void
     iterable: AsyncIterable<SDKUserMessage>
+  }
+
+  // MIME types the Claude API accepts as image content blocks.
+  const IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+
+  /** Convert an Attachment to the appropriate Claude API content block.
+   *  - Known image types → `type: 'image'` with correct media_type
+   *  - PDF → `type: 'document'` (base64)
+   *  - Everything else (CSV, JSON, text, code, etc.) → `type: 'text'` with
+   *    the file content decoded as UTF-8 and prefixed with the filename */
+  function attachmentToContentBlock(att: import('@sovereign/core').Attachment): any {
+    if (IMAGE_MIME.has(att.mediaType)) {
+      return {
+        type: 'image',
+        source: { type: 'base64', media_type: att.mediaType, data: att.data.toString('base64') }
+      }
+    }
+    if (att.mediaType === 'application/pdf') {
+      return {
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: att.data.toString('base64') }
+      }
+    }
+    // Text-based files: decode as UTF-8 and send as a text block.
+    // This handles CSV, JSON, XML, Markdown, source code, logs, etc.
+    const textContent = att.data.toString('utf-8')
+    return { type: 'text', text: `--- ${att.name} ---\n${textContent}` }
   }
 
   function makeInputPump(sessionId: string): InputPump {
@@ -1275,13 +1302,7 @@ export function createClaudeCodeBackend(
       push(text, attachments) {
         const content: any =
           attachments && attachments.length > 0
-            ? [
-                { type: 'text', text },
-                ...attachments.map((buf) => ({
-                  type: 'image',
-                  source: { type: 'base64', media_type: 'image/png', data: buf.toString('base64') }
-                }))
-              ]
+            ? [{ type: 'text', text }, ...attachments.map(attachmentToContentBlock)]
             : text
         deliver({
           type: 'user',
@@ -1702,7 +1723,7 @@ export function createClaudeCodeBackend(
     }
   }
 
-  async function sendMessage(sessionKey: string, text: string, attachments?: Buffer[]) {
+  async function sendMessage(sessionKey: string, text: string, attachments?: import('@sovereign/core').Attachment[]) {
     let state = internal.sessions.get(sessionKey)
     if (!state) {
       // Registry-driven resume: if Sovereign already persisted this key,

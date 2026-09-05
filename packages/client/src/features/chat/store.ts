@@ -387,16 +387,20 @@ export async function sendMessage(
   if (opts?.origin) body.origin = opts.origin
   if (opts?.immediate) body.immediate = true
   if (attachments?.length) {
-    const base64Files = await Promise.all(
+    const filePayloads = await Promise.all(
       attachments.map(async (f) => {
         const buf = await f.arrayBuffer()
         const bytes = new Uint8Array(buf)
         let binary = ''
         for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-        return btoa(binary)
+        return {
+          name: f.name,
+          mediaType: f.type || 'application/octet-stream',
+          data: btoa(binary)
+        }
       })
     )
-    body = { ...body, attachments: base64Files }
+    body = { ...body, attachments: filePayloads }
   }
 
   try {
