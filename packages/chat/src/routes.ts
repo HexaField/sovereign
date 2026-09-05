@@ -148,12 +148,23 @@ export function createChatRoutes(
       if (!threadId || (!message && !attachments?.length)) {
         return res.status(400).json({ error: 'threadId and message are required' })
       }
-      // Convert base64 attachments to Buffers
-      const buffers = attachments?.map((a: string) => Buffer.from(a, 'base64'))
+      // Convert attachment payloads to Attachment objects.
+      // Accepts both the new { name, mediaType, data } format and legacy
+      // bare base64 strings for backward compatibility.
+      const parsed = attachments?.map((a: string | { name?: string; mediaType?: string; data: string }) => {
+        if (typeof a === 'string') {
+          return { name: 'attachment', mediaType: 'application/octet-stream', data: Buffer.from(a, 'base64') }
+        }
+        return {
+          name: a.name || 'attachment',
+          mediaType: a.mediaType || 'application/octet-stream',
+          data: Buffer.from(a.data, 'base64')
+        }
+      })
       const opts: Record<string, unknown> = {}
       if (origin) opts.origin = origin
       if (immediate) opts.immediate = true
-      await chatModule.handleSend(threadId, message || '', buffers, Object.keys(opts).length > 0 ? opts : undefined)
+      await chatModule.handleSend(threadId, message || '', parsed, Object.keys(opts).length > 0 ? opts : undefined)
       // Return current queue snapshot so HTTP-only clients have a fresh view
       // without waiting for the SSE round-trip.
       res.json({ success: true, queue: chatModule.getQueueSnapshot(threadId) })

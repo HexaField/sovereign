@@ -149,7 +149,7 @@ export interface ClaudeSessionState {
   /** Abort controller for the in-flight `query()` (if any). */
   abortController?: AbortController
   /** Input-queue write side for streaming input mode. */
-  pushUserMessage?: (text: string, attachments?: Buffer[]) => void
+  pushUserMessage?: (text: string, attachments?: import('@sovereign/core').Attachment[]) => void
   /** Cleanup function that stops the input queue. */
   endInput?: () => void
   /** Promise that resolves when the in-flight query iteration completes. */

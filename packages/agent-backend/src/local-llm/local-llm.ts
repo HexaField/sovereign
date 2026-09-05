@@ -194,10 +194,20 @@ function estimateTokens(chars: number): number {
  *  ollama / vLLM, and the shared wire `ChatMessage.content` is `string |
  *  null` (no content-part array) — so attachments are surfaced as a note
  *  rather than true image content. Never silently drop them. */
-function buildUserContent(text: string, attachments?: Buffer[]): string {
+function buildUserContent(text: string, attachments?: import('@sovereign/core').Attachment[]): string {
   if (!attachments || attachments.length === 0) return text
-  const note = `[${attachments.length} attachment(s) included — this backend does not forward images to the model.]`
-  return text ? `${text}\n\n${note}` : note
+  // For text-based files, inline the content so the local model can read it.
+  // Binary files (images, etc.) get a note since local models lack multimodal support.
+  const IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+  const parts: string[] = text ? [text] : []
+  for (const att of attachments) {
+    if (IMAGE_MIME.has(att.mediaType) || att.mediaType === 'application/pdf') {
+      parts.push(`[Attachment "${att.name}" (${att.mediaType}) — binary file, not forwarded to this model.]`)
+    } else {
+      parts.push(`--- ${att.name} ---\n${att.data.toString('utf-8')}`)
+    }
+  }
+  return parts.join('\n\n')
 }
 
 /** Serialize messages for the inference server.
@@ -289,7 +299,7 @@ interface LocalLlmSessionState {
   createdAt: number
   updatedAt: number
   /** Messages waiting for the current turn to finish — sendMessage never drops input. */
-  pendingQueue: Array<{ text: string; attachments?: Buffer[] }>
+  pendingQueue: Array<{ text: string; attachments?: import('@sovereign/core').Attachment[] }>
   /** True while a turn is actively running for this session. */
   processing: boolean
   abortController?: AbortController
@@ -921,7 +931,7 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
   async function runTurn(
     state: LocalLlmSessionState,
     text: string,
-    attachments?: Buffer[]
+    attachments?: import('@sovereign/core').Attachment[]
   ): Promise<{ outcome: 'ok' | 'aborted' | 'error'; errorMessage: string }> {
     state.agentStatus = 'working'
     emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'working' })
@@ -1631,7 +1641,11 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     return connectionStatus
   }
 
-  async function sendMessage(sessionKey: string, text: string, attachments?: Buffer[]): Promise<void> {
+  async function sendMessage(
+    sessionKey: string,
+    text: string,
+    attachments?: import('@sovereign/core').Attachment[]
+  ): Promise<void> {
     const state = ensureSession(sessionKey)
     state.pendingQueue.push({ text, attachments })
     if (state.processing) return // already draining — the new message will be picked up in order

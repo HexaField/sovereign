@@ -196,10 +196,10 @@ describe('§2.4 Chat Module (Server)', () => {
     // (it was named `_attachments` as an intentional no-op). The buffers were
     // converted from base64 in the route handler but never reached the SDK.
     const { threadId, sessionKey } = await chatModule.handleSessionCreate()
-    const buf = Buffer.from('fake-image-bytes')
-    await chatModule.handleSend(threadId, 'here is an image', [buf])
-    // Third arg MUST be present with the buffer array
-    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'here is an image', [buf])
+    const att = { name: 'test.png', mediaType: 'image/png', data: Buffer.from('fake-image-bytes') }
+    await chatModule.handleSend(threadId, 'here is an image', [att])
+    // Third arg MUST be present with the attachment array
+    expect(backend.sendMessage).toHaveBeenCalledWith(sessionKey, 'here is an image', [att])
   })
 
   // Regression: in the bare-UUID model the client/cron may address a thread by

@@ -49,7 +49,11 @@ export function registerChatWs(wsHandler: WsHandler, chatModule: ChatModule, bus
       switch (type) {
         case 'chat.send':
           chatModule
-            .handleSend(threadKey, msg.text as string, msg.attachments as Buffer[] | undefined)
+            .handleSend(
+              threadKey,
+              msg.text as string,
+              msg.attachments as import('@sovereign/core').Attachment[] | undefined
+            )
             .then(() => {
               if (ackId && wsHandler.sendTo) {
                 wsHandler.sendTo(deviceId, { type: 'ack', ackId, status: 'accepted' } as any)

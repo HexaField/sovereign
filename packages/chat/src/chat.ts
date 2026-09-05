@@ -75,7 +75,12 @@ export interface SendOptions {
 
 export interface ChatModule {
   status(): ModuleStatus
-  handleSend(threadId: string, text: string, attachments?: Buffer[], opts?: SendOptions): Promise<void>
+  handleSend(
+    threadId: string,
+    text: string,
+    attachments?: import('@sovereign/core').Attachment[],
+    opts?: SendOptions
+  ): Promise<void>
   handleAbort(threadId: string): Promise<void>
   handleHistory(threadId: string, deviceId: string): Promise<void>
   handleFullHistory(threadId: string, deviceId: string): Promise<void>
@@ -186,7 +191,7 @@ export function createChatModule(
   // item and pass them to backend.sendMessage at dispatch time. If the server
   // restarts while an attachment-bearing item is queued, the text still sends
   // (queue persists to disk) but the binary is lost — same as before this fix.
-  const attachmentSidecar = new Map<string, Buffer[]>() // queue item id → buffers
+  const attachmentSidecar = new Map<string, import('@sovereign/core').Attachment[]>() // queue item id → attachments
 
   /** Threads with an in-flight send (queue head is in 'sending' status, agent
    * is processing). Used so dispatcher does not double-send while an
@@ -867,7 +872,7 @@ export function createChatModule(
   async function handleSend(
     threadIdOrLabel: string,
     text: string,
-    attachments?: Buffer[],
+    attachments?: import('@sovereign/core').Attachment[],
     opts?: SendOptions
   ): Promise<void> {
     if (!threadIdOrLabel) return // No thread — don't send

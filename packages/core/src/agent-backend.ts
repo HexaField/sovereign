@@ -12,6 +12,19 @@ export interface BackendRouter {
   forSession(sessionKey: string): import('./agent-backend.js').AgentBackend
 }
 
+/** File attachment with metadata — threaded from the UI through the chat
+ *  module to the agent backend so content blocks use the correct MIME type
+ *  instead of blindly assuming image/png. */
+export interface Attachment {
+  /** Original filename (e.g. "data.csv"). */
+  name: string
+  /** MIME type from the browser's File.type (e.g. "text/csv", "image/png").
+   *  Falls back to "application/octet-stream" when unknown. */
+  mediaType: string
+  /** Raw file content. */
+  data: Buffer
+}
+
 /**
  * Connection status of the agent backend.
  */
@@ -387,7 +400,7 @@ export interface AgentBackend {
   /** Current connection status */
   status(): BackendConnectionStatus
   /** Send a chat message to a session */
-  sendMessage(sessionKey: string, text: string, attachments?: Buffer[]): Promise<void>
+  sendMessage(sessionKey: string, text: string, attachments?: Attachment[]): Promise<void>
   /** Abort in-progress generation for a session */
   abort(sessionKey: string): Promise<void>
   /** Switch to / activate a session */
