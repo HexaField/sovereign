@@ -34,6 +34,7 @@ import { createMultiRootFileWatcher } from '@sovereign/files'
 import { createGitCli } from '@sovereign/git'
 import { createGitService } from '@sovereign/git'
 import { createGitRoutes } from '@sovereign/git'
+import { createThreadGitRoutes, createRepoTracker } from '@sovereign/git'
 import { registerGitChannel } from '@sovereign/git'
 import { createTerminalManager } from '@sovereign/terminal'
 import { createTerminalRoutes } from '@sovereign/terminal'
@@ -59,7 +60,7 @@ import { createDraftRouter } from '@sovereign/drafts'
 import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
-import { createInferenceClient, localLlmConfigFromStore } from '@sovereign/agent-backend'
+import { createInferenceClient, localLlmConfigFromStore, readHistoryLog } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
 import { createChatRoutes } from '@sovereign/chat'
@@ -1090,6 +1091,35 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     ? chatRoutesLlamaService.healthUrl.replace(chatRoutesLlamaService.path ?? '/health', '')
     : undefined
   app.use(createChatRoutes(chatModule, backend, dataDir, { llamaBaseUrl: chatRoutesLlamaUrl }))
+
+  // Thread-centric git routes — resolve threadId → workspace projects → repo paths.
+  // Resolution: threadId → thread.workspaceIds[0] → org → projects[].repoPath.
+  // Each project's repoPath points to an actual git repository root.
+  const gitCliInstance = createGitCli()
+
+  // Track which repos each thread's agent has touched via tool call paths.
+  const repoTracker = createRepoTracker(gitCliInstance)
+  bus.on('chat.work', (event) => {
+    const payload = event.payload as { sessionKey: string; work: { type: string; name?: string; input?: string } }
+    if (payload.work?.type !== 'tool_call') return
+    // Extract threadId from session key: agent:main:thread:<id>
+    const parts = payload.sessionKey.split(':thread:')
+    const threadId = parts.length > 1 ? parts[parts.length - 1] : null
+    if (threadId) {
+      repoTracker.trackWorkItem(threadId, payload.work.name, payload.work.input)
+    }
+  })
+  app.use(
+    createThreadGitRoutes(gitCliInstance, async (threadId) => {
+      // Seed from history log on first access so repos survive server restarts
+      if (!repoTracker.hasSeeded(threadId)) {
+        const sessionKey = `agent:main:thread:${threadId}`
+        const messages = readHistoryLog(dataDir, sessionKey)
+        await repoTracker.seedFromHistory(threadId, messages)
+      }
+      return repoTracker.getRepos(threadId)
+    })
+  )
   app.use(
     createThreadRoutes(threadManager, createForwardHandler(bus, threadManager), {
       chatModule,
