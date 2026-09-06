@@ -7,6 +7,7 @@ import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
 import { SummaryBubble } from '../chat/SummaryBubble.js'
 import { TtsToggle } from '../chat/TtsToggle.js'
+import { DiffViewer } from '../diff/index.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -108,47 +109,52 @@ export function Header() {
   const handleToggleMode = () => toggleMode()
 
   return (
-    <div
-      class="safe-top z-[100] flex shrink-0 items-center gap-2 px-4 py-2"
-      style={{ 'border-bottom': '1px solid var(--c-border)', background: 'var(--c-bg-raised)' }}
-    >
-      {/* Left: Agent icon — toggles between workspace and agent modes. */}
-      <button
-        class="shrink-0 cursor-pointer text-xl"
-        style={{ color: activeView() === 'agent' ? 'var(--c-accent)' : undefined }}
-        onClick={handleToggleMode}
-        title={activeView() === 'agent' ? 'Back to workspace' : `Open ${agentName()}`}
+    <>
+      <div
+        class="safe-top z-[100] flex shrink-0 items-center gap-2 px-4 py-2"
+        style={{ 'border-bottom': '1px solid var(--c-border)', background: 'var(--c-bg-raised)' }}
       >
-        {agentIcon()}
-      </button>
+        {/* Left: Agent icon — toggles between workspace and agent modes. */}
+        <button
+          class="shrink-0 cursor-pointer text-xl"
+          style={{ color: activeView() === 'agent' ? 'var(--c-accent)' : undefined }}
+          onClick={handleToggleMode}
+          title={activeView() === 'agent' ? 'Back to workspace' : `Open ${agentName()}`}
+        >
+          {agentIcon()}
+        </button>
 
-      {/* Center: mode-dependent header content. */}
-      <div class="min-w-0 flex-1 px-2">
-        <Show when={activeView() === 'workspace'}>
-          <WorkspaceHeaderContent />
+        {/* Center: mode-dependent header content. */}
+        <div class="min-w-0 flex-1 px-2">
+          <Show when={activeView() === 'workspace'}>
+            <WorkspaceHeaderContent />
+          </Show>
+          <Show when={activeView() === 'agent'}>
+            <AgentHeaderContent />
+          </Show>
+        </div>
+
+        {/* Rolling conversation summary + TTS toggle — gateway thread only. */}
+        <Show when={onGatewayThread()}>
+          <TtsToggle />
+          <SummaryBubble />
         </Show>
-        <Show when={activeView() === 'agent'}>
-          <AgentHeaderContent />
-        </Show>
+
+        {/* Status dot */}
+        <button
+          ref={healthDotRef}
+          class="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent transition-all"
+          style={{ background: statusStyle().background }}
+          onClick={() => setHealthOpen(!healthOpen())}
+          title={statusLabel()}
+        >
+          <span class="inline-block h-2 w-2 rounded-full" style={{ background: statusStyle().color }} />
+        </button>
+        <HealthPopover open={healthOpen()} onClose={() => setHealthOpen(false)} anchorRef={healthDotRef} />
       </div>
 
-      {/* Rolling conversation summary + TTS toggle — gateway thread only. */}
-      <Show when={onGatewayThread()}>
-        <TtsToggle />
-        <SummaryBubble />
-      </Show>
-
-      {/* Status dot */}
-      <button
-        ref={healthDotRef}
-        class="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent transition-all"
-        style={{ background: statusStyle().background }}
-        onClick={() => setHealthOpen(!healthOpen())}
-        title={statusLabel()}
-      >
-        <span class="inline-block h-2 w-2 rounded-full" style={{ background: statusStyle().color }} />
-      </button>
-      <HealthPopover open={healthOpen()} onClose={() => setHealthOpen(false)} anchorRef={healthDotRef} />
-    </div>
+      {/* Diff viewer overlay — rendered outside the header bar, portal-style */}
+      <DiffViewer />
+    </>
   )
 }
