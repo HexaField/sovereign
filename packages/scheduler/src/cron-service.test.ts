@@ -119,6 +119,47 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     scheduler.destroy()
   })
 
+  it('sets deleteAfterRun on oneshot jobs so the scheduler cleans them up', () => {
+    const bus = createEventBus(dataDir)
+    const scheduler = createScheduler(bus, dataDir, 60000)
+    const service = createCronService({ routing, scheduler, bus })
+
+    // Oneshot — should get deleteAfterRun: true
+    const oneshot = service.createUserMessageCron({
+      threadKey: 't-os',
+      schedule: { kind: 'oneshot', at: new Date(Date.now() + 60000).toISOString() },
+      prompt: 'once',
+      label: 'os'
+    })
+    const osJob = scheduler.get(oneshot.id)
+    expect(osJob).toBeDefined()
+    expect(osJob!.deleteAfterRun).toBe(true)
+
+    // Interval — should NOT get deleteAfterRun
+    const interval = service.createUserMessageCron({
+      threadKey: 't-iv',
+      schedule: { kind: 'interval', everyMs: 60000 },
+      prompt: 'repeat',
+      label: 'iv'
+    })
+    const ivJob = scheduler.get(interval.id)
+    expect(ivJob).toBeDefined()
+    expect(ivJob!.deleteAfterRun).toBeFalsy()
+
+    // Cron — should NOT get deleteAfterRun
+    const cron = service.createUserMessageCron({
+      threadKey: 't-cr',
+      schedule: { kind: 'cron', expr: '0 * * * *' },
+      prompt: 'hourly',
+      label: 'cr'
+    })
+    const crJob = scheduler.get(cron.id)
+    expect(crJob).toBeDefined()
+    expect(crJob!.deleteAfterRun).toBeFalsy()
+
+    scheduler.destroy()
+  })
+
   /**
    * Regression suite for the schedule-projection bug.
    *
