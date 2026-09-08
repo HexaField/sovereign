@@ -65,6 +65,9 @@ export {
 } from './local-llm/index.js'
 export type { LocalLlmBackend, LocalLlmConfig, InferenceClient, InferenceClientConfig } from './local-llm/index.js'
 
+// History log
+export { readHistoryLog } from './history-log.js'
+
 // Metrics
 export { createMetricsAccumulator } from './metrics.js'
 export type {

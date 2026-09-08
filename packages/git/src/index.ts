@@ -1,5 +1,7 @@
 export * from './git.js'
 export * from './service.js'
 export * from './routes.js'
+export * from './thread-routes.js'
 export * from './ws.js'
 export * from './types.js'
+export * from './repo-tracker.js'
