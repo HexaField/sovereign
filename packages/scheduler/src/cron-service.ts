@@ -216,6 +216,7 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
         name: input.label ?? `cron:${input.threadKey}`,
         schedule: input.schedule,
         enabled: true,
+        deleteAfterRun: input.schedule.kind === 'oneshot',
         payload: {
           kind: SOVEREIGN_CRON_JOB_KIND,
           threadKey: input.threadKey,
