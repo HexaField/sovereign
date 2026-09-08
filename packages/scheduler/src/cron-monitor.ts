@@ -12,14 +12,22 @@ export interface CronMonitorOptions {
   pollIntervalMs?: number
 }
 
-/** Derive threadKey from sessionTarget or sessionKey */
+/** Derive threadKey from sessionTarget or sessionKey.
+ *  Handles both legacy compound keys (`session:agent:main:thread:<key>`) and
+ *  post-migration bare-UUID / `session:<bare>` formats. */
 function deriveThreadKey(sessionTarget?: string, sessionKey?: string): string | null {
   for (const val of [sessionTarget, sessionKey]) {
     if (!val) continue
+    // Legacy: session:agent:main:thread:<key>
     const sessionMatch = val.match(/^session:agent:main:thread:(.+)$/)
     if (sessionMatch) return sessionMatch[1]
+    // Legacy: agent:main:thread:<key>
     const agentMatch = val.match(/^agent:main:thread:(.+)$/)
     if (agentMatch) return agentMatch[1]
+    // Post-migration: session:<bare-key> (e.g. session:1949df6d-...)
+    if (val.startsWith('session:')) return val.slice('session:'.length)
+    // Bare key (UUID or thread name) — use directly
+    if (!val.includes(':')) return val
   }
   return null
 }

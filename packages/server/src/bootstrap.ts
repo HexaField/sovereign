@@ -644,8 +644,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         })
       }
       if (!sessionId && isInit(req.body)) {
+        // Extract the Sovereign session key from ?session= so each MCP instance
+        // has reliable thread attribution without a global variable.
+        const callerSessionKey = new URL(req.url, 'http://localhost').searchParams.get('session') ?? undefined
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() })
-        const server = createSovereignMcpInstance()
+        const server = createSovereignMcpInstance(callerSessionKey)
         await server.connect(transport)
         transport.onclose = () => {
           if (transport.sessionId) {

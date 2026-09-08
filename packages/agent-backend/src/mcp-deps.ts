@@ -4,7 +4,6 @@
 
 import { randomUUID } from 'node:crypto'
 import type { PresenceMcpDeps, EmbeddingsToolDeps, SovereignToolDeps } from './claude-code/mcp-server.js'
-import type { ClaudeCodeBackend } from './claude-code/index.js'
 import type { RoutingBackend } from './factory.js'
 import type { CronService } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -34,8 +33,6 @@ export interface SovereignMcpDepsInput {
   meetingsService: MeetingsService
   notificationsModule: Notifications
   browserService: BrowserService
-  /** Resolver for the currently-active Claude Code session key (optional). */
-  getClaudeCodeBackend?: () => ClaudeCodeBackend | undefined
   /** Thread manager — used by agents.spawn to resolve per-thread subagent
    *  routing config (subagentBackend / subagentModel). */
   threadManager?: ThreadManager
@@ -60,8 +57,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     issueTracker,
     meetingsService,
     notificationsModule,
-    browserService,
-    getClaudeCodeBackend
+    browserService
   } = input
 
   /** Resolve a user-facing session/thread key to the canonical session key
@@ -247,7 +243,10 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
       }
     },
     currentSessionKey() {
-      return getClaudeCodeBackend?.()?.getActiveSessionKey()
+      // Base implementation returns undefined. Per-session overrides are injected
+      // by createSovereignMcpInstance (Claude Code HTTP path) or by the local-llm
+      // executor setting activeLocalSession before each turn.
+      return undefined
     },
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.embeddings ? { embeddings: input.embeddings } : {})

@@ -82,8 +82,10 @@ export interface AgentBackendWiringResult {
   sessionsRegistry: SessionsRegistry
   activeSessions: ActiveSessions
   sovereignMcpServer: import('@anthropic-ai/claude-agent-sdk').McpSdkServerConfigWithInstance
-  /** Creates a fresh McpServer instance bound to the same live deps — use for per-session HTTP transport. */
-  createSovereignMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
+  /** Creates a fresh McpServer instance bound to the same live deps — use for per-session HTTP transport.
+   *  When `callerSessionKey` is provided, the instance's `currentSessionKey()` returns that fixed key,
+   *  giving each MCP HTTP session reliable thread attribution without a global variable. */
+  createSovereignMcpInstance: (callerSessionKey?: string) => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
   /** Creates a filtered McpServer instance exposing only the 5 subagent-safe tools (browser + embeddings). */
   createSubagentMcpInstance: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer
   /** Registry of pending Claude Code `AskUserQuestion` calls awaiting user submission. */
@@ -348,7 +350,6 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     meetingsService,
     notificationsModule,
     browserService,
-    getClaudeCodeBackend: () => claudeCodeBackend,
     embeddings: embeddingsService,
     ...(hasSubagentDefaults ? { subagentDefaults } : {}),
     ...(input.presence ? { presence: input.presence } : {})
@@ -543,7 +544,15 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     metrics,
     activeSessions,
     sovereignMcpServer,
-    createSovereignMcpInstance: () => createSovereignMcpServer(sharedMcpDeps).instance,
+    createSovereignMcpInstance: (callerSessionKey?: string) => {
+      // When a session key arrives (from ?session= on the HTTP URL), override
+      // currentSessionKey so every tool call in this MCP instance sees the
+      // correct thread — no global variable, no race.
+      const instanceDeps = callerSessionKey
+        ? { ...sharedMcpDeps, currentSessionKey: () => callerSessionKey }
+        : sharedMcpDeps
+      return createSovereignMcpServer(instanceDeps).instance
+    },
     createSubagentMcpInstance: () =>
       createSovereignMcpServer(sharedMcpDeps, { include: SUBAGENT_SOVEREIGN_TOOLS }).instance,
     askUserQuestionStore

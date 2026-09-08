@@ -406,7 +406,16 @@ export function createLocalLlmBackend(
   }
 
   // ── Tool schemas + executors ──────────────────────────────────────
-  const sovereignExecutor = deps.sovereignTools ? createSovereignToolExecutor(deps.sovereignTools) : null
+  // Mutable session ref — set before each turn so sovereign tools know the
+  // calling session. Local-llm processes turns sequentially, so a single
+  // mutable variable suffices (no concurrent-stomp risk like Claude Code had).
+  let activeLocalSession: string | undefined
+  const sovereignExecutor = deps.sovereignTools
+    ? createSovereignToolExecutor({
+        ...deps.sovereignTools,
+        currentSessionKey: () => activeLocalSession
+      })
+    : null
 
   // Semble code search — enabled by default when the binary exists
   const sembleEnabled = deps.enableSemble !== false
@@ -933,6 +942,9 @@ Omit: verbose tool output already captured in section 7, intermediate reasoning 
     text: string,
     attachments?: import('@sovereign/core').Attachment[]
   ): Promise<{ outcome: 'ok' | 'aborted' | 'error'; errorMessage: string }> {
+    // Pin the calling session so sovereign tools (cron, agents_spawn, presence)
+    // resolve the correct thread for this turn.
+    activeLocalSession = state.sessionKey
     state.agentStatus = 'working'
     emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'working' })
 

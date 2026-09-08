@@ -158,19 +158,22 @@ function bareThreadKey(key: string): string {
 
 /**
  * Resolve the target thread for tools that schedule or send into a thread.
- * Order of preference: explicit arg → the calling session's thread →
- * throw with a clear message. Prevents the foot-gun where an agent in
- * `neural-nets` forgets to pass `threadKey` and the cron silently lands
- * in `main`.
+ * `threadKey` is now required in the schema, so `explicit` should always be
+ * present. The fallback path remains as a safety net — if somehow reached,
+ * it logs a warning so the caller knows attribution came from the session
+ * rather than the explicit parameter.
  */
 function resolveThreadKey(explicit: string | undefined, deps: SovereignToolDeps): string {
   if (explicit && explicit.trim()) return explicit.trim()
+  // Safety-net fallback — threadKey should always be provided now.
   const current = deps.currentSessionKey?.()
-  if (current) return bareThreadKey(current)
-  throw new Error(
-    'cron_create: threadKey is required when no calling session is attributable. ' +
-      'Pass `threadKey` explicitly (e.g. "main") or call from inside an active thread.'
-  )
+  if (current) {
+    console.warn(
+      '[mcp] cron_create: threadKey missing — falling back to session-attributed key. This should not happen.'
+    )
+    return bareThreadKey(current)
+  }
+  throw new Error('cron_create: threadKey is required. Pass the bare thread UUID or label.')
 }
 
 /** Tools exposed to subagents (local-LLM workers). Deliberately narrow —
@@ -193,14 +196,9 @@ export function createSovereignMcpServer(
     // ── cron ──────────────────────────────────────────────────────────────
     tool(
       'cron_create',
-      'Schedule a future user-message. Defaults to the CALLING thread when `threadKey` is omitted — i.e. the message is delivered back into the same thread the agent is currently running in. Pass `threadKey` explicitly only to cross-post into a different thread.',
+      'Schedule a future user-message into a Sovereign thread.',
       {
-        threadKey: z
-          .string()
-          .optional()
-          .describe(
-            'Optional. Logical thread key — a thread id, or its label. When omitted, defaults to the calling thread. Pass another thread id/label to cross-post into a different thread.'
-          ),
+        threadKey: z.string().describe('Target thread key — a bare thread UUID or label. Required.'),
         when: z
           .object({
             kind: z.enum(['cron', 'interval', 'oneshot']),
