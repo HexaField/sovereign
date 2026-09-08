@@ -174,7 +174,7 @@ export function createWorktreeManager(bus: EventBus, dataDir: string, opts: Work
       const project = requireProject(orgId, projectId)
       const worktrees = loadWorktrees(orgId, projectId)
       const removed: string[] = []
-      for (const wt of [...worktrees]) {
+      for (const wt of worktrees) {
         const merged = await gitOps.isBranchMerged(project.repoPath, wt.branch, project.defaultBranch)
         if (merged) {
           try {

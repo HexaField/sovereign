@@ -15,7 +15,6 @@
 // Self-skips when local-llm backend reports unavailable.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,

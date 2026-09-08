@@ -2050,7 +2050,6 @@ describe('claude-code/spawnSubagent — local model path', () => {
     // ~/.claude/projects/<parent-cwd-encoded>/<id>.jsonl while the SDK wrote
     // to ~/.claude/projects/-home-...-workspaces/<id>.jsonl, so getHistory
     // returned nothing for every LiteLLM subagent thread.
-    const home = process.env.HOME ?? ''
     const stub = capturingSdkQuery()
     const backend = createClaudeCodeBackend(
       { dataDir, cwd, agentDir: join(dataDir, 'agent'), litellm: { url: 'http://localhost:4000' } },

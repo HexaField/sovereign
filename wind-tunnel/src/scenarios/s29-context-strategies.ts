@@ -53,9 +53,6 @@ function makeLargeContent(sizeChars: number, marker: string): string {
   return lines.join('\n')
 }
 
-/** Duplicate content block for dedup testing — must exceed 1024 chars. */
-const DUPLICATE_BLOCK = 'DUPLICATE_MARKER_START\n' + 'x'.repeat(2000) + '\nDUPLICATE_MARKER_END'
-
 export const s29ContextStrategies: Scenario = {
   id: 's29',
   name: 'Context Strategies',

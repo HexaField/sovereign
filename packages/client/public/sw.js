@@ -9,7 +9,7 @@
 // `tag: 'thread-<id>'` lets a fresh push replace an outstanding one for the
 // same thread, and lets us dismiss by tag on clear.
 
-const SW_VERSION = 'sovereign-v1'
+const _SW_VERSION = 'sovereign-v1' // Reserved for cache-keyed upgrades
 
 self.addEventListener('install', () => {
   self.skipWaiting()

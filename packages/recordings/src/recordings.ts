@@ -183,7 +183,7 @@ export function createRecordingsService(
         meta.transcript = result.text
         meta.transcriptStatus = 'completed'
         meta.transcriptionProgress = 100
-      } catch (err: any) {
+      } catch {
         meta.transcriptStatus = 'failed'
         meta.transcriptionProgress = undefined
       } finally {

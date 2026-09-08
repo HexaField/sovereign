@@ -24,6 +24,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  system.dispose()
   fs.rmSync(dataDir, { recursive: true, force: true })
 })
 
