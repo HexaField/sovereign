@@ -102,7 +102,7 @@ class RingBuffer<T> {
 
   constructor(capacity: number) {
     this.capacity = capacity
-    this.buf = new Array(capacity)
+    this.buf = Array.from<T>({ length: capacity })
   }
 
   push(item: T): void {

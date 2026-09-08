@@ -221,7 +221,8 @@ describe('§8.6.4 Thread Routing for Imports', () => {
     })
     // The transcript.completed event includes threadKey for downstream handling
     const event = bus.events.find((e) => e.type === 'meeting.transcript.completed')
-    expect((event?.payload as { threadKey: string }).threadKey).toBe('thread-123')
+    expect(event).toBeDefined()
+    expect((event!.payload as { threadKey: string }).threadKey).toBe('thread-123')
   })
 
   it('§8.6.4 SHOULD create workspace-level meeting when no threadKey provided', async () => {

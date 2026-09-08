@@ -172,12 +172,13 @@ describeWithPty('Terminal Manager', () => {
     handle.write("printf '\\033[31mred\\033[0m'\n")
     // Poll for output instead of fixed sleep
     const deadline = Date.now() + 5000
+    const ESC_SEQ = '\x1b['
     while (Date.now() < deadline) {
-      if (chunks.join('').match(/\x1b\[/)) break
+      if (chunks.join('').includes(ESC_SEQ)) break
       await new Promise((r) => setTimeout(r, 100))
     }
     const output = chunks.join('')
-    expect(output).toMatch(/\x1b\[/)
+    expect(output).toContain(ESC_SEQ)
     handle.dispose()
   })
 

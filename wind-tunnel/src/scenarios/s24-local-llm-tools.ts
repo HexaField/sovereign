@@ -253,7 +253,6 @@ export const s24LocalLlmTools: Scenario = {
     //   3. Semble tool call routed (even if CLI absent)
     //   4. Core tool call worked
     const sovereignRouted = sovereignToolOk && toolResultRequests.length > 0
-    const hasExtraTools = totalToolCount > 7
     const coreRouted = coreToolOk
 
     // sovereignRouted is the critical path — proves the 4-tier executor

@@ -383,7 +383,7 @@ export function createBrowserService(dataDir: string, config: BrowserManagerConf
   }
 
   async function dispose(): Promise<void> {
-    for (const id of [...sessions.keys()]) {
+    for (const id of sessions.keys()) {
       try {
         await close(id)
       } catch {

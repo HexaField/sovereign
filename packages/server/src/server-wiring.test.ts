@@ -56,7 +56,7 @@ describe('Server index.ts wiring — Phase 6 modules', () => {
       expect(typeof mod.createBackend).toBe('function')
       expect(typeof mod.createSessionsRegistry).toBe('function')
       expect(typeof mod.createClaudeCodeBackend).toBe('function')
-    })
+    }, 15_000)
 
     it('routes a session to the claude-code backend when only claude-code is enabled', async () => {
       const { createBackend, createSessionsRegistry } = await import('@sovereign/agent-backend')

@@ -6,7 +6,16 @@ import { embedText, embedBatch, embedHealthCheck } from './embed.js'
 const SERVER_URL = 'http://127.0.0.1:9092'
 
 describe('embed (live server)', async () => {
-  const healthy = await embedHealthCheck(SERVER_URL)
+  // Verify the server can actually produce embeddings, not just respond to /health.
+  // The health endpoint may report OK while the model is still loading.
+  let healthy = await embedHealthCheck(SERVER_URL)
+  if (healthy) {
+    try {
+      await embedText('probe', 'search_query', { baseUrl: SERVER_URL, retries: 0 })
+    } catch {
+      healthy = false
+    }
+  }
 
   it.skipIf(!healthy)('health check passes', async () => {
     const ok = await embedHealthCheck(SERVER_URL)

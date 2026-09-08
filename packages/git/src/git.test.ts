@@ -92,9 +92,9 @@ describe('Git CLI Wrapper', () => {
   })
 
   it('pushes to remote', async () => {
-    // Create a bare remote
+    // Create a bare remote with default branch matching the local repo
     const remoteDir = await mkdtemp(join(tmpdir(), 'git-remote-'))
-    await gitCmd(remoteDir, ['init', '--bare'])
+    await gitCmd(remoteDir, ['init', '--bare', '-b', 'main'])
     await gitCmd(repoDir, ['remote', 'add', 'origin', remoteDir])
     await gitCmd(repoDir, ['push', '-u', 'origin', 'main'])
 
@@ -112,9 +112,9 @@ describe('Git CLI Wrapper', () => {
   })
 
   it('pulls from remote', async () => {
-    // Set up two clones
+    // Set up two clones with matching default branch
     const remoteDir = await mkdtemp(join(tmpdir(), 'git-remote-'))
-    await gitCmd(remoteDir, ['init', '--bare'])
+    await gitCmd(remoteDir, ['init', '--bare', '-b', 'main'])
     await gitCmd(repoDir, ['remote', 'add', 'origin', remoteDir])
     await gitCmd(repoDir, ['push', '-u', 'origin', 'main'])
 

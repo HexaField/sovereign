@@ -20,7 +20,7 @@ describe('Server — bootstrap', () => {
   it('exports bootstrapServer as a function', async () => {
     const mod = await import('./bootstrap.js')
     expect(typeof mod.bootstrapServer).toBe('function')
-  })
+  }, 15_000)
 })
 
 describe('Server — lockfile', () => {

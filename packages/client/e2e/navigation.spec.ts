@@ -1,10 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
-
-// Helper to open settings modal
-async function openSettings(page: Page) {
-  await page.getByTitle('Menu').click()
-  await page.getByRole('button', { name: '⚙️ Settings' }).click()
-}
+import { test, expect } from '@playwright/test'
 
 test.describe('Navigation', () => {
   test.beforeEach(async ({ page }) => {

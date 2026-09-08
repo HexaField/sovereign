@@ -2,7 +2,7 @@ import type { FullConfig } from '@playwright/test'
 import fs from 'node:fs'
 import type { ChildProcess } from 'node:child_process'
 
-async function globalTeardown(config: FullConfig) {
+async function globalTeardown(_config: FullConfig) {
   const serverProcess = (globalThis as any).__E2E_SERVER_PROCESS as ChildProcess | undefined
   const tempDir = (globalThis as any).__E2E_TEMP_DIR as string | undefined
 
