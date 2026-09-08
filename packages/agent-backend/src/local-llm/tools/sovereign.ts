@@ -126,11 +126,11 @@ const cronCreateSchema: ToolSchema = {
       'Schedule a future user-message into a Sovereign thread. Supports one-shot, interval, and cron schedules.',
     parameters: {
       type: 'object',
-      required: ['when', 'prompt'],
+      required: ['threadKey', 'when', 'prompt'],
       properties: {
         threadKey: {
           type: 'string',
-          description: 'Target thread key. Defaults to the current thread when omitted.'
+          description: 'Target thread key — bare thread UUID or label. Required.'
         },
         when: {
           type: 'object',
@@ -636,9 +636,13 @@ function bareThreadKey(key: string): string {
 
 function resolveThreadKey(explicit: string | undefined, deps: SovereignToolsDeps): string {
   if (explicit && explicit.trim()) return explicit.trim()
+  // Safety-net fallback — threadKey should always be provided now.
   const current = deps.currentSessionKey?.()
-  if (current) return bareThreadKey(current)
-  throw new Error('threadKey is required when no calling session is attributable.')
+  if (current) {
+    console.warn('[local-llm] cron_create: threadKey missing — falling back to session key. This should not happen.')
+    return bareThreadKey(current)
+  }
+  throw new Error('threadKey is required. Pass the bare thread UUID or label.')
 }
 
 export function createSovereignToolExecutor(
