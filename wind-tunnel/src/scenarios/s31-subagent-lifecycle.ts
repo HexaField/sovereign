@@ -30,8 +30,14 @@ export const s31SubagentLifecycle: Scenario = {
   name: 'Subagent Lifecycle Events',
   description: 'spawned/completed events fire for local-llm subagents; cross-backend result notification works',
 
-  async run(ctx: ScenarioContext): Promise<ScenarioResult> {
-    const { client, mockLlmUrl } = ctx
+  async run(_ctx: ScenarioContext): Promise<ScenarioResult> {
+    // agents_spawn disabled — local-LLM subagents produce unreliable results.
+    // This scenario tests sovereign_agents_spawn lifecycle events which no
+    // longer fire. Skip until the tool gets re-enabled.
+    return skip('skipped — sovereign_agents_spawn disabled (local-LLM subagents unreliable)')
+
+    /* eslint-disable no-unreachable */
+    const { client, mockLlmUrl } = _ctx
     const metrics: Record<string, unknown> = {}
 
     // 0. Check local-llm backend exists

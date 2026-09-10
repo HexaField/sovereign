@@ -238,7 +238,7 @@ export function makePresenceAwareAppendResolver(
         const lines: string[] = ['# Subagent Routing Configuration']
         const source = thread?.subagentBackend || thread?.subagentModel ? 'per-thread' : 'global default'
         lines.push(
-          `This thread has ${source} subagent routing configured. When spawning subagents via \`agents_spawn\`:`
+          `This thread has ${source} subagent routing configured. Sovereign subagent spawning via \`agents_spawn\` has been disabled — use Claude Code's built-in Task tool for subagent work. The routing config below applies when re-enabled:`
         )
         if (effBackend) {
           lines.push(`- All subagents route to the \`${effBackend}\` backend.`)

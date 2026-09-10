@@ -88,8 +88,8 @@ export const ALL_SCENARIOS: Scenario[] = [
   // response content, system prompt injection, and idle lifecycle.
   s25LocalLlmRoundtrip,
   // Subagent routing enforcement — system prompt declares routing policy,
-  // SDK tools (Agent/Workflow/SendMessage) blocked, sovereign_agents_spawn
-  // available. Self-skips when local-llm backend not enabled.
+  // SDK tools (Agent/Workflow/SendMessage) blocked. sovereign_agents_spawn
+  // disabled. Self-skips when local-llm backend not enabled.
   s26SubagentRouting,
   // Event isolation — local-llm and claude-code threads' SSE/WS events
   // stay isolated. No cross-thread marker leakage. Covers the cross-thread
