@@ -85,7 +85,6 @@ describe('claude-code/mcp-server', () => {
         'browser_open',
         'browser_act',
         'browser_close',
-        'agents_spawn',
         'agents_list',
         'notifications_send',
         'create_issue',
@@ -414,58 +413,7 @@ describe('claude-code/mcp-server', () => {
 
   // ── agents ──────────────────────────────────────────────────────────────
 
-  describe('agents_spawn', () => {
-    it('spawns a subagent using currentSessionKey as parent', async () => {
-      const deps = makeDeps()
-      const tools = getTools(deps)
-      const result = await invoke(tools, 'agents_spawn', { task: 'explore codebase' })
-      expect(deps.agents.spawn).toHaveBeenCalledWith('agent:main:thread:t1', {
-        task: 'explore codebase',
-        label: undefined,
-        backend: undefined,
-        model: undefined
-      })
-      const parsed = parseResult(result) as any
-      expect(parsed.sessionKey).toBe('agent:main:subagent:abc')
-      expect(parsed.parentSessionKey).toBe('agent:main:thread:t1')
-    })
-
-    it('uses explicit parentSessionKey over currentSessionKey', async () => {
-      const deps = makeDeps()
-      const tools = getTools(deps)
-      await invoke(tools, 'agents_spawn', {
-        task: 'work',
-        parentSessionKey: 'agent:main:thread:other'
-      })
-      expect(deps.agents.spawn).toHaveBeenCalledWith(
-        'agent:main:thread:other',
-        expect.objectContaining({ task: 'work' })
-      )
-    })
-
-    it('passes backend and model options', async () => {
-      const deps = makeDeps()
-      const tools = getTools(deps)
-      await invoke(tools, 'agents_spawn', {
-        task: 'research',
-        backend: 'local-llm',
-        model: 'qwen3-8b',
-        label: 'researcher'
-      })
-      expect(deps.agents.spawn).toHaveBeenCalledWith('agent:main:thread:t1', {
-        task: 'research',
-        backend: 'local-llm',
-        model: 'qwen3-8b',
-        label: 'researcher'
-      })
-    })
-
-    it('throws when no parent available', async () => {
-      const deps = makeDeps({ currentSessionKey: () => undefined })
-      const tools = getTools(deps)
-      await expect(invoke(tools, 'agents_spawn', { task: 'work' })).rejects.toThrow(/no parent session key available/)
-    })
-  })
+  // agents_spawn tests removed — tool disabled (local-LLM subagents unreliable)
 
   describe('agents_list', () => {
     it('returns all agents when no filter', async () => {

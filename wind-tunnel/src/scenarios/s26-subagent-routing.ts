@@ -1,16 +1,16 @@
 // S26: Subagent Routing Enforcement — verify that a local-llm thread's
-// subagent spawn routes through Sovereign's agents_spawn (not the SDK's
-// native Agent tool) and that the system prompt injection declares the
-// routing policy.
+// system prompt injection declares the routing policy, and that SDK
+// subagent tools remain blocked for non-native backends.
 //
-// Tests three aspects:
+// Tests two aspects:
 //   1. System prompt injection — the mock log's system messages must
 //      contain the "Subagent Routing" section with the thread's
 //      configured backend and model.
 //   2. Tool schema filtering — the context budget must NOT include
 //      Agent/Workflow/SendMessage tools (blocked by makeSubagentToolBlocker).
-//   3. Sovereign tool presence — sovereign_agents_spawn must appear in
-//      the registered tool schemas.
+//
+// NOTE: sovereign_agents_spawn has been disabled (local-LLM subagents
+// unreliable). The scenario no longer asserts its presence.
 //
 // Self-skips when local-llm backend reports unavailable.
 
@@ -30,7 +30,7 @@ function is404(err: any): boolean {
 export const s26SubagentRouting: Scenario = {
   id: 's26',
   name: 'Subagent Routing Enforcement',
-  description: 'System prompt declares routing, SDK tools blocked, sovereign_agents_spawn available',
+  description: 'System prompt declares routing, SDK tools blocked',
 
   async run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const { client, mockLlmUrl } = ctx
@@ -155,22 +155,22 @@ export const s26SubagentRouting: Scenario = {
     const leakedTools = blockedTools.filter((t) => toolNames.includes(t))
     metrics.leakedBlockedTools = leakedTools
 
-    // sovereign_agents_spawn MUST be present (the approved spawn path)
+    // sovereign_agents_spawn deliberately disabled — verify it does NOT appear
     const hasAgentsSpawn = toolNames.includes('sovereign_agents_spawn')
     metrics.hasAgentsSpawn = hasAgentsSpawn
 
     // 6. Verdict
     const noLeakedTools = leakedTools.length === 0
     const routingDeclared = hasRoutingSection && mentionsLocalLlm
-    const passed = routingDeclared && noLeakedTools && hasAgentsSpawn
+    const passed = routingDeclared && noLeakedTools && !hasAgentsSpawn
 
     return cleanup({
       passed,
       summary: passed
         ? `routing enforcement OK — prompt declares routing: ✓, blocked tools absent: ✓ (${toolNames.length} tools), ` +
-          `agents_spawn present: ✓`
+          `agents_spawn absent: ✓ (disabled)`
         : `routing enforcement failed — routing-in-prompt=${routingDeclared}, ` +
-          `leaked=${JSON.stringify(leakedTools)}, agents_spawn=${hasAgentsSpawn}`,
+          `leaked=${JSON.stringify(leakedTools)}, agents_spawn=${hasAgentsSpawn} (should be absent)`,
       metrics,
       samples: client.samples
     })
