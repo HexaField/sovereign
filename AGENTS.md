@@ -69,6 +69,43 @@ A rebuild severs in-flight agent turns rather than draining them. Draining deadl
 - **Tier 3** — synthesize a continuation message, quoting the in-flight prompt. Always-on: the backend's session resume rehydrates a transcript and then waits for input, so a mid-turn session otherwise sits idle forever.
 - **tool-await** — a `PreToolUse` hook was holding the backend open (currently `AskUserQuestion`). The backend re-fires the tool on resume, so synthesizing a continuation here would duplicate it. Short-circuit instead.
 
+## Holonic task system (`packages/tasks/`)
+
+Cross-thread task coordination via a holonic DAG. Tasks form many-to-many parent/child relationships (a holon acts as both whole and part). Stored in-memory at runtime; AD4M `hex-tasks` perspective bootstraps in the background for schema registration.
+
+### Architecture
+
+```
+TaskStore (interface)
+  ├── createInMemoryTaskStore()   — runtime, tests
+  └── createAd4mTaskStore()       — AD4M persistence (future primary)
+       ↓
+TaskService (business logic)
+  ├── CRUD + validation
+  ├── DAG link management + BFS cycle detection
+  ├── Bus event emission (task.created, task.state_changed, ...)
+  └── Operational summary (inFlight / recentlyCompleted / unassigned)
+       ↓
+TaskDigest (replaces PresenceDigest)
+  ├── Listens on task.* bus events
+  ├── Formats structured entries (no text extraction)
+  └── Sole operational-context source for internal thread
+```
+
+### MCP tools
+
+Eight Sovereign tools: `task_create`, `task_update`, `task_get`, `task_list`, `task_link`, `task_unlink`, `task_subscribe`, `task_summary`. Registered in `packages/agent-backend/src/claude-code/mcp-server.ts` via `TaskMcpDeps`.
+
+### Task states
+
+`pending` → `in_progress` → `completed` | `cancelled`
+
+### Digest migration (Wave 4 — complete)
+
+TaskDigest replaced PresenceDigest as the sole operational-context injection. The PresenceDigest's `chat.turn.completed` listener gets disposed at bootstrap. WatchStore tools (`presence_watch`, `presence_unwatch`, `presence_watched`) remain functional but deprecated.
+
+A debounced proactive-wake listener (`task.state_changed`, `task.created`) forwards a trigger message to the internal thread so TaskDigest entries surface immediately — not deferred until the next external event.
+
 ## Presence system
 
 Two long-lived threads form the presence system (`packages/presence/`). They pair but stay independent — each has its own session, history, and context window. They communicate via explicit tool calls, not by sharing context.
@@ -76,9 +113,9 @@ Two long-lived threads form the presence system (`packages/presence/`). They pai
 ### Thread roles
 
 - **`presence`** (`ThreadInfo.presence = 'gateway'`) — the user's primary interface. Voice input, text conversations, and direct work happen here (or in subagents spawned from here). A normal Claude Code thread. Carries only PRESENCE_KNOWLEDGE.md in its session prompt.
-- **`presence-internal`** (`ThreadInfo.presence = 'internal'`) — the agent's peripheral awareness. Processes **external and ambient signals only**: AD4M mentions, webhook events, watched-thread digests, and context forwarded from the gateway. The agent speaks externally only via `presence_reply_*` tool calls; silence counts as valid. Carries PRESENCE.md + PRESENCE_MEMORY.md + PRESENCE_KNOWLEDGE.md in its session prompt.
+- **`presence-internal`** (`ThreadInfo.presence = 'internal'`) — the agent's peripheral awareness. Processes **external and ambient signals only**: AD4M mentions, webhook events, task digests, and context forwarded from the gateway. The agent speaks externally only via `presence_reply_*` tool calls; silence counts as valid. Carries PRESENCE.md + PRESENCE_MEMORY.md + PRESENCE_KNOWLEDGE.md in its session prompt.
 
-The internal thread does NOT handle direct work. It observes the periphery — things that happen outside Sovereign (external integrations) and activity across other threads (watch digests). It surfaces noteworthy items to the gateway via `presence_reply_text`.
+The internal thread does NOT handle direct work. It observes the periphery — things that happen outside Sovereign (external integrations) and task activity across other threads (task digest). It surfaces noteworthy items to the gateway via `presence_reply_text`.
 
 ### Prompt layers
 
@@ -86,7 +123,7 @@ The internal thread does NOT handle direct work. It observes the periphery — t
 
 ### Knowledge graph (AD4M perspective)
 
-Both presence threads maintain a shared knowledge graph in a private AD4M perspective named `hex-knowledge`. The schema, tools, and patterns live in `~/.sovereign/PRESENCE_KNOWLEDGE.md` (injected into both sessions). Two subject classes:
+Both presence threads maintain a shared knowledge graph in a private AD4M perspective named `hex-knowledge`. The schema, tools, and patterns live in `PRESENCE_KNOWLEDGE.md` (injected into both sessions). Two subject classes:
 
 - **Entity** (`hex://Entity`) — durable nodes (person, project, concept, system)
 - **Note** (`hex://Note`) — timestamped knowledge units (observation, decision, fact, preference, insight)
