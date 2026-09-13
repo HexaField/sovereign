@@ -622,6 +622,12 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       })
   }
 
+  // Wave 4: Stop the PresenceDigest's chat.turn.completed listener.
+  // TaskDigest replaces it as the sole operational-context source.
+  // The WatchStore and PresenceDigest module remain structurally intact
+  // (deprecated tools still function) but the digest stops accumulating.
+  presenceModule.digest.dispose()
+
   // TaskDigest — replaces PresenceDigest for the presence system.
   // Listens on task.* bus events, formats structured entries.
   const taskDigest = createTaskDigest({
@@ -803,10 +809,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       setInFlight: (sessionKey, info) => activeSessions.setInFlight(sessionKey, info)
     },
     presence: {
-      // TaskDigest replaces PresenceDigest — structured task events
-      // instead of lossy 120-char text summaries. Falls back to the
-      // old PresenceDigest when the task digest has nothing.
-      takeDigest: () => taskDigest.take() ?? presenceModule.digest.take()
+      // Wave 4: TaskDigest replaces PresenceDigest as the sole
+      // operational-context injection. The PresenceDigest still runs
+      // internally (watch-store accumulation) but its output no longer
+      // surfaces — task events provide richer, structured context.
+      takeDigest: () => taskDigest.take()
     }
   })
 
@@ -867,6 +874,33 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       }
     })
   }
+
+  // ── Proactive task wake ──────────────────────────────────────────────
+  // When a task state changes, wake the presence-internal thread so the
+  // TaskDigest's accumulated entries surface immediately — not deferred
+  // until the next external trigger. Debounced (5 s) to batch rapid
+  // state transitions into a single wake.
+  {
+    let wakeTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleWake = () => {
+      if (wakeTimer) return
+      wakeTimer = setTimeout(async () => {
+        wakeTimer = null
+        const internalId = presenceModule.internalThreadId()
+        if (!internalId) return
+        try {
+          await chatModule.handleSend(internalId, '[Task state changed]', undefined, {
+            origin: { modality: 'text' as const }
+          })
+        } catch (err: unknown) {
+          console.warn('[tasks] proactive wake failed:', (err as Error)?.message)
+        }
+      }, 5000)
+    }
+    bus.on('task.state_changed', scheduleWake)
+    bus.on('task.created', scheduleWake)
+  }
+
   // Shared by voice response + conversation summary below — both pair a
   // completed turn with recent thread history via the same session lookup.
   const getRecentTurns = async (threadId: string, limit: number): Promise<Array<{ role: string; content: string }>> => {

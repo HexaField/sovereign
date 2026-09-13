@@ -244,7 +244,46 @@ describe('TaskDigest', () => {
     expect(digest.peek()).toHaveLength(0)
   })
 
-  // T3.10: Ignores transient_updated with no transientState
+  // T3.10: Cross-thread observation — events from thread A appear in digest
+  it('captures events from multiple source threads', () => {
+    const bus = makeBus()
+    const labels: Record<string, string> = {
+      'thread-A': 'feature-work',
+      'thread-B': 'review-agent'
+    }
+    const digest = createTaskDigest({
+      bus,
+      resolveLabel: (id) => labels[id]
+    })
+
+    emitTaskEvent(bus, 'task.created', {
+      taskName: 'Implement widget',
+      sourceThreadId: 'thread-A',
+      threadId: 'thread-A'
+    })
+    emitTaskEvent(bus, 'task.state_changed', {
+      taskName: 'Review PR',
+      sourceThreadId: 'thread-B',
+      oldState: 'pending',
+      newState: 'in_progress'
+    })
+
+    const entries = digest.peek()
+    expect(entries).toHaveLength(2)
+    expect(entries[0].threadLabel).toBe('feature-work')
+    expect(entries[0].summary).toContain('Implement widget')
+    expect(entries[1].threadLabel).toBe('review-agent')
+    expect(entries[1].summary).toContain('Review PR')
+
+    // take() returns a single block containing both threads
+    const block = digest.take()!
+    expect(block).toContain('feature-work')
+    expect(block).toContain('review-agent')
+
+    digest.dispose()
+  })
+
+  // T3.11: Ignores transient_updated with no transientState
   it('ignores transient_updated events with empty transientState', () => {
     const bus = makeBus()
     const digest = createTaskDigest({ bus, resolveLabel: () => 'x' })
