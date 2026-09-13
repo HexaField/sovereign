@@ -62,6 +62,8 @@ export interface AgentBackendWiringInput {
   /** Presence-thread integration. When set, the seven presence_* MCP tools
    *  are registered. Sourced from `@sovereign/presence`. */
   presence?: import('./claude-code/mcp-server.js').PresenceMcpDeps
+  /** Task service. When set, the eight task_* MCP tools are registered. */
+  tasks?: import('./claude-code/mcp-server.js').TaskMcpDeps
   /** Path to PRESENCE.md — appended to the session prompt for the presence
    *  thread only. */
   presencePersonalityFile?: string
@@ -352,7 +354,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     browserService,
     embeddings: embeddingsService,
     ...(hasSubagentDefaults ? { subagentDefaults } : {}),
-    ...(input.presence ? { presence: input.presence } : {})
+    ...(input.presence ? { presence: input.presence } : {}),
+    ...(input.tasks ? { tasks: input.tasks } : {})
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 

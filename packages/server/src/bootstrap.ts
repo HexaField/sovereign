@@ -61,6 +61,7 @@ import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
 import { createInferenceClient, localLlmConfigFromStore, readHistoryLog } from '@sovereign/agent-backend'
+import type { TaskMcpDeps } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
 import { createChatRoutes } from '@sovereign/chat'
@@ -105,6 +106,12 @@ import {
   bootstrapKnowledgeGraph,
   createSimpleConversation
 } from '@sovereign/presence'
+import {
+  createTaskService,
+  createInMemoryTaskStore,
+  createTaskDigest,
+  bootstrapTaskPerspective
+} from '@sovereign/tasks'
 import { createForestRoutes } from './forest/routes.js'
 import { createDashboardRoutes } from './dashboard/routes.js'
 import { createMeetingsService } from '@sovereign/meetings'
@@ -587,6 +594,52 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const presenceMemoryFile = path.join(configDir, 'PRESENCE_MEMORY.md')
   const presenceKnowledgeFile = path.join(configDir, 'PRESENCE_KNOWLEDGE.md')
 
+  // ── Task service ────────────────────────────────────────────────────
+  // In-memory store provides immediate availability. When AD4M connects,
+  // bootstrapTaskPerspective creates/finds the `hex-tasks` perspective and
+  // the AD4M-backed store can replace it (future enhancement). For now the
+  // in-memory store covers all test and runtime paths — tasks survive
+  // within a process lifetime, and the AD4M perspective bootstrap runs in
+  // the background for schema registration.
+  const taskStore = createInMemoryTaskStore()
+  const taskService = createTaskService({ store: taskStore, bus })
+
+  // Bootstrap the AD4M perspective in the background (non-blocking).
+  // Creates the `hex-tasks` perspective + registers SHACL schema when AD4M
+  // connects. Does not block server startup.
+  const agentName = cfg.identity?.agentName ?? 'Hex'
+  if (ad4mService) {
+    bootstrapTaskPerspective({
+      ad4m: ad4mService.client(),
+      agentName,
+      dataDir: path.join(dataDir, 'tasks')
+    })
+      .then((uuid) => {
+        if (uuid) console.log(`[tasks] AD4M perspective ready: ${uuid}`)
+      })
+      .catch((err) => {
+        console.warn('[tasks] AD4M bootstrap failed:', (err as Error)?.message)
+      })
+  }
+
+  // TaskDigest — replaces PresenceDigest for the presence system.
+  // Listens on task.* bus events, formats structured entries.
+  const taskDigest = createTaskDigest({
+    bus,
+    resolveLabel: (threadId: string) => threadManager.get(threadId)?.label,
+    persistFile: path.join(dataDir, 'presence', 'task-digest.json')
+  })
+
+  const taskMcpDeps: TaskMcpDeps = {
+    create: (opts) => taskService.create(opts),
+    update: (taskId, opts) => taskService.update(taskId, opts as any) as any,
+    get: (taskId) => taskService.get(taskId) as any,
+    list: (filter) => taskService.list(filter as any) as any,
+    link: (parentId, childId, sourceThreadId) => taskService.link(parentId, childId, sourceThreadId),
+    unlink: (parentId, childId, sourceThreadId) => taskService.unlink(parentId, childId, sourceThreadId),
+    summary: (resolveLabel) => taskService.summary(resolveLabel ?? ((id) => threadManager.get(id)?.label)) as any
+  }
+
   // Agent backend (the only construction cycle)
   const {
     routingBackend,
@@ -614,6 +667,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     notificationsModule,
     browserService,
     presence: presenceMcpDeps,
+    tasks: taskMcpDeps,
     presencePersonalityFile,
     presenceMemoryFile,
     presenceKnowledgeFile
@@ -749,7 +803,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       setInFlight: (sessionKey, info) => activeSessions.setInFlight(sessionKey, info)
     },
     presence: {
-      takeDigest: () => presenceModule.digest.take()
+      // TaskDigest replaces PresenceDigest — structured task events
+      // instead of lossy 120-char text summaries. Falls back to the
+      // old PresenceDigest when the task digest has nothing.
+      takeDigest: () => taskDigest.take() ?? presenceModule.digest.take()
     }
   })
 

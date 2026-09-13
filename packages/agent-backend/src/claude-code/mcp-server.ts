@@ -105,6 +105,8 @@ export interface SovereignToolDeps {
   /** Embeddings service. When set, registers `embeddings_search` and
    *  `embeddings_index` tools for semantic retrieval over local content. */
   embeddings?: EmbeddingsToolDeps
+  /** Task service. When set, registers the eight task_* MCP tools. */
+  tasks?: TaskMcpDeps
 }
 
 /** Subset of @sovereign/embeddings the MCP layer needs. Kept inline so this
@@ -137,6 +139,41 @@ export interface PresenceMcpDeps {
   }
   /** Optional: resolve a thread id by label so the agent can `presence_watch` by name. */
   resolveThreadId?(idOrLabel: string): string | undefined
+}
+
+/** Subset of @sovereign/tasks the MCP layer needs. Kept inline so this
+ *  package doesn't depend on @sovereign/tasks directly. */
+export interface TaskMcpDeps {
+  create(opts: {
+    name: string
+    description?: string
+    parentTaskIds?: string[]
+    tags?: string[]
+    autoAssign?: boolean
+    sourceThreadId: string
+  }): Promise<{ id: string; name: string; state: string; threadId: string | null }>
+  update(
+    taskId: string,
+    opts: {
+      state?: string
+      transientState?: string
+      name?: string
+      description?: string
+      threadId?: string | null
+      tags?: string[]
+      sourceThreadId: string
+    }
+  ): Promise<Record<string, unknown>>
+  get(taskId: string): Promise<Record<string, unknown> | null>
+  list(filter?: {
+    state?: string
+    threadId?: string | null
+    parentId?: string
+    rootsOnly?: boolean
+  }): Promise<Array<Record<string, unknown>>>
+  link(parentId: string, childId: string, sourceThreadId: string): Promise<void>
+  unlink(parentId: string, childId: string, sourceThreadId: string): Promise<void>
+  summary(resolveLabel?: (threadId: string) => string | undefined): Promise<Record<string, unknown>>
 }
 
 const okText = (text: string) => ({ content: [{ type: 'text' as const, text }] })
@@ -557,6 +594,150 @@ export function createSovereignMcpServer(
     )
   }
 
+  // ── tasks (only registered when wired) ──────────────────────────────────
+  if (deps.tasks) {
+    const tasks = deps.tasks
+    tools.push(
+      tool(
+        'task_create',
+        'Create a holonic task. Assigns to the calling thread by default. Returns the new task.',
+        {
+          name: z.string().describe('Short imperative title for the task.'),
+          description: z.string().optional().describe('What needs doing (markdown).'),
+          parentTaskIds: z.array(z.string()).optional().describe('IRIs of parent tasks (holonic — many-to-many).'),
+          tags: z.array(z.string()).optional().describe('Freeform labels.'),
+          autoAssign: z.boolean().optional().default(true).describe('Assign to the calling thread. Defaults to true.')
+        },
+        async (args) => {
+          const sourceThreadId = deps.currentSessionKey?.() ? bareThreadKey(deps.currentSessionKey()!) : 'unknown'
+          const result = await tasks.create({
+            name: args.name,
+            description: args.description,
+            parentTaskIds: args.parentTaskIds,
+            tags: args.tags,
+            autoAssign: args.autoAssign,
+            sourceThreadId
+          })
+          return okJson(result)
+        }
+      ),
+      tool(
+        'task_update',
+        'Update task properties. Sets updatedAt automatically. Emits typed bus events for state, thread, and transient changes.',
+        {
+          taskId: z.string().describe('The task IRI to update.'),
+          state: z.enum(['pending', 'in_progress', 'completed', 'cancelled']).optional().describe('New task state.'),
+          transientState: z.string().optional().describe('Freeform live status line.'),
+          name: z.string().optional(),
+          description: z.string().optional(),
+          threadId: z.string().nullable().optional().describe('Reassign (string) or unassign (null).'),
+          tags: z.array(z.string()).optional().describe('Replaces the entire tag set.')
+        },
+        async (args) => {
+          const sourceThreadId = deps.currentSessionKey?.() ? bareThreadKey(deps.currentSessionKey()!) : 'unknown'
+          const result = await tasks.update(args.taskId, {
+            state: args.state,
+            transientState: args.transientState,
+            name: args.name,
+            description: args.description,
+            threadId: args.threadId,
+            tags: args.tags,
+            sourceThreadId
+          })
+          return okJson(result)
+        }
+      ),
+      tool(
+        'task_get',
+        'Retrieve a single task with its full relationship graph (parents, children, tags).',
+        {
+          taskId: z.string().describe('The task IRI to retrieve.')
+        },
+        async (args) => {
+          const result = await tasks.get(args.taskId)
+          if (!result) return okText(`Task not found: ${args.taskId}`)
+          return okJson(result)
+        }
+      ),
+      tool(
+        'task_list',
+        'List tasks with optional filtering by state, thread, parent, or roots-only.',
+        {
+          state: z.enum(['pending', 'in_progress', 'completed', 'cancelled']).optional(),
+          threadId: z.string().nullable().optional().describe('Filter by assigned thread (null = unassigned).'),
+          parentId: z.string().optional().describe('Only direct children of this task.'),
+          rootsOnly: z.boolean().optional().describe('Only tasks with no parents.')
+        },
+        async (args) => {
+          const result = await tasks.list({
+            state: args.state,
+            threadId: args.threadId,
+            parentId: args.parentId,
+            rootsOnly: args.rootsOnly
+          })
+          return okJson(result)
+        }
+      ),
+      tool(
+        'task_link',
+        'Add a holonic parent/child relationship. Rejects cycles.',
+        {
+          parentId: z.string().describe('Parent task IRI.'),
+          childId: z.string().describe('Child task IRI.')
+        },
+        async (args) => {
+          const sourceThreadId = deps.currentSessionKey?.() ? bareThreadKey(deps.currentSessionKey()!) : 'unknown'
+          await tasks.link(args.parentId, args.childId, sourceThreadId)
+          return okJson({ linked: true })
+        }
+      ),
+      tool(
+        'task_unlink',
+        'Remove a holonic parent/child relationship.',
+        {
+          parentId: z.string().describe('Parent task IRI.'),
+          childId: z.string().describe('Child task IRI.')
+        },
+        async (args) => {
+          const sourceThreadId = deps.currentSessionKey?.() ? bareThreadKey(deps.currentSessionKey()!) : 'unknown'
+          await tasks.unlink(args.parentId, args.childId, sourceThreadId)
+          return okJson({ unlinked: true })
+        }
+      ),
+      tool(
+        'task_subscribe',
+        'Subscribe the calling thread to task events matching a filter. Returns a subscription id. (Requires AD4M waker — currently a placeholder for manual bus subscription.)',
+        {
+          taskId: z.string().optional().describe('Watch a specific task.'),
+          threadId: z.string().optional().describe('Watch all tasks assigned to a thread.'),
+          state: z
+            .enum(['pending', 'in_progress', 'completed', 'cancelled'])
+            .optional()
+            .describe('Watch for transitions to this state.')
+        },
+        async (_args) => {
+          // Subscriptions require AD4M waker integration. The bus-based
+          // TaskDigest covers the passive path; waker subscriptions provide
+          // the proactive path. For now, return a placeholder — the
+          // TaskDigest handles all current use cases.
+          return okJson({
+            subscriptionId: `sub-${Date.now()}`,
+            note: 'Task event subscriptions flow through the TaskDigest. AD4M waker integration pending.'
+          })
+        }
+      ),
+      tool(
+        'task_summary',
+        'Read-only snapshot of the operational landscape: in-flight tasks, recently completed, and unassigned work.',
+        {},
+        async () => {
+          const result = await tasks.summary()
+          return okJson(result)
+        }
+      )
+    )
+  }
+
   // ── presence (only registered when wired) ──────────────────────────────
   // The presence_* tools split by session role. See plans/presence-thread-spec.md.
   if (deps.presence) {
@@ -614,7 +795,7 @@ export function createSovereignMcpServer(
       ),
       tool(
         'presence_watch',
-        'Watch a thread — its assistant turns will be summarised into the next inbound digest. Only callable from the presence-internal thread.',
+        '[Deprecated — use task_create/task_subscribe instead.] Watch a thread — its assistant turns will be summarised into the next inbound digest. Only callable from the presence-internal thread.',
         {
           threadId: z.string().describe('Thread id (UUID) or label.'),
           reason: z.string().optional().describe('Short note about why this thread is being watched.')
@@ -629,7 +810,7 @@ export function createSovereignMcpServer(
       ),
       tool(
         'presence_unwatch',
-        'Stop watching a thread. Only callable from the presence-internal thread.',
+        '[Deprecated — use task_unlink instead.] Stop watching a thread. Only callable from the presence-internal thread.',
         { threadId: z.string() },
         async (args) => {
           const refusal = ensureInternal()
@@ -641,7 +822,7 @@ export function createSovereignMcpServer(
       ),
       tool(
         'presence_watched',
-        'List threads currently watched. Only callable from the presence-internal thread.',
+        '[Deprecated — use task_list instead.] List threads currently watched. Only callable from the presence-internal thread.',
         {},
         async () => {
           const refusal = ensureInternal()
