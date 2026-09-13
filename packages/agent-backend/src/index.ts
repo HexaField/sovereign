@@ -50,6 +50,7 @@ export {
   createAskUserQuestionStore,
   type ClaudeCodeBackend,
   type SovereignToolDeps,
+  type TaskMcpDeps,
   type PersonalityCompiler,
   type PersonalityCompilerOptions,
   type PersonalityManifest,
