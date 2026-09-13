@@ -363,3 +363,59 @@ describe('TaskService — summary', () => {
     expect(summary.inFlight[0].threadLabel).toBe('main-thread')
   })
 })
+
+// ── Cross-thread bus event observability ─────────────────────────────
+
+describe('TaskService — cross-thread event emission', () => {
+  it('task.state_changed carries sourceThreadId distinct from task threadId', async () => {
+    const { bus, events } = makeBus()
+    const svc = createTaskService({ store: createInMemoryTaskStore(), bus })
+
+    // Thread A creates and owns the task
+    const task = await svc.create({ name: 'Feature', sourceThreadId: 'thread-A' })
+
+    // Thread B updates the task (e.g. a review agent completing it)
+    await svc.update(task.id, { state: 'completed', sourceThreadId: 'thread-B' })
+
+    const stateEvent = events.find((e) => e.type === 'task.state_changed')
+    expect(stateEvent).toBeTruthy()
+    const p = stateEvent!.payload as TaskEventPayload
+    expect(p.sourceThreadId).toBe('thread-B')
+    expect(p.threadId).toBe('thread-A')
+    expect(p.oldState).toBe('pending')
+    expect(p.newState).toBe('completed')
+  })
+
+  it('task.created event emits for observation by any listener', async () => {
+    const { bus, events } = makeBus()
+    const svc = createTaskService({ store: createInMemoryTaskStore(), bus })
+
+    await svc.create({ name: 'Observable', sourceThreadId: 'thread-X' })
+
+    const createEvent = events.find((e) => e.type === 'task.created')
+    expect(createEvent).toBeTruthy()
+    const p = createEvent!.payload as TaskEventPayload
+    expect(p.taskName).toBe('Observable')
+    expect(p.sourceThreadId).toBe('thread-X')
+  })
+
+  it('task.linked and task.unlinked events fire with correct source', async () => {
+    const { bus, events } = makeBus()
+    const svc = createTaskService({ store: createInMemoryTaskStore(), bus })
+
+    const parent = await svc.create({ name: 'Parent', sourceThreadId: 't1' })
+    const child = await svc.create({ name: 'Child', sourceThreadId: 't1' })
+    events.length = 0
+
+    await svc.link(parent.id, child.id, 'linker-thread')
+    const linkEvent = events.find((e) => e.type === 'task.linked')
+    expect(linkEvent).toBeTruthy()
+    expect((linkEvent!.payload as TaskEventPayload).sourceThreadId).toBe('linker-thread')
+
+    events.length = 0
+    await svc.unlink(parent.id, child.id, 'unlinker-thread')
+    const unlinkEvent = events.find((e) => e.type === 'task.unlinked')
+    expect(unlinkEvent).toBeTruthy()
+    expect((unlinkEvent!.payload as TaskEventPayload).sourceThreadId).toBe('unlinker-thread')
+  })
+})
