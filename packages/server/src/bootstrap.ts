@@ -580,13 +580,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const presenceMcpDeps = {
     internalThreadId: () => presenceModule.internalThreadId(),
     gatewayThreadId: () => presenceModule.gatewayThreadId(),
-    watch: {
-      add: (threadId: string, reason?: string) => presenceModule.watchStore.add(threadId, reason),
-      remove: (threadId: string) => presenceModule.watchStore.remove(threadId),
-      list: () => presenceModule.watchStore.list()
-    },
-    tools: presenceModule.tools,
-    resolveThreadId: (idOrLabel: string) => threadManager.resolve(idOrLabel)?.id
+    tools: presenceModule.tools
   }
   // Presence files live alongside the personality sources in configDir
   // (not hardcoded to HOME — tests must never touch production paths).
@@ -624,8 +618,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
   // Wave 4: Stop the PresenceDigest's chat.turn.completed listener.
   // TaskDigest replaces it as the sole operational-context source.
-  // The WatchStore and PresenceDigest module remain structurally intact
-  // (deprecated tools still function) but the digest stops accumulating.
   presenceModule.digest.dispose()
 
   // TaskDigest — replaces PresenceDigest for the presence system.
@@ -809,10 +801,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       setInFlight: (sessionKey, info) => activeSessions.setInFlight(sessionKey, info)
     },
     presence: {
-      // Wave 4: TaskDigest replaces PresenceDigest as the sole
-      // operational-context injection. The PresenceDigest still runs
-      // internally (watch-store accumulation) but its output no longer
-      // surfaces — task events provide richer, structured context.
+      // TaskDigest replaces PresenceDigest as the sole
+      // operational-context injection. Task events provide richer,
+      // structured context than the old thread-watching digest.
       takeDigest: () => taskDigest.take()
     }
   })

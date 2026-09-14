@@ -13,7 +13,6 @@
 // See plans/presence-thread-spec.md for the spec.
 
 export { createLastOriginTracker, type LastOriginTracker } from './last-origin.js'
-export { createWatchStore, type WatchStore, type WatchEntry } from './watch-store.js'
 export { createPresenceDigest, summariseAssistantContent, type PresenceDigest, type DigestEntry } from './digest.js'
 export {
   createResponseTools,

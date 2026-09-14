@@ -10,7 +10,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { EventBus } from '@sovereign/core'
-import type { WatchStore } from './watch-store.js'
 
 export interface DigestEntry {
   threadId: string
@@ -36,7 +35,6 @@ export interface PresenceDigest {
 
 interface Deps {
   bus: EventBus
-  watchStore: WatchStore
   /** Resolves a thread id to a display label (for rendering). */
   resolveLabel(threadId: string): string | undefined
   /** When set, store buffer state in this file across restarts. */
@@ -116,7 +114,6 @@ export function createPresenceDigest(deps: Deps): PresenceDigest {
     const turn = payload?.turn
     if (!threadId || !turn) return
     if (turn.role !== 'assistant') return
-    if (!deps.watchStore.has(threadId)) return
     const summary = summariseAssistantContent(turn.content ?? '')
     if (!summary) return
     append({

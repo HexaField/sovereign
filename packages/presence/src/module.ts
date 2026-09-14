@@ -15,7 +15,6 @@ import path from 'node:path'
 import type { EventBus } from '@sovereign/core'
 import type { ThreadManager } from '@sovereign/threads'
 import { createLastOriginTracker, type LastOriginTracker } from './last-origin.js'
-import { createWatchStore, type WatchStore } from './watch-store.js'
 import { createPresenceDigest, type PresenceDigest } from './digest.js'
 import {
   createResponseTools,
@@ -54,8 +53,6 @@ export interface PresenceModule {
   internalThreadId(): string | null
   /** Gateway thread id (user-facing text chat). Null when not yet provisioned. */
   gatewayThreadId(): string | null
-  /** Watch-store handle exposed for the MCP tool layer. */
-  watchStore: WatchStore
   /** Digest accumulator + take/clear (sourced from watched-thread turns). */
   digest: PresenceDigest
   /** Last-origin-per-modality tracker (populated from inbound on the internal thread). */
@@ -112,10 +109,8 @@ export function createPresenceModule(deps: PresenceModuleDeps): PresenceModule {
   gatewayThreadId()
 
   const lastOrigin = createLastOriginTracker(deps.bus, internalThreadId)
-  const watchStore = createWatchStore(dataDir)
   const digest = createPresenceDigest({
     bus: deps.bus,
-    watchStore,
     resolveLabel: (threadId: string) => deps.threadManager.get(threadId)?.label,
     persistFile: path.join(dataDir, 'presence-digest.json')
   })
@@ -151,7 +146,6 @@ export function createPresenceModule(deps: PresenceModuleDeps): PresenceModule {
   return {
     internalThreadId,
     gatewayThreadId,
-    watchStore,
     digest,
     lastOrigin,
     tools,
@@ -159,7 +153,6 @@ export function createPresenceModule(deps: PresenceModuleDeps): PresenceModule {
     dispose() {
       digest.dispose()
       lastOrigin.dispose()
-      watchStore.flush()
     }
   }
 }

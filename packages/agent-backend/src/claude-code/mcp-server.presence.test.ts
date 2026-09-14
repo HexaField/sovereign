@@ -1,6 +1,6 @@
 // Tests for presence-tool registration and session-role gating in the
 // Sovereign MCP server. Verifies that:
-//  - All 5 presence tools appear when deps.presence exists
+//  - All 2 presence tools appear when deps.presence exists
 //  - Internal-only tools refuse calls from a non-internal session
 //  - All tools work from the internal session
 
@@ -14,16 +14,10 @@ function makePresence(overrides: Partial<PresenceMcpDeps> = {}): PresenceMcpDeps
   return {
     internalThreadId: () => INTERNAL_ID,
     gatewayThreadId: () => GATEWAY_ID,
-    watch: {
-      add: vi.fn().mockReturnValue({ threadId: 't1', addedAt: '2026-01-01T00:00:00Z' }),
-      remove: vi.fn().mockReturnValue(true),
-      list: vi.fn().mockReturnValue([])
-    },
     tools: {
       reply_voice: vi.fn().mockResolvedValue({ delivered: true }),
       reply_ad4m: vi.fn().mockResolvedValue({ delivered: true })
     },
-    resolveThreadId: vi.fn().mockImplementation((id: string) => id),
     ...overrides
   }
 }
@@ -75,16 +69,10 @@ function invokeHandler(tools: Record<string, any>, name: string, args: Record<st
   return handler(args, {})
 }
 
-const PRESENCE_TOOLS = [
-  'presence_reply_voice',
-  'presence_reply_ad4m',
-  'presence_watch',
-  'presence_unwatch',
-  'presence_watched'
-]
+const PRESENCE_TOOLS = ['presence_reply_voice', 'presence_reply_ad4m']
 
 describe('mcp-server presence tools', () => {
-  it('registers all 5 presence tools when deps.presence exists', () => {
+  it('registers all 2 presence tools when deps.presence exists', () => {
     const deps = makeDeps({ presence: makePresence() })
     const tools = getTools(deps)
     const names = Object.keys(tools)
@@ -102,6 +90,15 @@ describe('mcp-server presence tools', () => {
     }
   })
 
+  it('does NOT register removed watch tools', () => {
+    const deps = makeDeps({ presence: makePresence() })
+    const tools = getTools(deps)
+    const names = Object.keys(tools)
+    expect(names).not.toContain('presence_watch')
+    expect(names).not.toContain('presence_unwatch')
+    expect(names).not.toContain('presence_watched')
+  })
+
   describe('internal-only tools refuse from non-internal session', () => {
     for (const toolName of PRESENCE_TOOLS) {
       it(`${toolName} refuses from gateway session`, async () => {
@@ -112,7 +109,6 @@ describe('mcp-server presence tools', () => {
         const tools = getTools(deps)
         const minArgs: Record<string, unknown> = {}
         if (toolName.includes('reply')) minArgs.text = 'hello'
-        if (toolName === 'presence_watch' || toolName === 'presence_unwatch') minArgs.threadId = 't1'
         const result = await invokeHandler(tools, toolName, minArgs)
         expect(JSON.stringify(result.content)).toContain('this tool can only be used from the internal session')
       })
@@ -157,35 +153,6 @@ describe('mcp-server presence tools', () => {
         perspectiveUuid: 'p-uuid',
         channelAddress: 'ch-addr'
       })
-    })
-
-    it('presence_watch adds a thread with reason', async () => {
-      const presence = makePresence()
-      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
-      const tools = getTools(deps)
-      const result = await invokeHandler(tools, 'presence_watch', { threadId: 'neural-nets', reason: 'monitoring SNN' })
-      expect(presence.resolveThreadId).toHaveBeenCalledWith('neural-nets')
-      expect(presence.watch.add).toHaveBeenCalledWith('neural-nets', 'monitoring SNN')
-      const parsed = JSON.parse(result.content[0].text)
-      expect(parsed.watched.threadId).toBe('t1')
-    })
-
-    it('presence_unwatch removes a thread', async () => {
-      const presence = makePresence()
-      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
-      const tools = getTools(deps)
-      const result = await invokeHandler(tools, 'presence_unwatch', { threadId: 'neural-nets' })
-      expect(presence.watch.remove).toHaveBeenCalledWith('neural-nets')
-      const parsed = JSON.parse(result.content[0].text)
-      expect(parsed.removed).toBe(true)
-    })
-
-    it('presence_watched returns the watch list', async () => {
-      const presence = makePresence()
-      const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
-      const tools = getTools(deps)
-      await invokeHandler(tools, 'presence_watched', {})
-      expect(presence.watch.list).toHaveBeenCalled()
     })
   })
 })
