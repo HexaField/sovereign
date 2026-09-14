@@ -387,20 +387,15 @@ export async function sendMessage(
   if (opts?.origin) body.origin = opts.origin
   if (opts?.immediate) body.immediate = true
   if (attachments?.length) {
-    const filePayloads = await Promise.all(
-      attachments.map(async (f) => {
-        const buf = await f.arrayBuffer()
-        const bytes = new Uint8Array(buf)
-        let binary = ''
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-        return {
-          name: f.name,
-          mediaType: f.type || 'application/octet-stream',
-          data: btoa(binary)
-        }
-      })
-    )
-    body = { ...body, attachments: filePayloads }
+    // Upload files to server, then send path references.
+    const formData = new FormData()
+    for (const f of attachments) formData.append('files', f)
+    const uploadRes = await fetch('/api/uploads', { method: 'POST', body: formData })
+    if (!uploadRes.ok) throw new Error(`File upload failed: ${uploadRes.status}`)
+    const { files: uploaded } = (await uploadRes.json()) as {
+      files: { name: string; path: string; size: number; mediaType: string }[]
+    }
+    body = { ...body, attachments: uploaded.map((u) => ({ name: u.name, path: u.path, mediaType: u.mediaType })) }
   }
 
   try {

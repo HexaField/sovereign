@@ -172,7 +172,9 @@ export function InputArea(props: InputAreaProps) {
   const [editingId, setEditingId] = createSignal<number | null>(null)
 
   // File attachment state
-  const [attachedFiles, setAttachedFiles] = createSignal<{ name: string; path: string; size: number; file: File }[]>([])
+  const [attachedFiles, setAttachedFiles] = createSignal<
+    { name: string; path: string; size: number; file: File; serverPath?: string }[]
+  >([])
   const [isDragging, setIsDragging] = createSignal(false)
   const [uploading, setUploading] = createSignal(false)
   let dragCounter = 0
@@ -291,11 +293,32 @@ export function InputArea(props: InputAreaProps) {
     setUploading(true)
     try {
       const fileArray = Array.from(files)
-      const uploaded = fileArray.map((f) => ({
+      // Upload to server immediately to get persistent paths
+      interface UploadedFile {
+        name: string
+        path: string
+        size: number
+        mediaType: string
+      }
+      const formData = new FormData()
+      for (const f of fileArray) formData.append('files', f)
+      let serverFiles: UploadedFile[] | null = null
+      try {
+        const res = await fetch('/api/uploads', { method: 'POST', body: formData })
+        if (res.ok) {
+          const data = (await res.json()) as { files: UploadedFile[] }
+          serverFiles = data.files
+        }
+      } catch {
+        /* fall back to client-only preview */
+      }
+
+      const uploaded = fileArray.map((f, i) => ({
         name: f.name,
         path: URL.createObjectURL(f),
         size: f.size,
-        file: f
+        file: f,
+        serverPath: serverFiles?.[i]?.path
       }))
       if (uploaded.length) {
         setAttachedFiles((prev) => [...prev, ...uploaded])
@@ -416,10 +439,10 @@ export function InputArea(props: InputAreaProps) {
       return
     }
 
-    // Build message with file context for display
+    // Build message with file context for display — show server path when available
     let msg = text
     if (files.length) {
-      const fileLines = files.map((f) => `📎 ${f.name} (${(f.size / 1024).toFixed(1)}KB)`).join('\n')
+      const fileLines = files.map((f) => `📎 ${f.name} (${f.serverPath ?? f.name})`).join('\n')
       msg = files.length && text ? `${text}\n\n${fileLines}` : fileLines
     }
 
@@ -658,7 +681,7 @@ export function InputArea(props: InputAreaProps) {
 
     let msg = text
     if (files.length) {
-      const fileLines = files.map((f) => `📎 ${f.name} (${(f.size / 1024).toFixed(1)}KB)`).join('\n')
+      const fileLines = files.map((f) => `📎 ${f.name} (${f.serverPath ?? f.name})`).join('\n')
       msg = files.length && text ? `${text}\n\n${fileLines}` : fileLines
     }
     const rawFiles = files.map((f) => f.file)
