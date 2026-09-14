@@ -59,6 +59,7 @@ export interface ThreadManager {
     presence?: 'internal' | 'gateway'
     subagentBackend?: string
     subagentModel?: string
+    model?: string
   }): ThreadInfo
   /** Get by UUID. */
   get(id: string): ThreadInfo | undefined
