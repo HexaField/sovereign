@@ -12,9 +12,6 @@ const PRESENCE_TOOLS = [
   'presence_reply_ad4m',
   'presence_reply_text',
   'presence_reply_webhook',
-  'presence_watch',
-  'presence_unwatch',
-  'presence_watched',
   'presence_internal_send',
   'presence_internal_history'
 ]
@@ -145,7 +142,7 @@ export const s19PresenceTools: Scenario = {
       }
     }
 
-    // 5. Smoke-test: call presence_watched via MCP tools/call.
+    // 5. Smoke-test: call presence_reply_voice via MCP tools/call.
     const callRes = await client.timed('mcp-tools-call', () =>
       mcpPost(
         client.baseUrl,
@@ -153,7 +150,7 @@ export const s19PresenceTools: Scenario = {
           jsonrpc: '2.0',
           id: 3,
           method: 'tools/call',
-          params: { name: 'presence_watched', arguments: {} }
+          params: { name: 'presence_reply_voice', arguments: { text: 'smoke test' } }
         },
         sessionId
       )
@@ -165,7 +162,7 @@ export const s19PresenceTools: Scenario = {
     if (callRes.status !== 200 || !callRes.body?.result) {
       return {
         passed: false,
-        summary: `MCP tools/call (presence_watched) failed: HTTP ${callRes.status}`,
+        summary: `MCP tools/call (presence_reply_voice) failed: HTTP ${callRes.status}`,
         metrics,
         samples: client.samples
       }

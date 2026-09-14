@@ -97,9 +97,8 @@ export interface SovereignToolDeps {
   }
   /** Used by `sovereign.sessions_send` source attribution; optional. */
   currentSessionKey?(): string | undefined
-  /** Presence-system integration. When set, registers the presence_* MCP
-   *  tools — `presence_reply_*` + `presence_watch_*` gated to the internal
-   *  session, `presence_internal_*` gated to the gateway session.
+  /** Presence-system integration. When set, registers the presence_reply_*
+   *  MCP tools gated to the internal session.
    *  Sourced from `@sovereign/presence` at the wiring layer. */
   presence?: PresenceMcpDeps
   /** Embeddings service. When set, registers `embeddings_search` and
@@ -124,21 +123,14 @@ export interface EmbeddingsToolDeps {
 /** Subset of @sovereign/presence the MCP layer needs. Kept inline so this
  *  package doesn't depend on @sovereign/presence directly. */
 export interface PresenceMcpDeps {
-  /** The internal thread's bare id, or null when none. Gates `presence_reply_*` + `presence_watch_*`. */
+  /** The internal thread's bare id, or null when none. Gates `presence_reply_*`. */
   internalThreadId(): string | null
-  /** The gateway thread's bare id, or null when none. Gates `presence_internal_*`. */
+  /** The gateway thread's bare id, or null when none. */
   gatewayThreadId(): string | null
-  watch: {
-    add(threadId: string, reason?: string): { threadId: string; reason?: string; addedAt: string }
-    remove(threadId: string): boolean
-    list(): Array<{ threadId: string; reason?: string; addedAt: string }>
-  }
   tools: {
     reply_voice(text: string, opts?: { deviceId?: string }): Promise<unknown>
     reply_ad4m(text: string, opts?: { perspectiveUuid?: string; channelAddress?: string }): Promise<unknown>
   }
-  /** Optional: resolve a thread id by label so the agent can `presence_watch` by name. */
-  resolveThreadId?(idOrLabel: string): string | undefined
 }
 
 /** Subset of @sovereign/tasks the MCP layer needs. Kept inline so this
@@ -791,43 +783,6 @@ export function createSovereignMcpServer(
           if (args.channelAddress) opts.channelAddress = args.channelAddress
           const result = await presence.tools.reply_ad4m(args.text, Object.keys(opts).length ? opts : undefined)
           return okJson(result)
-        }
-      ),
-      tool(
-        'presence_watch',
-        '[Deprecated — use task_create/task_subscribe instead.] Watch a thread — its assistant turns will be summarised into the next inbound digest. Only callable from the presence-internal thread.',
-        {
-          threadId: z.string().describe('Thread id (UUID) or label.'),
-          reason: z.string().optional().describe('Short note about why this thread is being watched.')
-        },
-        async (args) => {
-          const refusal = ensureInternal()
-          if (refusal) return refusal
-          const resolved = presence.resolveThreadId?.(args.threadId) ?? args.threadId
-          const entry = presence.watch.add(resolved, args.reason)
-          return okJson({ watched: entry })
-        }
-      ),
-      tool(
-        'presence_unwatch',
-        '[Deprecated — use task_unlink instead.] Stop watching a thread. Only callable from the presence-internal thread.',
-        { threadId: z.string() },
-        async (args) => {
-          const refusal = ensureInternal()
-          if (refusal) return refusal
-          const resolved = presence.resolveThreadId?.(args.threadId) ?? args.threadId
-          const removed = presence.watch.remove(resolved)
-          return okJson({ removed })
-        }
-      ),
-      tool(
-        'presence_watched',
-        '[Deprecated — use task_list instead.] List threads currently watched. Only callable from the presence-internal thread.',
-        {},
-        async () => {
-          const refusal = ensureInternal()
-          if (refusal) return refusal
-          return okJson({ watched: presence.watch.list() })
         }
       )
     )

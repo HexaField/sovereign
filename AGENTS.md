@@ -102,7 +102,7 @@ Eight Sovereign tools: `task_create`, `task_update`, `task_get`, `task_list`, `t
 
 ### Digest migration (Wave 4 — complete)
 
-TaskDigest replaced PresenceDigest as the sole operational-context injection. The PresenceDigest's `chat.turn.completed` listener gets disposed at bootstrap. WatchStore tools (`presence_watch`, `presence_unwatch`, `presence_watched`) remain functional but deprecated.
+TaskDigest replaced PresenceDigest as the sole operational-context injection. The PresenceDigest's `chat.turn.completed` listener gets disposed at bootstrap. WatchStore and its MCP tools (`presence_watch`, `presence_unwatch`, `presence_watched`) have been fully removed.
 
 A debounced proactive-wake listener (`task.state_changed`, `task.created`) forwards a trigger message to the internal thread so TaskDigest entries surface immediately — not deferred until the next external event.
 

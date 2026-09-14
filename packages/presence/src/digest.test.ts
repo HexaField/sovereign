@@ -4,7 +4,6 @@ import path from 'node:path'
 import os from 'node:os'
 import { EventEmitter } from 'node:events'
 import { createPresenceDigest, summariseAssistantContent } from './digest.js'
-import { createWatchStore } from './watch-store.js'
 
 function makeBus() {
   const emitter = new EventEmitter()
@@ -52,38 +51,28 @@ describe('PresenceDigest', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'presence-digest-'))
   })
 
-  it('only accumulates assistant turns from watched threads', () => {
+  it('accumulates assistant turns from any thread', () => {
     const bus = makeBus()
-    const watch = createWatchStore(dir)
-    watch.add('watched-thread')
     const digest = createPresenceDigest({
       bus,
-      watchStore: watch,
-      resolveLabel: () => 'watched'
+      resolveLabel: () => 'thread'
     })
     bus.emit({
       type: 'chat.turn.completed',
-      payload: { threadId: 'unrelated-thread', turn: { role: 'assistant', content: 'noise' } }
+      payload: { threadId: 'thread-a', turn: { role: 'user', content: 'user msg' } }
     })
     bus.emit({
       type: 'chat.turn.completed',
-      payload: { threadId: 'watched-thread', turn: { role: 'user', content: 'user msg' } }
-    })
-    bus.emit({
-      type: 'chat.turn.completed',
-      payload: { threadId: 'watched-thread', turn: { role: 'assistant', content: 'Done a thing.' } }
+      payload: { threadId: 'thread-a', turn: { role: 'assistant', content: 'Done a thing.' } }
     })
     expect(digest.peek()).toHaveLength(1)
-    expect(digest.peek()[0].threadId).toBe('watched-thread')
+    expect(digest.peek()[0].threadId).toBe('thread-a')
   })
 
   it('take() returns formatted block and clears buffer', () => {
     const bus = makeBus()
-    const watch = createWatchStore(dir)
-    watch.add('t1')
     const digest = createPresenceDigest({
       bus,
-      watchStore: watch,
       resolveLabel: (id) => `label-${id}`
     })
     bus.emit({
@@ -95,17 +84,14 @@ describe('PresenceDigest', () => {
     expect(out).toContain('label-t1')
     expect(out).toContain('First thing')
     expect(digest.peek()).toHaveLength(0)
-    // Second take is null
+    // Second take returns null
     expect(digest.take()).toBeNull()
   })
 
   it('caps the buffer at maxEntries (oldest evicted)', () => {
     const bus = makeBus()
-    const watch = createWatchStore(dir)
-    watch.add('t1')
     const digest = createPresenceDigest({
       bus,
-      watchStore: watch,
       resolveLabel: () => 't1',
       maxEntries: 3
     })
@@ -116,18 +102,15 @@ describe('PresenceDigest', () => {
       })
     }
     expect(digest.peek()).toHaveLength(3)
-    // Oldest evicted — first remaining is Turn 2
+    // Oldest evicted — first remaining starts at Turn 2
     expect(digest.peek()[0].summary).toContain('Turn 2')
   })
 
   it('persists buffer across instances', () => {
     const bus = makeBus()
-    const watch = createWatchStore(dir)
-    watch.add('t1')
     const persistFile = path.join(dir, 'digest.json')
     const first = createPresenceDigest({
       bus,
-      watchStore: watch,
       resolveLabel: () => 't1',
       persistFile
     })
@@ -139,7 +122,6 @@ describe('PresenceDigest', () => {
     const bus2 = makeBus()
     const second = createPresenceDigest({
       bus: bus2,
-      watchStore: watch,
       resolveLabel: () => 't1',
       persistFile
     })

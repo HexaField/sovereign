@@ -55,7 +55,7 @@ export interface ThreadInfo {
    *    - `'internal'`  Agent's stream-of-consciousness. Receives ambient
    *                    inbound (voice, AD4M, watched-thread digests).
    *                    Carries PRESENCE.md + PRESENCE_MEMORY.md. Has the
-   *                    `presence_reply_*` + `presence_watch_*` tools.
+   *                    `presence_reply_*` tools.
    *                    NOT push-notified.
    *    - `'gateway'`   User's text-chat surface. Normal Claude Code thread
    *                    with its own session. Has the `presence_internal_*`
