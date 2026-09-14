@@ -110,7 +110,8 @@ import {
   createTaskService,
   createInMemoryTaskStore,
   createTaskDigest,
-  bootstrapTaskPerspective
+  bootstrapTaskPerspective,
+  createTaskRoutes
 } from '@sovereign/tasks'
 import { createForestRoutes } from './forest/routes.js'
 import { createDashboardRoutes } from './dashboard/routes.js'
@@ -615,6 +616,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         console.warn('[tasks] AD4M bootstrap failed:', (err as Error)?.message)
       })
   }
+
+  // Task REST routes — /api/tasks, /api/tasks/summary, /api/tasks/graph, /api/tasks/:id
+  app.use(
+    createTaskRoutes({
+      taskService,
+      resolveLabel: (id) => threadManager.get(id)?.label
+    })
+  )
 
   // Wave 4: Stop the PresenceDigest's chat.turn.completed listener.
   // TaskDigest replaces it as the sole operational-context source.

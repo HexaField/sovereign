@@ -31,3 +31,6 @@ export { createTaskDigest } from './task-digest.js'
 
 export type { TaskBootstrapOpts } from './bootstrap.js'
 export { bootstrapTaskPerspective } from './bootstrap.js'
+
+export type { TaskRouteDeps } from './routes.js'
+export { createTaskRoutes } from './routes.js'
