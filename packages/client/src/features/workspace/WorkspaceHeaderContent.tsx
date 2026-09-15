@@ -4,7 +4,6 @@ import { formatRelativeTime } from '../../lib/format.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from './store.js'
 import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
-import { DiffButton } from '../diff/index.js'
 import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
 
@@ -566,7 +565,6 @@ export function WorkspaceHeaderContent() {
             ▾
           </span>
         </button>
-        <DiffButton />
         <ChatSettingsButton />
         <button
           class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
