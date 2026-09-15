@@ -1,10 +1,12 @@
-import { createMemo, createSignal, Show, onMount, onCleanup } from 'solid-js'
+import { createMemo, createSignal, Show, Suspense, lazy, onMount, onCleanup } from 'solid-js'
 import { agentIcon, agentName } from '../../lib/identity.js'
 import { HealthPopover, overallHealth, initHealthPolling } from '../connection/HealthPopover.js'
 import { activeView, toggleMode, activeAgentTab, setActiveAgentTab, type AgentTab } from '../nav/store.js'
 import { threadKey, switchThread } from '../threads/store.js'
 import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
-import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
+const WorkspaceHeaderContent = lazy(() =>
+  import('../workspace/WorkspaceHeaderContent.js').then((m) => ({ default: m.WorkspaceHeaderContent }))
+)
 import { SummaryBubble } from '../chat/SummaryBubble.js'
 import { TtsToggle } from '../chat/TtsToggle.js'
 
@@ -123,7 +125,9 @@ export function Header() {
         {/* Center: mode-dependent header content. */}
         <div class="min-w-0 flex-1 px-2">
           <Show when={activeView() === 'workspace'}>
-            <WorkspaceHeaderContent />
+            <Suspense>
+              <WorkspaceHeaderContent />
+            </Suspense>
           </Show>
           <Show when={activeView() === 'agent'}>
             <AgentHeaderContent />

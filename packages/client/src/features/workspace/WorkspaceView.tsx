@@ -54,10 +54,10 @@ import {
   activeWorkspace
 } from './store.js'
 
-// Chat imports
-import { ChatView } from '../chat/ChatView.js'
-import { InputArea } from '../chat/InputArea.js'
-import { SubagentView } from '../chat/SubagentView.js'
+// Chat imports — lazy-loaded for progressive rendering
+const ChatView = lazy(() => import('../chat/ChatView.js').then((m) => ({ default: m.ChatView })))
+const InputArea = lazy(() => import('../chat/InputArea.js').then((m) => ({ default: m.InputArea })))
+const SubagentView = lazy(() => import('../chat/SubagentView.js').then((m) => ({ default: m.SubagentView })))
 import type { SubagentNavEntry } from '../chat/SubagentView.js'
 import {
   turns,
@@ -77,6 +77,15 @@ import { wsStore } from '../../ws/index.js'
 import { draftsStore } from '../drafts/index.js'
 import type { ChatMessage } from '../chat/types.js'
 import { showSimpleView, simpleConversationEntries } from '../chat/simple-conversation-store.js'
+
+const ChatSkeleton: Component = () => (
+  <div class="flex flex-1 flex-col gap-3 p-4" style={{ opacity: '0.4' }}>
+    <div class="h-8 w-3/4 rounded" style={{ background: 'var(--c-border)' }} />
+    <div class="h-6 w-1/2 rounded" style={{ background: 'var(--c-border)' }} />
+    <div class="h-8 w-5/6 rounded" style={{ background: 'var(--c-border)' }} />
+    <div class="h-6 w-2/3 rounded" style={{ background: 'var(--c-border)' }} />
+  </div>
+)
 
 // Subagent navigation stack — shared across all chat panels
 const [subagentNavStack, setSubagentNavStack] = createSignal<SubagentNavEntry[]>([])
@@ -458,49 +467,48 @@ const ChatPanel: Component = () => {
             transition: resize.dragging() ? 'none' : 'width 200ms ease'
           }}
         >
-          <Show
-            when={!isViewingSubagent()}
-            fallback={
-              <SubagentView
-                navStack={subagentNavStack()}
-                parentLabel={threadKey() || 'Main'}
-                onBack={() => popSubagent()}
-                onNavigateTo={navigateToDepth}
-                onViewSubagent={pushSubagent}
-              />
-            }
-          >
-            {/* Chat messages with settings button */}
-            <div
-              style={{
-                position: 'relative',
-                display: 'flex',
-                'flex-direction': 'column',
-                flex: '1',
-                'min-height': '0'
-              }}
+          <Suspense fallback={<ChatSkeleton />}>
+            <Show
+              when={!isViewingSubagent()}
+              fallback={
+                <SubagentView
+                  navStack={subagentNavStack()}
+                  parentLabel={threadKey() || 'Main'}
+                  onBack={() => popSubagent()}
+                  onNavigateTo={navigateToDepth}
+                  onViewSubagent={pushSubagent}
+                />
+              }
             >
-              <ChatView
-                messages={displayMessages()}
-                streamingHtml={simple() ? '' : streamingHtml()}
-                agentStatus={agentStatus()}
-                liveWork={simple() ? [] : liveWork()}
-                liveThinkingText={liveThinkingText()}
-                compacting={simple() ? false : compacting()}
-                isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
-                retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
-                onSend={sendMessage}
-                onAbort={abortChat}
-                threadKey={threadKey()}
-                onViewSubagent={pushSubagent}
-                mode={simple() ? 'summary' : 'full'}
-              />
-            </div>
+              <div
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  'flex-direction': 'column',
+                  flex: '1',
+                  'min-height': '0'
+                }}
+              >
+                <ChatView
+                  messages={displayMessages()}
+                  streamingHtml={simple() ? '' : streamingHtml()}
+                  agentStatus={agentStatus()}
+                  liveWork={simple() ? [] : liveWork()}
+                  liveThinkingText={liveThinkingText()}
+                  compacting={simple() ? false : compacting()}
+                  isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
+                  retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
+                  onSend={sendMessage}
+                  onAbort={abortChat}
+                  threadKey={threadKey()}
+                  onViewSubagent={pushSubagent}
+                  mode={simple() ? 'summary' : 'full'}
+                />
+              </div>
 
-            {/* Input area */}
-
-            <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
-          </Show>
+              <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+            </Show>
+          </Suspense>
         </div>
       </Show>
     </>
@@ -525,40 +533,42 @@ const ExpandedChatView: Component = () => {
 
   return (
     <div class="flex h-full flex-col" style={{ background: 'var(--c-bg)' }}>
-      <Show
-        when={!isViewingSubagent()}
-        fallback={
-          <SubagentView
-            navStack={subagentNavStack()}
-            parentLabel={threadKey() || 'Main'}
-            onBack={() => popSubagent()}
-            onNavigateTo={navigateToDepth}
-            onViewSubagent={pushSubagent}
-          />
-        }
-      >
-        <div
-          style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
+      <Suspense fallback={<ChatSkeleton />}>
+        <Show
+          when={!isViewingSubagent()}
+          fallback={
+            <SubagentView
+              navStack={subagentNavStack()}
+              parentLabel={threadKey() || 'Main'}
+              onBack={() => popSubagent()}
+              onNavigateTo={navigateToDepth}
+              onViewSubagent={pushSubagent}
+            />
+          }
         >
-          <ChatView
-            messages={displayMessages()}
-            streamingHtml={simple() ? '' : streamingHtml()}
-            agentStatus={agentStatus()}
-            liveWork={simple() ? [] : liveWork()}
-            liveThinkingText={liveThinkingText()}
-            compacting={simple() ? false : compacting()}
-            isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
-            retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
-            onSend={sendMessage}
-            onAbort={abortChat}
-            threadKey={threadKey()}
-            onViewSubagent={pushSubagent}
-            mode={simple() ? 'summary' : 'full'}
-          />
-        </div>
+          <div
+            style={{ position: 'relative', display: 'flex', 'flex-direction': 'column', flex: '1', 'min-height': '0' }}
+          >
+            <ChatView
+              messages={displayMessages()}
+              streamingHtml={simple() ? '' : streamingHtml()}
+              agentStatus={agentStatus()}
+              liveWork={simple() ? [] : liveWork()}
+              liveThinkingText={liveThinkingText()}
+              compacting={simple() ? false : compacting()}
+              isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
+              retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
+              onSend={sendMessage}
+              onAbort={abortChat}
+              threadKey={threadKey()}
+              onViewSubagent={pushSubagent}
+              mode={simple() ? 'summary' : 'full'}
+            />
+          </div>
 
-        <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
-      </Show>
+          <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+        </Show>
+      </Suspense>
     </div>
   )
 }
@@ -581,36 +591,38 @@ const MobileChatPanel: Component = () => {
 
   return (
     <div class="flex h-full flex-col">
-      <Show
-        when={!isViewingSubagent()}
-        fallback={
-          <SubagentView
-            navStack={subagentNavStack()}
-            parentLabel={threadKey() || 'Main'}
-            onBack={() => popSubagent()}
-            onNavigateTo={navigateToDepth}
+      <Suspense fallback={<ChatSkeleton />}>
+        <Show
+          when={!isViewingSubagent()}
+          fallback={
+            <SubagentView
+              navStack={subagentNavStack()}
+              parentLabel={threadKey() || 'Main'}
+              onBack={() => popSubagent()}
+              onNavigateTo={navigateToDepth}
+              onViewSubagent={pushSubagent}
+            />
+          }
+        >
+          <ChatView
+            messages={displayMessages()}
+            streamingHtml={simple() ? '' : streamingHtml()}
+            agentStatus={agentStatus()}
+            liveWork={simple() ? [] : liveWork()}
+            liveThinkingText={liveThinkingText()}
+            compacting={simple() ? false : compacting()}
+            isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
+            retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
+            onSend={sendMessage}
+            onAbort={abortChat}
+            threadKey={threadKey()}
             onViewSubagent={pushSubagent}
+            mode={simple() ? 'summary' : 'full'}
           />
-        }
-      >
-        <ChatView
-          messages={displayMessages()}
-          streamingHtml={simple() ? '' : streamingHtml()}
-          agentStatus={agentStatus()}
-          liveWork={simple() ? [] : liveWork()}
-          liveThinkingText={liveThinkingText()}
-          compacting={simple() ? false : compacting()}
-          isRetryCountdownActive={simple() ? false : isRetryCountdownActive()}
-          retryCountdownSeconds={simple() ? 0 : retryCountdownSeconds()}
-          onSend={sendMessage}
-          onAbort={abortChat}
-          threadKey={threadKey()}
-          onViewSubagent={pushSubagent}
-          mode={simple() ? 'summary' : 'full'}
-        />
 
-        <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
-      </Show>
+          <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+        </Show>
+      </Suspense>
     </div>
   )
 }
@@ -710,13 +722,37 @@ const MobileWorkspace: Component = () => {
             </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'git'}>
-            <GitPanel />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
+              <GitPanel />
+            </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'diff'}>
-            <DiffContentPanel />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
+              <DiffContentPanel />
+            </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'planning'}>
-            <PlanningPanel />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
+              <PlanningPanel />
+            </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'planning-dag' && activeWorkspace()}>
             <Suspense
@@ -730,19 +766,59 @@ const MobileWorkspace: Component = () => {
             </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'notifications'}>
-            <NotificationsPanel />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
+              <NotificationsPanel />
+            </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'terminal'}>
-            <TerminalPanel />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
+              <TerminalPanel />
+            </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'recordings'}>
-            <RecordingsPanel />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
+              <RecordingsPanel />
+            </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'meetings'}>
-            <MeetingsPanel />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
+              <MeetingsPanel />
+            </Suspense>
           </Match>
           <Match when={activeMobileTab() === 'logs'}>
-            <LogsPanel />
+            <Suspense
+              fallback={
+                <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  Loading...
+                </p>
+              }
+            >
+              <LogsPanel />
+            </Suspense>
           </Match>
         </Switch>
       </div>
