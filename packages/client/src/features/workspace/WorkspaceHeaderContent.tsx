@@ -1,4 +1,4 @@
-import { createSignal, Show, For, onCleanup, onMount } from 'solid-js'
+import { createMemo, createSignal, Show, For, onCleanup, onMount } from 'solid-js'
 import { wsStore } from '../../ws/index.js'
 import { formatRelativeTime } from '../../lib/format.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from './store.js'
@@ -6,6 +6,7 @@ import { threadKey, switchThread, threads, createThread, moveThread } from '../t
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
+import { fetchGitContext, type ThreadGitContext } from '../diff/store.js'
 
 interface OrgListItem {
   id: string
@@ -372,6 +373,31 @@ export function WorkspaceHeaderContent() {
   // Ticks every 60s so relative-time strings re-compute even when thread data is unchanged.
   const [nowTick, setNowTick] = createSignal(Date.now())
 
+  const [gitContexts, setGitContexts] = createSignal<ThreadGitContext[] | null>(null)
+  let gitPollTimer: ReturnType<typeof setInterval> | undefined
+
+  const pollGitContext = async () => {
+    const tid = threadKey()
+    if (!tid) {
+      setGitContexts(null)
+      return
+    }
+    setGitContexts(await fetchGitContext(tid))
+  }
+
+  const totalChangedFiles = createMemo(() => {
+    const ctxs = gitContexts()
+    if (!ctxs) return 0
+    let n = 0
+    for (const c of ctxs) n += c.files.length
+    return n
+  })
+
+  createMemo(() => {
+    threadKey()
+    pollGitContext()
+  })
+
   const fetchActiveSubagents = async () => {
     try {
       const res = await fetch('/api/threads/active-subagents')
@@ -408,6 +434,9 @@ export function WorkspaceHeaderContent() {
       if (threadPickerOpen()) void fetchActiveSubagents()
     }, 10_000)
 
+    pollGitContext()
+    gitPollTimer = setInterval(pollGitContext, 30_000)
+
     onCleanup(() => {
       offSpawned()
       offCompleted()
@@ -415,6 +444,7 @@ export function WorkspaceHeaderContent() {
       if (subagentRefetchTimer) clearTimeout(subagentRefetchTimer)
       clearInterval(clockInterval)
       clearInterval(pollInterval)
+      if (gitPollTimer) clearInterval(gitPollTimer)
     })
   })
 
@@ -567,7 +597,7 @@ export function WorkspaceHeaderContent() {
         </button>
         <ChatSettingsButton />
         <button
-          class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
+          class="relative flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
           style={{ color: 'var(--c-text-muted)' }}
           onClick={() => toggleChatExpanded()}
           onMouseEnter={(e) => {
@@ -582,6 +612,29 @@ export function WorkspaceHeaderContent() {
         >
           <Show when={chatExpanded()} fallback={<ExpandIcon class="h-3.5 w-3.5" />}>
             <CollapseIcon class="h-3.5 w-3.5" />
+          </Show>
+          <Show when={totalChangedFiles() > 0}>
+            <span
+              style={{
+                position: 'absolute',
+                top: '-2px',
+                right: '-4px',
+                'min-width': '14px',
+                height: '14px',
+                'border-radius': '7px',
+                background: 'var(--c-accent)',
+                color: '#fff',
+                'font-size': '8px',
+                'font-weight': '700',
+                display: 'flex',
+                'align-items': 'center',
+                'justify-content': 'center',
+                padding: '0 2px',
+                'line-height': '1'
+              }}
+            >
+              {totalChangedFiles() > 99 ? '99+' : totalChangedFiles()}
+            </span>
           </Show>
         </button>
         <Show when={threadPickerOpen()}>

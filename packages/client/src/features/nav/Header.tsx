@@ -7,7 +7,6 @@ import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
 import { SummaryBubble } from '../chat/SummaryBubble.js'
 import { TtsToggle } from '../chat/TtsToggle.js'
-import { fetchGitContext, type ThreadGitContext } from '../diff/store.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -68,40 +67,10 @@ export function Header() {
   let healthDotRef: HTMLButtonElement | undefined
 
   const [presenceGatewayId, setPresenceGatewayId] = createSignal<string | null>(null)
-  const [gitContexts, setGitContexts] = createSignal<ThreadGitContext[] | null>(null)
-  let gitPollTimer: ReturnType<typeof setInterval> | undefined
-
-  const pollGitContext = async () => {
-    const tid = threadKey()
-    if (!tid) {
-      setGitContexts(null)
-      return
-    }
-    setGitContexts(await fetchGitContext(tid))
-  }
-
-  const totalChangedFiles = createMemo(() => {
-    const ctxs = gitContexts()
-    if (!ctxs) return 0
-    let n = 0
-    for (const c of ctxs) n += c.files.length
-    return n
-  })
-
-  createMemo(() => {
-    threadKey()
-    pollGitContext()
-  })
 
   onMount(() => {
     const cleanup = initHealthPolling()
     onCleanup(cleanup)
-
-    pollGitContext()
-    gitPollTimer = setInterval(pollGitContext, 30_000)
-    onCleanup(() => {
-      if (gitPollTimer) clearInterval(gitPollTimer)
-    })
 
     void getPresenceGatewayThreadId().then((id) => {
       setPresenceGatewayId(id)
@@ -141,37 +110,14 @@ export function Header() {
         class="safe-top z-[100] flex shrink-0 items-center gap-2 px-4 py-2"
         style={{ 'border-bottom': '1px solid var(--c-border)', background: 'var(--c-bg-raised)' }}
       >
-        {/* Left: Agent icon — toggles between workspace and agent modes. Badge shows changed file count. */}
+        {/* Left: Agent icon — toggles between workspace and agent modes. */}
         <button
-          class="relative shrink-0 cursor-pointer text-xl"
+          class="shrink-0 cursor-pointer text-xl"
           style={{ color: activeView() === 'agent' ? 'var(--c-accent)' : undefined }}
           onClick={handleToggleMode}
           title={activeView() === 'agent' ? 'Back to workspace' : `Open ${agentName()}`}
         >
           {agentIcon()}
-          <Show when={totalChangedFiles() > 0}>
-            <span
-              style={{
-                position: 'absolute',
-                top: '-4px',
-                right: '-6px',
-                'min-width': '16px',
-                height: '16px',
-                'border-radius': '8px',
-                background: 'var(--c-accent)',
-                color: '#fff',
-                'font-size': '9px',
-                'font-weight': '700',
-                display: 'flex',
-                'align-items': 'center',
-                'justify-content': 'center',
-                padding: '0 3px',
-                'line-height': '1'
-              }}
-            >
-              {totalChangedFiles() > 99 ? '99+' : totalChangedFiles()}
-            </span>
-          </Show>
         </button>
 
         {/* Center: mode-dependent header content. */}
