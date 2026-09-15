@@ -7,7 +7,7 @@ import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
 import { WorkspaceHeaderContent } from '../workspace/WorkspaceHeaderContent.js'
 import { SummaryBubble } from '../chat/SummaryBubble.js'
 import { TtsToggle } from '../chat/TtsToggle.js'
-import { DiffViewer } from '../diff/index.js'
+import { DiffViewer, DiffButton } from '../diff/index.js'
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -140,6 +140,9 @@ export function Header() {
           <TtsToggle />
           <SummaryBubble />
         </Show>
+
+        {/* Git diff button — self-hides when the active thread has no git context */}
+        <DiffButton />
 
         {/* Status dot */}
         <button
