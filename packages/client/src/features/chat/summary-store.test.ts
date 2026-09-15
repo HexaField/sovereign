@@ -62,10 +62,10 @@ describe('summary-store', () => {
     return { setThreadKey: (key: string) => (currentKey = key) }
   }
 
-  it('subscribes to the chat WS channel on init', () => {
+  it('does not subscribe to chat independently (app-level initChatStore owns the subscription)', () => {
     const ws = createMockWs()
     setup('thread-1', ws)
-    expect(ws.subscribe).toHaveBeenCalledWith(['chat'])
+    expect(ws.subscribe).not.toHaveBeenCalled()
   })
 
   it('fetches the current summary for the initial thread and exposes it via hasSummary', async () => {

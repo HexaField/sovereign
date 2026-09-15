@@ -109,6 +109,58 @@ describe('WsStore', () => {
       expect(subscribeMsgs.length).toBe(2)
       store.close()
     })
+
+    it('deduplicates subscribe — second call for same channel skips the wire message', () => {
+      const store = createWsStore({ url: 'ws://localhost', WebSocket: MockWsCtor as any })
+      lastWs().open()
+      store.subscribe(['chat'])
+      store.subscribe(['chat'])
+      store.subscribe(['chat'])
+      const subscribeMsgs = lastWs().sent.filter((s: string) => JSON.parse(s).type === 'subscribe')
+      expect(subscribeMsgs.length).toBe(1)
+      store.close()
+    })
+
+    it('unsubscribe with remaining refcount does not send to server', () => {
+      const store = createWsStore({ url: 'ws://localhost', WebSocket: MockWsCtor as any })
+      lastWs().open()
+      store.subscribe(['chat'])
+      store.subscribe(['chat'])
+      store.unsubscribe(['chat'])
+      const unsubMsgs = lastWs().sent.filter((s: string) => JSON.parse(s).type === 'unsubscribe')
+      expect(unsubMsgs.length).toBe(0)
+      store.close()
+    })
+
+    it('unsubscribe with last refcount sends to server', () => {
+      const store = createWsStore({ url: 'ws://localhost', WebSocket: MockWsCtor as any })
+      lastWs().open()
+      store.subscribe(['chat'])
+      store.subscribe(['chat'])
+      store.unsubscribe(['chat'])
+      store.unsubscribe(['chat'])
+      const unsubMsgs = lastWs().sent.filter((s: string) => JSON.parse(s).type === 'unsubscribe')
+      expect(unsubMsgs.length).toBe(1)
+      store.close()
+    })
+
+    it('does not resubscribe channels that were fully unsubscribed', () => {
+      const store = createWsStore({ url: 'ws://localhost', WebSocket: MockWsCtor as any })
+      const firstWs = lastWs()
+      firstWs.open()
+      store.subscribe(['files'])
+      store.subscribe(['chat'])
+      store.unsubscribe(['files'])
+      firstWs.close()
+      vi.advanceTimersByTime(2000)
+      const secondWs = lastWs()
+      secondWs.open()
+      const subscribeMsgs = secondWs.sent.filter((s: string) => JSON.parse(s).type === 'subscribe')
+      expect(subscribeMsgs.length).toBe(1)
+      const channels = subscribeMsgs.map((s: string) => JSON.parse(s).channels)
+      expect(channels).toEqual([['chat']])
+      store.close()
+    })
   })
 
   describe('message handling', () => {

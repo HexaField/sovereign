@@ -25,12 +25,9 @@ export function initPresence(threadKey: Accessor<string>, ws: WsStore): () => vo
 
   const announceFocus = (): void => {
     const id = threadKey()
-    if (!id) return
+    if (!id || id === lastSent) return
     send({ type: 'thread.focus', threadId: id })
     lastSent = id
-    // Also drop the local notification if one is showing — the server-side
-    // sendAll(thread.clear) covers other devices but we want the current
-    // device to clear instantly without waiting for the round-trip.
     dismissThreadNotification(id)
   }
 
@@ -68,23 +65,18 @@ export function initPresence(threadKey: Accessor<string>, ws: WsStore): () => vo
 
   // 4. WS reconnect: re-declare focus. The server clears presence on
   // ws.disconnected, so a reconnect needs a fresh focus message.
-  // We use a polling check on `connected()` so this stays driver-agnostic;
-  // the cost is one boolean read per second.
-  let wasConnected = ws.connected()
-  const reconnectCheck = setInterval(() => {
-    const now = ws.connected()
-    if (now && !wasConnected) {
-      ws.subscribe(['presence'])
-      const id = threadKey()
-      if (id) send({ type: 'thread.focus', threadId: id })
-    }
-    wasConnected = now
-  }, 1000)
+  // resubscribe() in ws-store already replays channel subscriptions;
+  // we only need to re-send the focus message.
+  const offReconnect = ws.on('ws.reconnected', () => {
+    lastSent = ''
+    const id = threadKey()
+    if (id) send({ type: 'thread.focus', threadId: id })
+  })
 
   return () => {
     document.removeEventListener('visibilitychange', onVisibility)
     window.removeEventListener('blur', onWindowBlur)
     window.removeEventListener('focus', onWindowFocus)
-    clearInterval(reconnectCheck)
+    offReconnect()
   }
 }

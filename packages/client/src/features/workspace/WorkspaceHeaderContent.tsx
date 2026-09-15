@@ -418,7 +418,6 @@ export function WorkspaceHeaderContent() {
   }
 
   onMount(() => {
-    wsStore.subscribe(['chat'])
     const offSpawned = wsStore.on('subagent.spawned', scheduleSubagentRefetch)
     const offCompleted = wsStore.on('subagent.completed', scheduleSubagentRefetch)
     const offFailed = wsStore.on('subagent.failed', scheduleSubagentRefetch)
