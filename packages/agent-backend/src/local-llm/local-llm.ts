@@ -52,6 +52,7 @@ import { resolveEndpoint } from './endpoint-resolver.js'
 import { EndpointQueue } from './endpoint-queue.js'
 import { runContextStrategies } from '../context-strategies/index.js'
 import { archiveMessagesBeforeStrategies, listStrategyArchives, readStrategyArchive } from '../history-archive.js'
+import { buildLocalLlmContent } from '../claude-code/attachment.js'
 import {
   appendToHistoryLog,
   appendBatchToHistoryLog,
@@ -193,22 +194,10 @@ function estimateTokens(chars: number): number {
 /** Local models overwhelmingly lack multimodal wiring across llama.cpp /
  *  ollama / vLLM, and the shared wire `ChatMessage.content` is `string |
  *  null` (no content-part array) — so attachments are surfaced as a note
- *  rather than true image content. Never silently drop them. */
-function buildUserContent(text: string, attachments?: import('@sovereign/core').Attachment[]): string {
-  if (!attachments || attachments.length === 0) return text
-  // For text-based files, inline the content so the local model can read it.
-  // Binary files (images, etc.) get a note since local models lack multimodal support.
-  const IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
-  const parts: string[] = text ? [text] : []
-  for (const att of attachments) {
-    if (IMAGE_MIME.has(att.mediaType) || att.mediaType === 'application/pdf') {
-      parts.push(`[Attachment "${att.name}" (${att.mediaType}) — binary file, not forwarded to this model.]`)
-    } else {
-      parts.push(`--- ${att.name} ---\n${att.data.toString('utf-8')}`)
-    }
-  }
-  return parts.join('\n\n')
-}
+ *  rather than true image content. Never silently drop them.
+ *
+ *  Delegates to the shared buildLocalLlmContent() from attachment.ts. */
+const buildUserContent = buildLocalLlmContent
 
 /** Serialize messages for the inference server.
  *
