@@ -67,56 +67,62 @@ function iconForKind(kind: TurnKind): JSX.Element {
 
 // ── MarkdownContent (internal) ───────────────────────────────────────
 
+function injectCopyButtons(container: HTMLDivElement): void {
+  container.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('.code-copy-btn')) return
+    const btn = document.createElement('button')
+    btn.className = 'code-copy-btn'
+    btn.title = 'Copy code'
+    btn.innerHTML = copyIcon
+    btn.onclick = async () => {
+      const code = pre.querySelector('code')
+      const text = (code || pre).textContent || ''
+      try {
+        await navigator.clipboard.writeText(text)
+        btn.innerHTML = checkIcon
+        setTimeout(() => (btn.innerHTML = copyIcon), 1500)
+      } catch {
+        /* empty */
+      }
+    }
+    pre.style.position = 'relative'
+    pre.appendChild(btn)
+  })
+  container.querySelectorAll('code').forEach((code) => {
+    if (code.closest('pre')) return
+    if (code.querySelector('.inline-code-copy')) return
+    const wrapper = document.createElement('span')
+    wrapper.className = 'inline-code-wrap'
+    code.parentNode?.insertBefore(wrapper, code)
+    wrapper.appendChild(code)
+    const btn = document.createElement('button')
+    btn.className = 'inline-code-copy'
+    btn.title = 'Copy'
+    btn.innerHTML = copyIcon
+    btn.onclick = async (e) => {
+      e.stopPropagation()
+      try {
+        await navigator.clipboard.writeText(code.textContent || '')
+        btn.innerHTML = checkIcon
+        setTimeout(() => (btn.innerHTML = copyIcon), 1500)
+      } catch {
+        /* empty */
+      }
+    }
+    wrapper.appendChild(btn)
+  })
+}
+
 function MarkdownContentInternal(props: { text: string }) {
   let ref!: HTMLDivElement
+  let lastHtml = ''
   const html = createMemo(() => renderMarkdown(props.text))
   createEffect(() => {
-    ref.innerHTML = html()
-    // Inject copy buttons on <pre> code blocks
-    ref.querySelectorAll('pre').forEach((pre) => {
-      if (pre.querySelector('.code-copy-btn')) return
-      const btn = document.createElement('button')
-      btn.className = 'code-copy-btn'
-      btn.title = 'Copy code'
-      btn.innerHTML = copyIcon
-      btn.onclick = async () => {
-        const code = pre.querySelector('code')
-        const text = (code || pre).textContent || ''
-        try {
-          await navigator.clipboard.writeText(text)
-          btn.innerHTML = checkIcon
-          setTimeout(() => (btn.innerHTML = copyIcon), 1500)
-        } catch {
-          /* empty */
-        }
-      }
-      pre.style.position = 'relative'
-      pre.appendChild(btn)
-    })
-    // Inject copy buttons on inline <code> (not inside <pre>)
-    ref.querySelectorAll('code').forEach((code) => {
-      if (code.closest('pre')) return
-      if (code.querySelector('.inline-code-copy')) return
-      const wrapper = document.createElement('span')
-      wrapper.className = 'inline-code-wrap'
-      code.parentNode?.insertBefore(wrapper, code)
-      wrapper.appendChild(code)
-      const btn = document.createElement('button')
-      btn.className = 'inline-code-copy'
-      btn.title = 'Copy'
-      btn.innerHTML = copyIcon
-      btn.onclick = async (e) => {
-        e.stopPropagation()
-        try {
-          await navigator.clipboard.writeText(code.textContent || '')
-          btn.innerHTML = checkIcon
-          setTimeout(() => (btn.innerHTML = copyIcon), 1500)
-        } catch {
-          /* empty */
-        }
-      }
-      wrapper.appendChild(btn)
-    })
+    const h = html()
+    if (h === lastHtml) return
+    lastHtml = h
+    ref.innerHTML = h
+    requestAnimationFrame(() => injectCopyButtons(ref))
   })
   return (
     <div
