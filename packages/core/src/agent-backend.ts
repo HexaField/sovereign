@@ -21,8 +21,14 @@ export interface Attachment {
   /** MIME type from the browser's File.type (e.g. "text/csv", "image/png").
    *  Falls back to "application/octet-stream" when unknown. */
   mediaType: string
-  /** Raw file content. */
-  data: Buffer
+  /** Raw file content. Present for binary types (images, PDFs) that need
+   *  inline encoding. Absent for text-based files — the agent reads those
+   *  from disk via the `path` field instead. */
+  data?: Buffer
+  /** Absolute path to the file on disk. The agent backend emits a path
+   *  reference for text-based files so the LLM reads the file with its
+   *  Read tool rather than receiving the full content inline. */
+  path?: string
 }
 
 /**

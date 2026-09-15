@@ -53,50 +53,68 @@ export interface ChatRoutesOptions {
   llamaBaseUrl?: string
 }
 
+/** MIME types that require inline binary encoding (images for vision,
+ *  PDFs for document blocks). Everything else gets a disk-path reference
+ *  so the LLM reads the file with its Read tool. */
+const INLINE_MIME = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'])
+
+/** Infer MIME type from file extension. */
+const MIME_MAP: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
+  '.csv': 'text/csv',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.ts': 'text/plain',
+  '.js': 'text/plain',
+  '.py': 'text/plain',
+  '.rs': 'text/plain',
+  '.go': 'text/plain',
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.yaml': 'text/yaml',
+  '.yml': 'text/yaml',
+  '.toml': 'text/plain',
+  '.sh': 'text/plain',
+  '.sql': 'text/plain',
+  '.log': 'text/plain'
+}
+
 /** Read an uploaded file from disk and return an Attachment.
- *  Validates the resolved path stays within allowedDir to prevent path traversal. */
-function readUploadedFile(filePath: string, allowedDir: string): Attachment | null {
+ *  Validates the resolved path stays within allowedDir to prevent path traversal.
+ *
+ *  Binary types (images, PDFs) load file data into a Buffer for inline
+ *  encoding. Text-based files only carry a disk path — the agent backend
+ *  emits a path reference so the LLM reads the file via its Read tool
+ *  instead of receiving the full content in the prompt. */
+export function readUploadedFile(filePath: string, allowedDir: string): Attachment | null {
   try {
     const resolved = path.resolve(filePath)
     const resolvedDir = path.resolve(allowedDir)
     if (!resolved.startsWith(resolvedDir + path.sep) && resolved !== resolvedDir) {
       return null // path traversal attempt
     }
-    const data = fs.readFileSync(resolved)
     const name = path.basename(resolved)
     // Strip the UUID prefix added during upload (e.g. "a1b2c3d4-original.txt" → "original.txt")
     const dashIdx = name.indexOf('-')
     const originalName = dashIdx > 0 ? name.slice(dashIdx + 1) : name
     // Infer media type from extension
     const ext = path.extname(originalName).toLowerCase()
-    const MIME_MAP: Record<string, string> = {
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp',
-      '.pdf': 'application/pdf',
-      '.csv': 'text/csv',
-      '.json': 'application/json',
-      '.xml': 'application/xml',
-      '.txt': 'text/plain',
-      '.md': 'text/markdown',
-      '.ts': 'text/plain',
-      '.js': 'text/plain',
-      '.py': 'text/plain',
-      '.rs': 'text/plain',
-      '.go': 'text/plain',
-      '.html': 'text/html',
-      '.css': 'text/css',
-      '.yaml': 'text/yaml',
-      '.yml': 'text/yaml',
-      '.toml': 'text/plain',
-      '.sh': 'text/plain',
-      '.sql': 'text/plain',
-      '.log': 'text/plain'
-    }
     const mediaType = MIME_MAP[ext] || 'application/octet-stream'
-    return { name: originalName, mediaType, data }
+
+    if (INLINE_MIME.has(mediaType)) {
+      // Binary type — load data for inline base64 encoding
+      const data = fs.readFileSync(resolved)
+      return { name: originalName, mediaType, data, path: resolved }
+    }
+    // Text-based file — path reference only, no data loaded
+    return { name: originalName, mediaType, path: resolved }
   } catch {
     return null
   }
