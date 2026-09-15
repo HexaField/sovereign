@@ -220,7 +220,9 @@ const sessionsHistorySchema: ToolSchema = {
   }
 }
 
-const agentsSpawnSchema: ToolSchema = {
+// Disabled — local-LLM subagents produce unreliable results. Exported so
+// re-enabling only requires adding it back to SOVEREIGN_TOOL_SCHEMAS.
+export const agentsSpawnSchema: ToolSchema = {
   type: 'function',
   function: {
     name: 'sovereign_agents_spawn',
@@ -546,7 +548,7 @@ export const SOVEREIGN_TOOL_SCHEMAS: ToolSchema[] = [
   sessionsListSchema,
   sessionsSendSchema,
   sessionsHistorySchema,
-  agentsSpawnSchema,
+  // agentsSpawnSchema — disabled; local-LLM subagents unreliable
   agentsListSchema,
   notificationsSendSchema,
   createIssueSchema,
@@ -641,17 +643,7 @@ export function createSovereignToolExecutor(
         }
 
         // ── agents ───────────────────────────────────────────────────
-        case 'sovereign_agents_spawn': {
-          const parent = deps.currentSessionKey?.()
-          if (!parent) return fail('agents_spawn: no parent session key available')
-          const result = await deps.agents.spawn(parent, {
-            task: String(input.task),
-            label: input.label as string | undefined,
-            backend: input.backend as string | undefined,
-            model: input.model as string | undefined
-          })
-          return ok({ sessionKey: result.sessionKey, parentSessionKey: parent })
-        }
+        // sovereign_agents_spawn — disabled; local-LLM subagents unreliable
         case 'sovereign_agents_list': {
           const list = await deps.agents.list(input.parentSessionKey as string | undefined)
           return ok({ agents: list })
