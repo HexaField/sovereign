@@ -55,8 +55,6 @@ export function toggleSimpleView(): void {
 // ── Init / cleanup ──────────────────────────────────────────────────
 
 export function initSimpleConversationStore(ws: WsStore, threadKey: Accessor<string>): () => void {
-  ws.subscribe(['chat'])
-
   // Restore from URL on init (covers page refresh)
   setShowSimpleView(readSimpleParam())
 

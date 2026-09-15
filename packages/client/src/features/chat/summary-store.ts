@@ -50,8 +50,6 @@ function fetchSummary(threadKey: Accessor<string>, key: string): void {
 }
 
 export function initSummaryStore(ws: WsStore, threadKey: Accessor<string>): () => void {
-  ws.subscribe(['chat'])
-
   const offSummary = ws.on('chat.summary', (msg: Record<string, unknown>) => {
     const threadId = msg?.threadId
     const text = msg?.summary

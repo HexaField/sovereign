@@ -45,7 +45,8 @@ export function createWsStore(options: WsStoreOptions): WsStore {
   // The first binary channel registered on the server gets ID 1.
   const binaryChannelIds = new Map<string, number>()
   let nextBinaryChannelId = 1
-  const activeSubscriptions: Array<{ channels: string[]; scope?: Record<string, string> }> = []
+  const channelRefCounts = new Map<string, number>()
+  const channelScopes = new Map<string, Record<string, string>>()
   const queue: WsMessage[] = []
   const reconnector = createReconnector()
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -62,8 +63,10 @@ export function createWsStore(options: WsStoreOptions): WsStore {
   }
 
   const resubscribe = (): void => {
-    for (const sub of activeSubscriptions) {
-      sendRaw({ type: 'subscribe', channels: sub.channels, scope: sub.scope } as unknown as WsMessage)
+    for (const [channel, count] of channelRefCounts) {
+      if (count <= 0) continue
+      const scope = channelScopes.get(channel)
+      sendRaw({ type: 'subscribe', channels: [channel], scope } as unknown as WsMessage)
     }
   }
 
@@ -184,17 +187,33 @@ export function createWsStore(options: WsStoreOptions): WsStore {
   }
 
   const subscribe = (channels: string[], scope?: Record<string, string>): void => {
-    activeSubscriptions.push({ channels, scope })
-    sendRaw({ type: 'subscribe', channels, scope } as unknown as WsMessage)
+    const toSend: string[] = []
+    for (const ch of channels) {
+      const prev = channelRefCounts.get(ch) ?? 0
+      channelRefCounts.set(ch, prev + 1)
+      if (scope) channelScopes.set(ch, scope)
+      if (prev === 0) toSend.push(ch)
+    }
+    if (toSend.length > 0) {
+      sendRaw({ type: 'subscribe', channels: toSend, scope } as unknown as WsMessage)
+    }
   }
 
   const unsubscribe = (channels: string[]): void => {
-    const set = new Set(channels)
-    for (let i = activeSubscriptions.length - 1; i >= 0; i--) {
-      activeSubscriptions[i].channels = activeSubscriptions[i].channels.filter((c) => !set.has(c))
-      if (activeSubscriptions[i].channels.length === 0) activeSubscriptions.splice(i, 1)
+    const toSend: string[] = []
+    for (const ch of channels) {
+      const prev = channelRefCounts.get(ch) ?? 0
+      if (prev <= 1) {
+        channelRefCounts.delete(ch)
+        channelScopes.delete(ch)
+        toSend.push(ch)
+      } else {
+        channelRefCounts.set(ch, prev - 1)
+      }
     }
-    sendRaw({ type: 'unsubscribe', channels } as unknown as WsMessage)
+    if (toSend.length > 0) {
+      sendRaw({ type: 'unsubscribe', channels: toSend } as unknown as WsMessage)
+    }
   }
 
   const on = <T extends WsMessage>(type: string, handler: (msg: T) => void): (() => void) => {
