@@ -32,6 +32,7 @@ import { showSimpleView, simpleConversationEntries } from '../chat/simple-conver
 // Lazy-loaded tabs
 const DashboardView = lazy(() => import('../dashboard/DashboardView.js'))
 const ForestView = lazy(() => import('../forest/ForestView.js'))
+const TasksView = lazy(() => import('../tasks/TasksView.js'))
 const SystemView = lazy(() => import('../system/SystemView.js'))
 const SettingsContent = lazy(() => import('./SettingsContent.js'))
 
@@ -66,6 +67,9 @@ export default function AgentView() {
           </Match>
           <Match when={activeAgentTab() === 'forest'}>
             <ForestView />
+          </Match>
+          <Match when={activeAgentTab() === 'tasks'}>
+            <TasksView />
           </Match>
           <Match when={activeAgentTab() === 'settings'}>
             <SettingsContent />
