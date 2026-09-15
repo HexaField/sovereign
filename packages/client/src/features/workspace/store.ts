@@ -34,10 +34,16 @@ export const SIDEBAR_TABS: { key: SidebarTab; label: string; iconKey: string }[]
   { key: 'logs', label: 'Logs', iconKey: 'logs' }
 ]
 
-// --- Per-workspace persisted signal helper ---
+// --- Per-thread persisted workspace state ---
 
-function wsKey(orgId: string, name: string): string {
-  return `sovereign:workspace:${orgId}:${name}`
+const [workspaceThreadId, _setWorkspaceThreadId] = createSignal<string>('_default')
+
+function wsKey(threadId: string, name: string): string {
+  return `sovereign:ws:thread:${threadId}:${name}`
+}
+
+function currentPersistKey(): string {
+  return workspaceThreadId()
 }
 
 // --- Storage helpers ---
@@ -84,19 +90,13 @@ function writeSession(key: string, value: unknown): void {
   }
 }
 
-/** Get the current orgId for keying. Called lazily so it works during init. */
-function currentOrgId(): string {
-  const ws = activeWorkspace()
-  return ws?.orgId ?? '_global'
-}
-
 // §3.3 — Active sidebar tab
 export const [activeSidebarTab, _setActiveSidebarTab] = createSignal<SidebarTab>('git')
 
 export function setActiveSidebarTab(tab: SidebarTab): void {
   const prev = activeSidebarTab()
   _setActiveSidebarTab(tab)
-  writeStorage(wsKey(currentOrgId(), 'activeSidebarTab'), tab)
+  writeStorage(wsKey(currentPersistKey(), 'activeSidebarTab'), tab)
   if (tab === 'diff') {
     setMainContentView('diff')
   } else if (prev === 'diff' && mainContentView() === 'diff') {
@@ -198,7 +198,7 @@ export const [chatExpanded, _setChatExpanded] = createSignal(false)
 
 export function setChatExpanded(v: boolean): void {
   _setChatExpanded(v)
-  writeStorage(wsKey(currentOrgId(), 'chatExpanded'), v)
+  writeStorage(wsKey(currentPersistKey(), 'chatExpanded'), v)
 }
 
 export function toggleChatExpanded(): void {
@@ -213,7 +213,7 @@ export const [chatPanelWidth, _setChatPanelWidth] = createSignal(CHAT_PANEL_DEFA
 
 export function setChatPanelWidth(v: number): void {
   _setChatPanelWidth(v)
-  writeStorage(wsKey(currentOrgId(), 'chatPanelWidth'), v)
+  writeStorage(wsKey(currentPersistKey(), 'chatPanelWidth'), v)
 }
 
 // §3.5 — Active thread key for right panel. Empty = no thread selected; the
@@ -265,7 +265,12 @@ export interface IssueDetailParams {
   issueId: string
 }
 
-export const [mainContentView, setMainContentView] = createSignal<MainContentView>('files')
+export const [mainContentView, _setMainContentView] = createSignal<MainContentView>('files')
+
+export function setMainContentView(view: MainContentView): void {
+  _setMainContentView(view)
+  writeStorage(wsKey(currentPersistKey(), 'mainContentView'), view)
+}
 export const [issueDetailParams, setIssueDetailParams] = createSignal<IssueDetailParams | null>(null)
 
 export function openPlanningDAG(): void {
@@ -318,17 +323,17 @@ export const [sidebarWidth, _setSidebarWidth] = createSignal(SIDEBAR_DEFAULT_WID
 
 export function setSidebarWidth(v: number): void {
   _setSidebarWidth(v)
-  writeStorage(wsKey(currentOrgId(), 'sidebarWidth'), v)
+  writeStorage(wsKey(currentPersistKey(), 'sidebarWidth'), v)
 }
 
 export function setSidebarCollapsed(v: boolean): void {
   _setSidebarCollapsed(v)
-  writeStorage(wsKey(currentOrgId(), 'sidebarCollapsed'), v)
+  writeStorage(wsKey(currentPersistKey(), 'sidebarCollapsed'), v)
 }
 
 export function setChatCollapsed(v: boolean): void {
   _setChatCollapsed(v)
-  writeStorage(wsKey(currentOrgId(), 'chatCollapsed'), v)
+  writeStorage(wsKey(currentPersistKey(), 'chatCollapsed'), v)
 }
 
 export function toggleSidebar(): void {
@@ -377,9 +382,6 @@ const initial = loadFromStorage() || {
 
 export const [activeWorkspace, _setActiveWorkspace] = createSignal<WorkspaceContext | null>(initial)
 
-// Restore panel state for the initially loaded workspace
-restoreWorkspacePanelState(initial.orgId)
-
 export function setActiveWorkspace(orgId: string, orgName?: string): void {
   const ctx: WorkspaceContext = {
     orgId,
@@ -390,7 +392,6 @@ export function setActiveWorkspace(orgId: string, orgName?: string): void {
   _setActiveWorkspace(ctx)
   saveToStorage(ctx)
   syncViewToUrl(activeView(), orgId)
-  restoreWorkspacePanelState(orgId)
   switchWorkspaceThreads(orgId)
 }
 
@@ -418,7 +419,6 @@ export function syncWorkspaceForThread(orgId: string, orgName?: string): void {
   _setActiveWorkspace(ctx)
   saveToStorage(ctx)
   syncViewToUrl(activeView(), orgId)
-  restoreWorkspacePanelState(orgId)
   setActiveOrgIdForThreads(orgId)
   fetchThreadsForOrg(orgId)
   // Resolve the org name lazily so the dropdown label matches the picker.
@@ -435,24 +435,32 @@ export function syncWorkspaceForThread(orgId: string, orgName?: string): void {
   }
 }
 
-/** Restore layout panel state from localStorage + file state from sessionStorage */
-function restoreWorkspacePanelState(orgId: string): void {
-  // Layout state → localStorage (shared across tabs)
-  _setSidebarWidth(readStorage(wsKey(orgId, 'sidebarWidth'), SIDEBAR_DEFAULT_WIDTH))
-  _setChatPanelWidth(readStorage(wsKey(orgId, 'chatPanelWidth'), CHAT_PANEL_DEFAULT_WIDTH))
-  _setSidebarCollapsed(readStorage(wsKey(orgId, 'sidebarCollapsed'), false))
-  _setChatCollapsed(readStorage(wsKey(orgId, 'chatCollapsed'), false))
-  _setChatExpanded(readStorage(wsKey(orgId, 'chatExpanded'), false))
-  const tab = readStorage<string>(wsKey(orgId, 'activeSidebarTab'), 'files', (v) => v)
+/** Restore layout panel state from localStorage for a given thread. */
+function restoreWorkspacePanelState(threadId: string): void {
+  _setSidebarWidth(readStorage(wsKey(threadId, 'sidebarWidth'), SIDEBAR_DEFAULT_WIDTH))
+  _setChatPanelWidth(readStorage(wsKey(threadId, 'chatPanelWidth'), CHAT_PANEL_DEFAULT_WIDTH))
+  _setSidebarCollapsed(readStorage(wsKey(threadId, 'sidebarCollapsed'), false))
+  _setChatCollapsed(readStorage(wsKey(threadId, 'chatCollapsed'), false))
+  _setChatExpanded(readStorage(wsKey(threadId, 'chatExpanded'), false))
+  const tab = readStorage<string>(wsKey(threadId, 'activeSidebarTab'), 'git', (v) => v)
   if (SIDEBAR_TABS.some((t) => t.key === tab)) {
     _setActiveSidebarTab(tab as SidebarTab)
   }
+  const view = readStorage<string>(wsKey(threadId, 'mainContentView'), 'files', (v) => v)
+  const validViews: string[] = ['files', 'diff', 'planning-dag', 'issue-detail']
+  _setMainContentView(validViews.includes(view) ? (view as MainContentView) : 'files')
   // File state → sessionStorage (per-tab isolation)
   _setLastOpenFilePath(
     readSession<string | null>('sovereign:file:lastOpenFilePath', null, (v) => (v === 'null' ? null : v))
   )
   _setMobileFileShowTree(readSession('sovereign:file:mobileFileShowTree', true))
   _setPersistedExpandedDirs(readSession<string[]>('sovereign:file:expandedDirs', []))
+}
+
+/** Switch workspace panel state to match a thread. Called on thread changes. */
+export function restoreWorkspaceForThread(threadId: string): void {
+  _setWorkspaceThreadId(threadId)
+  restoreWorkspacePanelState(threadId)
 }
 
 export function setActiveProject(projectId: string, projectName?: string): void {

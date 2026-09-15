@@ -1,4 +1,4 @@
-import { createEffect, lazy, Switch, Match, onCleanup, onMount, Suspense } from 'solid-js'
+import { createEffect, lazy, onCleanup, onMount, Suspense } from 'solid-js'
 import type { ThreadInfo } from '@sovereign/core'
 import './app.css'
 
@@ -18,7 +18,8 @@ import {
   autoSelectProject,
   openFileTab,
   setChatExpanded,
-  syncWorkspaceForThread
+  syncWorkspaceForThread,
+  restoreWorkspaceForThread
 } from './features/workspace/store.js'
 
 // WS + connection stores
@@ -91,6 +92,7 @@ export default function App() {
       const key = threadKey()
       if (!key || key === lastSyncedThreadId) return
       lastSyncedThreadId = key
+      restoreWorkspaceForThread(key)
       const local = threads().find((t) => t.id === key)
       const applyFrom = (t: ThreadInfo): void => {
         const target = threadPrimaryWorkspace(t) ?? '_global'
@@ -167,16 +169,16 @@ export default function App() {
       <Header />
 
       <main class="relative flex-1 overflow-hidden">
-        <Suspense>
-          <Switch>
-            <Match when={activeView() === 'workspace'}>
-              <WorkspaceView />
-            </Match>
-            <Match when={activeView() === 'agent'}>
-              <AgentView />
-            </Match>
-          </Switch>
-        </Suspense>
+        <div class="absolute inset-0" style={{ display: activeView() === 'workspace' ? '' : 'none' }}>
+          <Suspense>
+            <WorkspaceView />
+          </Suspense>
+        </div>
+        <div class="absolute inset-0" style={{ display: activeView() === 'agent' ? '' : 'none' }}>
+          <Suspense>
+            <AgentView />
+          </Suspense>
+        </div>
       </main>
 
       <QuickSwitchModal />
