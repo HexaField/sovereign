@@ -14,7 +14,7 @@
 import { Literal, LinkQuery } from '@coasys/ad4m'
 import type { Ad4mClientManager } from '@sovereign/ad4m'
 import type { TaskStore } from './store.js'
-import type { Task, TaskListItem, TaskRef, TaskState } from './types.js'
+import type { Task, TaskListItem, TaskProvider, TaskRef, TaskState } from './types.js'
 
 const CLASS_NAME = 'Task'
 const TYPE_PREDICATE = 'rdf://type'
@@ -102,10 +102,11 @@ export function createAd4mTaskStore(opts: Ad4mStoreOpts): TaskStore {
       readProp(p, taskId, 'updatedAt')
     ])
 
-    const [parentIris, childIris, tagLiterals] = await Promise.all([
+    const [parentIris, childIris, tagLiterals, providerJson] = await Promise.all([
       readCollection(p, taskId, 'parentTasks'),
       readCollection(p, taskId, 'childTasks'),
-      readCollection(p, taskId, 'tags')
+      readCollection(p, taskId, 'tags'),
+      readProp(p, taskId, 'provider')
     ])
 
     const parentTasks: TaskRef[] = []
@@ -119,7 +120,16 @@ export function createAd4mTaskStore(opts: Ad4mStoreOpts): TaskStore {
       if (ref) childTasks.push(ref)
     }
 
-    return {
+    let provider: TaskProvider | undefined
+    if (providerJson) {
+      try {
+        provider = JSON.parse(providerJson) as TaskProvider
+      } catch {
+        /* corrupt provider data — skip */
+      }
+    }
+
+    const task: Task = {
       id: taskId,
       name,
       state: (state as TaskState) ?? 'pending',
@@ -132,6 +142,8 @@ export function createAd4mTaskStore(opts: Ad4mStoreOpts): TaskStore {
       childTasks,
       tags: tagLiterals.map(fromLiteral)
     }
+    if (provider) task.provider = provider
+    return task
   }
 
   return {
@@ -145,7 +157,8 @@ export function createAd4mTaskStore(opts: Ad4mStoreOpts): TaskStore {
         createdAt: task.createdAt,
         ...(task.threadId ? { threadId: task.threadId } : {}),
         ...(task.description ? { description: task.description } : {}),
-        ...(task.transientState ? { transientState: task.transientState } : {})
+        ...(task.transientState ? { transientState: task.transientState } : {}),
+        ...(task.provider ? { provider: JSON.stringify(task.provider) } : {})
       })
 
       // Add tags via collection adder
@@ -179,14 +192,19 @@ export function createAd4mTaskStore(opts: Ad4mStoreOpts): TaskStore {
         const name = await readProp(p, taskId, 'name')
         if (!name) continue
 
-        const state = ((await readProp(p, taskId, 'state')) as TaskState) ?? 'pending'
-        const threadId = await readProp(p, taskId, 'threadId')
-        const transientState = await readProp(p, taskId, 'transientState')
+        const [state, threadId, transientState, providerJson] = await Promise.all([
+          readProp(p, taskId, 'state') as Promise<string | null>,
+          readProp(p, taskId, 'threadId'),
+          readProp(p, taskId, 'transientState'),
+          readProp(p, taskId, 'provider')
+        ])
         const parentIris = await readCollection(p, taskId, 'parentTasks')
         const childIris = await readCollection(p, taskId, 'childTasks')
 
+        const typedState = (state as TaskState) ?? 'pending'
+
         // Apply filters
-        if (filter?.state && state !== filter.state) continue
+        if (filter?.state && typedState !== filter.state) continue
         if (filter?.threadId !== undefined) {
           if (filter.threadId === null && threadId !== null) continue
           if (filter.threadId !== null && threadId !== filter.threadId) continue
@@ -194,15 +212,34 @@ export function createAd4mTaskStore(opts: Ad4mStoreOpts): TaskStore {
         if (filter?.parentId && !parentIris.includes(filter.parentId)) continue
         if (filter?.rootsOnly && parentIris.length > 0) continue
 
-        results.push({
+        const item: TaskListItem = {
           id: taskId,
           name,
-          state,
+          state: typedState,
           threadId: threadId ?? null,
           transientState: transientState ?? null,
           childCount: childIris.length,
           parentCount: parentIris.length
-        })
+        }
+
+        if (providerJson) {
+          try {
+            const prov = JSON.parse(providerJson) as TaskProvider
+            item.provider = {
+              kind: prov.kind,
+              repo: prov.repo,
+              number: prov.number,
+              prStatus: prov.prStatus,
+              checksStatus: prov.checksStatus,
+              reviewDecision: prov.reviewDecision,
+              url: prov.url
+            }
+          } catch {
+            /* corrupt — skip provider badge */
+          }
+        }
+
+        results.push(item)
       }
       return results
     },
@@ -235,6 +272,15 @@ export function createAd4mTaskStore(opts: Ad4mStoreOpts): TaskStore {
             target: toLiteral(value)
           })
         }
+      }
+
+      // Update provider as JSON string
+      if (fields.provider !== undefined) {
+        await p.setSingleTarget({
+          source: id,
+          predicate: `${NS}provider`,
+          target: toLiteral(JSON.stringify(fields.provider))
+        })
       }
 
       // Replace tags if provided

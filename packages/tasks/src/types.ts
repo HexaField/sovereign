@@ -8,6 +8,27 @@ export type TaskState = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 
 export const TASK_STATES: readonly TaskState[] = ['pending', 'in_progress', 'completed', 'cancelled'] as const
 
+/** Provider metadata for tasks backed by an external system (e.g. GitHub PR). */
+export interface TaskProvider {
+  kind: 'github-pr'
+  /** Full GitHub URL (e.g. https://github.com/org/repo/pull/199). */
+  url: string
+  /** GitHub repo slug (e.g. "coasys/we"). */
+  repo: string
+  /** PR number. */
+  number: number
+  /** Last-known PR status from GitHub. */
+  prStatus: 'open' | 'merged' | 'closed' | 'draft'
+  /** Last-known CI check conclusion. */
+  checksStatus: 'pending' | 'passing' | 'failing' | 'unknown'
+  /** Last-known review decision. */
+  reviewDecision: 'approved' | 'changes_requested' | 'review_required' | 'unknown'
+  /** ISO timestamp of last poll. */
+  lastPolledAt: string
+  /** Count of unresolved review comments at last poll. */
+  unresolvedComments: number
+}
+
 /** Full task record with resolved relationship refs. */
 export interface Task {
   id: string
@@ -21,6 +42,8 @@ export interface Task {
   parentTasks: TaskRef[]
   childTasks: TaskRef[]
   tags: string[]
+  /** External provider metadata. Present when the task represents a GitHub PR. */
+  provider?: TaskProvider
 }
 
 /** Compact reference to a related task (used in parent/child lists). */
@@ -39,6 +62,16 @@ export interface TaskListItem {
   transientState: string | null
   childCount: number
   parentCount: number
+  /** Compact provider summary for UI badges. */
+  provider?: {
+    kind: TaskProvider['kind']
+    repo: string
+    number: number
+    prStatus: TaskProvider['prStatus']
+    checksStatus: TaskProvider['checksStatus']
+    reviewDecision: TaskProvider['reviewDecision']
+    url: string
+  }
 }
 
 /** Operational snapshot returned by task_summary. */
@@ -75,6 +108,7 @@ export type TaskEventType =
   | 'task.transient_updated'
   | 'task.linked'
   | 'task.unlinked'
+  | 'task.provider_updated'
 
 export interface TaskEventPayload {
   taskId: string
@@ -101,6 +135,8 @@ export interface CreateTaskOpts {
   autoAssign?: boolean
   /** Thread UUID of the caller (injected by the MCP layer). */
   sourceThreadId: string
+  /** External provider metadata (e.g. GitHub PR). */
+  provider?: TaskProvider
 }
 
 export interface UpdateTaskOpts {
@@ -114,6 +150,8 @@ export interface UpdateTaskOpts {
   tags?: string[]
   /** Thread UUID of the caller (injected by the MCP layer). */
   sourceThreadId: string
+  /** Update provider metadata. */
+  provider?: TaskProvider
 }
 
 export interface ListTaskFilter {
@@ -218,6 +256,14 @@ export const TASK_SHACL_SCHEMA = {
       collection: true,
       adder: [{ action: 'addLink', source: 'this', predicate: 'task://tags', target: 'value' }],
       remover: [{ action: 'removeLink', source: 'this', predicate: 'task://tags', target: 'value' }]
+    },
+    {
+      path: 'task://provider',
+      name: 'provider',
+      datatype: 'xsd://string',
+      max_count: 1,
+      writable: true,
+      setter: [{ action: 'setSingleTarget', source: 'this', predicate: 'task://provider', target: 'value' }]
     }
   ]
 } as const

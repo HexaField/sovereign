@@ -6,7 +6,7 @@
 //
 // The TaskService delegates all persistence through this interface.
 
-import type { Task, TaskListItem, TaskRef, TaskState } from './types.js'
+import type { Task, TaskListItem, TaskProvider, TaskRef, TaskState } from './types.js'
 
 export interface TaskStore {
   /** Create a new task. Returns the created task. */
@@ -23,7 +23,9 @@ export interface TaskStore {
   /** Update scalar properties on a task. Returns the updated task. */
   update(
     id: string,
-    fields: Partial<Pick<Task, 'name' | 'state' | 'threadId' | 'description' | 'transientState' | 'updatedAt' | 'tags'>>
+    fields: Partial<
+      Pick<Task, 'name' | 'state' | 'threadId' | 'description' | 'transientState' | 'updatedAt' | 'tags' | 'provider'>
+    >
   ): Promise<Task>
   /** Add a parent/child link (bidirectional). */
   addLink(parentId: string, childId: string): Promise<void>
@@ -47,6 +49,7 @@ interface StoredTask {
   createdAt: string
   updatedAt: string | null
   tags: string[]
+  provider?: TaskProvider
   parentIds: Set<string>
   childIds: Set<string>
 }
@@ -71,7 +74,7 @@ export function createInMemoryTaskStore(): TaskStore {
       const ref = resolveRef(cid)
       if (ref) childTasks.push(ref)
     }
-    return {
+    const task: Task = {
       id: stored.id,
       name: stored.name,
       state: stored.state,
@@ -84,6 +87,8 @@ export function createInMemoryTaskStore(): TaskStore {
       childTasks,
       tags: [...stored.tags]
     }
+    if (stored.provider) task.provider = { ...stored.provider }
+    return task
   }
 
   return {
@@ -98,6 +103,7 @@ export function createInMemoryTaskStore(): TaskStore {
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
         tags: [...task.tags],
+        provider: task.provider ? { ...task.provider } : undefined,
         parentIds: new Set(),
         childIds: new Set()
       }
@@ -123,7 +129,7 @@ export function createInMemoryTaskStore(): TaskStore {
           if (!stored.parentIds.has(filter.parentId)) continue
         }
         if (filter?.rootsOnly && stored.parentIds.size > 0) continue
-        results.push({
+        const item: TaskListItem = {
           id: stored.id,
           name: stored.name,
           state: stored.state,
@@ -131,7 +137,19 @@ export function createInMemoryTaskStore(): TaskStore {
           transientState: stored.transientState,
           childCount: stored.childIds.size,
           parentCount: stored.parentIds.size
-        })
+        }
+        if (stored.provider) {
+          item.provider = {
+            kind: stored.provider.kind,
+            repo: stored.provider.repo,
+            number: stored.provider.number,
+            prStatus: stored.provider.prStatus,
+            checksStatus: stored.provider.checksStatus,
+            reviewDecision: stored.provider.reviewDecision,
+            url: stored.provider.url
+          }
+        }
+        results.push(item)
       }
       return results
     },
@@ -146,6 +164,7 @@ export function createInMemoryTaskStore(): TaskStore {
       if (fields.transientState !== undefined) stored.transientState = fields.transientState
       if (fields.updatedAt !== undefined) stored.updatedAt = fields.updatedAt
       if (fields.tags !== undefined) stored.tags = [...fields.tags]
+      if (fields.provider !== undefined) stored.provider = fields.provider ? { ...fields.provider } : undefined
       return toTask(stored)
     },
 

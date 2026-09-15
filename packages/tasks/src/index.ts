@@ -5,6 +5,7 @@
 
 export type {
   Task,
+  TaskProvider,
   TaskRef,
   TaskListItem,
   TaskSummary,
@@ -31,3 +32,9 @@ export { createTaskDigest } from './task-digest.js'
 
 export type { TaskBootstrapOpts } from './bootstrap.js'
 export { bootstrapTaskPerspective } from './bootstrap.js'
+
+export type { PrPollService, PrPollServiceDeps, ImportPrOpts } from './pr-poll.js'
+export { createPrPollService } from './pr-poll.js'
+
+export type { TaskRouteDeps } from './routes.js'
+export { createTaskRoutes } from './routes.js'
