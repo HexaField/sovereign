@@ -125,6 +125,51 @@ describe('PrPollService — importPr', () => {
     expect(sentMessages[0].text).toBe('Review this PR and address any issues.')
   })
 
+  it('sends default prompt when no explicit prompt provided and thread assigned', async () => {
+    await pollService.importPr({
+      repo: 'org/repo',
+      pr: 42,
+      threadId: 'my-thread',
+      sourceThreadId: 'thread-1'
+    })
+
+    expect(sentMessages).toHaveLength(1)
+    expect(sentMessages[0].threadId).toBe('my-thread')
+    expect(sentMessages[0].text).toContain('[PR #42]')
+    expect(sentMessages[0].text).toContain('Add widget feature')
+    expect(sentMessages[0].text).toContain('feat/widget')
+    expect(sentMessages[0].text).toContain('imported into your task list')
+    pollService.dispose()
+  })
+
+  it('sends contextual default prompt when CI failing', async () => {
+    const failExec = makeExecFn(
+      ghPrResponse({
+        statusCheckRollup: [{ state: 'COMPLETED', conclusion: 'FAILURE' }]
+      })
+    )
+    const failPoll = createPrPollService({
+      taskService,
+      bus: makeBus().bus,
+      sendToThread: async (threadId, text) => {
+        sentMessages.push({ threadId, text })
+      },
+      execFn: failExec
+    })
+
+    await failPoll.importPr({
+      repo: 'org/repo',
+      pr: 42,
+      threadId: 'my-thread',
+      sourceThreadId: 'thread-1'
+    })
+
+    expect(sentMessages).toHaveLength(1)
+    expect(sentMessages[0].text).toContain('CI checks have failed')
+    expect(sentMessages[0].text).toContain('gh pr checks')
+    failPoll.dispose()
+  })
+
   it('starts polling after import', async () => {
     await pollService.importPr({
       repo: 'org/repo',
