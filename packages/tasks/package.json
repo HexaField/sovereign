@@ -21,9 +21,11 @@
   "dependencies": {
     "@coasys/ad4m": "workspace:*",
     "@sovereign/ad4m": "workspace:*",
-    "@sovereign/core": "workspace:*"
+    "@sovereign/core": "workspace:*",
+    "express": "^5.2.1"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
     "vitest": "^2.1.9"
   }

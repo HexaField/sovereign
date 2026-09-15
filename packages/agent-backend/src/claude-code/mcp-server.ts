@@ -143,6 +143,7 @@ export interface TaskMcpDeps {
     tags?: string[]
     autoAssign?: boolean
     sourceThreadId: string
+    provider?: Record<string, unknown>
   }): Promise<{ id: string; name: string; state: string; threadId: string | null }>
   update(
     taskId: string,
@@ -154,6 +155,7 @@ export interface TaskMcpDeps {
       threadId?: string | null
       tags?: string[]
       sourceThreadId: string
+      provider?: Record<string, unknown>
     }
   ): Promise<Record<string, unknown>>
   get(taskId: string): Promise<Record<string, unknown> | null>
@@ -166,6 +168,19 @@ export interface TaskMcpDeps {
   link(parentId: string, childId: string, sourceThreadId: string): Promise<void>
   unlink(parentId: string, childId: string, sourceThreadId: string): Promise<void>
   summary(resolveLabel?: (threadId: string) => string | undefined): Promise<Record<string, unknown>>
+  /** Import a GitHub PR as a task. Returns the created task + starts polling. */
+  importPr?(opts: {
+    repo: string
+    pr: number
+    threadId?: string
+    parentTaskIds?: string[]
+    tags?: string[]
+    prompt?: string
+    pollIntervalMinutes?: number
+    sourceThreadId: string
+  }): Promise<Record<string, unknown>>
+  /** Send a prompt to a task's assigned thread. */
+  sendPrompt?(taskId: string, prompt: string): Promise<void>
 }
 
 const okText = (text: string) => ({ content: [{ type: 'text' as const, text }] })
@@ -728,6 +743,64 @@ export function createSovereignMcpServer(
         }
       )
     )
+
+    // ── PR-task bridge tools (only when importPr/sendPrompt wired) ───
+    if (tasks.importPr) {
+      const importPr = tasks.importPr
+      tools.push(
+        tool(
+          'task_import_pr',
+          'Import a GitHub PR as a task in the holonic task graph. Starts polling for CI/review changes. Optionally assigns a thread and sends an initial prompt.',
+          {
+            repo: z.string().describe('GitHub repo slug (e.g. "coasys/we").'),
+            pr: z.number().int().positive().describe('PR number.'),
+            threadId: z.string().optional().describe('Thread to assign. Omit to leave unassigned.'),
+            parentTaskIds: z.array(z.string()).optional().describe('Parent task IRIs.'),
+            tags: z.array(z.string()).optional().describe('Freeform labels.'),
+            prompt: z.string().optional().describe('Initial prompt to send to the assigned thread.'),
+            pollIntervalMinutes: z
+              .number()
+              .int()
+              .min(1)
+              .max(60)
+              .optional()
+              .describe('Poll interval in minutes. Default: 5.')
+          },
+          async (args) => {
+            const sourceThreadId = deps.currentSessionKey?.() ? bareThreadKey(deps.currentSessionKey()!) : 'unknown'
+            const result = await importPr({
+              repo: args.repo,
+              pr: args.pr,
+              threadId: args.threadId,
+              parentTaskIds: args.parentTaskIds,
+              tags: args.tags,
+              prompt: args.prompt,
+              pollIntervalMinutes: args.pollIntervalMinutes,
+              sourceThreadId
+            })
+            return okJson(result)
+          }
+        )
+      )
+    }
+
+    if (tasks.sendPrompt) {
+      const sendPrompt = tasks.sendPrompt
+      tools.push(
+        tool(
+          'task_send_prompt',
+          "Send a prompt to a task's assigned thread. The task must have a threadId assigned.",
+          {
+            taskId: z.string().describe('The task IRI.'),
+            prompt: z.string().describe('The message to send to the assigned thread.')
+          },
+          async (args) => {
+            await sendPrompt(args.taskId, args.prompt)
+            return okText(`Prompt sent to task ${args.taskId}'s assigned thread.`)
+          }
+        )
+      )
+    }
   }
 
   // ── presence (only registered when wired) ──────────────────────────────

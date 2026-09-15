@@ -14,6 +14,7 @@ export type SidebarTab =
   | 'files'
   | 'git'
   | 'planning'
+  | 'tasks'
   | 'notifications'
   | 'terminal'
   | 'recordings'
@@ -23,6 +24,7 @@ export type SidebarTab =
 export const SIDEBAR_TABS: { key: SidebarTab; label: string; iconKey: string }[] = [
   { key: 'git', label: 'Git', iconKey: 'git' },
   { key: 'planning', label: 'Planning', iconKey: 'planning' },
+  { key: 'tasks', label: 'Tasks', iconKey: 'tasks' },
   { key: 'notifications', label: 'Notifications', iconKey: 'notifications' },
   { key: 'terminal', label: 'Terminal', iconKey: 'terminal' },
   { key: 'recordings', label: 'Recordings', iconKey: 'recordings' },
