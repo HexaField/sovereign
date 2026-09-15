@@ -174,12 +174,19 @@ function makeChip(filePath: string, displayName: string): string {
   return `<span class="file-chip" data-file-path="${filePath}" title="${filePath}">📄 ${displayName}<button class="file-chip-copy" data-copy-path="${filePath}" title="Copy path">⧉</button></span>`
 }
 
-/** Build regex matching workspace filenames, longest first */
+let cachedFilenameRe: RegExp | null = null
+let cachedFilenameReVersion = -1
+
+/** Build regex matching workspace filenames, longest first (cached) */
 function buildFilenameRe(): RegExp | null {
   if (!workspaceFiles || workspaceFiles.size === 0) return null
+  const v = wsFilesVersion()
+  if (cachedFilenameReVersion === v && cachedFilenameRe) return cachedFilenameRe
   const names = [...workspaceFiles].sort((a, b) => b.length - a.length)
   const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  return new RegExp('`?(' + escaped.join('|') + ')`?', 'g')
+  cachedFilenameRe = new RegExp('`?(' + escaped.join('|') + ')`?', 'g')
+  cachedFilenameReVersion = v
+  return cachedFilenameRe
 }
 
 /** Wrap detected file paths and workspace filenames in clickable chips */
@@ -332,16 +339,25 @@ function injectCodeLinks(html: string): string {
   return result
 }
 
+const renderCache = new Map<string, { version: number; html: string }>()
+const RENDER_CACHE_MAX = 512
+
 /**
  * Convert markdown text to HTML.
  */
 export function renderMarkdown(text: string): string {
-  // Access reactive signal so callers inside createMemo/JSX re-run when files load
-  wsFilesVersion()
+  const version = wsFilesVersion()
+  const cached = renderCache.get(text)
+  if (cached && cached.version === version) return cached.html
   try {
     let html = marked.parse(text, { async: false }) as string
     html = injectFileChips(html)
     html = injectCodeLinks(html)
+    if (renderCache.size >= RENDER_CACHE_MAX) {
+      const first = renderCache.keys().next().value
+      if (first !== undefined) renderCache.delete(first)
+    }
+    renderCache.set(text, { version, html })
     return html
   } catch {
     return escapeHtml(text)
