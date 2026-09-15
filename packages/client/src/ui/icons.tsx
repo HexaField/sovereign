@@ -155,6 +155,18 @@ export function GitIcon(props: IconProps = {}) {
   )
 }
 
+export function DiffIcon(props: IconProps = {}) {
+  return (
+    <svg {...defaults(props)}>
+      <path d="M12 3v14" />
+      <path d="M5 10l7 7 7-7" />
+      <line x1="5" y1="21" x2="19" y2="21" />
+      <line x1="5" y1="3" x2="9" y2="3" />
+      <line x1="15" y1="3" x2="19" y2="3" />
+    </svg>
+  )
+}
+
 export function ThreadsIcon(props: IconProps = {}) {
   return (
     <svg {...defaults(props)}>

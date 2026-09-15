@@ -1,55 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import {
-  openDiffViewer,
-  closeDiffViewer,
-  diffViewerOpen,
-  diffThreadId,
-  selectedFile,
-  setSelectedFile,
-  selectedRepo,
-  setSelectedRepo
-} from './store.js'
+import { clearDiffSelection, selectedFile, setSelectedFile, selectedRepo, setSelectedRepo } from './store.js'
 
 describe('diff store', () => {
   beforeEach(() => {
-    closeDiffViewer() // reset state
+    clearDiffSelection()
   })
 
-  it('openDiffViewer sets threadId and opens', () => {
-    expect(diffViewerOpen()).toBe(false)
-    expect(diffThreadId()).toBe(null)
-
-    openDiffViewer('thread-123')
-
-    expect(diffViewerOpen()).toBe(true)
-    expect(diffThreadId()).toBe('thread-123')
-    expect(selectedFile()).toBe(null)
-    expect(selectedRepo()).toBe(null)
-  })
-
-  it('closeDiffViewer clears all state', () => {
-    openDiffViewer('thread-456')
-    expect(diffViewerOpen()).toBe(true)
-
-    closeDiffViewer()
-
-    expect(diffViewerOpen()).toBe(false)
-    expect(diffThreadId()).toBe(null)
-    expect(selectedFile()).toBe(null)
-    expect(selectedRepo()).toBe(null)
-  })
-
-  it('openDiffViewer resets file/repo selection from previous session', () => {
-    openDiffViewer('thread-1')
-    // Simulate selecting a file
+  it('clearDiffSelection resets all selection state', () => {
     setSelectedFile('src/foo.ts')
     setSelectedRepo('/home/user/project')
+    expect(selectedFile()).toBe('src/foo.ts')
+    expect(selectedRepo()).toBe('/home/user/project')
 
-    // Open for a different thread — should reset
-    openDiffViewer('thread-2')
+    clearDiffSelection()
+
     expect(selectedFile()).toBe(null)
     expect(selectedRepo()).toBe(null)
-    expect(diffThreadId()).toBe('thread-2')
   })
 })
 
