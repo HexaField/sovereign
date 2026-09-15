@@ -410,38 +410,9 @@ export function createSovereignMcpServer(
     ),
 
     // ── subagents ─────────────────────────────────────────────────────────
-    tool(
-      'agents_spawn',
-      'Spawn a Sovereign-tracked subagent under the current parent session. Use when the model wants a tracked subagent record (the Task tool is the lighter-weight alternative for ad-hoc work). Pass `backend` to run the subagent on a different backend (e.g. "local-llm").',
-      {
-        task: z.string(),
-        label: z.string().optional(),
-        parentSessionKey: z.string().optional(),
-        backend: z
-          .string()
-          .optional()
-          .describe(
-            'Backend kind to run the subagent on (e.g. "claude-code", "local-llm"). Defaults to the thread\'s subagent backend config, then the parent session\'s backend.'
-          ),
-        model: z
-          .string()
-          .optional()
-          .describe(
-            'Model to use for the subagent (e.g. "default", a local model name). Defaults to the thread\'s subagent model config, then the backend\'s default model.'
-          )
-      },
-      async (args) => {
-        const parent = args.parentSessionKey ?? deps.currentSessionKey?.()
-        if (!parent) throw new Error('agents_spawn: no parent session key available')
-        const result = await deps.agents.spawn(parent, {
-          task: args.task,
-          label: args.label,
-          backend: args.backend,
-          model: args.model
-        })
-        return okJson({ sessionKey: result.sessionKey, parentSessionKey: parent })
-      }
-    ),
+    // NOTE: agents_spawn disabled — local-LLM subagents produce unreliable
+    // results. Use Claude Code's built-in Task tool instead. The tool
+    // definition, deps interface, and wiring remain for future re-enable.
     tool(
       'agents_list',
       'List live subagents, optionally filtered to a specific parent.',
