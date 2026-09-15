@@ -14,6 +14,7 @@ import {
 import type { Component } from 'solid-js'
 import {
   GitIcon,
+  DiffIcon,
   PlanningIcon,
   TasksIcon,
   NotificationsIcon,
@@ -115,6 +116,10 @@ const MeetingsPanel = lazy(() =>
 const TasksPanel = lazy(() => import('./panels/TasksPanel.js'))
 const LogsPanel = lazy(() => import('./panels/LogsPanel.js'))
 const FilePanel = lazy(() => import('./panels/FilePanel.js'))
+const DiffSidebar = lazy(() => import('../../features/diff/DiffSidebar.js').then((m) => ({ default: m.DiffSidebar })))
+const DiffContentPanel = lazy(() =>
+  import('../../features/diff/DiffContentPanel.js').then((m) => ({ default: m.DiffContentPanel }))
+)
 const PlanningDAGView = lazy(() => import('./panels/PlanningDAGView.js'))
 const IssueDetailView = lazy(() => import('./panels/IssueDetailView.js'))
 const DraftEditPanel = lazy(() => import('../../features/drafts/DraftEditPanel.js'))
@@ -122,6 +127,7 @@ const DraftEditPanel = lazy(() => import('../../features/drafts/DraftEditPanel.j
 // Icon component lookup
 const SIDEBAR_ICON_MAP: Record<string, Component<{ class?: string }>> = {
   git: GitIcon,
+  diff: DiffIcon,
   planning: PlanningIcon,
   tasks: TasksIcon,
   notifications: NotificationsIcon,
@@ -170,6 +176,9 @@ const SidebarContent: Component = () => {
         <Switch>
           <Match when={activeSidebarTab() === 'git'}>
             <GitPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'diff'}>
+            <DiffSidebar />
           </Match>
           <Match when={activeSidebarTab() === 'planning'}>
             <PlanningPanel />
@@ -240,6 +249,17 @@ const MainContentArea: Component = () => {
               const params = issueDetailParams()!
               return <IssueDetailView orgId={params.orgId} projectId={params.projectId} issueId={params.issueId} />
             })()}
+          </Suspense>
+        </Match>
+        <Match when={view() === 'diff'}>
+          <Suspense
+            fallback={
+              <p class="p-4 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                Loading...
+              </p>
+            }
+          >
+            <DiffContentPanel />
           </Suspense>
         </Match>
         <Match when={view() === 'files'}>
@@ -691,6 +711,9 @@ const MobileWorkspace: Component = () => {
           </Match>
           <Match when={activeMobileTab() === 'git'}>
             <GitPanel />
+          </Match>
+          <Match when={activeMobileTab() === 'diff'}>
+            <DiffContentPanel />
           </Match>
           <Match when={activeMobileTab() === 'planning'}>
             <PlanningPanel />

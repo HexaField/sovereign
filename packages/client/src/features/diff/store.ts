@@ -41,8 +41,6 @@ export interface ThreadGitContext {
 export type DiffViewMode = 'unified' | 'split'
 
 // ── Signals ─────────────────────────────────────────────────────────────
-const [diffThreadId, setDiffThreadId] = createSignal<string | null>(null)
-const [diffViewerOpen, setDiffViewerOpen] = createSignal(false)
 const [selectedFile, setSelectedFile] = createSignal<string | null>(null)
 const [selectedRepo, setSelectedRepo] = createSignal<string | null>(null)
 const [selectedCommit, setSelectedCommit] = createSignal<string | null>(null)
@@ -81,25 +79,13 @@ export async function fetchFileDiff(
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────
-export function openDiffViewer(threadId: string): void {
-  setDiffThreadId(threadId)
-  setSelectedFile(null)
-  setSelectedRepo(null)
-  setSelectedCommit(null)
-  setDiffViewerOpen(true)
-}
-
-export function closeDiffViewer(): void {
-  setDiffViewerOpen(false)
-  setDiffThreadId(null)
+export function clearDiffSelection(): void {
   setSelectedFile(null)
   setSelectedRepo(null)
   setSelectedCommit(null)
 }
 
 export {
-  diffThreadId,
-  diffViewerOpen,
   selectedFile,
   setSelectedFile,
   selectedRepo,

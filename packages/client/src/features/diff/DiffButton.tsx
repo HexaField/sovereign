@@ -1,8 +1,8 @@
-// DiffButton — header icon that shows changed-file count badge and opens the diff viewer.
-
 import { createSignal, createMemo, onMount, onCleanup, Show } from 'solid-js'
 import { threadKey } from '../threads/store.js'
-import { openDiffViewer, fetchGitContext, type ThreadGitContext } from './store.js'
+import { fetchGitContext, clearDiffSelection, type ThreadGitContext } from './store.js'
+import { openDiffView } from '../workspace/store.js'
+import { activeView, setActiveView } from '../nav/store.js'
 
 const POLL_INTERVAL = 30_000
 
@@ -20,7 +20,6 @@ export function DiffButton() {
     setContexts(result)
   }
 
-  // Poll on mount and on interval
   onMount(() => {
     poll()
     timer = setInterval(poll, POLL_INTERVAL)
@@ -29,9 +28,8 @@ export function DiffButton() {
     if (timer) clearInterval(timer)
   })
 
-  // Re-poll when thread changes
   createMemo(() => {
-    threadKey() // subscribe
+    threadKey()
     poll()
   })
 
@@ -45,15 +43,17 @@ export function DiffButton() {
 
   const repoCount = createMemo(() => contexts()?.length ?? 0)
 
-  // Hide when no git context available
   const visible = createMemo(() => {
     const ctxs = contexts()
     return ctxs !== null && ctxs.length > 0
   })
 
   const handleClick = () => {
-    const tid = threadKey()
-    if (tid) openDiffViewer(tid)
+    clearDiffSelection()
+    if (activeView() !== 'workspace') {
+      setActiveView('workspace')
+    }
+    openDiffView()
   }
 
   return (
@@ -88,7 +88,6 @@ export function DiffButton() {
           e.currentTarget.style.borderColor = 'var(--c-border)'
         }}
       >
-        {/* Git diff icon — simplified branch/merge glyph */}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M5 3v10M11 3v4" stroke-linecap="round" />
           <circle cx="5" cy="3" r="1.5" fill="currentColor" />
@@ -98,7 +97,6 @@ export function DiffButton() {
           <path d="M11 9c0 2.5-2 4-6 4" stroke-linecap="round" />
         </svg>
 
-        {/* Badge */}
         <Show when={totalFiles() > 0}>
           <span
             style={{

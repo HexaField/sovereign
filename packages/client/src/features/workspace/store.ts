@@ -13,6 +13,7 @@ export interface WorkspaceContext {
 export type SidebarTab =
   | 'files'
   | 'git'
+  | 'diff'
   | 'planning'
   | 'tasks'
   | 'notifications'
@@ -23,6 +24,7 @@ export type SidebarTab =
 
 export const SIDEBAR_TABS: { key: SidebarTab; label: string; iconKey: string }[] = [
   { key: 'git', label: 'Git', iconKey: 'git' },
+  { key: 'diff', label: 'Diff', iconKey: 'diff' },
   { key: 'planning', label: 'Planning', iconKey: 'planning' },
   { key: 'tasks', label: 'Tasks', iconKey: 'tasks' },
   { key: 'notifications', label: 'Notifications', iconKey: 'notifications' },
@@ -92,8 +94,14 @@ function currentOrgId(): string {
 export const [activeSidebarTab, _setActiveSidebarTab] = createSignal<SidebarTab>('git')
 
 export function setActiveSidebarTab(tab: SidebarTab): void {
+  const prev = activeSidebarTab()
   _setActiveSidebarTab(tab)
   writeStorage(wsKey(currentOrgId(), 'activeSidebarTab'), tab)
+  if (tab === 'diff') {
+    setMainContentView('diff')
+  } else if (prev === 'diff' && mainContentView() === 'diff') {
+    setMainContentView('files')
+  }
 }
 
 // §7.3 — Mobile workspace tab types
@@ -101,6 +109,7 @@ export type MobileTab =
   | 'files'
   | 'chat'
   | 'git'
+  | 'diff'
   | 'threads'
   | 'planning'
   | 'planning-dag'
@@ -113,6 +122,7 @@ export type MobileTab =
 export const MOBILE_TAB_ORDER: { key: MobileTab; label: string }[] = [
   { key: 'files', label: 'Files' },
   { key: 'git', label: 'Git' },
+  { key: 'diff', label: 'Diff' },
   { key: 'planning', label: 'Planning' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'terminal', label: 'Terminal' },
@@ -247,7 +257,7 @@ export function openFileTab(filePath: string, projectId: string): void {
 }
 
 // §3.4 — Main content view types
-export type MainContentView = 'files' | 'planning-dag' | 'issue-detail'
+export type MainContentView = 'files' | 'diff' | 'planning-dag' | 'issue-detail'
 
 export interface IssueDetailParams {
   orgId: string
@@ -267,6 +277,12 @@ export function openPlanningDAG(): void {
 export function openIssueDetail(orgId: string, projectId: string, issueId: string): void {
   setIssueDetailParams({ orgId, projectId, issueId })
   setMainContentView('issue-detail')
+}
+
+export function openDiffView(): void {
+  setActiveSidebarTab('diff')
+  setMainContentView('diff')
+  setActiveMobileTab('diff')
 }
 
 export function closePlanningView(): void {

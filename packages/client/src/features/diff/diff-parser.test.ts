@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseDiff, countAdditions, countDeletions } from './diff-parser.js'
-import { pairLinesForSplit } from './DiffViewer.js'
+import { pairLinesForSplit } from './DiffContentPanel.js'
 
 describe('parseDiff', () => {
   it('parses a simple single-file diff', () => {

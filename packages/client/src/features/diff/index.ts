@@ -1,3 +1,4 @@
-export { DiffViewer } from './DiffViewer.js'
 export { DiffButton } from './DiffButton.js'
-export { openDiffViewer, closeDiffViewer, diffViewerOpen } from './store.js'
+export { DiffSidebar } from './DiffSidebar.js'
+export { DiffContentPanel } from './DiffContentPanel.js'
+export { clearDiffSelection } from './store.js'
