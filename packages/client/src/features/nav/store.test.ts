@@ -174,7 +174,7 @@ describe('§3.5 Nav Store', () => {
     })
 
     it('setActiveAgentTab switches tabs', () => {
-      const tabs: AgentTab[] = ['hex', 'overview', 'settings', 'system']
+      const tabs: AgentTab[] = ['hex', 'overview', 'forest', 'tasks', 'settings', 'system']
       for (const tab of tabs) {
         setActiveAgentTab(tab)
         expect(activeAgentTab()).toBe(tab)
@@ -225,6 +225,18 @@ describe('§3.5 Nav Store', () => {
       const lastCall = replaceState.mock.calls[replaceState.mock.calls.length - 1]
       expect(lastCall[2]).toContain('view=agent')
       expect(lastCall[2]).not.toContain('tab=')
+    })
+
+    it('?tab=tasks URL resolves to agent/tasks on init', () => {
+      cleanup()
+      Object.defineProperty(globalThis, 'location', {
+        value: { search: '?view=agent&tab=tasks', href: 'http://localhost?view=agent&tab=tasks', hash: '' },
+        writable: true,
+        configurable: true
+      })
+      cleanup = initNavStore()
+      expect(activeView()).toBe('agent')
+      expect(activeAgentTab()).toBe('tasks')
     })
 
     it('legacy ?view=dashboard URL resolves to agent/overview on init', () => {

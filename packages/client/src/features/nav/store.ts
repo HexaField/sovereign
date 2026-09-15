@@ -25,10 +25,10 @@ export type ViewMode =
 export type NavView = 'workspace' | 'agent'
 
 // --- Agent-context tabs (visible when activeView === 'agent') ---
-export type AgentTab = 'hex' | 'overview' | 'forest' | 'settings' | 'system'
+export type AgentTab = 'hex' | 'overview' | 'forest' | 'tasks' | 'settings' | 'system'
 
 const VALID_NAV_VIEWS: NavView[] = ['workspace', 'agent']
-const VALID_AGENT_TABS: AgentTab[] = ['hex', 'overview', 'forest', 'settings', 'system']
+const VALID_AGENT_TABS: AgentTab[] = ['hex', 'overview', 'forest', 'tasks', 'settings', 'system']
 
 function readNavViewFromUrl(): NavView {
   if (typeof location === 'undefined') return 'workspace'

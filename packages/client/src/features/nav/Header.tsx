@@ -33,6 +33,7 @@ const AGENT_TAB_DEFS: Array<{ tab: AgentTab; staticLabel?: string }> = [
   { tab: 'hex' },
   { tab: 'overview', staticLabel: 'Overview' },
   { tab: 'forest', staticLabel: 'Forest' },
+  { tab: 'tasks', staticLabel: 'Tasks' },
   { tab: 'settings', staticLabel: 'Settings' },
   { tab: 'system', staticLabel: 'System' }
 ]
