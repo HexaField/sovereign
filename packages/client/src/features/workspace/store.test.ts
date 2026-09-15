@@ -25,6 +25,7 @@ import {
   setActiveWorkspace,
   setActiveProject,
   syncWorkspaceForThread,
+  restoreWorkspaceForThread,
   _setActiveWorkspace,
   _resetWorkspaceStore,
   activeMobileTab,
@@ -179,22 +180,22 @@ describe('Workspace Store', () => {
       })
     })
 
-    it('§0.2 — panel state persists per workspace and restores on switch', () => {
-      setActiveWorkspace('org-a', 'A')
+    it('§0.2 — panel state persists per thread and restores on switch', () => {
+      restoreWorkspaceForThread('thread-a')
       setSidebarWidth(300)
       setChatPanelWidth(500)
       setChatExpanded(true)
       setSidebarCollapsed(true)
       setChatCollapsed(true)
 
-      setActiveWorkspace('org-b', 'B')
+      restoreWorkspaceForThread('thread-b')
       expect(sidebarWidth()).not.toBe(300)
       expect(chatPanelWidth()).not.toBe(500)
       expect(chatExpanded()).toBe(false)
       expect(sidebarCollapsed()).toBe(false)
       expect(chatCollapsed()).toBe(false)
 
-      setActiveWorkspace('org-a', 'A')
+      restoreWorkspaceForThread('thread-a')
       expect(sidebarWidth()).toBe(300)
       expect(chatPanelWidth()).toBe(500)
       expect(chatExpanded()).toBe(true)
@@ -204,9 +205,19 @@ describe('Workspace Store', () => {
   })
 
   describe('§7.3 — Mobile Tab Store', () => {
-    it('has 8 mobile tabs in correct order', () => {
+    it('has 9 mobile tabs in correct order', () => {
       const keys = MOBILE_TAB_ORDER.map((t) => t.key)
-      expect(keys).toEqual(['files', 'git', 'planning', 'notifications', 'terminal', 'recordings', 'meetings', 'logs'])
+      expect(keys).toEqual([
+        'files',
+        'git',
+        'diff',
+        'planning',
+        'notifications',
+        'terminal',
+        'recordings',
+        'meetings',
+        'logs'
+      ])
     })
 
     it('setActiveMobileTab persists to localStorage', () => {
