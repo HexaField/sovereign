@@ -4,8 +4,9 @@ import { Router } from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import multer from 'multer'
 import type { ChatModule } from './chat.js'
-import type { AgentBackend } from '@sovereign/core'
+import type { AgentBackend, Attachment } from '@sovereign/core'
 
 /** Simple file-backed draft store for chat input drafts (syncs across devices). */
 function createChatDraftStore(dataDir: string) {
@@ -52,6 +53,55 @@ export interface ChatRoutesOptions {
   llamaBaseUrl?: string
 }
 
+/** Read an uploaded file from disk and return an Attachment.
+ *  Validates the resolved path stays within allowedDir to prevent path traversal. */
+function readUploadedFile(filePath: string, allowedDir: string): Attachment | null {
+  try {
+    const resolved = path.resolve(filePath)
+    const resolvedDir = path.resolve(allowedDir)
+    if (!resolved.startsWith(resolvedDir + path.sep) && resolved !== resolvedDir) {
+      return null // path traversal attempt
+    }
+    const data = fs.readFileSync(resolved)
+    const name = path.basename(resolved)
+    // Strip the UUID prefix added during upload (e.g. "a1b2c3d4-original.txt" → "original.txt")
+    const dashIdx = name.indexOf('-')
+    const originalName = dashIdx > 0 ? name.slice(dashIdx + 1) : name
+    // Infer media type from extension
+    const ext = path.extname(originalName).toLowerCase()
+    const MIME_MAP: Record<string, string> = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.pdf': 'application/pdf',
+      '.csv': 'text/csv',
+      '.json': 'application/json',
+      '.xml': 'application/xml',
+      '.txt': 'text/plain',
+      '.md': 'text/markdown',
+      '.ts': 'text/plain',
+      '.js': 'text/plain',
+      '.py': 'text/plain',
+      '.rs': 'text/plain',
+      '.go': 'text/plain',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.yaml': 'text/yaml',
+      '.yml': 'text/yaml',
+      '.toml': 'text/plain',
+      '.sh': 'text/plain',
+      '.sql': 'text/plain',
+      '.log': 'text/plain'
+    }
+    const mediaType = MIME_MAP[ext] || 'application/octet-stream'
+    return { name: originalName, mediaType, data }
+  } catch {
+    return null
+  }
+}
+
 export function createChatRoutes(
   chatModule: ChatModule,
   backend: AgentBackend,
@@ -60,6 +110,36 @@ export function createChatRoutes(
 ): Router {
   const router = Router()
   const draftStore = createChatDraftStore(dataDir)
+
+  // ── File upload endpoint ────────────────────────────────────────────
+  const uploadsDir = path.join(dataDir, 'uploads')
+  fs.mkdirSync(uploadsDir, { recursive: true })
+
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, uploadsDir),
+      filename: (_req, file, cb) => {
+        const id = crypto.randomUUID().split('-')[0]
+        cb(null, `${id}-${file.originalname}`)
+      }
+    }),
+    limits: { fileSize: 50 * 1024 * 1024 } // 50 MB per file
+  })
+
+  router.post('/api/uploads', upload.array('files', 20), (req, res) => {
+    const files = req.files as Express.Multer.File[] | undefined
+    if (!files?.length) {
+      res.status(400).json({ error: 'no files provided' })
+      return
+    }
+    const results = files.map((f) => ({
+      name: f.originalname,
+      path: f.path,
+      size: f.size,
+      mediaType: f.mimetype || 'application/octet-stream'
+    }))
+    res.json({ files: results })
+  })
 
   router.get('/api/chat/status', (_req, res) => {
     res.json({ status: backend.status() })
@@ -148,19 +228,14 @@ export function createChatRoutes(
       if (!threadId || (!message && !attachments?.length)) {
         return res.status(400).json({ error: 'threadId and message are required' })
       }
-      // Convert attachment payloads to Attachment objects.
-      // Accepts both the new { name, mediaType, data } format and legacy
-      // bare base64 strings for backward compatibility.
-      const parsed = attachments?.map((a: string | { name?: string; mediaType?: string; data: string }) => {
-        if (typeof a === 'string') {
-          return { name: 'attachment', mediaType: 'application/octet-stream', data: Buffer.from(a, 'base64') }
-        }
-        return {
-          name: a.name || 'attachment',
-          mediaType: a.mediaType || 'application/octet-stream',
-          data: Buffer.from(a.data, 'base64')
-        }
-      })
+      // Convert path-based attachment payloads to Attachment objects.
+      // Each entry must have { path } pointing to a file in data/uploads/.
+      const parsed: Attachment[] | undefined = attachments
+        ?.map((a: { path?: string }) => {
+          if (!a.path) return null
+          return readUploadedFile(a.path, uploadsDir)
+        })
+        .filter((a: Attachment | null): a is Attachment => a !== null)
       const opts: Record<string, unknown> = {}
       if (origin) opts.origin = origin
       if (immediate) opts.immediate = true

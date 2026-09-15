@@ -1,13 +1,11 @@
 // S34: File Attachments — verify that binary attachments sent via the UI
 // actually reach the LLM backend.
 //
-// Regression: handleSend in chat.ts named the third parameter `_attachments`
-// (intentional no-op). Base64 buffers were decoded by the route handler but
-// then silently dropped — the agent never saw the attached files.
-//
-// This scenario proves the full path:
-//   POST /api/chat/send (base64 attachment array)
-//     → chat.ts handleSend (attachment sidecar)
+// Flow:
+//   POST /api/uploads (multipart file)
+//     → disk: data/uploads/<uuid>-<name>
+//   POST /api/chat/send (path-based attachment refs)
+//     → chat.ts handleSend (reads from disk, attachment sidecar)
 //     → pumpQueue (retrieves sidecar, passes Buffer[] to sendMessage)
 //     → backend.sendMessage (Buffer[] → image content block)
 //     → mock Anthropic API (receives messages with image content)
@@ -19,8 +17,10 @@
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
 
 // A minimal 1×1 PNG (67 bytes) — smallest valid PNG for testing.
-// base64 of: \x89PNG\r\n\x1a\n + IHDR + IDAT + IEND
-const TINY_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+const TINY_PNG_BYTES = Uint8Array.from(
+  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='),
+  (c) => c.charCodeAt(0)
+)
 
 export const s34FileAttachments: Scenario = {
   id: 's34',
@@ -47,14 +47,46 @@ export const s34FileAttachments: Scenario = {
     metrics.threadId = thread.id
     await client.connectWs(['chat'])
 
-    // ── Send message with one attachment ─────────────────────────────
+    // ── Upload file via POST /api/uploads ─────────────────────────────
+    let uploadedPath: string | null = null
+    try {
+      const blob = new Blob([TINY_PNG_BYTES], { type: 'image/png' })
+      const formData = new FormData()
+      formData.append('files', blob, 'test.png')
+
+      const uploadRes = await client.timed('upload-file', () =>
+        fetch(`${client.baseUrl}/api/uploads`, { method: 'POST', body: formData })
+      )
+      if (uploadRes.ok) {
+        const { files } = (await uploadRes.json()) as { files: { name: string; path: string }[] }
+        uploadedPath = files[0]?.path ?? null
+      }
+      metrics.uploadOk = !!uploadedPath
+    } catch (err: any) {
+      metrics.uploadError = err?.message ?? String(err)
+    }
+
+    if (!uploadedPath) {
+      client.disconnectWs()
+      await client.deleteThread(thread.id)
+      return {
+        passed: false,
+        summary: `POST /api/uploads failed — ${metrics.uploadError || 'no path returned'}`,
+        metrics,
+        samples: client.samples
+      }
+    }
+
+    // ── Send message with path-based attachment ──────────────────────
     let sendOk = false
     let sendError = ''
     try {
       await client.timed('send-with-attachment', () =>
-        client.sendMessageWithAttachments(thread.id, 'Hello from wind-tunnel-s34 test', [
-          { data: TINY_PNG_B64, mediaType: 'image/png' }
-        ])
+        client.post('/api/chat/send', {
+          threadId: thread.id,
+          message: 'Hello from wind-tunnel-s34 test',
+          attachments: [{ path: uploadedPath }]
+        })
       )
       sendOk = true
     } catch (err: any) {
@@ -70,7 +102,7 @@ export const s34FileAttachments: Scenario = {
       try {
         const turnMsg = await client.timed('wait-for-turn', () =>
           // Filter by threadId AND role===assistant — Sovereign emits a synthetic
-          // user turn immediately at dispatch time (before the LLM is called).
+          // user turn immediately at dispatch time (before the LLM calls).
           // Catching that turn instead of the assistant reply causes the log check
           // to run before the image request reaches the mock LLM.
           client.waitForWs('chat.turn', 30000, (d) => d.threadId === thread.id && d.turn?.role === 'assistant')
