@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { extractPaths, createRepoTracker } from './repo-tracker.js'
 import type { GitCli } from './git.js'
 
@@ -249,6 +252,89 @@ describe('createRepoTracker', () => {
     ])
 
     // Live tool call
+    await tracker.trackWorkItem('t1', 'Read', JSON.stringify({ file_path: '/home/user/beta/b.ts' }))
+
+    const repos = tracker.getRepos('t1')
+    expect(repos).toHaveLength(2)
+    expect(repos).toContain('/home/user/alpha')
+    expect(repos).toContain('/home/user/beta')
+  })
+})
+
+describe('repo tracker persistence', () => {
+  const tmpFiles: string[] = []
+
+  function tmpPersistPath(): string {
+    const p = path.join(os.tmpdir(), `repo-tracker-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+    tmpFiles.push(p)
+    return p
+  }
+
+  afterEach(() => {
+    for (const f of tmpFiles) {
+      try {
+        fs.unlinkSync(f)
+      } catch {
+        /* ignore */
+      }
+    }
+    tmpFiles.length = 0
+  })
+
+  function mockGitCli(repoRootFn: (cwd: string) => Promise<string | null>): GitCli {
+    return { repoRoot: repoRootFn } as unknown as GitCli
+  }
+
+  it('persists tracked repos to disk after new repo discovered', async () => {
+    const persistPath = tmpPersistPath()
+    const cli = mockGitCli(async () => '/home/user/project')
+    const tracker = createRepoTracker(cli, { persistPath })
+
+    await tracker.trackWorkItem('t1', 'Read', JSON.stringify({ file_path: '/home/user/project/a.ts' }))
+
+    // Flush the debounced persist by waiting
+    await new Promise((r) => setTimeout(r, 2_500))
+
+    const raw = JSON.parse(fs.readFileSync(persistPath, 'utf-8'))
+    expect(raw.t1).toEqual(['/home/user/project'])
+  })
+
+  it('restores tracked repos from disk on creation', async () => {
+    const persistPath = tmpPersistPath()
+    fs.writeFileSync(persistPath, JSON.stringify({ t1: ['/home/user/alpha'], t2: ['/home/user/beta'] }))
+
+    const cli = mockGitCli(async () => null)
+    const tracker = createRepoTracker(cli, { persistPath })
+
+    expect(tracker.getRepos('t1')).toEqual(['/home/user/alpha'])
+    expect(tracker.getRepos('t2')).toEqual(['/home/user/beta'])
+  })
+
+  it('survives missing persist file on creation', () => {
+    const persistPath = tmpPersistPath() // file does not exist
+    const cli = mockGitCli(async () => null)
+    const tracker = createRepoTracker(cli, { persistPath })
+
+    expect(tracker.getRepos('t1')).toEqual([])
+  })
+
+  it('survives corrupt persist file on creation', () => {
+    const persistPath = tmpPersistPath()
+    fs.writeFileSync(persistPath, 'not json at all{{{')
+
+    const cli = mockGitCli(async () => null)
+    const tracker = createRepoTracker(cli, { persistPath })
+
+    expect(tracker.getRepos('t1')).toEqual([])
+  })
+
+  it('merges restored and live-tracked repos', async () => {
+    const persistPath = tmpPersistPath()
+    fs.writeFileSync(persistPath, JSON.stringify({ t1: ['/home/user/alpha'] }))
+
+    const cli = mockGitCli(async () => '/home/user/beta')
+    const tracker = createRepoTracker(cli, { persistPath })
+
     await tracker.trackWorkItem('t1', 'Read', JSON.stringify({ file_path: '/home/user/beta/b.ts' }))
 
     const repos = tracker.getRepos('t1')

@@ -60,7 +60,7 @@ import { createDraftRouter } from '@sovereign/drafts'
 import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
-import { createInferenceClient, localLlmConfigFromStore, readHistoryLog } from '@sovereign/agent-backend'
+import { createInferenceClient, localLlmConfigFromStore } from '@sovereign/agent-backend'
 import type { TaskMcpDeps } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
@@ -1245,25 +1245,23 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const gitCliInstance = createGitCli()
 
   // Track which repos each thread's agent has touched via tool call paths.
-  const repoTracker = createRepoTracker(gitCliInstance)
+  // Persists to disk so tracked repos survive server restarts.
+  const repoTracker = createRepoTracker(gitCliInstance, {
+    persistPath: path.join(dataDir, 'agent-backend', 'repo-tracker.json')
+  })
   bus.on('chat.work', (event) => {
     const payload = event.payload as { sessionKey: string; work: { type: string; name?: string; input?: string } }
     if (payload.work?.type !== 'tool_call') return
-    // Extract threadId from session key: agent:main:thread:<id>
-    const parts = payload.sessionKey.split(':thread:')
-    const threadId = parts.length > 1 ? parts[parts.length - 1] : null
+    // Session keys use bare UUIDs (e.g. "26e2fc25-...") — the threadId IS the key.
+    // Legacy prefixed keys ("agent:main:thread:<id>") also handled for safety.
+    const sk = payload.sessionKey
+    const threadId = sk.includes(':thread:') ? sk.split(':thread:').pop()! : sk
     if (threadId) {
       repoTracker.trackWorkItem(threadId, payload.work.name, payload.work.input)
     }
   })
   app.use(
     createThreadGitRoutes(gitCliInstance, async (threadId) => {
-      // Seed from history log on first access so repos survive server restarts
-      if (!repoTracker.hasSeeded(threadId)) {
-        const sessionKey = `agent:main:thread:${threadId}`
-        const messages = readHistoryLog(dataDir, sessionKey)
-        await repoTracker.seedFromHistory(threadId, messages)
-      }
       return repoTracker.getRepos(threadId)
     })
   )
