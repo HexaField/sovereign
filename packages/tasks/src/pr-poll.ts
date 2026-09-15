@@ -105,6 +105,32 @@ function prStateToTaskState(provider: TaskProvider): 'in_progress' | 'completed'
   return 'in_progress'
 }
 
+/** Build a default prompt for a newly imported PR when none was provided. */
+function buildDefaultPrompt(provider: TaskProvider, title: string, branch: string): string {
+  const lines = [
+    `[PR #${provider.number}] ${title}`,
+    provider.url,
+    '',
+    `Branch: ${branch}`,
+    `CI: ${provider.checksStatus} · Review: ${provider.reviewDecision}`,
+    ''
+  ]
+  if (provider.checksStatus === 'failing') {
+    lines.push(
+      `CI checks have failed. Run \`gh pr checks ${provider.number} -R ${provider.repo}\` to see which checks failed and address the failures.`
+    )
+  } else if (provider.reviewDecision === 'changes_requested') {
+    lines.push(
+      `Changes have been requested. Run \`gh pr view ${provider.number} -R ${provider.repo} --comments\` to read the review comments and address them.`
+    )
+  } else {
+    lines.push(
+      'This PR has been imported into your task list. Monitor CI status and review comments. Address any failures or requested changes.'
+    )
+  }
+  return lines.join('\n')
+}
+
 /** Build a human-readable transient state line. */
 function buildTransient(provider: TaskProvider): string {
   const parts: string[] = [`PR #${provider.number}`]
@@ -365,11 +391,12 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
       const intervalMs = (opts.pollIntervalMinutes ?? 5) * 60 * 1000
       start(task.id, intervalMs)
 
-      // Send initial prompt to assigned thread
-      if (opts.prompt && (opts.threadId ?? task.threadId)) {
-        const targetThread = opts.threadId ?? task.threadId!
+      // Send initial prompt to assigned thread (use default if none provided)
+      const targetThread = opts.threadId ?? task.threadId
+      if (targetThread) {
+        const prompt = opts.prompt ?? buildDefaultPrompt(provider, fetched.title, fetched.headBranch)
         try {
-          await sendToThread(targetThread, opts.prompt)
+          await sendToThread(targetThread, prompt)
         } catch (err) {
           console.warn(TAG, `failed to send initial prompt to thread ${targetThread}:`, (err as Error).message)
         }
