@@ -208,12 +208,20 @@ function clearStreamingState(): void {
 // fraction of the prompt has been processed. Stops (and clears) on idle/turn.
 
 let slotsPolltimer: ReturnType<typeof setInterval> | null = null
+let slotsUnavailable = false
 
 function startSlotsPolling(): void {
-  if (slotsPolltimer) return
+  if (slotsPolltimer || slotsUnavailable) return
   slotsPolltimer = setInterval(() => {
     fetch('/api/llm/slots')
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        if (r.status === 503) {
+          slotsUnavailable = true
+          stopSlotsPolling()
+          return null
+        }
+        return r.ok ? r.json() : null
+      })
       .then((slots) => {
         const slot = Array.isArray(slots) ? slots[0] : null
         // Only expose prefill data when the slot is actively processing.
