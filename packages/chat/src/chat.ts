@@ -546,6 +546,13 @@ export function createChatModule(
             currentStreamText.delete(threadId)
           }
           persistLiveState(threadId)
+          // Forward to the EventBus so repo-tracking and other bus listeners receive tool calls
+          bus.emit({
+            type: 'chat.work',
+            timestamp: new Date().toISOString(),
+            source: 'chat',
+            payload: { sessionKey, work: data.work }
+          })
         } else if (eventName === 'chat.stream') {
           const prev = currentStreamText.get(threadId) ?? ''
           currentStreamText.set(threadId, prev + (data.text as string))
@@ -755,6 +762,13 @@ export function createChatModule(
                 const items = currentWork.get(threadId) ?? []
                 items.push(work)
                 currentWork.set(threadId, items)
+                // Forward to bus for repo-tracking
+                bus.emit({
+                  type: 'chat.work',
+                  timestamp: new Date().toISOString(),
+                  source: 'chat',
+                  payload: { sessionKey, work }
+                })
               }
             }
 

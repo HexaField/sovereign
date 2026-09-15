@@ -5,6 +5,7 @@
 // This replaces workspace-based resolution — the diff viewer shows repos
 // the agent actually worked in, not every repo in an org.
 
+import fs from 'node:fs'
 import path from 'node:path'
 import type { GitCli } from './git.js'
 
@@ -62,6 +63,10 @@ export function extractPaths(toolName: string | undefined, input: string | undef
   return paths
 }
 
+export interface RepoTrackerOpts {
+  persistPath?: string
+}
+
 export interface RepoTracker {
   /** Get the set of repo roots the thread has touched. */
   getRepos(threadId: string): string[]
@@ -77,11 +82,48 @@ export interface RepoTracker {
   hasSeeded(threadId: string): boolean
 }
 
-export function createRepoTracker(gitCli: GitCli): RepoTracker {
+export function createRepoTracker(gitCli: GitCli, opts?: RepoTrackerOpts): RepoTracker {
+  const persistPath = opts?.persistPath
   // threadId → Set of resolved repo roots
   const tracked = new Map<string, Set<string>>()
   // path → resolved repo root (or null if not in a repo). Cache avoids repeat git calls.
   const repoRootCache = new Map<string, string | null>()
+
+  function persistToDisk(): void {
+    if (!persistPath) return
+    try {
+      const obj: Record<string, string[]> = {}
+      for (const [tid, repos] of tracked) {
+        if (repos.size > 0) obj[tid] = [...repos]
+      }
+      fs.mkdirSync(path.dirname(persistPath), { recursive: true })
+      fs.writeFileSync(persistPath, JSON.stringify(obj))
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  let persistTimer: ReturnType<typeof setTimeout> | undefined
+  function schedulePersist(): void {
+    if (!persistPath) return
+    if (persistTimer) clearTimeout(persistTimer)
+    persistTimer = setTimeout(persistToDisk, 2_000)
+  }
+
+  // Restore from disk on creation
+  if (persistPath) {
+    try {
+      const raw = fs.readFileSync(persistPath, 'utf-8')
+      const obj = JSON.parse(raw) as Record<string, string[]>
+      for (const [tid, repos] of Object.entries(obj)) {
+        if (Array.isArray(repos) && repos.length > 0) {
+          tracked.set(tid, new Set(repos))
+        }
+      }
+    } catch {
+      /* file missing or corrupt — start fresh */
+    }
+  }
 
   async function resolveRepoRoot(filePath: string): Promise<string | null> {
     // Resolve to directory — if it looks like a file, use its parent
@@ -106,6 +148,7 @@ export function createRepoTracker(gitCli: GitCli): RepoTracker {
       tracked.set(threadId, threadRepos)
     }
 
+    const sizeBefore = threadRepos.size
     for (const p of paths) {
       try {
         const root = await resolveRepoRoot(p)
@@ -114,6 +157,7 @@ export function createRepoTracker(gitCli: GitCli): RepoTracker {
         // Can't resolve — skip silently
       }
     }
+    if (threadRepos.size > sizeBefore) schedulePersist()
   }
 
   return {
