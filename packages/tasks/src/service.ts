@@ -74,7 +74,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         transientState: null,
         createdAt: now,
         updatedAt: null,
-        tags: opts.tags ?? []
+        tags: opts.tags ?? [],
+        provider: opts.provider
       })
 
       // Wire parent links
@@ -138,6 +139,12 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         transientChanged = true
       }
 
+      let providerChanged = false
+      if (opts.provider !== undefined) {
+        fields.provider = opts.provider
+        providerChanged = true
+      }
+
       const updated = await store.update(taskId, fields as any)
 
       // Emit specific events for state, thread, transient changes
@@ -173,8 +180,17 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         })
       }
 
+      if (providerChanged) {
+        emit(bus, 'task.provider_updated', {
+          taskId,
+          taskName: updated.name,
+          threadId: updated.threadId,
+          sourceThreadId: opts.sourceThreadId
+        })
+      }
+
       // Generic update event for non-specific changes
-      if (!stateChanged && !threadChanged && !transientChanged) {
+      if (!stateChanged && !threadChanged && !transientChanged && !providerChanged) {
         emit(bus, 'task.updated', {
           taskId,
           taskName: updated.name,

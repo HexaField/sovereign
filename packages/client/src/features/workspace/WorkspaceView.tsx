@@ -15,6 +15,7 @@ import type { Component } from 'solid-js'
 import {
   GitIcon,
   PlanningIcon,
+  TasksIcon,
   NotificationsIcon,
   TerminalIcon,
   RecordingIcon,
@@ -111,6 +112,7 @@ const RecordingsPanel = lazy(() => import('./panels/RecordingsPanel.js'))
 const MeetingsPanel = lazy(() =>
   import('../../features/meetings/MeetingsPanel.js').then((m) => ({ default: m.MeetingsPanel }))
 )
+const TasksPanel = lazy(() => import('./panels/TasksPanel.js'))
 const LogsPanel = lazy(() => import('./panels/LogsPanel.js'))
 const FilePanel = lazy(() => import('./panels/FilePanel.js'))
 const PlanningDAGView = lazy(() => import('./panels/PlanningDAGView.js'))
@@ -121,6 +123,7 @@ const DraftEditPanel = lazy(() => import('../../features/drafts/DraftEditPanel.j
 const SIDEBAR_ICON_MAP: Record<string, Component<{ class?: string }>> = {
   git: GitIcon,
   planning: PlanningIcon,
+  tasks: TasksIcon,
   notifications: NotificationsIcon,
   terminal: TerminalIcon,
   recordings: RecordingIcon,
@@ -170,6 +173,9 @@ const SidebarContent: Component = () => {
           </Match>
           <Match when={activeSidebarTab() === 'planning'}>
             <PlanningPanel />
+          </Match>
+          <Match when={activeSidebarTab() === 'tasks'}>
+            <TasksPanel />
           </Match>
           <Match when={activeSidebarTab() === 'notifications'}>
             <NotificationsPanel />
