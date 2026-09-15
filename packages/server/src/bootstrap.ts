@@ -110,7 +110,9 @@ import {
   createTaskService,
   createInMemoryTaskStore,
   createTaskDigest,
-  bootstrapTaskPerspective
+  bootstrapTaskPerspective,
+  createPrPollService,
+  createTaskRoutes
 } from '@sovereign/tasks'
 import { createForestRoutes } from './forest/routes.js'
 import { createDashboardRoutes } from './dashboard/routes.js'
@@ -629,7 +631,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   })
 
   const taskMcpDeps: TaskMcpDeps = {
-    create: (opts) => taskService.create(opts),
+    create: (opts) => taskService.create(opts as any),
     update: (taskId, opts) => taskService.update(taskId, opts as any) as any,
     get: (taskId) => taskService.get(taskId) as any,
     list: (filter) => taskService.list(filter as any) as any,
@@ -825,6 +827,66 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   chatHandleHolder.sendToThread = async (threadId, text, origin) => {
     await chatModule.handleSend(threadId, text, undefined, { origin })
   }
+
+  // ── PR-Task Bridge ────────────────────────────────────────────────────
+  // PrPollService monitors GitHub PRs linked to tasks. Created after
+  // chatModule so sendToThread can forward notifications to agent threads.
+  const prPollService = createPrPollService({
+    taskService,
+    bus,
+    sendToThread: async (threadId, text) => {
+      await chatModule.handleSend(threadId, text, undefined, {
+        origin: { modality: 'text' as const }
+      })
+    }
+  })
+
+  // Late-bind importPr and sendPrompt onto taskMcpDeps. These require
+  // chatModule + prPollService which exist only after the chat layer.
+  // Because sharedMcpDeps (in wiring.ts) holds a reference to this
+  // object, any future MCP server instance picks up these methods when
+  // createSovereignMcpInstance builds a fresh tools array per session.
+  taskMcpDeps.importPr = async (opts) => {
+    const task = await prPollService.importPr({
+      repo: opts.repo as string,
+      pr: opts.pr as number,
+      threadId: opts.threadId as string | undefined,
+      parentTaskIds: opts.parentTaskIds as string[] | undefined,
+      tags: opts.tags as string[] | undefined,
+      prompt: opts.prompt as string | undefined,
+      pollIntervalMinutes: opts.pollIntervalMinutes as number | undefined,
+      sourceThreadId: opts.sourceThreadId as string
+    })
+    return task as any
+  }
+
+  taskMcpDeps.sendPrompt = async (taskId, prompt) => {
+    const task = await taskService.get(taskId)
+    if (!task) throw new Error(`Task not found: ${taskId}`)
+    if (!task.threadId) throw new Error(`Task ${taskId} has no assigned thread — assign one first.`)
+    await chatModule.handleSend(task.threadId, prompt, undefined, {
+      origin: { modality: 'text' as const }
+    })
+  }
+
+  // Bootstrap: start polls for any existing PR-tasks in active states.
+  void prPollService.bootstrap().catch((err) => {
+    console.warn('[pr-poll] bootstrap failed:', (err as Error).message)
+  })
+
+  // Task REST API — serves the client sidebar panel and task detail views.
+  app.use(
+    createTaskRoutes({
+      taskService,
+      prPollService,
+      sendToThread: async (threadId, text) => {
+        await chatModule.handleSend(threadId, text, undefined, {
+          origin: { modality: 'text' as const }
+        })
+      },
+      resolveLabel: (threadId) => threadManager.get(threadId)?.label
+    })
+  )
 
   // AD4M → presence-internal thread injection. Mentions land on the
   // long-lived internal thread with origin metadata so the agent can choose
@@ -1510,6 +1572,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
   return {
     shutdown() {
+      prPollService.dispose()
       ad4mService?.close()
       fileWatcher.stop()
       scheduler.destroy()

@@ -419,3 +419,94 @@ describe('TaskService — cross-thread event emission', () => {
     expect((unlinkEvent!.payload as TaskEventPayload).sourceThreadId).toBe('unlinker-thread')
   })
 })
+
+// ── T4: Provider (PR-Task Bridge) ───────────────────────────────────────
+
+describe('TaskService — provider', () => {
+  let svc: TaskService
+  let events: Array<{ type: string; payload: unknown }>
+
+  const sampleProvider = {
+    kind: 'github-pr' as const,
+    url: 'https://github.com/org/repo/pull/42',
+    repo: 'org/repo',
+    number: 42,
+    prStatus: 'open' as const,
+    checksStatus: 'passing' as const,
+    reviewDecision: 'review_required' as const,
+    lastPolledAt: '2026-09-15T00:00:00.000Z',
+    unresolvedComments: 0
+  }
+
+  beforeEach(() => {
+    const { bus, events: e } = makeBus()
+    events = e
+    svc = createTaskService({ store: createInMemoryTaskStore(), bus })
+  })
+
+  it('creates a task with provider metadata', async () => {
+    const task = await svc.create({
+      name: 'PR #42',
+      sourceThreadId: 't1',
+      provider: sampleProvider
+    })
+
+    expect(task.provider).toBeDefined()
+    expect(task.provider!.kind).toBe('github-pr')
+    expect(task.provider!.number).toBe(42)
+    expect(task.provider!.repo).toBe('org/repo')
+  })
+
+  it('persists provider through get', async () => {
+    const task = await svc.create({
+      name: 'PR #42',
+      sourceThreadId: 't1',
+      provider: sampleProvider
+    })
+
+    const fetched = await svc.get(task.id)
+    expect(fetched!.provider).toEqual(sampleProvider)
+  })
+
+  it('updates provider and emits task.provider_updated', async () => {
+    const task = await svc.create({
+      name: 'PR #42',
+      sourceThreadId: 't1',
+      provider: sampleProvider
+    })
+
+    const updated = await svc.update(task.id, {
+      provider: { ...sampleProvider, checksStatus: 'failing' },
+      sourceThreadId: 't1'
+    })
+
+    expect(updated.provider!.checksStatus).toBe('failing')
+
+    const providerEvent = events.find((e) => e.type === 'task.provider_updated')
+    expect(providerEvent).toBeTruthy()
+    expect((providerEvent!.payload as TaskEventPayload).taskId).toBe(task.id)
+  })
+
+  it('includes provider summary in list items', async () => {
+    await svc.create({
+      name: 'PR #42',
+      sourceThreadId: 't1',
+      provider: sampleProvider
+    })
+
+    const list = await svc.list()
+    expect(list).toHaveLength(1)
+    expect(list[0].provider).toBeDefined()
+    expect(list[0].provider!.kind).toBe('github-pr')
+    expect(list[0].provider!.prStatus).toBe('open')
+    expect(list[0].provider!.checksStatus).toBe('passing')
+  })
+
+  it('omits provider from list items when task has no provider', async () => {
+    await svc.create({ name: 'Plain task', sourceThreadId: 't1' })
+
+    const list = await svc.list()
+    expect(list).toHaveLength(1)
+    expect(list[0].provider).toBeUndefined()
+  })
+})
