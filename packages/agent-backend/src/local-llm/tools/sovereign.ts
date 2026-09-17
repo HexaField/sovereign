@@ -116,15 +116,11 @@ const cronCreateSchema: ToolSchema = {
   function: {
     name: 'sovereign_cron_create',
     description:
-      'Schedule a future user-message into a Sovereign thread. Supports one-shot, interval, and cron schedules.',
+      'Schedule a future user-message into the calling thread. Supports one-shot, interval, and cron schedules.',
     parameters: {
       type: 'object',
-      required: ['threadKey', 'when', 'prompt'],
+      required: ['when', 'prompt'],
       properties: {
-        threadKey: {
-          type: 'string',
-          description: 'Target thread key — bare thread UUID or label. Required.'
-        },
         when: {
           type: 'object',
           properties: {
@@ -576,15 +572,12 @@ function bareThreadKey(key: string): string {
   return key
 }
 
-function resolveThreadKey(explicit: string | undefined, deps: SovereignToolsDeps): string {
-  if (explicit && explicit.trim()) return explicit.trim()
-  // Safety-net fallback — threadKey should always be provided now.
+function getCallingThreadKey(deps: SovereignToolsDeps): string {
   const current = deps.currentSessionKey?.()
-  if (current) {
-    console.warn('[local-llm] cron_create: threadKey missing — falling back to session key. This should not happen.')
-    return bareThreadKey(current)
+  if (!current) {
+    throw new Error('cron_create: no calling session — cannot determine target thread.')
   }
-  throw new Error('threadKey is required. Pass the bare thread UUID or label.')
+  return bareThreadKey(current)
 }
 
 export function createSovereignToolExecutor(
@@ -601,7 +594,7 @@ export function createSovereignToolExecutor(
         case 'sovereign_cron_create': {
           const when = input.when as { kind: string; expr?: string; tz?: string; everyMs?: number; at?: string }
           if (!when?.kind) return fail('when.kind is required')
-          const threadKey = resolveThreadKey(input.threadKey as string | undefined, deps)
+          const threadKey = getCallingThreadKey(deps)
           const result = await deps.cron.createUserMessageCron({
             threadKey,
             schedule: when,

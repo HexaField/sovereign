@@ -778,12 +778,9 @@ export function createClaudeCodeBackend(
       // Redirect SDK built-in scheduling tools to Sovereign equivalents.
       // Runs before the toolPolicy check so the redirect applies regardless
       // of per-org allowlists and even when no session/policy is bound.
-      // Includes the current session's threadKey in the reason so the agent
-      // doesn't have to guess it (mcp__sovereign__cron_create requires it).
+      // cron_create auto-resolves the calling thread — no threadKey needed.
       if (WAKEUP_TOOLS.has(inp.tool_name)) {
         const target = WAKEUP_REDIRECT[inp.tool_name]
-        const sk = state?.sessionKey ?? ''
-        const threadKeyHint = sk ? ` Pass threadKey="${sk}" so the wakeup fires back into THIS thread.` : ''
         return {
           continue: true,
           hookSpecificOutput: {
@@ -793,7 +790,8 @@ export function createClaudeCodeBackend(
               `This Sovereign-managed session does not support ${inp.tool_name}. ` +
               `Use ${target} instead — it schedules through Sovereign's own ` +
               `scheduler which fires the prompt back into this thread via the ` +
-              `standard message queue (observable, cancellable, durable).${threadKeyHint}`
+              `standard message queue (observable, cancellable, durable). ` +
+              `The target thread is resolved automatically from the calling session.`
           }
         }
       }
