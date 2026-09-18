@@ -152,6 +152,8 @@ export const schema = {
       properties: {
         transcribeUrl: { type: 'string' },
         ttsUrl: { type: 'string' },
+        llmBaseUrl: { type: 'string' },
+        llmModel: { type: 'string' },
         autoTts: { type: 'boolean' },
         ackDelayMs: { type: 'number', minimum: 0, maximum: 10000 },
         conversationSummary: { type: 'boolean' },

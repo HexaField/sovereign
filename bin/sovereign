@@ -642,6 +642,26 @@ _build_summary() {
   echo "---"
 }
 
+_run_config_tests() {
+  # Guard: config schema, types, and defaults must stay in sync. The
+  # "accepts valid full config" test catches exactly the failure mode
+  # where a field lands in types+defaults but not the Zod schema.
+  _note "Running config schema tests"
+  (cd "$REPO_DIR" && pnpm vitest run packages/config/src/schema.test.ts --reporter=verbose 2>&1) \
+    || _die "Config schema tests failed — fix before building"
+}
+
+_validate_config_post_build() {
+  # After build, validate the live config.json against the newly built
+  # schema. Catches the case where new code rejects the user's config.
+  local target="$CONFIG_DIR/config.json"
+  [ -f "$target" ] || return 0
+  _note "Validating live config against new schema"
+  if ! _config_check "$target"; then
+    return 1
+  fi
+}
+
 _guarded_build() {
   local was_running=0
   if _is_running; then
@@ -649,6 +669,7 @@ _guarded_build() {
   fi
 
   _run_checks
+  _run_config_tests
   _backup_artifacts
 
   local build_ok=0
@@ -661,27 +682,35 @@ _guarded_build() {
     _die "Guarded build failed before reload; running service left untouched"
   fi
 
-  _cleanup_backup
+  # Validate live config against the newly built schema before deploying.
+  if ! _validate_config_post_build; then
+    _warn "Live config rejected by new schema; restoring previous build"
+    _restore_artifacts
+    _cleanup_backup
+    _die "Config validation failed — fix schema or config.json before deploying"
+  fi
 
   if [ "$build_ok" -eq 1 ] && [ "$was_running" -eq 1 ]; then
-    # Print the success summary BEFORE restarting. The restart kills the
-    # running Sovereign process, which tears down any MCP transport that
-    # an agent session (Claude Code) holds. If the restart happens
-    # synchronously, the caller never sees the build output — it looks
-    # like a failure even though the build succeeded (the harness
-    # interprets the dropped connection as a tool rejection).
-    #
-    # The deferred restart fires 1s after the script exits, giving the
-    # caller time to receive the output. Health verification + rollback
-    # happen in the background process — if the restart fails, the
-    # backup was already cleaned up (build artifacts replaced in-place),
-    # but the build was verified good so the only failure mode is the
-    # service itself not starting, which systemd surfaces via status.
+    # Keep backup alive for health-based rollback after restart.
     _note "Build succeeded; service restart scheduled (1s)"
     _build_summary
 
     (
       sleep 1
+
+      if _is_macos; then
+        _restart_launchd_service && { _cleanup_backup; exit 0; }
+      elif _is_linux_systemd; then
+        _restart_systemd && { _cleanup_backup; exit 0; }
+      else
+        _stop_pidfile
+        _start_pidfile && { _cleanup_backup; exit 0; }
+      fi
+
+      # Health check failed after restart — roll back.
+      printf 'WARN: %s\n' "Service unhealthy after restart; rolling back to previous build" >&2
+      _restore_artifacts
+
       if _is_macos; then
         _restart_launchd_service
       elif _is_linux_systemd; then
@@ -690,10 +719,19 @@ _guarded_build() {
         _stop_pidfile
         _start_pidfile
       fi
+
+      if _wait_for_health 15; then
+        printf '==> %s\n' "Rollback successful — previous build restored and healthy"
+      else
+        printf 'WARN: %s\n' "Rollback restart also unhealthy — manual intervention required" >&2
+      fi
+      _cleanup_backup
     ) &
     disown
     return 0
   fi
+
+  _cleanup_backup
 
   if [ "$was_running" -eq 1 ]; then
     _note "Build + reload complete"
