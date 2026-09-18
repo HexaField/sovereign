@@ -1126,6 +1126,35 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     ;(app as any).__voiceResponse = voiceResponse
   }
 
+  // ── Voice error → presence-internal self-heal ─────────────────────
+  // Critical voice/TTS failures emit `voice.error` on the bus. Route
+  // them to the internal presence thread so the agent can diagnose and
+  // recover (e.g. restart F5-TTS, alert Josh).
+  bus.on('voice.error', (event) => {
+    const {
+      stage,
+      message,
+      threadId: errorThreadId
+    } = (event.payload ?? {}) as {
+      stage?: string
+      message?: string
+      threadId?: string
+    }
+    const internalId = presenceModule.internalThreadId()
+    if (!internalId) return
+    const errorText = [
+      `[system:voice-error]`,
+      `stage: ${stage ?? 'unknown'}`,
+      `error: ${message ?? 'unknown'}`,
+      errorThreadId ? `thread: ${errorThreadId}` : null
+    ]
+      .filter(Boolean)
+      .join('\n')
+    void chatModule.handleSend(internalId, errorText, undefined, {
+      origin: { modality: 'text' as const }
+    })
+  })
+
   // ── Conversation summary (rolling summary bubble, presence gateway
   // thread only) ──────────────────────────────────────────────────────
   // Shares the local-llm connection settings with voice response above via

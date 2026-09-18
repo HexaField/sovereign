@@ -612,3 +612,63 @@ describe('voice response — state persistence', () => {
     vr.shutdown()
   })
 })
+
+// ── Error emission for self-healing ───────────────────────────────
+
+describe('voice response — error emission', () => {
+  it('emits voice.error on the bus when TTS synthesis fails', async () => {
+    const { deps, bus, getDeviceName } = createDeps()
+    getDeviceName.mockReturnValue('Josh Phone')
+    ;(deps.synthesize as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('TTS service down'))
+    const vr = createVoiceResponse(deps)
+
+    emitMessageSent(bus, {
+      threadId: 't1',
+      text: 'test voice',
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    await flush()
+
+    const errorEmit = (bus.emit as ReturnType<typeof vi.fn>).mock.calls.find(
+      (args: any[]) => (args[0] as BusEvent).type === 'voice.error'
+    )
+    expect(errorEmit).toBeDefined()
+    expect((errorEmit![0] as BusEvent).payload).toMatchObject({
+      stage: 'ack-generation',
+      message: 'TTS service down'
+    })
+
+    vr.shutdown()
+  })
+
+  it('emits voice.error when summary generation fails', async () => {
+    const { deps, bus, getDeviceName } = createDeps()
+    getDeviceName.mockReturnValue('Josh Phone')
+    let callCount = 0
+    ;(deps.synthesize as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      callCount++
+      if (callCount > 1) throw new Error('synthesis failed')
+      return { audio: Buffer.from('fake'), durationMs: 10 }
+    })
+    const vr = createVoiceResponse(deps)
+
+    emitMessageSent(bus, {
+      threadId: 't1',
+      text: 'run the deploy',
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    await flush()
+
+    emitTurnCompleted(bus, { threadId: 't1', turn: { role: 'assistant', content: 'Deploy complete.' } })
+    await flush()
+
+    const errorEmit = (bus.emit as ReturnType<typeof vi.fn>).mock.calls.find(
+      (args: any[]) =>
+        (args[0] as BusEvent).type === 'voice.error' &&
+        ((args[0] as BusEvent).payload as any).stage === 'summary-generation'
+    )
+    expect(errorEmit).toBeDefined()
+
+    vr.shutdown()
+  })
+})
