@@ -989,6 +989,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
     const voiceResponse = createVoiceResponse({
       bus,
+      dataDir,
       synthesize: (text: string) => voiceModule.synthesize(text),
       synthesizeStream: (text, onChunk, options) =>
         voiceModule.synthesizeStream(

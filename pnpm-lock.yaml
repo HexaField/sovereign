@@ -987,6 +987,9 @@ importers:
       '@sovereign/core':
         specifier: workspace:*
         version: link:../core
+      '@sovereign/primitives':
+        specifier: workspace:*
+        version: link:../primitives
       express:
         specifier: ^5.2.1
         version: 5.2.1

@@ -10,7 +10,9 @@
 // Both pipelines fire only when `config.voice.autoTts` is true and a
 // TTS URL is configured.  Dependency-injected — no cross-package imports.
 
+import path from 'node:path'
 import type { EventBus } from '@sovereign/core'
+import { createWriteThroughFile, type WriteThroughFile } from '@sovereign/primitives'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -75,6 +77,8 @@ export interface VoiceResponseDeps {
   getDeviceName: (deviceId: string) => string | undefined
   /** Current config (called per-event so hot-reload works). */
   config: () => VoiceResponseConfig
+  /** Data directory for persisting state across restarts. */
+  dataDir: string
 }
 
 // ── Prompt defaults ───────────────────────────────────────────────────
@@ -125,12 +129,27 @@ interface VoiceOrigin {
 }
 
 export function createVoiceResponse(deps: VoiceResponseDeps) {
-  const { bus, synthesize, synthesizeStream, llm, getRecentTurns, sendToDeviceName, getDeviceName, config } = deps
+  const { bus, synthesize, synthesizeStream, llm, getRecentTurns, sendToDeviceName, getDeviceName, config, dataDir } =
+    deps
 
-  // Active voice origins — maps threadId → origin info.
-  // Set when a voice message enters the queue; consumed when the
-  // assistant turn completes.
-  const pendingVoice = new Map<string, VoiceOrigin>()
+  type TtsOverrideRecord = Record<string, { deviceName: string }>
+  type PendingVoiceRecord = Record<string, VoiceOrigin>
+
+  const overrideFile: WriteThroughFile<TtsOverrideRecord> = createWriteThroughFile<TtsOverrideRecord>({
+    filePath: path.join(dataDir, 'voice', 'tts-override.json'),
+    version: 1,
+    defaultValue: {},
+    debounceMs: 0,
+    label: 'tts-override'
+  })
+
+  const pendingFile: WriteThroughFile<PendingVoiceRecord> = createWriteThroughFile<PendingVoiceRecord>({
+    filePath: path.join(dataDir, 'voice', 'pending-voice.json'),
+    version: 1,
+    defaultValue: {},
+    debounceMs: 0,
+    label: 'pending-voice'
+  })
 
   // In-flight ack abort controllers — so we can cancel TTS synthesis
   // if the real response arrives before the ack finishes.
@@ -425,13 +444,6 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     }
   }
 
-  // ── TTS override ─────────────────────────────────────────────────
-  // Per-thread override: forces TTS on/off regardless of input modality.
-  // Toggled by the client via the `voice.tts-override` WS message.
-  // When enabled, every assistant turn on that thread triggers the summary
-  // pipeline routed to the specified device name.
-  const ttsOverride = new Map<string, { deviceName: string }>()
-
   // ── Event subscriptions ───────────────────────────────────────────
 
   // Listen for TTS override toggle from the client
@@ -444,22 +456,26 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     if (!payload?.threadId) return
 
     if (payload.enabled && payload.deviceName) {
-      ttsOverride.set(payload.threadId, { deviceName: payload.deviceName })
+      overrideFile.updateSync((prev) => ({ ...prev, [payload.threadId!]: { deviceName: payload.deviceName! } }))
       console.log(`[voice-response] TTS override ON for ${payload.threadId} → ${payload.deviceName}`)
     } else {
-      ttsOverride.delete(payload.threadId)
+      overrideFile.updateSync((prev) => {
+        const next = { ...prev }
+        delete next[payload.threadId!]
+        return next
+      })
       console.log(`[voice-response] TTS override OFF for ${payload.threadId}`)
     }
 
-    // Broadcast state back so all clients see the toggle
+    const current = overrideFile.read()
     bus.emit({
       type: 'voice.tts-override.state',
       timestamp: new Date().toISOString(),
       source: 'voice-response',
       payload: {
         threadId: payload.threadId,
-        enabled: ttsOverride.has(payload.threadId),
-        deviceName: ttsOverride.get(payload.threadId)?.deviceName ?? null
+        enabled: payload.threadId in current,
+        deviceName: current[payload.threadId]?.deviceName ?? null
       }
     })
   })
@@ -474,11 +490,6 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     if (!payload?.threadId || !payload?.text) return
     if (payload.origin?.modality !== 'voice') return
 
-    // The live connection's announced name beats the one carried on the
-    // origin payload — it reflects current state, while origin.deviceName
-    // only captures a snapshot taken when the message entered the queue.
-    // The fallback covers the race where that snapshot arrives before the
-    // ws.device-name announcement lands on this exact connection.
     const deviceName =
       (payload.origin?.deviceId && getDeviceName(payload.origin.deviceId)) || payload.origin?.deviceName
     if (!deviceName) {
@@ -491,10 +502,11 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
     const { threadId, text } = payload
 
-    // Track this thread as voice-originated for the summary pipeline
-    pendingVoice.set(threadId, { deviceName, threadId, timestamp: Date.now() })
+    pendingFile.updateSync((prev) => ({
+      ...prev,
+      [threadId]: { deviceName, threadId, timestamp: Date.now() }
+    }))
 
-    // Fire the ack pipeline (non-blocking)
     void generateAck(threadId, text, deviceName)
   })
 
@@ -510,16 +522,19 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     const responseText = payload.turn?.content ?? ''
     if (!responseText) return
 
-    // Voice-originated message — one-shot, clear after use
-    const origin = pendingVoice.get(payload.threadId)
+    const pending = pendingFile.read()
+    const origin = pending[payload.threadId]
     if (origin) {
-      pendingVoice.delete(payload.threadId)
+      pendingFile.updateSync((prev) => {
+        const next = { ...prev }
+        delete next[payload.threadId!]
+        return next
+      })
       void generateSummary(payload.threadId, responseText, origin.deviceName)
       return
     }
 
-    // TTS override — persistent toggle, fires for every assistant turn
-    const override = ttsOverride.get(payload.threadId)
+    const override = overrideFile.read()[payload.threadId]
     if (override) {
       const cfg = config()
       if (!cfg.ttsUrl) return
@@ -529,28 +544,36 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
   // Expire stale voice origins (safety valve — 5 minutes)
   const EXPIRE_MS = 5 * 60 * 1000
-  const expiryTimer = setInterval(() => {
+
+  function expireStale(): void {
     const now = Date.now()
-    for (const [threadId, origin] of pendingVoice) {
+    const current = pendingFile.read()
+    let changed = false
+    const next = { ...current }
+    for (const [threadId, origin] of Object.entries(next)) {
       if (now - origin.timestamp > EXPIRE_MS) {
-        pendingVoice.delete(threadId)
+        delete next[threadId]
+        changed = true
       }
     }
-  }, 60_000)
+    if (changed) pendingFile.writeSync(next)
+  }
+
+  // Expire on boot and periodically
+  expireStale()
+  const expiryTimer = setInterval(expireStale, 60_000)
 
   return {
-    /** Current TTS override state for a thread (used by WS on-connect replay). */
     getTtsOverride(threadId: string): { enabled: boolean; deviceName: string | null } {
-      const entry = ttsOverride.get(threadId)
+      const entry = overrideFile.read()[threadId]
       return { enabled: !!entry, deviceName: entry?.deviceName ?? null }
     },
-    /** Cleanup — clear timers. */
     shutdown() {
       clearInterval(expiryTimer)
       for (const ctrl of ackAbort.values()) ctrl.abort()
       ackAbort.clear()
-      pendingVoice.clear()
-      ttsOverride.clear()
+      overrideFile.flush()
+      pendingFile.flush()
     }
   }
 }

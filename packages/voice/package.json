@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@sovereign/core": "workspace:*",
+    "@sovereign/primitives": "workspace:*",
     "express": "^5.2.1",
     "multer": "^2.1.1"
   },
