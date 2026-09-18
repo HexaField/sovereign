@@ -365,7 +365,8 @@ export function createThreadRoutes(
       presence: bodyPresence,
       subagentBackend: bodySubagentBackend,
       subagentModel: bodySubagentModel,
-      model: bodyModel
+      model: bodyModel,
+      pinnedRepoPath: bodyPinnedRepoPath
     } = req.body
     // Translate legacy `orgId` body field. Empty/`_global` → empty array
     // so a PATCH with `orgId: '_global'` actually moves a thread to global.
@@ -405,7 +406,8 @@ export function createThreadRoutes(
         ...presencePatch,
         ...(bodySubagentBackend !== undefined ? { subagentBackend: bodySubagentBackend ?? null } : {}),
         ...(bodySubagentModel !== undefined ? { subagentModel: bodySubagentModel ?? null } : {}),
-        ...(bodyModel !== undefined ? { model: bodyModel ?? null } : {})
+        ...(bodyModel !== undefined ? { model: bodyModel ?? null } : {}),
+        ...(bodyPinnedRepoPath !== undefined ? { pinnedRepoPath: bodyPinnedRepoPath ?? null } : {})
       })
     } catch (err) {
       return res.status(400).json({ error: (err as Error).message })

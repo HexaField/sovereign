@@ -87,6 +87,7 @@ function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
     subagentBackend: typeof raw.subagentBackend === 'string' ? raw.subagentBackend : undefined,
     subagentModel: typeof raw.subagentModel === 'string' ? raw.subagentModel : undefined,
     model: typeof raw.model === 'string' ? raw.model : undefined,
+    pinnedRepoPath: typeof raw.pinnedRepoPath === 'string' ? raw.pinnedRepoPath : undefined,
     // Migrate legacy `presence: true` (boolean) → `presence: 'internal'`.
     // String roles pass through untouched; anything else is dropped.
     presence:
@@ -290,6 +291,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       subagentBackend?: string | null
       subagentModel?: string | null
       model?: string | null
+      pinnedRepoPath?: string | null
     }
   ): ThreadInfo | undefined {
     const thread = threads.get(id)
@@ -298,6 +300,10 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     if (patch.membraneId !== undefined) thread.membraneId = patch.membraneId
     if (patch.workspaceIds !== undefined) thread.workspaceIds = patch.workspaceIds
     if (patch.contextWindow !== undefined) thread.contextWindow = patch.contextWindow
+    if (patch.pinnedRepoPath !== undefined) {
+      if (patch.pinnedRepoPath === null) delete thread.pinnedRepoPath
+      else thread.pinnedRepoPath = patch.pinnedRepoPath
+    }
     if (patch.subagentBackend !== undefined) {
       if (patch.subagentBackend === null) delete thread.subagentBackend
       else thread.subagentBackend = patch.subagentBackend

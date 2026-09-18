@@ -78,6 +78,44 @@ export async function fetchFileDiff(
   }
 }
 
+// ── Pin/unpin repo to thread ────────────────────────────────────────────
+export async function pinRepoToThread(threadId: string, repoPath: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}api/threads/${encodeURIComponent(threadId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinnedRepoPath: repoPath })
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+export async function unpinRepoFromThread(threadId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}api/threads/${encodeURIComponent(threadId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinnedRepoPath: null })
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+export async function fetchThreadPinnedRepo(threadId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${BASE}api/threads/${encodeURIComponent(threadId)}`)
+    if (!res.ok) return null
+    const data = await res.json()
+    return data.thread?.pinnedRepoPath ?? null
+  } catch {
+    return null
+  }
+}
+
 // ── Actions ─────────────────────────────────────────────────────────────
 export function clearDiffSelection(): void {
   setSelectedFile(null)
