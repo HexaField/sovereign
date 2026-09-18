@@ -7,6 +7,7 @@
 // invoke, compaction, error) are decoded.
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { ParsedTurn } from '@sovereign/core'
 import { parseTurns as parseTurnsGeneric, stripTimestamp } from '@sovereign/primitives'
@@ -128,6 +129,80 @@ export function normalizeClaudeCodeEntry(entry: any): any | null {
   return null
 }
 
+// ── Cozempic receipt enrichment ─────────────────────────────────────
+// Cozempic guard runs as PreCompact/PostCompact hooks that don't
+// persist to the JSONL. Receipts live in ~/.cozempic/receipts/index.jsonl.
+// Read them and inject synthetic system turns next to compaction events
+// so the UI surfaces what cozempic did during each compaction.
+
+interface CozempicReceipt {
+  ts: string
+  epoch: number
+  tier?: string
+  outcome?: string
+  tokens_reclaimed?: number
+  bytes_reclaimed?: number
+}
+
+let _receiptCache: { mtime: number; receipts: CozempicReceipt[] } | null = null
+const RECEIPT_PATH = path.join(os.homedir(), '.cozempic', 'receipts', 'index.jsonl')
+
+function readCozempicReceipts(): CozempicReceipt[] {
+  try {
+    const stat = fs.statSync(RECEIPT_PATH)
+    if (_receiptCache && _receiptCache.mtime === stat.mtimeMs) return _receiptCache.receipts
+    const content = fs.readFileSync(RECEIPT_PATH, 'utf-8')
+    const receipts: CozempicReceipt[] = []
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const r = JSON.parse(line)
+        if (r.ts) receipts.push({ ...r, epoch: Date.parse(r.ts) || 0 })
+      } catch {
+        /* skip */
+      }
+    }
+    _receiptCache = { mtime: stat.mtimeMs, receipts }
+    return receipts
+  } catch {
+    return []
+  }
+}
+
+const RECEIPT_MATCH_WINDOW_MS = 30_000
+
+function enrichWithCozempicReceipts(turns: ParsedTurn[]): ParsedTurn[] {
+  const receipts = readCozempicReceipts()
+  if (receipts.length === 0) return turns
+
+  const out: ParsedTurn[] = []
+  for (const turn of turns) {
+    out.push(turn)
+    if (turn.kind?.variant !== 'compaction') continue
+
+    const ts = turn.timestamp
+    const match = receipts.find((r) => Math.abs(r.epoch - ts) < RECEIPT_MATCH_WINDOW_MS)
+    if (!match) continue
+
+    const parts: string[] = []
+    if (match.outcome) parts.push(match.outcome)
+    if (match.tier) parts.push(`tier: ${match.tier}`)
+    if (match.tokens_reclaimed) parts.push(`${match.tokens_reclaimed.toLocaleString()} tokens reclaimed`)
+    if (match.bytes_reclaimed) parts.push(`${(match.bytes_reclaimed / 1024).toFixed(1)} KB reclaimed`)
+
+    const label = `Cozempic: ${parts.join(', ') || 'guard fired'}`
+    out.push({
+      role: 'system',
+      content: label,
+      timestamp: ts + 1,
+      workItems: [],
+      thinkingBlocks: [],
+      kind: { variant: 'hook-output', label, payload: { cozempic: true } }
+    })
+  }
+  return out
+}
+
 /** Apply Claude Code-specific classification on top of the shared parser. */
 export function parseClaudeCodeTurns(messages: any[]): ParsedTurn[] {
   const turns = parseTurnsGeneric(messages, {
@@ -140,11 +215,9 @@ export function parseClaudeCodeTurns(messages: any[]): ParsedTurn[] {
       return true
     }
   })
-  // Classify each turn, then fold framing system turns (compaction, hook
-  // output) into the workItems of the neighbouring assistant turn so the
-  // client renders them as tool-call rows inside the existing collapsible
-  // list rather than as standalone bubbles between turns.
-  return foldSystemEventsIntoWork(turns.map(classifyClaudeCodeTurn))
+  const classified = turns.map(classifyClaudeCodeTurn)
+  const enriched = enrichWithCozempicReceipts(classified)
+  return foldSystemEventsIntoWork(enriched)
 }
 
 /** Read all messages from a Claude Code session JSONL file. */

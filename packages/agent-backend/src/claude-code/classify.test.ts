@@ -109,11 +109,12 @@ describe('classifyClaudeCodeTurn', () => {
       expect(out.role).toBe('system')
       expect(out.content).toBe('Cozempic: guard active')
       expect(out.kind?.variant).toBe('hook-output')
-      expect(out.kind?.label).toBe('Hook: SessionStart · startup')
+      expect(out.kind?.label).toBe('Cozempic: SessionStart')
       expect(out.kind?.payload).toMatchObject({
         hookEvent: 'SessionStart',
         hookName: 'startup',
-        stdout: 'Cozempic: guard active'
+        stdout: 'Cozempic: guard active',
+        cozempic: true
       })
     })
 

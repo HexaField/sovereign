@@ -175,6 +175,18 @@ function classifyHookOutput(content: string): { content: string; kind: TurnKind 
   const hookEvent = m[1]
   const hookName = (m[2] ?? '').trim()
   const body = (m[3] ?? '').trim()
+
+  if (/\bcozempic\b/i.test(body)) {
+    return {
+      content: body,
+      kind: {
+        variant: 'hook-output',
+        label: `Cozempic: ${hookEvent}`,
+        payload: { hookEvent, hookName, stdout: body, cozempic: true }
+      }
+    }
+  }
+
   const label = hookName ? `Hook: ${hookEvent} · ${hookName}` : `Hook: ${hookEvent}`
   return {
     content: body,
