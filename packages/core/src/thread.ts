@@ -83,6 +83,9 @@ export interface ThreadInfo {
    * Format: bare model id (e.g. `'qwen3.8-27b-rocmfp4'`).
    */
   model?: string
+  /** Absolute repo path pinned to this thread. The diff panel shows only
+   *  this repo and auto-selects it. Unset = show all repos. */
+  pinnedRepoPath?: string
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus

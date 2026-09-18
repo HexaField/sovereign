@@ -9,6 +9,9 @@ import {
   setSelectedCommit,
   fetchGitContext,
   fetchFileDiff,
+  fetchThreadPinnedRepo,
+  pinRepoToThread,
+  unpinRepoFromThread,
   type ThreadGitContext,
   type CommitInfo
 } from './store.js'
@@ -91,6 +94,11 @@ function formatDate(dateStr: string): string {
 export function DiffSidebar() {
   const [commitsExpanded, setCommitsExpanded] = createSignal(true)
 
+  const [pinnedRepo, { refetch: refetchPinned }] = createResource(threadKey, async (tid) => {
+    if (!tid) return null
+    return fetchThreadPinnedRepo(tid)
+  })
+
   const [contexts] = createResource(threadKey, async (tid) => {
     if (!tid) return null
     return fetchGitContext(tid)
@@ -99,6 +107,11 @@ export function DiffSidebar() {
   const sortedContexts = createMemo<ThreadGitContext[]>(() => {
     const ctxs = contexts()
     if (!ctxs?.length) return []
+    const pinned = pinnedRepo()
+    if (pinned) {
+      const match = ctxs.find((c) => c.repoRoot === pinned)
+      return match ? [match] : []
+    }
     return [...ctxs].sort((a, b) => contextFileCount(b) - contextFileCount(a))
   })
 
@@ -120,7 +133,25 @@ export function DiffSidebar() {
     return ctxs.find((c) => c.repoRoot === sel) ?? ctxs[0]
   })
 
-  const hasMultipleRepos = createMemo(() => sortedContexts().length > 1)
+  const allContexts = createMemo<ThreadGitContext[]>(() => {
+    const ctxs = contexts()
+    if (!ctxs?.length) return []
+    return [...ctxs].sort((a, b) => contextFileCount(b) - contextFileCount(a))
+  })
+
+  const hasMultipleRepos = createMemo(() => allContexts().length > 1)
+
+  const handlePin = async (repoRoot: string) => {
+    const tid = threadKey()
+    if (!tid) return
+    const current = pinnedRepo()
+    if (current === repoRoot) {
+      await unpinRepoFromThread(tid)
+    } else {
+      await pinRepoToThread(tid, repoRoot)
+    }
+    refetchPinned()
+  }
   const commits = createMemo<CommitInfo[]>(() => activeContext()?.commits ?? [])
 
   const [commitFullDiff] = createResource(
@@ -245,8 +276,8 @@ export function DiffSidebar() {
         )}
       </Show>
 
-      {/* Repo picker (multiple repos) */}
-      <Show when={hasMultipleRepos()}>
+      {/* Repo picker (multiple repos or pinned) */}
+      <Show when={hasMultipleRepos() || pinnedRepo()}>
         <div
           style={{
             display: 'flex',
@@ -258,48 +289,71 @@ export function DiffSidebar() {
             'overflow-x': 'auto'
           }}
         >
-          <For each={sortedContexts()}>
+          <For each={allContexts()}>
             {(ctx) => {
               const active = () => selectedRepo() === ctx.repoRoot
+              const pinned = () => pinnedRepo() === ctx.repoRoot
               const fileCount = contextFileCount(ctx)
               return (
-                <button
-                  onClick={() => switchRepo(ctx.repoRoot)}
-                  style={{
-                    display: 'inline-flex',
-                    'align-items': 'center',
-                    gap: '4px',
-                    padding: '2px 8px',
-                    'border-radius': '6px',
-                    border: active() ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
-                    background: active() ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
-                    color: active() ? 'var(--c-accent)' : 'var(--c-text)',
-                    cursor: 'pointer',
-                    'font-size': '11px',
-                    'flex-shrink': '0'
-                  }}
-                >
-                  <span style={{ 'font-weight': active() ? '600' : '400' }}>{ctx.repoName}</span>
-                  <Show when={fileCount > 0}>
-                    <span
-                      style={{
-                        'min-width': '14px',
-                        height: '14px',
-                        'border-radius': '7px',
-                        background: active() ? 'var(--c-accent)' : 'var(--c-text-muted)',
-                        color: '#fff',
-                        'font-size': '9px',
-                        'font-weight': '700',
-                        display: 'inline-flex',
-                        'align-items': 'center',
-                        'justify-content': 'center',
-                        padding: '0 3px'
-                      }}
-                    >
-                      {fileCount}
-                    </span>
-                  </Show>
-                </button>
+                <div style={{ display: 'inline-flex', 'align-items': 'center', gap: '0', 'flex-shrink': '0' }}>
+                  <button
+                    onClick={() => switchRepo(ctx.repoRoot)}
+                    style={{
+                      display: 'inline-flex',
+                      'align-items': 'center',
+                      gap: '4px',
+                      padding: '2px 8px',
+                      'border-radius': pinned() || hasMultipleRepos() ? '6px 0 0 6px' : '6px',
+                      border: active() ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
+                      'border-right': 'none',
+                      background: active() ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
+                      color: active() ? 'var(--c-accent)' : 'var(--c-text)',
+                      cursor: 'pointer',
+                      'font-size': '11px'
+                    }}
+                  >
+                    <span style={{ 'font-weight': active() ? '600' : '400' }}>{ctx.repoName}</span>
+                    <Show when={fileCount > 0}>
+                      <span
+                        style={{
+                          'min-width': '14px',
+                          height: '14px',
+                          'border-radius': '7px',
+                          background: active() ? 'var(--c-accent)' : 'var(--c-text-muted)',
+                          color: '#fff',
+                          'font-size': '9px',
+                          'font-weight': '700',
+                          display: 'inline-flex',
+                          'align-items': 'center',
+                          'justify-content': 'center',
+                          padding: '0 3px'
+                        }}
+                      >
+                        {fileCount}
+                      </span>
+                    </Show>
+                  </button>
+                  <button
+                    onClick={() => handlePin(ctx.repoRoot)}
+                    title={pinned() ? 'Unpin repo from thread' : 'Pin repo to thread'}
+                    style={{
+                      display: 'inline-flex',
+                      'align-items': 'center',
+                      'justify-content': 'center',
+                      width: '22px',
+                      height: '22px',
+                      'border-radius': '0 6px 6px 0',
+                      border: active() ? '1px solid var(--c-accent)' : '1px solid var(--c-border)',
+                      background: pinned() ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
+                      color: pinned() ? 'var(--c-accent)' : 'var(--c-text-muted)',
+                      cursor: 'pointer',
+                      'font-size': '11px',
+                      padding: '0'
+                    }}
+                  >
+                    {pinned() ? '📌' : '📍'}
+                  </button>
+                </div>
               )
             }}
           </For>
