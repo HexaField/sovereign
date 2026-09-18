@@ -151,6 +151,15 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     label: 'pending-voice'
   })
 
+  function emitVoiceError(stage: string, message: string, threadId?: string): void {
+    bus.emit({
+      type: 'voice.error',
+      timestamp: new Date().toISOString(),
+      source: 'voice-response',
+      payload: { stage, message, threadId }
+    })
+  }
+
   // In-flight ack abort controllers — so we can cancel TTS synthesis
   // if the real response arrives before the ack finishes.
   const ackAbort = new Map<string, AbortController>()
@@ -227,6 +236,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[voice-response] ack generation failed for ${threadId}: ${msg}`)
+      emitVoiceError('ack-generation', msg, threadId)
     } finally {
       ackAbort.delete(threadId)
     }
@@ -326,7 +336,9 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
           `[voice-response] streaming summary [${idx + 1}/${total}] to ${deviceName}: "${sentence.slice(0, 40)}…" (${durationMs}ms TTS)`
         )
       } catch (err) {
-        console.error(`[voice-response] TTS failed for sentence ${idx}:`, err)
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[voice-response] TTS failed for sentence ${idx}:`, msg)
+        emitVoiceError('tts-synthesis', msg, threadId)
       }
     }
 
@@ -441,6 +453,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[voice-response] summary generation failed for ${threadId}: ${msg}`)
+      emitVoiceError('summary-generation', msg, threadId)
     }
   }
 

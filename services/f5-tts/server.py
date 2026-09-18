@@ -169,6 +169,34 @@ def _synthesize(model: F5TTS, text: str):
     return wav, sr
 
 
+def _persist_ref_audio_cache() -> None:
+    """Move the preprocessed reference audio from /tmp to a stable path.
+
+    f5_tts caches the preprocessed reference in a NamedTemporaryFile under
+    /tmp. systemd-tmpfiles-clean deletes /tmp files older than 10 days,
+    breaking synthesis for long-running processes. This copies the cached
+    temp file to the voice data directory and updates the in-memory cache.
+    """
+    import hashlib
+    import shutil
+    from f5_tts.infer import utils_infer
+
+    with open(REF_AUDIO, "rb") as f:
+        audio_hash = hashlib.md5(f.read()).hexdigest()
+
+    cache = utils_infer._ref_audio_cache
+    tmp_path = cache.get(audio_hash)
+    if not tmp_path or not os.path.isfile(tmp_path):
+        return
+
+    persist_dir = os.path.join(os.path.expanduser("~"), ".sovereign", "data", "voice")
+    persist_path = os.path.join(persist_dir, "ref-preprocessed.wav")
+    os.makedirs(persist_dir, exist_ok=True)
+    shutil.copy2(tmp_path, persist_path)
+    cache[audio_hash] = persist_path
+    log.info("Persisted preprocessed reference audio to %s", persist_path)
+
+
 def _load_and_warm() -> None:
     log.info("Loading model %s (%s, device=cuda:0) ...", MODEL_ID, MODEL_NAME)
     t0 = time.time()
@@ -193,6 +221,8 @@ def _load_and_warm() -> None:
             "  calibration [%d/%d] %.1fs wall, %.1fs audio, RTF %.2fx",
             i, len(CALIBRATION_LINES), dt, dur, rtf,
         )
+
+    _persist_ref_audio_cache()
 
     state.model = model
     state.ready = True
