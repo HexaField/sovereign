@@ -1,14 +1,9 @@
-// Tests for presence-tool registration and session-role gating in the
-// Sovereign MCP server. Verifies that:
-//  - All 2 presence tools appear when deps.presence exists
-//  - Internal-only tools refuse calls from a non-internal session
-//  - All tools work from the internal session
-
 import { describe, it, expect, vi } from 'vitest'
 import { createSovereignMcpServer, type SovereignToolDeps, type PresenceMcpDeps } from './mcp-server.js'
 
 const INTERNAL_ID = 'aaaa-internal'
 const GATEWAY_ID = 'bbbb-gateway'
+const OTHER_ID = 'cccc-other'
 
 function makePresence(overrides: Partial<PresenceMcpDeps> = {}): PresenceMcpDeps {
   return {
@@ -55,7 +50,6 @@ function makeDeps(overrides: Partial<SovereignToolDeps> = {}): SovereignToolDeps
   }
 }
 
-/** Extract registered tool handlers from the MCP server instance. */
 function getTools(deps: SovereignToolDeps): Record<string, { callback: Function }> {
   const cfg = createSovereignMcpServer(deps) as any
   return cfg.instance?._registeredTools ?? cfg.instance?.registeredTools ?? {}
@@ -72,50 +66,68 @@ function invokeHandler(tools: Record<string, any>, name: string, args: Record<st
 const PRESENCE_TOOLS = ['presence_reply_voice', 'presence_reply_ad4m']
 
 describe('mcp-server presence tools', () => {
-  it('registers all 2 presence tools when deps.presence exists', () => {
-    const deps = makeDeps({ presence: makePresence() })
-    const tools = getTools(deps)
-    const names = Object.keys(tools)
-    for (const expected of PRESENCE_TOOLS) {
-      expect(names, `missing tool: ${expected}`).toContain(expected)
-    }
-  })
+  describe('registration-time gating', () => {
+    it('registers presence tools when session matches internal thread', () => {
+      const deps = makeDeps({ presence: makePresence(), currentSessionKey: () => INTERNAL_ID })
+      const names = Object.keys(getTools(deps))
+      for (const expected of PRESENCE_TOOLS) {
+        expect(names, `missing tool: ${expected}`).toContain(expected)
+      }
+    })
 
-  it('does NOT register presence tools when deps.presence omitted', () => {
-    const deps = makeDeps({ presence: undefined })
-    const tools = getTools(deps)
-    const names = Object.keys(tools)
-    for (const absent of PRESENCE_TOOLS) {
-      expect(names, `should not include: ${absent}`).not.toContain(absent)
-    }
-  })
+    it('excludes presence tools for the gateway session', () => {
+      const deps = makeDeps({ presence: makePresence(), currentSessionKey: () => GATEWAY_ID })
+      const names = Object.keys(getTools(deps))
+      for (const absent of PRESENCE_TOOLS) {
+        expect(names, `should not include: ${absent}`).not.toContain(absent)
+      }
+    })
 
-  it('does NOT register removed watch tools', () => {
-    const deps = makeDeps({ presence: makePresence() })
-    const tools = getTools(deps)
-    const names = Object.keys(tools)
-    expect(names).not.toContain('presence_watch')
-    expect(names).not.toContain('presence_unwatch')
-    expect(names).not.toContain('presence_watched')
-  })
+    it('excludes presence tools for an unrelated session', () => {
+      const deps = makeDeps({ presence: makePresence(), currentSessionKey: () => OTHER_ID })
+      const names = Object.keys(getTools(deps))
+      for (const absent of PRESENCE_TOOLS) {
+        expect(names, `should not include: ${absent}`).not.toContain(absent)
+      }
+    })
 
-  describe('internal-only tools refuse from non-internal session', () => {
-    for (const toolName of PRESENCE_TOOLS) {
-      it(`${toolName} refuses from gateway session`, async () => {
-        const deps = makeDeps({
-          presence: makePresence(),
-          currentSessionKey: () => GATEWAY_ID
-        })
-        const tools = getTools(deps)
-        const minArgs: Record<string, unknown> = {}
-        if (toolName.includes('reply')) minArgs.text = 'hello'
-        const result = await invokeHandler(tools, toolName, minArgs)
-        expect(JSON.stringify(result.content)).toContain('this tool can only be used from the internal session')
+    it('excludes presence tools when currentSessionKey returns undefined', () => {
+      const deps = makeDeps({ presence: makePresence(), currentSessionKey: () => undefined as any })
+      const names = Object.keys(getTools(deps))
+      for (const absent of PRESENCE_TOOLS) {
+        expect(names, `should not include: ${absent}`).not.toContain(absent)
+      }
+    })
+
+    it('excludes presence tools when internalThreadId returns null', () => {
+      const deps = makeDeps({
+        presence: makePresence({ internalThreadId: () => null }),
+        currentSessionKey: () => INTERNAL_ID
       })
-    }
+      const names = Object.keys(getTools(deps))
+      for (const absent of PRESENCE_TOOLS) {
+        expect(names, `should not include: ${absent}`).not.toContain(absent)
+      }
+    })
+
+    it('excludes presence tools when deps.presence omitted', () => {
+      const deps = makeDeps({ presence: undefined })
+      const names = Object.keys(getTools(deps))
+      for (const absent of PRESENCE_TOOLS) {
+        expect(names, `should not include: ${absent}`).not.toContain(absent)
+      }
+    })
+
+    it('does NOT register removed watch tools', () => {
+      const deps = makeDeps({ presence: makePresence() })
+      const names = Object.keys(getTools(deps))
+      expect(names).not.toContain('presence_watch')
+      expect(names).not.toContain('presence_unwatch')
+      expect(names).not.toContain('presence_watched')
+    })
   })
 
-  describe('internal-only tools succeed from internal session', () => {
+  describe('internal session tool execution', () => {
     it('presence_reply_voice calls the reply handler', async () => {
       const presence = makePresence()
       const deps = makeDeps({ presence, currentSessionKey: () => INTERNAL_ID })
