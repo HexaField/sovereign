@@ -55,7 +55,16 @@ export function foldableToWorkItem(turn: ParsedTurn): WorkItem {
   const resumed = !turn.kind && isSessionResumedMarker(turn.content)
   const variant = turn.kind?.variant ?? (resumed ? 'session-resumed' : undefined)
   const label = turn.kind?.label ?? (resumed ? 'Resumed after restart' : 'System')
-  const icon = variant === 'compaction' ? 'compaction' : variant === 'session-resumed' ? 'resumed' : 'hook'
+  const payload = turn.kind?.payload as Record<string, unknown> | undefined
+  const isCozempic = payload?.cozempic === true
+  const icon =
+    variant === 'compaction'
+      ? 'compaction'
+      : variant === 'session-resumed'
+        ? 'resumed'
+        : isCozempic
+          ? 'cozempic'
+          : 'hook'
   return {
     type: 'system_event',
     name: label,
