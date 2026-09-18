@@ -124,6 +124,7 @@ const ICON_MAP: Record<string, () => JSX.Element> = {
   worker: () => <BotIcon class={cls} />,
   heart: () => <HeartIcon class={cls} />,
   broom: () => <BroomIcon class={cls} />,
+  pill: () => <BrainIcon class={cls} />,
   split: () => <SplitIcon class={cls} />,
   check: () => <CheckIcon class={cls} />,
   image: () => <ImageIcon class={cls} />,
@@ -349,31 +350,10 @@ export function WorkSection(props: { work: WorkItem[] }) {
       if (w.type === 'tool_result') return { icon: resolveIcon('check'), text: normalizeToolName(w.name || '') }
       if (w.type === 'system_event') {
         const sk = w.icon || 'generic'
-        const icons: Record<string, string> = {
-          nudge: 'pin',
-          supervisor: 'worker',
-          memorySave: 'write',
-          heartbeat: 'heart',
-          compaction: 'broom',
-          hook: 'gear',
-          resumed: 'play',
-          subagentContext: 'split',
-          runtimeContext: 'gear',
-          generic: 'list'
+        return {
+          icon: resolveIcon(SYSTEM_EVENT_ICON[sk] || 'list'),
+          text: w.name || SYSTEM_EVENT_DEFAULT_LABEL[sk] || 'System'
         }
-        const labels: Record<string, string> = {
-          nudge: 'System Nudge',
-          supervisor: 'Supervisor',
-          memorySave: 'Memory Checkpoint',
-          heartbeat: 'Heartbeat',
-          compaction: 'Context Compacted',
-          hook: 'Hook',
-          resumed: 'Resumed after restart',
-          subagentContext: 'Subagent Task',
-          runtimeContext: 'Runtime Context',
-          generic: 'System'
-        }
-        return { icon: resolveIcon(icons[sk] || 'list'), text: w.name || labels[sk] || 'System' }
       }
       if (w.type === 'thinking') return { icon: resolveIcon('thought'), text: (w.output || w.input || '').slice(0, 60) }
     }
@@ -382,6 +362,10 @@ export function WorkSection(props: { work: WorkItem[] }) {
 
   const stepLabel = () => {
     const calls = props.work.filter((w) => w.type === 'tool_call')
+    const sysEvents = props.work.filter((w) => w.type === 'system_event')
+
+    const parts: string[] = []
+
     if (calls.length > 0) {
       const counts = new Map<string, number>()
       for (const c of calls) {
@@ -390,10 +374,18 @@ export function WorkSection(props: { work: WorkItem[] }) {
       }
       const uniqueTools = Array.from(counts.entries())
       if (uniqueTools.length <= 5) {
-        return uniqueTools.map(([name, n]) => (n > 1 ? `${name} (${n})` : name)).join(', ')
+        parts.push(uniqueTools.map(([name, n]) => (n > 1 ? `${name} (${n})` : name)).join(', '))
+      } else {
+        parts.push(`${calls.length} tool call${calls.length !== 1 ? 's' : ''}`)
       }
-      return `${calls.length} tool call${calls.length !== 1 ? 's' : ''}`
     }
+
+    for (const ev of sysEvents) {
+      const label = SYSTEM_EVENT_DEFAULT_LABEL[ev.icon || 'generic'] || ev.name || 'System'
+      if (!parts.includes(label)) parts.push(label)
+    }
+
+    if (parts.length > 0) return parts.join(', ')
     return `${props.work.length} step${props.work.length !== 1 ? 's' : ''}`
   }
 
@@ -457,6 +449,7 @@ const SYSTEM_EVENT_ICON: Record<string, string> = {
   memorySave: 'write',
   heartbeat: 'heart',
   compaction: 'broom',
+  cozempic: 'pill',
   hook: 'gear',
   resumed: 'play',
   subagentContext: 'split',
@@ -469,6 +462,7 @@ const SYSTEM_EVENT_DEFAULT_LABEL: Record<string, string> = {
   memorySave: 'Memory Checkpoint',
   heartbeat: 'Heartbeat',
   compaction: 'Context Compacted',
+  cozempic: 'Cozempic Guard',
   hook: 'Hook',
   resumed: 'Resumed after restart',
   subagentContext: 'Subagent Task',
