@@ -978,9 +978,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   let summarizeForSimpleConversation: ((text: string) => Promise<string>) | undefined
   {
     const llmCfg = localLlmConfigFromStore(configStore, dataDir)
+    const voiceCfg = configStore.get<SovereignConfig['voice']>('voice')
     const voiceLlm = createInferenceClient({
-      baseUrl: llmCfg.baseUrl,
-      model: llmCfg.model,
+      baseUrl: voiceCfg?.llmBaseUrl?.trim() || llmCfg.baseUrl,
+      model: voiceCfg?.llmModel?.trim() || llmCfg.model,
       temperature: 0.3,
       maxTokens: 150,
       timeoutMs: 15_000,
@@ -1033,14 +1034,17 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       }
     })
 
-    // Hot-reload the inference client when local-llm config changes
-    configStore.onChange('agentBackend.localLlm', () => {
-      const next = localLlmConfigFromStore(configStore, dataDir)
+    // Hot-reload the inference client when local-llm or voice LLM config changes
+    const reloadVoiceLlm = () => {
+      const nextLlm = localLlmConfigFromStore(configStore, dataDir)
+      const nextVoice = configStore.get<SovereignConfig['voice']>('voice')
       voiceLlm.updateConfig({
-        baseUrl: next.baseUrl,
-        model: next.model
+        baseUrl: nextVoice?.llmBaseUrl?.trim() || nextLlm.baseUrl,
+        model: nextVoice?.llmModel?.trim() || nextLlm.model
       })
-    })
+    }
+    configStore.onChange('agentBackend.localLlm', reloadVoiceLlm)
+    configStore.onChange('voice', reloadVoiceLlm)
 
     // ── On-demand TTS speak endpoint ──────────────────────────────────
     // Summarises text via the same LLM prompt used for voice response,

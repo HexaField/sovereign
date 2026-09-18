@@ -537,6 +537,11 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
     const pending = pendingFile.read()
     const origin = pending[payload.threadId]
+    const override = overrideFile.read()[payload.threadId]
+    console.log(
+      `[voice-response] chat.turn.completed: thread=${payload.threadId} pending=${!!origin} override=${!!override} contentLen=${responseText.length}`
+    )
+
     if (origin) {
       pendingFile.updateSync((prev) => {
         const next = { ...prev }
@@ -547,7 +552,6 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       return
     }
 
-    const override = overrideFile.read()[payload.threadId]
     if (override) {
       const cfg = config()
       if (!cfg.ttsUrl) return

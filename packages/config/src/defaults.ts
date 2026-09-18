@@ -63,6 +63,8 @@ export const defaults: SovereignConfig = {
   voice: {
     transcribeUrl: '',
     ttsUrl: '',
+    llmBaseUrl: '',
+    llmModel: '',
     autoTts: false,
     ackDelayMs: 1500,
     conversationSummary: false,

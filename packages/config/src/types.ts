@@ -118,6 +118,11 @@ export interface SovereignConfig {
   voice: {
     transcribeUrl: string
     ttsUrl: string
+    /** Base URL for the lightweight LLM used by ack/summary generation.
+     *  Falls back to `agentBackend.localLlm.baseUrl` when empty. */
+    llmBaseUrl: string
+    /** Model name for the voice LLM. Falls back to `agentBackend.localLlm.model`. */
+    llmModel: string
     /** When true, voice-originated messages receive an immediate TTS
      *  acknowledgment and a spoken summary of the assistant response. */
     autoTts: boolean
