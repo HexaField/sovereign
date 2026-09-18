@@ -350,6 +350,53 @@ describe('voice response — TTS override toggle', () => {
     vr.shutdown()
   })
 
+  it('fires TTS via override even when autoTts is false', async () => {
+    const { deps, bus, sendToDeviceName } = createDeps()
+    ;(deps.config as ReturnType<typeof vi.fn>).mockReturnValue({
+      autoTts: false,
+      ttsUrl: 'http://tts.local',
+      ackDelayMs: 0,
+      ackSystemPrompt: '',
+      summarySystemPrompt: ''
+    })
+    const vr = createVoiceResponse(deps)
+
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Phone' })
+    await flush()
+
+    emitTurnCompleted(bus, { threadId: 't1', turn: { role: 'assistant', content: 'Build succeeded.' } })
+    await flush()
+
+    const audioCall = sendToDeviceName.mock.calls.find(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+    expect(audioCall?.[0]).toBe('Josh Phone')
+
+    vr.shutdown()
+  })
+
+  it('does not fire voice-origin TTS when autoTts is false', async () => {
+    const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
+    ;(deps.config as ReturnType<typeof vi.fn>).mockReturnValue({
+      autoTts: false,
+      ttsUrl: 'http://tts.local',
+      ackDelayMs: 0,
+      ackSystemPrompt: '',
+      summarySystemPrompt: ''
+    })
+    getDeviceName.mockReturnValue('Josh Phone')
+    const vr = createVoiceResponse(deps)
+
+    emitMessageSent(bus, {
+      threadId: 't1',
+      text: 'turn the lights on',
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    await flush()
+
+    expect(sendToDeviceName).not.toHaveBeenCalled()
+
+    vr.shutdown()
+  })
+
   it('does not fire the summary pipeline after TTS override is toggled off', async () => {
     const { deps, bus, sendToDeviceName } = createDeps()
     const vr = createVoiceResponse(deps)

@@ -774,62 +774,52 @@ export function createSovereignMcpServer(
     }
   }
 
-  // ── presence (only registered when wired) ──────────────────────────────
-  // The presence_* tools split by session role. See plans/presence-thread-spec.md.
+  // ── presence (only registered for the internal thread) ───────────────
+  // The presence reply tools only appear in the internal thread's tool list.
+  // Other sessions never see them — no wasted context, no failed calls.
   if (deps.presence) {
     const presence = deps.presence
-    function refuseFor(role: 'internal' | 'gateway', expectedId: string | null) {
-      const current = deps.currentSessionKey?.()
-      const currentBare = current ? bareThreadKey(current) : undefined
-      if (!expectedId) return okText(`presence: no ${role} thread configured.`)
-      if (currentBare !== expectedId) {
-        return okText(
-          `presence: this tool can only be used from the ${role} session (current: ${currentBare ?? 'unknown'}, ${role}: ${expectedId}).`
+    const currentBare = deps.currentSessionKey?.() ? bareThreadKey(deps.currentSessionKey()!) : undefined
+    const internalId = presence.internalThreadId()
+
+    if (currentBare && internalId && currentBare === internalId) {
+      tools.push(
+        tool(
+          'presence_reply_voice',
+          'Synthesize a voice (TTS) reply to the last voice-origin device, or an explicit deviceId. Returns delivery status. Only callable from the presence-internal thread.',
+          {
+            text: z.string().describe('The spoken reply text — keep it short and conversational.'),
+            deviceId: z
+              .string()
+              .optional()
+              .describe('Override the target deviceId (defaults to the last voice origin).')
+          },
+          async (args) => {
+            const result = await presence.tools.reply_voice(
+              args.text,
+              args.deviceId ? { deviceId: args.deviceId } : undefined
+            )
+            return okJson(result)
+          }
+        ),
+        tool(
+          'presence_reply_ad4m',
+          'Post a reply into the AD4M channel of the last ad4m-origin message (or explicit perspective/channel). Only callable from the presence-internal thread.',
+          {
+            text: z.string(),
+            perspectiveUuid: z.string().optional(),
+            channelAddress: z.string().optional()
+          },
+          async (args) => {
+            const opts: { perspectiveUuid?: string; channelAddress?: string } = {}
+            if (args.perspectiveUuid) opts.perspectiveUuid = args.perspectiveUuid
+            if (args.channelAddress) opts.channelAddress = args.channelAddress
+            const result = await presence.tools.reply_ad4m(args.text, Object.keys(opts).length ? opts : undefined)
+            return okJson(result)
+          }
         )
-      }
-      return null
-    }
-    function ensureInternal() {
-      return refuseFor('internal', presence.internalThreadId())
-    }
-    // ── Internal-only tools (reply + watch) ─────────────────────────────
-    tools.push(
-      tool(
-        'presence_reply_voice',
-        'Synthesize a voice (TTS) reply to the last voice-origin device, or an explicit deviceId. Returns delivery status. Only callable from the presence-internal thread.',
-        {
-          text: z.string().describe('The spoken reply text — keep it short and conversational.'),
-          deviceId: z.string().optional().describe('Override the target deviceId (defaults to the last voice origin).')
-        },
-        async (args) => {
-          const refusal = ensureInternal()
-          if (refusal) return refusal
-          const result = await presence.tools.reply_voice(
-            args.text,
-            args.deviceId ? { deviceId: args.deviceId } : undefined
-          )
-          return okJson(result)
-        }
-      ),
-      tool(
-        'presence_reply_ad4m',
-        'Post a reply into the AD4M channel of the last ad4m-origin message (or explicit perspective/channel). Only callable from the presence-internal thread.',
-        {
-          text: z.string(),
-          perspectiveUuid: z.string().optional(),
-          channelAddress: z.string().optional()
-        },
-        async (args) => {
-          const refusal = ensureInternal()
-          if (refusal) return refusal
-          const opts: { perspectiveUuid?: string; channelAddress?: string } = {}
-          if (args.perspectiveUuid) opts.perspectiveUuid = args.perspectiveUuid
-          if (args.channelAddress) opts.channelAddress = args.channelAddress
-          const result = await presence.tools.reply_ad4m(args.text, Object.keys(opts).length ? opts : undefined)
-          return okJson(result)
-        }
       )
-    )
+    }
   }
 
   const filteredTools = opts?.include ? tools.filter((t) => opts.include!.includes(t.name)) : tools

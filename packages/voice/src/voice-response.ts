@@ -317,7 +317,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
   async function generateSummary(threadId: string, responseText: string, deviceName: string): Promise<void> {
     const cfg = config()
-    if (!cfg.autoTts || !cfg.ttsUrl) return
+    if (!cfg.ttsUrl) return
 
     try {
       // Cancel any in-flight ack for this thread
