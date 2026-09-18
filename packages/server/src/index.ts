@@ -149,7 +149,7 @@ const { shutdown } = bootstrapServer({ app, server, wss, bus, configDir, dataDir
 // and it holds `.sovereign.lock` + :5801 against every subsequent start. That
 // is what produced a 58-hour restart loop.
 let shuttingDown = false
-function shutdownWithLock(signal: string): void {
+function shutdownWithLock(signal: string, exitCode = 0): void {
   if (shuttingDown) return
   shuttingDown = true
   try {
@@ -161,16 +161,39 @@ function shutdownWithLock(signal: string): void {
   }
   // Give in-flight writes a tick to flush, then exit unconditionally. The
   // timer is unref'd so it cannot itself keep the loop alive.
-  const t = setTimeout(() => process.exit(0), 250)
+  const t = setTimeout(() => process.exit(exitCode), 250)
   if (typeof t.unref === 'function') t.unref()
   // Backstop: if something re-entrant blocks the timer, hard-exit anyway.
-  const hard = setTimeout(() => process.exit(0), 5_000)
+  const hard = setTimeout(() => process.exit(exitCode), 5_000)
   if (typeof hard.unref === 'function') hard.unref()
 }
 
 process.on('SIGTERM', () => shutdownWithLock('SIGTERM'))
 process.on('SIGINT', () => shutdownWithLock('SIGINT'))
 process.on('exit', releaseLock)
+
+// ── Sentinel-based graceful reload ──────────────────────────────────────
+// `bin/sovereign build` writes `data/restart-requested` after a successful
+// build instead of directly restarting the service. This avoids killing the
+// server while an agent's Bash tool result is still in flight — the old
+// `( sleep 1; systemctl restart )` background subshell raced the SDK's API
+// round-trip and the session saw a severed connection reported as "rejected."
+//
+// The 5-second delay before exit lets the calling agent's SDK complete its
+// current API round-trip (send tool_result → receive assistant response).
+// Exit code 75 (EX_TEMPFAIL) triggers systemd Restart=on-failure; macOS
+// launchd KeepAlive restarts regardless of exit code.
+const restartSentinel = path.join(dataDir, 'restart-requested')
+const sentinelPoll = setInterval(() => {
+  if (!fs.existsSync(restartSentinel)) return
+  clearInterval(sentinelPoll)
+  try {
+    fs.unlinkSync(restartSentinel)
+  } catch {}
+  console.log('[server] restart sentinel detected — graceful reload in 5s')
+  setTimeout(() => shutdownWithLock('reload', 75), 5000)
+}, 2000)
+if (typeof sentinelPoll.unref === 'function') sentinelPoll.unref()
 
 const clientDist = path.resolve(__dirname, '../../client/dist')
 if (fs.existsSync(clientDist)) {

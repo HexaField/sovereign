@@ -691,43 +691,27 @@ _guarded_build() {
   fi
 
   if [ "$build_ok" -eq 1 ] && [ "$was_running" -eq 1 ]; then
-    # Keep backup alive for health-based rollback after restart.
-    _note "Build succeeded; service restart scheduled (1s)"
+    _cleanup_backup
+
+    if _is_macos || _is_linux_systemd; then
+      # Signal the running server to restart itself gracefully. The server
+      # polls for this sentinel, waits for in-flight SDK round-trips to
+      # complete, then exits. The process manager (launchd KeepAlive /
+      # systemd Restart=on-failure) brings it back with the fresh dist/.
+      #
+      # This replaces the old `( sleep 1; restart ) &` which killed the
+      # server while the calling agent's Bash tool result was still in
+      # flight — the SDK saw a severed connection and reported "rejected."
+      printf '%s' "$(date +%s)" > "$DATA_DIR/restart-requested"
+      _note "Build succeeded; server will reload gracefully"
+    else
+      # Pidfile fallback — no process manager auto-restart. Direct restart.
+      _note "Build succeeded; restarting service"
+      _stop_pidfile
+      _start_pidfile
+    fi
+
     _build_summary
-
-    (
-      sleep 1
-
-      if _is_macos; then
-        _restart_launchd_service && { _cleanup_backup; exit 0; }
-      elif _is_linux_systemd; then
-        _restart_systemd && { _cleanup_backup; exit 0; }
-      else
-        _stop_pidfile
-        _start_pidfile && { _cleanup_backup; exit 0; }
-      fi
-
-      # Health check failed after restart — roll back.
-      printf 'WARN: %s\n' "Service unhealthy after restart; rolling back to previous build" >&2
-      _restore_artifacts
-
-      if _is_macos; then
-        _restart_launchd_service
-      elif _is_linux_systemd; then
-        _restart_systemd
-      else
-        _stop_pidfile
-        _start_pidfile
-      fi
-
-      if _wait_for_health 15; then
-        printf '==> %s\n' "Rollback successful — previous build restored and healthy"
-      else
-        printf 'WARN: %s\n' "Rollback restart also unhealthy — manual intervention required" >&2
-      fi
-      _cleanup_backup
-    ) &
-    disown
     return 0
   fi
 
