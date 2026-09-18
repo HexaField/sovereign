@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { createVoiceResponse } from './voice-response.js'
 import type { VoiceResponseDeps, LlmCompleter, VoiceResponseConfig } from './voice-response.js'
 import type { EventBus, BusEvent } from '@sovereign/core'
@@ -41,11 +44,31 @@ async function flush(times = 6): Promise<void> {
   }
 }
 
+const tmpDirs: string[] = []
+
+afterEach(() => {
+  for (const d of tmpDirs) {
+    try {
+      fs.rmSync(d, { recursive: true })
+    } catch {
+      /* already gone */
+    }
+  }
+  tmpDirs.length = 0
+})
+
+function makeTmpDir(): string {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-test-'))
+  tmpDirs.push(d)
+  return d
+}
+
 function createDeps(): {
   deps: VoiceResponseDeps
   bus: EventBus
   sendToDeviceName: ReturnType<typeof vi.fn>
   getDeviceName: ReturnType<typeof vi.fn>
+  dataDir: string
 } {
   const bus = createMockBus()
   const sendToDeviceName = vi.fn()
@@ -65,6 +88,8 @@ function createDeps(): {
     })
   )
 
+  const dataDir = makeTmpDir()
+
   const deps: VoiceResponseDeps = {
     bus,
     synthesize,
@@ -72,9 +97,10 @@ function createDeps(): {
     getRecentTurns,
     sendToDeviceName,
     getDeviceName,
-    config
+    config,
+    dataDir
   }
-  return { deps, bus, sendToDeviceName, getDeviceName }
+  return { deps, bus, sendToDeviceName, getDeviceName, dataDir }
 }
 
 function emitMessageSent(bus: EventBus, payload: Record<string, unknown>): void {
@@ -499,6 +525,89 @@ describe('voice response — SKIP sentinel', () => {
     )
     expect(summaryAudio).toBeDefined()
     expect(summaryAudio?.[0]).toBe('Josh Phone')
+
+    vr.shutdown()
+  })
+})
+
+// ── State persistence across restarts ─────────────────────────────
+
+describe('voice response — state persistence', () => {
+  it('TTS override survives a simulated restart', async () => {
+    const { deps, bus } = createDeps()
+    const vr1 = createVoiceResponse(deps)
+
+    emitTtsOverride(bus, { threadId: 't1', enabled: true, deviceName: 'Josh Phone' })
+    expect(vr1.getTtsOverride('t1')).toEqual({ enabled: true, deviceName: 'Josh Phone' })
+    vr1.shutdown()
+
+    // Simulate restart — new instance, same dataDir
+    const bus2 = createMockBus()
+    const sendToDeviceName2 = vi.fn()
+    const vr2 = createVoiceResponse({ ...deps, bus: bus2, sendToDeviceName: sendToDeviceName2 })
+
+    expect(vr2.getTtsOverride('t1')).toEqual({ enabled: true, deviceName: 'Josh Phone' })
+
+    emitTurnCompleted(bus2, { threadId: 't1', turn: { role: 'assistant', content: 'Post-restart response.' } })
+    await flush()
+
+    const audioCall = sendToDeviceName2.mock.calls.find(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+    expect(audioCall?.[0]).toBe('Josh Phone')
+
+    vr2.shutdown()
+  })
+
+  it('pendingVoice survives a simulated restart within the expiry window', async () => {
+    const { deps, bus, getDeviceName } = createDeps()
+    getDeviceName.mockReturnValue('Josh Phone')
+    const vr1 = createVoiceResponse(deps)
+
+    emitMessageSent(bus, {
+      threadId: 't1',
+      text: 'check the deploy',
+      origin: { modality: 'voice', deviceId: 'dev-1' }
+    })
+    await flush()
+    vr1.shutdown()
+
+    // Simulate restart
+    const bus2 = createMockBus()
+    const sendToDeviceName2 = vi.fn()
+    const vr2 = createVoiceResponse({ ...deps, bus: bus2, sendToDeviceName: sendToDeviceName2 })
+
+    emitTurnCompleted(bus2, { threadId: 't1', turn: { role: 'assistant', content: 'Deploy looks good.' } })
+    await flush()
+
+    const audioCall = sendToDeviceName2.mock.calls.find(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+    expect(audioCall?.[0]).toBe('Josh Phone')
+
+    vr2.shutdown()
+  })
+
+  it('expired pendingVoice entries get pruned on boot', async () => {
+    const { deps, dataDir } = createDeps()
+
+    // Seed a stale pending-voice entry directly on disk
+    const voiceDir = path.join(dataDir, 'voice')
+    fs.mkdirSync(voiceDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(voiceDir, 'pending-voice.json'),
+      JSON.stringify({
+        version: 1,
+        data: { t1: { deviceName: 'Josh Phone', threadId: 't1', timestamp: Date.now() - 10 * 60 * 1000 } }
+      })
+    )
+
+    const bus2 = createMockBus()
+    const sendToDeviceName2 = vi.fn()
+    const vr = createVoiceResponse({ ...deps, bus: bus2, sendToDeviceName: sendToDeviceName2 })
+
+    // Turn completes — stale entry should have been pruned, no TTS fires
+    emitTurnCompleted(bus2, { threadId: 't1', turn: { role: 'assistant', content: 'Stale test.' } })
+    await flush()
+
+    const audioCall = sendToDeviceName2.mock.calls.find(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+    expect(audioCall).toBeUndefined()
 
     vr.shutdown()
   })
