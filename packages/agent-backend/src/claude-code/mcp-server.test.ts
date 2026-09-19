@@ -100,7 +100,7 @@ describe('claude-code/mcp-server', () => {
   // ── cron ────────────────────────────────────────────────────────────────
 
   describe('cron_create', () => {
-    it('uses the current thread when threadKey omitted', async () => {
+    it('derives threadKey from the calling session', async () => {
       const createSpy = vi.fn().mockResolvedValue({ id: 'cron-x', schedule: 'every 60s' })
       const deps = makeDeps({
         cron: { createUserMessageCron: createSpy, list: vi.fn(), remove: vi.fn() } as any,
@@ -118,20 +118,6 @@ describe('claude-code/mcp-server', () => {
       expect(parsed.id).toBe('cron-x')
     })
 
-    it('honours explicit threadKey to cross-post', async () => {
-      const createSpy = vi.fn().mockResolvedValue({ id: 'cron-y', schedule: 'once' })
-      const deps = makeDeps({
-        cron: { createUserMessageCron: createSpy, list: vi.fn(), remove: vi.fn() } as any
-      })
-      const tools = getTools(deps)
-      await invoke(tools, 'cron_create', {
-        threadKey: 'maps',
-        when: { kind: 'oneshot', at: '2099-01-01T00:00:00Z' },
-        prompt: 'cross-post'
-      })
-      expect(createSpy.mock.calls[0][0].threadKey).toBe('maps')
-    })
-
     it('strips agent:main:main → main', async () => {
       const createSpy = vi.fn().mockResolvedValue({ id: 'cron-z', schedule: 'once' })
       const deps = makeDeps({
@@ -146,12 +132,12 @@ describe('claude-code/mcp-server', () => {
       expect(createSpy.mock.calls[0][0].threadKey).toBe('main')
     })
 
-    it('throws when no threadKey and no calling session', async () => {
+    it('throws when no calling session', async () => {
       const deps = makeDeps({ currentSessionKey: () => undefined })
       const tools = getTools(deps)
       await expect(
         invoke(tools, 'cron_create', { when: { kind: 'interval', everyMs: 60000 }, prompt: 'tick' })
-      ).rejects.toThrow(/threadKey is required/)
+      ).rejects.toThrow(/no calling session/)
     })
 
     it('rejects kind=cron without expr', async () => {

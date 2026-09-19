@@ -201,23 +201,17 @@ function bareThreadKey(key: string): string {
 }
 
 /**
- * Resolve the target thread for tools that schedule or send into a thread.
- * `threadKey` is now required in the schema, so `explicit` should always be
- * present. The fallback path remains as a safety net — if somehow reached,
- * it logs a warning so the caller knows attribution came from the session
- * rather than the explicit parameter.
+ * Return the bare thread key of the calling session.
+ * Every MCP instance receives a fixed `currentSessionKey` at creation time
+ * via the `?session=` HTTP parameter. Throws when no session attribution
+ * exists — indicates a wiring bug.
  */
-function resolveThreadKey(explicit: string | undefined, deps: SovereignToolDeps): string {
-  if (explicit && explicit.trim()) return explicit.trim()
-  // Safety-net fallback — threadKey should always be provided now.
+function getCallingThreadKey(deps: SovereignToolDeps): string {
   const current = deps.currentSessionKey?.()
-  if (current) {
-    console.warn(
-      '[mcp] cron_create: threadKey missing — falling back to session-attributed key. This should not happen.'
-    )
-    return bareThreadKey(current)
+  if (!current) {
+    throw new Error('cron_create: no calling session — cannot determine target thread.')
   }
-  throw new Error('cron_create: threadKey is required. Pass the bare thread UUID or label.')
+  return bareThreadKey(current)
 }
 
 /** Tools exposed to subagents (local-LLM workers). Deliberately narrow —
@@ -240,9 +234,8 @@ export function createSovereignMcpServer(
     // ── cron ──────────────────────────────────────────────────────────────
     tool(
       'cron_create',
-      'Schedule a future user-message into a Sovereign thread.',
+      'Schedule a future user-message into the calling thread.',
       {
-        threadKey: z.string().describe('Target thread key — a bare thread UUID or label. Required.'),
         when: z
           .object({
             kind: z.enum(['cron', 'interval', 'oneshot']),
@@ -262,14 +255,14 @@ export function createSovereignMcpServer(
         if (sched.kind === 'cron' && !sched.expr) throw new Error('cron_create: kind=cron requires expr')
         if (sched.kind === 'interval' && !sched.everyMs) throw new Error('cron_create: kind=interval requires everyMs')
         if (sched.kind === 'oneshot' && !sched.at) throw new Error('cron_create: kind=oneshot requires at')
-        const resolvedThreadKey = resolveThreadKey(args.threadKey, deps)
+        const threadKey = getCallingThreadKey(deps)
         const result = await deps.cron.createUserMessageCron({
-          threadKey: resolvedThreadKey,
+          threadKey,
           schedule: sched,
           prompt: args.prompt,
           label: args.label
         })
-        return okJson({ id: result.id, schedule: result.schedule, threadKey: resolvedThreadKey })
+        return okJson({ id: result.id, schedule: result.schedule, threadKey })
       }
     ),
     tool(
