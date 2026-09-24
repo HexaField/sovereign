@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsdown",
     "check": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --root ../.. packages/presence/"
   },
   "dependencies": {
     "@coasys/ad4m": "workspace:*",
