@@ -89,18 +89,19 @@ describe('Live System Updates', () => {
     it('system module emits health.updated periodically', async () => {
       system = createSystemModule(bus, '/tmp/test', { wsHandler, healthIntervalMs: 50 })
       bus._emitted.length = 0
-      await new Promise((r) => setTimeout(r, 120))
-      const healthEvents = bus._emitted.filter((e) => e.type === 'system.health.updated')
-      expect(healthEvents.length).toBeGreaterThanOrEqual(1)
+      // Poll, not a fixed sleep: under full-suite load the first tick can land past 120 ms.
+      await vi.waitFor(() => expect(bus._emitted.some((e) => e.type === 'system.health.updated')).toBe(true), {
+        timeout: 3000
+      })
     })
 
     it('system module emits health.updated on significant metric change', async () => {
       // Health is emitted periodically — any metric change shows up on next tick
       system = createSystemModule(bus, '/tmp/test', { wsHandler, healthIntervalMs: 50 })
       bus._emitted.length = 0
-      await new Promise((r) => setTimeout(r, 80))
-      const healthEvents = bus._emitted.filter((e) => e.type === 'system.health.updated')
-      expect(healthEvents.length).toBeGreaterThanOrEqual(1)
+      await vi.waitFor(() => expect(bus._emitted.some((e) => e.type === 'system.health.updated')).toBe(true), {
+        timeout: 3000
+      })
     })
   })
 
