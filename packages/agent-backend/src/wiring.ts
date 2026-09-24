@@ -240,16 +240,16 @@ export function makePresenceAwareAppendResolver(
         const lines: string[] = ['# Subagent Routing Configuration']
         const source = thread?.subagentBackend || thread?.subagentModel ? 'per-thread' : 'global default'
         lines.push(
-          `This thread has ${source} subagent routing configured. Sovereign subagent spawning via \`agents_spawn\` has been disabled — use Claude Code's built-in Task tool for subagent work. The routing config below applies when re-enabled:`
+          `This thread has ${source} subagent routing configured. It governs Sovereign's \`agents_spawn\`, which stays disabled. Use Claude Code's built-in \`Agent\` tool for subagent work — those subagents run on Claude, not on the routing target below.`
         )
         if (effBackend) {
-          lines.push(`- All subagents route to the \`${effBackend}\` backend.`)
+          lines.push(`- \`agents_spawn\` backend: \`${effBackend}\``)
         }
         if (effModel) {
-          lines.push(`- All subagents use model: \`${effModel}\``)
+          lines.push(`- \`agents_spawn\` model: \`${effModel}\``)
         }
         lines.push(
-          'The harness enforces this routing programmatically — the model cannot override these values via explicit backend/model parameters. Thread config > global config > model request.'
+          'Once `agents_spawn` returns, the harness enforces this routing — explicit backend/model parameters cannot override it. Thread config > global config > model request.'
         )
         parts.push(lines.join('\n'))
       }
