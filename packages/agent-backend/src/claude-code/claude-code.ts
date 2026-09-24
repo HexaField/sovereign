@@ -98,10 +98,8 @@ const DEFAULT_CONTEXT_WINDOW = 200000
  * passes them through to the model endpoint unchanged.
  *
  * Naming caveat: the 4-series pins a minor (`claude-opus-4-6`), but the
- * 5-series drops the suffix entirely — the id is `claude-opus-5`, NOT
- * `claude-opus-5-0`. Extrapolating the 4-series pattern yields an id the API
- * rejects with "It may not exist or you may not have access to it". Every id
- * below was verified live via `claude --model <id> -p …` before being listed.
+ * 5-series uses minor versions (`claude-opus-5-5`) or bare (`claude-opus-5`).
+ * Every id below was verified against the live API models endpoint.
  */
 interface CatalogFamily {
   family: string
@@ -111,10 +109,19 @@ interface CatalogFamily {
 
 const MODEL_CATALOG: CatalogFamily[] = [
   {
+    family: 'fable',
+    familyLabel: 'Fable',
+    versions: [
+      { id: 'claude-fable-5-1', version: '5.1', versionLabel: '5.1' },
+      { id: 'claude-fable-5', version: '5', versionLabel: '5' }
+    ]
+  },
+  {
     family: 'opus',
     familyLabel: 'Opus',
     versions: [
       { id: 'opus', version: null, versionLabel: 'Latest' },
+      { id: 'claude-opus-5-5', version: '5.5', versionLabel: '5.5' },
       { id: 'claude-opus-5', version: '5', versionLabel: '5' },
       { id: 'claude-opus-4-8', version: '4.8', versionLabel: '4.8' },
       { id: 'claude-opus-4-7', version: '4.7', versionLabel: '4.7' },
@@ -147,8 +154,7 @@ const MODEL_CATALOG: CatalogFamily[] = [
   }
 ]
 
-/** Default model when none is configured per-session. Opus 4.6 (verified active). */
-const DEFAULT_MODEL_FALLBACK = 'claude-opus-4-6'
+const DEFAULT_MODEL_FALLBACK = 'claude-opus-5-5'
 
 /** Strip a leading "anthropic/" if present so callers can pass either form. */
 function bareModelName(model: string): string {
@@ -166,7 +172,7 @@ function familyForModel(model: string | null | undefined): string | null {
   const bare = bareModelName(model)
   const inCatalog = MODEL_CATALOG.find((c) => c.versions.some((v) => v.id === bare))
   if (inCatalog) return inCatalog.family
-  const m = /^claude-(opus|sonnet|haiku)/.exec(bare)
+  const m = /^claude-(fable|opus|sonnet|haiku)/.exec(bare)
   return m ? m[1] : null
 }
 
