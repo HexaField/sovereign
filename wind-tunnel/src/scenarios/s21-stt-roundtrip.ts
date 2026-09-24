@@ -32,14 +32,10 @@ export const s21SttRoundtrip: Scenario = {
       body: JSON.stringify({ text: CANNED_TRANSCRIPT })
     })
 
-    // ── 1. Configure Sovereign to use the mock transcription endpoint ──
-    await client.timed('configure-voice', () =>
-      client.patch('/api/config', {
-        voice: { transcribeUrl: `${mockLlmUrl}/mock/transcribe` }
-      })
-    )
-
-    // Verify config took effect
+    // ── 1. Confirm Sovereign points at the mock transcription endpoint ──
+    // The Docker config sets it to the in-network address (mock-llm:8900).
+    // Never PATCH it from here: `mockLlmUrl` holds the runner's host-side
+    // address, which the Sovereign container cannot reach.
     const cfg = await client.config()
     const transcribeUrl = cfg?.voice?.transcribeUrl ?? ''
     metrics.transcribeUrl = transcribeUrl
@@ -130,7 +126,10 @@ export const s21SttRoundtrip: Scenario = {
     let gotTurn = false
     let turnContent = ''
     try {
-      const turnMsg = await client.timed('wait-for-turn', () => client.waitForWs('chat.turn', 30000))
+      // Filter on role: the voice message's own user turn arrives first.
+      const turnMsg = await client.timed('wait-for-turn', () =>
+        client.waitForWs('chat.turn', 30000, (d) => d.threadId === thread.id && d.turn?.role === 'assistant')
+      )
       gotTurn = true
       turnContent = turnMsg?.turn?.content ?? ''
       metrics.turnContent = turnContent

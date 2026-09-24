@@ -18,6 +18,7 @@
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
 import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -28,19 +29,6 @@ const skip = (summary: string): ScenarioResult => ({
 
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 /** Count how many history turns match a role and contain a marker substring. */
@@ -180,7 +168,7 @@ async function testLocalLlmHistory(
         samples: client.samples
       })
     }
-    const idle = await waitForIdleStatus(client, 30000)
+    const idle = await waitForThreadIdle(client, thread.id, 30000)
     if (!idle) {
       return cleanup({
         passed: false,
@@ -392,7 +380,7 @@ async function testClaudeCodeHistory(
         samples: client.samples
       })
     }
-    const idle = await waitForIdleStatus(client, 30000)
+    const idle = await waitForThreadIdle(client, thread.id, 30000)
     if (!idle) {
       return cleanup({
         passed: false,

@@ -11,6 +11,7 @@
 // post-implementation.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const TOOL_USE_ID = 'toolu_s11_bash'
 const RAW_COMMAND_LINES = 2000
@@ -44,7 +45,7 @@ export const s11ContextFilter: Scenario = {
     //     session may arrive WITHOUT tools. Send a throwaway message to
     //     force the initialisation cycle.
     await client.timed('warmup-send', () => client.sendMessage(thread.id, 'warmup — initialise session'))
-    await client.timed('warmup-idle', () => waitForIdleStatus(client, 15000))
+    await client.timed('warmup-idle', () => waitForThreadIdle(client, thread.id, 15000))
     client.drainWs('chat.status')
     client.drainWs('chat.turn')
 
@@ -85,7 +86,7 @@ export const s11ContextFilter: Scenario = {
     metrics.originalEstimate = seqByteSize(RAW_COMMAND_LINES)
 
     // Also wait for the session to settle back to idle.
-    await waitForIdleStatus(client, 10000)
+    await waitForThreadIdle(client, thread.id, 10000)
 
     // Fetch the final mock log for diagnostics.
     let mockLog: unknown[] = []
@@ -150,24 +151,6 @@ export const s11ContextFilter: Scenario = {
       samples: client.samples
     }
   }
-}
-
-/** Wait for a WS `chat.status` message reporting idle, bounded by
- *  `timeoutMs` overall. Multiple status events can arrive (working, then
- *  idle) before the one we want, so keep waiting on the shrinking budget
- *  rather than resolving on the first event. Falls back to buffered
- *  messages already drained before this call started waiting. */
-async function waitForIdleStatus(client: any, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const evt = await client.waitForWs('chat.status', deadline - Date.now())
-      if (evt?.status === 'idle') return true
-    } catch {
-      break
-    }
-  }
-  return client.drainWs('chat.status').some((m: any) => m.status === 'idle')
 }
 
 /** Poll the mock log every 500ms for a tool_result matching `toolUseId`.

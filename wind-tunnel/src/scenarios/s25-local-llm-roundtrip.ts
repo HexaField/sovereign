@@ -15,7 +15,7 @@
 // Self-skips when local-llm backend reports unavailable.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -26,19 +26,6 @@ const skip = (summary: string): ScenarioResult => ({
 
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 export const s25LocalLlmRoundtrip: Scenario = {
@@ -142,7 +129,7 @@ export const s25LocalLlmRoundtrip: Scenario = {
     metrics.assistantTurnContent = assistantTurn?.turn?.content?.slice(0, 80)
 
     // 6. Wait for idle status
-    const gotIdle = await client.timed('wait-idle', () => waitForIdleStatus(client, 10000))
+    const gotIdle = await client.timed('wait-idle', () => waitForThreadIdle(client, thread.id, 10000))
     metrics.gotIdle = gotIdle
 
     // 7. Check mock log — should show OpenAI-format requests with a system prompt

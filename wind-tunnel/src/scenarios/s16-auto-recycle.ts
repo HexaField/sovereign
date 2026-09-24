@@ -8,7 +8,7 @@
 // completes, proving the auto-trigger wired through.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -16,19 +16,6 @@ const skip = (summary: string): ScenarioResult => ({
   metrics: { skipped: true },
   samples: []
 })
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
-}
 
 export const s16AutoRecycle: Scenario = {
   id: 's16',
@@ -77,7 +64,7 @@ export const s16AutoRecycle: Scenario = {
     //    after the turn completes because the mock returns usage above
     //    the 1% threshold.
     await client.timed('send-msg', () => client.sendMessage(thread.id, 's16-auto-recycle test message'))
-    const idle = await client.timed('wait-idle', () => waitForIdleStatus(client, 20000))
+    const idle = await client.timed('wait-idle', () => waitForThreadIdle(client, thread.id, 20000))
     metrics.firstTurnIdle = idle
 
     if (!idle) {

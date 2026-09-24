@@ -14,7 +14,7 @@
 // Self-skips when local-llm backend reports unavailable.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -25,19 +25,6 @@ const skip = (summary: string): ScenarioResult => ({
 
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 /** Generate a large block of text with an identifiable marker. */
@@ -124,7 +111,7 @@ export const s29ContextStrategies: Scenario = {
           samples: client.samples
         })
       }
-      const idle = await client.timed(`idle-round-${i}`, () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed(`idle-round-${i}`, () => waitForThreadIdle(client, thread.id, 30000))
       if (!idle) {
         return cleanup({
           passed: false,
@@ -155,7 +142,7 @@ export const s29ContextStrategies: Scenario = {
         samples: client.samples
       })
     }
-    const triggerIdle = await client.timed('trigger-idle', () => waitForIdleStatus(client, 30000))
+    const triggerIdle = await client.timed('trigger-idle', () => waitForThreadIdle(client, thread.id, 30000))
     if (!triggerIdle) {
       return cleanup({
         passed: false,
@@ -170,7 +157,7 @@ export const s29ContextStrategies: Scenario = {
     let postPruneOk = false
     try {
       await client.timed('post-prune-send', () => client.sendMessage(thread.id, 's29 — post-prune verification'))
-      const idle = await client.timed('post-prune-idle', () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed('post-prune-idle', () => waitForThreadIdle(client, thread.id, 30000))
       postPruneOk = idle
     } catch (err: any) {
       metrics.postPruneError = err?.message

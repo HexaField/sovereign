@@ -15,7 +15,7 @@
 // Self-skips when local-llm backend reports unavailable.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -26,19 +26,6 @@ const skip = (summary: string): ScenarioResult => ({
 
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 /** Generate filler content to consume context budget quickly. */
@@ -121,7 +108,7 @@ export const s28LocalLlmHistory: Scenario = {
         samples: client.samples
       })
     }
-    await waitForIdleStatus(client, 30000)
+    await waitForThreadIdle(client, thread.id, 30000)
     client.drainWs('chat.turn')
     client.drainWs('chat.status')
 
@@ -170,7 +157,7 @@ export const s28LocalLlmHistory: Scenario = {
         samples: client.samples
       })
     }
-    await waitForIdleStatus(client, 30000)
+    await waitForThreadIdle(client, thread.id, 30000)
     client.drainWs('chat.turn')
     client.drainWs('chat.status')
 
@@ -196,11 +183,11 @@ export const s28LocalLlmHistory: Scenario = {
     }
 
     // ── Test 3: Compaction survival + summary visibility ───────────
-    // Fill the context window to trigger compaction. Send several
-    // large messages (each ~35K chars). With 32K context window
-    // (75% threshold ≈ ~96K chars), 3 rounds should trigger it.
-    const FILL_SIZE = 35_000
-    const FILL_ROUNDS = 3
+    // Fill the context window to trigger compaction. It needs the prompt
+    // past 75% of the 32K window AND more than 12 messages (the backend
+    // always keeps the last 10). Turns 1-2 left 4; six rounds reach 16.
+    const FILL_SIZE = 20_000
+    const FILL_ROUNDS = 6
 
     for (let i = 1; i <= FILL_ROUNDS; i++) {
       await fetch(`${mockLlmUrl}/mock/scripts`, { method: 'DELETE' })
@@ -225,7 +212,7 @@ export const s28LocalLlmHistory: Scenario = {
           samples: client.samples
         })
       }
-      const idle = await waitForIdleStatus(client, 30000)
+      const idle = await waitForThreadIdle(client, thread.id, 30000)
       if (!idle) {
         return cleanup({
           passed: false,
@@ -268,9 +255,15 @@ export const s28LocalLlmHistory: Scenario = {
     // the compaction prefix — either the new "[CONTEXT COMPACTION" or
     // legacy "[Compacted" format. Before the fix, toGenericMessages
     // silently dropped system-role messages and this turn vanished.
+    // The summary lives in the model-context view; thread history keeps
+    // the original conversation, which compaction never alters.
+    const contextTurns =
+      compactionCount > 0
+        ? await client.timed('context-after-compaction', () => client.fullHistory(thread.id)).catch(() => [])
+        : []
     const hasCompactionSummary =
       compactionCount > 0
-        ? turns3.some(
+        ? contextTurns.some(
             (t: any) =>
               t.role === 'system' &&
               ((t.content ?? '').includes('CONTEXT COMPACTION') || (t.content ?? '').includes('Compacted'))
@@ -302,7 +295,7 @@ export const s28LocalLlmHistory: Scenario = {
         samples: client.samples
       })
     }
-    await waitForIdleStatus(client, 30000)
+    await waitForThreadIdle(client, thread.id, 30000)
     client.drainWs('chat.turn')
     client.drainWs('chat.status')
 

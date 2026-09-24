@@ -7,14 +7,16 @@
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
 
-const PRESENCE_TOOLS = [
-  'presence_reply_voice',
-  'presence_reply_ad4m',
-  'presence_reply_text',
-  'presence_reply_webhook',
-  'presence_internal_send',
-  'presence_internal_history'
-]
+const INIT_REQUEST = {
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'initialize',
+  params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'wind-tunnel', version: '0.1.0' } }
+}
+
+// The reply tools the internal thread gets. 1331b3a removed the text/webhook
+// replies and the inter-thread send/history tools.
+const PRESENCE_TOOLS = ['presence_reply_voice', 'presence_reply_ad4m']
 
 /** Parse SSE text into JSON-RPC message objects. */
 function parseSse(text: string): any[] {
@@ -36,14 +38,16 @@ function parseSse(text: string): any[] {
 async function mcpPost(
   baseUrl: string,
   body: unknown,
-  sessionId?: string
+  sessionId?: string,
+  callerSession?: string
 ): Promise<{ status: number; headers: Headers; body: any }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream'
   }
   if (sessionId) headers['mcp-session-id'] = sessionId
-  const res = await fetch(`${baseUrl}/api/mcp`, {
+  const query = callerSession ? `?session=${encodeURIComponent(callerSession)}` : ''
+  const res = await fetch(`${baseUrl}/api/mcp${query}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body)
@@ -73,18 +77,22 @@ export const s19PresenceTools: Scenario = {
     const { client } = ctx
     const metrics: Record<string, unknown> = {}
 
-    // 1. Initialize an MCP session.
+    // Presence tools register only for an MCP session bound to the internal
+    // presence thread (`?session=` at initialize), so bind to it.
+    const presenceThreads = await client.timed('presence-lookup', () => client.presenceThreads())
+    const internalId: string | undefined = presenceThreads?.internal?.id
+    if (!internalId) {
+      return {
+        passed: false,
+        summary: 'no internal presence thread to bind the MCP session to',
+        metrics,
+        samples: client.samples
+      }
+    }
+
+    // 1. Initialize an MCP session as the internal thread.
     const initRes = await client.timed('mcp-initialize', () =>
-      mcpPost(client.baseUrl, {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2025-03-26',
-          capabilities: {},
-          clientInfo: { name: 'wind-tunnel', version: '0.1.0' }
-        }
-      })
+      mcpPost(client.baseUrl, INIT_REQUEST, undefined, internalId)
     )
 
     if (initRes.status !== 200 || !initRes.body?.result) {
@@ -168,13 +176,37 @@ export const s19PresenceTools: Scenario = {
       }
     }
 
-    // 6. Clean up — DELETE the session.
-    await fetch(`${client.baseUrl}/api/mcp`, {
-      method: 'DELETE',
-      headers: { 'mcp-session-id': sessionId }
-    })
+    // 6. The gate: a session bound to no thread must not see presence tools.
+    const otherInit = await mcpPost(client.baseUrl, INIT_REQUEST)
+    const otherId = otherInit.headers.get('mcp-session-id') ?? undefined
+    await mcpPost(client.baseUrl, { jsonrpc: '2.0', method: 'notifications/initialized' }, otherId)
+    const otherList = await mcpPost(
+      client.baseUrl,
+      { jsonrpc: '2.0', id: 4, method: 'tools/list', params: {} },
+      otherId
+    )
+    const otherNames: string[] = (otherList.body?.result?.tools ?? []).map((t: any) => t.name)
+    const leaked = PRESENCE_TOOLS.filter((t) => otherNames.includes(t))
+    metrics.leakedToUnboundSession = leaked
 
-    // 7. Verify presence threads exist (self-contained check).
+    // 7. Clean up — DELETE both sessions.
+    for (const id of [sessionId, otherId]) {
+      if (id) await fetch(`${client.baseUrl}/api/mcp`, { method: 'DELETE', headers: { 'mcp-session-id': id } })
+    }
+
+    if (otherNames.length === 0 || leaked.length > 0) {
+      return {
+        passed: false,
+        summary:
+          otherNames.length === 0
+            ? `unbound MCP session listed no tools: HTTP ${otherList.status}`
+            : `presence tools leaked to an unbound MCP session: ${leaked.join(', ')}`,
+        metrics,
+        samples: client.samples
+      }
+    }
+
+    // 8. Verify presence threads exist (self-contained check).
     const presence = await client.timed('presence-check', () => client.presenceThreads())
     metrics.hasInternal = presence?.internal?.id != null
     metrics.hasGateway = presence?.gateway?.id != null

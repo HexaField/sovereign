@@ -92,16 +92,19 @@ export class SovereignClient {
       this.ws.on('message', (raw: RawData) => {
         try {
           const data = JSON.parse(raw.toString())
-          this.wsMessages.push({ channel: data.channel ?? '', data })
-          // Check waiting resolvers
+          // Deliver to every matching waiter; buffer only what no waiter took,
+          // so one message never satisfies two waits.
+          let consumed = false
           for (let i = this.wsResolvers.length - 1; i >= 0; i--) {
             const w = this.wsResolvers[i]
             if (data.type && (!w.type || w.type === data.type) && (!w.predicate || w.predicate(data))) {
               clearTimeout(w.timer)
               w.resolve(data)
               this.wsResolvers.splice(i, 1)
+              consumed = true
             }
           }
+          if (!consumed) this.wsMessages.push({ channel: data.channel ?? '', data })
         } catch {
           /* ignore non-json */
         }
@@ -113,7 +116,8 @@ export class SovereignClient {
   /** Wait for a WS message matching the given type (and optional predicate). Rejects after timeoutMs. */
   waitForWs(type: string, timeoutMs = 10000, predicate?: (data: any) => boolean): Promise<any> {
     // Check buffered messages first
-    const existing = this.wsMessages.find((m) => m.data.type === type && (!predicate || predicate(m.data)))
+    // An empty type matches any message, as in the live dispatch.
+    const existing = this.wsMessages.find((m) => (!type || m.data.type === type) && (!predicate || predicate(m.data)))
     if (existing) {
       this.wsMessages.splice(this.wsMessages.indexOf(existing), 1)
       return Promise.resolve(existing.data)
@@ -139,13 +143,13 @@ export class SovereignClient {
   }
 
   /** Drain all buffered WS messages matching a type. */
-  drainWs(type?: string): any[] {
+  drainWs(type?: string, predicate?: (data: any) => boolean): any[] {
     if (!type) {
       const all = [...this.wsMessages]
       this.wsMessages.length = 0
       return all.map((m) => m.data)
     }
-    const matching = this.wsMessages.filter((m) => m.data.type === type)
+    const matching = this.wsMessages.filter((m) => m.data.type === type && (!predicate || predicate(m.data)))
     for (const m of matching) {
       this.wsMessages.splice(this.wsMessages.indexOf(m), 1)
     }
@@ -202,6 +206,21 @@ export class SovereignClient {
 
   chatStatus(): Promise<any> {
     return this.get('/api/chat/status')
+  }
+
+  /**
+   * The model-context history over WS (`chat.history.full`): what the model
+   * sees, compaction summaries included. `threadHistory` returns the
+   * original conversation, which compaction never alters. Needs `connectWs`.
+   */
+  async fullHistory(threadId: string, timeoutMs = 10000): Promise<any[]> {
+    this.wsSend({ type: 'chat.history.full', threadKey: threadId })
+    const msg = await this.waitForWs(
+      'chat.session.info',
+      timeoutMs,
+      (d) => d.threadId === threadId && Array.isArray(d.history)
+    )
+    return msg.history
   }
 
   threadHistory(threadId: string): Promise<any> {

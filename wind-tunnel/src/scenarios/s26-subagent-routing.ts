@@ -1,20 +1,19 @@
-// S26: Subagent Routing Enforcement — verify that a local-llm thread's
-// system prompt injection declares the routing policy, and that SDK
-// subagent tools remain blocked for non-native backends.
+// S26: Subagent Routing — the routing prompt and the tools a thread gets must
+// agree.
 //
-// Tests two aspects:
-//   1. System prompt injection — the mock log's system messages must
-//      contain the "Subagent Routing" section with the thread's
-//      configured backend and model.
-//   2. Tool schema filtering — the context budget must NOT include
-//      Agent/Workflow/SendMessage tools (blocked by makeSubagentToolBlocker).
-//
-// NOTE: sovereign_agents_spawn has been disabled (local-LLM subagents
-// unreliable). The scenario no longer asserts its presence.
+// Since 6041e3e disabled `agents_spawn` (local-LLM subagents proved
+// unreliable), the routing prompt tells the model to use Claude Code's
+// built-in Task tool. So:
+//   A. A local-llm thread's system prompt declares the routing policy, and its
+//      tool list carries no `agents_spawn`.
+//   B. A claude-code thread with the same routing gets that prompt AND keeps
+//      the SDK's subagent tool. Stripping it (as the removed
+//      makeSubagentToolBlocker did) left no subagent path at all.
 //
 // Self-skips when local-llm backend reports unavailable.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -27,16 +26,23 @@ function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
 }
 
+/** The SDK names its subagent tool `Agent` (formerly `Task`). */
+const SUBAGENT_TOOLS = ['Agent', 'Task']
+const ROUTING = { subagentBackend: 'local-llm', subagentModel: 'test-model-s26' }
+
+async function mockLog(mockLlmUrl: string): Promise<any[]> {
+  return (await (await fetch(`${mockLlmUrl}/mock/log`)).json()) as any[]
+}
+
 export const s26SubagentRouting: Scenario = {
   id: 's26',
-  name: 'Subagent Routing Enforcement',
-  description: 'System prompt declares routing, SDK tools blocked',
+  name: 'Subagent Routing',
+  description: 'Routing prompt and subagent tools agree on local-llm and claude-code threads',
 
   async run(ctx: ScenarioContext): Promise<ScenarioResult> {
     const { client, mockLlmUrl } = ctx
     const metrics: Record<string, unknown> = {}
 
-    // 0. Check local-llm backend exists
     let backends: any[]
     try {
       const res = await client.get('/api/backends')
@@ -49,128 +55,81 @@ export const s26SubagentRouting: Scenario = {
       return skip('skipped — local-llm backend not enabled')
     }
 
-    // 1. Clear mock state
-    await fetch(`${mockLlmUrl}/mock/log`, { method: 'DELETE' })
-    await fetch(`${mockLlmUrl}/mock/scripts`, { method: 'DELETE' })
-
-    // 2. Create a local-llm thread with explicit subagent routing config
-    let thread: any
-    try {
-      thread = await client.timed('create-thread', () =>
-        client.post('/api/threads', {
-          label: 'swt-s26-routing',
-          backend: 'local-llm',
-          subagentBackend: 'local-llm',
-          subagentModel: 'test-model-s26'
-        })
-      )
-      thread = thread?.thread ?? thread
-    } catch (err: any) {
-      return { passed: false, summary: `thread creation failed: ${err?.message}`, metrics, samples: client.samples }
-    }
-    metrics.threadId = thread.id
-
+    const threadIds: string[] = []
     const cleanup = async (result: ScenarioResult): Promise<ScenarioResult> => {
       client.disconnectWs()
-      await client.deleteThread(thread.id).catch(() => {})
+      for (const id of threadIds) await client.deleteThread(id).catch(() => {})
       return result
     }
+    const fail = (summary: string) => cleanup({ passed: false, summary, metrics, samples: client.samples })
+    const createAndSend = async (label: string, extra: Record<string, unknown>): Promise<any> => {
+      const created = await client.timed(`create-${label}`, () =>
+        client.post('/api/threads', { label: `swt-s26-${label}`, ...ROUTING, ...extra })
+      )
+      const thread = created?.thread ?? created
+      threadIds.push(thread.id)
+      await client.timed(`send-${label}`, () => client.sendMessage(thread.id, 's26-routing-test hello'))
+      await client.timed(`idle-${label}`, () => waitForThreadIdle(client, thread.id, 30000))
+      return thread
+    }
 
-    // 3. Send a message to trigger system prompt injection into the mock.
-    //    The first request to the mock carries the full system prompt.
     await client.connectWs(['chat', 'threads'])
 
+    // ── A. local-llm thread ──────────────────────────────────────────
+    let local: any
     try {
-      await client.timed('send-message', () => client.sendMessage(thread.id, 's26-routing-test hello'))
+      local = await createAndSend('local', { backend: 'local-llm' })
     } catch (err: any) {
-      return cleanup({
-        passed: false,
-        summary: `send failed: ${err?.message}`,
-        metrics,
-        samples: client.samples
-      })
+      return fail(`local-llm thread setup failed: ${err?.message}`)
     }
+    const localSystem = (await mockLog(mockLlmUrl))
+      .filter((e) => e.format === 'openai')
+      .flatMap((e) => (e.messages ?? []).filter((m: any) => m.role === 'system').map((m: any) => m.content ?? ''))
+      .join('\n')
+    const localRouting = /subagent routing/i.test(localSystem) && /local-llm/i.test(localSystem)
+    metrics.localRouting = localRouting
 
-    // Wait for idle
-    const deadline = Date.now() + 30000
-    while (Date.now() < deadline) {
-      try {
-        const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-        if (msg?.status === 'idle') break
-      } catch {
-        break
-      }
-    }
-
-    // 4. Check mock log for system prompt content
-    let mockLog: any[] = []
+    let localTools: string[] = []
     try {
-      const logRes = await fetch(`${mockLlmUrl}/mock/log`)
-      mockLog = (await logRes.json()) as any[]
-    } catch {
-      metrics.mockLogError = 'failed to fetch'
-    }
-
-    const openAiRequests = mockLog.filter((e: any) => e.format === 'openai')
-    metrics.openAiRequests = openAiRequests.length
-
-    // Extract system prompt text from the first OpenAI request
-    let systemPromptText = ''
-    for (const req of openAiRequests) {
-      const systemMsgs = (req.messages ?? []).filter((m: any) => m.role === 'system')
-      for (const sm of systemMsgs) {
-        systemPromptText += (sm.content ?? '') + '\n'
-      }
-      if (systemPromptText.length > 0) break
-    }
-    metrics.systemPromptLength = systemPromptText.length
-
-    // Check for subagent routing declaration in the system prompt
-    const hasRoutingSection = /subagent routing/i.test(systemPromptText)
-    const mentionsLocalLlm = /local-llm/i.test(systemPromptText)
-    const mentionsEnforcement = /enforc|programmatic/i.test(systemPromptText)
-    metrics.hasRoutingSection = hasRoutingSection
-    metrics.mentionsLocalLlm = mentionsLocalLlm
-    metrics.mentionsEnforcement = mentionsEnforcement
-
-    // 5. Check context budget for tool schema filtering
-    let contextBudget: any = null
-    try {
-      contextBudget = await client.timed('context-budget', () =>
-        client.get(`/api/chat/context-budget?threadId=${encodeURIComponent(thread.id)}`)
+      const budget = await client.timed('context-budget', () =>
+        client.get(`/api/chat/context-budget?threadId=${encodeURIComponent(local.id)}`)
       )
+      localTools = (budget?.tools?.entries ?? []).map((t: any) => t.name)
     } catch (err: any) {
       metrics.contextBudgetError = err?.message
     }
+    const localSpawn = localTools.includes('sovereign_agents_spawn')
+    metrics.localToolCount = localTools.length
 
-    let toolNames: string[] = []
-    if (contextBudget?.tools?.entries) {
-      toolNames = contextBudget.tools.entries.map((t: any) => t.name)
+    // ── B. claude-code thread, same routing ──────────────────────────
+    await fetch(`${mockLlmUrl}/mock/log`, { method: 'DELETE' })
+    try {
+      await createAndSend('cc', {})
+    } catch (err: any) {
+      return fail(`claude-code thread setup failed: ${err?.message}`)
     }
-    metrics.totalTools = toolNames.length
-    metrics.toolNames = toolNames
+    // The main agent request carries the full tool list; side requests
+    // (title generation) carry few or none.
+    const main = (await mockLog(mockLlmUrl))
+      .filter((e) => e.format === 'anthropic')
+      .sort((a, b) => (b.tools?.length ?? 0) - (a.tools?.length ?? 0))[0]
+    const ccTools: string[] = (main?.tools ?? []).map((t: any) => t.name)
+    const ccSystem: string = main?.system ?? ''
+    const ccRouting = /subagent routing/i.test(ccSystem) && /Task tool/.test(ccSystem)
+    const subagentTool = SUBAGENT_TOOLS.find((t) => ccTools.includes(t))
+    const ccSpawn = ccTools.some((t) => t.endsWith('agents_spawn'))
+    metrics.ccToolCount = ccTools.length
+    metrics.ccRouting = ccRouting
+    metrics.subagentTool = subagentTool ?? null
 
-    // SDK tools that MUST be blocked for non-claude-code backends
-    const blockedTools = ['Agent', 'Workflow', 'SendMessage']
-    const leakedTools = blockedTools.filter((t) => toolNames.includes(t))
-    metrics.leakedBlockedTools = leakedTools
-
-    // sovereign_agents_spawn deliberately disabled — verify it does NOT appear
-    const hasAgentsSpawn = toolNames.includes('sovereign_agents_spawn')
-    metrics.hasAgentsSpawn = hasAgentsSpawn
-
-    // 6. Verdict
-    const noLeakedTools = leakedTools.length === 0
-    const routingDeclared = hasRoutingSection && mentionsLocalLlm
-    const passed = routingDeclared && noLeakedTools && !hasAgentsSpawn
-
+    const passed = localRouting && !localSpawn && ccRouting && !!subagentTool && !ccSpawn
     return cleanup({
       passed,
       summary: passed
-        ? `routing enforcement OK — prompt declares routing: ✓, blocked tools absent: ✓ (${toolNames.length} tools), ` +
-          `agents_spawn absent: ✓ (disabled)`
-        : `routing enforcement failed — routing-in-prompt=${routingDeclared}, ` +
-          `leaked=${JSON.stringify(leakedTools)}, agents_spawn=${hasAgentsSpawn} (should be absent)`,
+        ? `routing OK — local-llm prompt declares routing ✓, claude-code prompt names the Task tool and ` +
+          `${subagentTool} is offered ✓ (${ccTools.length} tools), agents_spawn absent ✓`
+        : `routing mismatch — local routing=${localRouting}, local agents_spawn=${localSpawn}, ` +
+          `cc routing prompt=${ccRouting}, cc subagent tool=${subagentTool ?? 'MISSING'}, cc agents_spawn=${ccSpawn}`,
       metrics,
       samples: client.samples
     })
