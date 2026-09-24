@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "tsdown src/index.ts --format esm --dts",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "sqlite-vec": "^0.1.9"
