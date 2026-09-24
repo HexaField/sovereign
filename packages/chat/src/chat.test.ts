@@ -292,6 +292,41 @@ describe('§2.4 Chat Module (Server)', () => {
     )
   })
 
+  it('announces one idle per assistant turn — drops the backend idle that repeats the synthesized one', async () => {
+    const { threadId, sessionKey } = await chatModule.handleSessionCreate()
+    const idleEvents: unknown[] = []
+    chatModule.chatEvents.on(
+      'chat.status',
+      (d: any) => d.threadId === threadId && d.status === 'idle' && idleEvents.push(d)
+    )
+    const wsIdles = () =>
+      (wsHandler.broadcastToChannel as any).mock.calls.filter(
+        ([, m]: any[]) => m.type === 'chat.status' && m.status === 'idle' && m.threadId === threadId
+      ).length
+    const turn: ParsedTurn = { role: 'assistant', content: 'hi', timestamp: 1, workItems: [], thinkingBlocks: [] }
+
+    emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'working' })
+    emitBackendEvent(backend, 'chat.turn', { sessionKey, turn })
+    emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
+    expect(wsIdles()).toBe(1)
+    expect(idleEvents).toHaveLength(1)
+
+    // No synthesized idle in between (e.g. an aborted turn): the backend idle goes out.
+    emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'working' })
+    emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
+    expect(wsIdles()).toBe(2)
+    expect(idleEvents).toHaveLength(2)
+
+    // Work after the synthesized idle (a mid-run assistant turn): the backend idle carries news.
+    const work = { type: 'tool_call' as const, name: 'test', timestamp: 2 }
+    emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'working' })
+    emitBackendEvent(backend, 'chat.turn', { sessionKey, turn })
+    emitBackendEvent(backend, 'chat.work', { sessionKey, work })
+    emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
+    expect(wsIdles()).toBe(4)
+    expect(idleEvents).toHaveLength(4)
+  })
+
   it('MUST proxy chat.work events to subscribed clients via WS', async () => {
     const { threadId, sessionKey } = await chatModule.handleSessionCreate()
     const work = { type: 'tool_call' as const, name: 'test', timestamp: 1 }

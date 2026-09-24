@@ -460,6 +460,11 @@ export function createChatModule(
     label: 'chat-live-state'
   })
   const currentStatus = new Map<string, string>()
+  // Threads whose last event was the idle synthesized for an assistant turn
+  // (below). When the backend's own idle follows directly, it still updates
+  // live state, but announcing it again would send every client the same
+  // idle twice.
+  const idleSynthesized = new Set<string>()
   const currentWork = new Map<string, any[]>()
   const currentStreamText = new Map<string, string>()
   const currentError = new Map<string, string>()
@@ -516,11 +521,15 @@ export function createChatModule(
     backend.on(eventName, (data: Record<string, unknown>) => {
       const sessionKey = data.sessionKey as string | undefined
       const threadId = sessionKey ? sessionToThread.get(sessionKey) : undefined
+      // Any other event between the synthesized idle and the backend's idle
+      // means the backend idle carries news — forward it.
+      if (threadId && eventName !== 'chat.status') idleSynthesized.delete(threadId)
 
       // Cache live state per thread for replay on reconnect
       if (threadId) {
         if (eventName === 'chat.status') {
           currentStatus.set(threadId, data.status as string)
+          if (data.status !== 'idle') idleSynthesized.delete(threadId)
           statusChangedAt.set(threadId, Date.now())
           persistLiveState(threadId)
           if (data.status === 'idle') {
@@ -590,6 +599,7 @@ export function createChatModule(
             // Replaying an "idle" status on SSE reconnect just churns
             // the client without telling it anything new.
             const idleData = { sessionKey, threadId, status: 'idle' }
+            idleSynthesized.add(threadId)
             if (wsHandler) {
               wsHandler.broadcastToChannel('chat', { type: 'chat.status', ...idleData })
             }
@@ -614,7 +624,9 @@ export function createChatModule(
       // It serves as a directed response to chat.history.full requests
       // (via handleFullHistory → sendTo), so broadcasting it causes every
       // tab to replace its turns with the new session's history.
-      const skipBroadcast = eventName === 'session.info'
+      const repeatIdle =
+        eventName === 'chat.status' && data.status === 'idle' && !!threadId && idleSynthesized.delete(threadId)
+      const skipBroadcast = eventName === 'session.info' || repeatIdle
 
       if (wsHandler && !skipBroadcast && (threadId || isSubagentEvent)) {
         wsHandler.broadcastToChannel('chat', {
@@ -625,7 +637,7 @@ export function createChatModule(
       }
 
       // Emit on chat-level emitter for SSE subscribers
-      if (threadId || isSubagentEvent) {
+      if (!repeatIdle && (threadId || isSubagentEvent)) {
         chatEvents.emit(wsType, { ...data, ...(threadId ? { threadId } : {}) })
       }
 
