@@ -97,9 +97,9 @@ const DEFAULT_CONTEXT_WINDOW = 200000
  * release. The bundled `@anthropic-ai/claude-agent-sdk` accepts both forms and
  * passes them through to the model endpoint unchanged.
  *
- * Naming caveat: the 4-series pins a minor (`claude-opus-4-6`), but the
- * 5-series uses minor versions (`claude-opus-5-5`) or bare (`claude-opus-5`).
- * Every id below was verified against the live API models endpoint.
+ * Naming caveat: the 4-series always pins a minor (`claude-opus-4-6`); the
+ * 5-series mixes bare ids (`claude-opus-5`) with minor ones (`claude-opus-5-5`).
+ * Each id below passed a live `claude --model <id> -p …` call before listing.
  */
 interface CatalogFamily {
   family: string
