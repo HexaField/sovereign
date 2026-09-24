@@ -2225,6 +2225,9 @@ export function createClaudeCodeBackend(
         : sessionKey
       persistRegistry(state, threadKey, existing.orgId)
     }
+    // rehydrate() reads the state store, not the registry — without this an
+    // idle session reverts to its old model on the next restart.
+    persistState(state)
     // If the session has a live query, switch the running session to the new
     // model immediately so the next user turn uses it without requiring a
     // session restart.
