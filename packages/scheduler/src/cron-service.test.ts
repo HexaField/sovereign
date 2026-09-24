@@ -325,4 +325,38 @@ describe('createCronService — Sovereign-native user-message cron', () => {
       scheduler.destroy()
     })
   })
+  describe('update() — accepts what list() returns', () => {
+    it('round-trips a listed job: edits the prompt, keeps the thread, stays listed', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 60000)
+      const service = createCronService({ routing, scheduler, bus })
+      const { id } = service.createUserMessageCron({
+        threadKey: 't-rt',
+        schedule: { kind: 'cron', expr: '0 5 * * *', tz: 'UTC' },
+        prompt: 'old prompt',
+        label: 'rt'
+      })
+      const listed = (await service.list(true)).find((j) => j.id === id)!
+      await service.update(id, { payload: { ...listed.payload, message: 'new prompt', text: 'new prompt' } })
+      const after = (await service.list(true)).find((j) => j.id === id)
+      expect(after?.payload?.message).toBe('new prompt')
+      expect(after?.sessionKey).toBe('t-rt')
+      scheduler.destroy()
+    })
+
+    it('rejects a payload it cannot run', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 60000)
+      const service = createCronService({ routing, scheduler, bus })
+      const { id } = service.createUserMessageCron({
+        threadKey: 't-bad',
+        schedule: { kind: 'cron', expr: '0 5 * * *', tz: 'UTC' },
+        prompt: 'keep me',
+        label: 'bad'
+      })
+      await expect(service.update(id, { payload: { kind: 'bogus' } })).rejects.toThrow(/payload/)
+      expect((await service.list(true)).find((j) => j.id === id)?.payload?.message).toBe('keep me')
+      scheduler.destroy()
+    })
+  })
 })

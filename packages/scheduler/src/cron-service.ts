@@ -101,6 +101,32 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
   const bus = config.bus
   const injectChatMessage = config.injectChatMessage
 
+  /**
+   * list() renders payloads as `{kind: 'agentTurn', message, text}`. Storing
+   * that shape verbatim drops `threadKey`, which hides the job from list()
+   * and breaks its runs — so map it back to the stored shape, and reject
+   * any payload the runner cannot execute.
+   */
+  function toStoredPatch(existing: Job, patch: Record<string, unknown>): Record<string, unknown> {
+    const payload = patch.payload as Record<string, unknown> | undefined
+    if (!payload) return patch
+    if (payload.kind === 'agentTurn') {
+      const prompt = payload.message ?? payload.text
+      if (typeof prompt !== 'string' || !prompt) throw new Error('cron: agentTurn payload needs a message')
+      return { ...patch, payload: { ...(existing.payload as Record<string, unknown>), prompt } }
+    }
+    if (
+      payload.kind !== SOVEREIGN_CRON_JOB_KIND ||
+      typeof payload.threadKey !== 'string' ||
+      typeof payload.prompt !== 'string'
+    ) {
+      throw new Error(
+        `cron: payload must be the listed agentTurn shape or {kind: '${SOVEREIGN_CRON_JOB_KIND}', threadKey, prompt}`
+      )
+    }
+    return patch
+  }
+
   function listSovereignJobs(): CronJob[] {
     if (!scheduler) return []
     const jobs = scheduler.list()
@@ -199,8 +225,9 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
       return jobId ? sovereign.filter((r) => r.jobId === jobId) : sovereign
     },
     async update(id, patch) {
-      if (!scheduler || !scheduler.get(id)) throw new Error(`cron: unknown job '${id}'`)
-      return scheduler.update(id, patch as Partial<Job>)
+      const existing = scheduler?.get(id)
+      if (!scheduler || !existing) throw new Error(`cron: unknown job '${id}'`)
+      return scheduler.update(id, toStoredPatch(existing, patch) as Partial<Job>)
     },
     async remove(id) {
       if (!scheduler || !scheduler.get(id)) throw new Error(`cron: unknown job '${id}'`)
