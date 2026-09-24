@@ -1,7 +1,9 @@
 // S23: Local LLM Compaction Loop — end-to-end test of the local-llm
 // backend's context compaction lifecycle:
 //
-//   1. Compaction triggers automatically when context budget exceeds 75%
+//   1. Compaction triggers automatically once the prompt exceeds 75% of the
+//      context window AND the session holds more than COMPACT_KEEP_RECENT + 2
+//      (12) messages — the backend always keeps the last 10 verbatim
 //   2. The summarisation request uses the structured compaction prompt
 //   3. The mock returns a structured <summary> with all 8 sections
 //   4. The summary appears in history with the REFERENCE ONLY prefix
@@ -16,7 +18,7 @@
 // Self-skips when local-llm backend reports unavailable.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -27,19 +29,6 @@ const skip = (summary: string): ScenarioResult => ({
 
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 /** Generate a long string to fill context quickly. */
@@ -181,8 +170,10 @@ export const s23LocalLlmCompaction: Scenario = {
     await client.connectWs(['chat', 'threads'])
 
     // ── Phase 1: Fill context to trigger first compaction ───────────
-    const MSG_SIZE = 35_000
-    const NUM_ROUNDS = 4
+    // 8 rounds → 16 messages clears the message floor; 10K chars each takes
+    // the prompt well past 75% of the 32K window by round 7.
+    const MSG_SIZE = 10_000
+    const NUM_ROUNDS = 8
 
     for (let i = 1; i <= NUM_ROUNDS; i++) {
       const content = makeLongContent(MSG_SIZE, `round-${i}`)
@@ -198,7 +189,7 @@ export const s23LocalLlmCompaction: Scenario = {
         })
       }
 
-      const idle = await client.timed(`idle-round-${i}`, () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed(`idle-round-${i}`, () => waitForThreadIdle(client, thread.id, 30000))
       if (!idle) {
         return cleanup({
           passed: false,
@@ -244,29 +235,28 @@ export const s23LocalLlmCompaction: Scenario = {
     metrics.compactionRequests = compactionRequests.length
 
     // Verify the compaction request used the structured prompt
-    const hasStructuredPrompt =
-      compactionRequests.length > 0 &&
-      compactionRequests.some((e: any) => {
-        const systemMsgs = (e.messages ?? []).filter((m: any) => m.role === 'system')
-        const allSystem = systemMsgs.map((m: any) => m.content ?? '').join(' ')
-        return (
-          allSystem.includes('<summary>') &&
-          allSystem.includes('Goal:') &&
-          allSystem.includes('Progress:') &&
-          allSystem.includes('Files & Code:') &&
-          allSystem.includes('Next Step:')
-        )
-      })
+    const hasStructuredPrompt = compactionRequests.some((e: any) => {
+      const systemMsgs = (e.messages ?? []).filter((m: any) => m.role === 'system')
+      const allSystem = systemMsgs.map((m: any) => m.content ?? '').join(' ')
+      return (
+        allSystem.includes('<summary>') &&
+        allSystem.includes('Goal:') &&
+        allSystem.includes('Progress:') &&
+        allSystem.includes('Files & Code:') &&
+        allSystem.includes('Next Step:')
+      )
+    })
     metrics.hasStructuredPrompt = hasStructuredPrompt
 
-    // ── Check 3: summary in history with REFERENCE ONLY prefix ─────
-    let history1: any
+    // ── Check 3: summary in model context with REFERENCE ONLY prefix
+    // The summary lives in the model-context view; thread history keeps
+    // the original conversation, which compaction never alters.
+    let turns1: any[] = []
     try {
-      history1 = await client.timed('history-after-compaction-1', () => client.threadHistory(thread.id))
+      turns1 = await client.timed('context-after-compaction-1', () => client.fullHistory(thread.id))
     } catch (err: any) {
       metrics.history1Error = err?.message
     }
-    const turns1 = history1?.turns ?? history1 ?? []
     metrics.turnsAfterCompaction1 = turns1.length
 
     const hasSummaryPrefix = turns1.some(
@@ -298,7 +288,7 @@ export const s23LocalLlmCompaction: Scenario = {
       await client.timed('post-compaction-1-send', () =>
         client.sendMessage(thread.id, 's23-post-compaction verification')
       )
-      const idle = await client.timed('post-compaction-1-idle', () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed('post-compaction-1-idle', () => waitForThreadIdle(client, thread.id, 30000))
       postCompaction1Ok = idle
     } catch (err: any) {
       metrics.postCompaction1Error = err?.message
@@ -318,7 +308,7 @@ export const s23LocalLlmCompaction: Scenario = {
           samples: client.samples
         })
       }
-      const idle = await client.timed(`idle-iter-${i}`, () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed(`idle-iter-${i}`, () => waitForThreadIdle(client, thread.id, 30000))
       if (!idle) {
         return cleanup({
           passed: false,
@@ -379,7 +369,7 @@ export const s23LocalLlmCompaction: Scenario = {
       await client.timed('post-compaction-2-send', () =>
         client.sendMessage(thread.id, 's23-final verification after iterative compaction')
       )
-      const idle = await client.timed('post-compaction-2-idle', () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed('post-compaction-2-idle', () => waitForThreadIdle(client, thread.id, 30000))
       postCompaction2Ok = idle
     } catch (err: any) {
       metrics.postCompaction2Error = err?.message

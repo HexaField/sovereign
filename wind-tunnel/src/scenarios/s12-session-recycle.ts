@@ -12,7 +12,7 @@
 // endpoints don't exist yet.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -24,21 +24,6 @@ const skip = (summary: string): ScenarioResult => ({
 /** Detects a 404 status inside a client error message (`GET path → 404 ...`). */
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-/** Waits for a 'chat.status' WS message reporting idle, stepping past interim
- *  states (working/thinking) until one lands or the timeout elapses. */
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 export const s12SessionRecycle: Scenario = {
@@ -75,7 +60,7 @@ export const s12SessionRecycle: Scenario = {
       await client.timed(`context-send-${i}`, () =>
         client.sendMessage(thread.id, `s12-recycle-msg-${i} — build context for recycle test`)
       )
-      const idle = await client.timed(`context-idle-${i}`, () => waitForIdleStatus(client, 15000))
+      const idle = await client.timed(`context-idle-${i}`, () => waitForThreadIdle(client, thread.id, 15000))
       contextBuildIdle.push(idle)
       client.drainWs('chat.status')
       client.drainWs('chat.turn')

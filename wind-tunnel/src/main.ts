@@ -118,6 +118,8 @@ async function run(): Promise<void> {
     let error: string | undefined
 
     try {
+      const reset = await fetch(`${mockLlmUrl}/mock/reset`, { method: 'POST' })
+      if (!reset.ok) throw new Error(`mock reset → ${reset.status}`)
       result = await scenario.run({
         client,
         mockLlmUrl,

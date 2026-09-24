@@ -23,7 +23,7 @@
 //   - /api/backends returns 404
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -34,19 +34,6 @@ const skip = (summary: string): ScenarioResult => ({
 
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 export const s32LiteLlmRoundtrip: Scenario = {
@@ -181,7 +168,7 @@ export const s32LiteLlmRoundtrip: Scenario = {
     metrics.assistantTurnContent = assistantTurn?.turn?.content?.slice(0, 80)
 
     // 8. Wait for idle
-    const gotIdle = await client.timed('wait-idle', () => waitForIdleStatus(client, 15000))
+    const gotIdle = await client.timed('wait-idle', () => waitForThreadIdle(client, thread.id, 15000))
     metrics.gotIdle = gotIdle
 
     // 9. Check mock log — must contain Anthropic-format requests. This is the

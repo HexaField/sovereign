@@ -15,7 +15,7 @@
 // Self-skips when local-llm backend reports unavailable.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -26,19 +26,6 @@ const skip = (summary: string): ScenarioResult => ({
 
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 export const s14LocalLlmBackend: Scenario = {
@@ -118,7 +105,7 @@ export const s14LocalLlmBackend: Scenario = {
           break
         }
       }
-      await waitForIdleStatus(client, 10000)
+      await waitForThreadIdle(client, thread.id, 10000)
     } catch (err: any) {
       metrics.basicError = err?.message
     }
@@ -160,7 +147,7 @@ export const s14LocalLlmBackend: Scenario = {
       await client.timed('tool-send', () => client.sendMessage(thread.id, 'Test s14-tool please read the hostname'))
 
       // Wait for the full round-trip: tool call → tool result → final text
-      const idle = await client.timed('tool-idle', () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed('tool-idle', () => waitForThreadIdle(client, thread.id, 30000))
       toolOk = idle
     } catch (err: any) {
       metrics.toolError = err?.message

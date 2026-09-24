@@ -19,7 +19,7 @@
 // Self-skips when local-llm backend reports unavailable.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
-import type { SovereignClient } from '../client.js'
+import { waitForThreadIdle } from '../wait.js'
 
 const skip = (summary: string): ScenarioResult => ({
   passed: true,
@@ -30,19 +30,6 @@ const skip = (summary: string): ScenarioResult => ({
 
 function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
-}
-
-async function waitForIdleStatus(client: SovereignClient, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const msg = await client.waitForWs('chat.status', Math.max(1, deadline - Date.now()))
-      if (msg?.status === 'idle') return true
-    } catch {
-      return false
-    }
-  }
-  return false
 }
 
 export const s24LocalLlmTools: Scenario = {
@@ -114,7 +101,7 @@ export const s24LocalLlmTools: Scenario = {
     let sovereignToolOk = false
     try {
       await client.timed('sovereign-tool-send', () => client.sendMessage(thread.id, 's24-sovereign-tool test'))
-      const idle = await client.timed('sovereign-tool-idle', () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed('sovereign-tool-idle', () => waitForThreadIdle(client, thread.id, 30000))
       sovereignToolOk = idle
     } catch (err: any) {
       metrics.sovereignToolError = err?.message
@@ -192,7 +179,7 @@ export const s24LocalLlmTools: Scenario = {
     let sembleToolRouted = false
     try {
       await client.timed('semble-tool-send', () => client.sendMessage(thread.id, 's24-semble-tool test'))
-      const idle = await client.timed('semble-tool-idle', () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed('semble-tool-idle', () => waitForThreadIdle(client, thread.id, 30000))
       sembleToolRouted = idle
     } catch (err: any) {
       metrics.sembleToolError = err?.message
@@ -239,7 +226,7 @@ export const s24LocalLlmTools: Scenario = {
     let coreToolOk = false
     try {
       await client.timed('core-tool-send', () => client.sendMessage(thread.id, 's24-core-tool test'))
-      const idle = await client.timed('core-tool-idle', () => waitForIdleStatus(client, 30000))
+      const idle = await client.timed('core-tool-idle', () => waitForThreadIdle(client, thread.id, 30000))
       coreToolOk = idle
     } catch (err: any) {
       metrics.coreToolError = err?.message

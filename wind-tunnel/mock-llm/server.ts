@@ -198,7 +198,12 @@ function sseDataWrite(res: http.ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`)
 }
 
-function streamOpenAiResponse(res: http.ServerResponse, plan: ResponsePlan, model: string) {
+function streamOpenAiResponse(
+  res: http.ServerResponse,
+  plan: ResponsePlan,
+  model: string,
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+) {
   const chatId = `chatcmpl-mock-${Date.now()}`
   const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) =>
     sseDataWrite(res, {
@@ -235,6 +240,8 @@ function streamOpenAiResponse(res: http.ServerResponse, plan: ResponsePlan, mode
 
   // 4. Final chunk carries finish_reason; [DONE] terminates the stream.
   chunk({}, plan.toolUse ? 'tool_calls' : 'stop')
+  // 5. With stream_options.include_usage, a last chunk carries usage and no choices.
+  if (usage) sseDataWrite(res, { id: chatId, object: 'chat.completion.chunk', model, choices: [], usage })
   res.write('data: [DONE]\n\n')
 }
 
@@ -344,6 +351,18 @@ const server = http.createServer(async (req, res) => {
     })
     res.writeHead(201, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ registered: true }))
+    return
+  }
+
+  // Reset all per-scenario state. The runner calls this before every
+  // scenario so scripts, log entries, and the canned transcript never leak
+  // into the next one.
+  if (url.pathname === '/mock/reset' && req.method === 'POST') {
+    scripts.length = 0
+    requestLog.length = 0
+    mockTranscript = 'mock transcription'
+    res.writeHead(204)
+    res.end()
     return
   }
 
@@ -510,7 +529,13 @@ const server = http.createServer(async (req, res) => {
       model,
       messages,
       tools: body.tools,
-      system: typeof body.system === 'string' ? body.system : undefined,
+      // The Claude Code SDK sends `system` as an array of text blocks.
+      system:
+        typeof body.system === 'string'
+          ? body.system
+          : Array.isArray(body.system)
+            ? body.system.map((b: { text?: string }) => b?.text ?? '').join('\n')
+            : undefined,
       format: 'anthropic'
     })
 
@@ -613,6 +638,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     const plan = planResponse(lastUserText, messages, model, hasTools)
+    // Size the prompt like a real server (~4 chars/token). The local-llm
+    // backend trusts this count over its own estimate when deciding to
+    // compact; a constant here means compaction never triggers.
+    const promptTokens = Math.ceil(JSON.stringify({ messages, tools: openAiBody.tools ?? [] }).length / 4)
+    const completionTokens = Math.ceil((plan.text?.length ?? 10) / 4)
+    const usage = {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens
+    }
 
     // Streaming response
     if (openAiBody.stream) {
@@ -636,13 +671,13 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      streamOpenAiResponse(res, plan, model)
+      // Like llama.cpp, send usage only when the client asks for it.
+      streamOpenAiResponse(res, plan, model, openAiBody.stream_options?.include_usage ? usage : undefined)
       res.end()
       return
     }
 
     // Non-streaming response
-    const completionTokens = Math.ceil((plan.text?.length ?? 10) / 4)
     const message: Record<string, unknown> = {
       role: 'assistant',
       content: plan.text ?? null
@@ -671,11 +706,7 @@ const server = http.createServer(async (req, res) => {
             finish_reason: plan.toolUse ? 'tool_calls' : 'stop'
           }
         ],
-        usage: {
-          prompt_tokens: 10,
-          completion_tokens: completionTokens,
-          total_tokens: 10 + completionTokens
-        }
+        usage
       })
     )
     return
