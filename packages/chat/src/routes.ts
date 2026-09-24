@@ -307,6 +307,14 @@ export function createChatRoutes(
   // Cache for history responses (short TTL to avoid re-parsing 3MB JSONL on every request)
   const historyResponseCache = new Map<string, { data: any; timestamp: number }>()
   const HISTORY_CACHE_TTL = 5000 // 5s — fresh enough for human perception, avoids constant re-parse
+  // A new turn or an accepted send changes a thread's history. Drop the entry
+  // here, for every reader — not only while an SSE stream for that thread is
+  // open (WS clients, SubagentCard, and API callers have none).
+  for (const event of ['chat.turn', 'chat.message.sent']) {
+    chatModule.chatEvents.on(event, (data: Record<string, unknown>) => {
+      if (typeof data.threadId === 'string') historyResponseCache.delete(data.threadId)
+    })
+  }
 
   // Periodic cleanup of stale cache entries (prevent unbounded growth)
   setInterval(() => {
@@ -488,15 +496,7 @@ export function createChatRoutes(
       if (forThread(data)) send('work', data)
     })
     addHandler('chat.turn', (data) => {
-      if (forThread(data)) {
-        historyResponseCache.delete(threadId) // invalidate cache on new turn
-        send('turn', data)
-      }
-    })
-    addHandler('chat.message.sent', (data) => {
-      if (forThread(data)) {
-        historyResponseCache.delete(threadId) // invalidate cache when a send is accepted
-      }
+      if (forThread(data)) send('turn', data)
     })
     addHandler('chat.compacting', (data) => {
       if (forThread(data)) send('compacting', data)
