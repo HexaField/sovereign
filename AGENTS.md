@@ -149,7 +149,7 @@ This artifact belongs to test resolution only — the client's real Vite/browser
 
 ## Wind tunnel (`wind-tunnel/`)
 
-End-to-end regression tests against a Dockerised Sovereign instance with a mock Anthropic API. 18 scenarios cover thread CRUD, chat roundtrip (full SDK → mock LLM → WS response), presence threads, thread-to-thread forwarding, scheduler jobs, WebSocket event propagation, config/membranes, context management, backend mixing, and LLM benchmarking.
+End-to-end regression tests against a Dockerised Sovereign instance with a mock Anthropic API. Scenarios (`wind-tunnel/src/scenarios/`) cover thread CRUD, chat roundtrip (full SDK → mock LLM → WS response), presence threads, thread-to-thread forwarding, scheduler jobs, WebSocket event propagation, config/membranes, context management, backend mixing, and LLM benchmarking.
 
 ### Isolation (HARD RULE — NON-NEGOTIABLE)
 
@@ -167,6 +167,24 @@ The wind tunnel runs **only inside Docker containers**. No `--native` mode exist
 # LLM benchmark (prompt via env, runs against mock in Docker)
 SWT_BENCHMARK_PROMPT="your prompt" ./wind-tunnel/run.sh --scenario s18
 ```
+
+To judge a dependency or refactor, run the suite on the change **and** on its parent commit (a `git worktree add --detach` checkout; fill the ad4m submodule with `git submodule update --init --reference <main checkout>/vendor/coasys/ad4m vendor/coasys/ad4m`). Only a failure absent from the parent counts as a regression. Remove the worktree with `git worktree remove --force` (submodules block a plain remove). `--no-build` reuses whichever checkout built the image last, so rebuild before trusting it.
+
+### Scenario order leaks state
+
+Scenarios share one mock LLM. A scenario that times out can leave scripted responses queued, and later scenarios then fail on content they never asked for (seen: s25 and s26 after an s22 timeout). Rerun a suspect failure alone (`--scenario sN`) before chasing it.
+
+### Known failures (as of `4d87709`, 2026-09-24)
+
+These fail on `main` and on the commit before the Claude SDK 0.3.281 upgrade alike:
+
+| Scenario | Failure | Cause |
+| --- | --- | --- |
+| s19 Presence MCP Tools | presence tools absent from `tools/list` | Stale: since `9601fe8`, presence tools register only for requests that carry the internal thread's `?session=`; s19 sends none |
+| s21 STT Roundtrip | `transcribe → 500: fetch failed` | Transcription backend unreachable from the container |
+| s14, s23, s24, s28, s29 | local-llm tool result, compaction, sovereign tool routing, assistant turn in history, context strategies | Not yet investigated |
+
+s10 (AD4M waker) and s18 (benchmark) report a pass while skipping: the ad4m lane stays inactive and `SWT_BENCHMARK_PROMPT` stays unset by default.
 
 ### Architecture
 
