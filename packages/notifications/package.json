@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsdown",
     "check": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --root ../.. packages/notifications/"
   },
   "dependencies": {
     "@sovereign/core": "workspace:*",

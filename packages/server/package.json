@@ -9,7 +9,7 @@
     "build": "tsdown",
     "start": "node dist/index.js",
     "check": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --root ../.. packages/server/"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.281",
