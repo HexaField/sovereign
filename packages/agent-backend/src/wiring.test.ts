@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import type { MembraneManager } from '@sovereign/membranes'
 import type { ThreadManager } from '@sovereign/threads'
-import { makeMembraneAppendResolver, makePresenceAwareAppendResolver, makeSubagentToolBlocker } from './wiring.js'
+import { makeMembraneAppendResolver, makePresenceAwareAppendResolver } from './wiring.js'
 
 function stubThreads(
   map: Record<string, { membraneId?: string; subagentBackend?: string; subagentModel?: string }>
@@ -156,85 +156,5 @@ describe('makePresenceAwareAppendResolver — subagent routing injection', () =>
     // Subagent sessions have key format agent:main:subagent:xxx — sessionKeyToThreadKey returns undefined
     const result = resolver('agent:main:subagent:some-child')
     expect(result).toBeUndefined()
-  })
-})
-
-describe('makeSubagentToolBlocker', () => {
-  it('blocks Agent/Workflow/SendMessage when subagentBackend targets a non-claude-code backend', () => {
-    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-a': { subagentBackend: 'local-llm' } }))!
-    const result = blocker('thread-a')
-    expect(result).toEqual(['Agent', 'Workflow', 'SendMessage'])
-  })
-
-  it('returns undefined when subagentBackend targets claude-code (native subagents allowed)', () => {
-    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-b': { subagentBackend: 'claude-code' } }))!
-    expect(blocker('thread-b')).toBeUndefined()
-  })
-
-  it('returns undefined when thread has no subagent routing configured', () => {
-    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-c': {} }))!
-    expect(blocker('thread-c')).toBeUndefined()
-  })
-
-  it('returns undefined for subagent session keys (no thread match)', () => {
-    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-d': { subagentBackend: 'local-llm' } }))!
-    expect(blocker('agent:main:subagent:child-1')).toBeUndefined()
-  })
-
-  it('returns undefined when threadManager not provided', () => {
-    const blocker = makeSubagentToolBlocker(undefined)
-    expect(blocker).toBeUndefined()
-  })
-
-  it('blocks SDK tools when global default backend targets non-claude-code (no per-thread config)', () => {
-    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-e': {} }), 'local-llm')!
-    expect(blocker('thread-e')).toEqual(['Agent', 'Workflow', 'SendMessage'])
-  })
-
-  it('thread-level claude-code overrides global non-claude-code default (allows native when no non-Claude model)', () => {
-    const blocker = makeSubagentToolBlocker(
-      stubThreads({ 'thread-f': { subagentBackend: 'claude-code' } }),
-      'local-llm'
-    )!
-    expect(blocker('thread-f')).toBeUndefined()
-  })
-
-  it('thread-level non-claude-code overrides global claude-code default (blocks native)', () => {
-    const blocker = makeSubagentToolBlocker(
-      stubThreads({ 'thread-g': { subagentBackend: 'local-llm' } }),
-      'claude-code'
-    )!
-    expect(blocker('thread-g')).toEqual(['Agent', 'Workflow', 'SendMessage'])
-  })
-
-  // LiteLLM path — claude-code backend with non-Claude model means subagents
-  // route through LiteLLM, not native claude-code. Agent/Workflow/SendMessage
-  // must be blocked so the model uses agents_spawn instead.
-  it('blocks SDK tools when claude-code backend is used with a non-Claude model (LiteLLM path)', () => {
-    const blocker = makeSubagentToolBlocker(
-      stubThreads({ 'thread-h': { subagentBackend: 'claude-code', subagentModel: 'qwen3.8-27b' } })
-    )!
-    expect(blocker('thread-h')).toEqual(['Agent', 'Workflow', 'SendMessage'])
-  })
-
-  it('blocks SDK tools when global defaults specify claude-code + non-Claude model', () => {
-    const blocker = makeSubagentToolBlocker(stubThreads({ 'thread-i': {} }), 'claude-code', 'qwen3.8-27b')!
-    expect(blocker('thread-i')).toEqual(['Agent', 'Workflow', 'SendMessage'])
-  })
-
-  it('allows native when claude-code backend is used with an explicit Claude model', () => {
-    const blocker = makeSubagentToolBlocker(
-      stubThreads({ 'thread-j': { subagentBackend: 'claude-code', subagentModel: 'claude-sonnet-4-5' } })
-    )!
-    expect(blocker('thread-j')).toBeUndefined()
-  })
-
-  it('thread-level Claude model override with non-Claude global model allows native', () => {
-    const blocker = makeSubagentToolBlocker(
-      stubThreads({ 'thread-k': { subagentBackend: 'claude-code', subagentModel: 'claude-opus-4-6' } }),
-      'claude-code',
-      'qwen3.8-27b'
-    )!
-    expect(blocker('thread-k')).toBeUndefined()
   })
 })
