@@ -325,6 +325,14 @@ describe('§2.4 Chat Module (Server)', () => {
     emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
     expect(wsIdles()).toBe(4)
     expect(idleEvents).toHaveLength(4)
+
+    // Claude Code's order: the backend idles first, then the assistant turn
+    // arrives. Chat must not synthesize a second idle for it.
+    emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'working' })
+    emitBackendEvent(backend, 'chat.status', { sessionKey, status: 'idle' })
+    emitBackendEvent(backend, 'chat.turn', { sessionKey, turn })
+    expect(wsIdles()).toBe(5)
+    expect(idleEvents).toHaveLength(5)
   })
 
   it('MUST proxy chat.work events to subscribed clients via WS', async () => {

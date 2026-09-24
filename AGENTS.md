@@ -172,7 +172,7 @@ To judge a dependency or refactor, run the suite on the change **and** on its pa
 
 ### Writing scenarios — traps
 
-- **Wait on the thread, not the stream.** Use `waitForThreadIdle(client, threadId, ms)` from `src/wait.ts`. An unfiltered `chat.status` wait ends on any thread's idle. Filter `chat.turn` waits on `threadId` and `turn.role` as well: a sent message's own user turn arrives first. Chat announces one idle per assistant turn: it synthesizes one and drops the backend's repeat (`idleSynthesized` in `chat.ts`). A second idle for the same turn would end the next turn's wait at once.
+- **Wait on the thread, not the stream.** Use `waitForThreadIdle(client, threadId, ms)` from `src/wait.ts`. An unfiltered `chat.status` wait ends on any thread's idle. Filter `chat.turn` waits on `threadId` and `turn.role` as well: a sent message's own user turn arrives first. Chat announces one idle per quiet spell, whichever order the backend uses — Claude Code idles just before its final assistant turn, the local LLM just after (`idleAnnounced` in `chat.ts`). A second idle for the same turn would end the next turn's wait at once. The mock LLM only produces the local-LLM order, so a unit test in `chat.test.ts` covers the Claude Code order.
 - **The mock resets before every scenario** (`POST /mock/reset`: scripts, log, canned transcript). Sovereign-side state (threads, voice devices, config) still carries over, so a scenario must clean up what it creates.
 - **`mockLlmUrl` holds the runner's host-side address.** Never hand it to Sovereign: the container reaches the mock at `http://mock-llm:8900`, set in `docker/config.json`.
 - **WS delivery:** a message consumed by a live `waitForWs` never enters the buffer, and `waitForWs('')` matches any type, buffered or live.
