@@ -2,6 +2,7 @@ import { createSignal, createEffect, onCleanup, For, Show } from 'solid-js'
 import type { ParsedTurn } from '@sovereign/core'
 import type { ChatMessage } from './types.js'
 import { ChatView } from './ChatView.js'
+import { turnsFromHistoryResponse } from './merge-history.js'
 
 /**
  * Pure helper: returns true when a subagent's turn history indicates
@@ -71,7 +72,7 @@ export function SubagentView(props: SubagentViewProps) {
       const res = await fetch(`/api/threads/${encodeURIComponent(entry.sessionKey)}/history`)
       if (res.ok) {
         const data = await res.json()
-        const newTurns: ParsedTurn[] = data.history ?? []
+        const newTurns = turnsFromHistoryResponse(data)
         setTurns(newTurns)
 
         // Evaluate completion immediately after every fetch

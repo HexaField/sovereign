@@ -3,6 +3,7 @@ import type { ParsedTurn, WorkItem } from '@sovereign/core'
 import { SplitIcon } from '../../ui/icons.js'
 import { renderMarkdown } from '../../lib/markdown.js'
 import { switchThread } from '../threads/store.js'
+import { turnsFromHistoryResponse } from './merge-history.js'
 
 export interface SubagentInfo {
   sessionKey: string
@@ -34,7 +35,7 @@ export function SubagentCard(props: SubagentCardProps) {
       const res = await fetch(`/api/threads/${encodeURIComponent(props.sessionKey)}/history`)
       if (res.ok) {
         const data = await res.json()
-        const turns: ParsedTurn[] = data.turns ?? data.history ?? []
+        const turns = turnsFromHistoryResponse(data)
         setHistory(turns)
 
         // Derive status from history
