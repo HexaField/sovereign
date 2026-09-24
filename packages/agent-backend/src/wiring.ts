@@ -259,51 +259,6 @@ export function makePresenceAwareAppendResolver(
   }
 }
 
-/**
- * When a thread's subagent routing (or the global default) routes subagents
- * away from native claude-code (either a different backend, or claude-code
- * with a non-Claude model via LiteLLM), block the SDK's built-in subagent
- * tools (`Agent`, `Workflow`, `SendMessage`) so the model cannot bypass
- * Sovereign's routing layer. The model must use `agents_spawn` (Sovereign
- * MCP) instead, which the harness redirects to the configured backend/model.
- *
- * Priority: thread-level config > global default.
- *
- * Returns `undefined` (no tools blocked) when:
- *  - no threadManager provided
- *  - session doesn't map to a thread
- *  - neither thread config nor global default specifies non-native routing
- *    (native = claude-code backend + Claude model)
- */
-export function makeSubagentToolBlocker(
-  threadManager: ThreadManager | undefined,
-  globalDefaultBackend?: string,
-  globalDefaultModel?: string
-): ((sessionKey: string) => string[] | undefined) | undefined {
-  if (!threadManager) return undefined
-  return (sessionKey: string): string[] | undefined => {
-    const threadKey = sessionKeyToThreadKey(sessionKey)
-    if (!threadKey) return undefined
-    const thread = threadManager.get(threadKey)
-    // Effective backend and model: thread config wins, then global default.
-    const effectiveBackend = thread?.subagentBackend ?? globalDefaultBackend
-    const effectiveModel = thread?.subagentModel ?? globalDefaultModel
-    // Non-claude-code backend — always block.
-    if (effectiveBackend && effectiveBackend !== 'claude-code') {
-      return ['Agent', 'Workflow', 'SendMessage']
-    }
-    // claude-code backend with a non-Claude model means the subagent runs
-    // through the LiteLLM bridge — still not native claude-code. Block so
-    // the model uses agents_spawn (which triggers the LiteLLM path) rather
-    // than the SDK Agent tool (which always spawns cloud Claude).
-    // Simple prefix check: Claude models always start with 'claude'.
-    if (effectiveModel != null && !effectiveModel.toLowerCase().startsWith('claude')) {
-      return ['Agent', 'Workflow', 'SendMessage']
-    }
-    return undefined
-  }
-}
-
 export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWiringResult {
   const {
     bus,
@@ -429,11 +384,6 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               knowledgeFile: input.presenceKnowledgeFile
             },
             () => subagentDefaults
-          ),
-          resolveDisallowedTools: makeSubagentToolBlocker(
-            threadManager,
-            subagentDefaults.backend ?? undefined,
-            subagentDefaults.model ?? undefined
           ),
           metrics
         })
