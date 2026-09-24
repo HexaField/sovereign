@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { createEventBus } from '@sovereign/core'
 import type { AgentBackend, BackendCapabilities, BackendRouter } from '@sovereign/core'
 import { createScheduler } from './scheduler.js'
-import { createCronService } from './cron-service.js'
+import { createCronService, toStoredPatch } from './cron-service.js'
+import type { Job } from './types.js'
 import { createBackendEmitter } from '@sovereign/primitives'
 
 type RoutingBackend = BackendRouter
@@ -358,5 +359,75 @@ describe('createCronService — Sovereign-native user-message cron', () => {
       expect((await service.list(true)).find((j) => j.id === id)?.payload?.message).toBe('keep me')
       scheduler.destroy()
     })
+
+    it('takes whichever of message/text changed, refuses a conflict, and answers in the listed shape', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 60000)
+      const service = createCronService({ routing, scheduler, bus })
+      const { id } = service.createUserMessageCron({
+        threadKey: 't-mt',
+        schedule: { kind: 'cron', expr: '0 5 * * *', tz: 'UTC' },
+        prompt: 'old',
+        label: 'mt'
+      })
+      const listed = (await service.list(true)).find((j) => j.id === id)!
+      // Only `text` edited; `message` still says 'old'.
+      const res = (await service.update(id, { payload: { ...listed.payload, text: 'new' } })) as any
+      expect(res.payload).toMatchObject({ kind: 'agentTurn', message: 'new', text: 'new' })
+      expect(res.sessionKey).toBe('t-mt')
+      await expect(service.update(id, { payload: { kind: 'agentTurn', message: 'a', text: 'b' } })).rejects.toThrow(
+        /disagree/
+      )
+      scheduler.destroy()
+    })
+
+    it('stores a whole listed job unchanged, and a new sessionKey retargets it', async () => {
+      const bus = createEventBus(dataDir)
+      const scheduler = createScheduler(bus, dataDir, 60000)
+      const service = createCronService({ routing, scheduler, bus })
+      const { id } = service.createUserMessageCron({
+        threadKey: 't-old',
+        schedule: { kind: 'cron', expr: '0 5 * * *', tz: 'UTC' },
+        prompt: 'p',
+        label: 'rt2'
+      })
+      const payloadBefore = JSON.stringify(scheduler.get(id)!.payload)
+      const listed = (await service.list(true)).find((j) => j.id === id)!
+      await service.update(id, listed as unknown as Record<string, unknown>)
+      expect(JSON.stringify(scheduler.get(id)!.payload)).toBe(payloadBefore)
+      for (const field of ['sessionKey', 'sessionTarget', 'delivery']) {
+        expect(scheduler.get(id)).not.toHaveProperty(field)
+      }
+
+      // The fix-thread route's patch, legacy key form included.
+      await service.update(id, { sessionKey: 'agent:main:thread:t-new', enabled: true })
+      expect(scheduler.get(id)!.payload.threadKey).toBe('t-new')
+      expect((await service.list(true)).find((j) => j.id === id)?.sessionKey).toBe('t-new')
+      scheduler.destroy()
+    })
+  })
+})
+
+describe('toStoredPatch — shared by PATCH /api/crons/:id and PATCH /api/jobs/:id', () => {
+  const job = (payload: Record<string, unknown>): Job => ({
+    id: 'j',
+    name: 'n',
+    schedule: { kind: 'cron', expr: '0 5 * * *' },
+    payload,
+    enabled: true,
+    createdAt: '',
+    updatedAt: ''
+  })
+
+  it('passes patches to other jobs through untouched', () => {
+    const patch = { payload: { kind: 'anything' }, enabled: false }
+    expect(toStoredPatch(job({ kind: 'context-cleanup' }), patch)).toBe(patch)
+  })
+
+  it('keeps a Sovereign cron runnable', () => {
+    const cron = job({ kind: 'sovereign.userMessage', threadKey: 't', prompt: 'p' })
+    expect(() => toStoredPatch(cron, { payload: { kind: 'agentTurn' } })).toThrow(/needs a message/)
+    expect(() => toStoredPatch(cron, { payload: { kind: 'bogus' } })).toThrow(/payload/)
+    expect(toStoredPatch(cron, { enabled: false })).toEqual({ enabled: false })
   })
 })
