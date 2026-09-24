@@ -1002,36 +1002,6 @@ export function createThreadRoutes(
   })
 
   // Thread / subagent history — fetch chat history for a session
-  const subagentHistoryCache = new Map<string, { data: any; ts: number }>()
-  const SUBAGENT_CACHE_TTL = 5000
-
-  router.get('/api/threads/:key/history', async (req, res) => {
-    try {
-      const threadKey = req.params.key
-      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      const cached = subagentHistoryCache.get(sessionKey)
-      if (cached && Date.now() - cached.ts < SUBAGENT_CACHE_TTL) {
-        return res.json({ history: cached.data })
-      }
-      const routing = opts?.backend
-      if (!routing || !('forSession' in routing)) {
-        return res.json({ history: [] })
-      }
-      const { turns: history } = await (routing as RoutingBackend).forSession(sessionKey).getHistory(sessionKey)
-      subagentHistoryCache.set(sessionKey, { data: history, ts: Date.now() })
-      if (subagentHistoryCache.size > 50) {
-        const now = Date.now()
-        for (const [k, v] of subagentHistoryCache) {
-          if (now - v.ts > 30000) subagentHistoryCache.delete(k)
-        }
-      }
-      res.json({ history })
-    } catch (err: any) {
-      console.error('Failed to get subagent history:', err.message)
-      res.status(500).json({ error: 'Failed to get history' })
-    }
-  })
-
   // Thread cron jobs endpoint
   router.get('/api/threads/:key/crons', async (req, res) => {
     const cronService = opts?.cronService
