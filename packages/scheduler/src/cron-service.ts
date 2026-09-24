@@ -72,6 +72,68 @@ function canonicalSessionKey(threadKey: string): string {
   return threadKey
 }
 
+/** CronJob fields list() derives from the stored job; never stored themselves. */
+const DERIVED_FIELDS = new Set(['payload', 'sessionKey', 'sessionTarget', 'delivery'])
+
+/**
+ * The prompt an agentTurn payload carries. list() fills `message` and `text`
+ * with the same prompt, so a client may edit either one: take whichever
+ * changed, and refuse when both changed to different values.
+ */
+function promptFrom(payload: Record<string, unknown>, current: unknown): string {
+  const values = [payload.message, payload.text].filter((v): v is string => typeof v === 'string' && v.length > 0)
+  const changed = [...new Set(values.filter((v) => v !== current))]
+  if (changed.length > 1) throw new Error('cron: payload message and text disagree')
+  const prompt = changed[0] ?? values[0]
+  if (!prompt) throw new Error('cron: agentTurn payload needs a message')
+  return prompt
+}
+
+/**
+ * Map a patch in the shape list() returns onto a Sovereign cron's stored
+ * shape. list() renders the payload as `{kind: 'agentTurn', message, text}`
+ * and derives `sessionKey`/`sessionTarget`/`delivery` from `threadKey`.
+ * Storing those verbatim drops `threadKey`, which hides the job from list()
+ * and breaks its runs. So: map the payload back, treat a changed `sessionKey`
+ * or `sessionTarget` as a retarget, and reject any payload the runner cannot
+ * execute. Patches to other jobs pass through untouched.
+ */
+export function toStoredPatch(existing: Job, patch: Record<string, unknown>): Record<string, unknown> {
+  const stored = existing.payload
+  if (stored?.kind !== SOVEREIGN_CRON_JOB_KIND) return patch
+  const next = Object.fromEntries(Object.entries(patch).filter(([k]) => !DERIVED_FIELDS.has(k)))
+
+  let payload: Record<string, unknown> | undefined
+  const incoming = patch.payload as Record<string, unknown> | undefined
+  if (incoming?.kind === 'agentTurn') {
+    payload = { ...stored, prompt: promptFrom(incoming, stored.prompt) }
+  } else if (incoming) {
+    if (
+      incoming.kind !== SOVEREIGN_CRON_JOB_KIND ||
+      typeof incoming.threadKey !== 'string' ||
+      typeof incoming.prompt !== 'string'
+    ) {
+      throw new Error(
+        `cron: payload must be the listed agentTurn shape or {kind: '${SOVEREIGN_CRON_JOB_KIND}', threadKey, prompt}`
+      )
+    }
+    payload = incoming
+  }
+
+  const target =
+    typeof patch.sessionKey === 'string'
+      ? patch.sessionKey
+      : typeof patch.sessionTarget === 'string'
+        ? patch.sessionTarget.replace(/^session:/, '')
+        : undefined
+  const base = payload ?? stored
+  if (target && canonicalSessionKey(target) !== canonicalSessionKey(String(base.threadKey))) {
+    payload = { ...base, threadKey: canonicalSessionKey(target) }
+  }
+  if (payload) next.payload = payload
+  return next
+}
+
 export interface CronServiceOptions {
   routing: RoutingBackend
   scheduler?: Scheduler
@@ -100,32 +162,6 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
   const scheduler = config.scheduler
   const bus = config.bus
   const injectChatMessage = config.injectChatMessage
-
-  /**
-   * list() renders payloads as `{kind: 'agentTurn', message, text}`. Storing
-   * that shape verbatim drops `threadKey`, which hides the job from list()
-   * and breaks its runs — so map it back to the stored shape, and reject
-   * any payload the runner cannot execute.
-   */
-  function toStoredPatch(existing: Job, patch: Record<string, unknown>): Record<string, unknown> {
-    const payload = patch.payload as Record<string, unknown> | undefined
-    if (!payload) return patch
-    if (payload.kind === 'agentTurn') {
-      const prompt = payload.message ?? payload.text
-      if (typeof prompt !== 'string' || !prompt) throw new Error('cron: agentTurn payload needs a message')
-      return { ...patch, payload: { ...(existing.payload as Record<string, unknown>), prompt } }
-    }
-    if (
-      payload.kind !== SOVEREIGN_CRON_JOB_KIND ||
-      typeof payload.threadKey !== 'string' ||
-      typeof payload.prompt !== 'string'
-    ) {
-      throw new Error(
-        `cron: payload must be the listed agentTurn shape or {kind: '${SOVEREIGN_CRON_JOB_KIND}', threadKey, prompt}`
-      )
-    }
-    return patch
-  }
 
   function listSovereignJobs(): CronJob[] {
     if (!scheduler) return []
@@ -227,7 +263,9 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
     async update(id, patch) {
       const existing = scheduler?.get(id)
       if (!scheduler || !existing) throw new Error(`cron: unknown job '${id}'`)
-      return scheduler.update(id, toStoredPatch(existing, patch) as Partial<Job>)
+      const updated = scheduler.update(id, toStoredPatch(existing, patch) as Partial<Job>)
+      // Answer in the shape list() uses, so a caller can edit and resend it.
+      return updated.payload?.kind === SOVEREIGN_CRON_JOB_KIND ? sovereignJobToCronJob(updated) : updated
     },
     async remove(id) {
       if (!scheduler || !scheduler.get(id)) throw new Error(`cron: unknown job '${id}'`)

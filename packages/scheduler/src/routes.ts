@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express'
 import type { Scheduler } from './scheduler.js'
-import type { CronService } from './cron-service.js'
+import type { Job } from './types.js'
+import { toStoredPatch, type CronService } from './cron-service.js'
 
 export function createSchedulerRoutes(scheduler: Scheduler, cronService?: CronService): Router {
   const router = Router()
@@ -43,11 +44,13 @@ export function createSchedulerRoutes(scheduler: Scheduler, cronService?: CronSe
 
   // PATCH /api/jobs/:id — update job
   router.patch('/api/jobs/:id', (req: Request, res: Response) => {
+    const existing = scheduler.get(req.params.id)
+    if (!existing) return res.status(404).json({ error: `Job '${req.params.id}' not found` })
     try {
-      const job = scheduler.update(req.params.id, req.body)
-      res.json(job)
+      // Same guard as PATCH /api/crons/:id: a Sovereign cron must keep a runnable payload.
+      res.json(scheduler.update(req.params.id, toStoredPatch(existing, req.body) as Partial<Job>))
     } catch (err: any) {
-      res.status(404).json({ error: err.message })
+      res.status(400).json({ error: err.message })
     }
   })
 
@@ -190,13 +193,8 @@ export function registerCronManagementRoutes(router: Router, cronService: CronSe
       if (!job) {
         return res.status(404).json({ error: 'Cron job not found' })
       }
-      const patch: Record<string, unknown> = {
-        sessionTarget: `session:agent:main:thread:${threadKey}`,
-        sessionKey: `agent:main:thread:${threadKey}`,
-        delivery: { mode: 'none' },
-        enabled: true
-      }
-      const result = await cronService.update(req.params.id, patch)
+      // update() maps a changed sessionKey onto the stored payload's threadKey.
+      const result = await cronService.update(req.params.id, { sessionKey: threadKey, enabled: true })
       res.json({ ok: true, cron: result })
     } catch (err: any) {
       res.status(500).json({ error: err.message })
