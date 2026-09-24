@@ -60,7 +60,7 @@ import { createDraftRouter } from '@sovereign/drafts'
 import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
-import { createInferenceClient, localLlmConfigFromStore } from '@sovereign/agent-backend'
+import { createVoiceLlmClients } from './voice-llm.js'
 import type { TaskMcpDeps } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
@@ -976,18 +976,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // simple-conversation module so text-originated assistant turns receive
   // real LLM summaries instead of truncated raw text.
   let summarizeForSimpleConversation: ((text: string) => Promise<string>) | undefined
+  const { voiceLlm, summaryLlm } = createVoiceLlmClients(configStore, dataDir)
   {
-    const llmCfg = localLlmConfigFromStore(configStore, dataDir)
-    const voiceCfg = configStore.get<SovereignConfig['voice']>('voice')
-    const voiceLlm = createInferenceClient({
-      baseUrl: voiceCfg?.llmBaseUrl?.trim() || llmCfg.baseUrl,
-      model: voiceCfg?.llmModel?.trim() || llmCfg.model,
-      temperature: 0.3,
-      maxTokens: 150,
-      timeoutMs: 15_000,
-      reasoning: { enabled: false, effort: 'medium', maxTokens: 0 }
-    })
-
     const voiceResponse = createVoiceResponse({
       bus,
       dataDir,
@@ -1033,18 +1023,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         }
       }
     })
-
-    // Hot-reload the inference client when local-llm or voice LLM config changes
-    const reloadVoiceLlm = () => {
-      const nextLlm = localLlmConfigFromStore(configStore, dataDir)
-      const nextVoice = configStore.get<SovereignConfig['voice']>('voice')
-      voiceLlm.updateConfig({
-        baseUrl: nextVoice?.llmBaseUrl?.trim() || nextLlm.baseUrl,
-        model: nextVoice?.llmModel?.trim() || nextLlm.model
-      })
-    }
-    configStore.onChange('agentBackend.localLlm', reloadVoiceLlm)
-    configStore.onChange('voice', reloadVoiceLlm)
 
     // ── On-demand TTS speak endpoint ──────────────────────────────────
     // Summarises text via the same LLM prompt used for voice response,
@@ -1161,26 +1139,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
   // ── Conversation summary (rolling summary bubble, presence gateway
   // thread only) ──────────────────────────────────────────────────────
-  // Shares the local-llm connection settings with voice response above via
-  // a dedicated client instance — the summary prompt needs more headroom
-  // (maxTokens 200) than the ack/summary TTS pipeline (150), and a shared
-  // instance would race the two prompts' generations against each other.
+  // Uses `summaryLlm` from createVoiceLlmClients (voice-llm.ts), which
+  // follows the voice LLM endpoint like voice response above.
   //
   // Registers its GET /api/threads/:threadId/summary route at the same
   // path @sovereign/summary uses further below. That service ships
   // disabled by default and has no client consumer today, so this route
   // (mounted first) safely takes precedence whenever both run.
   {
-    const llmCfg = localLlmConfigFromStore(configStore, dataDir)
-    const summaryLlm = createInferenceClient({
-      baseUrl: llmCfg.baseUrl,
-      model: llmCfg.model,
-      temperature: 0.3,
-      maxTokens: 200,
-      timeoutMs: 20_000,
-      reasoning: { enabled: false, effort: 'medium', maxTokens: 0 }
-    })
-
     const conversationSummary = createConversationSummary({
       bus,
       llm: summaryLlm,
@@ -1206,15 +1172,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         type: 'chat.summary',
         threadId: payload.threadId,
         summary: payload.summary
-      })
-    })
-
-    // Hot-reload the inference client when local-llm config changes
-    configStore.onChange('agentBackend.localLlm', () => {
-      const next = localLlmConfigFromStore(configStore, dataDir)
-      summaryLlm.updateConfig({
-        baseUrl: next.baseUrl,
-        model: next.model
       })
     })
 
