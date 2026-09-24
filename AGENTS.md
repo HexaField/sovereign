@@ -294,3 +294,10 @@ After a Sovereign rebuild, old Claude CLI subprocesses survive as orphans (repar
 - `routes.ts POST /api/threads` — extracts `model` from `req.body`, normalises it (strips a `provider/` prefix if present), passes the bare id to `threadManager.create()` and to `createSession()` as `{ provider: 'anthropic', model: bareId }`.
 
 The `PATCH /api/threads/:key/model` route and `update()` were already correct — only `create()` and the POST route needed fixing.
+
+## Claude Agent SDK + model catalog
+
+- **Default model precedence.** A session's model resolves as: explicit thread/session model → `agentBackend.claudeCode.defaultModel` in `config.json` → `DEFAULT_MODEL_FALLBACK` in `claude-code.ts`. An install whose `config.json` sets `defaultModel` ignores a changed code default. Change the live value through `PATCH /api/config`: the store deep-merges, validates, persists, and the next new session reads it with no restart. A hand edit to `config.json` takes effect only after a restart. Existing sessions keep the model persisted in their state file.
+- **Adding a model id.** Before listing an id in `MODEL_CATALOG`, run the platform binary shipped in `@anthropic-ai/claude-agent-sdk-<platform>` (under `node_modules/.pnpm/`) with `--model <id> -p "Reply with one word: ok"`. Id shapes vary by generation, so never extrapolate one. A new family name also needs adding to the `familyForModel` prefix regex.
+- **`@anthropic-ai/sdk` rides as a peer.** Bumping `@anthropic-ai/claude-agent-sdk` leaves `@anthropic-ai/sdk` on any version that satisfies the peer range. Model access does not depend on it: the SDK spawns a native `claude` binary with its own API client.
+- **Built-in task tools on newer models.** From SDK 0.3.268, `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` load by default only on models older than Opus 4.8. Sessions on newer models lose them unless listed explicitly. Sovereign's `mcp__sovereign__task_*` tools cover task tracking, and the client never renders the SDK task tools.
