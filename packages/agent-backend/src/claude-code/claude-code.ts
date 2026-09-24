@@ -337,15 +337,6 @@ export interface ClaudeCodeBackendDeps {
    * untouched (no `systemPrompt` override). Safe to omit.
    */
   resolveAppendSystemPrompt?: (sessionKey: string) => string | undefined
-  /**
-   * Per-session tool denylist. Called once when a session loop starts;
-   * the returned array is passed as `disallowedTools` to the SDK, which
-   * removes the named tools from the model's context entirely. Sovereign
-   * uses this to block the built-in `Agent` tool when a thread's subagent
-   * routing directs spawning through the local-llm backend. Returning
-   * `undefined` or an empty array leaves all tools available.
-   */
-  resolveDisallowedTools?: (sessionKey: string) => string[] | undefined
   /** Override sdkQuery for tests; defaults to the SDK's query(). */
   sdkQuery?: typeof sdkQuery
   /**
@@ -1363,7 +1354,6 @@ export function createClaudeCodeBackend(
     const betas: SdkBeta[] = []
     void effectiveContextWindow // referenced above for future use when betas become available via OAuth
     const sessionMcpServers = resolveMcpServers({ isSubagent: !!state.parentSessionKey, sessionKey: state.sessionKey })
-    const disallowedTools = deps?.resolveDisallowedTools?.(state.sessionKey)
     // LiteLLM proxy: inject ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY into the
     // subprocess environment so the Anthropic SDK inside the Claude Code CLI
     // routes to the proxy instead of api.anthropic.com. The `env` field
@@ -1421,7 +1411,6 @@ export function createClaudeCodeBackend(
       // restricts which can execute. Apply both for local subagents so the model
       // only sees schemas for the 7 tools it actually has access to.
       ...(isLocalSubagent ? { tools: cfgAtStart.defaultTools ?? DEFAULT_TOOLS } : {}),
-      ...(disallowedTools && disallowedTools.length > 0 ? { disallowedTools } : {}),
       mcpServers: sessionMcpServers,
       hooks: buildHooks(),
       // Settings sources:

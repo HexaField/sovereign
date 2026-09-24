@@ -3,11 +3,11 @@
 //
 // Since 6041e3e disabled `agents_spawn` (local-LLM subagents proved
 // unreliable), the routing prompt tells the model to use Claude Code's
-// built-in Task tool. So:
+// built-in subagent tool. So:
 //   A. A local-llm thread's system prompt declares the routing policy, and its
 //      tool list carries no `agents_spawn`.
-//   B. A claude-code thread with the same routing gets that prompt AND keeps
-//      the SDK's subagent tool. Stripping it (as the removed
+//   B. A claude-code thread with the same routing keeps the SDK's subagent
+//      tool, and its prompt names that tool. Stripping it (as the removed
 //      makeSubagentToolBlocker did) left no subagent path at all.
 //
 // Self-skips when local-llm backend reports unavailable.
@@ -115,8 +115,9 @@ export const s26SubagentRouting: Scenario = {
       .sort((a, b) => (b.tools?.length ?? 0) - (a.tools?.length ?? 0))[0]
     const ccTools: string[] = (main?.tools ?? []).map((t: any) => t.name)
     const ccSystem: string = main?.system ?? ''
-    const ccRouting = /subagent routing/i.test(ccSystem) && /Task tool/.test(ccSystem)
     const subagentTool = SUBAGENT_TOOLS.find((t) => ccTools.includes(t))
+    // The prompt must name the tool the thread actually gets.
+    const ccRouting = /subagent routing/i.test(ccSystem) && !!subagentTool && ccSystem.includes(`\`${subagentTool}\``)
     const ccSpawn = ccTools.some((t) => t.endsWith('agents_spawn'))
     metrics.ccToolCount = ccTools.length
     metrics.ccRouting = ccRouting
@@ -126,8 +127,8 @@ export const s26SubagentRouting: Scenario = {
     return cleanup({
       passed,
       summary: passed
-        ? `routing OK — local-llm prompt declares routing ✓, claude-code prompt names the Task tool and ` +
-          `${subagentTool} is offered ✓ (${ccTools.length} tools), agents_spawn absent ✓`
+        ? `routing OK — local-llm prompt declares routing ✓, claude-code thread offers ${subagentTool} and ` +
+          `its prompt names it ✓ (${ccTools.length} tools), agents_spawn absent ✓`
         : `routing mismatch — local routing=${localRouting}, local agents_spawn=${localSpawn}, ` +
           `cc routing prompt=${ccRouting}, cc subagent tool=${subagentTool ?? 'MISSING'}, cc agents_spawn=${ccSpawn}`,
       metrics,
