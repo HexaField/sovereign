@@ -132,7 +132,7 @@ Relationships between entities use raw AD4M links under `hex://` predicates. The
 
 ## Tests
 
-The root `vitest.config.ts` collects `packages/*/src/**/*.test.ts`. Most packages have no local vitest config, so `pnpm --filter <pkg> test` reports "no test files" for them — that is expected. The repo-root run is the real gate.
+`pnpm test` runs `vitest run` at the repo root — the real gate. The root `vitest.config.ts` collects `packages/*/src/**/*.test.ts`. Most packages have no local vitest config, so `pnpm --filter <pkg> test` reports "no test files" for them — that is expected. To run one package's tests, pass its path to the root run: `npx vitest run packages/<pkg>`.
 
 ### Rebuild dist after touching a shared package's runtime code
 
@@ -170,21 +170,16 @@ SWT_BENCHMARK_PROMPT="your prompt" ./wind-tunnel/run.sh --scenario s18
 
 To judge a dependency or refactor, run the suite on the change **and** on its parent commit (a `git worktree add --detach` checkout; fill the ad4m submodule with `git submodule update --init --reference <main checkout>/vendor/coasys/ad4m vendor/coasys/ad4m`). Only a failure absent from the parent counts as a regression. Remove the worktree with `git worktree remove --force` (submodules block a plain remove). `--no-build` reuses whichever checkout built the image last, so rebuild before trusting it.
 
-### Scenario order leaks state
+### Writing scenarios — traps
 
-Scenarios share one mock LLM. A scenario that times out can leave scripted responses queued, and later scenarios then fail on content they never asked for (seen: s25 and s26 after an s22 timeout). Rerun a suspect failure alone (`--scenario sN`) before chasing it.
-
-### Known failures (as of `4d87709`, 2026-09-24)
-
-These fail on `main` and on the commit before the Claude SDK 0.3.281 upgrade alike:
-
-| Scenario | Failure | Cause |
-| --- | --- | --- |
-| s19 Presence MCP Tools | presence tools absent from `tools/list` | Stale: since `9601fe8`, presence tools register only for requests that carry the internal thread's `?session=`; s19 sends none |
-| s21 STT Roundtrip | `transcribe → 500: fetch failed` | Transcription backend unreachable from the container |
-| s14, s23, s24, s28, s29 | local-llm tool result, compaction, sovereign tool routing, assistant turn in history, context strategies | Not yet investigated |
-
-s10 (AD4M waker) and s18 (benchmark) report a pass while skipping: the ad4m lane stays inactive and `SWT_BENCHMARK_PROMPT` stays unset by default.
+- **Wait on the thread, not the stream.** Use `waitForThreadIdle(client, threadId, ms)` from `src/wait.ts`. An unfiltered `chat.status` wait ends on any thread's idle, and idles arrive in pairs (chat synthesizes one per assistant turn; the backend sends its own), so the stray second one ends the next turn's wait at once. Filter `chat.turn` waits on `threadId` and `turn.role` as well: a sent message's own user turn arrives first.
+- **The mock resets before every scenario** (`POST /mock/reset`: scripts, log, canned transcript). Sovereign-side state (threads, voice devices, config) still carries over, so a scenario must clean up what it creates.
+- **`mockLlmUrl` holds the runner's host-side address.** Never hand it to Sovereign: the container reaches the mock at `http://mock-llm:8900`, set in `docker/config.json`.
+- **WS delivery:** a message consumed by a live `waitForWs` never enters the buffer, and `waitForWs('')` matches any type, buffered or live.
+- **Token counts drive local-llm compaction.** The backend trusts server-reported `prompt_tokens` (streamed when `stream_options.include_usage` is set, as with llama.cpp). The mock reports about chars/4 of each request. Compaction also needs more than 12 messages, because the backend always keeps the last 10 verbatim, so fill with many rounds, not a few huge ones.
+- **History versus model context.** `threadHistory` (`GET /api/threads/:id/history`) returns the original conversation, which compaction never alters. Compaction summaries live only in the model-context view: `fullHistory` (WS `chat.history.full`, backed by `getFullHistory`).
+- **The build context mirrors a fresh checkout** (`.dockerignore`): host `node_modules`, `dist`, and `services/` (Python virtualenvs and training data, tens of GB) stay out.
+- **Skips:** s10 (ad4m lane inactive), s18 (`SWT_BENCHMARK_PROMPT` unset), and s31 (`agents_spawn` disabled) report a pass while skipping.
 
 ### Architecture
 
@@ -319,3 +314,10 @@ The `PATCH /api/threads/:key/model` route and `update()` were already correct �
 - **Adding a model id.** Before listing an id in `MODEL_CATALOG`, run the platform binary shipped in `@anthropic-ai/claude-agent-sdk-<platform>` (under `node_modules/.pnpm/`) with `--model <id> -p "Reply with one word: ok"`. Id shapes vary by generation, so never extrapolate one. A new family name also needs adding to the `familyForModel` prefix regex.
 - **`@anthropic-ai/sdk` rides as a peer.** Bumping `@anthropic-ai/claude-agent-sdk` leaves `@anthropic-ai/sdk` on any version that satisfies the peer range. Model access does not depend on it: the SDK spawns a native `claude` binary with its own API client.
 - **Built-in task tools on newer models.** From SDK 0.3.268, `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` load by default only on models older than Opus 4.8. Sessions on newer models lose them unless listed explicitly. Sovereign's `mcp__sovereign__task_*` tools cover task tracking, and the client never renders the SDK task tools.
+- **Moving existing threads to a new model.** A session freezes its model at creation, so a new default reaches only new threads. Move the others one by one with `PATCH /api/threads/:key/model` (body `{"model": "anthropic/<id>"}`). It updates the thread and its live session, and it persists the session state that `rehydrate()` reads on restart.
+- **Subagents.** `agents_spawn` stays disabled (`6041e3e`), so the SDK's built-in `Agent` tool is the only subagent path the routing prompt offers. Nothing may strip it. The routing section of the prompt applies once `agents_spawn` returns. Wind-tunnel s26 guards this.
+
+## API traps
+
+- **Thread history** (`GET /api/threads/:threadId/history`) comes from the chat routes, which mount before the threads routes. Its 5 s response cache drops a thread's entry on every `chat.turn` and `chat.message.sent`, so readers without an SSE stream still see new turns.
+- **Crons:** `GET /api/crons` renders each payload as `{kind: 'agentTurn', message, text}`, while the store keeps `{kind: 'sovereign.userMessage', threadKey, prompt, label}`. `PATCH /api/crons/:id` accepts either shape and rejects any other payload, so a read-modify-write round trip stays safe.
