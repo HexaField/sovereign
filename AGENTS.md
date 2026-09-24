@@ -132,7 +132,7 @@ Relationships between entities use raw AD4M links under `hex://` predicates. The
 
 ## Tests
 
-`pnpm test` runs `vitest run` at the repo root — the real gate. The root `vitest.config.ts` collects `packages/*/src/**/*.test.ts`. Most packages have no local vitest config, so `pnpm --filter <pkg> test` reports "no test files" for them — that is expected. To run one package's tests, pass its path to the root run: `npx vitest run packages/<pkg>`.
+`pnpm test` runs `vitest run` at the repo root — the real gate. The root `vitest.config.ts` collects `packages/*/src/**/*.test.ts`. A package without its own vitest config runs its tests through that root config (`"test": "vitest run --root ../.. packages/<pkg>/"`), so `pnpm --filter <pkg> test` runs exactly that package's tests. A new package needs the same script — a bare `vitest run` from the package directory matches no files.
 
 ### Rebuild dist after touching a shared package's runtime code
 
@@ -172,7 +172,7 @@ To judge a dependency or refactor, run the suite on the change **and** on its pa
 
 ### Writing scenarios — traps
 
-- **Wait on the thread, not the stream.** Use `waitForThreadIdle(client, threadId, ms)` from `src/wait.ts`. An unfiltered `chat.status` wait ends on any thread's idle, and idles arrive in pairs (chat synthesizes one per assistant turn; the backend sends its own), so the stray second one ends the next turn's wait at once. Filter `chat.turn` waits on `threadId` and `turn.role` as well: a sent message's own user turn arrives first.
+- **Wait on the thread, not the stream.** Use `waitForThreadIdle(client, threadId, ms)` from `src/wait.ts`. An unfiltered `chat.status` wait ends on any thread's idle. Filter `chat.turn` waits on `threadId` and `turn.role` as well: a sent message's own user turn arrives first. Chat announces one idle per assistant turn: it synthesizes one and drops the backend's repeat (`idleSynthesized` in `chat.ts`). A second idle for the same turn would end the next turn's wait at once.
 - **The mock resets before every scenario** (`POST /mock/reset`: scripts, log, canned transcript). Sovereign-side state (threads, voice devices, config) still carries over, so a scenario must clean up what it creates.
 - **`mockLlmUrl` holds the runner's host-side address.** Never hand it to Sovereign: the container reaches the mock at `http://mock-llm:8900`, set in `docker/config.json`.
 - **WS delivery:** a message consumed by a live `waitForWs` never enters the buffer, and `waitForWs('')` matches any type, buffered or live.
@@ -315,7 +315,7 @@ The `PATCH /api/threads/:key/model` route and `update()` were already correct �
 - **`@anthropic-ai/sdk` rides as a peer.** Bumping `@anthropic-ai/claude-agent-sdk` leaves `@anthropic-ai/sdk` on any version that satisfies the peer range. Model access does not depend on it: the SDK spawns a native `claude` binary with its own API client.
 - **Built-in task tools on newer models.** From SDK 0.3.268, `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` load by default only on models older than Opus 4.8. Sessions on newer models lose them unless listed explicitly. Sovereign's `mcp__sovereign__task_*` tools cover task tracking, and the client never renders the SDK task tools.
 - **Moving existing threads to a new model.** A session freezes its model at creation, so a new default reaches only new threads. Move the others one by one with `PATCH /api/threads/:key/model` (body `{"model": "anthropic/<id>"}`). It updates the thread and its live session, and it persists the session state that `rehydrate()` reads on restart.
-- **Subagents.** `agents_spawn` stays disabled (`6041e3e`), so the SDK's built-in `Agent` tool is the only subagent path the routing prompt offers. Nothing may strip it. The routing section of the prompt applies once `agents_spawn` returns. Wind-tunnel s26 guards this.
+- **Subagents.** `agents_spawn` stays disabled (`6041e3e`), so the SDK's built-in `Agent` tool is the only subagent path the routing prompt offers. Nothing may strip it. Its subagents run on Claude whatever a thread's subagent routing says; that routing governs only `agents_spawn`, and the prompt tells the model so. Wind-tunnel s26 checks that the thread gets the tool and that its prompt names it.
 
 ## API traps
 
