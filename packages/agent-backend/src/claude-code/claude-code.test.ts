@@ -483,6 +483,20 @@ describe('claude-code/createClaudeCodeBackend', () => {
     await expect(backend.setSessionModel('p', 'openai', 'gpt-5')).rejects.toThrow(/anthropic/)
   })
 
+  it('setSessionModel survives a restart', async () => {
+    const opts = { dataDir, cwd, agentDir: join(dataDir, 'agent') }
+    const backend = createClaudeCodeBackend(opts, { sdkQuery: stubSdkQuery() })
+    await backend.createSession('t', { threadKey: 'm' })
+    // Not the default model — a lost write would fall back to the default and pass.
+    await backend.setSessionModel('m', 'anthropic', 'claude-sonnet-5')
+
+    // Shutdown flushes the debounced store; a second backend on the same
+    // dataDir then rehydrates, as a Sovereign restart does.
+    backend.flushState?.()
+    const restarted = createClaudeCodeBackend(opts, { sdkQuery: stubSdkQuery() })
+    expect((await restarted.getSessionMeta('m'))?.model).toBe('claude-sonnet-5')
+  })
+
   it('writes personality files into cwd on construction', () => {
     createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stubSdkQuery() })
     // Sovereign no longer writes a workspace-root CLAUDE.md (the global one
