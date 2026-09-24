@@ -379,9 +379,6 @@ importers:
       '@sovereign/primitives':
         specifier: workspace:*
         version: link:../primitives
-      chokidar:
-        specifier: ^5.0.0
-        version: 5.0.0
       express:
         specifier: ^5.2.1
         version: 5.2.1
