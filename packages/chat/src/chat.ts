@@ -460,11 +460,12 @@ export function createChatModule(
     label: 'chat-live-state'
   })
   const currentStatus = new Map<string, string>()
-  // Threads whose last event was the idle synthesized for an assistant turn
-  // (below). When the backend's own idle follows directly, it still updates
-  // live state, but announcing it again would send every client the same
-  // idle twice.
-  const idleSynthesized = new Set<string>()
+  // Threads whose idle has been announced with no activity since — by the
+  // backend, or by the idle synthesized for an assistant turn (below).
+  // Backends send their idle before the final assistant turn (Claude Code) or
+  // after it (local LLM); either way clients should hear it once, so a second
+  // idle in the same quiet spell still updates live state but is not re-sent.
+  const idleAnnounced = new Set<string>()
   const currentWork = new Map<string, any[]>()
   const currentStreamText = new Map<string, string>()
   const currentError = new Map<string, string>()
@@ -521,15 +522,17 @@ export function createChatModule(
     backend.on(eventName, (data: Record<string, unknown>) => {
       const sessionKey = data.sessionKey as string | undefined
       const threadId = sessionKey ? sessionToThread.get(sessionKey) : undefined
-      // Any other event between the synthesized idle and the backend's idle
-      // means the backend idle carries news — forward it.
-      if (threadId && eventName !== 'chat.status') idleSynthesized.delete(threadId)
+      // Activity ends a quiet spell, so the next idle carries news. The
+      // assistant turn does not: it reports the work the idle closes.
+      const isAssistantTurn =
+        eventName === 'chat.turn' && (data.turn as { role?: string } | undefined)?.role === 'assistant'
+      if (threadId && eventName !== 'chat.status' && !isAssistantTurn) idleAnnounced.delete(threadId)
 
       // Cache live state per thread for replay on reconnect
       if (threadId) {
         if (eventName === 'chat.status') {
           currentStatus.set(threadId, data.status as string)
-          if (data.status !== 'idle') idleSynthesized.delete(threadId)
+          if (data.status !== 'idle') idleAnnounced.delete(threadId)
           statusChangedAt.set(threadId, Date.now())
           persistLiveState(threadId)
           if (data.status === 'idle') {
@@ -588,18 +591,18 @@ export function createChatModule(
           // `chat.status: idle` after the final assistant turn — some only
           // do it on the next user input, others not at all. Synthesize one
           // here for assistant turns so the UI converges to idle without
-          // waiting on the backend. User turns (the synthetic ones we
+          // waiting on the backend — unless the backend already announced
+          // idle for this quiet spell (Claude Code). User turns (the synthetic ones we
           // generate for queued sends) must NOT trigger this, or the
           // "Thinking…" indicator gets stomped the moment the user message
           // appears.
-          const turnRole = (data.turn as { role?: string } | undefined)?.role
-          if (turnRole === 'assistant') {
+          if (isAssistantTurn && !idleAnnounced.has(threadId)) {
             // Don't re-cache status — the live state map mirrors
             // currently-non-idle work, and idle is the absence of work.
             // Replaying an "idle" status on SSE reconnect just churns
             // the client without telling it anything new.
             const idleData = { sessionKey, threadId, status: 'idle' }
-            idleSynthesized.add(threadId)
+            idleAnnounced.add(threadId)
             if (wsHandler) {
               wsHandler.broadcastToChannel('chat', { type: 'chat.status', ...idleData })
             }
@@ -625,7 +628,8 @@ export function createChatModule(
       // (via handleFullHistory → sendTo), so broadcasting it causes every
       // tab to replace its turns with the new session's history.
       const repeatIdle =
-        eventName === 'chat.status' && data.status === 'idle' && !!threadId && idleSynthesized.delete(threadId)
+        eventName === 'chat.status' && data.status === 'idle' && !!threadId && idleAnnounced.has(threadId)
+      if (eventName === 'chat.status' && data.status === 'idle' && threadId) idleAnnounced.add(threadId)
       const skipBroadcast = eventName === 'session.info' || repeatIdle
 
       if (wsHandler && !skipBroadcast && (threadId || isSubagentEvent)) {
