@@ -1,9 +1,17 @@
-# Wind-tunnel docker build context exclusions
-node_modules
+# Wind-tunnel docker build context exclusions.
+# Goal: the context matches a fresh checkout (tracked files + ad4m submodule).
+# The image builds its own node_modules and dist; host copies only add bulk
+# and let stale output mask a broken build.
+**/node_modules
+**/dist
 .git
-wind-tunnel/node_modules
-packages/client/dist
-packages/client/node_modules
+**/.git
+.certs
+.codegraph
+# Python services (virtualenvs, training data) — not part of the Node image.
+services
+**/.venv*
+**/__pycache__
 *.test.ts
 *.spec.ts
 .DS_Store
