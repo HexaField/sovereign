@@ -395,22 +395,20 @@ describe('claude-code/createClaudeCodeBackend', () => {
     expect(out.defaultModel).toBe('anthropic/sonnet')
   })
 
-  it('exposes a family/version catalog and defaults to Opus 4.6', async () => {
-    // No defaultModel configured → falls back to the verified-active pin.
+  it('exposes a family/version catalog and defaults to Opus 5.5', async () => {
     const backend = createClaudeCodeBackend(
       { dataDir, cwd, agentDir: join(dataDir, 'agent') },
       { sdkQuery: stubSdkQuery() }
     )
     const out = await backend.listAvailableModels()
-    expect(out.defaultModel).toBe('anthropic/claude-opus-4-6')
+    expect(out.defaultModel).toBe('anthropic/claude-opus-5-5')
 
     const catalog = out.catalog ?? []
-    // Catalog carries the metadata the UI buckets into a two-axis picker.
-    const opus46 = catalog.find((e) => e.id === 'anthropic/claude-opus-4-6')
-    expect(opus46).toMatchObject({ provider: 'anthropic', family: 'opus', familyLabel: 'Opus', version: '4.6' })
-    // Each family has a bare "latest" alias (version === null).
+    const opus55 = catalog.find((e) => e.id === 'anthropic/claude-opus-5-5')
+    expect(opus55).toMatchObject({ provider: 'anthropic', family: 'opus', familyLabel: 'Opus', version: '5.5' })
     const opusLatest = catalog.find((e) => e.id === 'anthropic/opus')
     expect(opusLatest?.version).toBeNull()
+    expect(catalog.map((e) => e.family)).toContain('fable')
     expect(catalog.map((e) => e.family)).toContain('sonnet')
     expect(catalog.map((e) => e.family)).toContain('haiku')
   })
