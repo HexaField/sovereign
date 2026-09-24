@@ -44,3 +44,12 @@ export function mergeFetchedHistory(local: ParsedTurn[], fetched: ParsedTurn[]):
   )
   return [...fetched, ...filteredTail]
 }
+
+/**
+ * Turns from a `GET /api/threads/:id/history` response, which answers
+ * `{turns, hasMore, oldestTimestamp}`. Anything else yields no turns.
+ */
+export function turnsFromHistoryResponse(data: unknown): ParsedTurn[] {
+  const turns = (data as { turns?: unknown } | null)?.turns
+  return Array.isArray(turns) ? (turns as ParsedTurn[]) : []
+}

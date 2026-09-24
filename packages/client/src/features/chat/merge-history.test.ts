@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { ParsedTurn } from '@sovereign/core'
-import { mergeFetchedHistory } from './merge-history.js'
+import { mergeFetchedHistory, turnsFromHistoryResponse } from './merge-history.js'
 
 const turn = (role: ParsedTurn['role'], content: string, timestamp: number): ParsedTurn => ({
   role,
@@ -68,5 +68,17 @@ describe('mergeFetchedHistory', () => {
     ]
     // Local user has no timestamp → treated as 0 → older than latest fetched 100 → dropped.
     expect(mergeFetchedHistory(local, fetched)).toEqual(fetched)
+  })
+})
+
+describe('turnsFromHistoryResponse', () => {
+  it('reads turns from the history route response', () => {
+    const turns = [{ role: 'user', content: 'hi', timestamp: 1, workItems: [], thinkingBlocks: [] }]
+    expect(turnsFromHistoryResponse({ turns, hasMore: false })).toEqual(turns)
+  })
+
+  it('yields no turns for any other shape (e.g. a legacy `history` field)', () => {
+    expect(turnsFromHistoryResponse({ history: [{ role: 'user' }] })).toEqual([])
+    expect(turnsFromHistoryResponse(null)).toEqual([])
   })
 })
