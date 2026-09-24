@@ -321,3 +321,10 @@ The `PATCH /api/threads/:key/model` route and `update()` were already correct â€
 
 - **Thread history** (`GET /api/threads/:threadId/history`) comes from the chat routes, which mount before the threads routes. Its 5 s response cache drops a thread's entry on every `chat.turn` and `chat.message.sent`, so readers without an SSE stream still see new turns.
 - **Crons:** `GET /api/crons` renders each payload as `{kind: 'agentTurn', message, text}`, while the store keeps `{kind: 'sovereign.userMessage', threadKey, prompt, label}`. `PATCH /api/crons/:id` accepts either shape and rejects any other payload, so a read-modify-write round trip stays safe.
+
+## File watcher (`packages/files/src/watcher.ts`)
+
+- **One kernel watch per directory, none per file.** On Linux the watcher walks every org root and puts an `fs.watch` on each directory. A directory watch reports changes to its entries by name. Kernel cost scales with directory count: about 6.3k for the live roots, where chokidar used about 228k. chokidar watched every file and exhausted `fs.inotify.max_user_watches` (65,536 by default), which starved every other watcher on the host. Do not reintroduce a per-file watcher. macOS and Windows use Node's native recursive watch instead.
+- **Ignored names** (`isIgnoredName`) prune a subtree before any watch goes on it: dependencies, build output, `.git`, caches, `data`, `results`, `training_data`/`training_output`, and every `.venv*`. When a project adds a large generated tree, add its name there.
+- A path settles for 150 ms before its event goes out, which coalesces write bursts and atomic saves. A vanished path is reported only if the watcher saw it exist, so editor temp files stay silent.
+- On `ENOSPC` the watcher logs once with the current limit and once more with how many directories it left unwatched. It does not log per path.

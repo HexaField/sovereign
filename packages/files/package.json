@@ -21,7 +21,6 @@
   "dependencies": {
     "@sovereign/core": "workspace:*",
     "@sovereign/primitives": "workspace:*",
-    "chokidar": "^5.0.0",
     "express": "^5.2.1"
   },
   "devDependencies": {

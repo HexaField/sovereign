@@ -1,203 +1,243 @@
 /**
- * Multi-root file watcher tests.
+ * File watcher tests — real directories, real kernel watches.
  *
- * Validates: start/stop lifecycle, multiple roots, event emission,
- * and ignore patterns. Uses a chokidar mock — the real watcher uses chokidar
- * so ignore patterns are applied at watch-registration time (not just event
- * filtering), keeping inotify descriptor counts low.
+ * The regression guard is the inotify count: one watch per directory and none
+ * per file. A watch per file (chokidar) exhausted the per-user limit.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { EventEmitter } from 'node:events'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { createMultiRootFileWatcher, isIgnoredName, type FileWatcher, type FileWatcherOptions } from './watcher.js'
 
-// ── Chokidar mock ──────────────────────────────────────────────────────────
-// Capture the last FSWatcher emitter and the options passed to watch().
-
-let lastWatcherEmitter: EventEmitter | null = null
-let lastWatchOptions: any = null
-let lastWatchPaths: string[] = []
-
-vi.mock('chokidar', () => ({
-  watch: vi.fn((paths: string | string[], opts: any) => {
-    lastWatchPaths = Array.isArray(paths) ? paths : [paths]
-    lastWatchOptions = opts
-    const emitter = new EventEmitter() as EventEmitter & { close: ReturnType<typeof vi.fn> }
-    emitter.close = vi.fn().mockResolvedValue(undefined)
-    lastWatcherEmitter = emitter
-    return emitter
-  })
-}))
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function resetMocks() {
-  lastWatcherEmitter = null
-  lastWatchOptions = null
-  lastWatchPaths = []
-  vi.clearAllMocks()
+interface Emitted {
+  type: string
+  payload: { path: string; fullPath: string; root: string }
 }
 
-// Emit a chokidar event on the current watcher instance.
-function simulateChokidar(event: string, fullPath: string) {
-  if (!lastWatcherEmitter) throw new Error('No watcher started')
-  lastWatcherEmitter.emit(event, fullPath)
+const SETTLE = 40
+const linuxIt = process.platform === 'linux' ? it : it.skip
+const cleanups: Array<() => void> = []
+
+afterEach(() => {
+  for (const fn of cleanups.splice(0)) fn()
+  vi.restoreAllMocks()
+})
+
+function tmpRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sov-watch-'))
+  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }))
+  return root
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
+function write(file: string, text = 'x') {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, text)
+}
 
-describe('createMultiRootFileWatcher', () => {
-  beforeEach(resetMocks)
-
-  it('starts a single chokidar watcher for all roots', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
-
-    const watcher = createMultiRootFileWatcher(bus, ['/root/a', '/root/b', '/root/c'])
-    watcher.start()
-
-    expect(lastWatchPaths).toEqual(['/root/a', '/root/b', '/root/c'])
-    expect(watcher.watching()).toBe(true)
+async function startWatcher(roots: string[], opts: FileWatcherOptions = {}) {
+  const events: Emitted[] = []
+  const watcher: FileWatcher = createMultiRootFileWatcher({ emit: (e: Emitted) => events.push(e) } as any, roots, {
+    settleMs: SETTLE,
+    ...opts
   })
+  cleanups.unshift(() => watcher.stop())
+  watcher.start()
+  await watcher.ready()
+  return { watcher, events }
+}
 
-  it('is idempotent — double start() does not create a second watcher', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
-    const { watch } = await import('chokidar')
+async function waitFor(check: () => boolean, ms = 3000) {
+  const end = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > end) throw new Error('timed out waiting for watcher event')
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
 
-    const watcher = createMultiRootFileWatcher(bus, ['/root/a'])
-    watcher.start()
-    watcher.start()
+const quiet = () => new Promise((r) => setTimeout(r, SETTLE * 6))
+const saw = (events: Emitted[], type: string, fullPath: string) =>
+  events.some((e) => e.type === type && e.payload.fullPath === fullPath)
 
-    expect(watch).toHaveBeenCalledTimes(1)
+/** inotify watches this process holds (Linux). */
+function inotifyWatches(): number {
+  let n = 0
+  for (const fd of fs.readdirSync('/proc/self/fdinfo')) {
+    try {
+      n += fs
+        .readFileSync(`/proc/self/fdinfo/${fd}`, 'utf8')
+        .split('\n')
+        .filter((l) => l.startsWith('inotify wd:')).length
+    } catch {
+      /* fd closed while reading */
+    }
+  }
+  return n
+}
+
+describe('isIgnoredName', () => {
+  it('ignores build output, dependencies, virtualenvs and training data', () => {
+    for (const name of [
+      '.git',
+      'node_modules',
+      'dist',
+      '.venv',
+      '.venv-gpu',
+      '.venv-3.14-backup',
+      'training_data',
+      'training_output'
+    ]) {
+      expect(isIgnoredName(name), name).toBe(true)
+    }
+    for (const name of ['src', 'venv-notes.md', 'datasets', 'README.md']) {
+      expect(isIgnoredName(name), name).toBe(false)
+    }
   })
+})
 
-  it('closes the watcher on stop()', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
+describe('createMultiRootFileWatcher — per-directory mode', () => {
+  linuxIt('holds one kernel watch per directory and none per file', async () => {
+    const root = tmpRoot()
+    for (let i = 0; i < 30; i++) write(path.join(root, i % 2 ? 'a/deep' : 'b', `f${i}.txt`))
+    write(path.join(root, 'node_modules/pkg/index.js'))
+    write(path.join(root, '.venv-gpu/lib/site.py'))
+    const before = inotifyWatches()
 
-    const watcher = createMultiRootFileWatcher(bus, ['/root/a', '/root/b'])
-    watcher.start()
-    const emitter = lastWatcherEmitter as any
+    const { watcher } = await startWatcher([root], { mode: 'per-directory' })
+
+    // root, a, a/deep, b — the ignored trees and the 30 files add nothing.
+    expect(watcher.watchedDirectoryCount()).toBe(4)
+    expect(inotifyWatches() - before).toBe(4)
     watcher.stop()
+    expect(inotifyWatches()).toBe(before)
+  })
 
-    expect(emitter.close).toHaveBeenCalled()
+  it('reports new, modified and deleted files with their root', async () => {
+    const root = tmpRoot()
+    const old = path.join(root, 'a/old.txt')
+    write(old)
+    const { events } = await startWatcher([root], { mode: 'per-directory' })
+
+    const created = path.join(root, 'a/new.txt')
+    write(created)
+    await waitFor(() => saw(events, 'file.changed', created))
+    expect(events.find((e) => e.payload.fullPath === created)?.payload).toEqual({
+      path: path.join('a', 'new.txt'),
+      fullPath: created,
+      root
+    })
+
+    fs.appendFileSync(old, 'more')
+    await waitFor(() => saw(events, 'file.changed', old))
+    fs.rmSync(old)
+    await waitFor(() => saw(events, 'file.deleted', old))
+  })
+
+  it('stays silent about a file created and removed within the settle window', async () => {
+    const root = tmpRoot()
+    const { events } = await startWatcher([root], { mode: 'per-directory' })
+    const tmp = path.join(root, '.save.tmp')
+    write(tmp)
+    fs.rmSync(tmp)
+    await quiet()
+    expect(events.filter((e) => e.payload.fullPath === tmp)).toEqual([])
+  })
+
+  it('watches a new directory and reports files created inside it', async () => {
+    const root = tmpRoot()
+    const { watcher, events } = await startWatcher([root], { mode: 'per-directory' })
+    const dir = path.join(root, 'fresh')
+    fs.mkdirSync(dir)
+    await waitFor(() => saw(events, 'file.changed', dir))
+    expect(watcher.watchedDirectoryCount()).toBe(2)
+
+    const inner = path.join(dir, 'inner.txt')
+    write(inner)
+    await waitFor(() => saw(events, 'file.changed', inner))
+  })
+
+  it('reports a deleted directory and stops watching everything beneath it', async () => {
+    const root = tmpRoot()
+    write(path.join(root, 'gone/sub/f.txt'))
+    const { watcher, events } = await startWatcher([root], { mode: 'per-directory' })
+    expect(watcher.watchedDirectoryCount()).toBe(3)
+
+    const gone = path.join(root, 'gone')
+    fs.rmSync(gone, { recursive: true })
+    await waitFor(() => saw(events, 'file.deleted', gone))
+    expect(watcher.watchedDirectoryCount()).toBe(1)
+  })
+
+  it('never watches or reports ignored names, even ones created later', async () => {
+    const root = tmpRoot()
+    const { watcher, events } = await startWatcher([root], { mode: 'per-directory' })
+    write(path.join(root, 'node_modules/pkg/index.js'))
+    write(path.join(root, 'training_data/sample.bin'))
+    write(path.join(root, '.venv-3.14-backup/lib/x.py'))
+    await quiet()
+    expect(events).toEqual([])
+    expect(watcher.watchedDirectoryCount()).toBe(1)
+  })
+
+  it('routes events to their own root', async () => {
+    const [r1, r2] = [tmpRoot(), tmpRoot()]
+    const { events } = await startWatcher([r1, r2], { mode: 'per-directory' })
+    const f2 = path.join(r2, 'two.txt')
+    write(f2)
+    await waitFor(() => saw(events, 'file.changed', f2))
+    expect(events.find((e) => e.payload.fullPath === f2)?.payload.root).toBe(r2)
+  })
+
+  it('starts once, stops cleanly, and ignores an empty root list', async () => {
+    const root = tmpRoot()
+    const { watcher, events } = await startWatcher([root], { mode: 'per-directory' })
+    watcher.start()
+    expect(watcher.watchedDirectoryCount()).toBe(1)
+
+    watcher.stop()
     expect(watcher.watching()).toBe(false)
+    expect(watcher.watchedDirectoryCount()).toBe(0)
+    write(path.join(root, 'after-stop.txt'))
+    await quiet()
+    expect(events).toEqual([])
+
+    const empty = createMultiRootFileWatcher({ emit: vi.fn() } as any, [])
+    empty.start()
+    expect(empty.watching()).toBe(false)
   })
 
-  it('emits file.changed on chokidar add event with root in payload', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
+  it('logs the watch limit once, not once per directory', async () => {
+    const root = tmpRoot()
+    for (const d of ['a', 'b', 'c']) fs.mkdirSync(path.join(root, d))
+    const realWatch = fs.watch
+    vi.spyOn(fs, 'watch').mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+      if (String(p) !== root)
+        throw Object.assign(new Error('ENOSPC: System limit for number of file watchers reached'), { code: 'ENOSPC' })
+      return (realWatch as (...a: unknown[]) => fs.FSWatcher)(p, ...rest)
+    }) as typeof fs.watch)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const watcher = createMultiRootFileWatcher(bus, ['/root/a'])
-    watcher.start()
+    const { watcher } = await startWatcher([root], { mode: 'per-directory' })
 
-    simulateChokidar('add', '/root/a/src/index.ts')
-
-    expect(bus.emit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'file.changed',
-        source: 'files',
-        payload: expect.objectContaining({
-          path: 'src/index.ts',
-          fullPath: '/root/a/src/index.ts',
-          root: '/root/a'
-        })
-      })
-    )
+    expect(watcher.watchedDirectoryCount()).toBe(1)
+    expect(errors).toHaveBeenCalledTimes(2)
+    expect(String(errors.mock.calls[0][0])).toContain('max_user_watches')
+    expect(String(errors.mock.calls[1][0])).toContain('3 directories left unwatched')
   })
+})
 
-  it('emits file.changed on chokidar change event', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
+describe('createMultiRootFileWatcher — recursive mode', () => {
+  it('reports changes and drops ignored paths', async () => {
+    const root = tmpRoot()
+    fs.mkdirSync(path.join(root, 'a'))
+    fs.mkdirSync(path.join(root, 'node_modules'))
+    const { events } = await startWatcher([root], { mode: 'recursive' })
 
-    const watcher = createMultiRootFileWatcher(bus, ['/root/a'])
-    watcher.start()
-
-    simulateChokidar('change', '/root/a/README.md')
-
-    expect(bus.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'file.changed' }))
-    watcher.stop()
-  })
-
-  it('emits file.deleted on chokidar unlink event', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
-
-    const watcher = createMultiRootFileWatcher(bus, ['/root/a'])
-    watcher.start()
-
-    simulateChokidar('unlink', '/root/a/gone.ts')
-
-    expect(bus.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'file.deleted' }))
-    watcher.stop()
-  })
-
-  it('passes shouldIgnore as chokidar ignored option', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
-
-    const watcher = createMultiRootFileWatcher(bus, ['/root/a'])
-    watcher.start()
-
-    // The ignored option should be a function
-    expect(typeof lastWatchOptions.ignored).toBe('function')
-
-    // It must exclude known noisy dirs
-    const ignored = lastWatchOptions.ignored as (p: string) => boolean
-    expect(ignored('/root/a/.git/objects/ab')).toBe(true)
-    expect(ignored('/root/a/node_modules/pkg/index.js')).toBe(true)
-    expect(ignored('/root/a/dist/index.js')).toBe(true)
-    expect(ignored('/root/a/results/run_42.json')).toBe(true)
-    expect(ignored('/root/a/.codegraph/codegraph.db')).toBe(true)
-
-    // Normal source paths must NOT be ignored
-    expect(ignored('/root/a/src/index.ts')).toBe(false)
-    expect(ignored('/root/a/packages/server/src/bootstrap.ts')).toBe(false)
-
-    watcher.stop()
-  })
-
-  it('routes events from different roots correctly', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
-
-    const watcher = createMultiRootFileWatcher(bus, ['/root/a', '/root/b'])
-    watcher.start()
-
-    simulateChokidar('change', '/root/b/lib/util.ts')
-
-    expect(bus.emit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          root: '/root/b',
-          path: 'lib/util.ts'
-        })
-      })
-    )
-    watcher.stop()
-  })
-
-  it('handles single root via createFileWatcher compat', async () => {
-    const { createFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
-
-    const watcher = createFileWatcher(bus, '/single/root')
-    watcher.start()
-
-    expect(lastWatchPaths).toEqual(['/single/root'])
-    expect(watcher.watching()).toBe(true)
-
-    watcher.stop()
-  })
-
-  it('does not start when rootPaths is empty', async () => {
-    const { createMultiRootFileWatcher } = await import('./watcher.js')
-    const bus = { emit: vi.fn() } as any
-    const { watch } = await import('chokidar')
-
-    const watcher = createMultiRootFileWatcher(bus, [])
-    watcher.start()
-
-    expect(watch).not.toHaveBeenCalled()
-    expect(watcher.watching()).toBe(false)
+    const file = path.join(root, 'a/x.txt')
+    write(file)
+    await waitFor(() => saw(events, 'file.changed', file))
+    write(path.join(root, 'node_modules/q.js'))
+    await quiet()
+    expect(events.some((e) => e.payload.fullPath.includes('node_modules'))).toBe(false)
   })
 })
