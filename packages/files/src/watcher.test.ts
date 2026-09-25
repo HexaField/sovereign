@@ -140,6 +140,9 @@ describe('createMultiRootFileWatcher — per-directory mode', () => {
     write(tmp)
     fs.rmSync(tmp)
     await quiet()
+    const sentinel = path.join(root, 'sentinel.txt') // proves the watcher is alive
+    write(sentinel)
+    await waitFor(() => saw(events, 'file.changed', sentinel))
     expect(events.filter((e) => e.payload.fullPath === tmp)).toEqual([])
   })
 
@@ -175,8 +178,69 @@ describe('createMultiRootFileWatcher — per-directory mode', () => {
     write(path.join(root, 'training_data/sample.bin'))
     write(path.join(root, '.venv-3.14-backup/lib/x.py'))
     await quiet()
-    expect(events).toEqual([])
+    const sentinel = path.join(root, 'sentinel.txt') // proves the watcher is alive
+    write(sentinel)
+    await waitFor(() => saw(events, 'file.changed', sentinel))
+    expect(events.map((e) => e.payload.fullPath)).toEqual([sentinel])
     expect(watcher.watchedDirectoryCount()).toBe(1)
+  })
+
+  it('keeps watching a directory deleted and recreated within the settle window', async () => {
+    const root = tmpRoot()
+    write(path.join(root, 'out/old.txt'))
+    const { events } = await startWatcher([root], { mode: 'per-directory' })
+
+    fs.rmSync(path.join(root, 'out'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'out'))
+    await quiet()
+    const fresh = path.join(root, 'out/new.txt')
+    write(fresh)
+    await waitFor(() => saw(events, 'file.changed', fresh))
+    expect(saw(events, 'file.deleted', path.join(root, 'out/old.txt'))).toBe(true)
+  })
+
+  it('reports the files inside a moved directory as deleted', async () => {
+    const root = tmpRoot()
+    const open = path.join(root, 'notes/deep/open.md')
+    write(open)
+    const { watcher, events } = await startWatcher([root], { mode: 'per-directory' })
+
+    fs.renameSync(path.join(root, 'notes'), path.join(root, 'archive'))
+    await waitFor(() => saw(events, 'file.deleted', open))
+    await waitFor(() => saw(events, 'file.changed', path.join(root, 'archive')))
+    const moved = path.join(root, 'archive/deep/open.md')
+    fs.appendFileSync(moved, 'edit')
+    await waitFor(() => saw(events, 'file.changed', moved))
+    expect(watcher.watchedDirectoryCount()).toBe(3) // root, archive, archive/deep
+  })
+
+  it('reports edits under the new name after a rename-and-recreate rotation', async () => {
+    const root = tmpRoot()
+    write(path.join(root, 'logs/run.log'))
+    const { events } = await startWatcher([root], { mode: 'per-directory' })
+
+    fs.renameSync(path.join(root, 'logs'), path.join(root, 'logs.1'))
+    fs.mkdirSync(path.join(root, 'logs'))
+    await quiet()
+    events.length = 0
+    const rotated = path.join(root, 'logs.1/run.log')
+    const fresh = path.join(root, 'logs/fresh.log') // only a live watch on the new logs/ sees this
+    fs.appendFileSync(rotated, 'late line')
+    write(fresh)
+    await waitFor(() => saw(events, 'file.changed', rotated) && saw(events, 'file.changed', fresh))
+    await quiet()
+    // The old watch follows the renamed inode; it must not report under the old path.
+    expect(events.filter((e) => e.payload.fullPath === path.join(root, 'logs/run.log'))).toEqual([])
+  })
+
+  it('normalises root paths', async () => {
+    const root = tmpRoot()
+    const file = path.join(root, 'top.txt')
+    write(file)
+    const { events } = await startWatcher([root + path.sep], { mode: 'per-directory' })
+    fs.rmSync(file)
+    await waitFor(() => saw(events, 'file.deleted', file))
+    expect(events[0].payload).toEqual({ path: 'top.txt', fullPath: file, root })
   })
 
   it('routes events to their own root', async () => {

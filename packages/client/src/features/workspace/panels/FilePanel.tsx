@@ -24,6 +24,7 @@ import {
   closeFileTab
 } from '../store.js'
 import { wsStore } from '../../../ws/index.js'
+import { activeFileEffect } from './file-events.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -644,16 +645,15 @@ const FilePanel: Component = () => {
       const changedPath = msg.fullPath || msg.path
       if (!changedPath) return
       const active = activeFilePath()
-      if (active && changedPath === active) {
-        if (msg.kind === 'deleted') {
-          batch(() => {
-            setFileData(null)
-            setActiveFilePath(null)
-            setLastOpenFilePath(null)
-          })
-        } else if (!dirty()) {
-          openFile(active)
-        }
+      const effect = activeFileEffect(active, changedPath, msg.kind)
+      if (effect === 'clear') {
+        batch(() => {
+          setFileData(null)
+          setActiveFilePath(null)
+          setLastOpenFilePath(null)
+        })
+      } else if (effect === 'reload' && active && !dirty()) {
+        openFile(active)
       }
       // Refresh the tree for the affected root
       const root = msg.root

@@ -78,10 +78,12 @@ export function createMultiRootFileWatcher(
 ): FileWatcher {
   const mode = opts.mode ?? (process.platform === 'linux' ? 'per-directory' : 'recursive')
   const settleMs = opts.settleMs ?? SETTLE_MS
-  // Per-directory mode: each watched directory, with the entry names it holds.
-  // Knowing the entries lets a vanished path be reported only if it existed —
-  // a temp file created and removed within the settle window stays silent.
-  const dirs = new Map<string, { watcher: fs.FSWatcher; entries: Set<string> }>()
+  const roots = [...new Set(rootPaths.map((r) => path.resolve(r)))]
+  // Per-directory mode: each watched directory, with the entry names it holds
+  // and the inode its watch follows. Known entries let a vanished path be
+  // reported only if it existed (a temp file created and removed within the
+  // settle window stays silent); the inode reveals a directory replaced in place.
+  const dirs = new Map<string, { watcher: fs.FSWatcher; entries: Set<string>; ino: number; dev: number }>()
   const rootWatchers: fs.FSWatcher[] = []
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
   let generation = 0 // bumped by stop(): in-flight walks and settles see it and bail
@@ -90,7 +92,7 @@ export function createMultiRootFileWatcher(
   let unwatched = 0
 
   function rootFor(filePath: string): string {
-    return rootPaths.find((r) => filePath.startsWith(r + path.sep) || filePath === r) ?? rootPaths[0]
+    return roots.find((r) => filePath.startsWith(r + path.sep) || filePath === r) ?? roots[0]
   }
 
   function emit(type: 'file.changed' | 'file.deleted', fullPath: string) {
@@ -118,19 +120,25 @@ export function createMultiRootFileWatcher(
     console.error(`[file-watcher] cannot watch ${dir}:`, err instanceof Error ? err.message : String(err))
   }
 
-  /** Close the watches on `dir` and every watched directory beneath it. */
-  function forget(dir: string) {
+  /** Close the watches on `dir` and its subtree; return every entry path they held. */
+  function forget(dir: string): string[] {
+    const lost: string[] = []
     const prefix = dir + path.sep
     for (const [d, node] of dirs) {
-      if (d === dir || d.startsWith(prefix)) {
-        node.watcher.close()
-        dirs.delete(d)
-      }
+      if (d !== dir && !d.startsWith(prefix)) continue
+      node.watcher.close()
+      dirs.delete(d)
+      for (const name of node.entries) lost.push(path.join(d, name))
     }
+    return lost
   }
 
-  async function watchTree(dir: string, gen: number): Promise<void> {
+  async function watchTree(dir: string, gen: number, stat?: fs.Stats): Promise<void> {
     if (gen !== generation || dirs.has(dir)) return
+    // Take the inode before watching: if the path is replaced in between, the
+    // next event for it shows a mismatch and re-watches rather than going deaf.
+    const st = stat ?? (await fs.promises.lstat(dir).catch(() => null))
+    if (!st?.isDirectory() || gen !== generation || dirs.has(dir)) return
     // Watch before listing, so an entry created in between still raises an event.
     let watcher: fs.FSWatcher
     try {
@@ -142,7 +150,7 @@ export function createMultiRootFileWatcher(
       return
     }
     watcher.on('error', () => forget(dir))
-    const node = { watcher, entries: new Set<string>() }
+    const node = { watcher, entries: new Set<string>(), ino: st.ino, dev: st.dev }
     dirs.set(dir, node)
     let list: fs.Dirent[]
     try {
@@ -152,7 +160,7 @@ export function createMultiRootFileWatcher(
       return
     }
     if (gen !== generation) return
-    for (const d of list) node.entries.add(d.name)
+    for (const d of list) if (!isIgnoredName(d.name)) node.entries.add(d.name)
     await Promise.all(
       list.filter((d) => d.isDirectory() && !isIgnoredName(d.name)).map((d) => watchTree(path.join(dir, d.name), gen))
     )
@@ -176,17 +184,39 @@ export function createMultiRootFileWatcher(
 
     const parent = dirs.get(path.dirname(full))
     const name = path.basename(full)
-    if (stat) {
-      parent?.entries.add(name)
+    const watched = dirs.get(full)
+    if (!stat) {
+      // Gone. A watched directory takes its subtree with it: report every entry
+      // it held, as a per-file watcher would, so an open file inside is released.
+      const known = (parent?.entries.delete(name) ?? false) || watched !== undefined
+      if (watched) for (const p of forget(full)) emit('file.deleted', p)
+      if (known) emit('file.deleted', full)
+      return
+    }
+    parent?.entries.add(name)
+    if (!watched) {
       if (!stat.isDirectory()) return emit('file.changed', full)
-      if (dirs.has(full)) return // an attribute change on a watched directory: nothing new
-      await watchTree(full, gen)
+      await watchTree(full, gen, stat)
       if (gen === generation) emit('file.changed', full)
       return
     }
-    const known = (parent?.entries.delete(name) ?? false) || dirs.has(full)
-    forget(full)
-    if (known) emit('file.deleted', full)
+    if (stat.isDirectory() && stat.ino === watched.ino && stat.dev === watched.dev) return // attribute change only
+    // Replaced in place (rm + mkdir, rename over it, a git checkout): the old
+    // watch follows the old inode. Re-watch the path, and report each entry the
+    // old directory held as it now stands.
+    const lost = forget(full)
+    if (stat.isDirectory()) await watchTree(full, gen, stat)
+    const present = await Promise.all(
+      lost.map((p) =>
+        fs.promises.lstat(p).then(
+          () => true,
+          () => false
+        )
+      )
+    )
+    if (gen !== generation) return
+    lost.forEach((p, i) => emit(present[i] ? 'file.changed' : 'file.deleted', p))
+    emit('file.changed', full)
   }
 
   function watchRecursive(root: string, gen: number) {
@@ -204,19 +234,19 @@ export function createMultiRootFileWatcher(
 
   return {
     start() {
-      if (isWatching || rootPaths.length === 0) return
+      if (isWatching || roots.length === 0) return
       isWatching = true
       unwatched = 0
       const gen = ++generation
       if (mode === 'recursive') {
-        for (const root of rootPaths) watchRecursive(root, gen)
+        for (const root of roots) watchRecursive(root, gen)
         initial = Promise.resolve()
         return
       }
-      initial = Promise.all(rootPaths.map((root) => watchTree(root, gen))).then(() => {
+      initial = Promise.all(roots.map((root) => watchTree(root, gen))).then(() => {
         if (gen === generation && unwatched > 0) {
           console.error(
-            `[file-watcher] ${unwatched} director${unwatched === 1 ? 'y' : 'ies'} left unwatched (watch limit)`
+            `[file-watcher] ${unwatched} director${unwatched === 1 ? 'y' : 'ies'} left unwatched (watch limit), with everything beneath them`
           )
         }
       })
