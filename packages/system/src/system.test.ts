@@ -114,6 +114,18 @@ describe('System Module', () => {
       customSystem.dispose()
     })
 
+    it('§9.2 — code index surfaces on services.codeIndex when provided', () => {
+      system.dispose()
+      const snapshot = { status: 'ok' as const, version: '1.5.0', roots: 3, errors: 0, lastSyncAt: 1 }
+      const withIndex = createSystemModule(bus, dataDir, {
+        sembleBin: '',
+        claudeBin: '',
+        getCodeIndexHealth: () => snapshot
+      })
+      expect(withIndex.getHealth().services).toEqual({ codeIndex: snapshot })
+      withIndex.dispose()
+    })
+
     it('§9.2 — agents census surfaces on services.agents with counts', () => {
       system.dispose()
       // Point at a binary that cannot exist so the probe fails deterministically.

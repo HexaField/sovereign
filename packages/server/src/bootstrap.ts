@@ -40,6 +40,7 @@ import { createTerminalManager } from '@sovereign/terminal'
 import { createTerminalRoutes } from '@sovereign/terminal'
 import { registerTerminalChannel } from '@sovereign/terminal'
 import { createWorktreeManager } from '@sovereign/worktrees'
+import { createCodeIndex, createCodeIndexRouter } from '@sovereign/code-index'
 import { createWorktreeRouter } from '@sovereign/worktrees'
 import { registerWorktreesChannel } from '@sovereign/worktrees'
 import { createConfigRouter } from '@sovereign/config'
@@ -248,6 +249,16 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   ]
   const fileWatcher = createMultiRootFileWatcher(bus, watchRoots)
   fileWatcher.start()
+
+  // Code index: keeps every codegraph index under the org roots in step with
+  // the files on disk, driven by the watcher above. CODEGRAPH_INDEX=off opts out.
+  const codeIndex = createCodeIndex({
+    bus,
+    getOrgRoots: () => orgManager.listOrgs().map((o) => o.path),
+    enabled: (process.env.CODEGRAPH_INDEX ?? '').trim().toLowerCase() !== 'off'
+  })
+  app.use(createCodeIndexRouter(codeIndex, authMiddleware))
+  codeIndex.start().catch((err: any) => console.error('[code-index] failed to start:', err?.message ?? err))
 
   const resolveProject = (orgId: string, projectId: string, _w?: string) => {
     const p = orgManager.getProject(orgId, projectId)
@@ -1447,7 +1458,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     }),
     externalServices,
     // Honour SEMBLE_BIN for non-standard installs; empty string opts out.
-    sembleBin: process.env.SEMBLE_BIN ?? 'semble'
+    sembleBin: process.env.SEMBLE_BIN ?? 'semble',
+    getCodeIndexHealth: () => codeIndex.health()
   })
   // Device monitor — collects system metrics from local + remote tailnet devices.
   // Discovery-first: `tailscale status --json` provides the device registry.
@@ -1564,6 +1576,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       prPollService.dispose()
       ad4mService?.close()
       fileWatcher.stop()
+      codeIndex.stop()
       scheduler.destroy()
       terminalManager.dispose()
       cronMonitor.stop()

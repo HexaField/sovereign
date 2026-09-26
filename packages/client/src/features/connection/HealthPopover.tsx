@@ -11,6 +11,15 @@ export interface SembleHealth {
   version: string
 }
 
+/** `@sovereign/code-index`: keeps every codegraph index in step with the files on disk. */
+export interface CodeIndexHealth {
+  status: 'ok' | 'degraded' | 'down' | 'off' | 'unknown'
+  version: string
+  roots: number
+  errors: number
+  lastSyncAt: number | null
+}
+
 export interface AgentsCensusHealth {
   status: 'ok' | 'down' | 'unknown'
   interactive: number
@@ -60,6 +69,13 @@ const [agentsHealth, setAgentsHealth] = createSignal<AgentsCensusHealth>({
   status: 'unknown',
   interactive: 0,
   background: 0
+})
+const [codeIndexHealth, setCodeIndexHealth] = createSignal<CodeIndexHealth>({
+  status: 'unknown',
+  version: '',
+  roots: 0,
+  errors: 0,
+  lastSyncAt: null
 })
 const [externalHealth, setExternalHealth] = createSignal<ExternalServiceHealth[]>([])
 const [contextMgmtHealth, setContextMgmtHealth] = createSignal<ContextManagementHealth>(CONTEXT_MGMT_HEALTH_UNKNOWN)
@@ -137,6 +153,10 @@ export const overallHealth = (): OverallHealth => {
   const mcp = mcpHealth()
   if (mcp.status === 'down' || mcp.status === 'degraded') return 'degraded'
 
+  // A stale code index misleads agents that trust codegraph output as read source.
+  const codeIndex = codeIndexHealth().status
+  if (codeIndex === 'down' || codeIndex === 'degraded') return 'degraded'
+
   if (conn === 'connecting' || conn === 'authenticating' || semble.status === 'down' || anyExtDown) return 'degraded'
   return 'ok'
 }
@@ -150,11 +170,13 @@ export function initHealthPolling(): () => void {
       | {
           semble?: SembleHealth
           agents?: AgentsCensusHealth
+          codeIndex?: CodeIndexHealth
           external?: ExternalServiceHealth[]
         }
       | undefined
     if (services?.semble) setSembleHealth(services.semble)
     if (services?.agents) setAgentsHealth(services.agents)
+    if (services?.codeIndex) setCodeIndexHealth(services.codeIndex)
     if (Array.isArray(services?.external)) setExternalHealth(services.external)
   })
 
@@ -343,6 +365,20 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
     return { status: 'error' as const, detail: 'not installed' }
   })
 
+  const codeIndexRow = createMemo(() => {
+    const h = codeIndexHealth()
+    if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'checking...' }
+    if (h.status === 'off') return { status: 'unknown' as const, detail: 'off' }
+    if (h.status === 'down') return { status: 'error' as const, detail: 'codegraph not installed' }
+    const repos = `${h.roots} repo${h.roots === 1 ? '' : 's'}`
+    if (h.status === 'degraded') return { status: 'warning' as const, detail: `${repos} · ${h.errors} failing` }
+    return { status: 'ok' as const, detail: h.version ? `${repos} · v${h.version}` : repos }
+  })
+  const codeIndexTitle = () => {
+    const at = codeIndexHealth().lastSyncAt
+    return at ? `Last sync ${new Date(at).toLocaleTimeString()} · details at /api/code-index` : undefined
+  }
+
   const agentsRow = createMemo(() => {
     const h = agentsHealth()
     if (h.status === 'unknown') return { status: 'unknown' as const, detail: 'checking...' }
@@ -429,12 +465,18 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
           }}
         >
           <div class="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Service Health</div>
-          {/* Health rows: Sovereign origin, code search, agent sessions,
+          {/* Health rows: Sovereign origin, code search, code index, agent sessions,
               per-thread context management (Layers 1/2/3), then any
               externally-configured LAN services (AD4M dapp, WE launcher, …). */}
           <div class="divide-y" style={{ 'border-color': 'var(--c-border)' }}>
             <StatusRow label="Sovereign" status={connRow().status} detail={connRow().detail} port={sovereignPort()} />
             <StatusRow label="Semble" status={sembleRow().status} detail={sembleRow().detail} />
+            <StatusRow
+              label="Code Index"
+              status={codeIndexRow().status}
+              detail={codeIndexRow().detail}
+              title={codeIndexTitle()}
+            />
             <StatusRow label="Agent Sessions" status={agentsRow().status} detail={agentsRow().detail} />
             <StatusRow
               label="Context Management"

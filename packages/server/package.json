@@ -22,6 +22,7 @@
     "@sovereign/auth": "workspace:*",
     "@sovereign/browser": "workspace:*",
     "@sovereign/chat": "workspace:*",
+    "@sovereign/code-index": "workspace:*",
     "@sovereign/config": "workspace:*",
     "@sovereign/core": "workspace:*",
     "@sovereign/diff": "workspace:*",

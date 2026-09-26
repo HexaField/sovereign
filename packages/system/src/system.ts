@@ -39,6 +39,19 @@ export interface AgentsCensusHealth {
 }
 
 /**
+ * The code index (`@sovereign/code-index`): keeps every codegraph index under
+ * the org roots in step with the files on disk. `off` means opted out,
+ * `down` means enabled but no `codegraph` binary.
+ */
+export interface CodeIndexServiceHealth {
+  status: 'ok' | 'degraded' | 'down' | 'off'
+  version: string
+  roots: number
+  errors: number
+  lastSyncAt: number | null
+}
+
+/**
  * Health snapshot for an external service (AD4M executor, WE launcher, …)
  * that the browser can open in a new tab. `port` and `path` describe how to
  * construct the outward URL (protocol is always http — these are LAN/tailnet
@@ -63,6 +76,7 @@ export interface HealthInfo {
   services?: {
     semble?: SembleServiceHealth
     agents?: AgentsCensusHealth
+    codeIndex?: CodeIndexServiceHealth
     external?: ExternalServiceHealth[]
   }
 }
@@ -110,6 +124,8 @@ export interface SystemModuleOptions {
    * --json`). Defaults to `claude` on PATH. Set to '' to disable the row.
    */
   claudeBin?: string
+  /** Code index snapshot. Omit to leave the row out. */
+  getCodeIndexHealth?: () => CodeIndexServiceHealth
   /**
    * External services to include in health rollups. Each entry is polled on
    * the same interval as MCP. `healthUrl` is server-side (typically localhost)
@@ -337,10 +353,12 @@ export function createSystemModule(bus: EventBus, _dataDir: string, options?: Sy
       jobs: { active: 0, lastStatus: 'idle', nextRun: null },
       errors: { countLastHour: 0, recent: [] }
     }
-    if (sembleBin || claudeBin || externalServiceDefs.length > 0) {
+    const codeIndex = options?.getCodeIndexHealth?.()
+    if (sembleBin || claudeBin || codeIndex || externalServiceDefs.length > 0) {
       health.services = {}
       if (sembleBin) health.services.semble = cachedSembleHealth
       if (claudeBin) health.services.agents = cachedAgentsHealth
+      if (codeIndex) health.services.codeIndex = codeIndex
       if (externalServiceDefs.length > 0) {
         health.services.external = externalServiceDefs.map((s) => cachedExternalHealth.get(s.name)!)
       }
