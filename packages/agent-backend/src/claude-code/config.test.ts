@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ConfigStore } from '@sovereign/config'
-import { claudeCodeConfigFromStore } from './config.js'
+import { claudeCodeConfigFromStore, claudeCodeConfigGetter } from './config.js'
 
 const store = (values: Record<string, unknown> = {}) =>
   ({ get: (key: string) => values[key] }) as unknown as ConfigStore
@@ -48,6 +48,22 @@ describe('graphcoder MCP injection', () => {
     })
   })
 
+  it("lets edits reach every org's workspace when the cwd is the config directory", () => {
+    installGraphcoder()
+    // As deployed: sessions start in the config directory; repos live in the org workspaces.
+    const orgs = ['/home/x/.sovereign', '/home/x/workspaces/coasys']
+    const getConfig = claudeCodeConfigGetter(
+      store({ 'agentBackend.claudeCode.cwd': '/home/x/.sovereign' }),
+      '/data',
+      '/home/x/.sovereign',
+      () => orgs
+    )
+    const roots = () => (getConfig().mcpServers!.graphcoder as { args: string[] }).args.slice(-1)[0]
+    expect(roots()).toBe(['/home/x/.sovereign', '/home/x/workspaces/coasys'].join(path.delimiter))
+    orgs.push('/home/x/workspaces/hexafield')
+    expect(roots()).toContain('/home/x/workspaces/hexafield')
+  })
+
   it('stays out when graphcoder-mcp is not installed, or when opted out', () => {
     expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
     installGraphcoder()
@@ -56,6 +72,41 @@ describe('graphcoder MCP injection', () => {
     fs.chmodSync(path.join(bin, 'graphcoder-mcp'), 0o755)
     process.env.GRAPHCODER_MCP = 'off'
     expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
+  })
+
+  it('ignores relative PATH entries and a directory that carries the name', () => {
+    const cwd = process.cwd()
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-work-'))
+    try {
+      // A relative entry names a different directory in every session's cwd.
+      fs.writeFileSync(path.join(work, 'graphcoder-mcp'), '#!/bin/sh\n', { mode: 0o755 })
+      process.chdir(work)
+      process.env.PATH = `.${path.delimiter}${bin}`
+      expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
+      fs.mkdirSync(path.join(bin, 'graphcoder-mcp'))
+      expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
+    } finally {
+      process.chdir(cwd)
+      fs.rmSync(work, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a quoted argument of a custom command whole', () => {
+    process.env.GRAPHCODER_MCP_CMD = `node "/opt/graph coder/index.js" --label 'a b'`
+    const server = claudeCodeConfigFromStore(store({ 'workspace.root': '/w' }), '/data').mcpServers?.graphcoder as {
+      command: string
+      args: string[]
+    }
+    expect(server.command).toBe('node')
+    expect(server.args).toEqual([
+      '/opt/graph coder/index.js',
+      '--label',
+      'a b',
+      '--tools',
+      'edit',
+      '--edit-roots',
+      '/w'
+    ])
   })
 
   it('launches a custom command and keeps its own arguments first', () => {

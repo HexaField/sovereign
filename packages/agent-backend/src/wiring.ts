@@ -348,7 +348,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
       (configStore.get<AgentBackendKind[]>('agentBackend.enabled') as AgentBackendKind[]) ?? enabledBackends,
     factories: {
       'claude-code': () => {
-        const cc = createClaudeCodeBackend(claudeCodeConfigGetter(configStore, dataDir, input.configDir), {
+        const orgRoots = () => orgManager.listOrgs().map((o) => o.path)
+        const cc = createClaudeCodeBackend(claudeCodeConfigGetter(configStore, dataDir, input.configDir, orgRoots), {
           sovereignMcpServer,
           registry: {
             upsertSession(record) {

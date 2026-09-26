@@ -549,6 +549,12 @@ function ToolPairRow(props: { pair: ToolPair }) {
   const name = () => normalizeToolName(rawName())
   const callInput = () => parseInput(call().input)
   const hasDetails = () => !!(call().input && Object.keys(callInput()).length > 0) || !!result()?.output
+  // A symbol edit's report embeds a diff, so its title decides, not the word "error".
+  const failed = () => {
+    const out = result()?.output ?? ''
+    if (name() === 'edit' && Array.isArray(callInput().ops)) return !parseSymbolEditReport(out).ok
+    return out.includes('error') || out.includes('Error')
+  }
 
   return (
     <div style={{ 'border-bottom': '1px solid var(--c-border)' }}>
@@ -563,11 +569,8 @@ function ToolPairRow(props: { pair: ToolPair }) {
         </span>
         <ToolCallSummary name={name()} input={callInput()} />
         <Show when={result()}>
-          <span
-            class="ml-auto text-[10px]"
-            style={{ color: result()?.output?.includes('error') ? '#ef4444' : '#22c55e' }}
-          >
-            {result()?.output?.includes('error') || result()?.output?.includes('Error') ? '✗' : '✓'}
+          <span class="ml-auto text-[10px]" style={{ color: failed() ? '#ef4444' : '#22c55e' }}>
+            {failed() ? '✗' : '✓'}
           </span>
         </Show>
         <Show when={hasDetails()}>
@@ -1298,8 +1301,9 @@ export function symbolEditSummary(input: Record<string, unknown>): string {
  * Split a symbol edit's report into its notes (op lines, warnings, callers)
  * and its unified diff. The "Edited <file>" title is dropped (the file shows
  * above); an error report has no title and no diff, so all of it is notes.
+ * `ok` comes from the title: the diff can hold the word "error" either way.
  */
-export function parseSymbolEditReport(text: string): { notes: string[]; diff: DiffLine[] } {
+export function parseSymbolEditReport(text: string): { ok: boolean; notes: string[]; diff: DiffLine[] } {
   const lines = text.split('\n')
   const at = lines.findIndex((l) => l.startsWith('@@ '))
   const head = (at === -1 ? lines : lines.slice(0, at)).filter((l) => l.trim() && !l.startsWith('Read the file again'))
@@ -1307,9 +1311,15 @@ export function parseSymbolEditReport(text: string): { notes: string[]; diff: Di
     if (l.startsWith('@@')) return { type: 'hunk', prefix: '', text: l }
     if (l.startsWith('+')) return { type: 'add', prefix: '+ ', text: l.slice(1) }
     if (l.startsWith('-')) return { type: 'remove', prefix: '- ', text: l.slice(1) }
-    return { type: 'context', prefix: '  ', text: l.slice(1) }
+    if (l.startsWith(' ')) return { type: 'context', prefix: '  ', text: l.slice(1) }
+    return { type: 'context', prefix: '', text: l } // "… N more diff lines"
   })
-  return { notes: /^(?:Edited|Created) /.test(head[0] ?? '') ? head.slice(1) : head, diff }
+  const title = head[0] ?? ''
+  return {
+    ok: /^(?:Edited|Created|Dry run, nothing written:|No change to) /.test(title),
+    notes: /^(?:Edited|Created) /.test(title) ? head.slice(1) : head,
+    diff
+  }
 }
 
 function buildDiffLines(oldText: string, newText: string): DiffLine[] {
