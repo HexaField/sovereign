@@ -5,7 +5,7 @@
 // The personality itself (the global `~/.claude/CLAUDE.md`) is owned by the
 // personality compiler — see `personality-compiler.ts`. The functions here
 // only seed the workspace-local layered-context file and the default
-// subagent definition.
+// subagent definition, and check the user's agent definitions.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -54,6 +54,54 @@ export function ensureDefaultSubagentFile(cwd: string): void {
   fs.mkdirSync(dir, { recursive: true })
   if (fs.existsSync(filePath)) return
   fs.writeFileSync(filePath, SUBAGENT_TEMPLATE)
+}
+
+/** An agent definition whose `model:` a Claude session cannot reach. */
+export interface UnreachableAgentModel {
+  file: string
+  name: string
+  model: string
+}
+
+// `model:` values the CLI resolves to a Claude model, in any case: the aliases,
+// `inherit`, or a `claude-` id, optionally with a `[1m]`-style suffix.
+const CLAUDE_AGENT_MODEL =
+  /^(?:anthropic\/)?(?:claude-[\w.-]+|opus|sonnet|haiku|fable|best|opusplan|default|inherit)(?:\[[^\]]*\])?$/i
+
+/**
+ * User-level agent definitions (`<agentDir>/agents/**\/*.md`) whose `model:` a
+ * Claude session cannot reach. In-process subagents use the parent's API
+ * endpoint, and a Claude parent calls Anthropic directly — so a local model
+ * named here fails every call with HTTP 404. Like the CLI, skips files that
+ * lack `name` or `description`.
+ */
+export function findUnreachableAgentModels(agentDir: string): UnreachableAgentModel[] {
+  const dir = path.join(agentDir, 'agents')
+  let files: string[]
+  try {
+    files = fs.readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.md'))
+  } catch {
+    return []
+  }
+  const found: UnreachableAgentModel[] = []
+  for (const f of files) {
+    const file = path.join(dir, f)
+    let head: string | undefined
+    try {
+      head = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(fs.readFileSync(file, 'utf8'))?.[1]
+    } catch {
+      continue // a directory named *.md, or unreadable
+    }
+    if (!head) continue
+    const fm = head
+    const field = (key: string) =>
+      new RegExp(`^${key}:[ \\t]*(.*?)[ \\t]*(?:#.*)?$`, 'm').exec(fm)?.[1].replace(/^(['"])(.*)\1$/, '$2')
+    const name = field('name')
+    const model = field('model')
+    if (!name || !field('description') || !model || CLAUDE_AGENT_MODEL.test(model)) continue
+    found.push({ file, name, model })
+  }
+  return found
 }
 
 /**
