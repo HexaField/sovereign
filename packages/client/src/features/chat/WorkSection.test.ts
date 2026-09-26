@@ -271,12 +271,65 @@ describe('§4.4 WorkSection', () => {
       const err =
         "remove: No symbol 'gret' in demo.ts. Did you mean 'greet'? Symbols:\n  greet (function, line 1)\nNothing was written."
       expect(parseSymbolEditReport(err)).toEqual({
+        ok: false,
         notes: [
           "remove: No symbol 'gret' in demo.ts. Did you mean 'greet'? Symbols:",
           '  greet (function, line 1)',
           'Nothing was written.'
         ],
         diff: []
+      })
+    })
+
+    // Reports exactly as GraphCoder's editFile writes them.
+    const REAL_REPORT = [
+      'Edited src/greet.ts',
+      'replace greet · lines 1–3 → 1–3',
+      'syntax ok',
+      'signature changed: greet (name: string): string → (name: string, loud = false): string',
+      '  callers to check: src/app.ts:4, src/greet.test.ts:3, src/app.ts:1',
+      'affected tests: src/greet.test.ts',
+      'Read the file again before using the built-in Edit on it.',
+      '',
+      '@@ -1,3 +1,3 @@',
+      '-export function greet(name: string): string {',
+      '-  return `hi ${name}`',
+      '+export function greet(name: string, loud = false): string {',
+      '+  return loud ? name.toUpperCase() : `hi ${name}`',
+      ' }'
+    ].join('\n')
+
+    it('reads a real report, whose diff mentions no error, as a success', () => {
+      const report = parseSymbolEditReport(REAL_REPORT)
+      expect(report.ok).toBe(true)
+      expect(report.notes).toEqual([
+        'replace greet · lines 1–3 → 1–3',
+        'syntax ok',
+        'signature changed: greet (name: string): string → (name: string, loud = false): string',
+        '  callers to check: src/app.ts:4, src/greet.test.ts:3, src/app.ts:1',
+        'affected tests: src/greet.test.ts'
+      ])
+      expect(report.diff.map((l) => l.type)).toEqual(['hunk', 'remove', 'remove', 'add', 'add', 'context'])
+    })
+
+    it('judges success by the report, not by the word error in its diff', () => {
+      const withError = REAL_REPORT.replace(
+        '+  return loud',
+        '+  if (!name) throw new Error("no name")\n+  return loud'
+      )
+      expect(parseSymbolEditReport(withError).ok).toBe(true)
+      expect(parseSymbolEditReport('Dry run, nothing written: src/big.ts\n\n@@ -1 +1 @@\n-a\n+b').ok).toBe(true)
+      expect(parseSymbolEditReport('Error: MCP error -32602: Invalid arguments').ok).toBe(false)
+    })
+
+    it('keeps the line that says how much of a long diff was cut', () => {
+      const capped =
+        'Dry run, nothing written: src/big.ts\n\n@@ -1,202 +1,3 @@\n-  const v147 = 147\n… 54 more diff lines'
+      const { diff } = parseSymbolEditReport(capped)
+      expect(diff[diff.length - 1]).toEqual({
+        type: 'context',
+        prefix: '',
+        text: '… 54 more diff lines'
       })
     })
   })

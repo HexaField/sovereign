@@ -16,23 +16,34 @@ function readAd4mToken(tokenFile: string): string | null {
   }
 }
 
-/** True when an executable named `name` sits in a PATH directory. */
+/**
+ * True when an executable file named `name` sits in an absolute PATH
+ * directory. A relative entry would name a different directory in each
+ * session's cwd, where the server is launched.
+ */
 function onPath(name: string): boolean {
   return (process.env.PATH ?? '').split(path.delimiter).some((dir) => {
-    if (!dir) return false
+    if (!path.isAbsolute(dir)) return false
     try {
       fs.accessSync(path.join(dir, name), fs.constants.X_OK)
-      return true
+      return fs.statSync(path.join(dir, name)).isFile()
     } catch {
       return false
     }
   })
 }
 
+/** Split a command line at whitespace; '…' and "…" keep their spaces. */
+function commandArgv(cmd: string): string[] {
+  return (cmd.match(/(?:"[^"]*"|'[^']*'|[^\s"']+)+/g) ?? []).map((t) => t.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
+}
+
 export function claudeCodeConfigFromStore(
   configStore: ConfigStore,
   dataDir: string,
-  configDir?: string
+  configDir?: string,
+  /** Workspace directories of the orgs: repos live here, whatever the cwd. */
+  orgRoots: string[] = []
 ): ClaudeCodeConfig {
   const home = process.env.HOME ?? ''
   const mcpServers: Record<string, unknown> = {}
@@ -67,7 +78,7 @@ export function claudeCodeConfigFromStore(
   if (!sembleOff) {
     const cmd = (process.env.SEMBLE_MCP_CMD ?? '').trim()
     if (cmd) {
-      const parts = cmd.split(/\s+/)
+      const parts = commandArgv(cmd)
       mcpServers['semble'] = { type: 'stdio', command: parts[0], args: parts.slice(1), alwaysLoad: true }
     } else {
       mcpServers['semble'] = {
@@ -88,7 +99,7 @@ export function claudeCodeConfigFromStore(
   if (!codegraphOff) {
     const cmd = (process.env.CODEGRAPH_MCP_CMD ?? '').trim()
     if (cmd) {
-      const parts = cmd.split(/\s+/)
+      const parts = commandArgv(cmd)
       mcpServers['codegraph'] = { type: 'stdio', command: parts[0], args: parts.slice(1), alwaysLoad: true }
     } else {
       mcpServers['codegraph'] = {
@@ -109,13 +120,13 @@ export function claudeCodeConfigFromStore(
   // replace_in, insert and remove code by symbol name, syntax-checked. Only
   // when `graphcoder-mcp` is installed; `--tools edit` keeps GraphCoder's
   // annotation tools out of every session's context. Edits stay inside the
-  // workspace and config directories. Opt out with GRAPHCODER_MCP=off;
-  // override the launch command with GRAPHCODER_MCP_CMD.
+  // cwd, the config directory and the org workspaces. Opt out with
+  // GRAPHCODER_MCP=off; override the launch command with GRAPHCODER_MCP_CMD.
   const graphcoderOff = (process.env.GRAPHCODER_MCP ?? '').trim().toLowerCase() === 'off'
   const graphcoderCmd = (process.env.GRAPHCODER_MCP_CMD ?? '').trim()
-  const graphcoder = graphcoderCmd ? graphcoderCmd.split(/\s+/) : onPath('graphcoder-mcp') ? ['graphcoder-mcp'] : []
+  const graphcoder = graphcoderCmd ? commandArgv(graphcoderCmd) : onPath('graphcoder-mcp') ? ['graphcoder-mcp'] : []
   if (!graphcoderOff && graphcoder.length > 0) {
-    const roots = [cwd, configDir].filter((r): r is string => !!r)
+    const roots = [...new Set([cwd, configDir, ...orgRoots].filter((r): r is string => !!r))]
     mcpServers['graphcoder'] = {
       type: 'stdio',
       command: graphcoder[0],
@@ -166,7 +177,8 @@ export function claudeCodeConfigFromStore(
 export function claudeCodeConfigGetter(
   configStore: ConfigStore,
   dataDir: string,
-  configDir?: string
+  configDir?: string,
+  orgRoots: () => string[] = () => []
 ): () => ClaudeCodeConfig {
-  return () => claudeCodeConfigFromStore(configStore, dataDir, configDir)
+  return () => claudeCodeConfigFromStore(configStore, dataDir, configDir, orgRoots())
 }
