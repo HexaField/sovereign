@@ -1,6 +1,7 @@
 // Resolve the Claude Code adapter's config from the Sovereign ConfigStore.
 
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import type { ConfigStore } from '@sovereign/config'
 import type { ClaudeCodeConfig } from './types.js'
@@ -16,21 +17,13 @@ function readAd4mToken(tokenFile: string): string | null {
   }
 }
 
-/**
- * True when an executable file named `name` sits in an absolute PATH
- * directory. A relative entry would name a different directory in each
- * session's cwd, where the server is launched.
- */
-function onPath(name: string): boolean {
-  return (process.env.PATH ?? '').split(path.delimiter).some((dir) => {
-    if (!path.isAbsolute(dir)) return false
-    try {
-      fs.accessSync(path.join(dir, name), fs.constants.X_OK)
-      return fs.statSync(path.join(dir, name)).isFile()
-    } catch {
-      return false
-    }
-  })
+/** The built code-edit MCP server script, or null before `@sovereign/code-edit` is built. */
+export function resolveCodeEditEntry(): string | null {
+  try {
+    return createRequire(import.meta.url).resolve('@sovereign/code-edit/mcp')
+  } catch {
+    return null
+  }
 }
 
 /** Split a command line at whitespace; '…' and "…" keep their spaces. */
@@ -43,7 +36,9 @@ export function claudeCodeConfigFromStore(
   dataDir: string,
   configDir?: string,
   /** Workspace directories of the orgs: repos live here, whatever the cwd. */
-  orgRoots: string[] = []
+  orgRoots: string[] = [],
+  /** The code-edit MCP server script; null when it is not built. */
+  codeEditEntry: string | null = resolveCodeEditEntry()
 ): ClaudeCodeConfig {
   const home = process.env.HOME ?? ''
   const mcpServers: Record<string, unknown> = {}
@@ -116,21 +111,17 @@ export function claudeCodeConfigFromStore(
     configStore.get<string>('workspace.root')?.trim() ||
     path.join(home, 'workspaces')
 
-  // Inject GraphCoder's symbol editor (mcp__graphcoder__edit): replace,
-  // replace_in, insert and remove code by symbol name, syntax-checked. Only
-  // when `graphcoder-mcp` is installed; `--tools edit` keeps GraphCoder's
-  // annotation tools out of every session's context. Edits stay inside the
-  // cwd, the config directory and the org workspaces. Opt out with
-  // GRAPHCODER_MCP=off; override the launch command with GRAPHCODER_MCP_CMD.
-  const graphcoderOff = (process.env.GRAPHCODER_MCP ?? '').trim().toLowerCase() === 'off'
-  const graphcoderCmd = (process.env.GRAPHCODER_MCP_CMD ?? '').trim()
-  const graphcoder = graphcoderCmd ? commandArgv(graphcoderCmd) : onPath('graphcoder-mcp') ? ['graphcoder-mcp'] : []
-  if (!graphcoderOff && graphcoder.length > 0) {
+  // Inject Sovereign's symbol editor (mcp__code__edit, packages/code-edit):
+  // replace, replace_in, insert and remove code by symbol name, syntax-checked.
+  // It runs on the node running Sovereign. Edits stay inside the cwd, the
+  // config directory and the org workspaces. Opt out with CODE_EDIT_MCP=off.
+  const codeEditOff = (process.env.CODE_EDIT_MCP ?? '').trim().toLowerCase() === 'off'
+  if (!codeEditOff && codeEditEntry) {
     const roots = [...new Set([cwd, configDir, ...orgRoots].filter((r): r is string => !!r))]
-    mcpServers['graphcoder'] = {
+    mcpServers['code'] = {
       type: 'stdio',
-      command: graphcoder[0],
-      args: [...graphcoder.slice(1), '--tools', 'edit', '--edit-roots', roots.join(path.delimiter)],
+      command: process.execPath,
+      args: [codeEditEntry, '--edit-roots', roots.join(path.delimiter)],
       alwaysLoad: true
     }
   }
@@ -178,7 +169,8 @@ export function claudeCodeConfigGetter(
   configStore: ConfigStore,
   dataDir: string,
   configDir?: string,
-  orgRoots: () => string[] = () => []
+  orgRoots: () => string[] = () => [],
+  codeEditEntry?: string | null
 ): () => ClaudeCodeConfig {
-  return () => claudeCodeConfigFromStore(configStore, dataDir, configDir, orgRoots())
+  return () => claudeCodeConfigFromStore(configStore, dataDir, configDir, orgRoots(), codeEditEntry)
 }

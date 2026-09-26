@@ -741,7 +741,7 @@ function DiffView(props: { lines: DiffLine[] }) {
   )
 }
 
-/** GraphCoder's `edit` (mcp__graphcoder__edit): the ops, the report's notes, and its unified diff. */
+/** The symbol editor's `edit` (mcp__code__edit, packages/code-edit): the ops, the report's notes, and its unified diff. */
 function SymbolEditDetail(props: { input: Record<string, unknown>; result?: string }) {
   const report = () => parseSymbolEditReport(props.result ?? '')
   return (
