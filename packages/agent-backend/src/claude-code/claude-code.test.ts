@@ -519,6 +519,20 @@ describe('claude-code/createClaudeCodeBackend', () => {
     expect((await restarted.getSessionMeta('m'))?.model).toBe('claude-sonnet-5')
   })
 
+  it("keeps effort and model set before a thread's first message", async () => {
+    const opts = { dataDir, cwd, agentDir: join(dataDir, 'agent') }
+    const backend = createClaudeCodeBackend(opts, { sdkQuery: stubSdkQuery() })
+    // No createSession and no message yet: the thread has no session state.
+    await backend.setSessionEffort!('fresh', 'low')
+    await backend.setSessionModel('fresh', 'anthropic', 'claude-sonnet-5')
+
+    backend.flushState?.()
+    const restarted = createClaudeCodeBackend(opts, { sdkQuery: stubSdkQuery() })
+    const meta = await restarted.getSessionMeta('fresh')
+    expect(meta?.reasoningEffort).toBe('low')
+    expect(meta?.model).toBe('claude-sonnet-5')
+  })
+
   it('writes personality files into cwd on construction', () => {
     createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stubSdkQuery() })
     // Sovereign no longer writes a workspace-root CLAUDE.md (the global one

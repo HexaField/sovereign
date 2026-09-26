@@ -1700,32 +1700,35 @@ export function createClaudeCodeBackend(
     }
   }
 
+  /** The session's state, built the way the first message builds it when
+   *  none is in memory yet — so a setting made before that message sticks. */
+  function sessionStateFor(sessionKey: string): ClaudeSessionState {
+    const live = internal.sessions.get(sessionKey)
+    if (live) return live
+    // Registry-driven resume: if Sovereign already persisted this key,
+    // pick up the original backendSessionId so the SDK resumes the same
+    // session instead of starting a fresh one. Also rehydrate the model
+    // preference so model switches survive restarts.
+    const existing = deps.registry?.lookupSession?.(sessionKey)
+    const state = ensureSessionState({
+      sessionKey,
+      backendSessionId: existing?.backendSessionId ?? randomUUID(),
+      cwd: existing?.cwd,
+      model: existing?.model,
+      effort: existing?.effort,
+      contextWindow: existing?.contextWindow,
+      label: existing?.label,
+      parentSessionKey: existing?.parentSessionKey
+    })
+    // If we just minted a fresh UUID for an unbound thread, persist the
+    // binding immediately so cold restart + history endpoints can find
+    // the session JSONL without needing to call sendMessage first.
+    if (!existing) persistRegistry(state, bareId(sessionKey))
+    return state
+  }
+
   async function sendMessage(sessionKey: string, text: string, attachments?: import('@sovereign/core').Attachment[]) {
-    let state = internal.sessions.get(sessionKey)
-    if (!state) {
-      // Registry-driven resume: if Sovereign already persisted this key,
-      // pick up the original backendSessionId so the SDK resumes the same
-      // session instead of starting a fresh one. Also rehydrate the model
-      // preference so model switches survive restarts.
-      const existing = deps.registry?.lookupSession?.(sessionKey)
-      const backendSessionId = existing?.backendSessionId ?? randomUUID()
-      state = ensureSessionState({
-        sessionKey,
-        backendSessionId,
-        cwd: existing?.cwd,
-        model: existing?.model,
-        effort: existing?.effort,
-        contextWindow: existing?.contextWindow,
-        label: existing?.label,
-        parentSessionKey: existing?.parentSessionKey
-      })
-      // If we just minted a fresh UUID for an unbound thread, persist the
-      // binding immediately so cold restart + history endpoints can find
-      // the session JSONL without needing to call sendMessage first.
-      if (!existing) {
-        persistRegistry(state, bareId(sessionKey))
-      }
-    }
+    const state = sessionStateFor(sessionKey)
     getOrStartSession(state)
     state.streamLastLength = 0
     state.thinkingAccum = ''
@@ -2230,8 +2233,7 @@ export function createClaudeCodeBackend(
     if (effectiveProvider !== PROVIDER) {
       throw new Error(`claude-code: only ${PROVIDER} provider is supported (got ${provider})`)
     }
-    const state = internal.sessions.get(sessionKey)
-    if (!state) return
+    const state = sessionStateFor(sessionKey)
     state.model = bareModelName(model)
     // Persist so the choice survives a Sovereign restart.
     const existing = deps.registry?.lookupSession?.(sessionKey)
@@ -2296,8 +2298,7 @@ export function createClaudeCodeBackend(
     if (!REASONING_EFFORTS.includes(effort)) {
       throw new Error(`claude-code: unknown reasoning effort "${effort}"`)
     }
-    const state = internal.sessions.get(sessionKey)
-    if (!state) return
+    const state = sessionStateFor(sessionKey)
     state.effort = effort
     // Persist so the choice survives a Sovereign restart.
     const existing = deps.registry?.lookupSession?.(sessionKey)
@@ -2321,8 +2322,7 @@ export function createClaudeCodeBackend(
   }
 
   async function setSessionContextWindow(sessionKey: string, contextWindow: number | undefined) {
-    const state = internal.sessions.get(sessionKey)
-    if (!state) return
+    const state = sessionStateFor(sessionKey)
     state.contextWindow = contextWindow
     const existing = deps.registry?.lookupSession?.(sessionKey)
     if (existing) {
