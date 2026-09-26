@@ -30,14 +30,18 @@ const maxLines = Number(args['max-lines'])
 const DOCS = /(^|\/)(AGENTS|README|CHANGELOG|CLAUDE)\.md$/
 
 async function candidates() {
-  const shas = (await git(repo, 'log', '--no-merges', `--since=${args.since}`, '--format=%H', 'HEAD')).split('\n').filter(Boolean)
+  const shas = (await git(repo, 'log', '--no-merges', `--since=${args.since}`, '--format=%H', 'HEAD'))
+    .split('\n')
+    .filter(Boolean)
   const out = []
   for (const sha of shas) {
     const numstat = (await git(repo, 'diff-tree', '--no-commit-id', '-r', '--numstat', sha)).split('\n').filter(Boolean)
     const rows = numstat.map((l) => l.split('\t')).map(([a, d, f]) => ({ lines: Number(a) + Number(d), f }))
     const { tests, src } = await taskFiles(repo, sha)
     const lines = rows.filter((r) => src.includes(r.f)).reduce((n, r) => n + r.lines, 0)
-    const other = rows.filter((r) => !src.includes(r.f) && !tests.includes(r.f) && !DOCS.test(r.f) && !r.f.endsWith('pnpm-lock.yaml'))
+    const other = rows.filter(
+      (r) => !src.includes(r.f) && !tests.includes(r.f) && !DOCS.test(r.f) && !r.f.endsWith('pnpm-lock.yaml')
+    )
     if (src.length >= 1 && src.length <= 3 && lines <= maxLines && tests.length >= 1 && other.length === 0) {
       out.push({ sha, tests, src, lines })
     }
@@ -68,7 +72,17 @@ for (const c of await candidates()) {
     if (!after.pass) throw new Error(`tests still fail with the fix (${after.summary})`)
     const subject = (await git(repo, 'log', '-1', '--format=%s', c.sha)).trim()
     const body = (await git(repo, 'log', '-1', '--format=%b', c.sha)).trim()
-    tasks.push({ id: c.sha.slice(0, 8), sha: c.sha, parent, subject, body, tests: c.tests, src: c.src, lines: c.lines, failingBefore: before.summary })
+    tasks.push({
+      id: c.sha.slice(0, 8),
+      sha: c.sha,
+      parent,
+      subject,
+      body,
+      tests: c.tests,
+      src: c.src,
+      lines: c.lines,
+      failingBefore: before.summary
+    })
     fs.writeFileSync(args.out, JSON.stringify(tasks, null, 2) + '\n')
     console.log(`✓ ${c.sha.slice(0, 8)} ${subject.slice(0, 70)} (${((Date.now() - started) / 1000).toFixed(0)} s)`)
   } catch (err) {

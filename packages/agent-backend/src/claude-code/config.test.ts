@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { ConfigStore } from '@sovereign/config'
-import { claudeCodeConfigFromStore, claudeCodeConfigGetter, resolveCodeEditEntry } from './config.js'
+import { claudeCodeConfigFromStore, claudeCodeConfigGetter, resolveCodeEditEntry, withEditRoot } from './config.js'
 
 const store = (values: Record<string, unknown> = {}) =>
   ({ get: (key: string) => values[key] }) as unknown as ConfigStore
@@ -33,7 +34,7 @@ describe('code-edit MCP injection', () => {
     expect(cfg.mcpServers?.code).toEqual({
       type: 'stdio',
       command: process.execPath,
-      args: [ENTRY, '--edit-roots', `/w${path.delimiter}/cfg`],
+      args: ['--liftoff-only', ENTRY, '--edit-roots', `/w${path.delimiter}/cfg`],
       alwaysLoad: true
     })
   })
@@ -61,10 +62,23 @@ describe('code-edit MCP injection', () => {
   })
 
   it("resolves the entry to the package's built server script, or null before a build", () => {
-    const entry = resolveCodeEditEntry()
-    if (entry === null) return
-    expect(entry.endsWith(path.join('code-edit', 'dist', 'mcp.js'))).toBe(true)
-    expect(fs.existsSync(entry)).toBe(true)
+    const built = fileURLToPath(new URL('../../../code-edit/dist/mcp.js', import.meta.url))
+    expect(resolveCodeEditEntry()).toBe(fs.existsSync(built) ? fs.realpathSync(built) : null)
+  })
+})
+
+describe('withEditRoot', () => {
+  const server = { command: 'node', args: [ENTRY, '--edit-roots', ['/w', '/cfg'].join(path.delimiter)] }
+
+  it('adds a directory outside every root', () => {
+    expect(withEditRoot(server, '/tmp/project').args[2]).toBe(['/w', '/cfg', '/tmp/project'].join(path.delimiter))
+    expect(server.args[2]).toBe(['/w', '/cfg'].join(path.delimiter))
+  })
+
+  it('leaves the roots alone for a directory a root already holds', () => {
+    expect(withEditRoot(server, '/w')).toBe(server)
+    expect(withEditRoot(server, '/w/repo')).toBe(server)
+    expect(withEditRoot(server, '/wx').args[2]).toContain('/wx')
   })
 })
 

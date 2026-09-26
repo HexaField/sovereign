@@ -67,6 +67,7 @@ import {
 } from './history.js'
 import { dispatchSdkMessage } from './events.js'
 import { defaultAgentDir, projectsDirForCwd, sessionJsonlPath } from './path-encoding.js'
+import { withEditRoot } from './config.js'
 import {
   ensureAd4mSkill,
   ensureDefaultSubagentFile,
@@ -425,10 +426,14 @@ export function createClaudeCodeBackend(
    *  When `sessionKey` is provided, it is embedded in the MCP URL as a query
    *  parameter so the Sovereign HTTP endpoint can attribute tool calls to the
    *  correct thread — eliminating the race-prone global activeSessionKey. */
-  function resolveMcpServers(opts: { isSubagent?: boolean; sessionKey?: string } = {}): Record<string, any> {
-    const { isSubagent = false, sessionKey } = opts
+  function resolveMcpServers(
+    opts: { isSubagent?: boolean; sessionKey?: string; cwd?: string } = {}
+  ): Record<string, any> {
+    const { isSubagent = false, sessionKey, cwd } = opts
     const cfg = getConfig()
     const servers: Record<string, any> = { ...cfg.mcpServers }
+    // The symbol editor may also write in the session's own cwd.
+    if (cwd && servers.code) servers.code = withEditRoot(servers.code, cwd)
     // Sovereign tools: connect via the HTTP MCP endpoint on the Sovereign server.
     // Subagents get the filtered /api/mcp/subagent endpoint (5 tools only:
     // browser + embeddings). Main sessions get the full /api/mcp endpoint
@@ -1108,7 +1113,7 @@ export function createClaudeCodeBackend(
       const lq = state.liveQuery
       const isSubagent = !!state.parentSessionKey
       try {
-        await lq?.setMcpServers?.(resolveMcpServers({ isSubagent, sessionKey: sk }))
+        await lq?.setMcpServers?.(resolveMcpServers({ isSubagent, sessionKey: sk, cwd: state.cwd }))
         console.log(`[mcp-rehydrate] PostCompact OK for ${sk} (compaction #${state.compactionCount})`)
       } catch (err) {
         // setMcpServers can clear the catalog before repopulating — a throw
@@ -1117,7 +1122,7 @@ export function createClaudeCodeBackend(
         try {
           await new Promise((r) => setTimeout(r, 2000))
           if (state.liveQuery === lq) {
-            await lq?.setMcpServers?.(resolveMcpServers({ isSubagent, sessionKey: sk }))
+            await lq?.setMcpServers?.(resolveMcpServers({ isSubagent, sessionKey: sk, cwd: state.cwd }))
             console.log(`[mcp-rehydrate] PostCompact retry OK for ${sk}`)
           }
         } catch (err2) {
@@ -1367,7 +1372,11 @@ export function createClaudeCodeBackend(
     // benefit. Leave betas empty for all sessions.
     const betas: SdkBeta[] = []
     void effectiveContextWindow // referenced above for future use when betas become available via OAuth
-    const sessionMcpServers = resolveMcpServers({ isSubagent: !!state.parentSessionKey, sessionKey: state.sessionKey })
+    const sessionMcpServers = resolveMcpServers({
+      isSubagent: !!state.parentSessionKey,
+      sessionKey: state.sessionKey,
+      cwd: state.cwd
+    })
     // LiteLLM proxy: inject ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY into the
     // subprocess environment so the Anthropic SDK inside the Claude Code CLI
     // routes to the proxy instead of api.anthropic.com. The `env` field
@@ -1492,7 +1501,9 @@ export function createClaudeCodeBackend(
       .then(async () => {
         const sk = state.sessionKey
         try {
-          await q.setMcpServers?.(resolveMcpServers({ isSubagent: !!state.parentSessionKey, sessionKey: sk }))
+          await q.setMcpServers?.(
+            resolveMcpServers({ isSubagent: !!state.parentSessionKey, sessionKey: sk, cwd: state.cwd })
+          )
           console.log(`[mcp-rehydrate] post-start OK for ${sk}`)
         } catch (err) {
           // setMcpServers can clear the catalog before repopulating — a throw
@@ -1501,7 +1512,9 @@ export function createClaudeCodeBackend(
           console.warn(`[mcp-rehydrate] post-start attempt 1 failed for ${sk}:`, (err as Error)?.message ?? err)
           try {
             await new Promise((r) => setTimeout(r, 2000))
-            await q.setMcpServers?.(resolveMcpServers({ isSubagent: !!state.parentSessionKey, sessionKey: sk }))
+            await q.setMcpServers?.(
+              resolveMcpServers({ isSubagent: !!state.parentSessionKey, sessionKey: sk, cwd: state.cwd })
+            )
             console.log(`[mcp-rehydrate] post-start retry OK for ${sk}`)
           } catch (err2) {
             console.error(
@@ -2144,7 +2157,7 @@ export function createClaudeCodeBackend(
   async function getMcpStatus(sessionKey: string): Promise<import('@sovereign/core').McpServerStatus[]> {
     const state = internal.sessions.get(sessionKey)
     if (!state) return []
-    const mcpServers = resolveMcpServers({ sessionKey })
+    const mcpServers = resolveMcpServers({ sessionKey, cwd: state.cwd })
     const serverNames = Object.keys(mcpServers)
     if (!state.liveQuery?.mcpServerStatus) {
       // No live query or SDK build lacks mcpServerStatus — report unknown
@@ -2177,7 +2190,7 @@ export function createClaudeCodeBackend(
   async function reconnectMcp(sessionKey: string): Promise<{ reconnected: string[]; failed: string[] }> {
     const state = internal.sessions.get(sessionKey)
     if (!state) return { reconnected: [], failed: [] }
-    const mcpServers = resolveMcpServers({ sessionKey })
+    const mcpServers = resolveMcpServers({ sessionKey, cwd: state.cwd })
     const serverNames = Object.keys(mcpServers)
 
     // Strategy 1: per-server reconnect via SDK (most targeted)
