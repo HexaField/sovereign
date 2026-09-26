@@ -49,6 +49,9 @@ const SYMBOL_EDIT = 'mcp__code__edit'
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit', SYMBOL_EDIT])
 /** This checkout's own build of the symbol editor, the server under test. */
 const CODE_EDIT_SERVER = fileURLToPath(new URL('../dist/mcp.js', import.meta.url))
+// Without it the CLI marks the server failed and the edit arm runs without the tool; a rerun skips that record.
+if (!fs.existsSync(CODE_EDIT_SERVER))
+  throw new Error(`${CODE_EDIT_SERVER} is missing: pnpm --filter @sovereign/code-edit build`)
 const BASH_WRITE = /\bsed\s+-i|\bperl\s+-p?i|>\s*\S+\.(?:ts|tsx|js|json|md)\b|writeFileSync|\bpython3?\s+-\s*<</
 
 function prompt(task, dir) {
@@ -68,7 +71,11 @@ function prompt(task, dir) {
 function mcpConfig(arm, dir) {
   const servers = { codegraph: { type: 'stdio', command: 'codegraph', args: ['serve', '--mcp'] } }
   if (arm.endsWith('-edit')) {
-    servers.code = { type: 'stdio', command: process.execPath, args: [CODE_EDIT_SERVER, '--edit-roots', dir] }
+    servers.code = {
+      type: 'stdio',
+      command: process.execPath,
+      args: ['--liftoff-only', CODE_EDIT_SERVER, '--edit-roots', dir]
+    }
   }
   return { mcpServers: servers }
 }
@@ -126,7 +133,9 @@ function metrics(file) {
       if (ev.usage) {
         m.outputTokens = ev.usage.output_tokens ?? null
         m.inputTokens =
-          (ev.usage.input_tokens ?? 0) + (ev.usage.cache_read_input_tokens ?? 0) + (ev.usage.cache_creation_input_tokens ?? 0)
+          (ev.usage.input_tokens ?? 0) +
+          (ev.usage.cache_read_input_tokens ?? 0) +
+          (ev.usage.cache_creation_input_tokens ?? 0)
       }
     }
   }
@@ -148,6 +157,7 @@ async function runArm(task, arm, dir, index) {
     delete env.ANTHROPIC_BASE_URL
     delete env.ANTHROPIC_API_KEY
   }
+  // prettier-ignore
   const cli = [
     '-p', prompt(task, dir),
     '--model', lane.model,
@@ -166,7 +176,9 @@ async function runArm(task, arm, dir, index) {
   const touched = (await git(dir, 'status', '--porcelain', '--', ...task.tests)).trim() !== ''
   await git(dir, 'checkout', '-q', 'HEAD', '--', ...task.tests)
   const tests = await runTests(dir, task.tests)
-  const changed = (await git(dir, 'status', '--porcelain')).split('\n').filter((l) => l && !l.includes('.codegraph')).length
+  const changed = (await git(dir, 'status', '--porcelain'))
+    .split('\n')
+    .filter((l) => l && !l.includes('.codegraph')).length
   const diffStat = (await git(dir, 'diff', '--shortstat', 'HEAD')).trim()
 
   const record = {
@@ -190,7 +202,9 @@ async function runArm(task, arm, dir, index) {
   )
 }
 
-const tasks = JSON.parse(fs.readFileSync(args.tasks, 'utf8')).filter((t) => !args.only || args.only.split(',').includes(t.id))
+const tasks = JSON.parse(fs.readFileSync(args.tasks, 'utf8')).filter(
+  (t) => !args.only || args.only.split(',').includes(t.id)
+)
 const arms = [`${args.lane}-base`, `${args.lane}-edit`]
 const done = new Set(readJsonl(runsFile).map((r) => `${r.task}:${r.arm}`))
 
@@ -203,8 +217,18 @@ for (const [i, task] of tasks.entries()) {
     const prep = await prepareCheckout({ repo, parent: task.parent, dir })
     await writeTests(repo, task.sha, dir, task.tests)
     await git(dir, 'add', '--', ...task.tests)
-    await git(dir, '-c', 'user.name=eval', '-c', 'user.email=eval@localhost', 'commit', '-qm', 'eval: tests for this task')
-    console.log(`${task.id} prepared in ${Object.values(prep).reduce((a, b) => a + b, 0).toFixed(0)} s`)
+    await git(
+      dir,
+      '-c',
+      'user.name=eval',
+      '-c',
+      'user.email=eval@localhost',
+      'commit',
+      '-qm',
+      'eval: tests for this task'
+    )
+    const seconds = Object.values(prep).reduce((a, b) => a + b, 0)
+    console.log(`${task.id} prepared in ${seconds.toFixed(0)} s`)
     for (const arm of order) await runArm(task, arm, dir, order.indexOf(arm))
   } catch (err) {
     console.error(`${task.id}: ${err.message}`)

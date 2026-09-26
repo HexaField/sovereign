@@ -17,6 +17,20 @@ function readAd4mToken(tokenFile: string): string | null {
   }
 }
 
+/**
+ * The code server's config with `dir` added to its --edit-roots, unless a
+ * root already holds it. A session's own cwd can sit outside every org.
+ */
+export function withEditRoot<T extends { args: string[] }>(server: T, dir: string): T {
+  const at = server.args.indexOf('--edit-roots')
+  if (at === -1) return server
+  const roots = server.args[at + 1].split(path.delimiter).filter(Boolean)
+  if (roots.some((r) => dir === r || dir.startsWith(r + path.sep))) return server
+  const args = [...server.args]
+  args[at + 1] = [...roots, dir].join(path.delimiter)
+  return { ...server, args }
+}
+
 /** The built code-edit MCP server script, or null before `@sovereign/code-edit` is built. */
 export function resolveCodeEditEntry(): string | null {
   try {
@@ -113,15 +127,17 @@ export function claudeCodeConfigFromStore(
 
   // Inject Sovereign's symbol editor (mcp__code__edit, packages/code-edit):
   // replace, replace_in, insert and remove code by symbol name, syntax-checked.
-  // It runs on the node running Sovereign. Edits stay inside the cwd, the
-  // config directory and the org workspaces. Opt out with CODE_EDIT_MCP=off.
+  // It runs on the node running Sovereign, with --liftoff-only as codegraph
+  // runs its own grammars: no V8 WASM out-of-memory, and a faster first parse.
+  // Edits stay inside the cwd, the config directory and the org workspaces
+  // (claude-code.ts adds each session's own cwd). Opt out with CODE_EDIT_MCP=off.
   const codeEditOff = (process.env.CODE_EDIT_MCP ?? '').trim().toLowerCase() === 'off'
   if (!codeEditOff && codeEditEntry) {
     const roots = [...new Set([cwd, configDir, ...orgRoots].filter((r): r is string => !!r))]
     mcpServers['code'] = {
       type: 'stdio',
       command: process.execPath,
-      args: [codeEditEntry, '--edit-roots', roots.join(path.delimiter)],
+      args: ['--liftoff-only', codeEditEntry, '--edit-roots', roots.join(path.delimiter)],
       alwaysLoad: true
     }
   }

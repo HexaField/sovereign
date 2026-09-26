@@ -17,19 +17,34 @@ const DESCRIPTION = `Edit code by naming a symbol instead of quoting its text. R
 - create {code}: make a new file (first op only).
 symbol: name, Container::name or Container.name; add @line when names repeat. An edit that adds a syntax error is rejected. Returns a unified diff, plus callers when a signature changes.`
 
-const op = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('replace'), symbol: z.string(), code: z.string() }),
-  z.object({
-    op: z.literal('replace_in'),
-    symbol: z.string().optional(),
-    find: z.string(),
-    to: z.string().optional(),
-    code: z.string()
-  }),
-  z.object({ op: z.literal('insert'), code: z.string(), after: z.string().optional(), before: z.string().optional() }),
-  z.object({ op: z.literal('remove'), symbol: z.string() }),
-  z.object({ op: z.literal('create'), code: z.string() })
-])
+// Strict objects: a misspelt key is an error, not dropped (a dropped `after`
+// appends at the end of the file, a dropped `dryRun` writes), and the schema
+// says so with additionalProperties: false.
+const op = z.discriminatedUnion(
+  'op',
+  [
+    z.strictObject({ op: z.literal('replace'), symbol: z.string(), code: z.string() }),
+    z.strictObject({
+      op: z.literal('replace_in'),
+      symbol: z.string().optional(),
+      find: z.string(),
+      to: z.string().optional(),
+      code: z.string()
+    }),
+    z.strictObject({
+      op: z.literal('insert'),
+      code: z.string(),
+      after: z.string().optional(),
+      before: z.string().optional()
+    }),
+    z.strictObject({ op: z.literal('remove'), symbol: z.string() }),
+    z.strictObject({ op: z.literal('create'), code: z.string() })
+  ],
+  {
+    error: (iss) =>
+      iss.code === 'invalid_union' ? 'op must be replace, replace_in, insert, remove or create' : undefined
+  }
+)
 
 function argValue(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`)
@@ -45,11 +60,11 @@ server.registerTool(
   'edit',
   {
     description: DESCRIPTION,
-    inputSchema: {
+    inputSchema: z.strictObject({
       file: z.string().describe('Absolute path of the file'),
       ops: z.array(op).min(1),
       dryRun: z.boolean().optional().describe('Report the diff without writing')
-    }
+    })
   },
   async (args) => {
     try {

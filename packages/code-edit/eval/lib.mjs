@@ -73,7 +73,16 @@ export async function prepareCheckout({ repo, parent, dir }) {
   fs.rmSync(dir, { recursive: true, force: true })
   fs.mkdirSync(path.dirname(dir), { recursive: true })
   await step('clone', async () => {
-    const r = await sh('git', ['clone', '-q', '--no-local', '--depth', '1', `--revision=${parent}`, `file://${repo}`, dir])
+    const r = await sh('git', [
+      'clone',
+      '-q',
+      '--no-local',
+      '--depth',
+      '1',
+      `--revision=${parent}`,
+      `file://${repo}`,
+      dir
+    ])
     if (r.code !== 0) throw new Error(`clone: ${r.stderr}`)
   })
   await step('submodules', async () => {
@@ -92,7 +101,9 @@ export async function prepareCheckout({ repo, parent, dir }) {
     // pnpm skips install scripts; borrow native builds from the source checkout.
     for (const pkg of fs.readdirSync(path.join(dir, 'node_modules', '.pnpm'))) {
       const from = path.join(repo, 'node_modules', '.pnpm', pkg)
-      for (const name of fs.existsSync(path.join(from, 'node_modules')) ? walkBuilds(path.join(from, 'node_modules')) : []) {
+      for (const name of fs.existsSync(path.join(from, 'node_modules'))
+        ? walkBuilds(path.join(from, 'node_modules'))
+        : []) {
         const rel = path.relative(from, name)
         const to = path.join(dir, 'node_modules', '.pnpm', pkg, rel)
         if (!fs.existsSync(to)) fs.cpSync(name, to, { recursive: true })
@@ -114,7 +125,9 @@ export async function prepareCheckout({ repo, parent, dir }) {
 function walkBuilds(nm) {
   const out = []
   for (const entry of fs.readdirSync(nm)) {
-    const pkgs = entry.startsWith('@') ? fs.readdirSync(path.join(nm, entry)).map((p) => path.join(nm, entry, p)) : [path.join(nm, entry)]
+    const pkgs = entry.startsWith('@')
+      ? fs.readdirSync(path.join(nm, entry)).map((p) => path.join(nm, entry, p))
+      : [path.join(nm, entry)]
     for (const p of pkgs) {
       const build = path.join(p, 'build')
       if (fs.existsSync(path.join(build, 'Release'))) out.push(build)

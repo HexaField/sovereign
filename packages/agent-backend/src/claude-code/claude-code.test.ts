@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { delimiter, join, resolve } from 'node:path'
 import { createClaudeCodeBackend } from './claude-code.js'
 import { readHistoryLog, historyLogExists } from '../history-log.js'
 
@@ -2118,6 +2118,34 @@ describe('claude-code/spawnSubagent — local model path', () => {
       expect(filePath).not.toContain(cwd)
       // It must be under the configured agentDir's projects/ tree
       expect(filePath).toContain(join(agentDir, 'projects'))
+    }
+  })
+})
+
+describe('claude-code/symbol editor edit roots', () => {
+  it("adds the session's own cwd to the code server's edit roots", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    const cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+    const threadCwd = mkdtempSync(join(tmpdir(), 'sov-cc-thread-'))
+    try {
+      const code = { type: 'stdio', command: 'node', args: ['/x/mcp.js', '--edit-roots', cwd], alwaysLoad: true }
+      const stub = capturingSdkQuery()
+      const backend = createClaudeCodeBackend(
+        { dataDir, cwd, agentDir: join(dataDir, 'agent'), mcpServers: { code } },
+        { sdkQuery: stub }
+      )
+      await backend.createSession('t', { threadKey: 't', cwd: threadCwd })
+      backend.sendMessage('t', 'hello').catch(() => {})
+      for (let i = 0; i < 20 && !stub.captured.options; i++) await new Promise((r) => setImmediate(r))
+
+      expect(stub.captured.options.mcpServers.code.args).toEqual([
+        '/x/mcp.js',
+        '--edit-roots',
+        [cwd, threadCwd].join(delimiter)
+      ])
+      expect(code.args[2]).toBe(cwd) // the shared config stays as it was
+    } finally {
+      for (const d of [dataDir, cwd, threadCwd]) rmSync(d, { recursive: true, force: true })
     }
   })
 })
