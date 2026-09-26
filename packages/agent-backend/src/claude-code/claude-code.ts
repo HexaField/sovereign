@@ -67,7 +67,12 @@ import {
 } from './history.js'
 import { dispatchSdkMessage } from './events.js'
 import { defaultAgentDir, projectsDirForCwd, sessionJsonlPath } from './path-encoding.js'
-import { ensureAd4mSkill, ensureDefaultSubagentFile, ensureLayeredContextFile } from './personality.js'
+import {
+  ensureAd4mSkill,
+  ensureDefaultSubagentFile,
+  ensureLayeredContextFile,
+  findUnreachableAgentModels
+} from './personality.js'
 import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, ToolPolicy } from './types.js'
 import { createContextFilter } from './context-filter.js'
 import type { ContextFilterConfig } from './context-filter.js'
@@ -172,8 +177,9 @@ function familyForModel(model: string | null | undefined): string | null {
   const bare = bareModelName(model)
   const inCatalog = MODEL_CATALOG.find((c) => c.versions.some((v) => v.id === bare))
   if (inCatalog) return inCatalog.family
-  const m = /^claude-(fable|opus|sonnet|haiku)/.exec(bare)
-  return m ? m[1] : null
+  // Also bare aliases the catalog lacks (`fable`, `opus[1m]`).
+  const m = /^claude-(fable|opus|sonnet|haiku)|^(fable|opus|sonnet|haiku)\b/.exec(bare)
+  return m ? (m[1] ?? m[2]) : null
 }
 
 /**
@@ -455,13 +461,21 @@ export function createClaudeCodeBackend(
   }
   const query = deps.sdkQuery ?? sdkQuery
 
+  // Agent definitions that name a model a Claude session cannot reach fail
+  // with HTTP 404 on every call — say so at startup. The check never throws.
+  const initAgentDir = initConfig.agentDir ?? defaultAgentDir(home)
+  for (const a of findUnreachableAgentModels(initAgentDir)) {
+    console.warn(
+      `[claude-code] agent "${a.name}" (${a.file}) names model "${a.model}": Claude sessions send subagent calls to Anthropic, so every call to it fails with HTTP 404. Use a Claude model or "inherit".`
+    )
+  }
+
   // Workspace-local seed files — best-effort, never fatal. The global
   // personality (~/.claude/CLAUDE.md) is owned by the personality compiler
   // in bootstrap; only the layered-context file and default subagent get
   // seeded here.
   try {
     const initCwd = initConfig.cwd ?? process.cwd()
-    const initAgentDir = initConfig.agentDir ?? defaultAgentDir(home)
     fs.mkdirSync(initCwd, { recursive: true })
     ensureLayeredContextFile(initCwd)
     ensureDefaultSubagentFile(initCwd)

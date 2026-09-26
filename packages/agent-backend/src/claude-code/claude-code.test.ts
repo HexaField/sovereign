@@ -48,6 +48,28 @@ describe('claude-code/createClaudeCodeBackend', () => {
     rmSync(cwd, { recursive: true, force: true })
   })
 
+  it('warns at startup about agent definitions a Claude session cannot reach', () => {
+    const agents = join(dataDir, 'agent', 'agents')
+    mkdirSync(agents, { recursive: true })
+    writeFileSync(join(agents, 'local.md'), '---\nname: local-helper\nmodel: qwen3.8-27b\ndescription: d\n---\nbody\n')
+    writeFileSync(
+      join(agents, 'claude.md'),
+      '---\nname: claude-helper\nmodel: claude-opus-5-5\ndescription: d\n---\nbody\n'
+    )
+    writeFileSync(join(agents, 'alias.md'), '---\nname: alias-helper\nmodel: sonnet\ndescription: d\n---\nbody\n')
+    writeFileSync(join(agents, 'fable.md'), '---\nname: fable-helper\nmodel: fable\ndescription: d\n---\nbody\n')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stubSdkQuery() })
+      const msgs = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('HTTP 404'))
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0]).toContain('"local-helper"')
+      expect(msgs[0]).toContain('"qwen3.8-27b"')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('declares the right capabilities', () => {
     const backend = createClaudeCodeBackend(
       { dataDir, cwd, agentDir: join(dataDir, 'agent') },
@@ -1788,6 +1810,11 @@ describe('claude-code/litellm env injection', () => {
     // Claude models must not get env override — they use OAuth from ~/.claude
     const envBase = opts.env?.ANTHROPIC_BASE_URL
     expect(envBase).toBeUndefined()
+  })
+
+  it('does NOT inject env for the bare fable alias — it names a Claude model', async () => {
+    const opts = await captureOptionsForModel('fable', { url: 'http://localhost:4000', apiKey: 'litellm' })
+    expect(opts.env?.ANTHROPIC_BASE_URL).toBeUndefined()
   })
 
   it('does NOT inject env when litellm is not configured', async () => {
