@@ -222,7 +222,7 @@ describe('§4.4 WorkSection', () => {
     })
   })
 
-  describe('GraphCoder symbol edits (mcp__graphcoder__edit)', () => {
+  describe('symbol edits (mcp__code__edit)', () => {
     const REPORT = [
       'Edited packages/chat/src/chat.ts',
       'replace createChatModule::handleSend · lines 765–814 → 765–816',
@@ -239,7 +239,7 @@ describe('§4.4 WorkSection', () => {
     ].join('\n')
 
     it('shares the edit icon with the built-in Edit', () => {
-      expect(normalizeToolName('mcp__graphcoder__edit')).toBe('edit')
+      expect(normalizeToolName('mcp__code__edit')).toBe('edit')
     })
 
     it('summarises the file and each op for the collapsed row', () => {
@@ -281,7 +281,7 @@ describe('§4.4 WorkSection', () => {
       })
     })
 
-    // Reports exactly as GraphCoder's editFile writes them.
+    // Reports exactly as code-edit's editFile writes them.
     const REAL_REPORT = [
       'Edited src/greet.ts',
       'replace greet · lines 1–3 → 1–3',

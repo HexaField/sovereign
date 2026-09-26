@@ -1,25 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import type { ConfigStore } from '@sovereign/config'
-import { claudeCodeConfigFromStore, claudeCodeConfigGetter } from './config.js'
+import { claudeCodeConfigFromStore, claudeCodeConfigGetter, resolveCodeEditEntry } from './config.js'
 
 const store = (values: Record<string, unknown> = {}) =>
   ({ get: (key: string) => values[key] }) as unknown as ConfigStore
 
-const ENV_KEYS = ['PATH', 'GRAPHCODER_MCP', 'GRAPHCODER_MCP_CMD', 'SEMBLE_MCP', 'CODEGRAPH_MCP'] as const
+const ENTRY = '/opt/sovereign/packages/code-edit/dist/mcp.js'
+const ENV_KEYS = ['CODE_EDIT_MCP', 'SEMBLE_MCP', 'SEMBLE_MCP_CMD', 'CODEGRAPH_MCP', 'CODEGRAPH_MCP_CMD'] as const
 let saved: Record<string, string | undefined>
-let bin: string
 
 beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
-  bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-config-'))
-  process.env.PATH = bin
   process.env.SEMBLE_MCP = 'off'
   process.env.CODEGRAPH_MCP = 'off'
-  delete process.env.GRAPHCODER_MCP
-  delete process.env.GRAPHCODER_MCP_CMD
+  delete process.env.CODE_EDIT_MCP
+  delete process.env.SEMBLE_MCP_CMD
+  delete process.env.CODEGRAPH_MCP_CMD
 })
 
 afterEach(() => {
@@ -27,95 +25,58 @@ afterEach(() => {
     if (saved[k] === undefined) delete process.env[k]
     else process.env[k] = saved[k]
   }
-  fs.rmSync(bin, { recursive: true, force: true })
 })
 
-function installGraphcoder(): void {
-  const exe = path.join(bin, 'graphcoder-mcp')
-  fs.writeFileSync(exe, '#!/bin/sh\n')
-  fs.chmodSync(exe, 0o755)
-}
-
-describe('graphcoder MCP injection', () => {
-  it('registers only the edit tool, bounded to the workspace and config directories', () => {
-    installGraphcoder()
-    const cfg = claudeCodeConfigFromStore(store({ 'workspace.root': '/w' }), '/data', '/cfg')
-    expect(cfg.mcpServers?.graphcoder).toEqual({
+describe('code-edit MCP injection', () => {
+  it('runs the symbol editor on the node running Sovereign, bounded to the cwd and config directory', () => {
+    const cfg = claudeCodeConfigFromStore(store({ 'workspace.root': '/w' }), '/data', '/cfg', [], ENTRY)
+    expect(cfg.mcpServers?.code).toEqual({
       type: 'stdio',
-      command: 'graphcoder-mcp',
-      args: ['--tools', 'edit', '--edit-roots', `/w${path.delimiter}/cfg`],
+      command: process.execPath,
+      args: [ENTRY, '--edit-roots', `/w${path.delimiter}/cfg`],
       alwaysLoad: true
     })
   })
 
   it("lets edits reach every org's workspace when the cwd is the config directory", () => {
-    installGraphcoder()
     // As deployed: sessions start in the config directory; repos live in the org workspaces.
     const orgs = ['/home/x/.sovereign', '/home/x/workspaces/coasys']
     const getConfig = claudeCodeConfigGetter(
       store({ 'agentBackend.claudeCode.cwd': '/home/x/.sovereign' }),
       '/data',
       '/home/x/.sovereign',
-      () => orgs
+      () => orgs,
+      ENTRY
     )
-    const roots = () => (getConfig().mcpServers!.graphcoder as { args: string[] }).args.slice(-1)[0]
+    const roots = () => (getConfig().mcpServers!.code as { args: string[] }).args.slice(-1)[0]
     expect(roots()).toBe(['/home/x/.sovereign', '/home/x/workspaces/coasys'].join(path.delimiter))
     orgs.push('/home/x/workspaces/hexafield')
     expect(roots()).toContain('/home/x/workspaces/hexafield')
   })
 
-  it('stays out when graphcoder-mcp is not installed, or when opted out', () => {
-    expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
-    installGraphcoder()
-    fs.chmodSync(path.join(bin, 'graphcoder-mcp'), 0o644)
-    expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
-    fs.chmodSync(path.join(bin, 'graphcoder-mcp'), 0o755)
-    process.env.GRAPHCODER_MCP = 'off'
-    expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
+  it('stays out before the package is built, and when opted out', () => {
+    expect(claudeCodeConfigFromStore(store(), '/data', undefined, [], null).mcpServers?.code).toBeUndefined()
+    process.env.CODE_EDIT_MCP = 'off'
+    expect(claudeCodeConfigFromStore(store(), '/data', undefined, [], ENTRY).mcpServers?.code).toBeUndefined()
   })
 
-  it('ignores relative PATH entries and a directory that carries the name', () => {
-    const cwd = process.cwd()
-    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-work-'))
-    try {
-      // A relative entry names a different directory in every session's cwd.
-      fs.writeFileSync(path.join(work, 'graphcoder-mcp'), '#!/bin/sh\n', { mode: 0o755 })
-      process.chdir(work)
-      process.env.PATH = `.${path.delimiter}${bin}`
-      expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
-      fs.mkdirSync(path.join(bin, 'graphcoder-mcp'))
-      expect(claudeCodeConfigFromStore(store(), '/data').mcpServers?.graphcoder).toBeUndefined()
-    } finally {
-      process.chdir(cwd)
-      fs.rmSync(work, { recursive: true, force: true })
-    }
+  it("resolves the entry to the package's built server script, or null before a build", () => {
+    const entry = resolveCodeEditEntry()
+    if (entry === null) return
+    expect(entry.endsWith(path.join('code-edit', 'dist', 'mcp.js'))).toBe(true)
+    expect(fs.existsSync(entry)).toBe(true)
   })
+})
 
+describe('MCP launch overrides', () => {
   it('keeps a quoted argument of a custom command whole', () => {
-    process.env.GRAPHCODER_MCP_CMD = `node "/opt/graph coder/index.js" --label 'a b'`
-    const server = claudeCodeConfigFromStore(store({ 'workspace.root': '/w' }), '/data').mcpServers?.graphcoder as {
-      command: string
-      args: string[]
-    }
-    expect(server.command).toBe('node')
-    expect(server.args).toEqual([
-      '/opt/graph coder/index.js',
-      '--label',
-      'a b',
-      '--tools',
-      'edit',
-      '--edit-roots',
-      '/w'
-    ])
-  })
-
-  it('launches a custom command and keeps its own arguments first', () => {
-    process.env.GRAPHCODER_MCP_CMD = 'node /opt/gc/index.js --verbose'
-    const server = claudeCodeConfigFromStore(store({ 'workspace.root': '/w' }), '/data').mcpServers?.graphcoder as {
-      command: string
-      args: string[]
-    }
-    expect(server.command).toBe('node')
-    expect(server.args).toEqual(['/opt/gc/index.js', '--verbose', '--tools', 'edit', '--edit-roots', '/w'])
+    delete process.env.CODEGRAPH_MCP
+    process.env.CODEGRAPH_MCP_CMD = `node "/opt/code graph/index.js" --label 'a b'`
+    expect(claudeCodeConfigFromStore(store(), '/data', undefined, [], null).mcpServers?.codegraph).toEqual({
+      type: 'stdio',
+      command: 'node',
+      args: ['/opt/code graph/index.js', '--label', 'a b'],
+      alwaysLoad: true
+    })
   })
 })

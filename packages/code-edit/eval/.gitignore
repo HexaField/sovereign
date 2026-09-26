@@ -1,0 +1,4 @@
+# Task lists quote the target repo's commit messages; run transcripts are large.
+tasks.json
+tasks.rejected.json
+results/

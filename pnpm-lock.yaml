@@ -87,6 +87,9 @@ importers:
       '@sovereign/browser':
         specifier: workspace:*
         version: link:../browser
+      '@sovereign/code-edit':
+        specifier: workspace:*
+        version: link:../code-edit
       '@sovereign/config':
         specifier: workspace:*
         version: link:../config
@@ -286,6 +289,21 @@ importers:
       vitest:
         specifier: ^4.0.16
         version: 4.0.16(@types/node@25.0.3)(jiti@2.6.1)(jsdom@28.1.0(@noble/hashes@2.0.1))(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/code-edit:
+    dependencies:
+      '@colbymchenry/codegraph':
+        specifier: 1.5.0
+        version: 1.5.0
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.1
+        version: 1.30.1(zod@4.3.5)
+      diff:
+        specifier: ^8.0.3
+        version: 8.0.3
+      zod:
+        specifier: ^4.3.5
+        version: 4.3.5
 
   packages/code-index:
     dependencies:
@@ -1417,6 +1435,40 @@ packages:
 
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
+    hasBin: true
+
+  '@colbymchenry/codegraph-darwin-arm64@1.5.0':
+    resolution: {integrity: sha512-ptQV1WlEKCDDy0Wl2r/urVGwaczUn5ezjt/Rv22Gj7RnKHAc9pNdU1uvL3gQzvoWJ9q7kmCeo7q6866/ZohbjQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@colbymchenry/codegraph-darwin-x64@1.5.0':
+    resolution: {integrity: sha512-7BUOOxMacLNXmXTQTrjDTZXhbo0o5R5Z19uKjICIau2KxO9oU+Zbk7Bnf4P/JT1T4M41xRuiCJVE1uqBi6cFWA==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@colbymchenry/codegraph-linux-arm64@1.5.0':
+    resolution: {integrity: sha512-Bq5Ggb7PoLF7mnOiGl/UxMrDgrPCAQUMsl7BpMkAxq8FulvVEp7E/GrIQih2YB32vWr18KpN2i2VoRLAHLIDUw==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@colbymchenry/codegraph-linux-x64@1.5.0':
+    resolution: {integrity: sha512-wT1O7NkQoV6zPiq36d1qBqoIHL2ZRnOkFMjQ7JJwWS7KHnP32qHCd/pPaSwl8cNRlGYkYSaX3WVDpz2BaV+Now==}
+    cpu: [x64]
+    os: [linux]
+
+  '@colbymchenry/codegraph-win32-arm64@1.5.0':
+    resolution: {integrity: sha512-cWMJp8BeVLKR1mUVklI3opy9mJL/yrVkvjBqJFXRejM8CCU+UTpPDxDzQuPyywY0qyD0Ru2tjuWT4do7OUcNvg==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@colbymchenry/codegraph-win32-x64@1.5.0':
+    resolution: {integrity: sha512-45gycJ+t153vpLEVkXChEySG1Ok5zqCgiBeonLe5V7Jxt1w+MF2vG00qexTC0pBWTmHSeMW4Q8d47nVMiC8ciQ==}
+    cpu: [x64]
+    os: [win32]
+
+  '@colbymchenry/codegraph@1.5.0':
+    resolution: {integrity: sha512-/l1JMVOQ9WGQLrc/IIuAg7Igr944t79/oNCJTcnGkYtIeQx2XFIqI0ho+9Les/Yu4zKfmPU17hIUshD6yP1fKw==}
     hasBin: true
 
   '@csstools/color-helpers@6.0.2':
@@ -7375,6 +7427,33 @@ snapshots:
   '@bramus/specificity@2.4.2':
     dependencies:
       css-tree: 3.2.1
+
+  '@colbymchenry/codegraph-darwin-arm64@1.5.0':
+    optional: true
+
+  '@colbymchenry/codegraph-darwin-x64@1.5.0':
+    optional: true
+
+  '@colbymchenry/codegraph-linux-arm64@1.5.0':
+    optional: true
+
+  '@colbymchenry/codegraph-linux-x64@1.5.0':
+    optional: true
+
+  '@colbymchenry/codegraph-win32-arm64@1.5.0':
+    optional: true
+
+  '@colbymchenry/codegraph-win32-x64@1.5.0':
+    optional: true
+
+  '@colbymchenry/codegraph@1.5.0':
+    optionalDependencies:
+      '@colbymchenry/codegraph-darwin-arm64': 1.5.0
+      '@colbymchenry/codegraph-darwin-x64': 1.5.0
+      '@colbymchenry/codegraph-linux-arm64': 1.5.0
+      '@colbymchenry/codegraph-linux-x64': 1.5.0
+      '@colbymchenry/codegraph-win32-arm64': 1.5.0
+      '@colbymchenry/codegraph-win32-x64': 1.5.0
 
   '@csstools/color-helpers@6.0.2': {}
 
