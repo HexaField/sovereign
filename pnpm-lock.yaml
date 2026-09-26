@@ -287,6 +287,28 @@ importers:
         specifier: ^4.0.16
         version: 4.0.16(@types/node@25.0.3)(jiti@2.6.1)(jsdom@28.1.0(@noble/hashes@2.0.1))(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
 
+  packages/code-index:
+    dependencies:
+      '@sovereign/core':
+        specifier: workspace:*
+        version: link:../core
+      '@sovereign/files':
+        specifier: workspace:*
+        version: link:../files
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
+      '@types/supertest':
+        specifier: ^7.2.0
+        version: 7.2.0
+      supertest:
+        specifier: ^7.2.2
+        version: 7.2.2
+
   packages/config:
     dependencies:
       '@sovereign/core':
@@ -680,6 +702,9 @@ importers:
       '@sovereign/chat':
         specifier: workspace:*
         version: link:../chat
+      '@sovereign/code-index':
+        specifier: workspace:*
+        version: link:../code-index
       '@sovereign/config':
         specifier: workspace:*
         version: link:../config

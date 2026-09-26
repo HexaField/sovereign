@@ -14,6 +14,16 @@ pnpm install && pnpm run build                  # build:vendor compiles core fir
 
 To move the pin: `cd vendor/coasys/ad4m && git fetch && git checkout <commit>`, then commit the updated gitlink in the superproject.
 
+### A new git worktree of this repo
+
+A fresh `git worktree add` lacks three untracked pieces that the build and tests need:
+
+- **The submodule.** `git submodule update --init --reference <main-checkout>/.git/modules/vendor/coasys/ad4m vendor/coasys/ad4m` borrows objects from the main checkout instead of cloning ad4m.
+- **Dev TLS certs.** `ln -s <main-checkout>/.certs .certs` â€” the client build reads `.certs/localhost.key`.
+- **node-pty's native binary.** pnpm 10 skips install scripts, so copy `node_modules/.pnpm/node-pty@*/node_modules/node-pty/build/` from the main checkout. Without it the terminal tests and every test that imports `bootstrapServer` fail on `pty.node`.
+
+Then `pnpm install && pnpm run build`.
+
 ## Service lifecycle
 
 Sovereign runs under a supervisor (a systemd user unit, `sovereign.service`, on Linux). `bin/sovereign` drives it: `build`, `status`, `start`, `stop`, `restart`, `logs`, `health`. Production serves the compiled `packages/server/dist/index.js`, so source edits change nothing until `bin/sovereign build` runs.
@@ -331,3 +341,14 @@ The `PATCH /api/threads/:key/model` route and `update()` were already correct â€
 - **Deleting or moving a directory reports every entry it held**, as a per-file watcher would. Consumers matching on an exact path (the file panel's open file) depend on this. The file panel also treats a deleted parent directory as deleting the open file (`panels/file-events.ts`), which covers macOS, where the recursive watch reports only the directory.
 - **Known limit:** the kernel queues at most `fs.inotify.max_queued_events` (16,384 by default) unread events and drops the rest silently. A burst of tens of thousands of changes, such as a huge checkout, can lose individual events. The file panel refreshes the whole root tree on any event, so its tree still converges.
 - On `ENOSPC` the watcher logs once with the current limit and once more with how many directories it left unwatched. It does not log per path.
+
+## Code index (`packages/code-index/`)
+
+Keeps every codegraph index under the org roots in step with the files on disk. Agents trust `codegraph_explore` output as already-read source, so a stale index misleads them.
+
+- **Trigger.** The files watcher's `file.changed` / `file.deleted` events. A burst of changes runs one `codegraph sync -q <checkout>` for the deepest indexed checkout that holds the path: 250 ms after the last change, or at most 3 s under continuous writes. `sync` reconciles the whole index against the filesystem (stat, then hash), so commits, checkouts, pulls and rebases land too, and a lost event heals at the next one. A full pass runs every 10 minutes as a backstop.
+- **Which checkouts.** Directories up to two levels below an org root that hold `.codegraph/codegraph.db`, plus the linked worktrees of those repos (`git worktree list`). A worktree without an index gets `codegraph init` automatically. Test for `codegraph.db`, never for `.codegraph/` alone: ad4m and WE commit `.codegraph/.gitignore`, so every checkout of them has the directory. Discovery reruns on `worktree.*`, `project.*` and `org.*` events, on a new directory near the top of an org root, and every 5 minutes.
+- **The CLI, not the library.** Each job spawns the installed `codegraph` (about 0.1 s when nothing changed). That keeps codegraph's bundled Node, its native kernel and its `--liftoff-only` WASM flag, follows `codegraph upgrade` with no Sovereign rebuild, and keeps a crash out of the server process. At most two jobs run, never two on one checkout, and change-driven jobs go before catch-up.
+- **Only org roots get events.** A checkout outside every org root gets no file events. Add its parent directory as an org.
+- **Surface:** `GET /api/code-index` lists checkouts and state. `POST /api/code-index/sync` with `{ "root"?: string }` forces a pass. The health popover shows a "Code Index" row. `CODEGRAPH_INDEX=off` in the service environment opts out.
+- Each session's codegraph MCP server reads the same SQLite database and sees these writes at once. codegraph starts its own watcher only for the project its MCP server opens at launch, and Sovereign launches sessions from the workspace root, so without this module no process refreshes any index.
