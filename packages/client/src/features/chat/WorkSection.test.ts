@@ -6,6 +6,8 @@ import {
   shouldCollapse,
   getWorkItemStatus,
   normalizeToolName,
+  parseSymbolEditReport,
+  symbolEditSummary,
   WorkSection
 } from './WorkSection.js'
 import type { WorkItem } from '@sovereign/core'
@@ -217,6 +219,65 @@ describe('§4.4 WorkSection', () => {
     })
     it('shows step count badge using Badge with var(--c-step-badge-bg)', () => {
       expect(typeof WorkSection).toBe('function')
+    })
+  })
+
+  describe('GraphCoder symbol edits (mcp__graphcoder__edit)', () => {
+    const REPORT = [
+      'Edited packages/chat/src/chat.ts',
+      'replace createChatModule::handleSend · lines 765–814 → 765–816',
+      'syntax ok',
+      'signature changed: createChatModule::handleSend (text: string) → (text: string, opts?: SendOpts)',
+      '  callers to check: packages/chat/src/routes.ts:41',
+      'Read the file again before using the built-in Edit on it.',
+      '',
+      '@@ -765,3 +765,3 @@',
+      ' async function handleSend(',
+      '-  text: string',
+      '+  text: string, opts?: SendOpts',
+      ' ) {'
+    ].join('\n')
+
+    it('shares the edit icon with the built-in Edit', () => {
+      expect(normalizeToolName('mcp__graphcoder__edit')).toBe('edit')
+    })
+
+    it('summarises the file and each op for the collapsed row', () => {
+      const input = {
+        file: '/home/someone/workspaces/org/repo/packages/chat/src/chat.ts',
+        ops: [
+          { op: 'replace', symbol: 'handleSend' },
+          { op: 'insert', after: 'pumpQueue' },
+          { op: 'replace_in', find: 'x' }
+        ]
+      }
+      expect(symbolEditSummary(input)).toBe('…/chat/src/chat.ts · replace handleSend, insert pumpQueue, replace_in')
+    })
+
+    it('splits the report into notes and a unified diff', () => {
+      const { notes, diff } = parseSymbolEditReport(REPORT)
+      expect(notes).toEqual([
+        'replace createChatModule::handleSend · lines 765–814 → 765–816',
+        'syntax ok',
+        'signature changed: createChatModule::handleSend (text: string) → (text: string, opts?: SendOpts)',
+        '  callers to check: packages/chat/src/routes.ts:41'
+      ])
+      expect(diff.map((l) => l.type)).toEqual(['hunk', 'context', 'remove', 'add', 'context'])
+      expect(diff[2]).toEqual({ type: 'remove', prefix: '- ', text: '  text: string' })
+      expect(diff[3]).toEqual({ type: 'add', prefix: '+ ', text: '  text: string, opts?: SendOpts' })
+    })
+
+    it('keeps an error report whole as notes', () => {
+      const err =
+        "remove: No symbol 'gret' in demo.ts. Did you mean 'greet'? Symbols:\n  greet (function, line 1)\nNothing was written."
+      expect(parseSymbolEditReport(err)).toEqual({
+        notes: [
+          "remove: No symbol 'gret' in demo.ts. Did you mean 'greet'? Symbols:",
+          '  greet (function, line 1)',
+          'Nothing was written.'
+        ],
+        diff: []
+      })
     })
   })
 })

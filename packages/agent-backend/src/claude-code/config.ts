@@ -16,6 +16,19 @@ function readAd4mToken(tokenFile: string): string | null {
   }
 }
 
+/** True when an executable named `name` sits in a PATH directory. */
+function onPath(name: string): boolean {
+  return (process.env.PATH ?? '').split(path.delimiter).some((dir) => {
+    if (!dir) return false
+    try {
+      fs.accessSync(path.join(dir, name), fs.constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
+  })
+}
+
 export function claudeCodeConfigFromStore(
   configStore: ConfigStore,
   dataDir: string,
@@ -91,6 +104,25 @@ export function claudeCodeConfigFromStore(
     configStore.get<string>('agentBackend.claudeCode.cwd')?.trim() ||
     configStore.get<string>('workspace.root')?.trim() ||
     path.join(home, 'workspaces')
+
+  // Inject GraphCoder's symbol editor (mcp__graphcoder__edit): replace,
+  // replace_in, insert and remove code by symbol name, syntax-checked. Only
+  // when `graphcoder-mcp` is installed; `--tools edit` keeps GraphCoder's
+  // annotation tools out of every session's context. Edits stay inside the
+  // workspace and config directories. Opt out with GRAPHCODER_MCP=off;
+  // override the launch command with GRAPHCODER_MCP_CMD.
+  const graphcoderOff = (process.env.GRAPHCODER_MCP ?? '').trim().toLowerCase() === 'off'
+  const graphcoderCmd = (process.env.GRAPHCODER_MCP_CMD ?? '').trim()
+  const graphcoder = graphcoderCmd ? graphcoderCmd.split(/\s+/) : onPath('graphcoder-mcp') ? ['graphcoder-mcp'] : []
+  if (!graphcoderOff && graphcoder.length > 0) {
+    const roots = [cwd, configDir].filter((r): r is string => !!r)
+    mcpServers['graphcoder'] = {
+      type: 'stdio',
+      command: graphcoder[0],
+      args: [...graphcoder.slice(1), '--tools', 'edit', '--edit-roots', roots.join(path.delimiter)],
+      alwaysLoad: true
+    }
+  }
   const agentDir = configStore.get<string>('agentBackend.claudeCode.agentDir')?.trim() || defaultAgentDir(home)
   const defaultModel = configStore.get<string>('agentBackend.claudeCode.defaultModel')?.trim() || undefined
   const modelContextWindows =

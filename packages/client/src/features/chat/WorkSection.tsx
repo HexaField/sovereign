@@ -600,7 +600,7 @@ function ToolCallSummary(props: { name: string; input: Record<string, unknown> }
       case 'write':
         return shortPath(str(inp.path || inp.file_path))
       case 'edit':
-        return shortPath(str(inp.path || inp.file_path))
+        return Array.isArray(inp.ops) ? symbolEditSummary(inp) : shortPath(str(inp.path || inp.file_path))
       case 'exec':
         return truncate(str(inp.command), 60)
       case 'grep':
@@ -659,7 +659,12 @@ function ToolDetailView(props: { name: string; input: Record<string, unknown>; r
 
   return (
     <div class="space-y-2">
-      {props.name === 'edit' && <EditDetail input={inp()} />}
+      {props.name === 'edit' &&
+        (Array.isArray(inp().ops) ? (
+          <SymbolEditDetail input={inp()} result={props.resultContent} />
+        ) : (
+          <EditDetail input={inp()} />
+        ))}
       {props.name === 'exec' && <ExecDetail input={inp()} result={props.resultContent} />}
       {props.name === 'read' && <ReadDetail input={inp()} result={props.resultContent} />}
       {props.name === 'write' && <WriteDetail input={inp()} />}
@@ -698,30 +703,61 @@ function EditDetail(props: { input: Record<string, unknown> }) {
           {shortPath(filePath())}
         </div>
       </Show>
-      <div
-        class="max-h-[300px] overflow-x-auto overflow-y-auto rounded p-2 font-mono text-[11px] leading-relaxed"
-        style={{ background: 'rgba(0,0,0,0.3)' }}
-      >
-        <For each={buildDiffLines(oldText(), newText())}>
-          {(line) => (
-            <div
-              class="whitespace-pre"
-              style={{
-                color: line.type === 'remove' ? '#f87171' : line.type === 'add' ? '#4ade80' : 'var(--c-text-muted)',
-                background:
-                  line.type === 'remove'
-                    ? 'rgba(239,68,68,0.1)'
-                    : line.type === 'add'
-                      ? 'rgba(34,197,94,0.1)'
-                      : 'transparent'
-              }}
-            >
-              {line.prefix}
-              {line.text}
-            </div>
-          )}
-        </For>
+      <DiffView lines={buildDiffLines(oldText(), newText())} />
+    </div>
+  )
+}
+
+function DiffView(props: { lines: DiffLine[] }) {
+  return (
+    <div
+      class="max-h-[300px] overflow-x-auto overflow-y-auto rounded p-2 font-mono text-[11px] leading-relaxed"
+      style={{ background: 'rgba(0,0,0,0.3)' }}
+    >
+      <For each={props.lines}>
+        {(line) => (
+          <div
+            class="whitespace-pre"
+            style={{
+              color: line.type === 'remove' ? '#f87171' : line.type === 'add' ? '#4ade80' : 'var(--c-text-muted)',
+              background:
+                line.type === 'remove'
+                  ? 'rgba(239,68,68,0.1)'
+                  : line.type === 'add'
+                    ? 'rgba(34,197,94,0.1)'
+                    : 'transparent',
+              opacity: line.type === 'hunk' ? 0.6 : 1
+            }}
+          >
+            {line.prefix}
+            {line.text}
+          </div>
+        )}
+      </For>
+    </div>
+  )
+}
+
+/** GraphCoder's `edit` (mcp__graphcoder__edit): the ops, the report's notes, and its unified diff. */
+function SymbolEditDetail(props: { input: Record<string, unknown>; result?: string }) {
+  const report = () => parseSymbolEditReport(props.result ?? '')
+  return (
+    <div>
+      <div class="mb-1 font-mono text-[10px]" style={{ color: 'var(--c-accent)' }}>
+        {shortPath(str(props.input.file))}
       </div>
+      <For each={report().notes}>
+        {(note) => (
+          <div class="font-mono text-[10px] whitespace-pre-wrap" style={{ color: 'var(--c-text-muted)' }}>
+            {note}
+          </div>
+        )}
+      </For>
+      <Show when={report().diff.length > 0}>
+        <div class="mt-1">
+          <DiffView lines={report().diff} />
+        </div>
+      </Show>
     </div>
   )
 }
@@ -1245,9 +1281,35 @@ function shortPath(p: string): string {
 }
 
 interface DiffLine {
-  type: 'context' | 'remove' | 'add'
+  type: 'context' | 'remove' | 'add' | 'hunk'
   prefix: string
   text: string
+}
+
+/** `replace handleSend, insert` — what a symbol edit call does, for the collapsed row. */
+export function symbolEditSummary(input: Record<string, unknown>): string {
+  const ops = (input.ops as Array<Record<string, unknown>>)
+    .map((o) => [o.op, o.symbol ?? o.after ?? o.before].filter(Boolean).join(' '))
+    .join(', ')
+  return truncate(`${shortPath(str(input.file))} · ${ops}`, 90)
+}
+
+/**
+ * Split a symbol edit's report into its notes (op lines, warnings, callers)
+ * and its unified diff. The "Edited <file>" title is dropped (the file shows
+ * above); an error report has no title and no diff, so all of it is notes.
+ */
+export function parseSymbolEditReport(text: string): { notes: string[]; diff: DiffLine[] } {
+  const lines = text.split('\n')
+  const at = lines.findIndex((l) => l.startsWith('@@ '))
+  const head = (at === -1 ? lines : lines.slice(0, at)).filter((l) => l.trim() && !l.startsWith('Read the file again'))
+  const diff = (at === -1 ? [] : lines.slice(at)).map((l): DiffLine => {
+    if (l.startsWith('@@')) return { type: 'hunk', prefix: '', text: l }
+    if (l.startsWith('+')) return { type: 'add', prefix: '+ ', text: l.slice(1) }
+    if (l.startsWith('-')) return { type: 'remove', prefix: '- ', text: l.slice(1) }
+    return { type: 'context', prefix: '  ', text: l.slice(1) }
+  })
+  return { notes: /^(?:Edited|Created) /.test(head[0] ?? '') ? head.slice(1) : head, diff }
 }
 
 function buildDiffLines(oldText: string, newText: string): DiffLine[] {
