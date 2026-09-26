@@ -218,8 +218,8 @@ export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
-/** Highest level we expose. Used as the new-thread default. */
-export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'max'
+/** New-thread default. A thread keeps whatever level it is set to. */
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'medium'
 
 /**
  * One selectable model in the backend's curated catalog. Lets the UI offer a
