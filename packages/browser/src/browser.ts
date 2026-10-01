@@ -60,6 +60,9 @@ const CHROME_CANDIDATES = [
   })()
 ].filter(Boolean) as string[]
 
+/** Thrown when no Chrome/Chromium binary exists, so callers can answer 503. */
+export class BrowserUnavailableError extends Error {}
+
 /** Locate a Chrome/Chromium binary. Returns the path or null when absent. */
 function findChrome(): string | null {
   for (const candidate of CHROME_CANDIDATES) {
@@ -382,6 +385,34 @@ export function createBrowserService(dataDir: string, config: BrowserManagerConf
     return out
   }
 
+  // A fresh headless browser per print: the shared one may run headed (no PDF
+  // support there) and must not see content from an export.
+  async function printPdf(html: string): Promise<Buffer> {
+    if (!executablePath) executablePath = findChrome()
+    if (!executablePath) {
+      throw new BrowserUnavailableError(
+        `browser: no Chrome/Chromium binary found. Install Chromium or set CHROME_PATH.\n` +
+          `  Searched: ${CHROME_CANDIDATES.join(', ')}`
+      )
+    }
+    const browser = await chromium.launch({ executablePath, headless: true })
+    try {
+      const context = await browser.newContext({ javaScriptEnabled: false })
+      const page = await context.newPage()
+      await page.route('**/*', (route) =>
+        route.request().url().startsWith('data:') ? route.continue() : route.abort()
+      )
+      await page.setContent(html, { waitUntil: 'load' })
+      return await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '18mm', bottom: '18mm', left: '16mm', right: '16mm' }
+      })
+    } finally {
+      await browser.close().catch(() => {})
+    }
+  }
+
   async function dispose(): Promise<void> {
     for (const id of sessions.keys()) {
       try {
@@ -400,5 +431,5 @@ export function createBrowserService(dataDir: string, config: BrowserManagerConf
     sharedBrowser = null
   }
 
-  return { open, act, close, list, dispose }
+  return { open, act, close, list, printPdf, dispose }
 }

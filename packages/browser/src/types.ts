@@ -76,6 +76,9 @@ export interface BrowserService {
   act(sessionId: string, action: BrowserAct): Promise<BrowserActResult>
   close(sessionId: string): Promise<void>
   list(): BrowserSessionSummary[]
+  /** Print an HTML document to PDF in a throwaway headless browser. Scripts
+   *  stay off and every request except `data:` URLs is blocked. */
+  printPdf(html: string): Promise<Buffer>
   /** Tear everything down (used on shutdown). */
   dispose(): Promise<void>
 }

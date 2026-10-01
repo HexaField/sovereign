@@ -343,6 +343,10 @@ Two server mechanisms interrupt a Claude Code turn; the transcript shows the sam
 - **Thread context window.** `POST`/`PATCH /api/threads` pass `contextWindow` to the session (`applyContextWindow`), also before the first message. Before, it reached the session only with an explicit `backend` on create or via `PATCH …/context-window`.
 - **Context window default.** With no per-thread or configured window, `contextWindowFor` uses the model's native window: 1M from Opus/Sonnet 4.6 on and for any `[1m]` id, 200K for Haiku, older models and non-Claude models. The old flat 200K default made 1M sessions look several times full and recycle on every cooldown.
 
+## PDF export (`packages/server/src/routes/export-pdf.ts`)
+
+`POST /api/export/pdf` takes `{ markdown }`, renders it with `marked` and prints it through `BrowserService.printPdf`: a fresh headless Chrome per call, JavaScript off, every request except `data:` URLs blocked, so remote images in a message never load. No Chrome → 503 (`BrowserUnavailableError`). The chat's thread and message export menus call it (`packages/client/src/features/chat/export.ts`).
+
 ## API traps
 
 - **Thread history** (`GET /api/threads/:threadId/history`) comes from the chat routes, which mount before the threads routes. Its 5 s response cache drops a thread's entry on every `chat.turn` and `chat.message.sent`, so readers without an SSE stream still see new turns.

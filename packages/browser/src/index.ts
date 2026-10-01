@@ -1,4 +1,4 @@
-export { createBrowserService } from './browser.js'
+export { createBrowserService, BrowserUnavailableError } from './browser.js'
 export type {
   BrowserService,
   BrowserOpenOptions,
