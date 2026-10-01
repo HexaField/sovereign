@@ -99,7 +99,8 @@ import {
   registerPresenceWs,
   wirePresenceOrchestrator
 } from '@sovereign/thread-presence'
-import { createBrowserService } from '@sovereign/browser'
+import { createBrowserService, BrowserUnavailableError } from '@sovereign/browser'
+import { createExportRoutes } from './routes/export-pdf.js'
 import { createAd4mService } from '@sovereign/ad4m'
 import {
   createPresenceModule,
@@ -448,9 +449,13 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       list() {
         return []
       },
+      async printPdf() {
+        throw new BrowserUnavailableError('browser: service unavailable (init failed)')
+      },
       async dispose() {}
     }
   }
+  app.use(createExportRoutes(browserService))
 
   // AD4M integration (optional — only if host configured)
   const ad4mService = cfg.ad4m.host
