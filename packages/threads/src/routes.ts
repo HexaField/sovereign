@@ -103,6 +103,17 @@ export function createThreadRoutes(
     return b as AgentBackend
   }
 
+  /** Give a thread's session its context window. The session may not exist
+   *  yet (it starts on the first message); the backend keeps the value for it. */
+  async function applyContextWindow(threadKey: string, value: number | undefined): Promise<void> {
+    const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
+    try {
+      await backendForSession(sessionKey)?.setSessionContextWindow?.(sessionKey, value)
+    } catch {
+      /* best-effort — the thread record still holds the value */
+    }
+  }
+
   function defaultBackend(): AgentBackend | null {
     const b = opts?.backend
     if (!b) return null
@@ -345,6 +356,8 @@ export function createThreadRoutes(
           console.error(`[threads] failed to bind thread "${thread.id}" to backend "${backendKind}":`, err.message)
         }
       }
+    } else if (contextWindow) {
+      await applyContextWindow(thread.id, contextWindow)
     }
     res.status(201).json({ thread })
   })
@@ -355,7 +368,7 @@ export function createThreadRoutes(
     res.json({ success: true })
   })
 
-  router.patch('/api/threads/:key', (req, res) => {
+  router.patch('/api/threads/:key', async (req, res) => {
     const {
       label,
       orgId: legacyOrgId,
@@ -413,6 +426,7 @@ export function createThreadRoutes(
       return res.status(400).json({ error: (err as Error).message })
     }
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
+    if (bodyContextWindow !== undefined) await applyContextWindow(thread.id, contextWindow)
     res.json({ thread })
   })
 
@@ -830,15 +844,7 @@ export function createThreadRoutes(
     if (!thread) return res.status(404).json({ error: 'Thread not found' })
     const value = typeof contextWindow === 'number' && contextWindow > 0 ? contextWindow : undefined
     threadManager.update(threadKey, { contextWindow: value })
-    try {
-      const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
-      const backend = backendForSession(sessionKey)
-      if (backend?.setSessionContextWindow) {
-        await backend.setSessionContextWindow(sessionKey, value)
-      }
-    } catch {
-      /* best-effort — session may not exist yet */
-    }
+    await applyContextWindow(threadKey, value)
     res.json({ success: true, contextWindow: value, thread: { ...thread, contextWindow: value } })
   })
 

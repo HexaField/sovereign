@@ -95,6 +95,13 @@ describe('Scheduler', () => {
     expect(dueEvents.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('does not fire a new cron job before its first scheduled time', () => {
+    // Daily at 04:00 UTC: whatever the time now, the first run lies ahead.
+    scheduler.add(makeJob({ schedule: { kind: 'cron', expr: '0 4 * * *', tz: 'UTC' } }))
+    scheduler.tick()
+    expect(events.filter((e) => e.type === 'scheduler.job.due')).toHaveLength(0)
+  })
+
   it('emits scheduler.job.started when a job starts', () => {
     scheduler.add(makeJob({ schedule: { kind: 'interval', everyMs: 1, anchorMs: 0 } }))
     scheduler.tick()

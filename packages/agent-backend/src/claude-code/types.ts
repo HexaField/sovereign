@@ -139,6 +139,12 @@ export interface ClaudeSessionState {
   contextFilter?: import('./context-filter.js').ContextFilter
   /** Wall-clock ms of the last successful recycle (Layer 2 rate-limiting). */
   lastRecycleAt?: number
+  /** Context passed the recycle threshold; recycle before the next message. */
+  recycleDue?: boolean
+  /** Background tasks (shells, monitors, agents) still running at the last Stop. */
+  backgroundTaskCount?: number
+  /** Last time subagent activity was reported on this (parent) session. */
+  lastSubagentBeatAt?: number
   /** Count of Layer 2 recycles completed this process lifetime. In-memory
    *  only — intentionally not persisted, resets to 0 across a restart. */
   recycleCount?: number

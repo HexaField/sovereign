@@ -397,8 +397,8 @@ describe('claude-code/createClaudeCodeBackend', () => {
     // totalTokens = "tokens currently filling the context window" — input +
     // cache_read + cache_creation. Drives the UI's `total/contextTokens` bar.
     expect(meta!.totalTokens).toBe(100)
-    // contextTokens is now the model's max window (driven by config).
-    expect(meta!.contextTokens).toBe(200000)
+    // contextTokens is the model's max window: 1M for current Opus.
+    expect(meta!.contextTokens).toBe(1_000_000)
   })
 
   it('lists available models including the default', async () => {
@@ -1092,6 +1092,226 @@ describe('claude-code/auto-recycle trigger on result message', () => {
  * liveQuery.interrupt() emits an extra `result` message that fires a second
  * maybeAutoRecycle before the first recycle updates state.lastRecycleAt.
  */
+/**
+ * An automatic recycle interrupts the session. It must never land inside a
+ * turn: it waits until the next message and runs only if the session is idle.
+ */
+describe('claude-code/auto-recycle waits for the next message', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  /** An SDK whose first query ends a turn with a full context, then stays open until interrupted. */
+  function fullContextSdk() {
+    const queries: Array<{ interrupt: ReturnType<typeof vi.fn>; options: any }> = []
+    let endTurn!: () => void
+    const factory: any = (args: any) => {
+      let release!: () => void
+      const interrupted = new Promise<void>((r) => (release = r))
+      // Like the CLI, the query also ends when its input stream closes.
+      void (async () => {
+        if (args?.prompt && typeof args.prompt !== 'string') for await (const _ of args.prompt) void _
+        release()
+      })()
+      const first = queries.length === 0
+      const turnEnded = new Promise<void>((r) => {
+        if (first) endTurn = r
+      })
+      const gen = (async function* () {
+        if (!first) {
+          await interrupted // later queries stay open, like a live session
+          return
+        }
+        await turnEnded
+        yield {
+          type: 'result',
+          subtype: 'success',
+          result: 'done',
+          usage: {
+            input_tokens: 900_000,
+            output_tokens: 10,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0
+          }
+        }
+        await interrupted
+      })()
+      const interrupt = vi.fn(async () => release())
+      queries.push({ interrupt, options: args?.options })
+      return Object.assign(gen, {
+        interrupt,
+        setPermissionMode: vi.fn(async () => {}),
+        setModel: vi.fn(async () => {}),
+        setMaxTurns: vi.fn(async () => {}),
+        setMaxThinkingTokens: vi.fn(async () => {}),
+        mcpServerStatus: vi.fn(async () => []),
+        setMcpServers: vi.fn(async () => {}),
+        initializationResult: vi.fn(async () => ({})),
+        supportedCommands: vi.fn(async () => []),
+        supportedModels: vi.fn(async () => []),
+        close: vi.fn(() => {})
+      })
+    }
+    return { factory, queries, endTurn: () => endTurn() }
+  }
+
+  async function sessionWithFullTurn() {
+    const sdk = fullContextSdk()
+    const compactions: any[] = []
+    const metrics = {
+      recordToolCall: vi.fn(),
+      recordContextSnapshot: vi.fn(),
+      recordCompaction: vi.fn((c: any) => compactions.push(c)),
+      recordContextStrategy: vi.fn(),
+      recordRecycle: vi.fn()
+    }
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), contextManagement: { recycle: { enabled: true } } },
+      { sdkQuery: sdk.factory, metrics: metrics as any }
+    )
+    await backend.createSession('t', { threadKey: 'r', model: { provider: 'anthropic', model: 'claude-opus-5-5' } })
+    const file = backend.getSessionFilePath!('r')!
+    mkdirSync(dirname(file), { recursive: true })
+    const usage = {
+      input_tokens: 900_000,
+      output_tokens: 10,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0
+    }
+    writeFileSync(
+      file,
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [], usage } }) + '\n'
+    )
+
+    await backend.sendMessage('r', 'first')
+    sdk.endTurn()
+    await new Promise((r) => setTimeout(r, 50))
+    return { backend, sdk, compactions }
+  }
+
+  it('does not interrupt after the turn ends; recycles before the next message instead', async () => {
+    const { backend, sdk, compactions } = await sessionWithFullTurn()
+    // 90% of a 1M window is past the threshold, yet nothing was interrupted.
+    expect(sdk.queries[0].interrupt).not.toHaveBeenCalled()
+    expect(compactions).toHaveLength(0)
+
+    const statuses: string[] = []
+    backend.on('chat.status', (d: any) => statuses.push(d.status))
+    const started = Date.now()
+    await backend.sendMessage('r', 'second')
+    // The idle session's input is closed, not interrupted: interrupt() would
+    // leave its iterator open until the 10 s timeout and hold this message.
+    expect(Date.now() - started).toBeLessThan(2_000)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(sdk.queries[0].interrupt).not.toHaveBeenCalled()
+    expect(compactions).toEqual([expect.objectContaining({ method: 'auto-recycle' })])
+    // No idle while the message is being sent: the chat layer would take it
+    // as the end of that message's turn and release its queue gate early.
+    expect(statuses).not.toContain('idle')
+    // The next message runs in a fresh query on the pruned transcript.
+    expect(sdk.queries).toHaveLength(2)
+  })
+
+  it('never recycles a session that a background task has made busy again', async () => {
+    const { backend, sdk, compactions } = await sessionWithFullTurn()
+    const onNotification = getHook(sdk.queries[0].options, 'Notification')
+    await onNotification({
+      hook_event_name: 'Notification',
+      session_id: sdk.queries[0].options.sessionId ?? sdk.queries[0].options.resume,
+      message: 'background task done'
+    })
+
+    await backend.sendMessage('r', 'second')
+    expect(sdk.queries[0].interrupt).not.toHaveBeenCalled()
+    expect(compactions).toHaveLength(0)
+    expect(sdk.queries).toHaveLength(1)
+  })
+
+  it('keeps background tasks alive: no recycle while the last Stop reported any', async () => {
+    const { backend, sdk, compactions } = await sessionWithFullTurn()
+    const onStop = getHook(sdk.queries[0].options, 'Stop')
+    const sessionId = sdk.queries[0].options.sessionId ?? sdk.queries[0].options.resume
+    await onStop({ hook_event_name: 'Stop', session_id: sessionId, stop_hook_active: false, background_tasks: [{}] })
+
+    await backend.sendMessage('r', 'second')
+    expect(sdk.queries[0].interrupt).not.toHaveBeenCalled()
+    expect(compactions).toHaveLength(0)
+  })
+
+  it('never lets the scheduled size sweep (force) interrupt a turn in progress', async () => {
+    const sdk = fullContextSdk()
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), contextManagement: { recycle: { enabled: true } } },
+      { sdkQuery: sdk.factory }
+    )
+    await backend.createSession('t', { threadKey: 'r' })
+    const file = backend.getSessionFilePath!('r')!
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, '{}\n')
+    await backend.sendMessage('r', 'long turn')
+
+    expect(await backend.recycleSession!('r', { force: true })).toBeNull()
+    expect(sdk.queries[0].interrupt).not.toHaveBeenCalled()
+  })
+
+  it("re-announces the parent's busy status when a subagent works, at most once a minute", async () => {
+    const sdk = fullContextSdk()
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent') },
+      { sdkQuery: sdk.factory }
+    )
+    await backend.createSession('t', { threadKey: 'p' })
+    await backend.sendMessage('p', 'delegate')
+    const onPreToolUse = getHook(sdk.queries[0].options, 'PreToolUse')
+    const sessionId = sdk.queries[0].options.sessionId ?? sdk.queries[0].options.resume
+    const statuses: string[] = []
+    backend.on('chat.status', (d: any) => d.sessionKey === 'p' && statuses.push(d.status))
+    const subagentTool = {
+      hook_event_name: 'PreToolUse',
+      session_id: sessionId,
+      agent_id: 'a1',
+      tool_name: 'Bash',
+      tool_input: {}
+    }
+
+    await onPreToolUse(subagentTool)
+    await onPreToolUse(subagentTool)
+    expect(statuses).toEqual(['working'])
+    // The parent's own tool calls are not subagent activity.
+    await onPreToolUse({ ...subagentTool, agent_id: undefined })
+    expect(statuses).toEqual(['working'])
+  })
+
+  it('sizes the context window by model when the thread sets none', async () => {
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd, agentDir: join(dataDir, 'agent'), modelContextWindows: { sonnet: 300_000 } },
+      { sdkQuery: fullContextSdk().factory }
+    )
+    const windowFor = async (threadKey: string, model: string) => {
+      await backend.createSession('t', { threadKey, model: { provider: 'anthropic', model } })
+      return (await backend.getSessionMeta(threadKey))?.contextTokens
+    }
+    expect(await windowFor('a', 'claude-opus-5-5')).toBe(1_000_000)
+    expect(await windowFor('b', 'opus')).toBe(1_000_000)
+    expect(await windowFor('c', 'claude-haiku-4-5')).toBe(200_000)
+    expect(await windowFor('d', 'claude-sonnet-5')).toBe(300_000)
+    expect(await windowFor('e', 'qwen3.8-27b')).toBe(200_000)
+    expect(await windowFor('f', 'claude-opus-4-6')).toBe(1_000_000)
+    expect(await windowFor('g', 'claude-opus-4-5-20251101')).toBe(200_000)
+    expect(await windowFor('h', 'claude-haiku-4-5-20251001')).toBe(200_000)
+    expect(await windowFor('i', 'claude-opus-4-5[1m]')).toBe(1_000_000)
+    expect(await windowFor('j', 'claude-opus-4-20250514')).toBe(200_000)
+  })
+})
+
 describe('claude-code/recycleSession double-trigger guard', () => {
   let dataDir: string
   let cwd: string
