@@ -392,16 +392,21 @@ export function createChatModule(
   // timeout (5 min was previous default) force-resets to idle mid-resume,
   // which then races with orphan-reclaim and produces duplicate replays.
   const statusChangedAt = new Map<string, number>()
-  const STUCK_STATUS_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+  // Last backend event of any kind per thread. A turn counts as stuck only
+  // after this long with no events at all: a long build, test run or
+  // subagent keeps emitting tool calls and must not be cut off.
+  const lastActivityAt = new Map<string, number>()
+  const STUCK_STATUS_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes of silence
 
-  // Periodic check: if any thread has been "working" for too long, reset to idle
+  // Periodic check: if any non-idle thread has been silent for too long, reset to idle
   setInterval(() => {
     const now = Date.now()
     for (const [threadId, changedAt] of statusChangedAt) {
       const status = currentStatus.get(threadId)
-      if (status && status !== 'idle' && now - changedAt > STUCK_STATUS_TIMEOUT_MS) {
+      const quietSince = Math.max(changedAt, lastActivityAt.get(threadId) ?? 0)
+      if (status && status !== 'idle' && now - quietSince > STUCK_STATUS_TIMEOUT_MS) {
         console.log(
-          `[chat] stuck status recovery: ${threadId} was '${status}' for ${Math.round((now - changedAt) / 1000)}s, resetting to idle`
+          `[chat] stuck status recovery: ${threadId} was '${status}' with no events for ${Math.round((now - quietSince) / 1000)}s, resetting to idle`
         )
         currentStatus.set(threadId, 'idle')
         statusChangedAt.set(threadId, now)
@@ -428,7 +433,7 @@ export function createChatModule(
 
         // Surface a visible error so the thread doesn't appear silently
         // abandoned. The user can send a new message to continue.
-        const stuckSecs = Math.round((now - changedAt) / 1000)
+        const stuckSecs = Math.round((now - quietSince) / 1000)
         const errorData = {
           threadId,
           error: `Agent was unresponsive for ${stuckSecs}s — turn abandoned. Send a new message to continue.`,
@@ -522,6 +527,10 @@ export function createChatModule(
     backend.on(eventName, (data: Record<string, unknown>) => {
       const sessionKey = data.sessionKey as string | undefined
       const threadId = sessionKey ? sessionToThread.get(sessionKey) : undefined
+      // Subagent lifecycle events name the parent session instead.
+      const activeThread =
+        threadId ?? (typeof data.parentKey === 'string' ? sessionToThread.get(data.parentKey) : undefined)
+      if (activeThread) lastActivityAt.set(activeThread, Date.now())
       // Activity ends a quiet spell, so the next idle carries news. The
       // assistant turn does not: it reports the work the idle closes.
       const isAssistantTurn =

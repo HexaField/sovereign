@@ -24,10 +24,11 @@ export interface SovereignConfig {
       agentDir: string
       defaultModel: string
       /**
-       * Map of model alias → max context window tokens. Drives the
-       * "X / 200k" usage display in the chat settings dropdown. Aliases
-       * here should match what the SDK accepts (opus, sonnet, haiku,
-       * opusplan, or fully-qualified ids).
+       * Overrides of model alias → max context window tokens. Drives the
+       * usage display and the recycle threshold. Unlisted models use their
+       * native window (1M from Opus/Sonnet 4.6 on, 200K for Haiku and older).
+       * Keys match what the SDK accepts (opus, sonnet, haiku, opusplan, or
+       * fully-qualified ids).
        */
       modelContextWindows: Record<string, number>
     }

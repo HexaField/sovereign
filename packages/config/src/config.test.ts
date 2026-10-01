@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import { createEventBus } from '@sovereign/core'
 import type { BusEvent } from '@sovereign/core'
 import { createConfigStore } from './config.js'
+import { defaults } from './defaults.js'
 import type { ConfigChange } from './types.js'
 
 let tmpDir: string
@@ -348,5 +349,13 @@ describe('ConfigStore', () => {
       store.importConfig(devPreset)
       expect(store.get('server.port')).toBe(3001)
     })
+  })
+})
+
+describe('defaults — Claude Code context windows', () => {
+  it('sets no per-family window, so each model keeps its native one (1M for current Opus)', () => {
+    // A family default here overrides the backend's model-aware fallback:
+    // 200K for `opus` made 1M sessions look several times full and recycle.
+    expect(defaults.agentBackend.claudeCode.modelContextWindows).toEqual({})
   })
 })

@@ -176,6 +176,39 @@ describe('Thread Routes — Model Switching', () => {
  * the literal segment "active-subagents" / "gateway-sessions" and return
  * "Thread not found").
  */
+describe('Thread Routes — context window reaches the session', () => {
+  let app: ReturnType<typeof express>
+  let tm: ThreadManager
+  let windows: Map<string, number | undefined>
+
+  beforeEach(() => {
+    const dataDir = makeTmpDir()
+    tm = createThreadManager(createEventBus(dataDir), dataDir)
+    windows = new Map()
+    const backend = createStubBackend()
+    backend.setSessionContextWindow = async (sessionKey, value) => {
+      windows.set(sessionKey, value)
+    }
+    app = express()
+    app.use(express.json())
+    app.use(createThreadRoutes(tm, forwardHandler as any, { backend }))
+  })
+
+  it('POST /api/threads with a contextWindow sets it on the not-yet-started session', async () => {
+    const res = await request(app).post('/api/threads').send({ label: 'w', contextWindow: 50 })
+    expect(res.status).toBe(201)
+    expect(windows.get(res.body.thread.id)).toBe(50)
+  })
+
+  it('PATCH /api/threads/:key with a contextWindow updates the session too', async () => {
+    const created = await request(app).post('/api/threads').send({ label: 'w' })
+    const id = created.body.thread.id
+    expect(windows.has(id)).toBe(false)
+    await request(app).patch(`/api/threads/${id}`).send({ contextWindow: 1_000_000 })
+    expect(windows.get(id)).toBe(1_000_000)
+  })
+})
+
 describe('Thread Routes — Subagent Listing (route-order regression)', () => {
   let app: ReturnType<typeof express>
   let dataDir: string

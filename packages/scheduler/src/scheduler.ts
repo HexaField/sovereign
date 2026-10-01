@@ -100,7 +100,10 @@ export function createScheduler(bus: EventBus, dataDir: string, tickIntervalMs =
     const now = new Date()
     for (const job of Array.from(jobs)) {
       if (!job.enabled) continue
-      const lastRun = lastRunTimes.get(job.id) ?? null
+      // A cron job that has never run counts from its creation, not from
+      // 1970: otherwise every new or re-created cron job (e.g. the context
+      // cleanup sweep, re-added on each boot) fires on the first tick.
+      const lastRun = lastRunTimes.get(job.id) ?? (job.schedule.kind === 'cron' ? new Date(job.createdAt) : null)
       if (isDue(job.schedule, lastRun, now)) {
         fireJob(job)
       }

@@ -96,6 +96,18 @@ const DEFAULT_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'LS']
 const PROVIDER = 'anthropic'
 const DEFAULT_CONTEXT_WINDOW = 200000
 
+/** Native window of a Claude model id or alias: 1M from Opus/Sonnet 4.6 on
+ *  (and any `[1m]` variant), 200K for Haiku and older models. */
+function nativeContextWindow(bare: string): number {
+  if (/\[1m\]$/i.test(bare)) return 1_000_000
+  const id = bare.replace(/\[.*\]$/, '')
+  if (/haiku/.test(id)) return DEFAULT_CONTEXT_WINDOW
+  const v = /^claude-(?:opus|sonnet|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(id)
+  if (!v) return 1_000_000 // aliases (opus, sonnet, fable, opusplan) track the latest
+  const [major, minor] = [Number(v[1]), Number(v[2] ?? 0)]
+  return major > 4 || (major === 4 && minor >= 6) ? 1_000_000 : DEFAULT_CONTEXT_WINDOW
+}
+
 /**
  * Curated Anthropic model catalog, grouped by family. Each family exposes a
  * bare "latest" alias (`opus` — resolved to the provider's current pin) plus
@@ -399,7 +411,9 @@ export function createClaudeCodeBackend(
   // interrupted-result race: when recycleSession calls liveQuery.interrupt(),
   // the SDK emits a second `result` message which fires a concurrent
   // maybeAutoRecycle before the first recycle updates state.lastRecycleAt.
-  const recyclingInProgress = new Set<string>()
+  // Settles when a session's recycle finishes. A message sent meanwhile waits
+  // for it, so its turn never starts on a transcript that is being pruned.
+  const recycleDone = new Map<string, Promise<void>>()
 
   // Reverse index from the SDK's session_id (backendSessionId) to our session
   // state. Every SDK hook input carries `session_id` — using this map to
@@ -462,7 +476,9 @@ export function createClaudeCodeBackend(
     const bare = bareModelName(model)
     const family = familyForModel(bare)
     const windows = getConfig().modelContextWindows ?? {}
-    return windows[bare] ?? (family ? windows[family] : undefined) ?? windows[model] ?? DEFAULT_CONTEXT_WINDOW
+    const configured = windows[bare] ?? (family ? windows[family] : undefined) ?? windows[model]
+    if (configured) return configured
+    return family ? nativeContextWindow(bare) : DEFAULT_CONTEXT_WINDOW
   }
   const query = deps.sdkQuery ?? sdkQuery
 
@@ -786,6 +802,17 @@ export function createClaudeCodeBackend(
       if (input.hook_event_name !== 'PreToolUse') return { continue: true }
       const inp = input as Extract<HookInput, { hook_event_name: 'PreToolUse' }>
       const state = stateForHook(input)
+
+      // A subagent's own messages never reach the parent's stream, so a long
+      // foreground Agent call looks silent to the chat layer's stuck-turn
+      // watchdog. Re-announce the parent's busy status, at most once a minute.
+      if ((inp as { agent_id?: string }).agent_id && state && state.agentStatus !== 'idle') {
+        const now = Date.now()
+        if (now - (state.lastSubagentBeatAt ?? 0) >= 60_000) {
+          state.lastSubagentBeatAt = now
+          emitter.emit('chat.status', { sessionKey: state.sessionKey, status: state.agentStatus })
+        }
+      }
 
       // Record start time for metrics duration tracking
       const toolUseId = (inp as Record<string, unknown>).tool_use_id as string | undefined
@@ -1177,7 +1204,8 @@ export function createClaudeCodeBackend(
       // users to send premature messages that conflict with the pending
       // notification delivery and destroy the background work.
       const inp = input as Extract<HookInput, { hook_event_name: 'Stop' }>
-      const hasPendingTasks = (inp.background_tasks?.length ?? 0) > 0
+      state.backgroundTaskCount = inp.background_tasks?.length ?? 0
+      const hasPendingTasks = state.backgroundTaskCount > 0
       if (hasPendingTasks) return { continue: true }
       if (state.agentStatus !== 'idle') {
         state.agentStatus = 'idle'
@@ -1583,7 +1611,11 @@ export function createClaudeCodeBackend(
         state.abortController = undefined
         state.liveQuery = undefined
         state.agentStatus = 'idle'
-        emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
+        // A recycle announces its own status; an idle from its teardown would
+        // release the chat layer's gate for a message still being sent.
+        if (!recycleDone.has(state.sessionKey)) {
+          emitter.emit('chat.status', { sessionKey: state.sessionKey, status: 'idle' })
+        }
       }
     })()
 
@@ -1729,6 +1761,17 @@ export function createClaudeCodeBackend(
 
   async function sendMessage(sessionKey: string, text: string, attachments?: import('@sovereign/core').Attachment[]) {
     const state = sessionStateFor(sessionKey)
+    // A due auto-recycle runs here, while the session is known to be idle,
+    // rather than after the last turn's result: by then a queued message, a
+    // cron or a finished background task may have started the next turn.
+    if (state.recycleDue && state.agentStatus === 'idle' && !recycleDone.has(sessionKey)) {
+      recycleSession(sessionKey, { metricsMethod: 'auto-recycle' }).catch((err) =>
+        console.warn('[context-recycle] auto-recycle error:', err)
+      )
+    }
+    // Never start a turn on a transcript that is being pruned.
+    const pruning = recycleDone.get(sessionKey)
+    if (pruning) await pruning
     getOrStartSession(state)
     state.streamLastLength = 0
     state.thinkingAccum = ''
@@ -2444,17 +2487,12 @@ export function createClaudeCodeBackend(
 
     if (fillPercent < threshold) return
 
+    if (state.recycleDue) return
     console.log(
       `[context-recycle] auto-trigger: ${fillPercent.toFixed(1)}% of ${maxTokens} tokens filled ` +
-        `(threshold: ${threshold}%), recycling session ${state.sessionKey}`
+        `(threshold: ${threshold}%), recycling session ${state.sessionKey} before its next message`
     )
-
-    const result = await recycleSession(state.sessionKey, { metricsMethod: 'auto-recycle' })
-    if (result) {
-      console.log(
-        `[context-recycle] auto-recycle complete: ` + `${result.reclaimedBytes} bytes reclaimed (${result.method})`
-      )
-    }
+    state.recycleDue = true
   }
 
   // ── Layer 2: Session Recycle ───────────────────────────────────────
@@ -2475,6 +2513,34 @@ export function createClaudeCodeBackend(
     const state = internal.sessions.get(sessionKey)
     if (!state) return null
     if (!state.sessionFile) return null
+    if (recycleDone.has(sessionKey)) return null
+    const run = recycleNow(state, sessionKey, opts)
+    const done = run.then(
+      () => {},
+      () => {}
+    )
+    recycleDone.set(sessionKey, done)
+    void done.then(() => {
+      if (recycleDone.get(sessionKey) === done) recycleDone.delete(sessionKey)
+    })
+    return run
+  }
+
+  async function recycleNow(
+    state: ClaudeSessionState,
+    sessionKey: string,
+    opts?: { force?: boolean; metricsMethod?: 'recycle' | 'auto-recycle' }
+  ): Promise<{
+    preTokens: number
+    postTokens: number
+    reclaimedTokens: number
+    reclaimedBytes: number
+    method: 'cozempic' | 'native'
+  } | null> {
+    if (!state.sessionFile) return null
+    // An automatic recycle is silent: the session is idle already, and the
+    // chat layer treats a new idle as the end of the message now being sent.
+    const announce = opts?.metricsMethod !== 'auto-recycle'
 
     // The SDK binary may still flush the JSONL after handleResult fires
     // setIdle. Retry briefly before bailing — the file usually appears
@@ -2501,171 +2567,173 @@ export function createClaudeCodeBackend(
       if (state.lastRecycleAt && Date.now() - state.lastRecycleAt < minInterval) return null
     }
 
-    // In-progress guard: the double-trigger race fires a second maybeAutoRecycle
-    // when liveQuery.interrupt() causes the SDK to emit an interrupted `result`
-    // message. The first recycler adds sessionKey synchronously (before its first
-    // await), so the second call always sees it and bails out.
-    if (recyclingInProgress.has(sessionKey)) return null
-    recyclingInProgress.add(sessionKey)
+    // Skip when subagents run (interrupting the parent strands them).
+    if (recycleCfg?.skipDuringSubagents !== false && state.liveSubagents.size > 0) return null
+    // Only a recycle someone asked for may cut a turn short. The automatic
+    // one and the scheduled size sweep (force) wait for an idle session.
+    const busy = state.agentStatus !== 'idle' || (state.backgroundTaskCount ?? 0) > 0
+    if ((!announce || opts?.force) && busy) return null
 
-    try {
-      // Skip when subagents run (interrupting the parent strands them).
-      if (recycleCfg?.skipDuringSubagents !== false && state.liveSubagents.size > 0) return null
+    // 1. Measure pre-recycle size.
+    //    Use the LAST turn's usage (not cumulative sum) — that represents the
+    //    actual context fill the model saw on its most recent response.
+    const preBytes = fs.statSync(state.sessionFile).size
+    const preUsage = latestUsageFromFile(state.sessionFile)
+    const preTokens = preUsage.inputTokens + preUsage.cacheRead + preUsage.cacheWrite
 
-      // 1. Measure pre-recycle size.
-      //    Use the LAST turn's usage (not cumulative sum) — that represents the
-      //    actual context fill the model saw on its most recent response.
-      const preBytes = fs.statSync(state.sessionFile).size
-      const preUsage = latestUsageFromFile(state.sessionFile)
-      const preTokens = preUsage.inputTokens + preUsage.cacheRead + preUsage.cacheWrite
-
-      // 2. Interrupt the live query if one exists (graceful — session stays
-      //    resumable). Idle sessions (no liveQuery) skip straight to pruning.
-      if (state.liveQuery) {
-        emitter.emit('chat.status', { sessionKey, status: 'idle' })
+    // 2. Interrupt the live query if one exists (graceful — session stays
+    //    resumable). Idle sessions (no liveQuery) skip straight to pruning.
+    if (state.liveQuery) {
+      if (announce) emitter.emit('chat.status', { sessionKey, status: 'idle' })
+      try {
+        // An idle session has no turn to interrupt: interrupt() leaves its
+        // iterator open until the timeout below. Ending the input closes it.
+        if (state.agentStatus === 'idle' && state.endInput) state.endInput()
+        else await state.liveQuery.interrupt()
+      } catch {
+        // Fall through — hard abort as fallback.
         try {
-          await state.liveQuery.interrupt()
+          state.abortController?.abort()
         } catch {
-          // Fall through — hard abort as fallback.
+          /* ignore */
+        }
+      }
+
+      // 3. Wait for the iterator to complete (the for-await-of loop in
+      //    startSessionLoop exits cleanly after interrupt). Cap at 10s so
+      //    a stuck iterator never blocks the cleanup endpoint indefinitely.
+      if (state.iteratorDone) {
+        try {
+          await Promise.race([
+            state.iteratorDone,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('iterator-timeout')), 10_000))
+          ])
+        } catch {
+          // Timed out or errored — force-abort and move on.
           try {
             state.abortController?.abort()
           } catch {
             /* ignore */
           }
         }
-
-        // 3. Wait for the iterator to complete (the for-await-of loop in
-        //    startSessionLoop exits cleanly after interrupt). Cap at 10s so
-        //    a stuck iterator never blocks the cleanup endpoint indefinitely.
-        if (state.iteratorDone) {
-          try {
-            await Promise.race([
-              state.iteratorDone,
-              new Promise((_, reject) => setTimeout(() => reject(new Error('iterator-timeout')), 10_000))
-            ])
-          } catch {
-            // Timed out or errored — force-abort and move on.
-            try {
-              state.abortController?.abort()
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-
-        // 4. Reset pump bindings so startSessionLoop can re-create them.
-        state.pushUserMessage = undefined
-        state.endInput = undefined
-        state.abortController = undefined
-        state.liveQuery = undefined
       }
 
-      // 4b. Archive the full JSONL BEFORE any pruning modifies it.
-      //     The archive preserves the complete, unmodified conversation
-      //     history as a write-once snapshot. Pruning only affects the
-      //     working JSONL that the SDK reads for context.
-      archiveJsonlBeforeRecycle(dataDir, state.backendSessionId, state.sessionFile)
+      // 4. Reset pump bindings so startSessionLoop can re-create them.
+      state.pushUserMessage = undefined
+      state.endInput = undefined
+      state.abortController = undefined
+      state.liveQuery = undefined
+    }
 
-      // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
-      let method: 'cozempic' | 'native' = 'native'
-      const rx = recycleCfg?.prescription ?? 'standard'
+    // 4b. Archive the full JSONL BEFORE any pruning modifies it.
+    //     The archive preserves the complete, unmodified conversation
+    //     history as a write-once snapshot. Pruning only affects the
+    //     working JSONL that the SDK reads for context.
+    archiveJsonlBeforeRecycle(dataDir, state.backendSessionId, state.sessionFile)
 
-      try {
-        const { execFileSync } = await import('node:child_process')
-        const cozStdout = execFileSync('cozempic', ['treat', state.backendSessionId, '-rx', rx, '--execute'], {
-          timeout: 30_000,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          encoding: 'utf-8'
-        })
-        method = 'cozempic'
+    // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
+    let method: 'cozempic' | 'native' = 'native'
+    const rx = recycleCfg?.prescription ?? 'standard'
 
-        // Record context strategy metrics from cozempic output
-        if (deps.metrics && cozStdout) {
-          const parsed = parseCozempicOutput(cozStdout)
-          if (parsed) {
-            deps.metrics.recordContextStrategy({
-              ts: Date.now(),
-              sessionKey,
-              backendKind: 'claude-code',
-              model: state.model ?? 'unknown',
-              ...parsed
-            })
-          }
-        }
-      } catch {
-        // Cozempic unavailable or failed — native fallback: truncate old
-        // tool_result blocks in the JSONL directly.
-        try {
-          nativePruneJsonl(state.sessionFile)
-        } catch (e) {
-          console.warn('[context-recycle] native prune failed:', e)
+    try {
+      const { execFileSync } = await import('node:child_process')
+      const cozStdout = execFileSync('cozempic', ['treat', state.backendSessionId, '-rx', rx, '--execute'], {
+        timeout: 30_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf-8'
+      })
+      method = 'cozempic'
+
+      // Record context strategy metrics from cozempic output
+      if (deps.metrics && cozStdout) {
+        const parsed = parseCozempicOutput(cozStdout)
+        if (parsed) {
+          deps.metrics.recordContextStrategy({
+            ts: Date.now(),
+            sessionKey,
+            backendKind: 'claude-code',
+            model: state.model ?? 'unknown',
+            ...parsed
+          })
         }
       }
-
-      // 5b. Compact-boundary trim — runs after cozempic/native prune.
-      //     Removes all pre-compaction content from the JSONL, keeping only
-      //     the last compact_boundary + its anchor entry + post-boundary content.
-      //     This prevents unbounded JSONL growth when cozempic has already
-      //     stripped all tool_result blocks (reclaimed ≤ 0 byte case).
-      //     The compacted summary (first message after the boundary) already
-      //     contains the full conversation context, so no agent memory is lost.
+    } catch {
+      // Cozempic unavailable or failed — native fallback: truncate old
+      // tool_result blocks in the JSONL directly.
       try {
-        const trimmedBytes = trimJsonlToLastCompaction(state.sessionFile)
-        if (trimmedBytes > 1_024 * 1_024) {
-          // Only log when the trim reclaims a meaningful amount — small files
-          // that cozempic already handled well don't need noise in the logs.
-          console.log(`[context-recycle] compact-boundary trim: ${(trimmedBytes / 1_024 / 1_024).toFixed(1)} MB freed`)
-        }
+        nativePruneJsonl(state.sessionFile)
       } catch (e) {
-        console.warn('[context-recycle] compact-boundary trim failed:', e)
+        console.warn('[context-recycle] native prune failed:', e)
       }
+    }
 
-      // 6. Measure post-recycle size.
-      //    Usage entries in the JSONL still record pre-prune API values (pruning
-      //    truncates tool_result content, not usage fields). Estimate post-prune
-      //    tokens proportionally from the byte reduction.
-      const postBytes = fs.existsSync(state.sessionFile) ? fs.statSync(state.sessionFile).size : 0
-      const postTokens = preBytes > 0 ? Math.round(preTokens * (postBytes / preBytes)) : 0
+    // 5b. Compact-boundary trim — runs after cozempic/native prune.
+    //     Removes all pre-compaction content from the JSONL, keeping only
+    //     the last compact_boundary + its anchor entry + post-boundary content.
+    //     This prevents unbounded JSONL growth when cozempic has already
+    //     stripped all tool_result blocks (reclaimed ≤ 0 byte case).
+    //     The compacted summary (first message after the boundary) already
+    //     contains the full conversation context, so no agent memory is lost.
+    try {
+      const trimmedBytes = trimJsonlToLastCompaction(state.sessionFile)
+      if (trimmedBytes > 1_024 * 1_024) {
+        // Only log when the trim reclaims a meaningful amount — small files
+        // that cozempic already handled well don't need noise in the logs.
+        console.log(`[context-recycle] compact-boundary trim: ${(trimmedBytes / 1_024 / 1_024).toFixed(1)} MB freed`)
+      }
+    } catch (e) {
+      console.warn('[context-recycle] compact-boundary trim failed:', e)
+    }
 
-      // 7. Reset filter dedup state and stamp the recycle time.
-      state.contextFilter?.reset()
-      state.lastRecycleAt = Date.now()
-      state.recycleCount = (state.recycleCount ?? 0) + 1
-      state.lastUsage = undefined
+    // 6. Measure post-recycle size.
+    //    Usage entries in the JSONL still record pre-prune API values (pruning
+    //    truncates tool_result content, not usage fields). Estimate post-prune
+    //    tokens proportionally from the byte reduction.
+    const postBytes = fs.existsSync(state.sessionFile) ? fs.statSync(state.sessionFile).size : 0
+    const postTokens = preBytes > 0 ? Math.round(preTokens * (postBytes / preBytes)) : 0
 
-      // 8. Resume the session — the next sendMessage triggers
-      //    startSessionLoop which sees the existing sessionFile and
-      //    passes `resume: backendSessionId` to the SDK.
-      persistState(state)
+    // 7. Reset filter dedup state and stamp the recycle time.
+    state.contextFilter?.reset()
+    state.lastRecycleAt = Date.now()
+    state.recycleDue = false
+    state.recycleCount = (state.recycleCount ?? 0) + 1
+    state.lastUsage = undefined
 
-      const result = {
+    // 8. Resume the session — the next sendMessage triggers
+    //    startSessionLoop which sees the existing sessionFile and
+    //    passes `resume: backendSessionId` to the SDK.
+    persistState(state)
+
+    const result = {
+      preTokens,
+      postTokens,
+      reclaimedTokens: preTokens - postTokens,
+      reclaimedBytes: preBytes - postBytes,
+      method
+    }
+
+    // Record compaction metric
+    if (deps.metrics) {
+      deps.metrics.recordCompaction({
+        ts: Date.now(),
+        sessionKey,
+        backendKind: 'claude-code',
+        model: state.model ?? 'unknown',
         preTokens,
         postTokens,
-        reclaimedTokens: preTokens - postTokens,
-        reclaimedBytes: preBytes - postBytes,
-        method
-      }
-
-      // Record compaction metric
-      if (deps.metrics) {
-        deps.metrics.recordCompaction({
-          ts: Date.now(),
-          sessionKey,
-          backendKind: 'claude-code',
-          model: state.model ?? 'unknown',
-          preTokens,
-          postTokens,
-          tokensReclaimed: preTokens - postTokens,
-          method: opts?.metricsMethod ?? 'recycle',
-          isSubagent: !!state.parentSessionKey
-        })
-      }
-
-      emitter.emit('chat.status', { sessionKey, status: 'idle' })
-      return result
-    } finally {
-      recyclingInProgress.delete(sessionKey)
+        tokensReclaimed: preTokens - postTokens,
+        method: opts?.metricsMethod ?? 'recycle',
+        isSubagent: !!state.parentSessionKey
+      })
     }
+
+    if (announce) emitter.emit('chat.status', { sessionKey, status: 'idle' })
+    if (!announce) {
+      console.log(
+        `[context-recycle] auto-recycle complete: ${result.reclaimedBytes} bytes reclaimed (${result.method})`
+      )
+    }
+    return result
   }
 
   /**

@@ -22,13 +22,9 @@ export const defaults: SovereignConfig = {
       cwd: '',
       agentDir: home ? path.join(home, '.claude') : '',
       defaultModel: 'claude-opus-5-5',
-      modelContextWindows: {
-        fable: 200000,
-        opus: 200000,
-        sonnet: 200000,
-        haiku: 200000,
-        opusplan: 200000
-      }
+      // Empty: each model's native window applies (1M from Opus/Sonnet 4.6
+      // on, 200K for Haiku and older models). Add entries only to override.
+      modelContextWindows: {}
     },
     localLlm: {
       baseUrl: 'http://localhost:8080',

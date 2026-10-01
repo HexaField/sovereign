@@ -908,6 +908,48 @@ describe('§2.4 Chat Module (Server)', () => {
   })
 
   describe('stuck-status recovery', () => {
+    it('keeps a long turn alive while it emits events, and aborts only after 30 minutes of silence', async () => {
+      vi.useFakeTimers()
+      try {
+        const localBackend = createMockBackend()
+        const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'busy-test-'))
+        try {
+          ;(localBackend.createSession as ReturnType<typeof vi.fn>).mockImplementation(async () => 'session-busy')
+          const localChat = createChatModule(bus, localBackend, threadManager, {
+            dataDir: localDir,
+            wsHandler: createMockWsHandler()
+          })
+          const { sessionKey } = await localChat.handleSessionCreate()
+          const emit = (event: string, data: Record<string, unknown>) => {
+            for (const fn of localBackend._handlers.get(event) ?? []) fn(data)
+          }
+
+          emit('chat.status', { sessionKey, status: 'working' })
+          // A 60-minute turn: tool calls at 10 and 60 minutes, and in between
+          // only a subagent event (reported with the parent's key) at 35.
+          const tool = () =>
+            emit('chat.work', { sessionKey, work: { type: 'tool_call', name: 'Bash', timestamp: Date.now() } })
+          await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+          tool()
+          await vi.advanceTimersByTimeAsync(25 * 60 * 1000)
+          emit('subagent.spawned', { parentKey: sessionKey, childKey: 'child-1' })
+          await vi.advanceTimersByTimeAsync(25 * 60 * 1000)
+          tool()
+          expect(localBackend.abort).not.toHaveBeenCalled()
+
+          // Then silence: the watchdog fires once 30 minutes pass with no events.
+          await vi.advanceTimersByTimeAsync(29 * 60 * 1000)
+          expect(localBackend.abort).not.toHaveBeenCalled()
+          await vi.advanceTimersByTimeAsync(2 * 60 * 1000)
+          expect(localBackend.abort).toHaveBeenCalledWith(sessionKey)
+        } finally {
+          fs.rmSync(localDir, { recursive: true, force: true })
+        }
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('aborts the backend, clears the in-flight gate, and emits chat.error after the timeout', async () => {
       // Must enable fake timers BEFORE creating the chat module so the
       // module's setInterval is registered on the fake clock and fires
