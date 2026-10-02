@@ -179,6 +179,52 @@ describe('claude-code/mcp-server', () => {
     })
   })
 
+  describe('ci_watch', () => {
+    function ciDeps() {
+      const ci = {
+        watch: vi.fn().mockResolvedValue({ watch: { id: 'w-1' } }),
+        list: vi.fn().mockReturnValue([{ id: 'w-1' }]),
+        unwatch: vi.fn().mockReturnValue(true)
+      }
+      return { ci, tools: getTools(makeDeps({ ci, currentSessionKey: () => 'agent:main:thread:neural-nets' })) }
+    }
+
+    it('watches a PR for the calling thread', async () => {
+      const { ci, tools } = ciDeps()
+      await invoke(tools, 'ci_watch', { repo: 'coasys/ad4m', pr: 1193, checks: ['integration-tests-js'] })
+      expect(ci.watch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadKey: 'neural-nets',
+          repo: 'coasys/ad4m',
+          target: { kind: 'pr', number: 1193 },
+          checks: ['integration-tests-js']
+        })
+      )
+    })
+
+    it('needs exactly one of pr, branch, sha', async () => {
+      const { ci, tools } = ciDeps()
+      await expect(invoke(tools, 'ci_watch', { repo: 'o/r' })).rejects.toThrow(/exactly one/)
+      await expect(invoke(tools, 'ci_watch', { repo: 'o/r', pr: 1, sha: 'abc' })).rejects.toThrow(/exactly one/)
+      await invoke(tools, 'ci_watch', { repo: 'o/r', branch: 'dev' })
+      expect(ci.watch.mock.calls[0][0].target).toEqual({ kind: 'branch', name: 'dev' })
+    })
+
+    it('lists the calling thread by default, every thread with all=true, and unwatches', async () => {
+      const { ci, tools } = ciDeps()
+      await invoke(tools, 'ci_watch_list', {})
+      await invoke(tools, 'ci_watch_list', { all: true })
+      expect(ci.list.mock.calls).toEqual([['neural-nets'], [undefined]])
+      await invoke(tools, 'ci_unwatch', { id: 'w-1' })
+      expect(ci.unwatch).toHaveBeenCalledWith('w-1')
+    })
+
+    it('registers no ci_* tools until the watcher is bound', () => {
+      const tools = getTools(makeDeps({ ci: {} }))
+      expect(Object.keys(tools).filter((n) => n.startsWith('ci_'))).toEqual([])
+    })
+  })
+
   describe('cron_list', () => {
     it('returns all crons when no threadKey filter', async () => {
       const deps = makeDeps()

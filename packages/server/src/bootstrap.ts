@@ -62,7 +62,7 @@ import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
 import { createVoiceLlmClients } from './voice-llm.js'
-import type { TaskMcpDeps } from '@sovereign/agent-backend'
+import type { TaskMcpDeps, CiWatchMcpDeps } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
 import { createChatRoutes } from '@sovereign/chat'
@@ -101,6 +101,7 @@ import {
 } from '@sovereign/thread-presence'
 import { createBrowserService, BrowserUnavailableError } from '@sovereign/browser'
 import { createExportRoutes } from './routes/export-pdf.js'
+import { createCiWatchService } from './ci-watch/service.js'
 import { createAd4mService } from '@sovereign/ad4m'
 import {
   createPresenceModule,
@@ -646,6 +647,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     persistFile: path.join(dataDir, 'presence', 'task-digest.json')
   })
 
+  // CI watcher: methods are bound once the chat layer exists (it delivers the
+  // notifications); the MCP tools appear from then on.
+  const ciMcpDeps: CiWatchMcpDeps = {}
+
   const taskMcpDeps: TaskMcpDeps = {
     create: (opts) => taskService.create(opts as any),
     update: (taskId, opts) => taskService.update(taskId, opts as any) as any,
@@ -684,6 +689,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     browserService,
     presence: presenceMcpDeps,
     tasks: taskMcpDeps,
+    ci: ciMcpDeps,
     presencePersonalityFile,
     presenceMemoryFile,
     presenceKnowledgeFile
@@ -884,6 +890,22 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       origin: { modality: 'text' as const }
     })
   }
+
+  const ciWatch = createCiWatchService({
+    dataDir,
+    notify: async (threadKey, text) => {
+      if (!threadManager.get(threadKey)) {
+        console.warn(`[ci-watch] thread ${threadKey} no longer exists — dropping its CI notification`)
+        return
+      }
+      // Same path as a cron fire: queued, never interrupting, shown as a system card.
+      await chatModule.handleSend(threadKey, text, undefined, { synthRole: 'system' })
+    }
+  })
+  ciMcpDeps.watch = (opts) => ciWatch.watch(opts)
+  ciMcpDeps.list = (threadKey) => ciWatch.list(threadKey)
+  ciMcpDeps.unwatch = (id) => ciWatch.unwatch(id)
+  ciWatch.start()
 
   // Bootstrap: start polls for any existing PR-tasks in active states.
   void prPollService.bootstrap().catch((err) => {
@@ -1579,6 +1601,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   return {
     shutdown() {
       prPollService.dispose()
+      ciWatch.dispose()
       ad4mService?.close()
       fileWatcher.stop()
       codeIndex.stop()

@@ -347,6 +347,16 @@ Two server mechanisms interrupt a Claude Code turn; the transcript shows the sam
 
 `POST /api/export/pdf` takes `{ markdown }`, renders it with `marked` and prints it through `BrowserService.printPdf`: a fresh headless Chrome per call, JavaScript off, every request except `data:` URLs blocked, so remote images in a message never load. No Chrome → 503 (`BrowserUnavailableError`). The chat's thread and message export menus call it (`packages/client/src/features/chat/export.ts`).
 
+## CI watch (`packages/server/src/ci-watch/`)
+
+MCP tools `ci_watch` / `ci_watch_list` / `ci_unwatch` let a thread watch the GitHub checks of a PR, branch or commit. The server polls; the thread gets one message (cron envelope `[Cron: CI <target> @ <time>]`) through the chat queue, so it never interrupts a turn.
+
+- **Sources:** check runs (GitHub Actions and Apps) and commit statuses (CircleCI on coasys repos posts statuses only), one state per name, check runs first.
+- **Ending:** the first failed check ends the watch at once (unless `waitForAll`); otherwise all watched checks must be finished on two polls `settleMs` (20 s) apart. CircleCI posts a job's dependants about a second after the job passes, so one all-finished poll can be partial.
+- **Cadence:** 30 s while checks exist, 60 s before any appear, exponential backoff to 5 min on errors. Requests carry the last ETag; unchanged answers are 304s, which do not count against the rate limit. Token from `gh auth token`.
+- **Follow:** a PR or branch watch moves to the new head after a push (default); `follow: false` stays on the commit.
+- **Limits:** 12 h default timeout; no check after 20 min ends the watch. Watches persist in `<dataDir>/ci-watch/watches.json` and resume after a restart.
+
 ## API traps
 
 - **Thread history** (`GET /api/threads/:threadId/history`) comes from the chat routes, which mount before the threads routes. Its 5 s response cache drops a thread's entry on every `chat.turn` and `chat.message.sent`, so readers without an SSE stream still see new turns.

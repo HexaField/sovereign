@@ -51,6 +51,7 @@ export {
   type ClaudeCodeBackend,
   type SovereignToolDeps,
   type TaskMcpDeps,
+  type CiWatchMcpDeps,
   type PersonalityCompiler,
   type PersonalityCompilerOptions,
   type PersonalityManifest,

@@ -64,6 +64,8 @@ export interface AgentBackendWiringInput {
   presence?: import('./claude-code/mcp-server.js').PresenceMcpDeps
   /** Task service. When set, the eight task_* MCP tools are registered. */
   tasks?: import('./claude-code/mcp-server.js').TaskMcpDeps
+  /** CI watcher. Its methods are bound later; when set, the ci_* MCP tools are registered. */
+  ci?: import('./claude-code/mcp-server.js').CiWatchMcpDeps
   /** Path to PRESENCE.md — appended to the session prompt for the presence
    *  thread only. */
   presencePersonalityFile?: string
@@ -310,7 +312,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     embeddings: embeddingsService,
     ...(hasSubagentDefaults ? { subagentDefaults } : {}),
     ...(input.presence ? { presence: input.presence } : {}),
-    ...(input.tasks ? { tasks: input.tasks } : {})
+    ...(input.tasks ? { tasks: input.tasks } : {}),
+    ...(input.ci ? { ci: input.ci } : {})
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 

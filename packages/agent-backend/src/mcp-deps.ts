@@ -3,7 +3,13 @@
 // MCP tool wires into the underlying services.
 
 import { randomUUID } from 'node:crypto'
-import type { PresenceMcpDeps, EmbeddingsToolDeps, TaskMcpDeps, SovereignToolDeps } from './claude-code/mcp-server.js'
+import type {
+  PresenceMcpDeps,
+  EmbeddingsToolDeps,
+  TaskMcpDeps,
+  CiWatchMcpDeps,
+  SovereignToolDeps
+} from './claude-code/mcp-server.js'
 import type { RoutingBackend } from './factory.js'
 import type { CronService } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -47,6 +53,7 @@ export interface SovereignMcpDepsInput {
   embeddings?: EmbeddingsToolDeps
   /** Task service. When set, registers the eight task_* MCP tools. */
   tasks?: TaskMcpDeps
+  ci?: CiWatchMcpDeps
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -252,6 +259,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     },
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.embeddings ? { embeddings: input.embeddings } : {}),
-    ...(input.tasks ? { tasks: input.tasks } : {})
+    ...(input.tasks ? { tasks: input.tasks } : {}),
+    ...(input.ci ? { ci: input.ci } : {})
   }
 }

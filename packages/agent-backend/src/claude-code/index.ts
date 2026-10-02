@@ -7,7 +7,8 @@ export {
   SUBAGENT_SOVEREIGN_TOOLS,
   type SovereignToolDeps,
   type EmbeddingsToolDeps,
-  type TaskMcpDeps
+  type TaskMcpDeps,
+  type CiWatchMcpDeps
 } from './mcp-server.js'
 export { ensureLayeredContextFile, ensureDefaultSubagentFile, ensureAd4mSkill } from './personality.js'
 export { createPersonalityCompiler } from './personality-compiler.js'
