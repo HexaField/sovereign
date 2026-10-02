@@ -23,8 +23,6 @@ export interface CiWatch {
   follow: boolean
   /** Only these checks count (case-insensitive substring of the check name). */
   checks?: string[]
-  /** Wait for every check, even after one fails. Default: report the first failure at once. */
-  waitForAll: boolean
   label: string
   /** Commit being watched; set by the first poll. */
   sha?: string
@@ -72,7 +70,6 @@ export interface CiWatchOpts {
   target: CiTarget
   follow?: boolean
   checks?: string[]
-  waitForAll?: boolean
   label?: string
   timeoutMinutes?: number
 }
@@ -94,9 +91,9 @@ export const CI_POLL = {
   maxBackoffMs: 300_000,
   /** Stop after this many polls in a row fail. */
   maxErrors: 10,
-  /** All checks must still be finished on a poll this much later. CircleCI
-   *  posts a job's dependants about a second after the job passes. */
-  settleMs: 20_000,
+  /** Green must hold on the next poll. CircleCI posts a job's dependants about
+   *  a second after the job passes, so one all-finished poll can be partial. */
+  settleMs: 10_000,
   /** Give up when no check has appeared after this long. */
   noChecksTimeoutMs: 20 * 60_000
 }
@@ -325,9 +322,10 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
       const allDone =
         snap.checks.length > 0 && snap.missing.length === 0 && snap.checks.every((c) => c.state !== 'pending')
 
-      if (failed && !w.waitForAll) return await finish(w, formatNotification(w, snap, t, 'failed'))
+      // Red: report on the poll that first sees a failed check.
+      if (failed) return await finish(w, formatNotification(w, snap, t, 'failed'))
       if (allDone) {
-        // Checks register gradually; only trust "all finished" a while later.
+        // Green: confirmed by the next poll, because checks register gradually.
         if (rt.finishedSince === undefined) rt.finishedSince = t
         if (t - rt.finishedSince >= CI_POLL.settleMs) return await finish(w, formatNotification(w, snap, t, 'done'))
         return
@@ -388,7 +386,6 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
         target: opts.target,
         follow: opts.target.kind === 'sha' ? false : (opts.follow ?? true),
         ...(opts.checks?.length ? { checks: opts.checks } : {}),
-        waitForAll: opts.waitForAll ?? false,
         label: opts.label ?? targetText(opts as CiWatch),
         shaChanges: 0,
         createdAt,
