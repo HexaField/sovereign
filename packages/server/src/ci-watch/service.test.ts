@@ -154,23 +154,34 @@ describe('ci-watch', () => {
     expect(svc.list()).toHaveLength(0)
   })
 
-  it('with waitForAll, keeps watching past a failure until every check finishes', async () => {
-    gh.prHead.set(7, 'aaa')
-    gh.statuses.set('aaa', [
+  it('reports red within one poll and green within two, measured from the change on GitHub', async () => {
+    gh.prHead.set(7, 'red')
+    gh.prHead.set(8, 'green')
+    gh.statuses.set('red', [
+      { context: 'a', state: 'pending' },
+      { context: 'b', state: 'pending' }
+    ])
+    gh.statuses.set('green', [{ context: 'a', state: 'pending' }])
+    const svc = make()
+    await svc.watch({ threadKey: 'red', repo: 'o/r', target: { kind: 'pr', number: 7 } })
+    await svc.watch({ threadKey: 'green', repo: 'o/r', target: { kind: 'pr', number: 8 } })
+    await advance(svc, 3_000)
+
+    // One check fails while the other is still running.
+    const redAt = clock
+    gh.statuses.set('red', [
       { context: 'a', state: 'failure' },
       { context: 'b', state: 'pending' }
     ])
-    const svc = make()
-    await svc.watch({ threadKey: 't1', repo: 'o/r', target: { kind: 'pr', number: 7 }, waitForAll: true })
-    await advance(svc, 120_000)
-    expect(sent).toHaveLength(0)
-    gh.statuses.set('aaa', [
-      { context: 'a', state: 'failure' },
-      { context: 'b', state: 'success' }
-    ])
-    await advance(svc, 60_000)
-    expect(sent).toHaveLength(1)
-    expect(sent[0].text).toContain('1 of 2 checks failed.')
+    const greenAt = clock
+    gh.statuses.set('green', [{ context: 'a', state: 'success' }])
+    const arrival: Record<string, number> = {}
+    while (Object.keys(arrival).length < 2 && clock < greenAt + 60_000) {
+      await advance(svc, 1_000)
+      for (const m of sent) arrival[m.threadKey] ??= clock
+    }
+    expect(arrival.red - redAt).toBeLessThanOrEqual(CI_POLL.pollMs)
+    expect(arrival.green - greenAt).toBeLessThanOrEqual(2 * CI_POLL.pollMs)
   })
 
   it('follows a push to the PR, and stays on the commit when follow is off', async () => {

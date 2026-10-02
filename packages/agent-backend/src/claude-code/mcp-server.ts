@@ -119,7 +119,6 @@ export interface CiWatchMcpDeps {
     target: { kind: 'pr'; number: number } | { kind: 'branch'; name: string } | { kind: 'sha'; sha: string }
     follow?: boolean
     checks?: string[]
-    waitForAll?: boolean
     label?: string
     timeoutMinutes?: number
   }): Promise<unknown>
@@ -841,7 +840,7 @@ export function createSovereignMcpServer(
     tools.push(
       tool(
         'ci_watch',
-        'Watch the GitHub CI checks of a PR, branch or commit. Sovereign polls GitHub itself (no model turns) and sends ONE message into the calling thread when the run finishes: at the first failed check, or when every check has finished. End your turn after calling it; do not poll or schedule crons for CI. Works for GitHub Actions and commit-status CI such as CircleCI.',
+        'Watch the GitHub CI checks of a PR, branch or commit. Sovereign polls GitHub itself (no model turns) and sends ONE message into the calling thread within a poll (10 s) of the run going red (the first failed check) or green (every check passed, confirmed by the next poll). End your turn after calling it; do not poll or schedule crons for CI. Works for GitHub Actions and commit-status CI such as CircleCI.',
         {
           repo: z.string().describe('GitHub repo slug, e.g. "coasys/ad4m".'),
           pr: z.number().int().positive().optional().describe('PR number. Give exactly one of pr, branch, sha.'),
@@ -852,12 +851,6 @@ export function createSovereignMcpServer(
             .optional()
             .describe(
               'Only these checks count (case-insensitive substring of the check name, e.g. "integration-tests-js"). Waits until each one has appeared and finished.'
-            ),
-          waitForAll: z
-            .boolean()
-            .optional()
-            .describe(
-              'Report only when every check has finished, even after a failure. Default false: report the first failure at once.'
             ),
           follow: z
             .boolean()
@@ -887,7 +880,6 @@ export function createSovereignMcpServer(
             target,
             follow: args.follow,
             checks: args.checks,
-            waitForAll: args.waitForAll,
             label: args.label,
             timeoutMinutes: args.timeoutMinutes
           })
