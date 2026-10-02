@@ -353,7 +353,7 @@ MCP tools `ci_watch` / `ci_watch_list` / `ci_unwatch` let a thread watch the Git
 
 - **Sources:** check runs (GitHub Actions and Apps) and commit statuses (CircleCI on coasys repos posts statuses only), one state per name, check runs first.
 - **Ending:** the first failed check ends the watch at once (unless `waitForAll`); otherwise all watched checks must be finished on two polls `settleMs` (20 s) apart. CircleCI posts a job's dependants about a second after the job passes, so one all-finished poll can be partial.
-- **Cadence:** 30 s while checks exist, 60 s before any appear, exponential backoff to 5 min on errors. Requests carry the last ETag; unchanged answers are 304s, which do not count against the rate limit. Token from `gh auth token`.
+- **Cadence:** one loop every 10 s polls every watch in parallel (`CI_POLL.pollMs`); only a watch whose polls fail backs off (20 s doubling to 5 min). Requests carry the last ETag; unchanged answers are 304s, which do not count against the rate limit. Token from `gh auth token`, so any repo the `gh` account can read works (public coasys repos included); no webhook needed.
 - **Follow:** a PR or branch watch moves to the new head after a push (default); `follow: false` stays on the commit.
 - **Limits:** 12 h default timeout; no check after 20 min ends the watch. Watches persist in `<dataDir>/ci-watch/watches.json` and resume after a restart.
 

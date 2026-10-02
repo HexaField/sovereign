@@ -1,6 +1,7 @@
 // CI watch — follows the GitHub checks of one PR, branch or commit and tells
-// a thread once when they finish or fail. Polling happens here, in the server:
-// a watch costs no model turn until its single notification arrives.
+// a thread once when they finish or fail. One 10 s loop in the server polls
+// every watch through the GitHub REST API, so it works for any repo the `gh`
+// account can read, and a watch costs no model turn until its one message.
 
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -80,7 +81,7 @@ export interface CiWatchService {
   watch(opts: CiWatchOpts): Promise<{ watch: CiWatch; snapshot: CiSnapshot }>
   list(threadKey?: string): CiWatch[]
   unwatch(id: string): boolean
-  /** Poll every watch whose next poll is due (the timer calls this). */
+  /** Poll every watch not in error backoff (the 10 s timer calls this). */
   pollDue(): Promise<void>
   start(): void
   dispose(): void
@@ -88,8 +89,8 @@ export interface CiWatchService {
 
 /** Poll cadence. */
 export const CI_POLL = {
-  runningMs: 30_000,
-  noChecksMs: 60_000,
+  /** One loop polls every watch this often (errors back off from it). */
+  pollMs: 10_000,
   maxBackoffMs: 300_000,
   /** Stop after this many polls in a row fail. */
   maxErrors: 10,
@@ -97,8 +98,7 @@ export const CI_POLL = {
    *  posts a job's dependants about a second after the job passes. */
   settleMs: 20_000,
   /** Give up when no check has appeared after this long. */
-  noChecksTimeoutMs: 20 * 60_000,
-  tickMs: 5_000
+  noChecksTimeoutMs: 20 * 60_000
 }
 
 const FAILED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale', 'error'])
@@ -330,7 +330,6 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
         // Checks register gradually; only trust "all finished" a while later.
         if (rt.finishedSince === undefined) rt.finishedSince = t
         if (t - rt.finishedSince >= CI_POLL.settleMs) return await finish(w, formatNotification(w, snap, t, 'done'))
-        rt.nextAt = rt.finishedSince + CI_POLL.settleMs
         return
       }
       rt.finishedSince = undefined
@@ -351,7 +350,6 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
           `[Cron: CI ${targetText(w)} @ ${new Date(t).toISOString()}] Stopped watching ${targetText(w)}: timed out — ${waiting.join('; ')}.`
         )
       }
-      rt.nextAt = t + (snap.checks.length ? CI_POLL.runningMs : CI_POLL.noChecksMs)
     } catch (err) {
       rt.errors++
       const message = (err as Error).message
@@ -368,7 +366,7 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
           console.warn(TAG, `could not notify thread ${w.threadKey}:`, (deliveryErr as Error).message)
         }
       }
-      rt.nextAt = t + Math.min(CI_POLL.maxBackoffMs, CI_POLL.runningMs * 2 ** rt.errors)
+      rt.nextAt = t + Math.min(CI_POLL.maxBackoffMs, CI_POLL.pollMs * 2 ** rt.errors)
     } finally {
       rt.inFlight = false
     }
@@ -400,7 +398,6 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
       // Resolve the target now so a wrong repo, PR or branch fails the tool call.
       const snap = await snapshot(w, rt)
       w.sha = snap.sha
-      rt.nextAt = createdAt + (snap.checks.length ? CI_POLL.runningMs : CI_POLL.noChecksMs)
       watches.set(w.id, w)
       runtime.set(w.id, rt)
       save()
@@ -420,13 +417,14 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
 
     async pollDue() {
       const t = now()
+      // Every watch each tick, in parallel; only a watch in error backoff waits.
       const due = [...watches.values()].filter((w) => (runtime.get(w.id)?.nextAt ?? 0) <= t)
-      for (const w of due) await poll(w)
+      await Promise.all(due.map((w) => poll(w)))
     },
 
     start() {
       if (timer) return
-      timer = setInterval(() => void this.pollDue(), CI_POLL.tickMs)
+      timer = setInterval(() => void this.pollDue(), CI_POLL.pollMs)
       timer.unref?.()
       if (resumed) console.log(TAG, `resumed ${resumed} watch${resumed === 1 ? '' : 'es'} after restart`)
     },
