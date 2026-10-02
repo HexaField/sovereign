@@ -35,6 +35,7 @@ import { s31SubagentLifecycle } from './s31-subagent-lifecycle.js'
 import { s32LiteLlmRoundtrip } from './s32-litellm-roundtrip.js'
 import { s33SlashCommands } from './s33-slash-commands.js'
 import { s34FileAttachments } from './s34-file-attachments.js'
+import { s35CiWatch } from './s35-ci-watch.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -124,5 +125,6 @@ export const ALL_SCENARIOS: Scenario[] = [
   // `_attachments` parameter. Verifies that base64-encoded file data sent
   // via POST /api/chat/send travels through the queue sidecar and arrives
   // at the mock LLM as image content blocks.
-  s34FileAttachments
+  s34FileAttachments,
+  s35CiWatch
 ]

@@ -106,6 +106,25 @@ export interface SovereignToolDeps {
   embeddings?: EmbeddingsToolDeps
   /** Task service. When set, registers the eight task_* MCP tools. */
   tasks?: TaskMcpDeps
+  /** CI watcher. When `watch` is bound, registers ci_watch / ci_watch_list / ci_unwatch. */
+  ci?: CiWatchMcpDeps
+}
+
+/** Subset of the server's CI watcher the MCP layer needs. Methods are bound
+ *  after the chat layer exists, so the object is shared and filled late. */
+export interface CiWatchMcpDeps {
+  watch?(opts: {
+    threadKey: string
+    repo: string
+    target: { kind: 'pr'; number: number } | { kind: 'branch'; name: string } | { kind: 'sha'; sha: string }
+    follow?: boolean
+    checks?: string[]
+    waitForAll?: boolean
+    label?: string
+    timeoutMinutes?: number
+  }): Promise<unknown>
+  list?(threadKey?: string): unknown[]
+  unwatch?(id: string): boolean
 }
 
 /** Subset of @sovereign/embeddings the MCP layer needs. Kept inline so this
@@ -813,6 +832,78 @@ export function createSovereignMcpServer(
         )
       )
     }
+  }
+
+  // ── CI watch ──────────────────────────────────────────────────────────
+  const ci = deps.ci
+  if (ci?.watch && ci.list && ci.unwatch) {
+    const { watch, list, unwatch } = ci as Required<CiWatchMcpDeps>
+    tools.push(
+      tool(
+        'ci_watch',
+        'Watch the GitHub CI checks of a PR, branch or commit. Sovereign polls GitHub itself (no model turns) and sends ONE message into the calling thread when the run finishes: at the first failed check, or when every check has finished. End your turn after calling it; do not poll or schedule crons for CI. Works for GitHub Actions and commit-status CI such as CircleCI.',
+        {
+          repo: z.string().describe('GitHub repo slug, e.g. "coasys/ad4m".'),
+          pr: z.number().int().positive().optional().describe('PR number. Give exactly one of pr, branch, sha.'),
+          branch: z.string().optional().describe('Branch name.'),
+          sha: z.string().optional().describe('Commit SHA.'),
+          checks: z
+            .array(z.string())
+            .optional()
+            .describe(
+              'Only these checks count (case-insensitive substring of the check name, e.g. "integration-tests-js"). Waits until each one has appeared and finished.'
+            ),
+          waitForAll: z
+            .boolean()
+            .optional()
+            .describe(
+              'Report only when every check has finished, even after a failure. Default false: report the first failure at once.'
+            ),
+          follow: z
+            .boolean()
+            .optional()
+            .describe('For a PR or branch: move to the new head commit after a push. Default true.'),
+          timeoutMinutes: z
+            .number()
+            .int()
+            .min(5)
+            .max(2880)
+            .optional()
+            .describe('Give up after this long. Default 720.'),
+          label: z.string().optional().describe('Shown in the notification.')
+        },
+        async (args) => {
+          const given = [args.pr !== undefined, !!args.branch, !!args.sha].filter(Boolean).length
+          if (given !== 1) throw new Error('ci_watch: give exactly one of pr, branch, sha')
+          const target =
+            args.pr !== undefined
+              ? ({ kind: 'pr', number: args.pr } as const)
+              : args.branch
+                ? ({ kind: 'branch', name: args.branch } as const)
+                : ({ kind: 'sha', sha: args.sha! } as const)
+          const result = await watch({
+            threadKey: getCallingThreadKey(deps),
+            repo: args.repo,
+            target,
+            follow: args.follow,
+            checks: args.checks,
+            waitForAll: args.waitForAll,
+            label: args.label,
+            timeoutMinutes: args.timeoutMinutes
+          })
+          return okJson(result)
+        }
+      ),
+      tool(
+        'ci_watch_list',
+        'List active CI watches. Defaults to the calling thread; pass all=true for every thread.',
+        { all: z.boolean().optional() },
+        async (args) => okJson({ watches: list(args.all ? undefined : getCallingThreadKey(deps)) })
+      ),
+      tool('ci_unwatch', 'Stop a CI watch by id.', { id: z.string() }, async (args) =>
+        unwatch(args.id) ? okText(`Stopped CI watch ${args.id}.`) : okText(`No CI watch ${args.id}.`)
+      )
+    )
   }
 
   const filteredTools = opts?.include ? tools.filter((t) => opts.include!.includes(t.name)) : tools
