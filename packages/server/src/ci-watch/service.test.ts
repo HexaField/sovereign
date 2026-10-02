@@ -76,7 +76,7 @@ describe('ci-watch', () => {
   const advance = async (svc: ReturnType<typeof make>, ms: number) => {
     const end = clock + ms
     while (clock < end) {
-      clock = Math.min(end, clock + CI_POLL.tickMs)
+      clock = Math.min(end, clock + CI_POLL.pollMs)
       await svc.pollDue()
     }
   }
@@ -104,7 +104,7 @@ describe('ci-watch', () => {
       { context: 'ci/circleci: build', state: 'success' },
       { context: 'ci/circleci: fmt', state: 'success' }
     ])
-    await advance(svc, 30_000)
+    await advance(svc, 10_000) // one poll sees everything finished; the settle window opens
     expect(sent).toHaveLength(0)
     // The dependant appears before the settle window closes.
     gh.statuses.set('aaa', [...gh.statuses.get('aaa')!, { context: 'ci/circleci: integration', state: 'pending' }])
@@ -274,11 +274,12 @@ describe('ci-watch', () => {
     try {
       gh.state.failures = 3
       gh.calls.length = 0
-      // 30 s to the first poll, then 60 s, 120 s, 240 s backoff: three failed polls in ~7.5 min.
-      await advance(svc, 7 * 60_000)
-      const failedPolls = gh.calls.filter((c) => c.status === 502).length
-      expect(failedPolls).toBe(3)
-      expect(gh.calls.length).toBe(3)
+      // Polls at 10 s and 30 s fail; the next waits 40 s (to 70 s). Without
+      // backoff a 10 s loop would make 6 calls in this minute.
+      await advance(svc, 60_000)
+      expect(gh.calls.map((c) => c.status)).toEqual([502, 502])
+      await advance(svc, 60_000)
+      expect(gh.calls.filter((c) => c.status === 502)).toHaveLength(3)
       gh.statuses.set('aaa', [{ context: 'ci', state: 'failure' }])
       await advance(svc, 5 * 60_000)
       expect(sent).toHaveLength(1)
