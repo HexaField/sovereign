@@ -5,6 +5,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { PassThrough } from 'node:stream'
 import {
+  attachmentHeader,
   createDeviceFiles,
   cleanPath,
   shQuote,
@@ -31,6 +32,12 @@ beforeAll(() => {
   fs.writeFileSync(path.join(root, ODD, 'note.txt'), 'hello')
   fs.writeFileSync(path.join(root, 'small.txt'), 'abc')
   fs.symlinkSync('small.txt', path.join(root, 'link'))
+  fs.mkdirSync(path.join(root, 'aside'))
+  fs.symlinkSync(path.join(root, 'big'), path.join(root, 'aside', 'biglink'))
+  fs.mkdirSync(path.join(root, 'aside', '-rf'))
+  fs.writeFileSync(path.join(root, 'aside', '-rf', 'x'), 'x')
+  fs.writeFileSync(path.join(root, 'aside', 'locked'), 'secret')
+  fs.chmodSync(path.join(root, 'aside', 'locked'), 0)
 })
 afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true })
@@ -48,7 +55,7 @@ describe('device files — list', () => {
       const listing = await files.list(target, root)
       const e = byName(listing.entries)
       expect(listing.path).toBe(root)
-      expect(Object.keys(e).sort()).toEqual(['big', 'link', 'small.txt', ODD].sort())
+      expect(Object.keys(e).sort()).toEqual(['aside', 'big', 'link', 'small.txt', ODD].sort())
       expect(e['small.txt']).toMatchObject({ type: 'file', size: 3 })
       expect(e.big).toMatchObject({ type: 'dir', size: 0 })
       expect(e[ODD].type).toBe('dir')
@@ -58,6 +65,11 @@ describe('device files — list', () => {
 
     it(`reports a missing directory as 404 (${label})`, async () => {
       await expect(files.list(target, path.join(root, 'nope'))).rejects.toMatchObject({ status: 404 })
+    })
+
+    it(`lists through a symlink to a directory (${label})`, async () => {
+      const listing = await files.list(target, path.join(root, 'aside', 'biglink'))
+      expect(listing.entries.map((e) => e.name)).toEqual(['blob.bin'])
     })
   }
 
@@ -85,6 +97,47 @@ describe('device files — sizes', () => {
     expect(s.total).toBeGreaterThanOrEqual(s.sizes.big)
     // A second call serves the cached result.
     expect(files.sizes('dev', remote, root)).toBe(s)
+  })
+
+  const settle = async (get: () => { done: boolean }) => {
+    for (let i = 0; i < 100 && !get().done; i++) await new Promise((r) => setTimeout(r, 20))
+  }
+
+  it('sizes the target of a symlinked directory', async () => {
+    const link = path.join(root, 'aside', 'biglink')
+    await settle(() => files.sizes('dev', remote, link))
+    expect(files.sizes('dev', remote, link).total).toBeGreaterThanOrEqual(290_000)
+  })
+
+  it('kills a du nobody polls, without waiting for another request', async () => {
+    const slow = createDeviceFiles({
+      remoteShell: () => ['bash', ['-c', 'cat >/dev/null; sleep 30']],
+      idleKillMs: 100
+    })
+    const s = slow.sizes('dev', remote, root)
+    await new Promise((r) => setTimeout(r, 400))
+    expect(s.done).toBe(true)
+    slow.dispose()
+  })
+
+  it('reports an unreachable device as an error, not as partial sizes', async () => {
+    const down = createDeviceFiles({
+      remoteShell: () => [
+        'bash',
+        [
+          '-c',
+          'cat >/dev/null; echo "Warning: Permanently added x" >&2; echo "ssh: connect to host x: Connection refused" >&2; exit 255'
+        ]
+      ]
+    })
+    const get = () => down.sizes('dev', remote, root)
+    await settle(get)
+    expect(get()).toMatchObject({
+      done: true,
+      partial: false,
+      error: 'ssh: connect to host x: Connection refused'
+    })
+    down.dispose()
   })
 })
 
@@ -120,6 +173,63 @@ describe('device files — download', () => {
     await expect(grab(remote, path.join(root, 'nope'))).rejects.toMatchObject({ status: 404 })
     await expect(grab(local, '/')).rejects.toMatchObject({ status: 400 })
   })
+
+  const untar = (body: Buffer) => {
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'sov-fs-out-'))
+    fs.writeFileSync(path.join(dest, 'x.tar.gz'), body)
+    execFileSync('tar', ['-xzf', 'x.tar.gz'], { cwd: dest })
+    return dest
+  }
+
+  it('archives the contents of a symlinked directory, not just the link', async () => {
+    const { meta, body } = await grab(remote, path.join(root, 'aside', 'biglink'))
+    expect(meta).toEqual({ name: 'biglink.tar.gz', isDir: true })
+    const dest = untar(body)
+    expect(fs.statSync(path.join(dest, 'big', 'blob.bin')).size).toBe(300_000)
+    fs.rmSync(dest, { recursive: true, force: true })
+  })
+
+  it('archives a directory whose name starts with a dash', async () => {
+    const dest = untar((await grab(remote, path.join(root, 'aside', '-rf'))).body)
+    expect(fs.readFileSync(path.join(dest, '-rf', 'x'), 'utf8')).toBe('x')
+    fs.rmSync(dest, { recursive: true, force: true })
+  })
+
+  it.skipIf(process.getuid?.() === 0)('rejects an unreadable file with 403 before sending headers', async () => {
+    let started = false
+    await expect(
+      files.download(remote, path.join(root, 'aside', 'locked'), new PassThrough(), () => (started = true))
+    ).rejects.toMatchObject({ status: 403 })
+    expect(started).toBe(false)
+  })
+
+  it('finds the start marker after other stderr output (ssh warnings, login shells)', async () => {
+    const noisy = createDeviceFiles({
+      remoteShell: () => ['bash', ['-c', 'echo "Warning: Permanently added x" >&2; exec bash -s']]
+    })
+    const out = new PassThrough()
+    const chunks: Buffer[] = []
+    out.on('data', (c) => chunks.push(c))
+    const ended = new Promise((r) => out.on('end', r))
+    await noisy.download(remote, path.join(root, 'big', 'blob.bin'), out, () => {})
+    await ended
+    expect(Buffer.concat(chunks).length).toBe(300_000)
+  })
+
+  it('destroys the output when the stream breaks after the start', async () => {
+    const dropped = createDeviceFiles({
+      remoteShell: () => ['bash', ['-c', 'bash -s; exit 255']]
+    })
+    const out = new PassThrough()
+    out.resume()
+    let ended = false
+    out.on('end', () => (ended = true))
+    const closed = new Promise((r) => out.on('close', r))
+    await dropped.download(remote, path.join(root, 'small.txt'), out, () => {})
+    await closed
+    expect(ended).toBe(false)
+    expect(out.destroyed).toBe(true)
+  })
 })
 
 describe('device files — path handling', () => {
@@ -128,6 +238,10 @@ describe('device files — path handling', () => {
     expect(cleanPath('/a/b/../c/')).toBe('/a/c')
     expect(() => cleanPath('relative')).toThrow(FsError)
     expect(() => cleanPath('/a\0b')).toThrow(FsError)
+  })
+
+  it('encodes the RFC 5987 delimiters in a download name', () => {
+    expect(attachmentHeader("it's (1)*.txt")).toBe("attachment; filename*=UTF-8''it%27s%20%281%29%2A.txt")
   })
 
   it('single-quotes for a shell, including embedded quotes', () => {
