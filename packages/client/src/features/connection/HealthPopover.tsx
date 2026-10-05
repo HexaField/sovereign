@@ -8,8 +8,7 @@ import { formatBytes } from '../system/HealthTab.js'
 import SettingsContent from '../agent/SettingsContent.js'
 import { agentName } from '../../lib/identity.js'
 
-/** Whether the header's Service Health popover shows. Shared so the app can
- *  open it on first launch, when the device still needs a name. */
+/** Whether the header's status popover (quick settings + Service Health) shows. */
 export const [healthPopoverOpen, setHealthPopoverOpen] = createSignal(false)
 
 export interface SembleHealth {

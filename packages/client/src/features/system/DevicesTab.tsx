@@ -1,6 +1,7 @@
 // Devices Tab — tailnet device monitoring with CPU/RAM/GPU/storage/network breakdown.
 
 import { createSignal, onMount, onCleanup, Show, For, type Component } from 'solid-js'
+import { DeviceNameSection } from '../settings/DeviceNameSection.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -465,6 +466,8 @@ const DevicesTab: Component = () => {
 
   return (
     <div class="space-y-4">
+      <DeviceNameSection />
+
       {/* Header */}
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
