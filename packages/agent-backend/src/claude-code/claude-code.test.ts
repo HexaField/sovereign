@@ -1312,6 +1312,114 @@ describe('claude-code/auto-recycle waits for the next message', () => {
   })
 })
 
+describe('claude-code/auto-recycle stops when pruning cannot shrink the session', () => {
+  let dataDir: string
+  let cwd: string
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-data-'))
+    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-cwd-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  /** An SDK that answers every message with a result, its context still 90 % full. */
+  function everyTurnFullSdk() {
+    const factory: any = (args: any) => {
+      const gen = (async function* () {
+        if (!args?.prompt || typeof args.prompt === 'string') return
+        for await (const _ of args.prompt) {
+          void _
+          yield {
+            type: 'result',
+            subtype: 'success',
+            result: 'done',
+            usage: {
+              input_tokens: 900_000,
+              output_tokens: 10,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
+            }
+          }
+        }
+      })()
+      return Object.assign(gen, {
+        interrupt: vi.fn(async () => {}),
+        setPermissionMode: vi.fn(async () => {}),
+        setModel: vi.fn(async () => {}),
+        setMaxTurns: vi.fn(async () => {}),
+        setMaxThinkingTokens: vi.fn(async () => {}),
+        mcpServerStatus: vi.fn(async () => []),
+        setMcpServers: vi.fn(async () => {}),
+        initializationResult: vi.fn(async () => ({})),
+        supportedCommands: vi.fn(async () => []),
+        supportedModels: vi.fn(async () => []),
+        close: vi.fn(() => {})
+      })
+    }
+    return factory
+  }
+
+  function backendWith(compactions: any[]) {
+    const metrics = {
+      recordToolCall: vi.fn(),
+      recordContextSnapshot: vi.fn(),
+      recordCompaction: vi.fn((c: any) => compactions.push(c)),
+      recordContextStrategy: vi.fn(),
+      recordRecycle: vi.fn()
+    }
+    return createClaudeCodeBackend(
+      {
+        dataDir,
+        cwd,
+        agentDir: join(dataDir, 'agent'),
+        // No cooldown: only the gate stands between turns and a recycle.
+        contextManagement: { recycle: { enabled: true, minIntervalMs: 0 } }
+      },
+      { sdkQuery: everyTurnFullSdk(), metrics: metrics as any }
+    )
+  }
+
+  const turn = async (backend: ReturnType<typeof createClaudeCodeBackend>, text: string) => {
+    await backend.sendMessage('r', text)
+    await new Promise((r) => setTimeout(r, 50))
+  }
+
+  it('recycles once, then no more — also after a restart — while the context stays full', async () => {
+    const compactions: any[] = []
+    const backend = backendWith(compactions)
+    await backend.createSession('t', { threadKey: 'r', model: { provider: 'anthropic', model: 'claude-opus-5-5' } })
+    const file = backend.getSessionFilePath!('r')!
+    mkdirSync(dirname(file), { recursive: true })
+    // Real conversation only: nothing for pruning to free.
+    const usage = {
+      input_tokens: 900_000,
+      output_tokens: 10,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0
+    }
+    writeFileSync(
+      file,
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [], usage } }) + '\n'
+    )
+
+    await turn(backend, 'one') // 90 % full: recycle due
+    await turn(backend, 'two') // recycles first; frees ~nothing
+    expect(compactions).toHaveLength(1)
+    await turn(backend, 'three')
+    await turn(backend, 'four')
+    expect(compactions).toHaveLength(1) // without the gate: a recycle before every message
+
+    const compactionsAfterRestart: any[] = []
+    const restarted = backendWith(compactionsAfterRestart)
+    await turn(restarted, 'five')
+    await turn(restarted, 'six')
+    expect(compactionsAfterRestart).toHaveLength(0)
+  })
+})
+
 describe('claude-code/recycleSession double-trigger guard', () => {
   let dataDir: string
   let cwd: string
