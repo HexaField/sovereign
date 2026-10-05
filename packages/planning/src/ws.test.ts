@@ -24,7 +24,8 @@ function makeMockWs(): WsHandler {
     getConnectedDevices: vi.fn().mockReturnValue([]),
     getChannels: vi.fn().mockReturnValue([]),
     getDeviceName: vi.fn().mockReturnValue(undefined),
-    isDeviceNameConnected: vi.fn().mockReturnValue(false)
+    isDeviceNameConnected: vi.fn().mockReturnValue(false),
+    sendSpeechToDeviceName: vi.fn().mockReturnValue(undefined)
   }
 }
 
