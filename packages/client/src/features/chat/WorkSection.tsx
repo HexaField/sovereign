@@ -90,7 +90,8 @@ function splitMcpName(raw: string): { server: string; tool: string } | null {
 export function normalizeToolName(raw: string): string {
   if (!raw) return 'tool'
   const mcp = splitMcpName(raw)
-  if (mcp) return mcp.tool
+  // The symbol editor's multi-file call renders as an edit; its `edits` input tells it apart.
+  if (mcp) return mcp.server === 'code' && mcp.tool === 'edit_files' ? 'edit' : mcp.tool
   return CLAUDE_CODE_TOOL_NAMES[raw] ?? raw.toLowerCase()
 }
 
@@ -553,6 +554,8 @@ function ToolPairRow(props: { pair: ToolPair }) {
   const failed = () => {
     const out = result()?.output ?? ''
     if (name() === 'edit' && Array.isArray(callInput().ops)) return !parseSymbolEditReport(out).ok
+    if (name() === 'edit' && Array.isArray(callInput().edits))
+      return !/^(?:Edited|Dry run of) \d+ of \d+ files/.test(out)
     return out.includes('error') || out.includes('Error')
   }
 
@@ -603,6 +606,7 @@ function ToolCallSummary(props: { name: string; input: Record<string, unknown> }
       case 'write':
         return shortPath(str(inp.path || inp.file_path))
       case 'edit':
+        if (Array.isArray(inp.edits)) return symbolEditsSummary(inp)
         return Array.isArray(inp.ops) ? symbolEditSummary(inp) : shortPath(str(inp.path || inp.file_path))
       case 'exec':
         return truncate(str(inp.command), 60)
@@ -663,7 +667,9 @@ function ToolDetailView(props: { name: string; input: Record<string, unknown>; r
   return (
     <div class="space-y-2">
       {props.name === 'edit' &&
-        (Array.isArray(inp().ops) ? (
+        (Array.isArray(inp().edits) ? (
+          <MultiFileEditDetail input={inp()} result={props.resultContent} />
+        ) : Array.isArray(inp().ops) ? (
           <SymbolEditDetail input={inp()} result={props.resultContent} />
         ) : (
           <EditDetail input={inp()} />
@@ -762,6 +768,26 @@ function SymbolEditDetail(props: { input: Record<string, unknown>; result?: stri
         </div>
       </Show>
     </div>
+  )
+}
+
+/** The symbol editor's `edit_files`: one SymbolEditDetail per file, or the error when the call failed. */
+function MultiFileEditDetail(props: { input: Record<string, unknown>; result?: string }) {
+  const edits = () => props.input.edits as Array<Record<string, unknown>>
+  const reports = () => splitEditFilesReport(props.result ?? '')
+  return (
+    <Show
+      when={reports().length === edits().length}
+      fallback={
+        <div class="font-mono text-[10px] whitespace-pre-wrap" style={{ color: 'var(--c-text-muted)' }}>
+          {props.result}
+        </div>
+      }
+    >
+      <div class="space-y-2">
+        <For each={edits()}>{(edit, i) => <SymbolEditDetail input={edit} result={reports()[i()]} />}</For>
+      </div>
+    </Show>
   )
 }
 
@@ -1295,6 +1321,26 @@ export function symbolEditSummary(input: Record<string, unknown>): string {
     .map((o) => [o.op, o.symbol ?? o.after ?? o.before].filter(Boolean).join(' '))
     .join(', ')
   return truncate(`${shortPath(str(input.file))} · ${ops}`, 90)
+}
+
+export function symbolEditsSummary(input: Record<string, unknown>): string {
+  const files = (input.edits as Array<Record<string, unknown>>).map((e) => shortPath(str(e.file)))
+  return truncate(`${files.length} files · ${files.join(', ')}`, 90)
+}
+
+/**
+ * Split an `edit_files` report into one report per file, in call order. Each
+ * file's report opens with its title line; diff and note lines never start
+ * with a title word. A failed call has no per-file reports.
+ */
+export function splitEditFilesReport(text: string): string[] {
+  if (!/^(?:Edited|Dry run of) \d+ of \d+ files/.test(text)) return []
+  const reports: string[][] = []
+  for (const line of text.split('\n').slice(1)) {
+    if (/^(?:Edited|Created|Dry run, nothing written:|No change to) /.test(line)) reports.push([line])
+    else reports[reports.length - 1]?.push(line)
+  }
+  return reports.map((r) => r.join('\n').trimEnd())
 }
 
 /**

@@ -128,6 +128,8 @@ function applyOne(op: EditOp, text: string, analysis: Analysis, label: string): 
       return replace(op.symbol, op.code, text, analysis, label)
     case 'replace_in':
       return replaceIn(op, text, analysis, label)
+    case 'replace_all':
+      return replaceAll(op, text, analysis, label)
     case 'insert':
       return insert(op, text, analysis, label)
     case 'remove':
@@ -264,6 +266,54 @@ function replaceIn(op: Extract<EditOp, { op: 'replace_in' }>, text: string, anal
     },
     change: (after) => (d ? signatureChange(d, owner(after)) : undefined)
   }
+}
+
+// ── replace_all ───────────────────────────────────────────────────────────────
+
+/**
+ * Every match of find, in the symbol or the whole file. count states how many
+ * matches the caller expects; any other number fails the call, so a find that
+ * matches nothing (or too much) can never pass silently.
+ */
+function replaceAll(op: Extract<EditOp, { op: 'replace_all' }>, text: string, analysis: Analysis, label: string): Step {
+  if (!op.find) throw new EditError('find is empty.')
+  const d = op.symbol ? lookup(analysis, op.symbol, label) : undefined
+  const top = d ? topOf(d) : 0
+  const from = d && startsLine(text, top) ? lineStart(text, top) : top
+  const to = d ? trailingCommentEnd(text, d.end, analysis.traits) : text.length
+  const where = d ? `'${d.qualifiedName}'` : label
+
+  let pattern: RegExp
+  try {
+    pattern = op.regex
+      ? new RegExp(op.find, 'gm')
+      : new RegExp(op.find.replace(/\r\n/g, '\n').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
+  } catch (err) {
+    throw new EditError(`find is not a valid regular expression: ${(err as Error).message}`)
+  }
+  const hay = text.slice(from, to)
+  const hits = [...hay.matchAll(pattern)]
+  if (hits.some((m) => m[0] === ''))
+    throw new EditError('find matches empty text; every match must cover at least one character.')
+  const lines = [...new Set(hits.map((m) => lineOf(text, from + m.index)))]
+  if (hits.length !== op.count) {
+    throw new EditError(
+      `find matches ${hits.length} place${hits.length === 1 ? '' : 's'} in ${where}${lines.length ? ` (line${lines.length === 1 ? '' : 's'} ${lineList(lines)})` : ''}, not ${op.count}. Check the matches, then set count to the number you mean to change.`
+    )
+  }
+  const code = op.code.replace(/\r\n/g, '\n')
+  // A literal find inserts code as written; a regex find expands $1, $<name> and $&.
+  const body = op.regex ? hay.replace(pattern, code) : hay.replace(pattern, () => code)
+  return {
+    text: text.slice(0, from) + body + text.slice(to),
+    note: () =>
+      `replace_all ${d ? d.qualifiedName : 'file'} · ${hits.length} replacement${hits.length === 1 ? '' : 's'} on line${lines.length === 1 ? '' : 's'} ${lineList(lines)}`
+  }
+}
+
+/** 1-based line numbers, the first 20 then a count. */
+function lineList(lines: number[]): string {
+  return lines.length > 20 ? `${lines.slice(0, 20).join(', ')}, … ${lines.length - 20} more` : lines.join(', ')
 }
 
 /** findAnchor in `hay`, which starts at `offset` in `text`, with errors that name lines and show the symbol. */

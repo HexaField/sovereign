@@ -7,7 +7,9 @@ import {
   getWorkItemStatus,
   normalizeToolName,
   parseSymbolEditReport,
+  splitEditFilesReport,
   symbolEditSummary,
+  symbolEditsSummary,
   WorkSection
 } from './WorkSection.js'
 import type { WorkItem } from '@sovereign/core'
@@ -219,6 +221,52 @@ describe('§4.4 WorkSection', () => {
     })
     it('shows step count badge using Badge with var(--c-step-badge-bg)', () => {
       expect(typeof WorkSection).toBe('function')
+    })
+  })
+
+  describe('multi-file symbol edits (mcp__code__edit_files)', () => {
+    const REPORT = [
+      'Edited 2 of 3 files (1 unchanged).',
+      '',
+      'Edited packages/a.ts',
+      'replace_all file · 2 replacements on lines 3, 9',
+      'syntax ok',
+      '',
+      '@@ -3,1 +3,1 @@',
+      '-old()',
+      '+fresh()',
+      '',
+      'Created packages/b.ts',
+      'create · 1 lines',
+      '',
+      '@@ -0,0 +1,1 @@',
+      '+export const b = 1',
+      '',
+      'No change to packages/c.ts: the ops leave the text as it was. Nothing written.'
+    ].join('\n')
+
+    it('renders as an edit and summarises the files', () => {
+      expect(normalizeToolName('mcp__code__edit_files')).toBe('edit')
+      expect(symbolEditsSummary({ edits: [{ file: '/r/packages/a.ts' }, { file: '/r/packages/b.ts' }] })).toBe(
+        '2 files · /r/packages/a.ts, /r/packages/b.ts'
+      )
+    })
+
+    it('splits the report into one report per file, in call order', () => {
+      const reports = splitEditFilesReport(REPORT)
+      expect(reports).toHaveLength(3)
+      expect(parseSymbolEditReport(reports[0])).toMatchObject({
+        ok: true,
+        notes: ['replace_all file · 2 replacements on lines 3, 9', 'syntax ok']
+      })
+      expect(parseSymbolEditReport(reports[1]).diff).toHaveLength(2)
+      expect(reports[2]).toMatch(/^No change to packages\/c\.ts/)
+    })
+
+    it('has no per-file reports when the call failed', () => {
+      expect(
+        splitEditFilesReport('/r/a.ts: replace_all: find matches 0 places in a.ts, not 1.\nNothing was written.')
+      ).toEqual([])
     })
   })
 

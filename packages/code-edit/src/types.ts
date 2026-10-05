@@ -4,6 +4,7 @@ import type { CodeTraits } from './text.js'
 export type EditOp =
   | { op: 'replace'; symbol: string; code: string }
   | { op: 'replace_in'; symbol?: string; find: string; to?: string; code: string }
+  | { op: 'replace_all'; symbol?: string; find: string; regex?: boolean; code: string; count: number }
   | { op: 'insert'; code: string; after?: string; before?: string }
   | { op: 'remove'; symbol: string }
   | { op: 'create'; code: string }
@@ -13,6 +14,12 @@ export interface EditArgs {
   file: string
   ops: EditOp[]
   /** Compute and report the change without writing it. */
+  dryRun?: boolean
+}
+
+/** Several files in one call: every file's ops apply, or no file changes. */
+export interface EditFilesArgs {
+  edits: Array<{ file: string; ops: EditOp[] }>
   dryRun?: boolean
 }
 

@@ -6,7 +6,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { Analyzer, EditArgs, EditOp } from './types.js'
 import { createAnalyzer } from './analyzer.js'
-import { editFile, type EditFileOptions } from './edit-file.js'
+import { editFile, editFiles, type EditFileOptions } from './edit-file.js'
 
 const hasCodegraph = spawnSync('codegraph', ['--version']).status === 0
 const hasPython = spawnSync('python3', ['--version']).status === 0
@@ -305,6 +305,140 @@ describe('replace_in', () => {
       { op: 'replace_in', find: "import { a } from './a'", code: "import { a } from './a'\nimport { b } from './b'" }
     ])
     expect(read(file).startsWith("import { a } from './a'\nimport { b } from './b'\n\n/** Adds one. */")).toBe(true)
+  })
+})
+
+describe('replace_all', () => {
+  const SRC = 'const a = oldName(1)\nconst b = oldName(2)\n\nfunction keep() {\n  return oldName(3)\n}\n'
+
+  it('replaces every literal match when count agrees, inserting code as written', async () => {
+    const file = put('all.ts', SRC)
+    const res = await edit(file, [{ op: 'replace_all', find: 'oldName', code: 'next$1', count: 3 }])
+    expect(read(file)).toBe(SRC.split('oldName').join('next$1'))
+    expect(res.report).toContain('replace_all file · 3 replacements on lines 1, 2, 5')
+  })
+
+  it('rejects a count that differs from the matches, naming their lines, and writes nothing', async () => {
+    const file = put('all.ts', SRC)
+    await expect(edit(file, [{ op: 'replace_all', find: 'oldName', code: 'x', count: 2 }])).rejects.toThrow(
+      'find matches 3 places in all.ts (lines 1, 2, 5), not 2.'
+    )
+    await expect(edit(file, [{ op: 'replace_all', find: 'missing', code: 'x', count: 1 }])).rejects.toThrow(
+      'find matches 0 places in all.ts, not 1.'
+    )
+    expect(read(file)).toBe(SRC)
+  })
+
+  it('treats find as a multiline regex with regex: true, expanding groups', async () => {
+    const file = put('all.ts', SRC)
+    await edit(file, [
+      { op: 'replace_all', find: '^const (\\w+) = oldName', regex: true, code: 'let $1 = fresh', count: 2 }
+    ])
+    expect(read(file)).toBe(
+      SRC.replace('const a = oldName', 'let a = fresh').replace('const b = oldName', 'let b = fresh')
+    )
+  })
+
+  it('matches a literal find copied with CRLF endings against any line endings', async () => {
+    const file = put('crlf.ts', SRC.replace(/\n/g, '\r\n'))
+    await edit(file, [{ op: 'replace_all', find: 'oldName(1)\r\nconst b', code: 'x(1)\nconst b', count: 1 }])
+    expect(read(file)).toBe(SRC.replace('oldName(1)', 'x(1)').replace(/\n/g, '\r\n'))
+  })
+
+  it('stays inside the symbol when one is given', async () => {
+    const file = put('all.ts', SRC)
+    await edit(file, [{ op: 'replace_all', symbol: 'keep', find: 'oldName', code: 'inner', count: 1 }])
+    expect(read(file)).toBe(SRC.replace('oldName(3)', 'inner(3)'))
+  })
+
+  it('rejects an invalid regex, a regex that matches empty text, and a change that breaks the syntax', async () => {
+    const file = put('all.ts', SRC)
+    await expect(edit(file, [{ op: 'replace_all', find: '(', regex: true, code: 'x', count: 1 }])).rejects.toThrow(
+      'not a valid regular expression'
+    )
+    await expect(edit(file, [{ op: 'replace_all', find: 'x*', regex: true, code: 'y', count: 1 }])).rejects.toThrow(
+      'matches empty text'
+    )
+    await expect(edit(file, [{ op: 'replace_all', find: '(', code: '((', count: 4 }])).rejects.toThrow(
+      'breaks the syntax'
+    )
+    expect(read(file)).toBe(SRC)
+  })
+})
+
+describe('editFiles', () => {
+  const many = (edits: Array<{ file: string; ops: EditOp[] }>, dryRun?: boolean) =>
+    editFiles({ edits, dryRun }, { roots: [tmp], graph: false })
+  const A = 'export function a() {\n  return old()\n}\n'
+  const B = 'export const b = () => old()\n'
+
+  it('edits several files in one call and reports each', async () => {
+    const a = put('a.ts', A)
+    const b = put('b.ts', B)
+    const c = path.join(tmp, 'new/c.ts')
+    const res = await many([
+      { file: a, ops: [{ op: 'replace_all', find: 'old', code: 'fresh', count: 1 }] },
+      { file: b, ops: [{ op: 'replace_all', find: 'old', code: 'fresh', count: 1 }] },
+      { file: c, ops: [{ op: 'create', code: 'export const c = 1' }] }
+    ])
+    expect(read(a)).toBe(A.replace('old', 'fresh'))
+    expect(read(b)).toBe(B.replace('old', 'fresh'))
+    expect(read(c)).toBe('export const c = 1\n')
+    expect(res.written).toEqual([a, b, c])
+    expect(res.report).toMatch(
+      /^Edited 3 of 3 files\.\n\nEdited a\.ts\n[\s\S]*\nEdited b\.ts\n[\s\S]*\nCreated c\.ts\n/
+    )
+  })
+
+  it('writes no file when an op in any file fails, and names that file', async () => {
+    const a = put('a.ts', A)
+    const b = put('b.ts', B)
+    await expect(
+      many([
+        { file: a, ops: [{ op: 'replace_all', find: 'old', code: 'fresh', count: 1 }] },
+        { file: b, ops: [{ op: 'replace_all', find: 'old', code: 'fresh', count: 2 }] }
+      ])
+    ).rejects.toThrow(`${b}: replace_all: find matches 1 place in b.ts (line 1), not 2.`)
+    expect(read(a)).toBe(A)
+    expect(read(b)).toBe(B)
+  })
+
+  it('refuses a file given twice, and writes nothing on a dry run', async () => {
+    const a = put('a.ts', A)
+    const op: EditOp = { op: 'replace_all', find: 'old', code: 'fresh', count: 1 }
+    await expect(
+      many([
+        { file: a, ops: [op] },
+        { file: a, ops: [op] }
+      ])
+    ).rejects.toThrow('a.ts appears twice')
+    const res = await many([{ file: a, ops: [op] }], true)
+    expect(res.written).toEqual([])
+    expect(res.report).toContain('Dry run, nothing written: a.ts')
+    expect(read(a)).toBe(A)
+  })
+
+  // A read-only directory stops the write; root ignores the permission.
+  it.skipIf(process.getuid?.() === 0)('undoes the files already written when a later write fails', async () => {
+    const a = put('a.ts', A)
+    const created = path.join(tmp, 'fresh/dir/c.ts')
+    const b = put('locked/b.ts', B)
+    fs.chmodSync(path.dirname(b), 0o555) // the temp file for b cannot be created
+    try {
+      await expect(
+        many([
+          { file: a, ops: [{ op: 'replace_all', find: 'old', code: 'fresh', count: 1 }] },
+          { file: created, ops: [{ op: 'create', code: 'export const c = 1' }] },
+          { file: b, ops: [{ op: 'replace_all', find: 'old', code: 'fresh', count: 1 }] }
+        ])
+      ).rejects.toThrow('restored the 2 files already written')
+      expect(read(a)).toBe(A)
+      expect(read(b)).toBe(B)
+      expect(fs.existsSync(path.join(tmp, 'fresh'))).toBe(false)
+      expect(fs.readdirSync(path.dirname(b))).toEqual(['b.ts'])
+    } finally {
+      fs.chmodSync(path.dirname(b), 0o755)
+    }
   })
 })
 
