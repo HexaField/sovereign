@@ -16,6 +16,7 @@ interface DirSizes {
   total?: number
   done: boolean
   partial: boolean
+  error?: string
 }
 
 const PAGE = 200
@@ -63,8 +64,6 @@ export function FileBrowser(props: { device: string }) {
     clearTimeout(pollTimer)
     setLoading(true)
     setError(null)
-    setSizes(null)
-    setShowAll(false)
     try {
       const res = await fetch(`${base()}?path=${encodeURIComponent(dir)}`)
       const body = await res.json()
@@ -72,6 +71,8 @@ export function FileBrowser(props: { device: string }) {
       if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`)
       setPath(body.path)
       setEntries(body.entries)
+      setSizes(null)
+      setShowAll(false)
       void pollSizes(body.path, gen)
     } catch (err) {
       if (gen === generation) setError((err as Error).message)
@@ -172,8 +173,9 @@ export function FileBrowser(props: { device: string }) {
                 <span class="w-4 shrink-0 text-center text-[11px]" aria-hidden="true">
                   {e.type === 'dir' ? '📁' : e.type === 'link' ? '↪' : '📄'}
                 </span>
+                {/* A link may point at a directory: opening one that does not shows the error. */}
                 <Show
-                  when={e.type === 'dir'}
+                  when={e.type === 'dir' || e.type === 'link'}
                   fallback={
                     <span class="min-w-0 flex-1 truncate font-mono text-[11px]" title={e.name}>
                       {e.name}
@@ -197,7 +199,7 @@ export function FileBrowser(props: { device: string }) {
                 <span class="w-16 shrink-0 text-right font-mono text-[10px]" style={{ color: 'var(--c-text)' }}>
                   {size() === undefined ? '…' : size() === null ? '—' : fmtSize(size()!)}
                 </span>
-                <Show when={e.type === 'dir' || e.type === 'file'} fallback={<span class="w-5 shrink-0" />}>
+                <Show when={e.type !== 'other'} fallback={<span class="w-5 shrink-0" />}>
                   <a
                     class="w-5 shrink-0 text-center text-[11px] hover:opacity-70"
                     href={`${base()}/download?path=${encodeURIComponent(join(path(), e.name))}`}
@@ -219,6 +221,13 @@ export function FileBrowser(props: { device: string }) {
         </Show>
       </div>
 
+      <Show when={sizes()?.error}>
+        {(err) => (
+          <div class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+            Folder sizes unavailable: {err()}
+          </div>
+        )}
+      </Show>
       <Show when={sizes()?.partial}>
         <div class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
           Some folders could not be read (permissions): their sizes are lower bounds. "—" marks folders on another disk

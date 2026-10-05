@@ -12,7 +12,7 @@ import type { RoutingBackend, ActiveSessions } from '@sovereign/agent-backend'
 import type { ContextBudget, EventBus } from '@sovereign/core'
 import type { EventStream } from './event-stream.js'
 import type { DeviceMonitor, DiscoveredDevice } from './device-monitor.js'
-import { createDeviceFiles, FsError, type DeviceFiles } from './device-files.js'
+import { attachmentHeader, createDeviceFiles, FsError, type DeviceFiles } from './device-files.js'
 import type { WsHandler } from '@sovereign/primitives'
 
 export interface PersonalityInfo {
@@ -527,7 +527,7 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
       try {
         await files.download(await target(req), req.query.path, res, (name, isDir) => {
           res.setHeader('Content-Type', isDir ? 'application/gzip' : 'application/octet-stream')
-          res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
+          res.setHeader('Content-Disposition', attachmentHeader(name))
         })
       } catch (err) {
         fail(res, err)
