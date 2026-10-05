@@ -491,12 +491,23 @@ describe('WsHandler', () => {
       expect(announced.handler.sendSpeechToDeviceName('Mac', MSG)).toBe('node')
     })
 
-    it('keeps a preferred live connection, and elects again when it has gone', () => {
-      const { handler, sockets } = setup(['t1', BROWSER], ['t2', BROWSER])
-      expect(handler.sendSpeechToDeviceName('Mac', MSG, 't1')).toBe('t1')
+    it('takes the first live preferred connection, and elects again when none is live', () => {
+      const { handler, sockets } = setup(['t1', BROWSER], ['t2', BROWSER], ['t3', BROWSER])
+      expect(handler.sendSpeechToDeviceName('Mac', MSG, ['t1', 't2'])).toBe('t1')
       sockets.get('t1')!.emit('close')
-      expect(handler.sendSpeechToDeviceName('Mac', MSG, 't1')).toBe('t2')
+      expect(handler.sendSpeechToDeviceName('Mac', MSG, ['t1', 't2'])).toBe('t2')
+      sockets.get('t2')!.emit('close')
+      expect(handler.sendSpeechToDeviceName('Mac', MSG, ['t1', 't2'])).toBe('t3')
       expect(handler.sendSpeechToDeviceName('Nobody', MSG)).toBeUndefined()
+    })
+
+    it('trusts a voice client that announces itself, whatever its User-Agent', () => {
+      const { handler, sockets } = setup(['tab', BROWSER], ['app', BROWSER])
+      sockets.get('tab')!.emit('message', JSON.stringify({ type: 'ws.active' }))
+      sockets
+        .get('app')!
+        .emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Mac', client: 'voice-node' }))
+      expect(handler.sendSpeechToDeviceName('Mac', MSG)).toBe('app')
     })
   })
 

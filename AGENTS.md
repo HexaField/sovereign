@@ -358,12 +358,12 @@ Two server mechanisms interrupt a Claude Code turn; the transcript shows the sam
 
 TTS routes by device **name** (announced with `ws.device-name`), because a page refresh mints a fresh connection deviceId. Several connections share a name on one machine: browser tabs, plus a voice node or the Android app. `wsHandler.sendSpeechToDeviceName` gives the audio to **one** of them and the reply without `audio` to the rest, so their UI still updates:
 
-1. the connection the voice request came from (`origin.deviceId`), while it stays live;
+1. the first live entry of `prefer`: the connection that spoke the reply's previous chunk, then the one the voice request came from (`origin.deviceId`);
 2. a voice client: `client: 'voice-node'` in `ws.device-name`, or a non-browser User-Agent on the upgrade request;
-3. the browser tab the user touched last (`ws.active`: the client sends it on focus, on input, throttled to 5 s, and on reconnect);
+3. the browser tab the user touched last (`ws.active`: the client sends it on focus, on input, throttled to 5 s, and on reconnect — only once the page has had a user gesture, since autoplay keeps audio suspended before that, and never while disconnected);
 4. the newest connection.
 
-`voice-response.ts` pins the later chunks of a reply to the connection that spoke chunk 0, so a reply never splits across tabs. The server decides this because a client-side race cannot: Chrome throttles background-tab timers to the same one-second tick, so hidden tabs that raced over a BroadcastChannel all woke together and all played. Wind-tunnel s37 covers it.
+`voice-response.ts` pins a reply's later chunks to the connection that spoke the chunk before, and forgets the pin when the reply ends, so a reply never splits across tabs and an old reply never claims a new one. With nothing connected under the name, the push fallback sends the text once per reply. The server decides this because a client-side race cannot: Chrome throttles background-tab timers to the same one-second tick, so hidden tabs that raced over a BroadcastChannel all woke together and all played. Wind-tunnel s37 covers it.
 
 ## CI watch (`packages/server/src/ci-watch/`)
 

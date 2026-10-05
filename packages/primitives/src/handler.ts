@@ -21,13 +21,13 @@ export interface WsHandler {
   sendToDeviceName(name: string, msg: WsMessage): void
   /** Send speech audio to ONE connection under a device name, so several
    *  tabs (or a tab and a voice node) on one machine never all speak. The
-   *  speaker: `prefer` when it is live under that name, else a dedicated
-   *  voice client (voice node, Android app), else the browser tab the user
-   *  touched last (ws.active), else the newest connection. The other
-   *  connections under the name get the message without its `audio`, so
-   *  their UI still sees the reply. Returns the speaker's deviceId, or
+   *  speaker: the first of `prefer` that is live under that name, else a
+   *  dedicated voice client (voice node, Android app), else the browser tab
+   *  the user touched last (ws.active), else the newest connection. The
+   *  other connections under the name get the message without its `audio`,
+   *  so their UI still sees the reply. Returns the speaker's deviceId, or
    *  undefined when nothing under the name is connected. */
-  sendSpeechToDeviceName(name: string, msg: WsMessage, prefer?: string): string | undefined
+  sendSpeechToDeviceName(name: string, msg: WsMessage, prefer?: string[]): string | undefined
   sendBinary(channel: string, data: Buffer, scope?: Record<string, string>): void
   /** Send a binary frame to a single device on a named channel. Returns true
    *  if the device had an active connection, false otherwise. */
@@ -102,19 +102,19 @@ export function createWsHandler(bus: EventBus): WsHandler {
     }
   }
 
-  const sendSpeechToDeviceName = (name: string, msg: WsMessage, prefer?: string): string | undefined => {
+  const sendSpeechToDeviceName = (name: string, msg: WsMessage, prefer: string[] = []): string | undefined => {
     const named = [...deviceNames].filter(([id, n]) => n === name && connections.has(id)).map(([id]) => id)
     if (named.length === 0) return undefined
     const rank = (id: string): [number, number, number] => {
       const s = speakers.get(id)
       return [s?.voiceClient ? 1 : 0, s?.activeAt ?? 0, s?.connectedAt ?? 0]
     }
-    const speaker = named.includes(prefer ?? '')
-      ? prefer!
-      : named.reduce((best, id) => {
-          const [a, b] = [rank(id), rank(best)]
-          return (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) > 0 ? id : best
-        })
+    const speaker =
+      prefer.find((id) => named.includes(id)) ??
+      named.reduce((best, id) => {
+        const [a, b] = [rank(id), rank(best)]
+        return (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) > 0 ? id : best
+      })
     const { audio: _audio, ...silent } = msg as WsMessage & { audio?: unknown }
     for (const id of named) sendTo(id, id === speaker ? msg : (silent as WsMessage))
     return speaker

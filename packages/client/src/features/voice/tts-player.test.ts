@@ -143,4 +143,28 @@ describe('tts-player — activity reports', () => {
     cleanup()
     focused.mockRestore()
   })
+
+  it('sends no report before the user has interacted with the page, or while disconnected', () => {
+    const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    const activation = { hasBeenActive: false }
+    Object.defineProperty(navigator, 'userActivation', { value: activation, configurable: true })
+    const ws = createMockWsStore()
+    const connected = vi.spyOn(ws, 'connected').mockReturnValue(true)
+    const cleanup = initTtsPlayer(ws)
+    window.dispatchEvent(new Event('focus'))
+    expect(sentActive(ws)).toBe(0) // a fresh reload: autoplay keeps its audio suspended
+
+    activation.hasBeenActive = true
+    connected.mockReturnValue(false)
+    window.dispatchEvent(new Event('focus'))
+    expect(sentActive(ws)).toBe(0) // a queued report would arrive stale
+
+    connected.mockReturnValue(true)
+    window.dispatchEvent(new Event('focus'))
+    expect(sentActive(ws)).toBe(1)
+
+    cleanup()
+    focused.mockRestore()
+    Reflect.deleteProperty(navigator, 'userActivation')
+  })
 })
