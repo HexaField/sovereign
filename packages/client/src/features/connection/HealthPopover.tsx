@@ -460,13 +460,16 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
       <Portal>
         <div
           ref={popoverRef}
-          class="fixed z-[999] w-80 overflow-y-auto rounded-lg border p-3 shadow-lg"
+          class="fixed z-[999] overflow-y-auto rounded-lg border p-3 shadow-lg"
           style={{
             background: 'var(--c-bg-raised)',
             'border-color': 'var(--c-border)',
             color: 'var(--c-text)',
             top: '44px',
-            right: '48px',
+            // 20rem wide, 48px from the right; on a narrow phone it slides
+            // right and shrinks so it never leaves the screen.
+            width: 'min(20rem, calc(100vw - 16px))',
+            right: 'clamp(8px, calc(100vw - 20rem - 8px), 48px)',
             'max-height': 'calc(100dvh - 56px)'
           }}
         >

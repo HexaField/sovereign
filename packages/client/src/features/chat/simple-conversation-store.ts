@@ -100,8 +100,12 @@ async function fetchEntries(threadKey: Accessor<string>, key: string): Promise<v
     const res = await fetch(`/api/threads/${encodeURIComponent(key)}/simple-conversation`)
     if (!res.ok) return
     const data = (await res.json()) as { entries?: SimpleConversationEntry[] }
-    // Ignore a response for a thread the user has already left.
-    if (data?.entries && threadKey() === key) setEntries(data.entries)
+    // Ignore a response for a thread the user has already left. Keep live
+    // entries that arrived after the snapshot was taken.
+    if (!data?.entries || threadKey() !== key) return
+    const fetched = data.entries
+    const last = fetched[fetched.length - 1]?.timestamp ?? ''
+    setEntries((prev) => [...fetched, ...prev.filter((e) => e.timestamp > last)])
   } catch {
     // Best-effort — WS push backfills live.
   }

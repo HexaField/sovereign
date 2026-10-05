@@ -1,7 +1,7 @@
 // Settings — device name, appearance (theme) and notifications. Shown in
 // the header's Service Health popover.
 
-import { createSignal, For, type JSX } from 'solid-js'
+import { createSignal, For, onCleanup, type JSX } from 'solid-js'
 import { agentName } from '../../lib/identity.js'
 import { currentTheme, setTheme } from '../theme/store.js'
 import { MoonIcon, SunIcon, CircleDotIcon } from '../../ui/icons.js'
@@ -67,6 +67,11 @@ function DeviceNameSection(): JSX.Element {
     setDeviceName(draft())
     setDraft(deviceName())
   }
+  // The popover closes on an outside mousedown, which unmounts the input
+  // before it blurs: keep what was typed.
+  onCleanup(() => {
+    if (draft() !== deviceName()) commit()
+  })
 
   return (
     <section>

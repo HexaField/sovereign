@@ -1,6 +1,7 @@
 import { render } from 'solid-js/web'
 import { registerServiceWorker } from './lib/push.js'
 import { registerFileChipHandlers } from './lib/file-chip-handlers.js'
+import { setActiveView } from './features/nav/store.js'
 import App from './App'
 import './app.css'
 
@@ -17,6 +18,8 @@ if ('serviceWorker' in navigator) {
     const msg = event.data
     if (!msg || typeof msg !== 'object') return
     if (msg.type === 'sovereign:navigate' && typeof msg.threadId === 'string') {
+      // Threads show only in the workspace.
+      setActiveView('workspace')
       window.location.hash = `thread=${msg.threadId}`
     }
   })

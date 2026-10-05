@@ -740,6 +740,53 @@ describe('SimpleConversation — LLM summarize', () => {
     store.shutdown()
   })
 
+  it('keeps a voice reply after an earlier typed turn left the race guard set', async () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+    const turn = (content: string) =>
+      bus.emit({
+        type: 'chat.turn.completed',
+        timestamp: 'x',
+        source: 'chat',
+        payload: { threadId: 'work', turn: { role: 'assistant', content } }
+      })
+
+    turn('Typed answer here.') // no voice summary follows: the timer fires
+    vi.advanceTimersByTime(5100)
+    turn('Spoken answer, long form.')
+    bus.emit({
+      type: 'presence.reply',
+      timestamp: 'y',
+      source: 'voice-response',
+      payload: { modality: 'voice', text: 'Spoken summary.', threadId: 'work' }
+    })
+    vi.advanceTimersByTime(5100)
+
+    expect(store.getEntries('work').map((e) => e.text)).toEqual(['Typed answer here.', 'Spoken summary.'])
+    store.shutdown()
+  })
+
+  it('stops summarising a thread a day after its view was last opened', async () => {
+    const bus = makeBus()
+    const summarize = vi.fn(async () => 'LLM summary')
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), summarize })
+    await store.open('work')
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000 + 1)
+
+    bus.emit({
+      type: 'chat.turn.completed',
+      timestamp: 'x',
+      source: 'chat',
+      payload: { threadId: 'work', turn: { role: 'assistant', content: 'Much later.' } }
+    })
+    vi.advanceTimersByTime(5100)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(summarize).not.toHaveBeenCalled()
+    expect(store.getEntries('work').map((e) => e.text)).toEqual(['Much later.'])
+    store.shutdown()
+  })
+
   it('summarises a thread’s turns only once its simple view has been opened', async () => {
     const bus = makeBus()
     const summarize = vi.fn(async () => 'LLM summary')
@@ -872,6 +919,42 @@ describe('SimpleConversation — per-thread open and storage', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('backfills on the first open even when live entries already exist, without duplicates', async () => {
+    const bus = makeBus()
+    const history = vi.fn(async () => [
+      ...HISTORY,
+      { role: 'user', content: 'new q', timestamp: Date.parse('2026-01-01T00:00:04Z') }
+    ])
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), history })
+    // Recorded live after deploy, before anyone opened the view; history holds it too.
+    bus.emit({
+      type: 'chat.message.sent',
+      timestamp: '2026-01-01T00:00:04.100Z',
+      source: 'chat',
+      payload: { threadId: 'work', text: 'new q' }
+    })
+
+    const entries = await store.open('work')
+
+    expect(entries.map((e) => e.text)).toEqual(['Fix the build', 'Fixed. The import was wrong.', 'thanks', 'new q'])
+    store.shutdown()
+  })
+
+  it('moves the gateway log of older builds into the gateway thread’s own file', () => {
+    const dir = makeTmpDir()
+    const legacy = path.join(dir, 'simple-conversation.json')
+    fs.writeFileSync(legacy, JSON.stringify([{ role: 'user', text: 'old', modality: 'text', timestamp: 't' }]))
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+
+    expect(store.getEntries().map((e) => e.text)).toEqual(['old'])
+    expect(fs.existsSync(path.join(dir, 'simple-conversation', `${GATEWAY}.json`))).toBe(true)
+    expect(fs.existsSync(legacy)).toBe(false)
+    // A thread that later takes the gateway role starts with its own log.
+    expect(store.getEntries('next-gateway')).toEqual([])
+    store.shutdown()
   })
 
   it('drops a deleted thread’s entries and file', async () => {

@@ -143,13 +143,14 @@ describe('Response tools', () => {
     expect(chatSent).toEqual([{ threadId: GATEWAY_ID, content: 'hi from presence' }])
     // Emits a presence.reply event for the simple conversation log
     expect(replies).toHaveLength(1)
-    expect(replies[0]).toEqual({ modality: 'text', text: 'hi from presence' })
+    expect(replies[0]).toEqual({ modality: 'text', text: 'hi from presence', threadId: GATEWAY_ID })
   })
 
-  it('reply_text can target another thread when threadId given', async () => {
-    const { tools, chatSent } = makeTools()
+  it('reply_text can target another thread when threadId given, and its reply names that thread', async () => {
+    const { tools, chatSent, replies } = makeTools()
     await tools.reply_text('cross-post', { threadId: 'other-thread' })
     expect(chatSent[0].threadId).toBe('other-thread')
+    expect(replies[0]).toEqual({ modality: 'text', text: 'cross-post', threadId: 'other-thread' })
   })
 
   it('reply_webhook returns no-webhook-gateway and emits bus event', async () => {
