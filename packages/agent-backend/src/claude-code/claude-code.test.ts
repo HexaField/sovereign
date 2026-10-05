@@ -180,6 +180,14 @@ describe('claude-code/createClaudeCodeBackend', () => {
     })
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny')
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain('mcp__sovereign__cron_create')
+
+    // The same hook sends shell file edits to the edit tools, and lets other commands run.
+    const bash = (command: string) =>
+      preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, tool_use_id: 'tu2' })
+    const edit = await bash("sed -i 's/a/b/' src/x.ts")
+    expect(edit.hookSpecificOutput.permissionDecision).toBe('deny')
+    expect(edit.hookSpecificOutput.permissionDecisionReason).toContain('mcp__code__edit_files')
+    expect((await bash('git status'))?.hookSpecificOutput?.permissionDecision).not.toBe('deny')
   })
 
   // ── Regression: tool_result must be emitted EXACTLY ONCE per tool ──
@@ -2049,6 +2057,17 @@ describe('claude-code/litellm env injection', () => {
   it('does NOT inject env for the bare fable alias — it names a Claude model', async () => {
     const opts = await captureOptionsForModel('fable', { url: 'http://localhost:4000', apiKey: 'litellm' })
     expect(opts.env?.ANTHROPIC_BASE_URL).toBeUndefined()
+  })
+
+  it('turns the CLI bash-first steer off for every session, keeping the parent env', async () => {
+    for (const [model, litellm] of [
+      ['claude-opus-4-6', undefined],
+      ['qwen3.8-27b', { url: 'http://localhost:4000' }]
+    ] as const) {
+      const opts = await captureOptionsForModel(model, litellm)
+      expect(opts.env.CLAUDE_CODE_THRIFTY_SONIC).toBe('0')
+      expect(opts.env.PATH).toBe(process.env.PATH)
+    }
   })
 
   it('does NOT inject env when litellm is not configured', async () => {

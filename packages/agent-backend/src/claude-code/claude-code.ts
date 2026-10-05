@@ -89,6 +89,7 @@ import {
 } from '../history-archive.js'
 import { readHistoryLog, historyLogExists, mergeIntoHistoryLog } from '../history-log.js'
 import { attachmentToContentBlock } from './attachment.js'
+import { shellEditDenial, shellEditReason } from './shell-edit-guard.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -294,6 +295,14 @@ const WAKEUP_REDIRECT: Record<string, string> = {
   CronList: 'mcp__sovereign__cron_list',
   CronDelete: 'mcp__sovereign__cron_delete'
 }
+
+// In bypass and auto permission modes the CLI adds a "bash-first" reminder
+// that tells the model to edit files with sed, heredocs or short scripts
+// instead of Edit/Write. Those edits fail silently and skip the diff review,
+// so turn the steer off. The variable is an internal CLI flag (read from the
+// bundled CLI of @anthropic-ai/claude-agent-sdk 0.3.281);
+// bash-first-steer.test.ts runs the real CLI and fails if an upgrade renames it.
+export const BASH_FIRST_OFF_ENV = { CLAUDE_CODE_THRIFTY_SONIC: '0' }
 
 export interface ClaudeCodeBackend extends AgentBackend {
   /** Synchronously flush all file-backed state. Called on shutdown (R5). */
@@ -814,10 +823,6 @@ export function createClaudeCodeBackend(
         }
       }
 
-      // Record start time for metrics duration tracking
-      const toolUseId = (inp as Record<string, unknown>).tool_use_id as string | undefined
-      if (toolUseId) toolStartTimes.set(toolUseId, Date.now())
-
       // Redirect SDK built-in scheduling tools to Sovereign equivalents.
       // Runs before the toolPolicy check so the redirect applies regardless
       // of per-org allowlists and even when no session/policy is bound.
@@ -838,6 +843,28 @@ export function createClaudeCodeBackend(
           }
         }
       }
+
+      // File edits through the shell (sed -i, heredocs, scripts) fail silently
+      // and skip the diff review: send them to the edit tools instead.
+      if (inp.tool_name === 'Bash') {
+        const command = (inp.tool_input as { command?: unknown } | undefined)?.command
+        const reason = typeof command === 'string' ? shellEditReason(command) : undefined
+        if (reason) {
+          return {
+            continue: true,
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse' as const,
+              permissionDecision: 'deny' as const,
+              permissionDecisionReason: shellEditDenial(reason)
+            }
+          }
+        }
+      }
+
+      // Record start time for metrics duration tracking. After the denials
+      // above: a denied call gets no PostToolUse to clear its entry.
+      const toolUseId = (inp as Record<string, unknown>).tool_use_id as string | undefined
+      if (toolUseId) toolStartTimes.set(toolUseId, Date.now())
 
       // AskUserQuestion — hold the SDK until the user submits answers, then
       // return them as the tool result. The SDK's built-in behaviour is to
@@ -1405,11 +1432,13 @@ export function createClaudeCodeBackend(
       sessionKey: state.sessionKey,
       cwd: state.cwd
     })
-    // LiteLLM proxy: inject ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY into the
-    // subprocess environment so the Anthropic SDK inside the Claude Code CLI
-    // routes to the proxy instead of api.anthropic.com. The `env` field
-    // REPLACES the subprocess environment entirely (SDK design), so spread
-    // process.env first to preserve PATH, HOME, and other required vars.
+    // Subprocess environment: the `env` field REPLACES the CLI's environment
+    // entirely (SDK design), so spread process.env first to preserve PATH,
+    // HOME, and other required vars. Every session gets BASH_FIRST_OFF_ENV.
+    //
+    // LiteLLM proxy: also inject ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY so
+    // the Anthropic SDK inside the Claude Code CLI routes to the proxy
+    // instead of api.anthropic.com.
     //
     // IMPORTANT: only inject for non-Claude model sessions. Claude models use
     // Claude.ai OAuth auth stored in ~/.claude — injecting ANTHROPIC_API_KEY
@@ -1428,15 +1457,16 @@ export function createClaudeCodeBackend(
     // suppress generic error emissions and trigger orphan cleanup instead.
     let sessionConflict = false
     const resumeExisting = !useLiteLlm && !!(state.sessionFile && fs.existsSync(state.sessionFile))
-    const litellmEnv = useLiteLlm
-      ? {
-          env: {
-            ...process.env,
+    const sessionEnv = {
+      ...process.env,
+      ...BASH_FIRST_OFF_ENV,
+      ...(useLiteLlm
+        ? {
             ANTHROPIC_BASE_URL: cfgAtStart.litellm!.url,
             ANTHROPIC_API_KEY: cfgAtStart.litellm!.apiKey ?? 'litellm'
-          } as Record<string, string>
-        }
-      : {}
+          }
+        : {})
+    } as Record<string, string>
 
     const sdkOptions: SdkOptions = {
       // Local-model subagents: override cwd to ~/workspaces so the SDK project-
@@ -1490,7 +1520,7 @@ export function createClaudeCodeBackend(
         : combinedAppend
           ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: combinedAppend } }
           : {}),
-      ...litellmEnv,
+      env: sessionEnv,
       stderr: (line: string) => {
         console.error(`[claude-code cli] ${line}`)
         // Detect "Session ID <id> is already in use" — means an orphaned

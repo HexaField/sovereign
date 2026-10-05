@@ -49,6 +49,9 @@ services:
       DO_NOT_TRACK: "1"
       DISABLE_TELEMETRY: "1"
       DISABLE_ERROR_REPORTING: "1"
+      # Force the CLI's "bash-first" steer on in the parent environment, so
+      # s36 proves Sovereign's per-session override (BASH_FIRST_OFF_ENV) wins.
+      CLAUDE_CODE_THRIFTY_SONIC: "1"
     # Route the claude binary's phone-home calls (api.anthropic.com:443)
     # to mock-llm, which runs an HTTPS listener with a self-signed cert.
     # Without this, the binary hangs trying to reach the real API.

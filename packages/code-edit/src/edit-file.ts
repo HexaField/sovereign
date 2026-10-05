@@ -9,10 +9,10 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { applyOps, type SignatureChange } from './apply.js'
+import { applyOps, type EditOutcome, type SignatureChange } from './apply.js'
 import { unifiedDiff } from './unified-diff.js'
 import { normaliseSource, restoreSource } from './text.js'
-import { EditError, type Analyzer, type EditArgs } from './types.js'
+import { EditError, type Analyzer, type EditArgs, type EditFilesArgs, type EditOp } from './types.js'
 import { createAnalyzer } from './analyzer.js'
 
 const require = createRequire(import.meta.url)
@@ -40,12 +40,99 @@ export interface EditFileResult {
   report: string
 }
 
+export interface EditFilesResult {
+  /** The real paths written; empty for a dry run. */
+  written: string[]
+  report: string
+}
+
 let sharedAnalyzer: Analyzer | undefined
 
 export async function editFile(args: EditArgs, opts: EditFileOptions = {}): Promise<EditFileResult> {
-  if (!path.isAbsolute(args.file)) throw new EditError(`file must be an absolute path: ${args.file}`)
+  const plan = await planEdit(args.file, args.ops, opts)
+  if (plan.next !== undefined && !args.dryRun) commit(plan)
+  return result(plan, !!args.dryRun)
+}
+
+/**
+ * Several files in one call, all or nothing: every file is read and edited in
+ * memory first, so one failing op writes nothing anywhere; if a write fails
+ * partway, the files already written get their old bytes back.
+ */
+export async function editFiles(args: EditFilesArgs, opts: EditFileOptions = {}): Promise<EditFilesResult> {
+  if (args.edits.length === 0) throw new EditError('No edits given.')
+  const seen = new Set<string>()
+  for (const { file } of args.edits) {
+    if (!path.isAbsolute(file)) throw new EditError(`file must be an absolute path: ${file}`)
+    const target = realTarget(file)
+    if (seen.has(target)) throw new EditError(`${file} appears twice; give each file once, with all its ops.`)
+    seen.add(target)
+  }
+  const plans: Plan[] = []
+  for (const edit of args.edits) {
+    try {
+      plans.push(await planEdit(edit.file, edit.ops, opts))
+    } catch (err) {
+      throw err instanceof EditError ? new EditError(`${edit.file}: ${err.message}`) : err
+    }
+  }
+  const changed = plans.filter((p) => p.next !== undefined)
+  if (!args.dryRun) {
+    for (const plan of changed) unchangedOnDisk(plan)
+    const done: Plan[] = []
+    for (const plan of changed) {
+      try {
+        commit(plan)
+        done.push(plan)
+      } catch (err) {
+        const unrestored = [plan, ...done.reverse()].flatMap((p) => {
+          try {
+            restore(p)
+            return []
+          } catch {
+            return [p.label]
+          }
+        })
+        const restored = done.length - unrestored.filter((l) => l !== plan.label).length
+        throw new EditError(
+          `writing ${plan.label} failed (${(err as Error).message})` +
+            (restored ? `; restored the ${restored} file${restored === 1 ? '' : 's'} already written` : '') +
+            (unrestored.length ? `; could not restore ${unrestored.join(', ')}` : '') +
+            '.'
+        )
+      }
+    }
+  }
+  const results = await Promise.all(plans.map((plan) => result(plan, !!args.dryRun)))
+  const unchanged = plans.length - changed.length
+  const head = `${args.dryRun ? 'Dry run of' : 'Edited'} ${changed.length} of ${plans.length} files${unchanged ? ` (${unchanged} unchanged)` : ''}.`
+  return {
+    written: args.dryRun ? [] : changed.map((p) => p.target),
+    report: [head, ...results.map((r) => r.report)].join('\n\n')
+  }
+}
+
+/** Everything an edit needs before writing: the file as read and the text it becomes. */
+interface Plan {
+  target: string
+  label: string
+  exists: boolean
+  bytes: Buffer
+  source: ReturnType<typeof normaliseSource>
+  outcome: EditOutcome
+  /** The bytes to write; undefined when the ops leave the text unchanged. */
+  next?: string
+  root?: string
+  changes: string[]
+  /** Set once a create has put the file in place; the first directory it made. Both go on rollback. */
+  created?: boolean
+  createdDir?: string
+}
+
+async function planEdit(file: string, ops: EditOp[], opts: EditFileOptions): Promise<Plan> {
+  if (!path.isAbsolute(file)) throw new EditError(`file must be an absolute path: ${file}`)
   const analyzer = opts.analyzer ?? (sharedAnalyzer ??= createAnalyzer())
-  const target = realTarget(args.file)
+  const target = realTarget(file)
   guard(target, opts.roots ?? [os.homedir()])
 
   const exists = fs.existsSync(target)
@@ -53,44 +140,77 @@ export async function editFile(args: EditArgs, opts: EditFileOptions = {}): Prom
   const source = normaliseSource(decodeUtf8(bytes, target))
   const label = projectRelative(target)
   await analyzer.prepare?.(target)
-  const outcome = applyOps(target, source.text, args.ops, analyzer, { label, exists })
-
-  if (outcome.text === source.text) {
-    return {
-      path: target,
-      written: false,
-      report: `No change to ${label}: the ops leave the text as it was. Nothing written.`
-    }
-  }
+  const outcome = applyOps(target, source.text, ops, analyzer, { label, exists })
+  if (outcome.text === source.text) return { target, label, exists, bytes, source, outcome, changes: [] }
 
   const root = opts.graph === false ? undefined : codegraphRoot(target)
   const changes = await changeReport(root, target, outcome.signatureChanges)
-  const next = restoreSource(outcome.text, source)
+  return { target, label, exists, bytes, source, outcome, next: restoreSource(outcome.text, source), root, changes }
+}
 
-  if (!args.dryRun) {
-    if (exists) {
-      if (!fs.readFileSync(target).equals(bytes)) {
-        throw new EditError(`${label} changed on disk during the edit; retry.`)
-      }
-      writeAtomic(target, next)
-    } else {
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.writeFileSync(target, next, { flag: 'wx' })
+/** Write a plan's new text, unless the file changed on disk since it was read. */
+function commit(plan: Plan): void {
+  if (plan.exists) {
+    unchangedOnDisk(plan)
+    writeAtomic(plan.target, plan.next!)
+    return
+  }
+  plan.createdDir = fs.mkdirSync(path.dirname(plan.target), { recursive: true })
+  // Written beside the target, then linked into place: never a partial file,
+  // and the link fails if something else created the target meanwhile.
+  const tmp = tempBeside(plan.target)
+  try {
+    fs.writeFileSync(tmp, plan.next!, { flag: 'wx' })
+    try {
+      fs.linkSync(tmp, plan.target)
+    } catch (err) {
+      // A filesystem without hard links: an exclusive copy still refuses an existing target.
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw err
+      fs.copyFileSync(tmp, plan.target, fs.constants.COPYFILE_EXCL)
+    }
+    plan.created = true
+  } finally {
+    fs.rmSync(tmp, { force: true })
+  }
+}
+
+function unchangedOnDisk(plan: Plan): void {
+  const changed = plan.exists
+    ? !fs.existsSync(plan.target) || !fs.readFileSync(plan.target).equals(plan.bytes)
+    : fs.existsSync(plan.target)
+  if (changed) throw new EditError(`${plan.label} changed on disk during the edit; retry.`)
+}
+
+/** Undo a commit, whole or partial: the old bytes back, or the created file and its new directories removed. */
+function restore(plan: Plan): void {
+  if (plan.exists) {
+    if (!fs.readFileSync(plan.target).equals(plan.bytes)) writeAtomic(plan.target, plan.bytes)
+    return
+  }
+  if (plan.created) fs.rmSync(plan.target, { force: true })
+  if (plan.createdDir) fs.rmSync(plan.createdDir, { recursive: true, force: true })
+}
+
+async function result(plan: Plan, dryRun: boolean): Promise<EditFileResult> {
+  if (plan.next === undefined) {
+    return {
+      path: plan.target,
+      written: false,
+      report: `No change to ${plan.label}: the ops leave the text as it was. Nothing written.`
     }
   }
-  const tests = root && !args.dryRun ? await affectedTests(root, target) : []
-
+  const tests = plan.root && !dryRun ? await affectedTests(plan.root, plan.target) : []
   const lines = [
-    `${args.dryRun ? 'Dry run, nothing written:' : exists ? 'Edited' : 'Created'} ${label}`,
-    ...outcome.notes,
-    ...(outcome.syntaxChecked ? ['syntax ok'] : []),
-    ...changes,
+    `${dryRun ? 'Dry run, nothing written:' : plan.exists ? 'Edited' : 'Created'} ${plan.label}`,
+    ...plan.outcome.notes,
+    ...(plan.outcome.syntaxChecked ? ['syntax ok'] : []),
+    ...plan.changes,
     ...(tests.length ? [`affected tests: ${tests.join(', ')}`] : []),
-    ...(!args.dryRun && exists ? ['Read the file again before using the built-in Edit on it.'] : []),
+    ...(!dryRun && plan.exists ? ['Read the file again before using the built-in Edit on it.'] : []),
     '',
-    unifiedDiff(source.text, outcome.text)
+    unifiedDiff(plan.source.text, plan.outcome.text)
   ]
-  return { path: target, written: !args.dryRun, report: lines.join('\n') }
+  return { path: plan.target, written: !dryRun, report: lines.join('\n') }
 }
 
 /** The path to write: a symlink's target, or for a new file, the real parent plus the new name. */
@@ -144,9 +264,9 @@ function decodeUtf8(bytes: Buffer, file: string): string {
 }
 
 /** Temp file in the same directory, created with the target's mode, renamed over the target. */
-function writeAtomic(file: string, content: string): void {
+function writeAtomic(file: string, content: string | Buffer): void {
   const mode = fs.statSync(file).mode & 0o7777
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${randomBytes(4).toString('hex')}.tmp`)
+  const tmp = tempBeside(file)
   try {
     fs.writeFileSync(tmp, content, { mode, flag: 'wx' })
     fs.chmodSync(tmp, mode) // the umask may have narrowed the mode at creation
@@ -155,6 +275,11 @@ function writeAtomic(file: string, content: string): void {
     fs.rmSync(tmp, { force: true })
     throw err
   }
+}
+
+/** A fresh temp file name in the same directory as `file`, so a rename or link stays on one filesystem. */
+function tempBeside(file: string): string {
+  return path.join(path.dirname(file), `.${path.basename(file)}.${randomBytes(4).toString('hex')}.tmp`)
 }
 
 /** Path relative to the enclosing git checkout, else the base name. */

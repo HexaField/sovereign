@@ -38,11 +38,13 @@
     "@sovereign/threads": "workspace:*",
     "ai": "^7.0.68",
     "express": "^5.2.1",
+    "shell-quote": "^1.8.3",
     "ws": "^8.19.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
+    "@types/shell-quote": "^1.7.5",
     "@types/ws": "^8.18.1"
   }
 }

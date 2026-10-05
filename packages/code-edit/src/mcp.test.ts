@@ -45,13 +45,40 @@ async function edit(args: Record<string, unknown>): Promise<{ text: string; isEr
 }
 
 describe('code-edit MCP server', () => {
-  it('lists one tool, edit, whose schema admits only the keys it names', async () => {
+  it('lists edit and edit_files, whose schemas admit only the keys they name', async () => {
     const { tools } = await client.listTools()
-    expect(tools.map((t) => t.name)).toEqual(['edit'])
-    expect(tools[0].inputSchema).toMatchObject({
+    expect(tools.map((t) => t.name)).toEqual(['edit', 'edit_files'])
+    const ops = { items: { oneOf: Array(6).fill({ additionalProperties: false }) } }
+    expect(tools[0].inputSchema).toMatchObject({ additionalProperties: false, properties: { ops } })
+    expect(tools[1].inputSchema).toMatchObject({
       additionalProperties: false,
-      properties: { ops: { items: { oneOf: Array(5).fill({ additionalProperties: false }) } } }
+      properties: { edits: { items: { additionalProperties: false, properties: { ops } } } }
     })
+  })
+
+  it('edit_files changes every file or none', async () => {
+    const second = path.join(root, 'b.ts')
+    fs.writeFileSync(second, SRC)
+    const call = async (count: number) =>
+      (await client.callTool({
+        name: 'edit_files',
+        arguments: {
+          edits: [file, second].map((f) => ({
+            file: f,
+            ops: [{ op: 'replace_all', find: 'return', code: 'return 0 +', count }]
+          }))
+        }
+      })) as { content: Array<{ text: string }>; isError?: boolean }
+
+    const failed = await call(3)
+    expect(failed.isError).toBe(true)
+    expect(failed.content[0].text).toContain('Nothing was written.')
+    expect(fs.readFileSync(second, 'utf8')).toBe(SRC)
+
+    const done = await call(2)
+    expect(done.isError).toBeFalsy()
+    expect(done.content[0].text).toMatch(/^Edited 2 of 2 files\./)
+    for (const f of [file, second]) expect(fs.readFileSync(f, 'utf8')).toBe(SRC.split('return').join('return 0 +'))
   })
 
   it('edits a file inside --edit-roots and refuses one outside', async () => {
@@ -86,7 +113,7 @@ describe('code-edit MCP server', () => {
     const res = await edit({ file, ops: [{ op: 'rename', symbol: 'greet' }] })
     expect(res).toMatchObject({
       isError: true,
-      text: expect.stringContaining('replace, replace_in, insert, remove or create')
+      text: expect.stringContaining('replace, replace_in, replace_all, insert, remove or create')
     })
   })
 
