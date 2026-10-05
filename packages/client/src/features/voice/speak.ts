@@ -24,7 +24,7 @@ export async function speakText(text: string): Promise<SpeakResult> {
   }
 
   const data = (await res.json()) as { audio: string; spokenText: string; durationMs: number }
-  await playBase64Audio(data.audio)
+  playBase64Audio(data.audio)
 
   return { spokenText: data.spokenText, durationMs: data.durationMs }
 }

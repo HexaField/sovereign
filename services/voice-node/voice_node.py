@@ -34,6 +34,8 @@ from pathlib import Path
 import aiohttp
 import numpy as np
 
+from tts_queue import SpeechQueue
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [voice-node] %(message)s",
@@ -45,6 +47,30 @@ SAMPLE_RATE = 16000
 CHANNELS = 1
 CHUNK_SAMPLES = 1280  # 80ms frames (OpenWakeWord expects this)
 FORMAT_WIDTH = 2  # 16-bit PCM
+
+# Push-to-talk sends long speech in segments of this length (keys still held).
+PTT_SEGMENT_S = 120.0
+
+
+def _cue_wav() -> bytes:
+    """Two short rising tones (660 Hz, 880 Hz): one reply ends, another follows."""
+    rate = 24000
+    t = np.arange(int(rate * 0.09)) / rate
+    fade = np.minimum(1, np.minimum(t, t[::-1]) / 0.01)
+    gap = np.zeros(int(rate * 0.02))
+    tail = np.zeros(int(rate * 0.25))
+    tones = [0.25 * np.sin(2 * np.pi * f * t) * fade for f in (660, 880)]
+    pcm = (np.concatenate([tones[0], gap, tones[1], tail]) * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+CUE_WAV = _cue_wav()
 
 # Device ID — persisted across restarts
 DEVICE_ID_FILE = Path.home() / ".sovereign" / "data" / "voice" / "node-device-id"
@@ -195,6 +221,11 @@ class VoiceNode:
         self.hotkey = hotkey
         self._running = False
         self._ws = None
+        # One POST at a time: segments of one long PTT message arrive in order.
+        self._send_lock = asyncio.Lock()
+        self._speech = SpeechQueue(self._play_clip, self._play_cue)
+        # Fallback reply ids (thread + kind) for a server that sends no utterance id.
+        self._fallback_ids: dict[str, str] = {}
 
     async def run(self):
         """Main event loop."""
@@ -390,38 +421,40 @@ class VoiceNode:
                                 CHUNK_SAMPLES, exception_on_overflow=False
                             )
                             frames.append(audio_bytes)
-                            # Safety cap
-                            duration = len(frames) * CHUNK_SAMPLES / SAMPLE_RATE
-                            if duration >= self.max_capture:
-                                log.info("Max capture reached (%.1fs)", self.max_capture)
-                                recording = False
-                                break
+                            # Long speech: send this segment and keep recording,
+                            # so transcription stays inside the server timeout
+                            # and nothing said while the keys stay held gets lost.
+                            if len(frames) * CHUNK_SAMPLES / SAMPLE_RATE >= self.max_capture:
+                                segment, frames = frames, []
+                                self._send_frames(segment, loop)
                         stream.stop_stream()
                         stream.close()
                     except Exception as e:
                         log.error("Mic error during PTT capture: %s", e)
                         recording = False
 
-                    # Key released (or max cap) — encode and send
+                    # Key released — send what remains
                     if frames:
-                        captured = self._encode_and_capture(frames)
-                        duration = len(frames) * CHUNK_SAMPLES / SAMPLE_RATE
-                        log.info(
-                            "Captured %.1fs (%.1f KB) — sending",
-                            duration,
-                            len(captured) / 1024 if captured else 0,
-                        )
-                        frames = []
-                        if captured:
-                            asyncio.run_coroutine_threadsafe(
-                                self._send_audio(captured), loop
-                            )
+                        segment, frames = frames, []
+                        self._send_frames(segment, loop)
                 else:
                     time.sleep(0.05)
         finally:
             listener.stop()
             listener.join()
             pa.terminate()
+
+    def _send_frames(self, frames: list, loop):
+        """Encode PTT frames and queue them for transcription (from the PTT thread)."""
+        captured = self._encode_and_capture(frames)
+        if not captured:
+            return
+        log.info(
+            "Captured %.1fs (%.1f KB) — sending",
+            len(frames) * CHUNK_SAMPLES / SAMPLE_RATE,
+            len(captured) / 1024,
+        )
+        asyncio.run_coroutine_threadsafe(self._send_audio(captured), loop)
 
     def _encode_and_capture(self, frames: list) -> bytes | None:
         """Encode collected frames as WAV bytes (standalone, no stream needed)."""
@@ -488,8 +521,9 @@ class VoiceNode:
 
         try:
             # Disable TLS verification for Tailscale Serve's internal certs
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            async with self._send_lock, aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(ssl=False)
+            ) as session:
                 form = aiohttp.FormData()
                 form.add_field(
                     "audio",
@@ -500,7 +534,9 @@ class VoiceNode:
                 form.add_field("deviceId", self.device_id)
                 form.add_field("deviceName", self.device_name)
 
-                async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                # Whisper runs at about 0.2x real time: a 120 s segment takes ~25 s.
+                # The server allows 120 s; wait a little longer than that.
+                async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=150)) as resp:
                     if resp.status == 200:
                         result = await resp.json()
                         log.info("Transcription: %s", result.get("text", "(empty)"))
@@ -550,13 +586,13 @@ class VoiceNode:
                         # voice.tts.audio — from the voice-response pipeline
                         # (ack and summary TTS, routed by sendToDeviceName)
                         if msg_type == "voice.tts.audio":
-                            await self._play_audio(msg)
+                            self._play_audio(msg)
                         # Legacy tts.play — kept for backward compat
                         elif msg_type == "tts.play":
                             target = msg.get("deviceId")
                             if target and target != self.device_id:
                                 continue
-                            await self._play_audio(msg)
+                            self._play_audio(msg)
 
             except asyncio.CancelledError:
                 raise
@@ -565,19 +601,45 @@ class VoiceNode:
                     log.warning("WebSocket disconnected: %s — reconnecting in 5s", e)
                     await asyncio.sleep(5)
 
-    async def _play_audio(self, msg: dict):
-        """Play a TTS audio response through the speaker."""
+    def _play_audio(self, msg: dict):
+        """Queue a TTS clip: whole replies play in arrival order, never cut off."""
         audio_b64 = msg.get("audio")
         if not audio_b64:
             return
-
-        log.info("Playing TTS response (%.1f KB)", len(audio_b64) * 3 / 4 / 1024)
-
         try:
             wav_data = base64.b64decode(audio_b64)
+        except Exception as e:
+            log.error("Bad TTS audio: %s", e)
+            return
+        chunk = msg.get("chunk") or None
+        self._speech.enqueue(
+            self._utterance_of(msg, chunk),
+            wav_data,
+            last=chunk is None or bool(chunk.get("done")),
+            priority=msg.get("kind") == "ack",
+        )
+
+    def _utterance_of(self, msg: dict, chunk: dict | None) -> str:
+        if msg.get("utterance"):
+            return msg["utterance"]
+        key = f"{msg.get('threadId')}:{msg.get('kind')}"
+        if chunk is None or chunk.get("index") == 0 or key not in self._fallback_ids:
+            self._fallback_ids[key] = f"{key}:{time.monotonic()}"
+        return self._fallback_ids[key]
+
+    async def _play_clip(self, wav_data: bytes):
+        log.info("Playing TTS clip (%.1f KB)", len(wav_data) / 1024)
+        try:
             await asyncio.to_thread(self._play_wav, wav_data)
         except Exception as e:
             log.error("Playback failed: %s", e)
+
+    async def _play_cue(self):
+        """Two short rising tones between back-to-back replies."""
+        try:
+            await asyncio.to_thread(self._play_wav, CUE_WAV)
+        except Exception as e:
+            log.error("Cue playback failed: %s", e)
 
     @staticmethod
     def _play_wav(wav_data: bytes):
@@ -632,8 +694,9 @@ def main():
     parser.add_argument(
         "--max-capture",
         type=float,
-        default=30.0,
-        help="Maximum capture duration in seconds (default: 30)",
+        default=None,
+        help=f"Wake word: maximum capture in seconds (default: 30). Push-to-talk: "
+        f"segment length in seconds, recording continues while held (default: {PTT_SEGMENT_S:.0f})",
     )
     parser.add_argument(
         "--input-device",
@@ -685,7 +748,7 @@ def main():
             model_path="",
             threshold=args.threshold,
             silence_timeout=args.silence_timeout,
-            max_capture=args.max_capture,
+            max_capture=args.max_capture or PTT_SEGMENT_S,
             input_device=args.input_device,
             push_to_talk=True,
             hotkey=args.hotkey,
@@ -699,7 +762,7 @@ def main():
             model_path=model_path,
             threshold=args.threshold,
             silence_timeout=args.silence_timeout,
-            max_capture=args.max_capture,
+            max_capture=args.max_capture or 30.0,
             input_device=args.input_device,
             push_to_talk=False,
             device_name=args.device_name,
