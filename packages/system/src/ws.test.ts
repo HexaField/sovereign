@@ -42,6 +42,9 @@ function createMockWsHandler(): WsHandler & {
     },
     isDeviceNameConnected() {
       return false
+    },
+    sendSpeechToDeviceName() {
+      return undefined
     }
   }
 }
