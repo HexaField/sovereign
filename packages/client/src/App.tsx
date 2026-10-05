@@ -3,8 +3,7 @@ import type { ThreadInfo } from '@sovereign/core'
 import './app.css'
 
 // Nav store
-import { activeView, initNavStore, setActiveView } from './features/nav/store.js'
-import { setHealthPopoverOpen } from './features/connection/HealthPopover.js'
+import { activeView, initNavStore, setActiveView, setActiveAgentTab, setActiveSystemTab } from './features/nav/store.js'
 
 // Identity
 import { loadIdentity } from './lib/identity.js'
@@ -74,10 +73,14 @@ export default function App() {
     cleanups.push(cleanupConnection)
 
     // Device naming — announce the stored name on every WS connect/
-    // reconnect, and open the settings (in the Service Health popover) on
-    // first launch so the user names the device before voice replies need it.
+    // reconnect, and open System → Devices on first launch so the user
+    // names the device before voice replies need it.
     cleanups.push(initDeviceNameSync())
-    if (!hasDeviceName()) setHealthPopoverOpen(true)
+    if (!hasDeviceName()) {
+      setActiveSystemTab('devices')
+      setActiveAgentTab('system')
+      setActiveView('agent')
+    }
 
     // Voice TTS playback — listens for voice.tts.audio JSON messages
     const cleanupTts = initTtsPlayer(wsStore)
