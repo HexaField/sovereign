@@ -224,6 +224,8 @@ class VoiceNode:
         # the server offers voice-stream; otherwise it uploads on release.
         self._ws_ready = False
         self._can_stream = True
+        # Counts connections: a stream started on one connection dies with it.
+        self._ws_gen = 0
         # Messages for the WebSocket, sent in order by one task.
         self._outbox: asyncio.Queue = asyncio.Queue()
         # One POST at a time: segments of one long PTT message arrive in order.
@@ -417,7 +419,8 @@ class VoiceNode:
         try:
             while self._running:
                 if recording:
-                    streaming = self._ws_ready and self._can_stream
+                    gen = self._ws_gen
+                    streaming = self._stream_alive(gen)
                     if streaming:
                         self._ws_send(loop, {
                             "type": "voice-stream.start",
@@ -439,13 +442,19 @@ class VoiceNode:
                             audio_bytes = stream.read(
                                 CHUNK_SAMPLES, exception_on_overflow=False
                             )
+                            # Kept while streaming too: if the stream breaks mid-hold
+                            # (connection lost, server without voice-stream), the
+                            # whole recording uploads on release instead.
+                            frames.append(audio_bytes)
+                            if streaming and not self._stream_alive(gen):
+                                log.warning("Push-to-talk stream lost — uploading on release")
+                                streaming = False
                             if streaming:
                                 self._ws_send(loop, {
                                     "type": "voice-stream.chunk",
                                     "audio": base64.b64encode(audio_bytes).decode(),
                                 })
                                 continue
-                            frames.append(audio_bytes)
                             # Long speech: send this segment and keep recording,
                             # so transcription stays inside the server timeout
                             # and nothing said while the keys stay held gets lost.
@@ -462,6 +471,7 @@ class VoiceNode:
                     if streaming:
                         self._ws_send(loop, {"type": "voice-stream.stop"})
                         log.info("Push-to-talk stream ended")
+                        frames = []
                     elif frames:
                         segment, frames = frames, []
                         self._send_frames(segment, loop)
@@ -471,6 +481,10 @@ class VoiceNode:
             listener.stop()
             listener.join()
             pa.terminate()
+
+    def _stream_alive(self, gen: int) -> bool:
+        """True while connection `gen` stays up and the server takes voice-stream."""
+        return self._ws_ready and self._can_stream and self._ws_gen == gen
 
     def _ws_send(self, loop, msg: dict):
         """Queue a WebSocket message from the PTT thread; one task sends them in order."""
@@ -616,6 +630,7 @@ class VoiceNode:
                     while not self._outbox.empty():
                         self._outbox.get_nowait()
                     self._can_stream = True
+                    self._ws_gen += 1
                     self._ws_ready = True
                     sender = asyncio.create_task(self._send_outbox(ws))
                     try:

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { initRemoteDictation } from './remote-dictation.js'
-import { voiceDraftFor, publishVoiceDraft, type VoiceDraftActions } from '../chat/voice-draft-store.js'
+import {
+  voiceDraftFor,
+  voiceDraftActions,
+  publishVoiceDraft,
+  clearVoiceDraft,
+  type VoiceDraftActions
+} from '../chat/voice-draft-store.js'
 import type { WsStore } from '../../ws/ws-store.js'
 
 function fakeWs() {
@@ -38,17 +44,22 @@ describe('remote dictation', () => {
     cleanup()
   })
 
-  it('leaves a draft another publisher took over, and clears its own on reconnect', () => {
+  it('never replaces or clears dictation in this tab, and clears its own draft on reconnect', () => {
     const { ws, fire } = fakeWs()
     const cleanup = initRemoteDictation(ws)
     fire('voice-stream.draft', draft('from the node'))
 
     const local: VoiceDraftActions = { edit: vi.fn(), change: vi.fn(), done: vi.fn(), send: vi.fn() }
     publishVoiceDraft({ threadKey: 'presence', text: 'typed here', state: 'streaming', editing: false }, local)
+    fire('voice-stream.draft', draft('from the node, later'))
+    expect(voiceDraftFor('presence')?.text).toBe('typed here')
+    expect(voiceDraftActions()).toBe(local)
     fire('voice-stream.draft', draft('', true))
     expect(voiceDraftFor('presence')?.text).toBe('typed here')
 
+    clearVoiceDraft(local)
     fire('voice-stream.draft', draft('again'))
+    expect(voiceDraftFor('presence')?.text).toBe('again')
     fire('ws.reconnected')
     expect(voiceDraftFor('presence')).toBeNull()
     cleanup()

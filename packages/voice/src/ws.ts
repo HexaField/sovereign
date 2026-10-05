@@ -59,11 +59,15 @@ interface StartPayload {
 export function registerVoiceStreamChannel(deps: VoiceStreamChannelDeps): void {
   const { ws, transcribeUrl, presence } = deps
   const manager = createStreamingManager()
-  // Streams that deliver to presence.
+  // The current presence-delivering stream per device.
   const delivering = new Map<string, Target>()
+  // Per device, the last stop's send: messages land in the order spoken.
+  const sends = new Map<string, Promise<void>>()
 
+  // Drafts come only from the device's current stream: a stopped stream's
+  // late text or `done` would otherwise overwrite the next stream's draft.
   const draft = (source: string, target: Target | undefined, text: string, done: boolean): void => {
-    if (!target) return
+    if (!target || delivering.get(source) !== target) return
     ws.sendToDeviceName(target.deviceName, {
       type: 'voice-stream.draft',
       source,
@@ -83,7 +87,10 @@ export function registerVoiceStreamChannel(deps: VoiceStreamChannelDeps): void {
         const threadId = presence?.threadId()
         const target = start.deliver === 'presence' && deviceName && threadId ? { deviceName, threadId } : undefined
         if (target) delivering.set(deviceId, target)
-        else delivering.delete(deviceId)
+        else {
+          draft(deviceId, delivering.get(deviceId), '', true)
+          delivering.delete(deviceId)
+        }
         manager.startSession(deviceId, {
           transcribeUrl,
           format: start.format === 'pcm16' ? 'pcm16' : 'webm',
@@ -118,16 +125,23 @@ export function registerVoiceStreamChannel(deps: VoiceStreamChannelDeps): void {
 
       if (type === 'voice-stream.stop') {
         const target = delivering.get(deviceId)
-        void manager.stopSession(deviceId).then(async (text) => {
-          if (!target || !presence) return
-          // Send first, then clear the draft: the message replaces it without a gap.
-          if (text.trim()) {
-            await presence
-              .send(text, { deviceId, deviceName: target.deviceName })
-              .catch((err: Error) => console.warn('[voice-stream] presence send failed:', err.message))
-          }
-          draft(deviceId, target, '', true)
-          if (delivering.get(deviceId) === target) delivering.delete(deviceId)
+        const final = manager.stopSession(deviceId)
+        const sent = (sends.get(deviceId) ?? Promise.resolve())
+          .then(() => final)
+          .then(async (text) => {
+            if (!target || !presence) return
+            // Send first, then clear the draft: the message replaces it without a gap.
+            if (text.trim()) {
+              await presence
+                .send(text, { deviceId, deviceName: target.deviceName })
+                .catch((err: Error) => console.warn('[voice-stream] presence send failed:', err.message))
+            }
+            draft(deviceId, target, '', true)
+            if (delivering.get(deviceId) === target) delivering.delete(deviceId)
+          })
+        sends.set(deviceId, sent)
+        void sent.finally(() => {
+          if (sends.get(deviceId) === sent) sends.delete(deviceId)
         })
         return
       }

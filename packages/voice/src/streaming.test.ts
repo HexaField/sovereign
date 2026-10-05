@@ -161,7 +161,8 @@ describe('createStreamingSession — pcm16', () => {
     // 25 s of speech with a pause at 14 s: past the 20 s commit threshold.
     session.pushChunk(pcm(25, (t) => t >= 14 && t < 14.2).toString('base64'))
     await vi.advanceTimersByTimeAsync(1600)
-    expect(results[results.length - 1]).toEqual({ text: 's14', final: false }) // committed up to the pause
+    // Committed up to the pause, and the same pass keeps the 11 s after it on screen.
+    expect(results[results.length - 1]).toEqual({ text: 's14 s11', final: false })
 
     session.pushChunk(pcm(1).toString('base64'))
     await vi.advanceTimersByTimeAsync(1600)
@@ -180,6 +181,36 @@ describe('createStreamingSession — pcm16', () => {
     session.pushChunk(pcm(0.2).toString('base64'))
     expect(await session.stop()).toBe('')
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('falls back to 16 kHz for a sample rate it cannot use (0 made the quiet-point scan endless)', async () => {
+    for (const sampleRate of [0, -1, 1e9]) {
+      const session = createStreamingSession({
+        transcribeUrl: 'http://localhost:9876/transcribe',
+        onTranscript: () => {},
+        format: 'pcm16',
+        sampleRate
+      })
+      session.pushChunk(pcm(1).toString('base64'))
+      expect(await session.stop()).toBe('s1') // the WAV header says 16 kHz
+    }
+  })
+
+  it('sends whole samples only when a chunk ends mid-sample', async () => {
+    const lengths: number[] = []
+    mockFetch.mockImplementation(async (_url: string, init: { body: FormData }) => {
+      const wav = Buffer.from(await (init.body.get('file') as Blob).arrayBuffer())
+      lengths.push(wav.readUInt32LE(40))
+      return okTranscriptResponse('x')
+    })
+    const session = createStreamingSession({
+      transcribeUrl: 'http://localhost:9876/transcribe',
+      onTranscript: () => {},
+      format: 'pcm16'
+    })
+    session.pushChunk(Buffer.concat([pcm(1), Buffer.alloc(1)]).toString('base64'))
+    await session.stop()
+    expect(lengths).toEqual([RATE * 2])
   })
 })
 

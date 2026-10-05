@@ -29,7 +29,7 @@ export interface StreamingDeps {
   onError?: (err: Error) => void
   /** Chunk format; default 'webm'. */
   format?: 'webm' | 'pcm16'
-  /** pcm16 sample rate; default 16000. */
+  /** pcm16 sample rate, 8000–48000 Hz; default 16000. */
   sampleRate?: number
 }
 
@@ -84,7 +84,9 @@ const joinText = (...parts: string[]): string => parts.filter(Boolean).join(' ')
 
 export function createStreamingSession(deps: StreamingDeps): StreamingSession {
   const pcm = deps.format === 'pcm16'
-  const sampleRate = deps.sampleRate ?? 16000
+  // The client names the rate: an absurd one would make the quiet-point scan never end.
+  const rate = deps.sampleRate
+  const sampleRate = Number.isInteger(rate) && rate! >= 8000 && rate! <= 48000 ? rate! : 16000
   const bytesPerSecond = sampleRate * 2
   const chunks: Buffer[] = []
   let totalBytes = 0
@@ -127,18 +129,20 @@ export function createStreamingSession(deps: StreamingDeps): StreamingSession {
     // Skip if not enough new audio (unless final)
     if (!isFinal && totalBytes - lastTranscribedBytes < MIN_NEW_BYTES) return lastTranscript
 
-    const end = totalBytes
+    // pcm16: whole samples only (a chunk may end mid-sample).
+    const end = pcm ? totalBytes - (totalBytes % 2) : totalBytes
     try {
       let text: string
       if (!pcm) {
         text = await post(audio(), 'audio.webm', 'audio/webm')
-      } else if (!isFinal && end - committedBytes >= COMMIT_AFTER_S * bytesPerSecond) {
-        const frameBytes = Math.round(QUIET_FRAME_S * bytesPerSecond) & ~1
-        const cut = quietestPoint(audio(), committedBytes + MIN_COMMIT_S * bytesPerSecond, end, frameBytes)
-        committedText = joinText(committedText, await postPcm(committedBytes, cut))
-        committedBytes = cut
-        text = committedText
       } else {
+        if (!isFinal && end - committedBytes >= COMMIT_AFTER_S * bytesPerSecond) {
+          const frameBytes = Math.round(QUIET_FRAME_S * bytesPerSecond) & ~1
+          const cut = quietestPoint(audio(), committedBytes + MIN_COMMIT_S * bytesPerSecond, end, frameBytes)
+          committedText = joinText(committedText, await postPcm(committedBytes, cut))
+          committedBytes = cut
+        }
+        // The same pass covers the rest, so the shown text never drops the words after the cut.
         text = joinText(committedText, await postPcm(committedBytes, end))
       }
       lastTranscript = text
