@@ -2453,29 +2453,9 @@ export function createClaudeCodeBackend(
     // Skip subagent sessions — recycling them mid-flight strands the parent.
     if (state.parentSessionKey) return
 
-    // Cooldown guard — hoisted here (before logging) so rapid re-triggers are
-    // silently skipped rather than appearing as misleading "auto-trigger" log
-    // entries. This is the primary defence against the tight loop where
-    // mcp-rehydrate injects MCP server instructions immediately after a recycle,
-    // pushing context back above threshold and firing another recycle before the
-    // session has accumulated any real new content.
-    //
-    // The inner check inside recycleSession acts as a secondary guard, but it
-    // only fires if lastRecycleAt survives state transitions (not guaranteed when
-    // the subprocess restarts). This guard fires on the same in-memory state
-    // object that the recycle itself modified.
-    const minInterval = recycleCfg?.minIntervalMs ?? 300_000
-    if (state.lastRecycleAt && Date.now() - state.lastRecycleAt < minInterval) return
-
-    // Use the session's actual context window (set per-thread), falling back
-    // to the model's default. Most Claude sessions use 200K, not 1M — using
-    // the real value makes the threshold meaningful.
+    // The session's own window (most use 200K), else the model default.
     const maxTokens = state.contextWindow ?? contextWindowFor(state.model)
     if (maxTokens <= 0) return
-
-    // Adaptive threshold: the configured percentage (default 45%) applies to
-    // whichever context window the session uses. At 200K this triggers at
-    // ~90K tokens; at 1M at ~450K — both realistic production fill levels.
     const threshold = recycleCfg?.thresholdPercent ?? 45
 
     // Read actual context fill from the LAST API call in the JSONL.
@@ -2492,6 +2472,18 @@ export function createClaudeCodeBackend(
         (state.lastUsage.cacheCreationInputTokens ?? 0)
     }
     if (filled <= 0) return
+
+    // The floor is an estimate from the byte ratio. A measured fill below it
+    // shows the recycle left less: wait for regrowth from the real value.
+    if (state.recycleFloor !== undefined && filled < state.recycleFloor) {
+      state.recycleFloor = filled
+      persistState(state)
+    }
+
+    // Cooldown: mcp-rehydrate refills the context right after a recycle.
+    const minInterval = recycleCfg?.minIntervalMs ?? 300_000
+    if (state.lastRecycleAt && Date.now() - state.lastRecycleAt < minInterval) return
+
     const fillPercent = (filled / maxTokens) * 100
 
     // Record context snapshot after every turn (regardless of recycle decision)
