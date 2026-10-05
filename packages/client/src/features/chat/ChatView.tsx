@@ -22,6 +22,8 @@ import {
   prefillProgress
 } from './store.js'
 import { QueueIndicator } from './QueueIndicator.js'
+import { VoiceDraftBubble } from './VoiceDraftBubble.js'
+import { voiceDraftFor } from './voice-draft-store.js'
 import { ChatIcon } from '../../ui/icons.js'
 import { renderMarkdown } from '../../lib/markdown.js'
 
@@ -315,6 +317,7 @@ export function ChatView(props: ChatViewProps) {
     liveWork().length
     streamingText()
     serverQueue().length
+    voiceDraftFor(props.threadKey)?.text
     if (!shouldAutoScrollOnNewContent(followBottom())) return
     // Double-RAF to ensure DOM has rendered (especially for large history loads)
     requestAnimationFrame(() => requestAnimationFrame(scrollToBottom))
@@ -540,6 +543,9 @@ export function ChatView(props: ChatViewProps) {
             />
           </div>
         </Show>
+
+        {/* The message being dictated — outlined, with a recording dot */}
+        <Show when={voiceDraftFor(props.threadKey)}>{(draft) => <VoiceDraftBubble draft={draft()} />}</Show>
       </div>
 
       {/* Queue indicator — collapsed button / expandable list */}

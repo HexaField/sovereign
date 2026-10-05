@@ -24,6 +24,7 @@ import {
   hasActiveSession
 } from '../voice/streaming.js'
 import { deviceName } from '../settings/device-name.js'
+import { publishVoiceDraft, clearVoiceDraft, type VoiceDraftActions } from './voice-draft-store.js'
 
 // ── Constants (exported for tests) ───────────────────────────────────
 
@@ -163,6 +164,14 @@ export interface InputAreaProps {
   threadKey?: string
   disabled?: boolean
 }
+
+// Dictation state is shared, not per instance: a phone mounts two input
+// areas (a hidden desktop panel and the full-screen chat), and the one that
+// owns the mic must see an edit started through the other.
+const [editingTranscript, setEditingTranscript] = createSignal(false)
+/** Whether STT was used at any point while composing the current message.
+ *  Set when streaming starts, cleared on send/cancel. */
+const [voiceUsedForMessage, setVoiceUsedForMessage] = createSignal(false)
 
 export function InputArea(props: InputAreaProps) {
   let textareaRef!: HTMLTextAreaElement
@@ -537,17 +546,18 @@ export function InputArea(props: InputAreaProps) {
   }
 
   // ── Streaming STT ──────────────────────────────
-  // Mic button toggles streaming transcription. The recording bar shows
-  // streaming transcript text. Tapping the text enters edit mode (textarea
-  // within the bar, mic pauses). Blur exits edit mode (mic resumes).
+  // Mic button toggles streaming transcription. The transcript shows in the
+  // thread as an outlined draft bubble (voice-draft-store / VoiceDraftBubble),
+  // so the bar below stays small. Tapping the bubble enters edit mode (mic
+  // pauses); blur exits edit mode (mic resumes).
   // The regular send button auto-attaches voice origin when this flag
   // indicates voice was used during message composition.
 
-  const [editingTranscript, setEditingTranscript] = createSignal(false)
-  /** Tracks whether STT was used at any point during composition of the
-   *  current message. Set when streaming starts, cleared on send/cancel. */
-  const [voiceUsedForMessage, setVoiceUsedForMessage] = createSignal(false)
-  let editTranscriptRef: HTMLTextAreaElement | undefined
+  /** A transcript that lands while the user edits (a paused segment's final)
+   *  must not overwrite what they typed. */
+  const applyTranscript = (fullText: string) => {
+    if (!editingTranscript()) setInputValue(fullText)
+  }
 
   // Initialise streaming WS on first render
   {
@@ -571,11 +581,7 @@ export function InputArea(props: InputAreaProps) {
         setVoiceState('listening')
         setEditingTranscript(false)
         setVoiceUsedForMessage(true)
-        await startStreaming(
-          inputValue(),
-          (fullText) => setInputValue(fullText),
-          (timerText) => setVoiceTimerText(timerText)
-        )
+        await startStreaming(inputValue(), applyTranscript, (timerText) => setVoiceTimerText(timerText))
       } catch {
         setVoiceState('idle')
       }
@@ -587,17 +593,13 @@ export function InputArea(props: InputAreaProps) {
       setVoiceState('listening')
       setEditingTranscript(false)
       setVoiceUsedForMessage(true)
-      await startStreaming(
-        inputValue(),
-        (fullText) => setInputValue(fullText),
-        (timerText) => setVoiceTimerText(timerText)
-      )
+      await startStreaming(inputValue(), applyTranscript, (timerText) => setVoiceTimerText(timerText))
     } catch {
       setVoiceState('idle')
     }
   }
 
-  /** Enter edit mode — pause mic, show textarea in recording bar. */
+  /** Enter edit mode — pause mic; the draft bubble turns into an editor. */
   const enterTranscriptEdit = () => {
     if (streamingState() === 'streaming') {
       pauseStreaming()
@@ -605,15 +607,6 @@ export function InputArea(props: InputAreaProps) {
       setVoiceTimerText('')
     }
     setEditingTranscript(true)
-    setTimeout(() => {
-      if (editTranscriptRef) {
-        editTranscriptRef.focus()
-        const len = editTranscriptRef.value.length
-        editTranscriptRef.setSelectionRange(len, len)
-        editTranscriptRef.style.height = 'auto'
-        editTranscriptRef.style.height = Math.min(editTranscriptRef.scrollHeight, 120) + 'px'
-      }
-    }, 0)
   }
 
   /** Exit edit mode — resume mic with current text. */
@@ -621,11 +614,7 @@ export function InputArea(props: InputAreaProps) {
     setEditingTranscript(false)
     try {
       setVoiceState('listening')
-      await startStreaming(
-        inputValue(),
-        (fullText) => setInputValue(fullText),
-        (timerText) => setVoiceTimerText(timerText)
-      )
+      await startStreaming(inputValue(), applyTranscript, (timerText) => setVoiceTimerText(timerText))
     } catch {
       setVoiceState('idle')
     }
@@ -639,6 +628,20 @@ export function InputArea(props: InputAreaProps) {
     setVoiceUsedForMessage(false)
     setInputValue('')
   }
+
+  // Publish the dictation to the thread as a draft bubble while a session lives.
+  const draftActions: VoiceDraftActions = {
+    edit: enterTranscriptEdit,
+    change: (text) => setInputValue(text),
+    done: () => void exitTranscriptEdit(),
+    send: () => void handleSend()
+  }
+  createEffect(() => {
+    const state = streamingState()
+    if (state !== 'streaming' && state !== 'paused') return clearVoiceDraft(draftActions)
+    publishVoiceDraft({ threadKey: threadKey(), text: inputValue(), state, editing: editingTranscript() }, draftActions)
+  })
+  onCleanup(() => clearVoiceDraft(draftActions))
 
   const currentAgentStatus = () => props.agentStatus ?? storeAgentStatus()
   const busy = () => isAgentBusy(currentAgentStatus())
@@ -1060,51 +1063,14 @@ export function InputArea(props: InputAreaProps) {
               {voiceTimerText() || '0:00'}
             </span>
 
-            {/* Transcript display / edit toggle */}
-            <Show
-              when={!editingTranscript()}
-              fallback={
-                <textarea
-                  ref={editTranscriptRef}
-                  rows={1}
-                  value={inputValue()}
-                  onInput={(e) => setInputValue(e.currentTarget.value)}
-                  onFocusOut={() => void exitTranscriptEdit()}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      handleSend()
-                    }
-                    if (e.key === 'Escape') {
-                      e.preventDefault()
-                      void exitTranscriptEdit()
-                    }
-                  }}
-                  class="max-h-[80px] min-h-[28px] min-w-0 flex-1 resize-none rounded-lg px-2.5 py-1 font-[inherit] text-sm outline-none"
-                  style={{
-                    background: 'var(--c-bg)',
-                    border: '1px solid var(--c-accent)',
-                    color: 'var(--c-text)'
-                  }}
-                />
-              }
-            >
-              <span
-                class="min-w-0 flex-1 cursor-pointer truncate text-sm"
-                style={{
-                  color: inputValue().trim() ? 'var(--c-text)' : 'var(--c-text-muted)',
-                  'font-style': inputValue().trim() ? 'normal' : 'italic'
-                }}
-                onClick={enterTranscriptEdit}
-              >
-                {inputValue().trim() || (streamingState() === 'streaming' ? 'Listening…' : 'Tap to edit')}
-              </span>
-            </Show>
+            {/* The transcript shows in the thread (VoiceDraftBubble). */}
+            <span class="flex-1" />
 
             {/* Cancel */}
             <span
               class="shrink-0 cursor-pointer px-2 py-1 text-xs"
               style={{ color: 'var(--c-text-muted)' }}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={cancelRecording}
             >
               cancel
@@ -1188,6 +1154,8 @@ export function InputArea(props: InputAreaProps) {
               'border-color': isRecording() ? 'var(--c-danger, #ef4444)' : 'var(--c-border)',
               color: isRecording() ? 'var(--c-danger, #ef4444)' : 'var(--c-text-muted)'
             }}
+            // Keep focus in the draft editor: its blur would resume the mic first.
+            onMouseDown={(e) => e.preventDefault()}
             onClick={toggleStreaming}
           >
             <svg

@@ -23,10 +23,14 @@ let recordStart = 0
 /** Text composed before streaming started — streaming appends after this. */
 let prefixText = ''
 
-/** Accumulated transcript from completed streaming segments. When the user
- *  pauses and resumes, previous segments' final text stays here so new
- *  partial transcripts only replace the current segment's portion. */
+/** Final text of the current segment, once the server confirms it. */
 let confirmedSegments = ''
+
+/** Finals still owed by segments that were paused. A pause asks the server
+ *  for the segment's final transcript, which can land after the user
+ *  resumes — by then the text it covers is already in the prefix, so it is
+ *  dropped instead of appended a second time. */
+let owedFinals = 0
 
 export function initStreaming(ws: WsStore): void {
   wsRef = ws
@@ -42,13 +46,11 @@ export async function startStreaming(
   if (!wsRef) throw new Error('WS not initialised for streaming')
   if (streamingState() === 'streaming') return
 
-  const resuming = streamingState() === 'paused'
-
-  if (!resuming) {
-    prefixText = currentInput
-    confirmedSegments = ''
-    setPartialTranscript('')
-  }
+  // A resume starts a new segment after the text as it stands now, so
+  // edits made while paused stay.
+  prefixText = currentInput
+  confirmedSegments = ''
+  setPartialTranscript('')
 
   // Get microphone access (reuse stream if resuming)
   if (!audioStream || !audioStream.active) {
@@ -58,10 +60,17 @@ export async function startStreaming(
   // Subscribe to voice-stream channel
   wsRef.subscribe(['voice-stream'])
 
-  // Listen for transcripts
+  // Listen for transcripts (one listener per session, across pauses)
+  unsubTranscript?.()
+  unsubError?.()
   unsubTranscript = wsRef.on('voice-stream.transcript', (msg: Record<string, unknown>) => {
     const text = (msg.text as string) ?? ''
     const isFinal = msg.final === true
+    if (isFinal && owedFinals > 0) {
+      owedFinals--
+      // A paused segment's final after the user resumed: already in the prefix.
+      if (streamingState() === 'streaming') return
+    }
     setPartialTranscript(text)
 
     if (isFinal) {
@@ -126,6 +135,7 @@ export function pauseStreaming(): void {
 
   // Tell server to stop this segment (gets final transcript)
   wsRef?.send({ type: 'voice-stream.stop' })
+  owedFinals++
 
   // Release mic
   if (audioStream) {
@@ -178,6 +188,7 @@ export function stopStreaming(): void {
 
   prefixText = ''
   confirmedSegments = ''
+  owedFinals = 0
   setPartialTranscript('')
   setStreamingState('idle')
 }

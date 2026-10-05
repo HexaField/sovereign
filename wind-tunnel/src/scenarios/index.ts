@@ -38,6 +38,7 @@ import { s34FileAttachments } from './s34-file-attachments.js'
 import { s35CiWatch } from './s35-ci-watch.js'
 import { s36EditToolsOverScripts } from './s36-edit-tools-over-scripts.js'
 import { s37OneSpeaker } from './s37-one-speaker.js'
+import { s38StreamingStt } from './s38-streaming-stt.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -130,5 +131,6 @@ export const ALL_SCENARIOS: Scenario[] = [
   s34FileAttachments,
   s35CiWatch,
   s36EditToolsOverScripts,
-  s37OneSpeaker
+  s37OneSpeaker,
+  s38StreamingStt
 ]
