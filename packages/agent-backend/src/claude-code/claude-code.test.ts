@@ -180,14 +180,6 @@ describe('claude-code/createClaudeCodeBackend', () => {
     })
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny')
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain('mcp__sovereign__cron_create')
-
-    // The same hook sends shell file edits to the edit tools, and lets other commands run.
-    const bash = (command: string) =>
-      preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, tool_use_id: 'tu2' })
-    const edit = await bash("sed -i 's/a/b/' src/x.ts")
-    expect(edit.hookSpecificOutput.permissionDecision).toBe('deny')
-    expect(edit.hookSpecificOutput.permissionDecisionReason).toContain('mcp__code__edit_files')
-    expect((await bash('git status'))?.hookSpecificOutput?.permissionDecision).not.toBe('deny')
   })
 
   // ── Regression: tool_result must be emitted EXACTLY ONCE per tool ──

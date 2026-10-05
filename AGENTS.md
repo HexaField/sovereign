@@ -330,11 +330,10 @@ The `PATCH /api/threads/:key/model` route and `update()` were already correct �
 
 ## Edits go through the edit tools, not the shell
 
-Shell edits (sed -i, heredoc rewrites, Python read-modify-write) fail silently and skip the diff review, so Sovereign closes both ends:
+Shell edits (sed -i, heredoc rewrites, Python read-modify-write) fail silently and skip the diff review, so Sovereign removes the push toward them and gives the batch power to the tools (`replace_all`, `edit_files`, see Code edit):
 
 - **No bash-first steer.** In bypass and auto permission modes the bundled Claude CLI adds a reminder telling the model to edit files with sed, heredocs or scripts. Every session's `env` sets `BASH_FIRST_OFF_ENV` (`CLAUDE_CODE_THRIFTY_SONIC=0`, an internal CLI flag) in `claude-code.ts`. `bash-first-steer.test.ts` runs the real CLI against a stub API and fails if an SDK upgrade renames the flag; wind-tunnel s36 forces the flag on in the container and checks the override wins.
-- **Shell edit guard.** The PreToolUse hook denies Bash commands that edit files (`shell-edit-guard.ts`): `sed`/`perl`/`ruby -i` and `awk -i inplace` (also behind `sudo`, `xargs`, `env`, a full path, or `bash -c`); `cat`/`echo`/`printf` redirected to a path; `tee` fed by a heredoc, here-string or `cat`/`echo`/`printf`; Python (`-c`, heredoc)/Node/Bun/Ruby (`-e`)/`deno eval` code that writes a file, unless every target is a literal `/tmp` path. The deny message points to `mcp__code__edit`/`edit_files`. The command is tokenised with `shell-quote` after a quote-aware pass (newlines → `;`, heredoc bodies lifted out, `$((…))` dropped), so quoted text such as a commit message is never read as syntax. Output redirects of other commands (`pnpm test > log`, `cmd | tee log`), `/tmp`, `/dev` and `$TMPDIR` targets stay allowed.
-- **Limits:** a script written to `/tmp` and then run (`node /tmp/x.mjs`), or a file built in `/tmp` and moved in with `cp`/`mv`, is not inspected. The rule in the user's instructions covers intent; the guard catches the habitual idioms.
+- **No hard block (yet).** `shell-edit-guard.ts` parses a Bash command and names any shell file edit in it (`sed`/`perl`/`ruby -i`, `awk -i inplace`, `cat`/`echo`/`printf`/`tee` authoring, scripts that write files; `/tmp` and `mktemp` targets are scratch). It is **not wired in**: a deny hook proved too blunt, since shell edits are sometimes warranted. It stays as the candidate first layer of a future decision gate (rules, then possibly a Jev-like decision model). Until then, watch the tool-usage metrics to see whether the steer removal and the batch tools are enough.
 
 ## Turns cut short ("[Request interrupted by user]")
 
