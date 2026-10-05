@@ -360,6 +360,14 @@ Two server mechanisms interrupt a Claude Code turn; the transcript shows the sam
 
 `POST /api/export/pdf` takes `{ markdown }`, renders it with `marked` and prints it through `BrowserService.printPdf`: a fresh headless Chrome per call, JavaScript off, every request except `data:` URLs blocked, so remote images in a message never load. No Chrome → 503 (`BrowserUnavailableError`). The chat's thread and message export menus call it (`packages/client/src/features/chat/export.ts`).
 
+## Dictation: the draft bubble
+
+While speech-to-text streams, the transcript shows in the thread as an outlined user bubble with a recording dot (`chat/VoiceDraftBubble.tsx`), not in the input bar, so the chat area is room to read it. `InputArea` publishes the draft through `chat/voice-draft-store.ts`; `ChatView` renders it for its own thread and routes edits back. Tap the bubble to pause the mic and edit in place; blur resumes; Enter sends.
+
+- **Dictation state is module-level** in `InputArea.tsx` (`editingTranscript`, `voiceUsedForMessage`): a phone mounts two input areas and two chat views (a hidden desktop panel behind the full-screen chat). Per-instance state let the hidden one enter edit mode while the visible one, which owns the mic, overwrote the edit. Only the visible bubble's editor takes focus.
+- **A resume starts a new segment after the current text** (`voice/streaming.ts`), so edits made while paused stay. A paused segment's final transcript that lands after the resume is dropped (`owedFinals`); one that lands while the user edits is ignored by `InputArea`.
+- **Server path:** wind-tunnel s38 drives `voice-stream.start/chunk/stop` against the mock `/transcribe` and checks the interim and final transcripts.
+
 ## Voice replies: one speaker per device name
 
 TTS routes by device **name** (announced with `ws.device-name`), because a page refresh mints a fresh connection deviceId. Several connections share a name on one machine: browser tabs, plus a voice node or the Android app. `wsHandler.sendSpeechToDeviceName` gives the audio to **one** of them and the reply without `audio` to the rest, so their UI still updates:
