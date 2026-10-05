@@ -354,6 +354,17 @@ Two server mechanisms interrupt a Claude Code turn; the transcript shows the sam
 
 `POST /api/export/pdf` takes `{ markdown }`, renders it with `marked` and prints it through `BrowserService.printPdf`: a fresh headless Chrome per call, JavaScript off, every request except `data:` URLs blocked, so remote images in a message never load. No Chrome → 503 (`BrowserUnavailableError`). The chat's thread and message export menus call it (`packages/client/src/features/chat/export.ts`).
 
+## Voice replies: one speaker per device name
+
+TTS routes by device **name** (announced with `ws.device-name`), because a page refresh mints a fresh connection deviceId. Several connections share a name on one machine: browser tabs, plus a voice node or the Android app. `wsHandler.sendSpeechToDeviceName` gives the audio to **one** of them and the reply without `audio` to the rest, so their UI still updates:
+
+1. the connection the voice request came from (`origin.deviceId`), while it stays live;
+2. a voice client: `client: 'voice-node'` in `ws.device-name`, or a non-browser User-Agent on the upgrade request;
+3. the browser tab the user touched last (`ws.active`: the client sends it on focus, on input, throttled to 5 s, and on reconnect);
+4. the newest connection.
+
+`voice-response.ts` pins the later chunks of a reply to the connection that spoke chunk 0, so a reply never splits across tabs. The server decides this because a client-side race cannot: Chrome throttles background-tab timers to the same one-second tick, so hidden tabs that raced over a BroadcastChannel all woke together and all played. Wind-tunnel s37 covers it.
+
 ## CI watch (`packages/server/src/ci-watch/`)
 
 MCP tools `ci_watch` / `ci_watch_list` / `ci_unwatch` let a thread watch the GitHub checks of a PR, branch or commit. The server polls; the thread gets one message (cron envelope `[Cron: CI <target> @ <time>]`) through the chat queue, so it never interrupts a turn.

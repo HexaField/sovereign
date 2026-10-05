@@ -5,12 +5,10 @@
 // channel. This module decodes and plays it, with support for
 // interrupting the current playback when a new frame arrives.
 //
-// The server now routes TTS by device NAME, not deviceId (a page refresh
-// mints a fresh deviceId, so name-based routing survives the refresh).
-// One side effect: every open tab that announces the same device name
-// receives the same audio message. The lock below picks exactly one tab
-// to play it, using a BroadcastChannel race so the tabs need no shared
-// server state to agree on a winner.
+// The server routes TTS by device NAME (a page refresh mints a fresh
+// deviceId), and sends the audio to ONE connection under that name: the
+// others get the message without `audio`. It prefers the tab the user
+// touched last, so each tab reports focus and input as `ws.active`.
 
 import type { WsStore } from '../../ws/ws-store.js'
 import { startMediaKeepAlive, updateNowPlaying, isKeepAliveActive } from './media-session.js'
@@ -145,53 +143,6 @@ async function playAudio(wavData: ArrayBuffer, chunk?: { index: number; total: n
   }
 }
 
-// ── Cross-tab playback lock ─────────────────────────────────────────────
-//
-// Every tab sharing a device name receives the same voice.tts.audio
-// message. Each tab computes a claim key for the clip, then races its
-// peers on a BroadcastChannel: wait a short window for a rival's claim
-// broadcast; if none lands, declare a win and broadcast the claim so
-// later peers back off. A crude heuristic, not a strict distributed
-// lock — a rare exact-tie remains possible — but it turns "every tab
-// speaks at once" into "one tab speaks" for the overwhelming majority
-// of cases.
-
-const TTS_LOCK_CHANNEL = 'sovereign-tts-lock'
-const CLAIM_WINDOW_MS = 50
-// Bounds how long a claim key lingers if this tab never consumes it
-// (e.g. this tab never received that particular broadcast) — keeps the
-// set from growing across a long-lived tab.
-const CLAIM_TTL_MS = 2000
-
-let lockChannel: BroadcastChannel | null = null
-const claimedKeys = new Set<string>()
-
-function getLockChannel(): BroadcastChannel | null {
-  if (typeof BroadcastChannel === 'undefined') return null
-  if (!lockChannel) {
-    lockChannel = new BroadcastChannel(TTS_LOCK_CHANNEL)
-    lockChannel.onmessage = (ev: MessageEvent) => {
-      const data = ev.data as { type?: string; key?: string } | null
-      if (!data || data.type !== 'claim' || !data.key) return
-      const key = data.key
-      claimedKeys.add(key)
-      setTimeout(() => claimedKeys.delete(key), CLAIM_TTL_MS)
-    }
-  }
-  return lockChannel
-}
-
-/** Build a short, stable digest from a string — good enough to dedupe
- *  identical TTS payloads across tabs without shipping the full text
- *  through the lock channel. */
-function hashText(input: string): string {
-  let hash = 0
-  for (let i = 0; i < input.length; i++) {
-    hash = (hash * 31 + input.charCodeAt(i)) | 0
-  }
-  return hash.toString(36)
-}
-
 export interface TtsAudioMessage {
   threadId?: string
   kind?: string
@@ -200,56 +151,8 @@ export interface TtsAudioMessage {
   chunk?: { index: number; total: number; done: boolean }
 }
 
-/** Derive the claim key for a TTS payload. threadId + kind + a hash of
- *  the spoken text together identify one clip: every tab that receives
- *  the literal same broadcast computes the identical key, while two
- *  genuinely distinct clips (different text) never collide. Exported so
- *  tests can compute a matching key to simulate a rival tab's claim. */
-export function claimKeyFor(msg: TtsAudioMessage): string {
-  const threadId = typeof msg.threadId === 'string' ? msg.threadId : ''
-  const kind = typeof msg.kind === 'string' ? msg.kind : ''
-  const text = typeof msg.text === 'string' ? msg.text : ''
-  return `${threadId}:${kind}:${hashText(text)}`
-}
-
-/** Race every tab on this device for the right to play one TTS clip.
- *  Resolves true for the winner (proceed with playback), false for
- *  every tab that hears a rival's claim first (skip). Environments
- *  without BroadcastChannel support always win — dedup never applies
- *  there, so falling back to "play locally" beats staying silent. */
-async function claimPlayback(key: string): Promise<boolean> {
-  const channel = getLockChannel()
-  if (!channel) return true
-
-  if (claimedKeys.has(key)) {
-    claimedKeys.delete(key)
-    return false
-  }
-
-  // Small random jitter spreads out same-tick claims across tabs so two
-  // rivals rarely broadcast at the exact same instant.
-  const jitterMs = Math.random() * 20
-  await new Promise((resolve) => setTimeout(resolve, CLAIM_WINDOW_MS + jitterMs))
-
-  if (claimedKeys.has(key)) {
-    claimedKeys.delete(key)
-    return false
-  }
-
-  channel.postMessage({ type: 'claim', key })
-  return true
-}
-
-/** Handle one voice.tts.audio message: claim playback rights against
- *  sibling tabs, then decode and play only on a win. */
-async function handleIncomingAudio(msg: TtsAudioMessage): Promise<void> {
-  const key = claimKeyFor(msg)
-  const wins = await claimPlayback(key)
-  if (!wins) {
-    console.log(`[tts-player] a sibling tab already claims playback for ${key} — skipping`)
-    return
-  }
-
+/** Handle one voice.tts.audio message that carries audio: decode and play. */
+function handleIncomingAudio(msg: TtsAudioMessage): void {
   // Start the media keep-alive on first TTS playback — the voice
   // interaction serves as the user gesture that satisfies autoplay policy.
   if (!isKeepAliveActive()) startMediaKeepAlive()
@@ -261,6 +164,37 @@ async function handleIncomingAudio(msg: TtsAudioMessage): Promise<void> {
   void playAudio(wavData, msg.chunk)
 }
 
+const ACTIVE_THROTTLE_MS = 5_000
+
+/** Report this tab as active (focused or touched) so the server picks it
+ *  to speak. Throttled; sent again on every reconnect while focused. */
+function reportActivity(ws: WsStore): () => void {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return () => {}
+  let last = 0
+  const report = (force = false): void => {
+    if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+    if (!force && Date.now() - last < ACTIVE_THROTTLE_MS) return
+    last = Date.now()
+    ws.send({ type: 'ws.active' } as any)
+  }
+  const onFocus = (): void => report(true)
+  const onInput = (): void => report()
+  const onVisible = (): void => report(true)
+  window.addEventListener('focus', onFocus)
+  window.addEventListener('pointerdown', onInput, { passive: true })
+  window.addEventListener('keydown', onInput)
+  document.addEventListener('visibilitychange', onVisible)
+  const unsubReconnect = ws.on('ws.reconnected', () => report(true))
+  report(true)
+  return () => {
+    window.removeEventListener('focus', onFocus)
+    window.removeEventListener('pointerdown', onInput)
+    window.removeEventListener('keydown', onInput)
+    document.removeEventListener('visibilitychange', onVisible)
+    unsubReconnect()
+  }
+}
+
 /** Wire up the TTS player to listen for voice.tts.audio messages.
  *  Call once at app startup. Returns a cleanup function. */
 export function initTtsPlayer(ws: WsStore): () => void {
@@ -270,8 +204,9 @@ export function initTtsPlayer(ws: WsStore): () => void {
   const unsubAudio = ws.on('voice.tts.audio', (msg: any) => {
     if (!msg.audio) return
     console.log(`[tts-player] ${msg.kind ?? 'audio'}: "${msg.text?.slice(0, 60) ?? ''}"`)
-    void handleIncomingAudio(msg)
+    handleIncomingAudio(msg)
   })
+  const stopReporting = reportActivity(ws)
 
   // Log status messages for debugging
   const unsubAckPending = ws.on('voice.ack.pending', (msg: any) => {
@@ -286,6 +221,7 @@ export function initTtsPlayer(ws: WsStore): () => void {
     unsubAudio()
     unsubAckPending()
     unsubSummaryPending()
+    stopReporting()
     interruptTts()
   }
 

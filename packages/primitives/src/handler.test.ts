@@ -441,6 +441,65 @@ describe('WsHandler', () => {
     })
   })
 
+  describe('sendSpeechToDeviceName', () => {
+    const BROWSER = { userAgent: 'Mozilla/5.0 (Macintosh) Brave' }
+    const MSG = { type: 'voice.tts.audio', text: 'hi', audio: 'UklGRg==' }
+
+    /** One connection per [deviceId, info], all announced as 'Mac'. */
+    function setup(...conns: Array<[string, { userAgent?: string } | undefined]>) {
+      const handler = createWsHandler(mockBus())
+      handler.registerChannel('status', { serverMessages: [], clientMessages: [] })
+      const sockets = new Map<string, ReturnType<typeof mockWs>>()
+      for (const [id, info] of conns) {
+        const ws = mockWs()
+        handler.handleConnection(ws, id, info)
+        ws.emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Mac' }))
+        sockets.set(id, ws)
+      }
+      const audioAt = () =>
+        [...sockets].filter(([, ws]) => ws.sent.some((s) => JSON.parse(s as string).audio)).map(([id]) => id)
+      const replyAt = () =>
+        [...sockets]
+          .filter(([, ws]) => ws.sent.some((s) => JSON.parse(s as string).type === 'voice.tts.audio'))
+          .map(([id]) => id)
+      return { handler, sockets, audioAt, replyAt }
+    }
+
+    it('gives the audio to one tab and the text-only reply to the others', () => {
+      const { handler, audioAt, replyAt } = setup(['t1', BROWSER], ['t2', BROWSER], ['t3', BROWSER])
+      expect(handler.sendSpeechToDeviceName('Mac', MSG)).toBe('t3') // newest, none active
+      expect(audioAt()).toEqual(['t3'])
+      expect(replyAt()).toEqual(['t1', 't2', 't3'])
+    })
+
+    it('picks the tab the user touched last, over a newer idle tab', () => {
+      const { handler, sockets, audioAt } = setup(['t1', BROWSER], ['t2', BROWSER])
+      sockets.get('t1')!.emit('message', JSON.stringify({ type: 'ws.active' }))
+      expect(handler.sendSpeechToDeviceName('Mac', MSG)).toBe('t1')
+      expect(audioAt()).toEqual(['t1'])
+    })
+
+    it('picks a voice client over browser tabs, by User-Agent or by its own announcement', () => {
+      const ua = setup(['tab', BROWSER], ['node', { userAgent: 'Python/3.14 websockets/15.0' }])
+      ua.sockets.get('tab')!.emit('message', JSON.stringify({ type: 'ws.active' }))
+      expect(ua.handler.sendSpeechToDeviceName('Mac', MSG)).toBe('node')
+
+      const announced = setup(['node', undefined], ['tab', BROWSER])
+      announced.sockets
+        .get('node')!
+        .emit('message', JSON.stringify({ type: 'ws.device-name', deviceName: 'Mac', client: 'voice-node' }))
+      expect(announced.handler.sendSpeechToDeviceName('Mac', MSG)).toBe('node')
+    })
+
+    it('keeps a preferred live connection, and elects again when it has gone', () => {
+      const { handler, sockets } = setup(['t1', BROWSER], ['t2', BROWSER])
+      expect(handler.sendSpeechToDeviceName('Mac', MSG, 't1')).toBe('t1')
+      sockets.get('t1')!.emit('close')
+      expect(handler.sendSpeechToDeviceName('Mac', MSG, 't1')).toBe('t2')
+      expect(handler.sendSpeechToDeviceName('Nobody', MSG)).toBeUndefined()
+    })
+  })
+
   describe('isDeviceNameConnected', () => {
     it('returns true when a named device has an active connection', () => {
       const handler = createWsHandler(mockBus())

@@ -68,11 +68,12 @@ export interface VoiceResponseDeps {
   llm: LlmCompleter
   /** Fetch the last N turns for a thread. */
   getRecentTurns: (threadId: string, limit: number) => Promise<Array<{ role: string; content: string }>>
-  /** Push a JSON message to every connection announced under a device name
-   *  (includes audio as base64). Reaches the right tab even after a page
-   *  refresh mints a fresh deviceId, because the announced name persists
-   *  across reconnects. */
-  sendToDeviceName: (deviceName: string, msg: Record<string, unknown>) => void
+  /** Push a JSON message to the connections announced under a device name.
+   *  The name persists across reconnects, so it reaches the right tab after
+   *  a page refresh mints a fresh deviceId. A message carrying `audio` plays
+   *  on ONE of those connections: `speaker` when it is still live, else one
+   *  the transport elects. Returns the deviceId that got the audio. */
+  sendToDeviceName: (deviceName: string, msg: Record<string, unknown>, speaker?: string) => string | void
   /** Resolve a live connection's announced device name from its deviceId. */
   getDeviceName: (deviceId: string) => string | undefined
   /** Current config (called per-event so hot-reload works). */
@@ -124,6 +125,8 @@ const SKIP_SENTINEL = 'SKIP'
  *  — which mints a fresh deviceId — still finds the originating tab. */
 interface VoiceOrigin {
   deviceName: string
+  /** The connection the voice request came from, when known: it speaks the reply. */
+  deviceId?: string
   threadId: string
   timestamp: number
 }
@@ -164,9 +167,26 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
   // if the real response arrives before the ack finishes.
   const ackAbort = new Map<string, AbortController>()
 
+  // The connection speaking each thread's current utterance. Later chunks of
+  // an utterance follow its first chunk, so one reply never splits across
+  // tabs; a new utterance (an ack, or chunk 0) starts from `preferred`.
+  const speakerOf = new Map<string, string>()
+
+  function speak(deviceName: string, msg: Record<string, unknown> & { threadId: string }, preferred?: string): void {
+    const chunk = msg.chunk as { index: number } | undefined
+    const pinned = chunk && chunk.index > 0 ? speakerOf.get(msg.threadId) : undefined
+    const speaker = sendToDeviceName(deviceName, msg, pinned ?? preferred)
+    if (speaker) speakerOf.set(msg.threadId, speaker)
+  }
+
   // ── ACK pipeline ───────────────────────────────────────────────────
 
-  async function generateAck(threadId: string, userText: string, deviceName: string): Promise<void> {
+  async function generateAck(
+    threadId: string,
+    userText: string,
+    deviceName: string,
+    preferred?: string
+  ): Promise<void> {
     const cfg = config()
     if (!cfg.autoTts || !cfg.ttsUrl) return
 
@@ -221,15 +241,12 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
         return
       }
 
-      // Push audio as base64-encoded JSON to every tab announcing this device name
-      const audioBase64 = audio.toString('base64')
-      sendToDeviceName(deviceName, {
-        type: 'voice.tts.audio',
-        threadId,
-        text: ackText,
-        audio: audioBase64,
-        kind: 'ack'
-      })
+      // Push audio as base64-encoded JSON; one connection under the name plays it
+      speak(
+        deviceName,
+        { type: 'voice.tts.audio', threadId, text: ackText, audio: audio.toString('base64'), kind: 'ack' },
+        preferred
+      )
       console.log(
         `[voice-response] ack delivered to ${deviceName}: "${ackText}" (${durationMs}ms TTS, ${audio.length}B)`
       )
@@ -272,7 +289,8 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>,
     threadId: string,
     deviceName: string,
-    onTextReady: (summaryText: string) => void
+    onTextReady: (summaryText: string) => void,
+    preferred?: string
   ): Promise<string> {
     if (!llm.stream || !synthesizeStream) return ''
 
@@ -323,15 +341,18 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       const isFinal = idx === total - 1
       try {
         const { audio, durationMs } = await synthesize(sentence)
-        const audioBase64 = audio.toString('base64')
-        sendToDeviceName(deviceName, {
-          type: 'voice.tts.audio',
-          threadId,
-          text: sentence,
-          audio: audioBase64,
-          kind: 'summary',
-          chunk: { index: idx, total, done: isFinal }
-        })
+        speak(
+          deviceName,
+          {
+            type: 'voice.tts.audio',
+            threadId,
+            text: sentence,
+            audio: audio.toString('base64'),
+            kind: 'summary',
+            chunk: { index: idx, total, done: isFinal }
+          },
+          preferred
+        )
         console.log(
           `[voice-response] streaming summary [${idx + 1}/${total}] to ${deviceName}: "${sentence.slice(0, 40)}…" (${durationMs}ms TTS)`
         )
@@ -346,7 +367,12 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
     return summaryText
   }
 
-  async function generateSummary(threadId: string, responseText: string, deviceName: string): Promise<void> {
+  async function generateSummary(
+    threadId: string,
+    responseText: string,
+    deviceName: string,
+    preferred?: string
+  ): Promise<void> {
     const cfg = config()
     if (!cfg.ttsUrl) return
 
@@ -376,18 +402,24 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       // When the LLM supports streaming, each sentence gets synthesised
       // and delivered as it completes — first audio after ~1 sentence.
       if (llm.stream && synthesizeStream) {
-        await streamSummaryToTts(messages, threadId, deviceName, (summaryText) => {
-          // Fires after LLM collection but before TTS synthesis —
-          // emits real summary text into the simple conversation and
-          // cancels the deferred raw-turn timer.
-          sendToDeviceName(deviceName, { type: 'voice.summary.pending', threadId, text: summaryText })
-          bus.emit({
-            type: 'presence.reply',
-            timestamp: new Date().toISOString(),
-            source: 'voice-response',
-            payload: { modality: 'voice', text: summaryText }
-          })
-        })
+        await streamSummaryToTts(
+          messages,
+          threadId,
+          deviceName,
+          (summaryText) => {
+            // Fires after LLM collection but before TTS synthesis —
+            // emits real summary text into the simple conversation and
+            // cancels the deferred raw-turn timer.
+            sendToDeviceName(deviceName, { type: 'voice.summary.pending', threadId, text: summaryText })
+            bus.emit({
+              type: 'presence.reply',
+              timestamp: new Date().toISOString(),
+              source: 'voice-response',
+              payload: { modality: 'voice', text: summaryText }
+            })
+          },
+          preferred
+        )
         return
       }
 
@@ -421,15 +453,18 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
         let chunkCount = 0
         await synthesizeStream(summaryText, (chunk) => {
           chunkCount++
-          const audioBase64 = chunk.audio.toString('base64')
-          sendToDeviceName(deviceName, {
-            type: 'voice.tts.audio',
-            threadId,
-            text: chunk.sentence,
-            audio: audioBase64,
-            kind: 'summary',
-            chunk: { index: chunk.index, total: chunk.total, done: chunk.done }
-          })
+          speak(
+            deviceName,
+            {
+              type: 'voice.tts.audio',
+              threadId,
+              text: chunk.sentence,
+              audio: chunk.audio.toString('base64'),
+              kind: 'summary',
+              chunk: { index: chunk.index, total: chunk.total, done: chunk.done }
+            },
+            preferred
+          )
           console.log(
             `[voice-response] summary chunk [${chunk.index + 1}/${chunk.total}] delivered to ${deviceName}: "${chunk.sentence.slice(0, 40)}…" (${chunk.durationMs}ms TTS)`
           )
@@ -438,14 +473,11 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
       } else {
         // Fallback: single-shot synthesis
         const { audio, durationMs } = await synthesize(summaryText)
-        const audioBase64 = audio.toString('base64')
-        sendToDeviceName(deviceName, {
-          type: 'voice.tts.audio',
-          threadId,
-          text: summaryText,
-          audio: audioBase64,
-          kind: 'summary'
-        })
+        speak(
+          deviceName,
+          { type: 'voice.tts.audio', threadId, text: summaryText, audio: audio.toString('base64'), kind: 'summary' },
+          preferred
+        )
         console.log(
           `[voice-response] summary delivered to ${deviceName}: "${summaryText.slice(0, 60)}…" (${durationMs}ms TTS, ${audio.length}B)`
         )
@@ -515,12 +547,13 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
 
     const { threadId, text } = payload
 
+    const deviceId = payload.origin?.deviceId
     pendingFile.updateSync((prev) => ({
       ...prev,
-      [threadId]: { deviceName, threadId, timestamp: Date.now() }
+      [threadId]: { deviceName, ...(deviceId ? { deviceId } : {}), threadId, timestamp: Date.now() }
     }))
 
-    void generateAck(threadId, text, deviceName)
+    void generateAck(threadId, text, deviceName, deviceId)
   })
 
   // Listen for assistant turns completing
@@ -548,7 +581,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
         delete next[payload.threadId!]
         return next
       })
-      void generateSummary(payload.threadId, responseText, origin.deviceName)
+      void generateSummary(payload.threadId, responseText, origin.deviceName, origin.deviceId)
       return
     }
 

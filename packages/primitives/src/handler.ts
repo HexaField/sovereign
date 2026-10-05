@@ -8,7 +8,7 @@ import { encodeBinaryFrame, createBinaryChannelRegistry } from './binary.js'
 
 export interface WsHandler {
   registerChannel(name: string, options: WsChannelOptions): void
-  handleConnection(ws: WsLike, deviceId: string): void
+  handleConnection(ws: WsLike, deviceId: string, info?: ConnectionInfo): void
   broadcast(msg: WsMessage): void
   broadcastToChannel(channel: string, msg: WsMessage, scope?: Record<string, string>): void
   sendTo(deviceId: string, msg: WsMessage): void
@@ -19,6 +19,15 @@ export interface WsHandler {
    *  though the refresh mints a fresh deviceId, so audio finds the right
    *  tab where a plain sendTo would miss it. */
   sendToDeviceName(name: string, msg: WsMessage): void
+  /** Send speech audio to ONE connection under a device name, so several
+   *  tabs (or a tab and a voice node) on one machine never all speak. The
+   *  speaker: `prefer` when it is live under that name, else a dedicated
+   *  voice client (voice node, Android app), else the browser tab the user
+   *  touched last (ws.active), else the newest connection. The other
+   *  connections under the name get the message without its `audio`, so
+   *  their UI still sees the reply. Returns the speaker's deviceId, or
+   *  undefined when nothing under the name is connected. */
+  sendSpeechToDeviceName(name: string, msg: WsMessage, prefer?: string): string | undefined
   sendBinary(channel: string, data: Buffer, scope?: Record<string, string>): void
   /** Send a binary frame to a single device on a named channel. Returns true
    *  if the device had an active connection, false otherwise. */
@@ -33,6 +42,11 @@ export interface WsHandler {
    *  Used by the push fallback to detect when TTS audio has nowhere to
    *  route via WebSocket and should fall back to a push notification. */
   isDeviceNameConnected(name: string): boolean
+}
+
+export interface ConnectionInfo {
+  /** The upgrade request's User-Agent: browsers send `Mozilla/…`. */
+  userAgent?: string
 }
 
 export interface WsLike {
@@ -52,6 +66,11 @@ export function createWsHandler(bus: EventBus): WsHandler {
   // The TTS pipeline calls it so audio keeps reaching the right tab across
   // a page refresh, which always mints a fresh deviceId.
   const deviceNames = new Map<string, string>()
+  // Speaker election state per connection: dedicated voice clients (voice
+  // node, Android app) beat browser tabs; among tabs, the last one the user
+  // touched (ws.active) wins.
+  const speakers = new Map<string, { voiceClient: boolean; connectedAt: number; activeAt: number }>()
+  let connectionCount = 0 // connection order; timestamps tie within a millisecond
   const tracker = createSubscriptionTracker()
   const binaryRegistry = createBinaryChannelRegistry()
 
@@ -81,6 +100,24 @@ export function createWsHandler(bus: EventBus): WsHandler {
     for (const [deviceId, storedName] of deviceNames) {
       if (storedName === name) sendTo(deviceId, msg)
     }
+  }
+
+  const sendSpeechToDeviceName = (name: string, msg: WsMessage, prefer?: string): string | undefined => {
+    const named = [...deviceNames].filter(([id, n]) => n === name && connections.has(id)).map(([id]) => id)
+    if (named.length === 0) return undefined
+    const rank = (id: string): [number, number, number] => {
+      const s = speakers.get(id)
+      return [s?.voiceClient ? 1 : 0, s?.activeAt ?? 0, s?.connectedAt ?? 0]
+    }
+    const speaker = named.includes(prefer ?? '')
+      ? prefer!
+      : named.reduce((best, id) => {
+          const [a, b] = [rank(id), rank(best)]
+          return (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) > 0 ? id : best
+        })
+    const { audio: _audio, ...silent } = msg as WsMessage & { audio?: unknown }
+    for (const id of named) sendTo(id, id === speaker ? msg : (silent as WsMessage))
+    return speaker
   }
 
   const getDeviceName = (deviceId: string): string | undefined => deviceNames.get(deviceId)
@@ -132,8 +169,14 @@ export function createWsHandler(bus: EventBus): WsHandler {
     ws.send(JSON.stringify({ type: 'error', code, message }))
   }
 
-  const handleConnection = (ws: WsLike, deviceId: string): void => {
+  const handleConnection = (ws: WsLike, deviceId: string, info?: ConnectionInfo): void => {
     connections.set(deviceId, ws)
+    const ua = info?.userAgent
+    speakers.set(deviceId, {
+      voiceClient: !!ua && !ua.startsWith('Mozilla/'),
+      connectedAt: ++connectionCount,
+      activeAt: 0
+    })
     // Default subscription to status channel
     tracker.subscribe(deviceId, ['status'])
     bus.emit({ type: 'ws.connected', timestamp: new Date().toISOString(), source: 'ws', payload: { deviceId } })
@@ -212,10 +255,21 @@ export function createWsHandler(bus: EventBus): WsHandler {
       // exception — the TTS pipeline calls it so audio survives a
       // deviceId change across page refresh.
       if (type === 'ws.device-name') {
-        const { deviceName } = msg as { deviceName?: string }
+        const { deviceName, client } = msg as { deviceName?: string; client?: string }
         if (typeof deviceName === 'string' && deviceName.trim()) {
           deviceNames.set(deviceId, deviceName.trim())
         }
+        // A voice client may name itself; the User-Agent covers older ones.
+        const s = speakers.get(deviceId)
+        if (s && client === 'voice-node') s.voiceClient = true
+        return
+      }
+
+      // Built-in: ws.active — a browser tab gained focus or user input, so
+      // it becomes the preferred speaker for its device name.
+      if (type === 'ws.active') {
+        const s = speakers.get(deviceId)
+        if (s) s.activeAt = Date.now()
         return
       }
 
@@ -237,6 +291,7 @@ export function createWsHandler(bus: EventBus): WsHandler {
     ws.on('close', () => {
       connections.delete(deviceId)
       deviceNames.delete(deviceId)
+      speakers.delete(deviceId)
       const removedChannels = tracker.removeDevice(deviceId)
       // Invoke onDisconnect for all channels the device was subscribed to
       for (const ch of removedChannels) {
@@ -256,6 +311,7 @@ export function createWsHandler(bus: EventBus): WsHandler {
     broadcastToChannel,
     sendTo,
     sendToDeviceName,
+    sendSpeechToDeviceName,
     sendBinary,
     sendBinaryTo,
     getConnectedDevices,

@@ -672,3 +672,50 @@ describe('voice response — error emission', () => {
     vr.shutdown()
   })
 })
+
+// ── One speaker per utterance ──────────────────────────────────────
+
+describe('voice response — speaker', () => {
+  it('asks for the originating connection to speak the ack and the first summary chunk', async () => {
+    const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
+    getDeviceName.mockImplementation((id: string) => (id === 'tab-1' ? 'Mac' : undefined))
+    const vr = createVoiceResponse(deps)
+
+    emitMessageSent(bus, { threadId: 't1', text: 'status please', origin: { modality: 'voice', deviceId: 'tab-1' } })
+    await flush()
+    emitTurnCompleted(bus, { threadId: 't1', turn: { role: 'assistant', content: 'All builds pass.' } })
+    await flush()
+
+    const audio = sendToDeviceName.mock.calls.filter(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+    expect(audio.map(([, msg, speaker]: any[]) => [msg.kind, speaker])).toEqual([
+      ['ack', 'tab-1'],
+      ['summary', 'tab-1']
+    ])
+    vr.shutdown()
+  })
+
+  it('keeps every later chunk of a reply on the connection that spoke its first chunk', async () => {
+    const { deps, bus, sendToDeviceName } = createDeps()
+    sendToDeviceName.mockImplementation((_name: string, msg: any) => (msg.audio ? 'node' : undefined))
+    const synthesizeStream = vi.fn(async (_text: string, onChunk: (c: any) => void) => {
+      for (let index = 0; index < 3; index++) {
+        onChunk({ index, total: 3, sentence: `s${index}`, audio: Buffer.from('a'), durationMs: 1, done: index === 2 })
+      }
+    })
+    const vr = createVoiceResponse({ ...deps, synthesizeStream })
+
+    emitTtsOverride(bus, { threadId: 't2', enabled: true, deviceName: 'Mac' })
+    emitTurnCompleted(bus, { threadId: 't2', turn: { role: 'assistant', content: 'A longer reply to read aloud.' } })
+    await flush()
+
+    const speakers = sendToDeviceName.mock.calls
+      .filter(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+      .map(([, msg, speaker]: any[]) => [msg.chunk.index, speaker])
+    expect(speakers).toEqual([
+      [0, undefined],
+      [1, 'node'],
+      [2, 'node']
+    ])
+    vr.shutdown()
+  })
+})
