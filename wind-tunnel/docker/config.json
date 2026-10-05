@@ -17,7 +17,9 @@
       "thresholdPercent": 1,
       "minIntervalMs": 0,
       "prescription": "standard",
-      "skipDuringSubagents": true
+      "skipDuringSubagents": true,
+      "regrowPercent": 0,
+      "minReclaimPercent": 0
     },
     "cleanup": {
       "enabled": true,

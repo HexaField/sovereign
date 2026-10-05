@@ -80,6 +80,7 @@ import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
 import { parseCozempicOutput } from './cozempic-parser.js'
+import { recycleWanted, recycleExhausted } from './recycle-gate.js'
 import { trimJsonlToLastCompaction } from './jsonl-trim.js'
 import {
   archiveJsonlBeforeRecycle,
@@ -392,6 +393,8 @@ interface PersistedClaudeSessionState {
   label?: string
   parentSessionKey?: string
   lastRecycleAt?: number
+  recycleFloor?: number
+  recycleExhausted?: boolean
   liveSubagents: string[]
   streamLastLength: number
   thinkingAccum: string
@@ -542,6 +545,8 @@ export function createClaudeCodeBackend(
       label: state.label,
       parentSessionKey: state.parentSessionKey,
       lastRecycleAt: state.lastRecycleAt,
+      recycleFloor: state.recycleFloor,
+      recycleExhausted: state.recycleExhausted,
       liveSubagents: [...state.liveSubagents],
       streamLastLength: state.streamLastLength,
       thinkingAccum: state.thinkingAccum,
@@ -567,6 +572,8 @@ export function createClaudeCodeBackend(
         label: value.label,
         parentSessionKey: value.parentSessionKey,
         lastRecycleAt: value.lastRecycleAt,
+        recycleFloor: value.recycleFloor,
+        recycleExhausted: value.recycleExhausted,
         // Recycle count resets on restart — it gates dedup within a process.
         recycleCount: 0,
         compactionCount: value.compactionCount ?? 0,
@@ -1137,6 +1144,9 @@ export function createClaudeCodeBackend(
       const state = stateForHook(input)
       if (!state) return { continue: true }
       state.compactionCount = (state.compactionCount ?? 0) + 1
+      // A compaction summarised the session: the recycle gate starts afresh.
+      state.recycleFloor = undefined
+      state.recycleExhausted = false
       persistState(state)
       emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: false })
       // MCP rehydration: compact tears down the SDK's deferred-tool catalog
@@ -2497,7 +2507,17 @@ export function createClaudeCodeBackend(
       })
     }
 
-    if (fillPercent < threshold) return
+    if (
+      !recycleWanted({
+        filled,
+        maxTokens,
+        thresholdPercent: threshold,
+        floor: state.recycleFloor,
+        regrowPercent: recycleCfg?.regrowPercent ?? 10,
+        exhausted: state.recycleExhausted
+      })
+    )
+      return
 
     if (state.recycleDue) return
     console.log(
@@ -2708,6 +2728,14 @@ export function createClaudeCodeBackend(
     state.contextFilter?.reset()
     state.lastRecycleAt = Date.now()
     state.recycleDue = false
+    state.recycleFloor = postTokens
+    state.recycleExhausted = recycleExhausted(preTokens, postTokens, recycleCfg?.minReclaimPercent ?? 5)
+    if (state.recycleExhausted) {
+      console.log(
+        `[context-recycle] ${sessionKey}: recycle freed ${preTokens - postTokens} of ${preTokens} tokens — ` +
+          `pruning cannot shrink it; auto-recycle off until the next compaction`
+      )
+    }
     state.recycleCount = (state.recycleCount ?? 0) + 1
     state.lastUsage = undefined
 

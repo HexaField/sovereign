@@ -84,6 +84,8 @@ export interface ClaudeCodeConfig {
       minIntervalMs?: number
       prescription?: string
       skipDuringSubagents?: boolean
+      regrowPercent?: number
+      minReclaimPercent?: number
     }
     cleanup?: {
       enabled?: boolean
@@ -141,6 +143,10 @@ export interface ClaudeSessionState {
   lastRecycleAt?: number
   /** Context passed the recycle threshold; recycle before the next message. */
   recycleDue?: boolean
+  /** Tokens the last recycle left: the next auto-recycle waits for growth past it (recycle-gate.ts). */
+  recycleFloor?: number
+  /** The last recycle freed too little: no auto-recycle until a compaction. */
+  recycleExhausted?: boolean
   /** Background tasks (shells, monitors, agents) still running at the last Stop. */
   backgroundTaskCount?: number
   /** Last time subagent activity was reported on this (parent) session. */

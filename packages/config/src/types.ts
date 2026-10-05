@@ -237,6 +237,10 @@ export interface SovereignConfig {
       prescription: string
       /** Skip recycle when subagents run in the session. */
       skipDuringSubagents: boolean
+      /** After a recycle, wait for the context to grow this % of the window before the next one. */
+      regrowPercent: number
+      /** A recycle that frees less than this % of the context stops auto-recycle until a compaction. */
+      minReclaimPercent: number
     }
     /** Layer 3: between-session JSONL cleanup via cron. */
     cleanup: {

@@ -252,7 +252,9 @@ export const schema = {
             thresholdPercent: { type: 'number', minimum: 0, maximum: 100 },
             minIntervalMs: { type: 'number', minimum: 0 },
             prescription: { type: 'string' },
-            skipDuringSubagents: { type: 'boolean' }
+            skipDuringSubagents: { type: 'boolean' },
+            regrowPercent: { type: 'number', minimum: 0, maximum: 100 },
+            minReclaimPercent: { type: 'number', minimum: 0, maximum: 100 }
           },
           additionalProperties: false
         },

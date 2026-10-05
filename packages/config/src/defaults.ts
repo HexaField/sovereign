@@ -145,7 +145,9 @@ export const defaults: SovereignConfig = {
       thresholdPercent: 55,
       minIntervalMs: 300_000,
       prescription: 'standard',
-      skipDuringSubagents: true
+      skipDuringSubagents: true,
+      regrowPercent: 10,
+      minReclaimPercent: 5
     },
     cleanup: {
       enabled: true,
