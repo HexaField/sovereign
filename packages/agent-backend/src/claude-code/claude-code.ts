@@ -89,7 +89,6 @@ import {
 } from '../history-archive.js'
 import { readHistoryLog, historyLogExists, mergeIntoHistoryLog } from '../history-log.js'
 import { attachmentToContentBlock } from './attachment.js'
-import { shellEditDenial, shellEditReason } from './shell-edit-guard.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -844,24 +843,7 @@ export function createClaudeCodeBackend(
         }
       }
 
-      // File edits through the shell (sed -i, heredocs, scripts) fail silently
-      // and skip the diff review: send them to the edit tools instead.
-      if (inp.tool_name === 'Bash') {
-        const command = (inp.tool_input as { command?: unknown } | undefined)?.command
-        const reason = typeof command === 'string' ? shellEditReason(command) : undefined
-        if (reason) {
-          return {
-            continue: true,
-            hookSpecificOutput: {
-              hookEventName: 'PreToolUse' as const,
-              permissionDecision: 'deny' as const,
-              permissionDecisionReason: shellEditDenial(reason)
-            }
-          }
-        }
-      }
-
-      // Record start time for metrics duration tracking. After the denials
+      // Record start time for metrics duration tracking. After the redirect
       // above: a denied call gets no PostToolUse to clear its entry.
       const toolUseId = (inp as Record<string, unknown>).tool_use_id as string | undefined
       if (toolUseId) toolStartTimes.set(toolUseId, Date.now())

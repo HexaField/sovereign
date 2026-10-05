@@ -1,3 +1,9 @@
+// NOT WIRED IN. Josh disabled the deny hook (2026-10-05): shell edits are
+// sometimes warranted, and a hard block is too blunt. The parser stays as the
+// candidate first layer of a future decision gate (rules, then possibly a
+// Jev-like decision model). Until then the bash-first steer is off and the
+// batch edit tools exist; tool-usage metrics show whether that is enough.
+//
 // Spots Bash commands that edit files: sed/perl/ruby/awk in place,
 // cat/echo/printf/tee writing content to a path, and Python/Node/Deno/Bun/
 // Ruby code that writes files. Such edits fail silently (a replace that
