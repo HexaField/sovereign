@@ -1,9 +1,14 @@
-import { createMemo, createSignal, Show, Suspense, lazy, onMount, onCleanup } from 'solid-js'
+import { createMemo, Show, Suspense, lazy, onMount, onCleanup } from 'solid-js'
 import { agentIcon, agentName } from '../../lib/identity.js'
-import { HealthPopover, overallHealth, initHealthPolling } from '../connection/HealthPopover.js'
+import {
+  HealthPopover,
+  overallHealth,
+  initHealthPolling,
+  healthPopoverOpen,
+  setHealthPopoverOpen
+} from '../connection/HealthPopover.js'
 import { activeView, toggleMode, activeAgentTab, setActiveAgentTab, type AgentTab } from '../nav/store.js'
-import { threadKey, switchThread } from '../threads/store.js'
-import { getPresenceGatewayThreadId } from '../threads/presence-helper.js'
+import { threadKey } from '../threads/store.js'
 const WorkspaceHeaderContent = lazy(() =>
   import('../workspace/WorkspaceHeaderContent.js').then((m) => ({ default: m.WorkspaceHeaderContent }))
 )
@@ -30,20 +35,17 @@ export function getViewModeLabel(mode: string): string {
 
 // ── Agent-context tab bar ───────────────────────────────────────────
 
-const AGENT_TAB_DEFS: Array<{ tab: AgentTab; staticLabel?: string }> = [
-  { tab: 'hex' },
-  { tab: 'overview', staticLabel: 'Overview' },
-  { tab: 'forest', staticLabel: 'Forest' },
-  { tab: 'tasks', staticLabel: 'Tasks' },
-  { tab: 'settings', staticLabel: 'Settings' },
-  { tab: 'system', staticLabel: 'System' }
+const AGENT_TAB_DEFS: Array<{ tab: AgentTab; label: string }> = [
+  { tab: 'overview', label: 'Overview' },
+  { tab: 'forest', label: 'Forest' },
+  { tab: 'tasks', label: 'Tasks' },
+  { tab: 'system', label: 'System' }
 ]
 
 function AgentHeaderContent() {
   return (
     <div class="scrollbar-none flex items-center gap-0.5 overflow-x-auto">
       {AGENT_TAB_DEFS.map((item) => {
-        const label = () => item.staticLabel ?? agentName()
         const active = () => activeAgentTab() === item.tab
         return (
           <button
@@ -54,7 +56,7 @@ function AgentHeaderContent() {
             }}
             onClick={() => setActiveAgentTab(item.tab)}
           >
-            {label()}
+            {item.label}
           </button>
         )
       })}
@@ -65,29 +67,16 @@ function AgentHeaderContent() {
 // ── Main Header ─────────────────────────────────────────────────────
 
 export function Header() {
-  const [healthOpen, setHealthOpen] = createSignal(false)
   let healthDotRef: HTMLButtonElement | undefined
-
-  const [presenceGatewayId, setPresenceGatewayId] = createSignal<string | null>(null)
 
   onMount(() => {
     const cleanup = initHealthPolling()
     onCleanup(cleanup)
-
-    void getPresenceGatewayThreadId().then((id) => {
-      setPresenceGatewayId(id)
-      if (id && activeView() === 'agent' && threadKey() !== id) {
-        switchThread(id)
-      }
-    })
   })
 
-  // Gates the summary bubble — it only ever holds data for the gateway
-  // thread, so showing it only ever makes sense while that thread stays open.
-  const onGatewayThread = createMemo(() => {
-    const pgId = presenceGatewayId()
-    return !!pgId && pgId === threadKey()
-  })
+  // The TTS and summary toggles act on the open thread, which only the
+  // workspace shows.
+  const threadOpen = createMemo(() => activeView() === 'workspace' && !!threadKey())
 
   const statusStyle = createMemo(() => {
     const h = overallHealth()
@@ -134,8 +123,8 @@ export function Header() {
           </Show>
         </div>
 
-        {/* Rolling conversation summary + TTS toggle — gateway thread only. */}
-        <Show when={onGatewayThread()}>
+        {/* TTS + simple-conversation toggles for the open thread. */}
+        <Show when={threadOpen()}>
           <TtsToggle />
           <SummaryBubble />
         </Show>
@@ -145,12 +134,16 @@ export function Header() {
           ref={healthDotRef}
           class="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent transition-all"
           style={{ background: statusStyle().background }}
-          onClick={() => setHealthOpen(!healthOpen())}
+          onClick={() => setHealthPopoverOpen(!healthPopoverOpen())}
           title={statusLabel()}
         >
           <span class="inline-block h-2 w-2 rounded-full" style={{ background: statusStyle().color }} />
         </button>
-        <HealthPopover open={healthOpen()} onClose={() => setHealthOpen(false)} anchorRef={healthDotRef} />
+        <HealthPopover
+          open={healthPopoverOpen()}
+          onClose={() => setHealthPopoverOpen(false)}
+          anchorRef={healthDotRef}
+        />
       </div>
     </>
   )

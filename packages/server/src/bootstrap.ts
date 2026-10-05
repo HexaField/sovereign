@@ -1236,23 +1236,35 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         return { gatewayThreadId: gateway?.id ?? null }
       },
       dataDir: path.join(dataDir, 'presence'),
-      summarize: summarizeForSimpleConversation
+      summarize: summarizeForSimpleConversation,
+      history: async (threadId) => {
+        const sessionKey = chatModule.getSessionKeyForThread(threadId)
+        if (!sessionKey) return []
+        return (await backend.getHistory(sessionKey)).turns
+      }
     })
 
-    // REST endpoint — initial load / page refresh.
+    // REST endpoints — initial load / page refresh / thread switch.
     app.get('/api/presence/simple-conversation', (_req, res) => {
       res.json({ entries: simpleConversation.getEntries() })
+    })
+    app.get('/api/threads/:id/simple-conversation', async (req, res) => {
+      const threadId = req.params.id
+      if (!threadManager.get(threadId)) return res.status(404).json({ error: 'unknown thread' })
+      res.json({ entries: await simpleConversation.open(threadId) })
     })
 
     // Push new entries to the chat WS channel for live client updates.
     bus.on('presence.simple-conversation.updated', (e) => {
       const payload = (e.payload ?? {}) as {
+        threadId?: string
         entry?: { role: string; text: string; modality: string; timestamp: string }
         total?: number
       }
       if (!payload.entry) return
       wsHandler.broadcastToChannel('chat', {
         type: 'chat.simple-conversation',
+        threadId: payload.threadId,
         entry: payload.entry,
         total: payload.total
       })

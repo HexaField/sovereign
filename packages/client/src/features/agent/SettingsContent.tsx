@@ -1,5 +1,5 @@
-// Settings tab content — extracted from SettingsModal for use as an
-// agent-context tab. Device name + appearance (theme) + notifications.
+// Settings — device name, appearance (theme) and notifications. Shown in
+// the header's Service Health popover.
 
 import { createSignal, For, type JSX } from 'solid-js'
 import { agentName } from '../../lib/identity.js'
@@ -18,8 +18,8 @@ const THEME_OPTIONS: Array<{ value: Theme; label: string; icon: () => JSX.Elemen
 
 export default function SettingsContent() {
   return (
-    <div class="mx-auto h-full max-w-md overflow-y-auto p-6">
-      <div class="space-y-6">
+    <div>
+      <div class="space-y-5">
         {/* Device */}
         <DeviceNameSection />
 

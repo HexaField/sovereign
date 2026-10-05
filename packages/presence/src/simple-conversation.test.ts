@@ -65,7 +65,7 @@ describe('SimpleConversation', () => {
     store.shutdown()
   })
 
-  it('ignores user messages on non-gateway threads', () => {
+  it('keeps each thread’s messages apart', () => {
     const bus = makeBus()
     const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
 
@@ -73,10 +73,37 @@ describe('SimpleConversation', () => {
       type: 'chat.message.sent',
       timestamp: '2026-01-01T00:00:00Z',
       source: 'chat',
-      payload: { threadId: 'other-thread', text: 'Should not appear' }
+      payload: { threadId: 'other-thread', text: 'Only in the other thread' }
     })
 
     expect(store.getEntries()).toHaveLength(0)
+    expect(store.getEntries('other-thread').map((e) => e.text)).toEqual(['Only in the other thread'])
+    store.shutdown()
+  })
+
+  it('files a reply under its threadId, and one without a threadId under the gateway', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+    const reply = (payload: Record<string, unknown>) =>
+      bus.emit({ type: 'presence.reply', timestamp: '2026-01-01T00:00:01Z', source: 'voice-response', payload })
+
+    reply({ modality: 'voice', text: 'Spoken on t2.', threadId: 't2' })
+    reply({ modality: 'text', text: 'From the presence tools.' })
+
+    expect(store.getEntries('t2').map((e) => e.text)).toEqual(['Spoken on t2.'])
+    expect(store.getEntries().map((e) => e.text)).toEqual(['From the presence tools.'])
+    store.shutdown()
+  })
+
+  it('tags live updates with their thread', () => {
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
+    const updates: any[] = []
+    bus.on('presence.simple-conversation.updated', (e: any) => updates.push(e.payload))
+
+    bus.emit({ type: 'chat.message.sent', timestamp: 'x', source: 'chat', payload: { threadId: 't3', text: 'hi' } })
+
+    expect(updates).toEqual([expect.objectContaining({ threadId: 't3', total: 1 })])
     store.shutdown()
   })
 
@@ -218,19 +245,19 @@ describe('SimpleConversation', () => {
       type: 'chat.message.sent',
       timestamp: '2026-01-01T00:00:00Z',
       source: 'chat',
-      payload: { threadId: 'any-thread', text: 'Should not appear' }
+      payload: { threadId: 'any-thread', text: 'Kept under its thread' }
     })
 
+    // No gateway: the default view is empty, and a reply naming no thread has nowhere to go.
     expect(store.getEntries()).toHaveLength(0)
-
-    // Hex replies still accumulate (they carry no thread filter)
     bus.emit({
       type: 'presence.reply',
       timestamp: '2026-01-01T00:00:01Z',
       source: 'presence',
       payload: { modality: 'text', text: 'Reply without gateway' }
     })
-    expect(store.getEntries()).toHaveLength(1)
+    expect(store.getEntries()).toHaveLength(0)
+    expect(store.getEntries('any-thread').map((e) => e.text)).toEqual(['Kept under its thread'])
     store.shutdown()
   })
 })
@@ -382,7 +409,7 @@ describe('SimpleConversation — assistant turn capture', () => {
     store.shutdown()
   })
 
-  it('ignores non-gateway assistant turns', () => {
+  it('captures assistant turns on any thread, under that thread', () => {
     const bus = makeBus()
     const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }) })
 
@@ -390,11 +417,12 @@ describe('SimpleConversation — assistant turn capture', () => {
       type: 'chat.turn.completed',
       timestamp: '2026-01-01T00:00:05Z',
       source: 'chat',
-      payload: { threadId: 'other-thread', turn: { role: 'assistant', content: 'Should not appear.' } }
+      payload: { threadId: 'other-thread', turn: { role: 'assistant', content: 'Done on the other thread.' } }
     })
 
     vi.advanceTimersByTime(5100)
     expect(store.getEntries()).toHaveLength(0)
+    expect(store.getEntries('other-thread').map((e) => e.text)).toEqual(['Done on the other thread.'])
     store.shutdown()
   })
 
@@ -710,5 +738,172 @@ describe('SimpleConversation — LLM summarize', () => {
     expect(entries[0].text).toBe('Spoken summary.')
     expect(entries[0].modality).toBe('voice')
     store.shutdown()
+  })
+
+  it('summarises a thread’s turns only once its simple view has been opened', async () => {
+    const bus = makeBus()
+    const summarize = vi.fn(async () => 'LLM summary')
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), summarize })
+    const turn = (content: string) =>
+      bus.emit({
+        type: 'chat.turn.completed',
+        timestamp: '2026-01-01T00:00:05Z',
+        source: 'chat',
+        payload: { threadId: 'work', turn: { role: 'assistant', content } }
+      })
+
+    turn('Before anyone looked.')
+    vi.advanceTimersByTime(5100)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(summarize).not.toHaveBeenCalled()
+
+    await store.open('work')
+    turn('After the view opened.')
+    vi.advanceTimersByTime(5100)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(summarize).toHaveBeenCalledOnce()
+    expect(store.getEntries('work').map((e) => e.text)).toEqual(['Before anyone looked.', 'LLM summary'])
+    store.shutdown()
+  })
+})
+
+describe('SimpleConversation — per-thread open and storage', () => {
+  const tmpDirs: string[] = []
+  afterEach(() => {
+    for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true })
+    tmpDirs.length = 0
+  })
+  function makeTmpDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'simple-conv-thread-'))
+    tmpDirs.push(dir)
+    return dir
+  }
+
+  const HISTORY = [
+    { role: 'user', content: 'Fix the build', timestamp: Date.parse('2026-01-01T00:00:00Z') },
+    { role: 'system', content: 'compaction summary', timestamp: Date.parse('2026-01-01T00:00:01Z') },
+    {
+      role: 'assistant',
+      content: '**Fixed.** The import was wrong.\n\nDetails…',
+      timestamp: Date.parse('2026-01-01T00:00:02Z')
+    },
+    { role: 'user', content: 'thanks', timestamp: Date.parse('2026-01-01T00:00:03Z'), origin: { modality: 'voice' } }
+  ]
+
+  it('backfills a thread’s first open from its history, without the system turns', async () => {
+    const bus = makeBus()
+    const history = vi.fn(async () => HISTORY)
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), history })
+
+    const entries = await store.open('work')
+
+    expect(entries.map((e) => [e.role, e.text, e.modality])).toEqual([
+      ['user', 'Fix the build', 'text'],
+      ['hex', 'Fixed. The import was wrong.', 'text'],
+      ['user', 'thanks', 'voice']
+    ])
+    await store.open('work')
+    expect(history).toHaveBeenCalledOnce() // entries exist now: no second backfill
+    store.shutdown()
+  })
+
+  it('keeps live entries that land while the history loads, after the older backfill', async () => {
+    const bus = makeBus()
+    let release!: () => void
+    const history = vi.fn(() => new Promise<typeof HISTORY>((resolve) => (release = () => resolve(HISTORY))))
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), history })
+
+    const opened = store.open('work')
+    bus.emit({
+      type: 'chat.message.sent',
+      timestamp: '2026-01-02T00:00:00Z',
+      source: 'chat',
+      payload: { threadId: 'work', text: 'live message' }
+    })
+    release()
+
+    expect((await opened).map((e) => e.text)).toEqual([
+      'Fix the build',
+      'Fixed. The import was wrong.',
+      'thanks',
+      'live message'
+    ])
+    store.shutdown()
+  })
+
+  it('stores each thread in its own file, and remembers opened threads across restarts', async () => {
+    const dir = makeTmpDir()
+    const summarize = vi.fn(async () => 'LLM summary')
+    const bus1 = makeBus()
+    const store1 = createSimpleConversation({ bus: bus1, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+    await store1.open('work')
+    bus1.emit({
+      type: 'chat.message.sent',
+      timestamp: 'x',
+      source: 'chat',
+      payload: { threadId: 'work', text: 'kept' }
+    })
+    store1.shutdown()
+
+    expect(fs.existsSync(path.join(dir, 'simple-conversation', 'work.json'))).toBe(true)
+    expect(fs.existsSync(path.join(dir, 'simple-conversation.json'))).toBe(false) // the gateway file stays untouched
+
+    vi.useFakeTimers()
+    try {
+      const bus2 = makeBus()
+      const store2 = createSimpleConversation({
+        bus: bus2,
+        config: () => ({ gatewayThreadId: GATEWAY }),
+        dataDir: dir,
+        summarize
+      })
+      expect(store2.getEntries('work').map((e) => e.text)).toEqual(['kept'])
+      bus2.emit({
+        type: 'chat.turn.completed',
+        timestamp: 'y',
+        source: 'chat',
+        payload: { threadId: 'work', turn: { role: 'assistant', content: 'A reply to summarise.' } }
+      })
+      vi.advanceTimersByTime(5100)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(summarize).toHaveBeenCalledOnce() // still watched after the restart
+      store2.shutdown()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops a deleted thread’s entries and file', async () => {
+    const dir = makeTmpDir()
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+    await store.open('gone')
+    bus.emit({ type: 'chat.message.sent', timestamp: 'x', source: 'chat', payload: { threadId: 'gone', text: 'bye' } })
+    store.shutdown()
+    const file = path.join(dir, 'simple-conversation', 'gone.json')
+    expect(fs.existsSync(file)).toBe(true)
+
+    const bus2 = makeBus()
+    const store2 = createSimpleConversation({ bus: bus2, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+    bus2.emit({ type: 'thread.deleted', timestamp: 'z', source: 'threads', payload: { threadId: 'gone' } })
+    expect(fs.existsSync(file)).toBe(false)
+    expect(store2.getEntries('gone')).toEqual([])
+    store2.shutdown()
+  })
+
+  it('never names a file after an id that is not a plain thread id', async () => {
+    const dir = makeTmpDir()
+    const bus = makeBus()
+    const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
+    bus.emit({
+      type: 'chat.message.sent',
+      timestamp: 'x',
+      source: 'chat',
+      payload: { threadId: '../escape', text: 'x' }
+    })
+    store.shutdown()
+    expect(fs.readdirSync(dir).filter((f) => f !== 'simple-conversation')).toEqual([])
+    expect(fs.existsSync(path.join(dir, '..', 'escape.json'))).toBe(false)
   })
 })

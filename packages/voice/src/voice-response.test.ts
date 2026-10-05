@@ -241,7 +241,7 @@ describe('voice response — device-name routing', () => {
       .map(([e]: any) => e)
       .filter((e: BusEvent) => e.type === 'presence.reply')
     expect(replyEvents).toHaveLength(1)
-    expect(replyEvents[0].payload).toEqual({ modality: 'voice', text: 'Spoken text.' })
+    expect(replyEvents[0].payload).toEqual({ modality: 'voice', text: 'Spoken text.', threadId: 't1' })
     expect(replyEvents[0].source).toBe('voice-response')
 
     vr.shutdown()

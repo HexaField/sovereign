@@ -36,5 +36,6 @@ export {
   type SimpleConversation,
   type SimpleConversationEntry,
   type SimpleConversationConfig,
-  type SimpleConversationDeps
+  type SimpleConversationDeps,
+  type HistoryTurn
 } from './simple-conversation.js'

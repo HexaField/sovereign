@@ -21,7 +21,6 @@ import {
   _setDrawerOpen,
   initNavStore,
   _triggerPopstate,
-  _resetNavThreadState,
   activeView,
   _setActiveView,
   setActiveView,
@@ -35,6 +34,17 @@ import {
   type AgentTab
 } from './store.js'
 
+/** Re-run initNavStore as if the page loaded at `search`. */
+function loadAt(search: string, reinit: () => void): () => void {
+  reinit()
+  Object.defineProperty(globalThis, 'location', {
+    value: { search, href: `http://localhost/${search}`, hash: '' },
+    writable: true,
+    configurable: true
+  })
+  return initNavStore()
+}
+
 describe('§3.5 Nav Store', () => {
   let cleanup: () => void
 
@@ -42,7 +52,7 @@ describe('§3.5 Nav Store', () => {
     _setViewMode('chat')
     _setDrawerOpen(false)
     _setActiveView('workspace')
-    _setActiveAgentTab('hex')
+    _setActiveAgentTab('overview')
     if (typeof globalThis.location === 'undefined') {
       ;(globalThis as any).location = { search: '', href: 'http://localhost' }
     }
@@ -50,23 +60,6 @@ describe('§3.5 Nav Store', () => {
     if (typeof globalThis.history === 'undefined') {
       ;(globalThis as any).history = { replaceState: vi.fn() }
     }
-    // Provide sessionStorage for thread save/restore tests.
-    if (typeof globalThis.sessionStorage === 'undefined') {
-      const store: Record<string, string> = {}
-      ;(globalThis as any).sessionStorage = {
-        getItem: (k: string) => store[k] ?? null,
-        setItem: (k: string, v: string) => {
-          store[k] = v
-        },
-        removeItem: (k: string) => {
-          delete store[k]
-        },
-        clear: () => {
-          for (const k of Object.keys(store)) delete store[k]
-        }
-      }
-    }
-    _resetNavThreadState()
     vi.mocked(switchThread).mockClear()
     vi.mocked(threadKey).mockReturnValue('')
     cleanup = initNavStore()
@@ -74,7 +67,6 @@ describe('§3.5 Nav Store', () => {
 
   afterEach(() => {
     cleanup()
-    _resetNavThreadState()
   })
 
   describe('viewMode', () => {
@@ -146,11 +138,6 @@ describe('§3.5 Nav Store', () => {
   })
 
   describe('two-mode architecture', () => {
-    beforeEach(() => {
-      _setActiveView('workspace')
-      _setActiveAgentTab('hex')
-    })
-
     it('defaults to workspace view', () => {
       expect(activeView()).toBe('workspace')
     })
@@ -169,28 +156,25 @@ describe('§3.5 Nav Store', () => {
       expect(activeView()).toBe('workspace')
     })
 
-    it('agent tabs default to hex', () => {
-      expect(activeAgentTab()).toBe('hex')
+    it('agent tabs default to overview', () => {
+      cleanup = loadAt('', cleanup)
+      expect(activeAgentTab()).toBe('overview')
     })
 
     it('setActiveAgentTab switches tabs', () => {
-      const tabs: AgentTab[] = ['hex', 'overview', 'forest', 'tasks', 'settings', 'system']
+      const tabs: AgentTab[] = ['overview', 'forest', 'tasks', 'system']
       for (const tab of tabs) {
         setActiveAgentTab(tab)
         expect(activeAgentTab()).toBe(tab)
       }
     })
 
-    it('navigateToAgent sets view + tab', () => {
-      navigateToAgent('settings')
+    it('navigateToAgent sets view + tab, defaulting to overview', () => {
+      navigateToAgent('system')
       expect(activeView()).toBe('agent')
-      expect(activeAgentTab()).toBe('settings')
-    })
-
-    it('navigateToAgent defaults to hex tab', () => {
+      expect(activeAgentTab()).toBe('system')
       navigateToAgent()
-      expect(activeView()).toBe('agent')
-      expect(activeAgentTab()).toBe('hex')
+      expect(activeAgentTab()).toBe('overview')
     })
 
     it('closeDashboardModal compat shim switches to workspace', () => {
@@ -207,72 +191,44 @@ describe('§3.5 Nav Store', () => {
       expect(activeAgentTab()).toBe('system')
     })
 
-    it('writes ?view=agent&tab=<tab> to URL when agent view active', () => {
+    it('writes ?view=agent&tab=<tab> to URL when agent view active, for every tab', () => {
       const replaceState = vi.fn()
       globalThis.history.replaceState = replaceState
-      _setActiveAgentTab('settings')
+      _setActiveAgentTab('overview')
       setActiveView('agent')
       const lastCall = replaceState.mock.calls[replaceState.mock.calls.length - 1]
       expect(lastCall[2]).toContain('view=agent')
-      expect(lastCall[2]).toContain('tab=settings')
-    })
-
-    it('omits tab param when tab=hex (default)', () => {
-      const replaceState = vi.fn()
-      globalThis.history.replaceState = replaceState
-      _setActiveAgentTab('hex')
-      setActiveView('agent')
-      const lastCall = replaceState.mock.calls[replaceState.mock.calls.length - 1]
-      expect(lastCall[2]).toContain('view=agent')
-      expect(lastCall[2]).not.toContain('tab=')
+      expect(lastCall[2]).toContain('tab=overview')
     })
 
     it('?tab=tasks URL resolves to agent/tasks on init', () => {
-      cleanup()
-      Object.defineProperty(globalThis, 'location', {
-        value: { search: '?view=agent&tab=tasks', href: 'http://localhost?view=agent&tab=tasks', hash: '' },
-        writable: true,
-        configurable: true
-      })
-      cleanup = initNavStore()
+      cleanup = loadAt('?view=agent&tab=tasks', cleanup)
       expect(activeView()).toBe('agent')
       expect(activeAgentTab()).toBe('tasks')
     })
 
     it('legacy ?view=dashboard URL resolves to agent/overview on init', () => {
-      cleanup()
-      Object.defineProperty(globalThis, 'location', {
-        value: { search: '?view=dashboard', href: 'http://localhost?view=dashboard', hash: '' },
-        writable: true,
-        configurable: true
-      })
-      cleanup = initNavStore()
+      cleanup = loadAt('?view=dashboard', cleanup)
       expect(activeView()).toBe('agent')
       expect(activeAgentTab()).toBe('overview')
     })
 
     it('legacy ?view=system URL resolves to agent/system on init', () => {
-      cleanup()
-      Object.defineProperty(globalThis, 'location', {
-        value: { search: '?view=system', href: 'http://localhost?view=system', hash: '' },
-        writable: true,
-        configurable: true
-      })
-      cleanup = initNavStore()
+      cleanup = loadAt('?view=system', cleanup)
       expect(activeView()).toBe('agent')
       expect(activeAgentTab()).toBe('system')
+    })
+
+    it('legacy ?tab=settings resolves to agent/overview (settings moved to the health popover)', () => {
+      cleanup = loadAt('?view=agent&tab=settings', cleanup)
+      expect(activeView()).toBe('agent')
+      expect(activeAgentTab()).toBe('overview')
     })
   })
 
   describe('activeView default + sibling views', () => {
     it('default activeView resolves to workspace', () => {
-      cleanup()
-      Object.defineProperty(globalThis, 'location', {
-        value: { search: '', href: 'http://localhost', hash: '' },
-        writable: true,
-        configurable: true
-      })
-      cleanup = initNavStore()
+      cleanup = loadAt('', cleanup)
       expect(activeView()).toBe('workspace')
     })
 
@@ -285,136 +241,40 @@ describe('§3.5 Nav Store', () => {
     })
   })
 
-  describe('mode-switch thread save/restore', () => {
-    it('saves workspace thread to sessionStorage when entering agent mode', () => {
+  // The presence thread lives in the workspace like any other thread, so
+  // switching modes never changes the open thread.
+  describe('presence thread in the workspace', () => {
+    it('leaves the open thread alone when entering and leaving agent mode', async () => {
       vi.mocked(threadKey).mockReturnValue('workspace-thread-abc')
-      _setActiveView('workspace')
-
-      setActiveView('agent')
-
-      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBe('workspace-thread-abc')
-    })
-
-    it('restores workspace thread when returning from agent mode', async () => {
-      // Simulate: user had thread-abc open, toggled to agent, now toggles back.
-      vi.mocked(threadKey).mockReturnValue('workspace-thread-abc')
-      _setActiveView('workspace')
-      setActiveView('agent')
-      await Promise.resolve() // flush gateway fetch microtask
-      vi.mocked(switchThread).mockClear()
-
-      setActiveView('workspace')
-
-      expect(switchThread).toHaveBeenCalledWith('workspace-thread-abc')
-    })
-
-    it('switches to presence gateway thread when entering agent mode', async () => {
-      vi.mocked(threadKey).mockReturnValue('some-thread')
-      _setActiveView('workspace')
-
-      setActiveView('agent')
-      await Promise.resolve() // flush getPresenceGatewayThreadId
-
-      expect(switchThread).toHaveBeenCalledWith('gateway-thread-123')
-    })
-
-    it('uses cached gateway id on subsequent toggles (no extra fetch)', async () => {
-      vi.mocked(threadKey).mockReturnValue('t1')
-      _setActiveView('workspace')
-      setActiveView('agent')
-      await Promise.resolve() // first fetch populates cache
-      vi.mocked(switchThread).mockClear()
-
-      // Return to workspace
-      setActiveView('workspace')
-      vi.mocked(switchThread).mockClear()
-
-      // Enter agent mode again — should use cached id synchronously
-      vi.mocked(threadKey).mockReturnValue('t2')
-      setActiveView('agent')
-      expect(switchThread).toHaveBeenCalledWith('gateway-thread-123')
-    })
-
-    it('does not switch threads when view stays the same', () => {
-      _setActiveView('workspace')
-      vi.mocked(switchThread).mockClear()
-
-      setActiveView('workspace')
-
+      toggleMode()
+      toggleMode()
+      navigateToAgent('tasks')
+      closeDashboardModal()
+      await Promise.resolve()
       expect(switchThread).not.toHaveBeenCalled()
     })
 
-    it('navigateToAgent saves workspace thread', () => {
-      vi.mocked(threadKey).mockReturnValue('nav-thread-xyz')
-      _setActiveView('workspace')
+    it.each(['?view=agent', '?view=agent&tab=hex'])(
+      'opens a legacy Hex-tab URL (%s) as the presence thread in the workspace',
+      async (search) => {
+        const replaceState = vi.fn()
+        globalThis.history.replaceState = replaceState
+        cleanup = loadAt(search, cleanup)
+        await Promise.resolve()
 
-      navigateToAgent('settings')
+        expect(activeView()).toBe('workspace')
+        expect(switchThread).toHaveBeenCalledWith('gateway-thread-123')
+        const url = replaceState.mock.calls[replaceState.mock.calls.length - 1][2]
+        expect(url).toContain('view=workspace')
+        expect(url).not.toContain('tab=')
+      }
+    )
 
-      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBe('nav-thread-xyz')
-      expect(activeView()).toBe('agent')
-      expect(activeAgentTab()).toBe('settings')
-    })
-
-    it('closeDashboardModal restores workspace thread', async () => {
-      vi.mocked(threadKey).mockReturnValue('dashboard-thread')
-      _setActiveView('workspace')
-      setActiveView('agent')
+    it('does not switch to the presence thread when it is already open', async () => {
+      vi.mocked(threadKey).mockReturnValue('gateway-thread-123')
+      cleanup = loadAt('?view=agent', cleanup)
       await Promise.resolve()
-      vi.mocked(switchThread).mockClear()
-
-      closeDashboardModal()
-
-      expect(switchThread).toHaveBeenCalledWith('dashboard-thread')
-      expect(activeView()).toBe('workspace')
-    })
-
-    it('toggleMode round-trips thread correctly', async () => {
-      vi.mocked(threadKey).mockReturnValue('toggle-thread')
-      _setActiveView('workspace')
-
-      // workspace → agent
-      toggleMode()
-      await Promise.resolve()
-      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBe('toggle-thread')
-      expect(switchThread).toHaveBeenCalledWith('gateway-thread-123')
-      vi.mocked(switchThread).mockClear()
-
-      // agent → workspace
-      toggleMode()
-      expect(switchThread).toHaveBeenCalledWith('toggle-thread')
-    })
-
-    it('skips save when threadKey returns empty string', () => {
-      vi.mocked(threadKey).mockReturnValue('')
-      _setActiveView('workspace')
-
-      setActiveView('agent')
-
-      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBeNull()
-    })
-
-    it('skips gateway switch if user toggles back before fetch resolves', async () => {
-      vi.mocked(threadKey).mockReturnValue('fast-toggle')
-      _setActiveView('workspace')
-
-      setActiveView('agent') // starts async fetch
-      setActiveView('workspace') // toggles back before fetch resolves
-      vi.mocked(switchThread).mockClear()
-
-      await Promise.resolve() // fetch resolves — but view changed back to workspace
-
-      // switchThread should NOT have been called with gateway (guard fires)
-      const gatewayCalls = vi.mocked(switchThread).mock.calls.filter((c) => c[0] === 'gateway-thread-123')
-      expect(gatewayCalls).toHaveLength(0)
-    })
-
-    it('persists across _resetNavThreadState + reinit', () => {
-      vi.mocked(threadKey).mockReturnValue('persist-thread')
-      _setActiveView('workspace')
-      setActiveView('agent')
-
-      // sessionStorage survives reset (only cachedGatewayId clears)
-      expect(sessionStorage.getItem('sovereign:savedWorkspaceThread')).toBe('persist-thread')
+      expect(switchThread).not.toHaveBeenCalled()
     })
   })
 })

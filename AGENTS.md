@@ -140,6 +140,12 @@ Both presence threads maintain a shared knowledge graph in a private AD4M perspe
 
 Relationships between entities use raw AD4M links under `hex://` predicates. The agent bootstraps the perspective + models on first session activation via `mcp__ad4m__*` tools.
 
+### In the UI: one thread among many
+
+The client shows the gateway thread in the workspace like any other thread; it has no tab of its own. The ⬡ agent view holds only Overview, Forest, Tasks and System, and switching between the two views never changes the open thread. Settings (device name, theme, notifications) live in the header's Service Health popover, which opens by itself on a first launch without a device name. A legacy `?view=agent` URL with no `tab` (or `tab=hex`) opens the workspace on the gateway thread.
+
+Every open workspace thread gets the header's TTS toggle and simple-conversation toggle. The simple conversation (`packages/presence/src/simple-conversation.ts`) is kept per thread: the gateway thread in `presence/simple-conversation.json`, others in `presence/simple-conversation/<threadId>.json`. `GET /api/threads/:id/simple-conversation` returns a thread's entries; the client calls it only while the simple view shows. The first call for a thread backfills it from history and adds it to `simple-conversation-watched.json`; from then on its assistant turns get an LLM summary instead of a truncated first paragraph (the gateway thread always does). `presence.reply` carries a `threadId`; one without it (the presence reply tools) belongs to the gateway thread.
+
 ## Tests
 
 `pnpm test` runs `vitest run` at the repo root — the real gate. The root `vitest.config.ts` collects `packages/*/src/**/*.test.ts`. A package without its own vitest config runs its tests through that root config (`"test": "vitest run --root ../.. packages/<pkg>/"`), so `pnpm --filter <pkg> test` runs exactly that package's tests. A new package needs the same script — a bare `vitest run` from the package directory matches no files.
