@@ -412,6 +412,24 @@ client    → features/voice/remote-dictation.ts shows it as a read-only draft (
 - **Fallback:** with the WebSocket down, or a server without `voice-stream` (error `UNKNOWN_CHANNEL`/`UNKNOWN_TYPE`), the node uploads on release. The node also keeps every frame while it streams: if the connection drops or reconnects mid-hold, or the server refuses the stream, the whole hold uploads on release to `/api/voice/transcribe`. There `--max-capture` sets the segment length (120 s): a longer hold sends a segment and keeps recording; POSTs go one at a time with a 150 s timeout. Wake word mode keeps `--max-capture` as its hard cap (30 s).
 - **Coverage:** `ws.test.ts` (draft fan-out, send-then-clear, send order, stop/start/disconnect races, browser streams untouched), `streaming.test.ts` (windowing), `remote-dictation.test.ts`, `services/voice-node/test_ptt_stream.py` (stream + mid-hold fallback), wind-tunnel s40.
 
+## Device file viewer (`packages/system/src/device-files.ts`)
+
+System → Devices → a device card → **Files**: browse the whole file system of any tailnet device the device monitor reaches, see sizes, and download a file or a directory (`.tar.gz`) to the viewing device.
+
+| Route | Does |
+| --- | --- |
+| `GET /api/system/devices/:device/fs?path=` | List one directory (name, type, apparent size, mtime) |
+| `GET …/fs/sizes?path=` | Start or poll a `du -x -d 1` job for that directory: child sizes fill in as du prints them; `done`, `total`, `partial` (some folders unreadable) |
+| `GET …/fs/download?path=` | Stream a file, or a directory as `tar -czf -` |
+
+- `:device` is the device label from `/api/system/devices/metrics` (`hostname` there). `deviceMonitor.findDevice` resolves it to local or SSH (`sshHost`, `osHint`, same BatchMode access as metrics).
+- **Quoting:** every command runs as a script on stdin (`bash -s`, locally or over ssh) with the path set as `P='…'` via `shQuote`; the path is never interpolated unquoted. Paths must be absolute; they are normalised.
+- **Listing:** local uses `fs.readdir`; Linux remotes `find -printf`; macOS remotes `find -print0 | xargs -0 -r stat -f`.
+- **Sizes:** `nice -n 19`, `-x` (one file system). A finished result is cached 10 min; a running du nobody polls for 60 s is killed. No sudo: root-only folders make sizes lower bounds (`partial`). Root of Field Server sizes in ~9 s.
+- **UI:** `FileBrowser.tsx` mounts on first open of the Files section, so nothing is counted until asked. Device cards are keyed by hostname: the 30 s metrics poll used to remount every card (keyed by object), which would close an open browser.
+- Replaces the old "Disk usage by directory" list (a 12 s-capped `du /` every 5 min per device, cleared between runs — it timed out on big disks and flickered away).
+- Phones (Android/iOS) are not in the device list: no SSH. Wind-tunnel s42 covers the routes.
+
 ## CI watch (`packages/server/src/ci-watch/`)
 
 MCP tools `ci_watch` / `ci_watch_list` / `ci_unwatch` let a thread watch the GitHub checks of a PR, branch or commit. The server polls; the thread gets one message (cron envelope `[Cron: CI <target> @ <time>]`) through the chat queue, so it never interrupts a turn.

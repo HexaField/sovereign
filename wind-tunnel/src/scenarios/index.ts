@@ -42,6 +42,7 @@ import { s38StreamingStt } from './s38-streaming-stt.js'
 import { s39OverlappingReplies } from './s39-overlapping-replies.js'
 import { s40PttStream } from './s40-ptt-stream.js'
 import { s41RecycleGate } from './s41-recycle-gate.js'
+import { s42DeviceFiles } from './s42-device-files.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -138,5 +139,6 @@ export const ALL_SCENARIOS: Scenario[] = [
   s38StreamingStt,
   s39OverlappingReplies,
   s40PttStream,
-  s41RecycleGate
+  s41RecycleGate,
+  s42DeviceFiles
 ]

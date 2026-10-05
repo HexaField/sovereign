@@ -2,6 +2,7 @@
 
 import { createSignal, onMount, onCleanup, Show, For, type Component } from 'solid-js'
 import { DeviceNameSection } from '../settings/DeviceNameSection.js'
+import { FileBrowser } from './FileBrowser.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -43,18 +44,12 @@ interface TempZone {
   tempC: number
 }
 
-interface DiskTreeEntry {
-  path: string
-  sizeBytes: number
-}
-
 interface DeviceMetrics {
   hostname: string
   os: string
   online: boolean
   tailscaleIP: string | null
   local: boolean
-  diskTree?: DiskTreeEntry[]
   cpu?: { cores: number; usagePercent: number; loadAvg: [number, number, number] }
   memory?: { totalBytes: number; usedBytes: number; availableBytes: number }
   gpu?: GpuInfo
@@ -140,6 +135,7 @@ function Tag(props: { label: string; color: string; bg: string }) {
 
 function DeviceCard(props: { device: DeviceMetrics }) {
   const d = () => props.device
+  const [filesOpened, setFilesOpened] = createSignal(false)
   const hottest = () => {
     const temps = d().temperature
     if (!temps?.length) return null
@@ -148,7 +144,7 @@ function DeviceCard(props: { device: DeviceMetrics }) {
 
   return (
     <div
-      class="rounded-lg border p-4"
+      class="min-w-0 rounded-lg border p-4"
       style={{
         background: 'var(--c-bg-raised)',
         'border-color': d().online ? 'var(--c-border)' : 'var(--c-border)',
@@ -329,45 +325,15 @@ function DeviceCard(props: { device: DeviceMetrics }) {
             </Show>
           </div>
 
-          {/* Disk tree (collapsible) */}
-          <Show when={d().diskTree?.length}>
-            <details>
-              <summary class="cursor-pointer text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                Disk usage by directory
-              </summary>
-              <div class="mt-1.5 space-y-0.5">
-                <For each={d().diskTree}>
-                  {(entry) => {
-                    const totalStorage = () => d().storage?.reduce((acc, m) => Math.max(acc, m.totalBytes), 0) ?? 0
-                    const pct = () => (totalStorage() > 0 ? Math.min((entry.sizeBytes / totalStorage()) * 100, 100) : 0)
-                    return (
-                      <div class="flex items-center gap-2">
-                        <span
-                          class="w-[38%] shrink-0 truncate font-mono text-[10px]"
-                          style={{ color: 'var(--c-text-muted)' }}
-                          title={entry.path}
-                        >
-                          {entry.path}
-                        </span>
-                        <div class="h-1 flex-1 overflow-hidden rounded-full" style={{ background: 'var(--c-border)' }}>
-                          <div
-                            class="h-full rounded-full"
-                            style={{ width: `${pct()}%`, background: pct() > 80 ? '#ef4444' : '#a855f7' }}
-                          />
-                        </div>
-                        <span
-                          class="w-[20%] shrink-0 text-right font-mono text-[10px]"
-                          style={{ color: 'var(--c-text)' }}
-                        >
-                          {fmtBytes(entry.sizeBytes)}
-                        </span>
-                      </div>
-                    )
-                  }}
-                </For>
-              </div>
-            </details>
-          </Show>
+          {/* File system viewer: mounts on first open, so nothing is counted until asked */}
+          <details onToggle={(e) => e.currentTarget.open && setFilesOpened(true)}>
+            <summary class="cursor-pointer text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+              Files
+            </summary>
+            <Show when={filesOpened()}>
+              <FileBrowser device={d().hostname} />
+            </Show>
+          </details>
 
           {/* Top processes (collapsible) */}
           <Show when={d().processes?.length}>
@@ -510,12 +476,16 @@ const DevicesTab: Component = () => {
         fallback={<div class="py-8 text-center text-xs opacity-40">Loading device metrics…</div>}
       >
         <div class="grid gap-4 lg:grid-cols-2">
+          {/* Keyed by hostname: each 30 s poll brings new objects, and keying by
+              object would remount every card (closing an open file browser). */}
           <For
-            each={devices().sort((a, b) =>
-              a.local ? -1 : b.local ? 1 : a.online === b.online ? 0 : a.online ? -1 : 1
-            )}
+            each={[...devices()]
+              .sort((a, b) => (a.local ? -1 : b.local ? 1 : a.online === b.online ? 0 : a.online ? -1 : 1))
+              .map((d) => d.hostname)}
           >
-            {(device) => <DeviceCard device={device} />}
+            {(hostname) => (
+              <Show when={devices().find((d) => d.hostname === hostname)}>{(d) => <DeviceCard device={d()} />}</Show>
+            )}
           </For>
         </div>
       </Show>
