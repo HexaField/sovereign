@@ -5,6 +5,11 @@ import { threadKey } from '../threads/store.js'
 import { wsStore } from '../../ws/index.js'
 import { ExternalLinkIcon } from '../../ui/icons.js'
 import { formatBytes } from '../system/HealthTab.js'
+import SettingsContent from '../agent/SettingsContent.js'
+
+/** Whether the header's Service Health popover shows. Shared so the app can
+ *  open it on first launch, when the device still needs a name. */
+export const [healthPopoverOpen, setHealthPopoverOpen] = createSignal(false)
 
 export interface SembleHealth {
   status: 'ok' | 'down' | 'unknown'
@@ -455,13 +460,14 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
       <Portal>
         <div
           ref={popoverRef}
-          class="fixed z-[999] w-80 rounded-lg border p-3 shadow-lg"
+          class="fixed z-[999] w-80 overflow-y-auto rounded-lg border p-3 shadow-lg"
           style={{
             background: 'var(--c-bg-raised)',
             'border-color': 'var(--c-border)',
             color: 'var(--c-text)',
             top: '44px',
-            right: '48px'
+            right: '48px',
+            'max-height': 'calc(100dvh - 56px)'
           }}
         >
           <div class="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Service Health</div>
@@ -503,6 +509,8 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
               )}
             </For>
           </div>
+          <div class="mt-4 mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Settings</div>
+          <SettingsContent />
         </div>
       </Portal>
     </Show>

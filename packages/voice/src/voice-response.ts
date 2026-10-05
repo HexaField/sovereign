@@ -422,7 +422,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
               type: 'presence.reply',
               timestamp: new Date().toISOString(),
               source: 'voice-response',
-              payload: { modality: 'voice', text: summaryText }
+              payload: { modality: 'voice', text: summaryText, threadId }
             })
           },
           preferred
@@ -447,7 +447,7 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
         type: 'presence.reply',
         timestamp: new Date().toISOString(),
         source: 'voice-response',
-        payload: { modality: 'voice', text: summaryText }
+        payload: { modality: 'voice', text: summaryText, threadId }
       })
 
       // Notify client that summary audio is coming

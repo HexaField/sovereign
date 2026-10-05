@@ -404,7 +404,7 @@ const ReopenButton: Component<{ side: 'left' | 'right'; onClick: () => void }> =
 
 // §3.5 — Right Panel Chat (now functional)
 /** Convert simple conversation entries to ChatMessage[] for the summary view.
- *  Shared across all chat rendering paths (ChatPanel, ExpandedChatView, HexTab). */
+ *  Shared across all chat rendering paths. */
 function summaryMessages(): ChatMessage[] {
   return simpleConversationEntries().map((entry) => ({
     turn: {

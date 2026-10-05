@@ -1,14 +1,17 @@
-// Client store for the simple conversation — the user↔Hex dialogue
-// stripped of internal reasoning, tool calls, and subagent work.
+// Client store for the simple conversation — the user↔Hex dialogue of the
+// open thread, stripped of internal reasoning, tool calls, and subagent work.
 //
 // Data flows:
-//   - REST: GET /api/presence/simple-conversation (initial load)
-//   - WS:   `chat.simple-conversation` events (live push)
+//   - REST: GET /api/threads/:id/simple-conversation while the simple view
+//     shows (on toggle-on and on each thread switch). The server backfills a
+//     thread's first view, and from then on summarises its replies with the
+//     LLM — so the store fetches only when the view is actually in use.
+//   - WS:   `chat.simple-conversation` events (live push, tagged by thread)
 //
-// The toggle signal `showSimpleView` controls whether the Hex tab shows
-// the full conversation or the simple view. The SummaryBubble icon
-// drives this toggle. State persists to the `?simple` URL search param
-// so a page refresh keeps the chosen mode.
+// The toggle signal `showSimpleView` controls whether the chat shows the
+// full conversation or the simple view. The SummaryBubble icon drives this
+// toggle. State persists to the `?simple` URL search param so a page
+// refresh keeps the chosen mode.
 
 import { createSignal } from 'solid-js'
 import type { Accessor } from 'solid-js'
@@ -50,48 +53,55 @@ export function toggleSimpleView(): void {
     writeSimpleParam(next)
     return next
   })
+  if (showSimpleView() && currentThread) void fetchEntries(currentThread, currentThread())
 }
+
+/** The open thread, bound by initSimpleConversationStore. */
+let currentThread: Accessor<string> | null = null
 
 // ── Init / cleanup ──────────────────────────────────────────────────
 
 export function initSimpleConversationStore(ws: WsStore, threadKey: Accessor<string>): () => void {
+  currentThread = threadKey
   // Restore from URL on init (covers page refresh)
   setShowSimpleView(readSimpleParam())
 
-  // Live push — new entries arrive one at a time.
+  // Live push — new entries arrive one at a time, for any thread.
   const offEntry = ws.on('chat.simple-conversation', (msg: Record<string, unknown>) => {
     const entry = msg?.entry as SimpleConversationEntry | undefined
-    if (!entry?.text) return
+    if (!entry?.text || msg?.threadId !== threadKey()) return
     setEntries((prev) => [...prev, entry])
   })
 
-  // Fetch on init
-  void fetchEntries()
-
-  // Re-fetch when the thread changes (in case the gateway thread shifted)
+  // Fetch while the view shows: now, and whenever the open thread changes.
   let lastKey = threadKey()
+  if (showSimpleView()) void fetchEntries(threadKey, lastKey)
   const pollTimer = setInterval(() => {
     const key = threadKey()
     if (key !== lastKey) {
       lastKey = key
-      void fetchEntries()
+      setEntries([])
+      if (showSimpleView()) void fetchEntries(threadKey, key)
     }
   }, 500)
 
   return () => {
     clearInterval(pollTimer)
     offEntry()
+    currentThread = null
     setEntries([])
     setShowSimpleView(false)
   }
 }
 
-async function fetchEntries(): Promise<void> {
+async function fetchEntries(threadKey: Accessor<string>, key: string): Promise<void> {
+  if (!key) return
   try {
-    const res = await fetch('/api/presence/simple-conversation')
+    const res = await fetch(`/api/threads/${encodeURIComponent(key)}/simple-conversation`)
     if (!res.ok) return
     const data = (await res.json()) as { entries?: SimpleConversationEntry[] }
-    if (data?.entries) setEntries(data.entries)
+    // Ignore a response for a thread the user has already left.
+    if (data?.entries && threadKey() === key) setEntries(data.entries)
   } catch {
     // Best-effort — WS push backfills live.
   }

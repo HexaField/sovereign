@@ -3,13 +3,13 @@ import type { ThreadInfo } from '@sovereign/core'
 import './app.css'
 
 // Nav store
-import { activeView, initNavStore, setActiveView, navigateToAgent } from './features/nav/store.js'
+import { activeView, initNavStore, setActiveView } from './features/nav/store.js'
+import { setHealthPopoverOpen } from './features/connection/HealthPopover.js'
 
 // Identity
 import { loadIdentity } from './lib/identity.js'
 
 // Theme — must load eagerly so the stored theme class applies on startup
-// (SettingsContent is lazy-loaded, so its import alone won't trigger this)
 import './features/theme/store.js'
 
 // Workspace auto-init
@@ -74,10 +74,10 @@ export default function App() {
     cleanups.push(cleanupConnection)
 
     // Device naming — announce the stored name on every WS connect/
-    // reconnect, and open Settings on first launch so the user names the
-    // device before voice replies need to reference it.
+    // reconnect, and open the settings (in the Service Health popover) on
+    // first launch so the user names the device before voice replies need it.
     cleanups.push(initDeviceNameSync())
-    if (!hasDeviceName()) navigateToAgent('settings')
+    if (!hasDeviceName()) setHealthPopoverOpen(true)
 
     // Voice TTS playback — listens for voice.tts.audio JSON messages
     const cleanupTts = initTtsPlayer(wsStore)

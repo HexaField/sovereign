@@ -19,19 +19,31 @@ export type ViewMode =
 // `workspace` — multi-agent / multi-thread workspace with sidebar, file
 // browser, and per-membrane thread picker.
 //
-// `agent` — single-agent context: the user's primary interface with
-// Hex (or whatever the configured agent name). Contains tabs for the
-// presence thread chat, overview dashboard, settings, and system status.
+// `agent` — agent-wide views: overview dashboard, knowledge forest, tasks
+// and system status. The presence thread opens in the workspace like any
+// other thread; settings live in the header's Service Health popover.
 export type NavView = 'workspace' | 'agent'
 
 // --- Agent-context tabs (visible when activeView === 'agent') ---
-export type AgentTab = 'hex' | 'overview' | 'forest' | 'tasks' | 'settings' | 'system'
+export type AgentTab = 'overview' | 'forest' | 'tasks' | 'system'
 
 const VALID_NAV_VIEWS: NavView[] = ['workspace', 'agent']
-const VALID_AGENT_TABS: AgentTab[] = ['hex', 'overview', 'forest', 'tasks', 'settings', 'system']
+const VALID_AGENT_TABS: AgentTab[] = ['overview', 'forest', 'tasks', 'system']
+const DEFAULT_AGENT_TAB: AgentTab = 'overview'
+
+/** A URL from before the Hex tab went away: `?view=agent` with no tab, or
+ *  `tab=hex`, meant "the presence thread". It now opens in the workspace. */
+function isLegacyHexUrl(): boolean {
+  if (typeof location === 'undefined') return false
+  const params = new URLSearchParams(location.search)
+  if (params.get('view') !== 'agent') return false
+  const tab = params.get('tab')
+  return tab === null || tab === 'hex'
+}
 
 function readNavViewFromUrl(): NavView {
   if (typeof location === 'undefined') return 'workspace'
+  if (isLegacyHexUrl()) return 'workspace'
   const params = new URLSearchParams(location.search)
   const v = params.get('view')
   if (v && VALID_NAV_VIEWS.includes(v as NavView)) return v as NavView
@@ -43,15 +55,14 @@ function readNavViewFromUrl(): NavView {
 }
 
 function readAgentTabFromUrl(): AgentTab {
-  if (typeof location === 'undefined') return 'hex'
+  if (typeof location === 'undefined') return DEFAULT_AGENT_TAB
   const params = new URLSearchParams(location.search)
-  // Legacy `?view=dashboard` → overview tab.
-  if (params.get('view') === 'dashboard' || params.get('dashboard') === 'open') return 'overview'
   // Legacy `?view=system` → system tab.
   if (params.get('view') === 'system') return 'system'
   const t = params.get('tab')
   if (t && VALID_AGENT_TABS.includes(t as AgentTab)) return t as AgentTab
-  return 'hex'
+  // Legacy `?view=dashboard`, `tab=settings`, `tab=hex`, or no tab → overview.
+  return DEFAULT_AGENT_TAB
 }
 
 function readViewModeFromUrl(): ViewMode {
@@ -78,30 +89,6 @@ export const [activeView, _setActiveView] = createSignal<NavView>(readNavViewFro
 export const [activeAgentTab, _setActiveAgentTab] = createSignal<AgentTab>(readAgentTabFromUrl())
 export const [drawerOpen, _setDrawerOpen] = createSignal(false)
 
-// ── Thread save/restore across mode switches ────────────────────────
-//
-// When the user enters agent mode, we save their current workspace thread
-// to sessionStorage and switch to the presence gateway thread. Returning
-// to workspace mode restores the saved thread. This centralised logic
-// runs inside setActiveView so ALL mode-switching paths (icon button,
-// ⌘1, ViewMenu, navigateToAgent, closeDashboardModal) get it for free.
-
-const SAVED_WORKSPACE_THREAD_KEY = 'sovereign:savedWorkspaceThread'
-
-/** Cached gateway thread id — populated on first workspace→agent transition. */
-let cachedGatewayId: string | null = null
-
-function readSavedWorkspaceThread(): string | null {
-  if (typeof sessionStorage === 'undefined') return null
-  return sessionStorage.getItem(SAVED_WORKSPACE_THREAD_KEY)
-}
-
-function writeSavedWorkspaceThread(id: string | null): void {
-  if (typeof sessionStorage === 'undefined') return
-  if (id) sessionStorage.setItem(SAVED_WORKSPACE_THREAD_KEY, id)
-  else sessionStorage.removeItem(SAVED_WORKSPACE_THREAD_KEY)
-}
-
 /** Write current view + agent tab + workspace to URL (replaceState). */
 export function syncViewToUrl(view: NavView, workspaceId?: string): void {
   if (typeof history === 'undefined' || typeof location === 'undefined') return
@@ -110,9 +97,7 @@ export function syncViewToUrl(view: NavView, workspaceId?: string): void {
   // Clean up legacy params.
   url.searchParams.delete('dashboard')
   if (view === 'agent') {
-    const tab = activeAgentTab()
-    if (tab !== 'hex') url.searchParams.set('tab', tab)
-    else url.searchParams.delete('tab')
+    url.searchParams.set('tab', activeAgentTab())
   } else {
     url.searchParams.delete('tab')
   }
@@ -124,32 +109,8 @@ export function syncViewToUrl(view: NavView, workspaceId?: string): void {
 }
 
 export function setActiveView(view: NavView): void {
-  const prev = activeView()
   _setActiveView(view)
   syncViewToUrl(view)
-
-  // Thread save/restore on mode transition.
-  if (prev === 'workspace' && view === 'agent') {
-    // Entering agent mode — save current workspace thread.
-    const current = threadKey()
-    if (current) writeSavedWorkspaceThread(current)
-    // Switch to presence gateway thread.
-    if (cachedGatewayId) {
-      switchThread(cachedGatewayId)
-    } else {
-      void getPresenceGatewayThreadId().then((id) => {
-        if (id) {
-          cachedGatewayId = id
-          // Guard: user might have toggled back before the fetch resolved.
-          if (activeView() === 'agent') switchThread(id)
-        }
-      })
-    }
-  } else if (prev === 'agent' && view === 'workspace') {
-    // Returning to workspace — restore the saved thread.
-    const saved = readSavedWorkspaceThread()
-    if (saved) switchThread(saved)
-  }
 }
 
 export function setActiveAgentTab(tab: AgentTab): void {
@@ -171,7 +132,7 @@ export function toggleMode(): NavView {
  * Navigate to the agent context with a specific tab.
  * Used by dashboard components that want to leave the overview and go to workspace.
  */
-export function navigateToAgent(tab: AgentTab = 'hex'): void {
+export function navigateToAgent(tab: AgentTab = DEFAULT_AGENT_TAB): void {
   _setActiveAgentTab(tab)
   setActiveView('agent')
 }
@@ -205,9 +166,17 @@ export const [activeSystemTab, setActiveSystemTab] = createSignal<SystemTabId>('
 let popstateHandler: (() => void) | null = null
 
 export function initNavStore(): () => void {
+  const legacyHex = isLegacyHexUrl()
   _setViewMode(readViewModeFromUrl())
   _setActiveView(readNavViewFromUrl())
   _setActiveAgentTab(readAgentTabFromUrl())
+  if (legacyHex) {
+    // An old "Hex tab" link: show the presence thread in the workspace.
+    syncViewToUrl('workspace')
+    void getPresenceGatewayThreadId().then((id) => {
+      if (id && threadKey() !== id) switchThread(id)
+    })
+  }
   popstateHandler = () => {
     _setViewMode(readViewModeFromUrl())
     _setActiveView(readNavViewFromUrl())
@@ -226,12 +195,4 @@ export function initNavStore(): () => void {
 /** @internal — for testing */
 export function _triggerPopstate(): void {
   if (popstateHandler) popstateHandler()
-}
-
-/** @internal — reset thread-switching state between tests. */
-export function _resetNavThreadState(): void {
-  cachedGatewayId = null
-  if (typeof sessionStorage !== 'undefined') {
-    sessionStorage.removeItem(SAVED_WORKSPACE_THREAD_KEY)
-  }
 }
