@@ -5,7 +5,12 @@
 // sends the message itself when the keys lift, then clears the draft.
 
 import type { WsStore } from '../../ws/ws-store.js'
-import { clearVoiceDraft, publishVoiceDraft, type VoiceDraftActions } from '../chat/voice-draft-store.js'
+import {
+  clearVoiceDraft,
+  publishVoiceDraft,
+  voiceDraftActions,
+  type VoiceDraftActions
+} from '../chat/voice-draft-store.js'
 
 interface DraftMessage {
   source: string
@@ -32,6 +37,9 @@ export function initRemoteDictation(ws: WsStore): () => void {
       owners.delete(msg.source)
       return
     }
+    // Dictation in this tab wins: a node's text must not replace the draft the user edits here.
+    const holder = voiceDraftActions()
+    if (holder && ![...owners.values()].includes(holder)) return
     const owner = owners.get(msg.source) ?? readOnly()
     owners.set(msg.source, owner)
     publishVoiceDraft(
