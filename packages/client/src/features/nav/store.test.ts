@@ -28,7 +28,6 @@ import {
   _setActiveAgentTab,
   setActiveAgentTab,
   toggleMode,
-  navigateToAgent,
   closeDashboardModal,
   type NavView,
   type AgentTab
@@ -169,14 +168,6 @@ describe('§3.5 Nav Store', () => {
       }
     })
 
-    it('navigateToAgent sets view + tab, defaulting to overview', () => {
-      navigateToAgent('system')
-      expect(activeView()).toBe('agent')
-      expect(activeAgentTab()).toBe('system')
-      navigateToAgent()
-      expect(activeAgentTab()).toBe('overview')
-    })
-
     it('closeDashboardModal compat shim switches to workspace', () => {
       setActiveView('agent')
       closeDashboardModal()
@@ -248,7 +239,8 @@ describe('§3.5 Nav Store', () => {
       vi.mocked(threadKey).mockReturnValue('workspace-thread-abc')
       toggleMode()
       toggleMode()
-      navigateToAgent('tasks')
+      setActiveAgentTab('tasks')
+      setActiveView('agent')
       closeDashboardModal()
       await Promise.resolve()
       expect(switchThread).not.toHaveBeenCalled()

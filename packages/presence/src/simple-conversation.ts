@@ -17,14 +17,15 @@
 //
 // The result strips away internal reasoning, tool calls, and subagent work
 // — just what was said between them. Persisted to disk so entries survive
-// service restarts and rebuilds: the gateway thread in
-// `simple-conversation.json`, every other thread in
-// `simple-conversation/<threadId>.json`.
+// service restarts and rebuilds, one file per thread in
+// `simple-conversation/<threadId>.json`. The gateway's log from before
+// threads had their own files (`simple-conversation.json`) moves into the
+// gateway thread's file on first use.
 //
 // LLM summaries cost a call per assistant turn, so only the gateway thread
-// and threads someone has opened the simple view for (`open`) get them;
-// other threads keep a truncated first paragraph. The first `open` of a
-// thread with no entries backfills them from its history.
+// and threads whose simple view was opened (`open`) in the last day get
+// them; other threads keep a truncated first paragraph. The first `open`
+// of a thread backfills it from its history.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -65,12 +66,18 @@ export interface HistoryTurn {
   /** Epoch milliseconds. */
   timestamp: number
   origin?: { modality?: string }
+  /** Set on envelope turns (cron, system events): not part of the dialogue. */
+  kind?: unknown
 }
 
 const MAX_ENTRIES = 200
-const FILE_NAME = 'simple-conversation.json'
+const LEGACY_GATEWAY_FILE = 'simple-conversation.json'
 const THREAD_DIR = 'simple-conversation'
 const WATCHED_FILE = 'simple-conversation-watched.json'
+/** How long an `open` keeps a thread's turns summarised by the LLM. */
+const WATCH_TTL_MS = 24 * 60 * 60 * 1000
+/** Max chars for a user entry. */
+const USER_ENTRY_MAX_CHARS = 2000
 /** Grace period (ms) for the voice-response summary to replace a raw turn. */
 const VOICE_GRACE_MS = 5000
 /** Max chars for a text-mode hex entry before truncation. */
@@ -160,6 +167,10 @@ function writeJson(filePath: string, value: unknown): void {
   fs.renameSync(tmp, filePath)
 }
 
+function capUserText(text: string): string {
+  return text.length > USER_ENTRY_MAX_CHARS ? text.slice(0, USER_ENTRY_MAX_CHARS) + '…' : text
+}
+
 export function createSimpleConversation(deps: SimpleConversationDeps) {
   const { bus, config, dataDir, summarize, history } = deps
   const threads = new Map<string, SimpleConversationEntry[]>()
@@ -169,9 +180,8 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
   // naming a file.
   const SAFE_ID = /^[\w.-]{1,128}$/
   function fileFor(threadId: string): string | null {
-    if (!dataDir) return null
-    if (threadId === gatewayId()) return path.join(dataDir, FILE_NAME)
-    return SAFE_ID.test(threadId) ? path.join(dataDir, THREAD_DIR, `${threadId}.json`) : null
+    if (!dataDir || !SAFE_ID.test(threadId)) return null
+    return path.join(dataDir, THREAD_DIR, `${threadId}.json`)
   }
 
   /** A thread's entries, loaded from disk on first use. */
@@ -181,19 +191,46 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
       const file = fileFor(threadId)
       list = file ? loadEntries(file) : []
       threads.set(threadId, list)
+      if (threadId === gatewayId() && file && !fs.existsSync(file)) adoptLegacyGatewayLog(list, threadId)
     }
     return list
   }
 
-  // Threads whose simple view someone opened: their turns get LLM summaries.
+  /** Move the single-file gateway log of older builds into the gateway's own file. */
+  function adoptLegacyGatewayLog(list: SimpleConversationEntry[], threadId: string): void {
+    const legacy = dataDir ? path.join(dataDir, LEGACY_GATEWAY_FILE) : null
+    if (!legacy || !fs.existsSync(legacy)) return
+    list.push(...loadEntries(legacy))
+    dirty.add(threadId)
+    persistNow()
+    try {
+      fs.renameSync(legacy, `${legacy}.migrated`)
+    } catch {
+      /* the new file holds the entries; a leftover legacy file stays unread */
+    }
+  }
+
+  // When each thread's simple view was last opened: such threads get LLM
+  // summaries for WATCH_TTL_MS.
   const watchedFile = dataDir ? path.join(dataDir, WATCHED_FILE) : null
-  const watched = new Set<string>()
+  const watched = new Map<string, number>()
   if (watchedFile) {
     try {
-      const ids = JSON.parse(fs.readFileSync(watchedFile, 'utf-8'))
-      if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') watched.add(id)
+      const saved = JSON.parse(fs.readFileSync(watchedFile, 'utf-8'))
+      for (const [id, at] of Object.entries(saved ?? {})) if (typeof at === 'number') watched.set(id, at)
     } catch {
       /* none yet */
+    }
+  }
+  const summarised = (threadId: string): boolean =>
+    threadId === gatewayId() || Date.now() - (watched.get(threadId) ?? 0) < WATCH_TTL_MS
+
+  function persistWatched(): void {
+    if (!watchedFile) return
+    try {
+      writeJson(watchedFile, Object.fromEntries(watched))
+    } catch (err) {
+      console.warn('[simple-conversation] persist failed:', (err as Error)?.message)
     }
   }
 
@@ -237,7 +274,7 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
 
     push(payload.threadId, {
       role: 'user',
-      text: payload.text,
+      text: capUserText(payload.text),
       modality: payload.origin?.modality ?? 'text',
       timestamp: event.timestamp
     })
@@ -252,8 +289,9 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
 
   const deferredTurns = new Map<string, { timer: ReturnType<typeof setTimeout>; text: string; timestamp: string }>()
   /** Guard against the timer/reply race: when the deferred timer fires
-   *  first, it adds the threadId here so the subsequent presence.reply
-   *  handler skips its own push (preventing a duplicate entry). */
+   *  first, it adds the threadId here so a late presence.reply for the same
+   *  turn skips its own push (preventing a duplicate entry). The next turn
+   *  on the thread clears it. */
   const timerFiredFor = new Set<string>()
 
   function cancelDeferred(threadId: string): void {
@@ -301,6 +339,10 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
     if (!payload?.threadId) return
     if (payload.turn?.role !== 'assistant') return
 
+    // A new turn: the guard from an earlier turn whose reply never came
+    // (typed turns, skipped summaries) must not swallow this one's.
+    timerFiredFor.delete(payload.threadId)
+
     const rawText = payload.turn?.content ?? ''
     if (!rawText || rawText.trim().length < 3) return
 
@@ -329,7 +371,7 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
         })
 
       // Threads in the simple view get a real summary; others truncate.
-      if (summarize && (threadId === gatewayId() || watched.has(threadId))) {
+      if (summarize && summarised(threadId)) {
         void summarize(stripped)
           .then((summary) => {
             if (!summary) return truncated()
@@ -346,9 +388,11 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
 
   // ── Deleted threads ───────────────────────────────────────────────────────
 
+  const deleted = new Set<string>()
   const offDeleted = bus.on('thread.deleted', (event) => {
     const threadId = (event.payload as { threadId?: string })?.threadId
     if (!threadId || threadId === gatewayId()) return
+    deleted.add(threadId)
     cancelDeferred(threadId)
     threads.delete(threadId)
     dirty.delete(threadId)
@@ -357,16 +401,8 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
     if (watched.delete(threadId)) persistWatched()
   })
 
-  function persistWatched(): void {
-    if (!watchedFile) return
-    try {
-      writeJson(watchedFile, [...watched])
-    } catch (err) {
-      console.warn('[simple-conversation] persist failed:', (err as Error)?.message)
-    }
-  }
-
   function push(threadId: string, entry: SimpleConversationEntry): void {
+    if (deleted.has(threadId)) return
     const entries = entriesOf(threadId)
     entries.push(entry)
     if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES)
@@ -383,13 +419,15 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
   }
 
   /** Entries backfilled from a thread's history: user messages and the
-   *  first paragraph of each assistant reply. */
+   *  first paragraph of each assistant reply. Envelope turns (cron, system
+   *  events) are not part of the dialogue. */
   function fromHistory(turns: HistoryTurn[]): SimpleConversationEntry[] {
     const out: SimpleConversationEntry[] = []
     for (const t of turns) {
+      if (t.kind) continue
       const timestamp = new Date(t.timestamp).toISOString()
       if (t.role === 'user' && t.content.trim()) {
-        out.push({ role: 'user', text: t.content, modality: t.origin?.modality ?? 'text', timestamp })
+        out.push({ role: 'user', text: capUserText(t.content), modality: t.origin?.modality ?? 'text', timestamp })
       } else if (t.role === 'assistant') {
         const stripped = stripToPlainText(t.content ?? '')
         if (stripped) out.push({ role: 'hex', text: truncateForSimpleView(stripped), modality: 'text', timestamp })
@@ -404,20 +442,22 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
       const id = threadId ?? gatewayId()
       return id ? entriesOf(id).slice() : []
     },
-    /** Someone opened a thread's simple view: from now on its turns get LLM
-     *  summaries, and a thread with no entries yet gets its history. */
+    /** Someone opened a thread's simple view: its turns get LLM summaries
+     *  for the next WATCH_TTL_MS, and its first open backfills its history. */
     async open(threadId: string): Promise<SimpleConversationEntry[]> {
-      if (threadId !== gatewayId() && !watched.has(threadId)) {
-        watched.add(threadId)
-        persistWatched()
-      }
-      if (history && entriesOf(threadId).length === 0) {
+      if (threadId === gatewayId()) return entriesOf(threadId).slice()
+      const firstOpen = !watched.has(threadId)
+      watched.set(threadId, Date.now())
+      persistWatched()
+      if (firstOpen && history) {
         const backfill = fromHistory(await history(threadId).catch(() => []))
+        if (deleted.has(threadId)) return []
         const entries = entriesOf(threadId)
-        // Live entries may have landed while the history loaded: keep them
-        // after the older backfilled ones.
+        // Entries recorded live before this first open stay; the backfill
+        // adds what came before them, minus anything they already hold.
         const first = entries[0]?.timestamp
-        const older = first ? backfill.filter((e) => e.timestamp < first) : backfill
+        const seen = new Set(entries.map((e) => `${e.role}\u0000${e.text}`))
+        const older = backfill.filter((e) => (!first || e.timestamp < first) && !seen.has(`${e.role}\u0000${e.text}`))
         if (older.length > 0) {
           entries.unshift(...older)
           if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES)

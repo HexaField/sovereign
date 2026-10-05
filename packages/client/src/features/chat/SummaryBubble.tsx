@@ -1,19 +1,17 @@
-// Header summary bubble — toggles between the full conversation and the
-// simple conversation view (user messages + Hex's spoken replies) on
-// the presence gateway thread. The icon highlights when the simple view
-// is active.
+// Header summary bubble — toggles the open thread between the full
+// conversation and the simple conversation view (user messages + Hex's
+// replies, summarised). The icon highlights when the simple view is active.
 
-import { toggleSimpleView, showSimpleView, simpleConversationEntries } from './simple-conversation-store.js'
+import { toggleSimpleView, showSimpleView } from './simple-conversation-store.js'
 
 export function SummaryBubble() {
-  const hasEntries = () => simpleConversationEntries().length > 0
   const active = () => showSimpleView()
 
   return (
     <button
       class="inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-full border-none transition-opacity"
       style={{
-        opacity: active() ? 1 : hasEntries() ? 0.7 : 0.4,
+        opacity: active() ? 1 : 0.4,
         color: active() ? '#fff' : 'var(--c-text)',
         background: active() ? 'var(--c-accent)' : 'transparent'
       }}

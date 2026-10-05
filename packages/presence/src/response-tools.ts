@@ -95,12 +95,13 @@ export function createResponseTools(deps: ResponseToolsDeps): PresenceResponseTo
   }
 
   /** Emit a presence.reply bus event — feeds the simple conversation log. */
-  function emitReply(modality: 'voice' | 'text' | 'ad4m', text: string): void {
+  function emitReply(modality: 'voice' | 'text' | 'ad4m', text: string, threadId?: string): void {
     deps.bus.emit({
       type: 'presence.reply',
       timestamp: new Date().toISOString(),
       source: 'presence',
-      payload: { modality, text }
+      // No threadId: the reply belongs to the gateway thread.
+      payload: threadId ? { modality, text, threadId } : { modality, text }
     })
   }
 
@@ -174,7 +175,7 @@ export function createResponseTools(deps: ResponseToolsDeps): PresenceResponseTo
       }
       try {
         deps.chat.postAssistantTurn(threadId, text)
-        emitReply('text', text)
+        emitReply('text', text, threadId)
         return { delivered: true, threadId }
       } catch (err) {
         return { delivered: false, threadId, reason: (err as Error)?.message ?? 'post-failed' }

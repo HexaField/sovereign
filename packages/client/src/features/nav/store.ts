@@ -129,15 +129,6 @@ export function toggleMode(): NavView {
 }
 
 /**
- * Navigate to the agent context with a specific tab.
- * Used by dashboard components that want to leave the overview and go to workspace.
- */
-export function navigateToAgent(tab: AgentTab = DEFAULT_AGENT_TAB): void {
-  _setActiveAgentTab(tab)
-  setActiveView('agent')
-}
-
-/**
  * Backward-compat shim — dashboard components call this to navigate
  * away from the overview to workspace mode. Equivalent to
  * setActiveView('workspace').

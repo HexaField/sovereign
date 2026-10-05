@@ -1244,10 +1244,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       }
     })
 
-    // REST endpoints — initial load / page refresh / thread switch.
-    app.get('/api/presence/simple-conversation', (_req, res) => {
-      res.json({ entries: simpleConversation.getEntries() })
-    })
+    // REST endpoint — the client calls it while a thread's simple view shows.
     app.get('/api/threads/:id/simple-conversation', async (req, res) => {
       const threadId = req.params.id
       if (!threadManager.get(threadId)) return res.status(404).json({ error: 'unknown thread' })
