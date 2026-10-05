@@ -714,6 +714,64 @@ describe('voice response — speaker', () => {
       .filter(([, msg]: any[]) => msg.type === 'voice.tts.audio')
       .map(([, msg, speakers]: any[]) => [msg.chunk?.index, speakers])
 
+  it('tags every audio message with an utterance id: one per reply, shared by its chunks', async () => {
+    const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
+    getDeviceName.mockImplementation(() => 'Mac')
+    const vr = createVoiceResponse({ ...deps, synthesizeStream: streamOf(3) })
+
+    emitMessageSent(bus, { threadId: 't5', text: 'status?', origin: { modality: 'voice', deviceId: 'd1' } })
+    await flush()
+    emitTurnCompleted(bus, { threadId: 't5', turn: { role: 'assistant', content: 'A reply in three parts.' } })
+    emitTtsOverride(bus, { threadId: 't6', enabled: true, deviceName: 'Mac' })
+    emitTurnCompleted(bus, { threadId: 't6', turn: { role: 'assistant', content: 'Another thread’s reply.' } })
+    await flush()
+
+    const audio = sendToDeviceName.mock.calls
+      .map(([, msg]: any[]) => msg)
+      .filter((m: any) => m.type === 'voice.tts.audio')
+    const ids = (thread: string, kind: string) =>
+      new Set(audio.filter((m: any) => m.threadId === thread && m.kind === kind).map((m: any) => m.utterance))
+    expect(audio.every((m: any) => typeof m.utterance === 'string' && m.utterance.length > 0)).toBe(true)
+    const [ack] = ids('t5', 'ack')
+    const [summary5] = ids('t5', 'summary')
+    const [summary6] = ids('t6', 'summary')
+    expect(ids('t5', 'summary').size).toBe(1) // all three chunks share one id
+    expect(new Set([ack, summary5, summary6]).size).toBe(3)
+    vr.shutdown()
+  })
+
+  it('an ack on the same thread mid-stream leaves the streaming reply its utterance id and speaker', async () => {
+    const { deps, bus, sendToDeviceName } = createDeps()
+    sendToDeviceName.mockImplementation((_name: string, msg: any) => (msg.audio ? 'node' : undefined))
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const synthesizeStream = vi.fn(async (_text: string, onChunk: (c: any) => void) => {
+      const chunk = (index: number) =>
+        onChunk({ index, total: 2, sentence: `s${index}`, audio: Buffer.from('a'), durationMs: 1, done: index === 1 })
+      chunk(0)
+      await gate
+      chunk(1)
+    })
+    const vr = createVoiceResponse({ ...deps, synthesizeStream })
+
+    emitTtsOverride(bus, { threadId: 't7', enabled: true, deviceName: 'Mac' })
+    emitTurnCompleted(bus, { threadId: 't7', turn: { role: 'assistant', content: 'A reply in two parts.' } })
+    await flush()
+    emitMessageSent(bus, { threadId: 't7', text: 'one more thing', origin: { modality: 'voice', deviceName: 'Mac' } })
+    await flush()
+    release()
+    await flush()
+
+    const audio = sendToDeviceName.mock.calls.filter(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+    expect(audio.map(([, msg]: any[]) => msg.kind)).toEqual(['summary', 'ack', 'summary'])
+    const [[, first], [, ack, ackSpeakers], [, second, secondSpeakers]] = audio
+    expect(second.utterance).toBe(first.utterance)
+    expect(ack.utterance).not.toBe(first.utterance)
+    expect(ackSpeakers).not.toContain('node')
+    expect(secondSpeakers).toEqual(['node'])
+    vr.shutdown()
+  })
+
   it('keeps every later chunk of a reply on the connection that spoke the chunk before it', async () => {
     const { deps, bus, sendToDeviceName } = createDeps()
     sendToDeviceName.mockImplementation((_name: string, msg: any) => (msg.audio ? 'node' : undefined))

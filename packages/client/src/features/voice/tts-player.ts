@@ -2,20 +2,24 @@
 // server and plays them through the Web Audio API.
 //
 // The server sends WAV audio as base64-encoded JSON on the chat WS
-// channel. This module decodes and plays it, with support for
-// interrupting the current playback when a new frame arrives.
+// channel. Every clip goes through one speech queue (tts-queue.ts): whole
+// replies play one after another, a cue sounds between back-to-back
+// replies, and only an explicit stop cuts playback short. "Play aloud"
+// uses the same queue.
 //
 // The server routes TTS by device NAME (a page refresh mints a fresh
 // deviceId), and sends the audio to ONE connection under that name: the
 // others get the message without `audio`. It prefers the tab the user
 // touched last, so each tab reports focus and input as `ws.active`.
 
+import { createSignal } from 'solid-js'
 import type { WsStore } from '../../ws/ws-store.js'
 import { startMediaKeepAlive, updateNowPlaying, isKeepAliveActive } from './media-session.js'
+import { createSpeechQueue } from './tts-queue.js'
 
 let audioContext: AudioContext | null = null
-let currentSource: AudioBufferSourceNode | null = null
-let isPlaying = false
+let currentSource: AudioScheduledSourceNode | null = null
+const [playing, setPlaying] = createSignal(false)
 let cleanup: (() => void) | null = null
 
 function getAudioContext(): AudioContext {
@@ -29,17 +33,9 @@ function getAudioContext(): AudioContext {
   return audioContext
 }
 
-/** Stop any currently playing TTS audio. */
+/** Stop all TTS playback now and drop everything queued. */
 export function interruptTts(): void {
-  if (currentSource) {
-    try {
-      currentSource.stop()
-    } catch {
-      // already stopped
-    }
-    currentSource = null
-  }
-  isPlaying = false
+  speech.stop()
 }
 
 /** Convert a base64 string to an ArrayBuffer. */
@@ -52,96 +48,64 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer
 }
 
-// ── Chunk queue ─────────────────────────────────────────────────────
-// When streaming TTS sends multiple voice.tts.audio messages for one
-// summary (each with chunk.index / chunk.total), queue them and play
-// sequentially instead of interrupting. A non-chunked message (no
-// chunk field) interrupts as before.
-
-const chunkQueue: ArrayBuffer[] = []
-let draining = false
-
-async function drainChunkQueue(): Promise<void> {
-  if (draining) return
-  draining = true
-  isPlaying = true
-  while (chunkQueue.length > 0) {
-    const wavData = chunkQueue.shift()!
-    await playOnce(wavData)
-  }
-  draining = false
-  isPlaying = false
-}
-
-/** Play a single WAV buffer and resolve when it finishes. */
-function playOnce(wavData: ArrayBuffer): Promise<void> {
+/** Play one source node; resolve when it ends or is stopped. */
+function playSource(source: AudioScheduledSourceNode): Promise<void> {
   return new Promise<void>((resolve) => {
-    const ctx = getAudioContext()
-    ctx
-      .decodeAudioData(wavData.slice(0))
-      .then((audioBuffer) => {
-        const source = ctx.createBufferSource()
-        source.buffer = audioBuffer
-        source.connect(ctx.destination)
-        currentSource = source
-        source.onended = () => {
-          if (currentSource === source) currentSource = null
-          resolve()
-        }
-        source.start()
-      })
-      .catch((err) => {
-        console.error('[tts-player] chunk decode/play failed:', err)
-        resolve() // Skip failed chunk, continue queue
-      })
+    currentSource = source
+    source.onended = () => {
+      if (currentSource === source) currentSource = null
+      resolve()
+    }
+    source.start()
   })
 }
 
-/** Play a WAV audio buffer through the Web Audio API.
- *  Handles both single-shot messages (interrupt) and streamed chunks
- *  (queue sequentially). Any message carrying a `chunk` field enters
- *  queue mode — chunk.index 0 interrupts prior playback, subsequent
- *  chunks append to the queue. Messages without `chunk` interrupt
- *  immediately (acks, single-shot synthesis). */
-async function playAudio(wavData: ArrayBuffer, chunk?: { index: number; total: number; done: boolean }): Promise<void> {
-  if (chunk != null) {
-    // Streaming mode — queue chunks and play sequentially.
-    // First chunk interrupts any prior playback; subsequent ones queue.
-    if (chunk.index === 0) {
-      interruptTts()
-      chunkQueue.length = 0
-    }
-    chunkQueue.push(wavData)
-    void drainChunkQueue()
-  } else {
-    // Single-shot — interrupt and play immediately
-    interruptTts()
-    chunkQueue.length = 0
-
-    const ctx = getAudioContext()
-    try {
-      const audioBuffer = await ctx.decodeAudioData(wavData.slice(0))
-      const source = ctx.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(ctx.destination)
-
-      currentSource = source
-      isPlaying = true
-
-      source.onended = () => {
-        if (currentSource === source) {
-          currentSource = null
-          isPlaying = false
-        }
+/** The Web Audio side of the speech queue. */
+const speech = createSpeechQueue(
+  {
+    async play(clip) {
+      const ctx = getAudioContext()
+      try {
+        const source = ctx.createBufferSource()
+        source.buffer = await ctx.decodeAudioData(clip.slice(0))
+        source.connect(ctx.destination)
+        await playSource(source)
+      } catch (err) {
+        console.error('[tts-player] decode/play failed:', err)
       }
-
-      source.start()
-    } catch (err) {
-      console.error('[tts-player] audio decode/play failed:', err)
-      isPlaying = false
+    },
+    async cue() {
+      // Two soft rising tones: one reply ended, the next begins.
+      const ctx = getAudioContext()
+      const t = ctx.currentTime
+      for (const [freq, at] of [
+        [660, 0],
+        [880, 0.11]
+      ] as const) {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.frequency.value = freq
+        gain.gain.setValueAtTime(0.0001, t + at)
+        gain.gain.exponentialRampToValueAtTime(0.08, t + at + 0.02)
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.1)
+        osc.connect(gain).connect(ctx.destination)
+        osc.start(t + at)
+        osc.stop(t + at + 0.1)
+      }
+      // The tones, then a short breath before the next reply.
+      await new Promise((r) => setTimeout(r, 400))
+    },
+    stop() {
+      try {
+        currentSource?.stop()
+      } catch {
+        // already stopped
+      }
+      currentSource = null
     }
-  }
-}
+  },
+  { onActiveChange: setPlaying }
+)
 
 export interface TtsAudioMessage {
   threadId?: string
@@ -149,9 +113,24 @@ export interface TtsAudioMessage {
   text?: string
   audio?: string
   chunk?: { index: number; total: number; done: boolean }
+  /** The reply this clip belongs to; its chunks share the id. */
+  utterance?: string
 }
 
-/** Handle one voice.tts.audio message that carries audio: decode and play. */
+let fallbackUtterance = 0
+
+/** The reply a message belongs to: the server's id, or for an older server
+ *  thread + kind, renewed at chunk 0 and for every unchunked clip. */
+const openFallback = new Map<string, string>()
+function utteranceOf(msg: TtsAudioMessage): string {
+  if (msg.utterance) return msg.utterance
+  const key = `${msg.threadId ?? ''}:${msg.kind ?? ''}`
+  if (!msg.chunk || msg.chunk.index === 0 || !openFallback.has(key))
+    openFallback.set(key, `local-${++fallbackUtterance}`)
+  return openFallback.get(key)!
+}
+
+/** Handle one voice.tts.audio message that carries audio: queue it. */
 function handleIncomingAudio(msg: TtsAudioMessage): void {
   // Start the media keep-alive on first TTS playback — the voice
   // interaction serves as the user gesture that satisfies autoplay policy.
@@ -160,8 +139,12 @@ function handleIncomingAudio(msg: TtsAudioMessage): void {
   // Show the spoken text on the lock screen / notification shade
   if (msg.text) updateNowPlaying(msg.text)
 
-  const wavData = base64ToArrayBuffer(msg.audio as string)
-  void playAudio(wavData, msg.chunk)
+  speech.enqueue({
+    utterance: utteranceOf(msg),
+    clip: base64ToArrayBuffer(msg.audio as string),
+    last: !msg.chunk || msg.chunk.done,
+    priority: msg.kind === 'ack'
+  })
 }
 
 const ACTIVE_THROTTLE_MS = 5_000
@@ -232,19 +215,19 @@ export function initTtsPlayer(ws: WsStore): () => void {
   return cleanup
 }
 
-/** Play base64-encoded WAV audio directly (single-shot, interrupts any
- *  current playback). Used by the on-demand "Play aloud" context menu. */
-export async function playBase64Audio(base64: string): Promise<void> {
-  interruptTts()
-  chunkQueue.length = 0
-
+/** Queue base64-encoded WAV audio as one reply, ahead of replies still
+ *  waiting. Used by the on-demand "Play aloud" context menu. */
+export function playBase64Audio(base64: string): void {
   if (!isKeepAliveActive()) startMediaKeepAlive()
-
-  const wavData = base64ToArrayBuffer(base64)
-  await playAudio(wavData)
+  speech.enqueue({
+    utterance: `play-aloud-${++fallbackUtterance}`,
+    clip: base64ToArrayBuffer(base64),
+    last: true,
+    priority: true
+  })
 }
 
-/** Reports whether TTS audio currently plays. */
+/** Whether TTS audio plays or waits to play (reactive). */
 export function isTtsPlaying(): boolean {
-  return isPlaying
+  return playing()
 }

@@ -398,30 +398,23 @@ class VoiceNodeService : Service() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     // voice.tts.audio — base64-encoded WAV pushed by the voice-response pipeline
-                    if (text.contains("\"voice.tts.audio\"")) {
-                        // Extract base64 audio
-                        val audioStart = text.indexOf("\"audio\":\"") + 9
-                        if (audioStart < 9) return
-                        val audioEnd = text.indexOf("\"", audioStart)
-                        if (audioEnd <= audioStart) return
-                        val audioB64 = text.substring(audioStart, audioEnd)
+                    if (!text.contains("\"voice.tts.audio\"")) return
+                    val msg = org.json.JSONObject(text)
+                    if (msg.optString("type") != "voice.tts.audio") return
+                    // The copy sent to the other connections of this device name carries no audio.
+                    val audioB64 = msg.optString("audio").takeIf { it.isNotEmpty() } ?: return
+                    msg.optString("text").takeIf { it.isNotEmpty() }?.let { broadcastTranscription("[Hex] $it") }
 
-                        // Detect chunked streaming — chunk.index present
-                        val chunkIndexMatch = Regex(""""index"\s*:\s*(\d+)""").find(text)
-                        val chunkIndex = chunkIndexMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: -1
-                        val isChunked = chunkIndex >= 0
-
-                        val kind = if (text.contains("\"ack\"")) "ack" else if (isChunked) "chunk$chunkIndex" else "summary"
-                        Log.i(TAG, "TTS audio received ($kind, ${audioB64.length / 1024}KB base64)")
-                        broadcastState("tts_playing")
-                        playAudio(Base64.decode(audioB64, Base64.DEFAULT), isChunked, chunkIndex)
-
-                        // Also extract text for display
-                        val textMatch = Regex(""""text"\s*:\s*"([^"]+)"""").find(text)
-                        textMatch?.groupValues?.getOrNull(1)?.let {
-                            broadcastTranscription("[Hex] $it")
-                        }
-                    }
+                    val chunk = msg.optJSONObject("chunk")
+                    val kind = msg.optString("kind")
+                    Log.i(TAG, "TTS audio received ($kind, chunk ${chunk?.optInt("index")}, ${audioB64.length / 1024}KB base64)")
+                    broadcastState("tts_playing")
+                    speech.enqueue(
+                        utteranceOf(msg, chunk),
+                        Base64.decode(audioB64, Base64.DEFAULT),
+                        last = chunk == null || chunk.optBoolean("done"),
+                        priority = kind == "ack",
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "WS message parse failed", e)
                 }
@@ -445,45 +438,24 @@ class VoiceNodeService : Service() {
         })
     }
 
-    // --- TTS audio queue — plays clips serially, never overlapping ---
+    // --- TTS playback: whole replies in arrival order, a cue between them ---
 
-    private val audioQueue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
-    @Volatile private var currentTrack: AudioTrack? = null
-    private var audioThread: Thread? = null
+    private val speech = SpeechQueue(
+        play = ::playOneClip,
+        cue = { playOneClip(CUE_WAV) },
+        onIdle = { broadcastState("listening") },
+    )
 
-    /** Enqueue a WAV clip. Non-chunked messages (acks) interrupt the current
-     *  clip and flush the queue. Chunked messages (index > 0) append. */
-    private fun playAudio(wavData: ByteArray, isChunked: Boolean = false, chunkIndex: Int = -1) {
-        if (!isChunked || chunkIndex == 0) {
-            // Interrupt: stop current playback and flush pending clips
-            interruptPlayback()
+    // Fallback reply ids (thread + kind) for a server that sends no utterance id.
+    private val fallbackIds = HashMap<String, String>()
+
+    private fun utteranceOf(msg: org.json.JSONObject, chunk: org.json.JSONObject?): String {
+        msg.optString("utterance").takeIf { it.isNotEmpty() }?.let { return it }
+        val key = "${msg.optString("threadId")}:${msg.optString("kind")}"
+        if (chunk == null || chunk.optInt("index") == 0 || key !in fallbackIds) {
+            fallbackIds[key] = "$key:${System.nanoTime()}"
         }
-        audioQueue.put(wavData)
-        ensureAudioThread()
-    }
-
-    private fun interruptPlayback() {
-        audioQueue.clear()
-        currentTrack?.let { track ->
-            try { track.stop() } catch (_: Exception) {}
-            try { track.release() } catch (_: Exception) {}
-        }
-        currentTrack = null
-    }
-
-    private fun ensureAudioThread() {
-        if (audioThread?.isAlive == true) return
-        audioThread = Thread {
-            while (running || audioQueue.isNotEmpty()) {
-                val wavData = audioQueue.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
-                playOneClip(wavData)
-            }
-            broadcastState("listening")
-        }.apply {
-            name = "tts-playback"
-            isDaemon = true
-            start()
-        }
+        return fallbackIds.getValue(key)
     }
 
     private fun playOneClip(wavData: ByteArray) {
@@ -509,7 +481,6 @@ class VoiceNodeService : Service() {
                 .setTransferMode(AudioTrack.MODE_STATIC)
                 .build()
 
-            currentTrack = track
             track.write(wavData, 44, dataSize)
             track.play()
 
@@ -519,10 +490,8 @@ class VoiceNodeService : Service() {
 
             track.stop()
             track.release()
-            currentTrack = null
         } catch (e: Exception) {
             Log.e(TAG, "Playback failed", e)
-            currentTrack = null
         }
     }
 
@@ -596,6 +565,33 @@ class VoiceNodeService : Service() {
             "SovereignVoice::WakeWordDetection",
         ).apply { acquire() }
     }
+}
+
+/** Two short rising tones (660 Hz, 880 Hz): one reply ends, another follows. */
+private val CUE_WAV: ByteArray = run {
+    val rate = 24_000
+    val tone = (rate * 0.09).toInt()
+    val gap = (rate * 0.02).toInt()
+    val tail = (rate * 0.25).toInt()
+    val samples = ShortArray(tone * 2 + gap + tail)
+    for ((n, freq) in listOf(660.0, 880.0).withIndex()) {
+        val offset = n * (tone + gap)
+        for (i in 0 until tone) {
+            val t = i.toDouble() / rate
+            val fade = minOf(1.0, minOf(i, tone - 1 - i) / (rate * 0.01))
+            samples[offset + i] = (0.25 * kotlin.math.sin(2 * Math.PI * freq * t) * fade * 32767).toInt().toShort()
+        }
+    }
+    val out = ByteArrayOutputStream()
+    DataOutputStream(out).apply {
+        val dataSize = samples.size * 2
+        writeBytes("RIFF"); writeIntLE(36 + dataSize); writeBytes("WAVE")
+        writeBytes("fmt "); writeIntLE(16); writeShortLE(1); writeShortLE(1)
+        writeIntLE(rate); writeIntLE(rate * 2); writeShortLE(2); writeShortLE(16)
+        writeBytes("data"); writeIntLE(dataSize)
+        for (s in samples) writeShortLE(s.toInt())
+    }
+    out.toByteArray()
 }
 
 // Little-endian helpers for WAV parsing and writing

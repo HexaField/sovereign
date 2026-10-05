@@ -50,18 +50,31 @@ function installFakeAudioContext(): {
 } {
   const start = vi.fn()
   const connect = vi.fn()
-  const decodeAudioData = vi.fn().mockResolvedValue({})
+  // Each decoded "buffer" is the clip's text, so tests can read the play order.
+  const decodeAudioData = vi.fn(async (data: ArrayBuffer) => new TextDecoder().decode(data))
   const MockAudioContext = vi.fn().mockImplementation(function (this: any) {
     this.state = 'running'
+    this.currentTime = 0
     this.destination = {}
     this.decodeAudioData = decodeAudioData
-    this.createBufferSource = vi.fn().mockReturnValue({
-      buffer: null,
-      connect,
-      start,
-      stop: vi.fn(),
-      onended: null
+    // A source "plays" for one macrotask, then fires onended (stop ends it at once).
+    this.createBufferSource = vi.fn(() => {
+      const source: any = { buffer: null, connect, onended: null }
+      source.start = vi.fn(() => {
+        start(source.buffer)
+        setTimeout(() => source.onended?.(), 5)
+      })
+      source.stop = vi.fn(() => source.onended?.())
+      return source
     })
+    const param = { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }
+    this.createOscillator = vi.fn(() => ({
+      frequency: { value: 0 },
+      connect: vi.fn((node: any) => node),
+      start: vi.fn(() => start('cue')),
+      stop: vi.fn()
+    }))
+    this.createGain = vi.fn(() => ({ gain: param, connect: vi.fn() }))
     this.resume = vi.fn().mockResolvedValue(undefined)
   })
   Object.defineProperty(globalThis, 'AudioContext', { value: MockAudioContext, writable: true, configurable: true })
@@ -96,6 +109,53 @@ describe('tts-player', () => {
     await tick()
 
     expect(start).toHaveBeenCalledTimes(1)
+    cleanup()
+  })
+
+  const b64 = (s: string) => Buffer.from(s).toString('base64')
+  const played = () => start.mock.calls.map(([b]) => b)
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 1500))
+
+  it('plays two overlapping replies one after the other, with the cue between, by utterance id', async () => {
+    const ws = createMockWsStore()
+    const cleanup = initTtsPlayer(ws)
+    const chunk = (utterance: string, index: number, total: number, text: string) =>
+      ws.fire('voice.tts.audio', {
+        threadId: utterance === 'A' ? 't1' : 't2',
+        kind: 'summary',
+        utterance,
+        audio: b64(text),
+        chunk: { index, total, done: index === total - 1 }
+      })
+    chunk('A', 0, 2, 'A0')
+    chunk('B', 0, 2, 'B0')
+    chunk('A', 1, 2, 'A1')
+    chunk('B', 1, 2, 'B1')
+    expect(isTtsPlaying()).toBe(true)
+    await settle()
+
+    expect(played()).toEqual(['A0', 'A1', 'cue', 'cue', 'B0', 'B1'])
+    expect(isTtsPlaying()).toBe(false)
+    cleanup()
+  })
+
+  it('groups chunks by thread and kind when an older server sends no utterance id', async () => {
+    const ws = createMockWsStore()
+    const cleanup = initTtsPlayer(ws)
+    const chunk = (threadId: string, index: number, text: string) =>
+      ws.fire('voice.tts.audio', {
+        threadId,
+        kind: 'summary',
+        audio: b64(text),
+        chunk: { index, total: 2, done: index === 1 }
+      })
+    chunk('t1', 0, 'A0')
+    chunk('t2', 0, 'B0')
+    chunk('t1', 1, 'A1')
+    chunk('t2', 1, 'B1')
+    await settle()
+
+    expect(played().filter((p) => p !== 'cue')).toEqual(['A0', 'A1', 'B0', 'B1'])
     cleanup()
   })
 

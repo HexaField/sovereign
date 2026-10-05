@@ -10,6 +10,7 @@
 // Both pipelines fire only when `config.voice.autoTts` is true and a
 // TTS URL is configured.  Dependency-injected — no cross-package imports.
 
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { EventBus } from '@sovereign/core'
 import { createWriteThroughFile, type WriteThroughFile } from '@sovereign/primitives'
@@ -173,17 +174,28 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
   // The entry lives only for the length of one reply.
   const speakerOf = new Map<string, string>()
 
+  // The utterance id of each thread's current chunked reply. Every audio
+  // message carries one, so players keep a reply's chunks together. An
+  // unchunked clip (an ack) gets its own id and leaves both maps alone, so
+  // it never splits a reply still streaming on the same thread.
+  const utteranceOf = new Map<string, string>()
+
   function speak(deviceName: string, msg: Record<string, unknown> & { threadId: string }, preferred?: string): void {
+    const { threadId } = msg
     const chunk = msg.chunk as { index: number; done: boolean } | undefined
-    if (!chunk || chunk.index === 0) speakerOf.delete(msg.threadId)
-    const pinned = speakerOf.get(msg.threadId)
+    if (chunk?.index === 0) speakerOf.delete(threadId)
+    if (chunk && (chunk.index === 0 || !utteranceOf.has(threadId))) utteranceOf.set(threadId, randomUUID())
+    const utterance = chunk ? utteranceOf.get(threadId)! : randomUUID()
+    const pinned = chunk ? speakerOf.get(threadId) : undefined
     const speaker = sendToDeviceName(
       deviceName,
-      msg,
+      { ...msg, utterance },
       [pinned, preferred].filter((id): id is string => !!id)
     )
-    if (speaker && chunk && !chunk.done) speakerOf.set(msg.threadId, speaker)
-    else speakerOf.delete(msg.threadId)
+    if (!chunk) return
+    if (speaker && !chunk.done) speakerOf.set(threadId, speaker)
+    else speakerOf.delete(threadId)
+    if (chunk.done) utteranceOf.delete(threadId)
   }
 
   // ── ACK pipeline ───────────────────────────────────────────────────

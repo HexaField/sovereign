@@ -379,6 +379,22 @@ TTS routes by device **name** (announced with `ws.device-name`), because a page 
 
 `voice-response.ts` pins a reply's later chunks to the connection that spoke the chunk before, and forgets the pin when the reply ends, so a reply never splits across tabs and an old reply never claims a new one. With nothing connected under the name, the push fallback sends the text once per reply. The server decides this because a client-side race cannot: Chrome throttles background-tab timers to the same one-second tick, so hidden tabs that raced over a BroadcastChannel all woke together and all played. Wind-tunnel s37 covers it.
 
+## Voice replies: the speech queue
+
+Two replies can stream at once (two threads finish together), and their chunks interleave on the wire. `speak()` tags every `voice.tts.audio` with an `utterance` id: one per reply, shared by all its chunks. Every player runs the same queue — web `client/src/features/voice/tts-queue.ts`, voice node `services/voice-node/tts_queue.py`, Android `SpeechQueue.kt` — with the same rules:
+
+- Whole replies play one after another, in arrival order. Nothing cuts a reply off except an explicit stop (web: "Stop playback" in a message's context menu).
+- A reply waits for its own late chunks instead of jumping to the next reply; after 20 s without a chunk it gives up, and late chunks of a finished reply are dropped.
+- A short cue (two tones, 660 → 880 Hz) sounds before a reply that starts within 3 s of the previous one ending.
+- Acks and "Play aloud" go ahead of replies still waiting, never ahead of the one playing.
+- A message without `utterance` (older server) falls back to thread + kind, renewed at chunk 0.
+
+Wind-tunnel s39 checks the server half: utterance ids, one owner each, chunks in order. The queue tests (vitest, `python3 -m unittest test_tts_queue`, `./gradlew testDebugUnitTest`) pin the player half.
+
+## Voice node push-to-talk
+
+`--max-capture` means two things. Wake word mode: the hard cap on one capture (30 s). Push-to-talk: the segment length (120 s) — when held that long, the node sends the segment and keeps recording, so speech never stops at a cap. Whisper runs at about 0.2× real time on CPU, so a 120 s segment transcribes well inside the server's 120 s STT timeout; the node waits 150 s and sends one POST at a time, so segments arrive in order.
+
 ## CI watch (`packages/server/src/ci-watch/`)
 
 MCP tools `ci_watch` / `ci_watch_list` / `ci_unwatch` let a thread watch the GitHub checks of a PR, branch or commit. The server polls; the thread gets one message (cron envelope `[Cron: CI <target> @ <time>]`) through the chat queue, so it never interrupts a turn.
