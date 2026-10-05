@@ -1,4 +1,5 @@
-import { createSignal, onMount, onCleanup, Show, For } from 'solid-js'
+import { createSignal, createEffect, onMount, onCleanup, Show, For, on } from 'solid-js'
+import { selectedDeviceIp } from './device-selection.js'
 
 interface HealthData {
   resources: {
@@ -105,6 +106,179 @@ function UsageBar(props: {
   )
 }
 
+/** A tailnet device's metrics, as System → Devices collects them. */
+interface RemoteMetrics {
+  hostname: string
+  online: boolean
+  tailscaleIP: string | null
+  cpu?: { cores: number; usagePercent: number }
+  memory?: { totalBytes: number; usedBytes: number }
+  gpu?: { name: string; memoryTotalMB: number; memoryUsedMB: number; usagePercent: number; tempC: number }
+  storage?: Array<{ mount: string; totalBytes: number; usedBytes: number }>
+  temperature?: Array<{ label: string; tempC: number }>
+  collectedAt: number
+  error?: string
+}
+
+function tempColor(c: number): string {
+  return c > 85 ? '#ef4444' : c > 70 ? '#f59e0b' : 'var(--c-text)'
+}
+
+/** The Device card's body for a device picked in the Tailscale card. */
+function RemoteDevice(props: { ip: string }) {
+  const [device, setDevice] = createSignal<RemoteMetrics | null | undefined>(undefined)
+
+  async function load(ip: string) {
+    try {
+      const res = await fetch('/api/system/devices/metrics')
+      if (!res.ok) return
+      const data = (await res.json()) as { devices?: RemoteMetrics[] }
+      if (ip === props.ip) setDevice(data.devices?.find((d) => d.tailscaleIP === ip) ?? null)
+    } catch {
+      /* keep the last value */
+    }
+  }
+
+  createEffect(
+    on(
+      () => props.ip,
+      (ip) => {
+        setDevice(undefined)
+        void load(ip)
+        const timer = setInterval(() => load(ip), 30_000)
+        onCleanup(() => clearInterval(timer))
+      }
+    )
+  )
+
+  const hottest = () => {
+    const zones = device()?.temperature ?? []
+    return zones.length ? zones.reduce((a, b) => (a.tempC > b.tempC ? a : b)) : null
+  }
+
+  return (
+    <Show when={device() !== undefined} fallback={<p class="text-[11px] opacity-40">Loading...</p>}>
+      <Show
+        when={device()}
+        fallback={<p class="text-[11px] opacity-40">No metrics for this device. See System → Devices.</p>}
+      >
+        {(d) => (
+          <div class="space-y-2">
+            <div class="text-[11px] font-medium" style={{ color: 'var(--c-text)' }}>
+              {d().hostname}
+            </div>
+            <Show when={!d().online || d().error}>
+              <p class="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+                {d().error ?? 'offline'}
+              </p>
+            </Show>
+            <Show when={d().cpu}>
+              {(cpu) => (
+                <div class="flex items-baseline justify-between text-[11px]">
+                  <span style={{ color: 'var(--c-text-muted)' }}>CPU ({cpu().cores} cores)</span>
+                  <span style={{ color: 'var(--c-text)' }}>{Math.round(cpu().usagePercent)}%</span>
+                </div>
+              )}
+            </Show>
+            <Show when={d().memory}>
+              {(m) => <UsageBar label="Memory" used={m().usedBytes} total={m().totalBytes} color="#6366f1" />}
+            </Show>
+            <Show when={d().storage?.[0]}>
+              {(s) => (
+                <UsageBar label={`Disk ${s().mount}`} used={s().usedBytes} total={s().totalBytes} color="#8b5cf6" />
+              )}
+            </Show>
+            <Show when={d().gpu}>
+              {(g) => (
+                <UsageBar
+                  label={`${g().name} · ${g().usagePercent}%`}
+                  used={g().memoryUsedMB * 1024 ** 2}
+                  total={g().memoryTotalMB * 1024 ** 2}
+                  color="#06b6d4"
+                />
+              )}
+            </Show>
+            <Show when={hottest()}>
+              {(zone) => (
+                <div class="flex items-center gap-1.5 text-[11px]">
+                  <span style={{ color: 'var(--c-text-muted)' }}>Temp</span>
+                  <span style={{ color: tempColor(zone().tempC) }}>{zone().tempC.toFixed(0)}°C</span>
+                  <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                    ({zone().label})
+                  </span>
+                </div>
+              )}
+            </Show>
+          </div>
+        )}
+      </Show>
+    </Show>
+  )
+}
+
+/** The Device card's body for this machine: health, temperature zones. */
+function LocalDevice(props: {
+  health: HealthData | null
+  temps: ThermalZone[]
+  memHistory: number[]
+  hottest: ThermalZone | null
+}) {
+  return (
+    <>
+      <Show when={props.health} fallback={<p class="text-[11px] opacity-40">Loading...</p>}>
+        {(h) => (
+          <div class="space-y-2">
+            <UsageBar
+              label="Memory"
+              used={h().resources.memoryUsage.used}
+              total={h().resources.memoryUsage.total}
+              color="#6366f1"
+              sparkValues={props.memHistory}
+              sparkMax={100}
+            />
+            <UsageBar
+              label="Disk"
+              used={h().resources.diskUsage.used}
+              total={h().resources.diskUsage.total}
+              color="#8b5cf6"
+            />
+          </div>
+        )}
+      </Show>
+
+      <Show when={props.hottest}>
+        {(zone) => (
+          <div class="mt-2 flex items-center gap-1.5 text-[11px]">
+            <span style={{ color: 'var(--c-text-muted)' }}>Temp</span>
+            <span style={{ color: tempColor(zone().tempC) }}>{zone().tempC.toFixed(0)}°C</span>
+            <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+              ({zone().type})
+            </span>
+          </div>
+        )}
+      </Show>
+
+      <Show when={props.temps.length > 1}>
+        <details class="mt-1">
+          <summary class="cursor-pointer text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+            All zones ({props.temps.length})
+          </summary>
+          <div class="mt-1 space-y-0.5">
+            <For each={props.temps}>
+              {(z) => (
+                <div class="flex items-center justify-between text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                  <span>{z.type}</span>
+                  <span style={{ color: tempColor(z.tempC) }}>{z.tempC.toFixed(0)}°C</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </details>
+      </Show>
+    </>
+  )
+}
+
 export default function DeviceCard() {
   const [health, setHealth] = createSignal<HealthData | null>(null)
   const [temps, setTemps] = createSignal<ThermalZone[]>([])
@@ -173,70 +347,18 @@ export default function DeviceCard() {
         <h3 class="text-xs font-semibold" style={{ color: 'var(--c-text-heading)' }}>
           Device
         </h3>
-        <Show when={health()}>
+        <Show when={health() && selectedDeviceIp() === null}>
           <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
             up {formatUptime(health()!.connection.uptime)}
           </span>
         </Show>
       </div>
 
-      <Show when={health()} fallback={<p class="text-[11px] opacity-40">Loading...</p>}>
-        {(h) => (
-          <div class="space-y-2">
-            <UsageBar
-              label="Memory"
-              used={h().resources.memoryUsage.used}
-              total={h().resources.memoryUsage.total}
-              color="#6366f1"
-              sparkValues={memHistory()}
-              sparkMax={100}
-            />
-            <UsageBar
-              label="Disk"
-              used={h().resources.diskUsage.used}
-              total={h().resources.diskUsage.total}
-              color="#8b5cf6"
-            />
-          </div>
-        )}
-      </Show>
-
-      <Show when={hottest()}>
-        {(zone) => (
-          <div class="mt-2 flex items-center gap-1.5 text-[11px]">
-            <span style={{ color: 'var(--c-text-muted)' }}>Temp</span>
-            <span
-              style={{
-                color: zone().tempC > 85 ? '#ef4444' : zone().tempC > 70 ? '#f59e0b' : 'var(--c-text)'
-              }}
-            >
-              {zone().tempC.toFixed(0)}°C
-            </span>
-            <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-              ({zone().type})
-            </span>
-          </div>
-        )}
-      </Show>
-
-      <Show when={temps().length > 1}>
-        <details class="mt-1">
-          <summary class="cursor-pointer text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-            All zones ({temps().length})
-          </summary>
-          <div class="mt-1 space-y-0.5">
-            <For each={temps()}>
-              {(z) => (
-                <div class="flex items-center justify-between text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                  <span>{z.type}</span>
-                  <span style={{ color: z.tempC > 85 ? '#ef4444' : z.tempC > 70 ? '#f59e0b' : 'var(--c-text)' }}>
-                    {z.tempC.toFixed(0)}°C
-                  </span>
-                </div>
-              )}
-            </For>
-          </div>
-        </details>
+      <Show
+        when={selectedDeviceIp()}
+        fallback={<LocalDevice health={health()} temps={temps()} memHistory={memHistory()} hottest={hottest()} />}
+      >
+        {(ip) => <RemoteDevice ip={ip()} />}
       </Show>
     </div>
   )

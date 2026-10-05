@@ -1,4 +1,5 @@
 import { createSignal, onMount, onCleanup, Show, For } from 'solid-js'
+import { selectedDeviceIp, setSelectedDeviceIp } from './device-selection.js'
 
 interface TailscaleNode {
   hostname: string
@@ -25,11 +26,19 @@ function osIcon(os: string): string {
   return '?'
 }
 
+/** One node; clicking it shows that device in the Device card. */
 function NodeRow(props: { node: TailscaleNode; isSelf?: boolean }) {
+  const ip = () => props.node.tailscaleIPs?.[0] ?? null
+  const selected = () => (props.isSelf ? selectedDeviceIp() === null : !!ip() && selectedDeviceIp() === ip())
   return (
-    <div
-      class="flex items-center gap-2 rounded px-2 py-1.5"
-      style={{ background: props.isSelf ? 'var(--c-hover-bg)' : 'transparent' }}
+    <button
+      type="button"
+      class="flex w-full cursor-pointer items-center gap-2 rounded border-none px-2 py-1.5 text-left transition-colors"
+      style={{ background: selected() ? 'var(--c-hover-bg)' : 'transparent' }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+      onMouseLeave={(e) => (e.currentTarget.style.background = selected() ? 'var(--c-hover-bg)' : 'transparent')}
+      onClick={() => setSelectedDeviceIp(props.isSelf ? null : ip())}
+      title={`Show ${props.node.hostname || 'this device'} in the Device card`}
     >
       <span
         class="inline-block h-2 w-2 shrink-0 rounded-full"
@@ -55,13 +64,13 @@ function NodeRow(props: { node: TailscaleNode; isSelf?: boolean }) {
             </span>
           </Show>
         </div>
-        <Show when={props.node.tailscaleIPs?.length}>
+        <Show when={ip()}>
           <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-            {props.node.tailscaleIPs[0]}
+            {ip()}
           </span>
         </Show>
       </div>
-    </div>
+    </button>
   )
 }
 
