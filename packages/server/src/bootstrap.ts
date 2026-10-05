@@ -379,6 +379,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   let voiceForward:
     | ((text: string, opts?: { deviceId?: string; deviceName?: string }) => Promise<{ delivered: boolean }>)
     | undefined
+  let voiceGatewayId: (() => string | undefined) | undefined
   app.use(
     createVoiceRoutes(voiceModule, {
       forwardToPresence: (text, opts) => {
@@ -392,7 +393,12 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   if (cfg.voice.transcribeUrl) {
     registerVoiceStreamChannel({
       ws: wsHandler,
-      transcribeUrl: cfg.voice.transcribeUrl
+      transcribeUrl: cfg.voice.transcribeUrl,
+      // Push-to-talk on a voice node streams here and lands in the presence thread.
+      presence: {
+        threadId: () => voiceGatewayId?.(),
+        send: (text, opts) => (voiceForward ? voiceForward(text, opts) : Promise.resolve({ delivered: false }))
+      }
     })
   }
 
@@ -580,6 +586,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // Fill the late-binding ref so voice transcriptions reach the gateway thread.
   // Voice node transcriptions go to the gateway (same as dashboard voice) —
   // the user expects to see their spoken message as a user turn in the main chat.
+  voiceGatewayId = () => presenceModule.gatewayThreadId() ?? undefined
   voiceForward = async (text, opts) => {
     const gatewayId = presenceModule.gatewayThreadId()
     if (!gatewayId) return { delivered: false }

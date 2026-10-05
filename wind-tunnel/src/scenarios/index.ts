@@ -40,6 +40,7 @@ import { s36EditToolsOverScripts } from './s36-edit-tools-over-scripts.js'
 import { s37OneSpeaker } from './s37-one-speaker.js'
 import { s38StreamingStt } from './s38-streaming-stt.js'
 import { s39OverlappingReplies } from './s39-overlapping-replies.js'
+import { s40PttStream } from './s40-ptt-stream.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -134,5 +135,6 @@ export const ALL_SCENARIOS: Scenario[] = [
   s36EditToolsOverScripts,
   s37OneSpeaker,
   s38StreamingStt,
-  s39OverlappingReplies
+  s39OverlappingReplies,
+  s40PttStream
 ]

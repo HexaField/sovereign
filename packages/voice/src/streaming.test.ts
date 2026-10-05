@@ -124,6 +124,65 @@ describe('createStreamingSession', () => {
   })
 })
 
+describe('createStreamingSession — pcm16', () => {
+  const RATE = 16000
+  /** `seconds` of 16-bit samples: loud, or silent where `quiet(t)` says so. */
+  const pcm = (seconds: number, quiet: (t: number) => boolean = () => false) => {
+    const buf = Buffer.alloc(Math.round(seconds * RATE) * 2)
+    for (let i = 0; i < buf.length / 2; i++) buf.writeInt16LE(quiet(i / RATE) ? 0 : 8000, i * 2)
+    return buf
+  }
+  /** whisper stand-in: answers with the seconds of audio it got, read from the WAV. */
+  const secondsHeard = async (_url: string, init: { body: FormData }) => {
+    const wav = Buffer.from(await (init.body.get('file') as Blob).arrayBuffer())
+    expect(wav.toString('ascii', 0, 4)).toBe('RIFF')
+    expect(wav.readUInt32LE(24)).toBe(RATE)
+    return okTranscriptResponse(`s${Math.round(wav.readUInt32LE(40) / 2 / RATE)}`)
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    mockFetch.mockReset()
+    mockFetch.mockImplementation(secondsHeard)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('transcribes only the audio after a committed cut, made at the quietest point', async () => {
+    const results: Array<{ text: string; final: boolean }> = []
+    const session = createStreamingSession({
+      transcribeUrl: 'http://localhost:9876/transcribe',
+      onTranscript: (text, final) => results.push({ text, final }),
+      format: 'pcm16'
+    })
+
+    // 25 s of speech with a pause at 14 s: past the 20 s commit threshold.
+    session.pushChunk(pcm(25, (t) => t >= 14 && t < 14.2).toString('base64'))
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(results[results.length - 1]).toEqual({ text: 's14', final: false }) // committed up to the pause
+
+    session.pushChunk(pcm(1).toString('base64'))
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(results[results.length - 1]).toEqual({ text: 's14 s12', final: false }) // the 12 s after the cut
+
+    expect(await session.stop()).toBe('s14 s12')
+    expect(results[results.length - 1]!.final).toBe(true)
+  })
+
+  it('posts nothing for a tail too short to hold words', async () => {
+    const session = createStreamingSession({
+      transcribeUrl: 'http://localhost:9876/transcribe',
+      onTranscript: () => {},
+      format: 'pcm16'
+    })
+    session.pushChunk(pcm(0.2).toString('base64'))
+    expect(await session.stop()).toBe('')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
 describe('createStreamingManager', () => {
   beforeEach(() => {
     vi.useFakeTimers()
