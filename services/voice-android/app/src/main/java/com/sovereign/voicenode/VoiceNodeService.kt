@@ -389,9 +389,10 @@ class VoiceNodeService : Service() {
         wsClient = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "WebSocket connected to $wsUrl")
-                // Announce device name — the existing TTS system routes by name
-                // via sendToDeviceName, not by channel subscription
-                webSocket.send("""{"type":"ws.device-name","deviceName":"$DEVICE_NAME","deviceId":"$deviceId"}""")
+                // Announce device name — TTS routes by name, not by channel
+                // subscription. "client" makes this app the speaker over
+                // browser tabs that share the name.
+                webSocket.send("""{"type":"ws.device-name","deviceName":"$DEVICE_NAME","deviceId":"$deviceId","client":"voice-node"}""")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {

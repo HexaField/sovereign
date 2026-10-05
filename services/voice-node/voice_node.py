@@ -529,12 +529,14 @@ class VoiceNode:
             try:
                 log.info("Connecting WebSocket to %s", ws_url)
                 async with websockets.connect(ws_url, ssl=ssl_ctx) as ws:
-                    # Announce device name — TTS routes by name via
-                    # sendToDeviceName (same protocol as Android/web clients)
+                    # Announce device name — TTS routes by name (same protocol
+                    # as Android/web clients). "client" makes this node the
+                    # speaker over browser tabs that share the name.
                     await ws.send(json.dumps({
                         "type": "ws.device-name",
                         "deviceName": self.device_name,
                         "deviceId": self.device_id,
+                        "client": "voice-node",
                     }))
                     log.info("WebSocket connected — announced as '%s', listening for TTS events", self.device_name)
 

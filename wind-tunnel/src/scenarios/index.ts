@@ -37,6 +37,7 @@ import { s33SlashCommands } from './s33-slash-commands.js'
 import { s34FileAttachments } from './s34-file-attachments.js'
 import { s35CiWatch } from './s35-ci-watch.js'
 import { s36EditToolsOverScripts } from './s36-edit-tools-over-scripts.js'
+import { s37OneSpeaker } from './s37-one-speaker.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -128,5 +129,6 @@ export const ALL_SCENARIOS: Scenario[] = [
   // at the mock LLM as image content blocks.
   s34FileAttachments,
   s35CiWatch,
-  s36EditToolsOverScripts
+  s36EditToolsOverScripts,
+  s37OneSpeaker
 ]

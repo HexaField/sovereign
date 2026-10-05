@@ -55,9 +55,9 @@ export function wireStatusAggregator(input: StatusWiringInput): StatusAggregator
     }
   })
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     const deviceId = Math.random().toString(36).slice(2)
-    wsHandler.handleConnection(ws as any, deviceId)
+    wsHandler.handleConnection(ws as any, deviceId, { userAgent: req?.headers['user-agent'] })
     // Tell the client its assigned device ID so it can attach it to
     // voice-originated messages (voice-response uses it for TTS routing).
     // Echo back a previously-announced name for this exact connection, if

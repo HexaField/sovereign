@@ -1036,8 +1036,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         ),
       llm: voiceLlm,
       getRecentTurns,
-      sendToDeviceName: (deviceName: string, msg: Record<string, unknown>) => {
-        wsHandler.sendToDeviceName(deviceName, msg as any)
+      sendToDeviceName: (deviceName: string, msg: Record<string, unknown>, speaker?: string) => {
+        // Audio plays on one connection under the name; text reaches them all.
+        const spoke = msg.audio
+          ? wsHandler.sendSpeechToDeviceName(deviceName, msg as any, speaker)
+          : (wsHandler.sendToDeviceName(deviceName, msg as any), undefined)
         // Push fallback — when no WS connection exists for the target device
         // (phone backgrounded/locked), send a push notification with the
         // spoken text so the user still receives Hex's reply.
@@ -1048,6 +1051,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
             `[voice-push-fallback] device "${deviceName}" offline — push notification sent: "${String(msg.text).slice(0, 60)}"`
           )
         }
+        return spoke
       },
       getDeviceName: (deviceId: string) => wsHandler.getDeviceName(deviceId),
       config: () => {

@@ -1,6 +1,14 @@
+// @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { initTtsPlayer, interruptTts, isTtsPlaying, claimKeyFor } from './tts-player.js'
+import { initTtsPlayer, interruptTts, isTtsPlaying } from './tts-player.js'
 import type { WsStore } from '../../ws/ws-store.js'
+
+// jsdom implements no media playback; the lock-screen keep-alive stays out of these tests.
+vi.mock('./media-session.js', () => ({
+  startMediaKeepAlive: vi.fn(),
+  updateNowPlaying: vi.fn(),
+  isKeepAliveActive: () => true
+}))
 
 // --- Helpers ---
 
@@ -62,12 +70,11 @@ function installFakeAudioContext(): {
 
 const AUDIO_B64 = Buffer.from('fake-wav-bytes').toString('base64')
 
-// Outlasts the module's claim window (50ms base + up to 20ms jitter).
-const PAST_CLAIM_WINDOW_MS = 130
-
 const { start, connect, decodeAudioData } = installFakeAudioContext()
 
-describe('tts-player — cross-tab playback dedup', () => {
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+describe('tts-player', () => {
   beforeEach(() => {
     start.mockClear()
     connect.mockClear()
@@ -79,77 +86,20 @@ describe('tts-player — cross-tab playback dedup', () => {
     interruptTts()
   })
 
-  it('plays audio when no rival tab claims the same clip', async () => {
+  // The server picks one connection per device name to carry the audio;
+  // every tab plays whatever audio reaches it, at once.
+  it('plays a message that carries audio', async () => {
     const ws = createMockWsStore()
     const cleanup = initTtsPlayer(ws)
 
-    ws.fire('voice.tts.audio', {
-      threadId: 't1',
-      kind: 'ack',
-      text: 'Looking into the build logs, sir.',
-      audio: AUDIO_B64
-    })
-    await new Promise((resolve) => setTimeout(resolve, PAST_CLAIM_WINDOW_MS))
+    ws.fire('voice.tts.audio', { threadId: 't1', kind: 'ack', text: 'Looking into it.', audio: AUDIO_B64 })
+    await tick()
 
     expect(start).toHaveBeenCalledTimes(1)
     cleanup()
   })
 
-  it('skips playback when a rival tab claims the identical clip first', async () => {
-    const ws = createMockWsStore()
-    const cleanup = initTtsPlayer(ws)
-    const msg = { threadId: 't2', kind: 'ack', text: 'Running that analysis now.', audio: AUDIO_B64 }
-
-    // A second BroadcastChannel instance stands in for a sibling tab —
-    // real BroadcastChannel, since Node ships a working implementation.
-    const rival = new BroadcastChannel('sovereign-tts-lock')
-    try {
-      ws.fire('voice.tts.audio', msg)
-      // Let the module's own listener finish registering (it does so
-      // synchronously on first use, but a tick keeps this deterministic),
-      // then claim the exact key this tab computed for the same clip.
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      rival.postMessage({ type: 'claim', key: claimKeyFor(msg) })
-
-      await new Promise((resolve) => setTimeout(resolve, PAST_CLAIM_WINDOW_MS))
-
-      expect(start).not.toHaveBeenCalled()
-    } finally {
-      rival.close()
-      cleanup()
-    }
-  })
-
-  it('never suppresses a genuinely distinct clip sharing the same thread and kind', async () => {
-    const ws = createMockWsStore()
-    const cleanup = initTtsPlayer(ws)
-
-    const rival = new BroadcastChannel('sovereign-tts-lock')
-    try {
-      // Rival claims a DIFFERENT clip (different text) on the same thread —
-      // must not suppress this tab's distinct clip.
-      rival.postMessage({
-        type: 'claim',
-        key: claimKeyFor({ threadId: 't3', kind: 'summary', text: 'A completely different summary.' })
-      })
-      await new Promise((resolve) => setTimeout(resolve, 0))
-
-      ws.fire('voice.tts.audio', {
-        threadId: 't3',
-        kind: 'summary',
-        text: 'Deployed the change, sir.',
-        audio: AUDIO_B64
-      })
-      await new Promise((resolve) => setTimeout(resolve, PAST_CLAIM_WINDOW_MS))
-
-      expect(start).toHaveBeenCalledTimes(1)
-    } finally {
-      rival.close()
-      cleanup()
-    }
-  })
-
-  it('reports isTtsPlaying false once decode/play never happens (message carries no audio)', () => {
+  it('stays silent for the text-only copy sent to the other tabs', () => {
     const ws = createMockWsStore()
     const cleanup = initTtsPlayer(ws)
 
@@ -159,12 +109,38 @@ describe('tts-player — cross-tab playback dedup', () => {
     expect(start).not.toHaveBeenCalled()
     cleanup()
   })
+})
 
-  it('claimKeyFor produces the same key for identical payloads and different keys for different text', () => {
-    const a = claimKeyFor({ threadId: 't5', kind: 'ack', text: 'Same text' })
-    const b = claimKeyFor({ threadId: 't5', kind: 'ack', text: 'Same text' })
-    const c = claimKeyFor({ threadId: 't5', kind: 'ack', text: 'Different text' })
-    expect(a).toBe(b)
-    expect(a).not.toBe(c)
+describe('tts-player — activity reports', () => {
+  const sentActive = (ws: WsStore) =>
+    (ws.send as ReturnType<typeof vi.fn>).mock.calls.filter(([m]) => m.type === 'ws.active').length
+
+  it('reports a focused tab as active on start, on focus and on reconnect, but not while unfocused', () => {
+    const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    const ws = createMockWsStore()
+    const cleanup = initTtsPlayer(ws)
+    expect(sentActive(ws)).toBe(1)
+
+    window.dispatchEvent(new Event('focus'))
+    ws.fire('ws.reconnected', {})
+    expect(sentActive(ws)).toBe(3)
+
+    focused.mockReturnValue(false)
+    window.dispatchEvent(new Event('focus'))
+    expect(sentActive(ws)).toBe(3)
+
+    cleanup()
+    focused.mockRestore()
+  })
+
+  it('throttles reports from repeated input', () => {
+    const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    const ws = createMockWsStore()
+    const cleanup = initTtsPlayer(ws)
+    for (let i = 0; i < 5; i++) window.dispatchEvent(new Event('keydown'))
+    expect(sentActive(ws)).toBe(1) // the start report covers the burst
+
+    cleanup()
+    focused.mockRestore()
   })
 })
