@@ -6,6 +6,7 @@ import { wsStore } from '../../ws/index.js'
 import { ExternalLinkIcon } from '../../ui/icons.js'
 import { formatBytes } from '../system/HealthTab.js'
 import SettingsContent from '../agent/SettingsContent.js'
+import { agentName } from '../../lib/identity.js'
 
 /** Whether the header's Service Health popover shows. Shared so the app can
  *  open it on first launch, when the device still needs a name. */
@@ -473,7 +474,9 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
             'max-height': 'calc(100dvh - 56px)'
           }}
         >
-          <div class="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Service Health</div>
+          <div class="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Settings</div>
+          <SettingsContent />
+          <div class="mt-4 mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Service Health</div>
           {/* Health rows: Sovereign origin, code search, code index, agent sessions,
               per-thread context management (Layers 1/2/3), then any
               externally-configured LAN services (AD4M dapp, WE launcher, …). */}
@@ -512,8 +515,9 @@ export function HealthPopover(props: { open: boolean; onClose: () => void; ancho
               )}
             </For>
           </div>
-          <div class="mt-4 mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">Settings</div>
-          <SettingsContent />
+          <div class="pt-4 text-center text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+            {agentName()} — Agent Interface
+          </div>
         </div>
       </Portal>
     </Show>

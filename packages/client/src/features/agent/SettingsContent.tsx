@@ -50,11 +50,6 @@ export default function SettingsContent() {
 
         {/* Notifications */}
         <NotificationsSection />
-
-        {/* Footer */}
-        <div class="pt-2 text-center text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
-          {agentName()} — Agent Interface
-        </div>
       </div>
     </div>
   )
