@@ -1,13 +1,11 @@
-// When an auto-recycle may run. Pruning only frees old tool output and
-// thinking; a session made of real conversation stays above the threshold
-// after it. Without a gate, such a session recycled before every message:
-// an interrupt, a full transcript archive and a cozempic pass, for ~2 %.
+// When an auto-recycle may run. Pruning frees only old tool output and
+// thinking, so a session of real conversation stays over the threshold after
+// it; ungated, it recycled before every message for ~2 %.
 //
-// - Floor: after a recycle, wait until the context grows `regrowPercent` of
+// - Floor: after a recycle, wait for the context to grow `regrowPercent` of
 //   the window past what the recycle left.
-// - Exhausted: a recycle that freed under `minReclaimPercent` of the context
-//   shows pruning cannot help; auto-recycle stays off until Claude Code's own
-//   compaction (a summary) shrinks the session.
+// - Exhausted: a recycle that freed under `minReclaimPercent` turns
+//   auto-recycle off until a compaction shrinks the session.
 
 export interface RecycleGateInput {
   /** Tokens in context at the last API call. */

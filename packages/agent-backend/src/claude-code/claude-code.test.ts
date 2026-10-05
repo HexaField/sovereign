@@ -1362,7 +1362,7 @@ describe('claude-code/auto-recycle stops when pruning cannot shrink the session'
     return factory
   }
 
-  function backendWith(compactions: any[]) {
+  function backendWith(compactions: any[], recycle: Record<string, number> = {}) {
     const metrics = {
       recordToolCall: vi.fn(),
       recordContextSnapshot: vi.fn(),
@@ -1376,7 +1376,7 @@ describe('claude-code/auto-recycle stops when pruning cannot shrink the session'
         cwd,
         agentDir: join(dataDir, 'agent'),
         // No cooldown: only the gate stands between turns and a recycle.
-        contextManagement: { recycle: { enabled: true, minIntervalMs: 0 } }
+        contextManagement: { recycle: { enabled: true, minIntervalMs: 0, ...recycle } }
       },
       { sdkQuery: everyTurnFullSdk(), metrics: metrics as any }
     )
@@ -1417,6 +1417,43 @@ describe('claude-code/auto-recycle stops when pruning cannot shrink the session'
     await turn(restarted, 'five')
     await turn(restarted, 'six')
     expect(compactionsAfterRestart).toHaveLength(0)
+  })
+
+  it('measures regrowth from the real fill when it sits below the estimated floor', async () => {
+    const compactions: any[] = []
+    // minReclaimPercent 0: only the floor gates the recycle.
+    const backend = backendWith(compactions, { thresholdPercent: 55, regrowPercent: 10, minReclaimPercent: 0 })
+    await backend.createSession('t', { threadKey: 'r', model: { provider: 'anthropic', model: 'claude-opus-5-5' } })
+    const file = backend.getSessionFilePath!('r')!
+    mkdirSync(dirname(file), { recursive: true })
+    const fill = (tokens: number) =>
+      writeFileSync(
+        file,
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [],
+            usage: {
+              input_tokens: tokens,
+              output_tokens: 10,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0
+            }
+          }
+        }) + '\n'
+      )
+
+    fill(900_000)
+    await turn(backend, 'one') // recycle due
+    await turn(backend, 'two') // recycles; the byte estimate leaves the floor at 900k
+    expect(compactions).toHaveLength(1)
+    fill(600_000) // the next API call shows the recycle left 600k
+    await turn(backend, 'three')
+    fill(720_000) // 12 % of the window past the real floor
+    await turn(backend, 'four') // recycle due
+    await turn(backend, 'five')
+    expect(compactions).toHaveLength(2)
   })
 })
 
