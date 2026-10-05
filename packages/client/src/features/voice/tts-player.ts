@@ -167,12 +167,16 @@ function handleIncomingAudio(msg: TtsAudioMessage): void {
 const ACTIVE_THROTTLE_MS = 5_000
 
 /** Report this tab as active (focused or touched) so the server picks it
- *  to speak. Throttled; sent again on every reconnect while focused. */
+ *  to speak. Throttled; sent again on every reconnect while focused. Only
+ *  after the user has interacted with the page: before that the browser's
+ *  autoplay policy keeps its audio suspended, so it must not win. Never
+ *  while disconnected: a queued report would arrive late and stale. */
 function reportActivity(ws: WsStore): () => void {
   if (typeof document === 'undefined' || typeof window === 'undefined') return () => {}
   let last = 0
   const report = (force = false): void => {
-    if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+    if (document.visibilityState !== 'visible' || !document.hasFocus() || !ws.connected()) return
+    if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return
     if (!force && Date.now() - last < ACTIVE_THROTTLE_MS) return
     last = Date.now()
     ws.send({ type: 'ws.active' } as any)

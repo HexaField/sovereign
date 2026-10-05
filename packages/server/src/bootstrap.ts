@@ -1036,17 +1036,19 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         ),
       llm: voiceLlm,
       getRecentTurns,
-      sendToDeviceName: (deviceName: string, msg: Record<string, unknown>, speaker?: string) => {
-        // Audio plays on one connection under the name; text reaches them all.
-        const spoke = msg.audio
-          ? wsHandler.sendSpeechToDeviceName(deviceName, msg as any, speaker)
-          : (wsHandler.sendToDeviceName(deviceName, msg as any), undefined)
-        // Push fallback — when no WS connection exists for the target device
-        // (phone backgrounded/locked), send a push notification with the
-        // spoken text so the user still receives Hex's reply.
-        if (!wsHandler.isDeviceNameConnected(deviceName) && msg.type === 'voice.tts.audio' && msg.text) {
-          const pushPayload = { type: 'voice.reply', text: msg.text, threadId: msg.threadId }
-          void notificationsModule.pushManager.sendAll(pushPayload)
+      sendToDeviceName: (deviceName: string, msg: Record<string, unknown>, speakers?: string[]) => {
+        // Text reaches every connection under the name; audio plays on one.
+        if (!msg.audio) {
+          wsHandler.sendToDeviceName(deviceName, msg as any)
+          return undefined
+        }
+        const spoke = wsHandler.sendSpeechToDeviceName(deviceName, msg as any, speakers)
+        // Push fallback — nothing under the name is connected (phone
+        // backgrounded/locked): push the spoken text instead, once per
+        // reply rather than once per sentence.
+        const chunk = msg.chunk as { index: number } | undefined
+        if (!spoke && msg.text && (!chunk || chunk.index === 0)) {
+          void notificationsModule.pushManager.sendAll({ type: 'voice.reply', text: msg.text, threadId: msg.threadId })
           console.log(
             `[voice-push-fallback] device "${deviceName}" offline — push notification sent: "${String(msg.text).slice(0, 60)}"`
           )

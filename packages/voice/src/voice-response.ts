@@ -71,9 +71,9 @@ export interface VoiceResponseDeps {
   /** Push a JSON message to the connections announced under a device name.
    *  The name persists across reconnects, so it reaches the right tab after
    *  a page refresh mints a fresh deviceId. A message carrying `audio` plays
-   *  on ONE of those connections: `speaker` when it is still live, else one
+   *  on ONE of those connections: the first live one in `speakers`, else one
    *  the transport elects. Returns the deviceId that got the audio. */
-  sendToDeviceName: (deviceName: string, msg: Record<string, unknown>, speaker?: string) => string | void
+  sendToDeviceName: (deviceName: string, msg: Record<string, unknown>, speakers?: string[]) => string | void
   /** Resolve a live connection's announced device name from its deviceId. */
   getDeviceName: (deviceId: string) => string | undefined
   /** Current config (called per-event so hot-reload works). */
@@ -167,16 +167,23 @@ export function createVoiceResponse(deps: VoiceResponseDeps) {
   // if the real response arrives before the ack finishes.
   const ackAbort = new Map<string, AbortController>()
 
-  // The connection speaking each thread's current utterance. Later chunks of
-  // an utterance follow its first chunk, so one reply never splits across
-  // tabs; a new utterance (an ack, or chunk 0) starts from `preferred`.
+  // The connection speaking each thread's current chunked reply. Later
+  // chunks follow the one that spoke before them, so a reply never splits
+  // across tabs; `preferred` (the origin) backs it up if that one drops.
+  // The entry lives only for the length of one reply.
   const speakerOf = new Map<string, string>()
 
   function speak(deviceName: string, msg: Record<string, unknown> & { threadId: string }, preferred?: string): void {
-    const chunk = msg.chunk as { index: number } | undefined
-    const pinned = chunk && chunk.index > 0 ? speakerOf.get(msg.threadId) : undefined
-    const speaker = sendToDeviceName(deviceName, msg, pinned ?? preferred)
-    if (speaker) speakerOf.set(msg.threadId, speaker)
+    const chunk = msg.chunk as { index: number; done: boolean } | undefined
+    if (!chunk || chunk.index === 0) speakerOf.delete(msg.threadId)
+    const pinned = speakerOf.get(msg.threadId)
+    const speaker = sendToDeviceName(
+      deviceName,
+      msg,
+      [pinned, preferred].filter((id): id is string => !!id)
+    )
+    if (speaker && chunk && !chunk.done) speakerOf.set(msg.threadId, speaker)
+    else speakerOf.delete(msg.threadId)
   }
 
   // ── ACK pipeline ───────────────────────────────────────────────────

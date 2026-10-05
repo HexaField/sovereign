@@ -687,35 +687,72 @@ describe('voice response — speaker', () => {
     await flush()
 
     const audio = sendToDeviceName.mock.calls.filter(([, msg]: any[]) => msg.type === 'voice.tts.audio')
-    expect(audio.map(([, msg, speaker]: any[]) => [msg.kind, speaker])).toEqual([
-      ['ack', 'tab-1'],
-      ['summary', 'tab-1']
+    expect(audio.map(([, msg, speakers]: any[]) => [msg.kind, speakers])).toEqual([
+      ['ack', ['tab-1']],
+      ['summary', ['tab-1']]
     ])
     vr.shutdown()
   })
 
-  it('keeps every later chunk of a reply on the connection that spoke its first chunk', async () => {
-    const { deps, bus, sendToDeviceName } = createDeps()
-    sendToDeviceName.mockImplementation((_name: string, msg: any) => (msg.audio ? 'node' : undefined))
-    const synthesizeStream = vi.fn(async (_text: string, onChunk: (c: any) => void) => {
-      for (let index = 0; index < 3; index++) {
-        onChunk({ index, total: 3, sentence: `s${index}`, audio: Buffer.from('a'), durationMs: 1, done: index === 2 })
+  /** A streaming TTS stand-in: one onChunk per sentence, chunk indices from `first`. */
+  const streamOf = (total: number, first = 0) =>
+    vi.fn(async (_text: string, onChunk: (c: any) => void) => {
+      for (let index = first; index < total; index++) {
+        onChunk({
+          index,
+          total,
+          sentence: `s${index}`,
+          audio: Buffer.from('a'),
+          durationMs: 1,
+          done: index === total - 1
+        })
       }
     })
-    const vr = createVoiceResponse({ ...deps, synthesizeStream })
+
+  const audioSpeakers = (send: ReturnType<typeof vi.fn>) =>
+    send.mock.calls
+      .filter(([, msg]: any[]) => msg.type === 'voice.tts.audio')
+      .map(([, msg, speakers]: any[]) => [msg.chunk?.index, speakers])
+
+  it('keeps every later chunk of a reply on the connection that spoke the chunk before it', async () => {
+    const { deps, bus, sendToDeviceName } = createDeps()
+    sendToDeviceName.mockImplementation((_name: string, msg: any) => (msg.audio ? 'node' : undefined))
+    const vr = createVoiceResponse({ ...deps, synthesizeStream: streamOf(3) })
 
     emitTtsOverride(bus, { threadId: 't2', enabled: true, deviceName: 'Mac' })
     emitTurnCompleted(bus, { threadId: 't2', turn: { role: 'assistant', content: 'A longer reply to read aloud.' } })
     await flush()
 
-    const speakers = sendToDeviceName.mock.calls
-      .filter(([, msg]: any[]) => msg.type === 'voice.tts.audio')
-      .map(([, msg, speaker]: any[]) => [msg.chunk.index, speaker])
-    expect(speakers).toEqual([
-      [0, undefined],
-      [1, 'node'],
-      [2, 'node']
+    expect(audioSpeakers(sendToDeviceName)).toEqual([
+      [0, []],
+      [1, ['node']],
+      [2, ['node']]
     ])
+    vr.shutdown()
+  })
+
+  it('forgets the speaker between replies, so an old one never claims a new reply', async () => {
+    const { deps, bus, sendToDeviceName, getDeviceName } = createDeps()
+    getDeviceName.mockImplementation((id: string) => (id === 'tab-B' ? 'Mac' : undefined))
+    sendToDeviceName.mockImplementation((_name: string, msg: any) => (msg.audio ? 'tab-A' : undefined))
+    const stream = streamOf(2)
+    const vr = createVoiceResponse({ ...deps, synthesizeStream: stream })
+
+    // Reply 1 plays on tab A.
+    emitTtsOverride(bus, { threadId: 't3', enabled: true, deviceName: 'Mac' })
+    emitTurnCompleted(bus, { threadId: 't3', turn: { role: 'assistant', content: 'First reply here.' } })
+    await flush()
+    sendToDeviceName.mockClear()
+
+    // Reply 2 comes from tab B and its chunk 0 fails: chunk 1 must ask for B, not A.
+    stream.mockImplementation(streamOf(2, 1))
+    emitMessageSent(bus, { threadId: 't3', text: 'and now?', origin: { modality: 'voice', deviceId: 'tab-B' } })
+    await flush()
+    emitTurnCompleted(bus, { threadId: 't3', turn: { role: 'assistant', content: 'Second reply here.' } })
+    await flush()
+
+    const chunks = audioSpeakers(sendToDeviceName).filter(([index]) => index !== undefined)
+    expect(chunks).toEqual([[1, ['tab-B']]])
     vr.shutdown()
   })
 })
