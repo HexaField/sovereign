@@ -3,7 +3,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
-import { Router } from 'express'
+import { Router, type Request, type Response } from 'express'
 import type { SystemModule } from './system.js'
 import type { LogsChannel } from './ws.js'
 import { readPersistedLogs } from './ws.js'
@@ -11,7 +11,8 @@ import type { HealthHistory } from './health-history.js'
 import type { RoutingBackend, ActiveSessions } from '@sovereign/agent-backend'
 import type { ContextBudget, EventBus } from '@sovereign/core'
 import type { EventStream } from './event-stream.js'
-import type { DeviceMonitor } from './device-monitor.js'
+import type { DeviceMonitor, DiscoveredDevice } from './device-monitor.js'
+import { createDeviceFiles, FsError, type DeviceFiles } from './device-files.js'
 import type { WsHandler } from '@sovereign/primitives'
 
 export interface PersonalityInfo {
@@ -48,6 +49,8 @@ export interface SystemRoutesOptions {
   metrics?: import('@sovereign/agent-backend').MetricsAccumulator
   /** Device monitor — when present, `/api/system/devices/metrics` endpoint serves tailnet device telemetry. */
   deviceMonitor?: DeviceMonitor
+  /** File viewer backend (tests inject one; defaults to SSH for remote devices). */
+  deviceFiles?: DeviceFiles
 }
 
 function mockContextBudget(): ContextBudget {
@@ -470,6 +473,7 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
 
   // ── Device monitoring ─────────────────────────────────────────────────
   const deviceMonitor = 'deviceMonitor' in opts ? (opts as SystemRoutesOptions).deviceMonitor : null
+  const deviceFiles = 'deviceFiles' in opts ? (opts as SystemRoutesOptions).deviceFiles : undefined
   if (deviceMonitor) {
     router.get('/api/system/devices/metrics', async (_req, res) => {
       try {
@@ -486,6 +490,47 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
         res.json({ devices, timestamp: new Date().toISOString() })
       } catch (err: any) {
         res.status(500).json({ error: err?.message ?? 'refresh failed', devices: [] })
+      }
+    })
+
+    // ── File system viewer: list, folder sizes, download ──
+    const files = deviceFiles ?? createDeviceFiles()
+    const target = async (req: Request): Promise<DiscoveredDevice> => {
+      const device = await deviceMonitor.findDevice(String(req.params.device))
+      if (!device) throw new FsError(404, `unknown device: ${req.params.device}`)
+      if (!device.online) throw new FsError(503, `${device.label} is offline`)
+      return device
+    }
+    const fail = (res: Response, err: any) => {
+      if (res.headersSent) return void res.end()
+      res.status(err instanceof FsError ? err.status : 500).json({ error: err?.message ?? 'failed' })
+    }
+
+    router.get('/api/system/devices/:device/fs', async (req, res) => {
+      try {
+        res.json(await files.list(await target(req), req.query.path))
+      } catch (err) {
+        fail(res, err)
+      }
+    })
+
+    router.get('/api/system/devices/:device/fs/sizes', async (req, res) => {
+      try {
+        const device = await target(req)
+        res.json(files.sizes(device.label, device, req.query.path))
+      } catch (err) {
+        fail(res, err)
+      }
+    })
+
+    router.get('/api/system/devices/:device/fs/download', async (req, res) => {
+      try {
+        await files.download(await target(req), req.query.path, res, (name, isDir) => {
+          res.setHeader('Content-Type', isDir ? 'application/gzip' : 'application/octet-stream')
+          res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
+        })
+      } catch (err) {
+        fail(res, err)
       }
     })
   }
