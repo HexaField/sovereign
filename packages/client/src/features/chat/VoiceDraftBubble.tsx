@@ -50,24 +50,27 @@ export function VoiceDraftBubble(props: { draft: VoiceDraft }) {
             classList={{ 'animate-pulse': listening() }}
             style={{ background: listening() ? 'var(--c-danger, #ef4444)' : 'var(--c-text-muted)' }}
           />
-          {props.draft.editing
-            ? 'Editing · mic paused'
-            : listening()
-              ? 'Listening · tap to edit'
-              : 'Paused · tap to edit'}
+          {props.draft.readOnly
+            ? 'Listening · push-to-talk'
+            : props.draft.editing
+              ? 'Editing · mic paused'
+              : listening()
+                ? 'Listening · tap to edit'
+                : 'Paused · tap to edit'}
         </div>
 
         <Show
           when={props.draft.editing}
           fallback={
             <span
-              class="block cursor-text"
+              class="block"
+              classList={{ 'cursor-text': !props.draft.readOnly }}
               style={{
                 color: props.draft.text.trim() ? 'var(--c-text)' : 'var(--c-text-muted)',
                 'font-style': props.draft.text.trim() ? 'normal' : 'italic'
               }}
-              onClick={() => voiceDraftActions()?.edit()}
-              title="Tap to edit"
+              onClick={() => !props.draft.readOnly && voiceDraftActions()?.edit()}
+              title={props.draft.readOnly ? undefined : 'Tap to edit'}
             >
               {props.draft.text.trim() || (listening() ? 'Listening…' : 'Tap to edit')}
             </span>

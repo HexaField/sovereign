@@ -12,6 +12,8 @@ export interface VoiceDraft {
   /** 'streaming' while the mic listens, 'paused' while the user edits or pauses. */
   state: 'streaming' | 'paused'
   editing: boolean
+  /** Dictated elsewhere (a voice node's push-to-talk): shown live, not editable here. */
+  readOnly?: boolean
 }
 
 /** What the bubble may ask the input area to do. */

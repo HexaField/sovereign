@@ -220,7 +220,12 @@ class VoiceNode:
         self.push_to_talk = push_to_talk
         self.hotkey = hotkey
         self._running = False
-        self._ws = None
+        # Push-to-talk streams over the WebSocket while it stays connected and
+        # the server offers voice-stream; otherwise it uploads on release.
+        self._ws_ready = False
+        self._can_stream = True
+        # Messages for the WebSocket, sent in order by one task.
+        self._outbox: asyncio.Queue = asyncio.Queue()
         # One POST at a time: segments of one long PTT message arrive in order.
         self._send_lock = asyncio.Lock()
         self._speech = SpeechQueue(self._play_clip, self._play_cue)
@@ -365,6 +370,12 @@ class VoiceNode:
         Runs in a worker thread via asyncio.to_thread. The `loop` argument
         holds the asyncio event loop for scheduling async sends.
 
+        With the WebSocket up, audio streams as voice-stream chunks while
+        the keys stay held: the server shows the live text as a draft in the
+        presence thread and sends the message there on release. Without
+        it, the node uploads the recording on release (in segments of
+        max_capture seconds).
+
         Supports single keys and combos. For combos, all keys must stay
         held to keep recording. Releasing any combo key stops capture.
         """
@@ -406,6 +417,14 @@ class VoiceNode:
         try:
             while self._running:
                 if recording:
+                    streaming = self._ws_ready and self._can_stream
+                    if streaming:
+                        self._ws_send(loop, {
+                            "type": "voice-stream.start",
+                            "format": "pcm16",
+                            "sampleRate": SAMPLE_RATE,
+                            "deliver": "presence",
+                        })
                     # Open mic only while key held — no orange dot otherwise
                     try:
                         stream = pa.open(
@@ -420,6 +439,12 @@ class VoiceNode:
                             audio_bytes = stream.read(
                                 CHUNK_SAMPLES, exception_on_overflow=False
                             )
+                            if streaming:
+                                self._ws_send(loop, {
+                                    "type": "voice-stream.chunk",
+                                    "audio": base64.b64encode(audio_bytes).decode(),
+                                })
+                                continue
                             frames.append(audio_bytes)
                             # Long speech: send this segment and keep recording,
                             # so transcription stays inside the server timeout
@@ -434,7 +459,10 @@ class VoiceNode:
                         recording = False
 
                     # Key released — send what remains
-                    if frames:
+                    if streaming:
+                        self._ws_send(loop, {"type": "voice-stream.stop"})
+                        log.info("Push-to-talk stream ended")
+                    elif frames:
                         segment, frames = frames, []
                         self._send_frames(segment, loop)
                 else:
@@ -443,6 +471,14 @@ class VoiceNode:
             listener.stop()
             listener.join()
             pa.terminate()
+
+    def _ws_send(self, loop, msg: dict):
+        """Queue a WebSocket message from the PTT thread; one task sends them in order."""
+        loop.call_soon_threadsafe(self._outbox.put_nowait, msg)
+
+    async def _send_outbox(self, ws):
+        while True:
+            await ws.send(json.dumps(await self._outbox.get()))
 
     def _send_frames(self, frames: list, loop):
         """Encode PTT frames and queue them for transcription (from the PTT thread)."""
@@ -575,24 +611,42 @@ class VoiceNode:
                         "client": "voice-node",
                     }))
                     log.info("WebSocket connected — announced as '%s', listening for TTS events", self.device_name)
-
-                    async for raw in ws:
-                        try:
-                            msg = json.loads(raw)
-                        except json.JSONDecodeError:
-                            continue
-
-                        msg_type = msg.get("type")
-                        # voice.tts.audio — from the voice-response pipeline
-                        # (ack and summary TTS, routed by sendToDeviceName)
-                        if msg_type == "voice.tts.audio":
-                            self._play_audio(msg)
-                        # Legacy tts.play — kept for backward compat
-                        elif msg_type == "tts.play":
-                            target = msg.get("deviceId")
-                            if target and target != self.device_id:
+                    # Push-to-talk streams on this channel; drop what a dead connection left.
+                    await ws.send(json.dumps({"type": "subscribe", "channels": ["voice-stream"]}))
+                    while not self._outbox.empty():
+                        self._outbox.get_nowait()
+                    self._can_stream = True
+                    self._ws_ready = True
+                    sender = asyncio.create_task(self._send_outbox(ws))
+                    try:
+                        async for raw in ws:
+                            try:
+                                msg = json.loads(raw)
+                            except json.JSONDecodeError:
                                 continue
-                            self._play_audio(msg)
+
+                            msg_type = msg.get("type")
+                            # voice.tts.audio — from the voice-response pipeline
+                            # (ack and summary TTS, routed by sendToDeviceName)
+                            if msg_type == "voice.tts.audio":
+                                self._play_audio(msg)
+                            # Legacy tts.play — kept for backward compat
+                            elif msg_type == "tts.play":
+                                target = msg.get("deviceId")
+                                if target and target != self.device_id:
+                                    continue
+                                self._play_audio(msg)
+                            elif msg_type == "voice-stream.transcript" and msg.get("final"):
+                                log.info("Transcription: %s", msg.get("text") or "(empty)")
+                            elif msg_type == "voice-stream.error":
+                                log.warning("Streaming STT error: %s", msg.get("message"))
+                            # A server without streaming STT: upload on release instead.
+                            elif msg_type == "error" and msg.get("code") in ("UNKNOWN_CHANNEL", "UNKNOWN_TYPE"):
+                                log.warning("Server has no voice-stream (%s) — push-to-talk will upload", msg.get("message"))
+                                self._can_stream = False
+                    finally:
+                        self._ws_ready = False
+                        sender.cancel()
 
             except asyncio.CancelledError:
                 raise
