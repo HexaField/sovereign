@@ -431,6 +431,16 @@ System → Devices → a device card → **Files**: browse the whole file system
 - Replaces the old "Disk usage by directory" list (a 12 s-capped `du /` every 5 min per device, cleared between runs — it timed out on big disks and flickered away).
 - Phones (Android/iOS) are not in the device list: no SSH. Wind-tunnel s42 covers the routes.
 
+## Network map (`packages/system/src/network-map.ts`)
+
+System → **Network**: a live map of the tailnet and LAN. It shows each device with its hardware, the services listening on it, and the TCP connections between them. `GET /api/system/network` returns `{ collectedAt, devices, links }`. The scan is cached 8 s and concurrent callers share one scan. The tab polls every 10 s while visible.
+
+- **Scan:** one script per device over stdin (`bash -s`, locally for the hub or over ssh), like the device monitor. Linux runs `ss -Htlnp` / `ss -Htnp state established`, `/proc/<pid>/cgroup`, `ip addr/route/neigh`, `docker ps`, `tailscale serve status --json`, `/proc/net/dev`, `lspci`, `/proc/asound/cards`, video4linux and `lsblk`. macOS runs `lsof +c 0 -F pcn`, `ps`, `ifconfig`, `route get`, `arp -an`, `netstat -ibn` and `sysctl`. Phones come from `tailscale status` only.
+- **Naming a listener:** Docker container (by published port) → systemd `.service` unit from the cgroup (scopes, slices and `user@` do not count) → known app (VS Code, Ollama, Claude Code…) → script name for node/python (the package dir for `dist/index.js`) → executable. A socket without a pid (root-owned, not visible without sudo) bound to the tailnet IP is `Tailscale Serve` or `Tailscale`, else a well-known port name, else `port N`. Processes in a unit's cgroup count as that unit, so the SSH sessions Sovereign spawns show as `sovereign → SSH`.
+- **Links:** `tcp` comes from the client side of each established socket, matched to the listener it reaches on the peer device (loopback = same device). The server side counts only clients nobody scans, such as a phone or an internet host. `proxy` links Serve to the local port it fronts. `tailnet` is the hub → peer path (`LAN`, `direct`, `relay <region>`) with a byte rate from `RxBytes+TxBytes` deltas. `lan`/`wan` come from the hub's default gateway.
+- **LAN devices:** IPv4 neighbours on the gateway subnet that no scanned host owns. A MAC with the locally-administered bit set shows as a Wi-Fi device (private MAC). Name one with a `deviceOverrides` entry keyed by its IP: `"192.168.1.216": { "label": "Printer" }`.
+- **UI** (`NetworkTab.tsx`): the cards are HTML. Edges are SVG paths measured from `[data-node]` element rects after each poll and on resize. Without focus, only device links and cross-device service links draw (Internet links excluded), all behind the cards. Hover or tap a chip or card to draw all its links on top, including links inside a machine. Tap to pin and open the inbound/outbound panel. "Unnamed ports" shows `port N` and the Tailscale peer API.
+
 ## Hazard monitor (`packages/server/src/hazards/`)
 
 Watches one property in Victoria and messages the **presence thread** (a queued system card, the same path as CI watch) only when something needs attention. Off by default; set `hazards` in the config (`enabled`, `lat`, `lon`, `label`, `fireDistrict`).

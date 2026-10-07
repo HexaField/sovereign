@@ -85,7 +85,7 @@ import { createVoiceTranscriptionProvider } from '@sovereign/voice'
 import { createSystemModule } from '@sovereign/system'
 import { createSystemRoutes, registerEventsChannel } from '@sovereign/system'
 import { createHealthHistory } from '@sovereign/system'
-import { createDeviceMonitor } from '@sovereign/system'
+import { createDeviceMonitor, createNetworkMonitor } from '@sovereign/system'
 import { registerLogsChannel } from '@sovereign/system'
 import { createEventStream } from '@sovereign/system'
 import { wireBusLogging } from '@sovereign/system'
@@ -1537,6 +1537,12 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     cacheTtlMs: 30_000,
     sshTimeoutMs: 8_000
   })
+  // Network map — live topology for the System → Network tab. Overrides keyed
+  // by a LAN IP name LAN-only devices (`"192.168.1.216": { "label": "Printer" }`).
+  const networkMonitor = createNetworkMonitor({
+    overrides: configStore.get<Record<string, any>>('deviceOverrides') ?? {},
+    deviceMonitor
+  })
 
   let personalityWatcherActive = !!personalityCompiler
   app.use(
@@ -1573,7 +1579,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       },
       agentDir,
       metrics,
-      deviceMonitor
+      deviceMonitor,
+      networkMonitor
     })
   )
   registerEventsChannel(wsHandler, eventStream)
