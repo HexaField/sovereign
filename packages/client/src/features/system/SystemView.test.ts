@@ -24,8 +24,8 @@ vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ json: () => Promise.resolve({
 import { SYSTEM_TABS } from './SystemView.jsx'
 
 describe('SystemView SYSTEM_TABS', () => {
-  it('has 6 tabs', () => {
-    expect(SYSTEM_TABS).toHaveLength(6)
+  it('has 7 tabs', () => {
+    expect(SYSTEM_TABS).toHaveLength(7)
   })
 
   it('every tab has id, label, and component', () => {
@@ -40,6 +40,7 @@ describe('SystemView SYSTEM_TABS', () => {
     const ids = SYSTEM_TABS.map((t) => t.id)
     expect(ids).toContain('status')
     expect(ids).toContain('devices')
+    expect(ids).toContain('network')
     expect(ids).toContain('agents')
     expect(ids).toContain('activity')
     expect(ids).toContain('config')
