@@ -6,6 +6,7 @@ export interface LatLon {
 }
 
 type Position = number[]
+
 export interface Geometry {
   type: string
   coordinates?: unknown
@@ -48,19 +49,45 @@ export function containsPoint(g: Geometry | null | undefined, p: LatLon): boolea
   return false
 }
 
-/** Every position in the geometry, flattened. */
-function positions(g: Geometry): Position[] {
-  if (g.type === 'GeometryCollection') return (g.geometries ?? []).flatMap(positions)
-  const walk = (c: unknown): Position[] =>
-    Array.isArray(c) && typeof c[0] === 'number' ? [c as Position] : Array.isArray(c) ? c.flatMap(walk) : []
+/** True when the geometry has an area (a polygon), not only points or lines. */
+export function hasArea(g: Geometry | null | undefined): boolean {
+  if (!g) return false
+  if (g.type === 'GeometryCollection') return (g.geometries ?? []).some(hasArea)
+  return g.type === 'Polygon' || g.type === 'MultiPolygon'
+}
+
+/** Every point, line and ring of the geometry as a list of position paths. */
+function paths(g: Geometry): Position[][] {
+  if (g.type === 'GeometryCollection') return (g.geometries ?? []).flatMap(paths)
+  const walk = (c: unknown): Position[][] => {
+    if (!Array.isArray(c) || !c.length) return []
+    if (typeof c[0] === 'number') return [[c as Position]]
+    if (Array.isArray(c[0]) && typeof c[0][0] === 'number') return [c as Position[]]
+    return c.flatMap(walk)
+  }
   return walk(g.coordinates)
 }
 
-/** Distance from the point to the nearest position of the geometry (0 when inside). */
+/** Distance from the point to the nearest point, edge or ring of the geometry (0 when inside). */
 export function distanceKm(g: Geometry | null | undefined, p: LatLon): number {
   if (!g) return Infinity
   if (containsPoint(g, p)) return 0
+  // Local flat projection around p: accurate to well under 1% at the radii used here.
+  const kx = (Math.PI / 180) * R_KM * Math.cos(p.lat * (Math.PI / 180))
+  const ky = (Math.PI / 180) * R_KM
+  const xy = ([lon, lat]: Position) => [(lon - p.lon) * kx, (lat - p.lat) * ky]
   let best = Infinity
-  for (const [lon, lat] of positions(g)) best = Math.min(best, haversineKm(p, { lat, lon }))
+  for (const path of paths(g)) {
+    if (path.length === 1) best = Math.min(best, haversineKm(p, { lat: path[0][1], lon: path[0][0] }))
+    for (let i = 1; i < path.length; i++) {
+      const [ax, ay] = xy(path[i - 1])
+      const [bx, by] = xy(path[i])
+      const dx = bx - ax
+      const dy = by - ay
+      const len2 = dx * dx + dy * dy
+      const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0
+      best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy))
+    }
+  }
   return best
 }

@@ -14,15 +14,23 @@ export const VICEMERGENCY_URL = 'https://emergency.vic.gov.au/public/events-geoj
 export const CFA_FORECAST_URL = 'https://www.cfa.vic.gov.au/cfa/rssfeed/tfbfdrforecast_rss.xml'
 
 export interface HazardEvent {
-  id: string
+  id: string // stable across updates for incidents; warnings get a new id on every reissue
   kind: 'warning' | 'incident'
-  category: string // category1: warning level, or incident class ("Fire")
-  type: string // category2 or CAP event: "Bushfire", "Grass", "Riverine Flood"...
-  status: string // "Going", "Responding", "Under Control", "Safe", "Minor"...
-  action?: string // warning advice: "Stay Informed", "Leave Now"...
+  category: string // category1: warning level, or incident class ("Fire", "Other"...)
+  type: string // CAP event or category2: "Bushfire", "Grass Fire", "Building Fire", "Riverine Flood"...
+  status: string // "Not Yet Under Control", "Responding", "Contained", "Under Control", "Safe"...
+  action?: string // warning advice: "Stay Informed", "Leave Now", "Take Shelter Now"...
+  feed: string // sourceFeed: "cop-cap", "cfa-incident", "cfa-fdr"...
   location: string
   updated: string
   geometry: Geometry | null
+}
+
+/** NSW RFS ids embed the update time ("2026-01-09T09:27:00.0000000:640445"); their sourceId does not. */
+function stableId(p: Record<string, any>): string {
+  const id = String(p.id ?? '')
+  if (p.sourceId != null && (!id || /^\d{4}-\d\d-\d\dT/.test(id))) return `${p.sourceOrg ?? ''}:${p.sourceId}`
+  return id || `${p.feedType}:${p.location}:${p.created}`
 }
 
 export interface DayOutlook {
@@ -39,12 +47,13 @@ export function parseVicEmergency(json: unknown): HazardEvent[] {
     const p = f.properties ?? {}
     if (p.feedType !== 'warning' && p.feedType !== 'incident') continue
     out.push({
-      id: String(p.id ?? p.sourceId ?? `${p.feedType}:${p.location}:${p.created}`),
+      id: stableId(p),
       kind: p.feedType,
       category: String(p.category1 ?? ''),
       type: String(p.cap?.event ?? p.category2 ?? ''),
       status: String(p.status ?? ''),
       action: p.action ? String(p.action) : undefined,
+      feed: String(p.sourceFeed ?? ''),
       location: String(p.location ?? p.name ?? ''),
       updated: String(p.updated ?? p.created ?? ''),
       geometry: f.geometry ?? null
@@ -68,13 +77,21 @@ const MONTHS: Record<string, string> = {
   december: '12'
 }
 
-const decode = (s: string) =>
-  s
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&')
+const ENTITIES: Record<string, string> = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&', nbsp: ' ' }
+
+/** One level of XML/HTML entity decoding. */
+const decodeOnce = (s: string) =>
+  s.replace(/&(?:#x([0-9a-f]{1,6})|#(\d{1,7})|([a-z]+));/gi, (m, hex?: string, dec?: string, name?: string) => {
+    if (!hex && !dec) return ENTITIES[name!.toLowerCase()] ?? m
+    const code = hex ? parseInt(hex, 16) : Number(dec)
+    return code <= 0x10ffff ? String.fromCodePoint(code) : m
+  })
+
+/** Decodes until no escaped markup is left, so a double-encoded description reads the same. */
+const decode = (s: string) => {
+  for (let i = 0; i < 3 && /&(lt|gt|amp|#\d+|#x[0-9a-f]+);/i.test(s); i++) s = decodeOnce(s)
+  return s
+}
 
 /** The district's outlook for each day in the CFA forecast. */
 export function parseCfaForecast(xml: string, district: string): DayOutlook[] {
@@ -94,6 +111,8 @@ export function parseCfaForecast(xml: string, district: string): DayOutlook[] {
     if (!ban && !rating) continue
     out.push({ date, totalFireBan: ban?.toUpperCase() === 'YES', rating: titleCase(rating ?? 'No Rating') })
   }
+  // A misspelt district would otherwise read as a forecast with nothing in it, forever.
+  if (!out.length) throw new Error(`CFA forecast: no lines for district "${district}"`)
   return out
 }
 

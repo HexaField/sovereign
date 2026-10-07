@@ -42,6 +42,13 @@ export function localDate(ms: number, timeZone: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(ms)
 }
 
+/** The calendar day after a YYYY-MM-DD date (not now + 24 h, which a 25-hour DST day breaks). */
+export function nextDate(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
 export function createHazardService(deps: HazardServiceDeps) {
   const doFetch = deps.fetch ?? fetch
   const now = deps.now ?? Date.now
@@ -76,12 +83,16 @@ export function createHazardService(deps: HazardServiceDeps) {
     return res.text()
   }
 
-  /** One round: read what is due, evaluate, send at most one message. */
+  /** One round: read what is due, evaluate, send what clears the bar. A no-op while disabled. */
   async function poll(): Promise<void> {
     const cfg = deps.config()
     const t = now()
+    if (!cfg.enabled) {
+      lastEventsOk = t // time spent switched off is not time spent blind
+      return
+    }
     const today = localDate(t, cfg.timeZone)
-    const tomorrow = localDate(t + 86_400_000, cfg.timeZone)
+    const tomorrow = nextDate(today)
 
     let events: ReturnType<typeof parseVicEmergency> | undefined
     try {
@@ -114,27 +125,25 @@ export function createHazardService(deps: HazardServiceDeps) {
       today,
       tomorrow
     })
-    const messages: string[] = []
-    if (result.alerts.length) messages.push(formatAlerts(result.alerts, cfg.label))
+    // Each send commits its own state, so a failed send retries next round without repeating the ones before it.
+    const commit = (next: Persisted) => {
+      if (JSON.stringify(next) === JSON.stringify(state)) return
+      state = next
+      save()
+    }
+    if (result.alerts.length) await deps.notify(formatAlerts(result.alerts, cfg.label))
+    commit({ ...state, notified: result.state.notified })
 
     // The monitor going blind matters only when today is dangerous.
     const todayOutlook = outlook.find((d) => d.date === today)
     const dangerous = !!todayOutlook && (todayOutlook.totalFireBan || DANGEROUS.test(todayOutlook.rating))
-    let blindNotified = state.blindNotified
-    if (t - lastEventsOk >= BLIND_AFTER_MS && dangerous && blindNotified !== today) {
-      messages.push(
+    if (t - lastEventsOk >= BLIND_AFTER_MS && dangerous && state.blindNotified !== today) {
+      await deps.notify(
         `[Hazard alert — ${cfg.label}] The VicEmergency feed has been unreadable for ${Math.round((t - lastEventsOk) / 60_000)} min ` +
           `on a ${todayOutlook!.totalFireBan ? 'Total Fire Ban' : todayOutlook!.rating} day, so new warnings near the property would go unseen. ` +
           'Tell Josh to watch the VicEmergency app directly until it recovers.'
       )
-      blindNotified = today
-    }
-
-    for (const text of messages) await deps.notify(text) // throws: state not saved, next round retries
-    const next: Persisted = { ...result.state, ...(blindNotified ? { blindNotified } : {}) }
-    if (JSON.stringify(next) !== JSON.stringify(state)) {
-      state = next
-      save()
+      commit({ ...state, blindNotified: today })
     }
   }
 
@@ -152,13 +161,15 @@ export function createHazardService(deps: HazardServiceDeps) {
   }
 
   return {
+    /** Runs the loop whatever `enabled` says, so turning it on or off in the config takes effect without a restart. */
     start() {
-      if (running || !deps.config().enabled) return
+      if (running) return
       running = true
       void poll()
         .catch((err) => console.warn(TAG, 'first poll failed:', (err as Error).message))
         .finally(schedule)
-      console.log(TAG, `watching ${deps.config().label} (${deps.config().fireDistrict} fire district)`)
+      const cfg = deps.config()
+      if (cfg.enabled) console.log(TAG, `watching ${cfg.label} (${cfg.fireDistrict} fire district)`)
     },
     stop() {
       running = false
