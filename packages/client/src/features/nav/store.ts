@@ -151,7 +151,7 @@ export function setDrawerOpen(open: boolean): void {
 }
 
 // System view active tab (shared so Header can render it in agent/system tab)
-export type SystemTabId = 'status' | 'devices' | 'agents' | 'activity' | 'config' | 'jobs'
+export type SystemTabId = 'status' | 'devices' | 'network' | 'agents' | 'activity' | 'config' | 'jobs'
 export const [activeSystemTab, setActiveSystemTab] = createSignal<SystemTabId>('status')
 
 let popstateHandler: (() => void) | null = null

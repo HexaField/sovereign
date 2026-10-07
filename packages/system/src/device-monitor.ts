@@ -108,7 +108,15 @@ export interface DiscoveredDevice {
 }
 
 // OS values that SSH collection cannot handle.
-const SKIP_OS = new Set(['android', 'iOS', 'windows'])
+export const SKIP_OS = new Set(['android', 'iOS', 'windows'])
+
+/** The override for a tailscale HostName (case-insensitive). */
+export function findOverride(overrides: Record<string, DeviceOverride>, hostname: string): DeviceOverride | undefined {
+  const lower = hostname.toLowerCase()
+  return (
+    overrides[hostname] ?? overrides[lower] ?? Object.entries(overrides).find(([k]) => k.toLowerCase() === lower)?.[1]
+  )
+}
 
 // ── Collection scripts ─────────────────────────────────────────────────
 
@@ -704,11 +712,7 @@ async function discoverFromTailscale(overrides: Record<string, DeviceOverride>):
     const hostname = node.HostName
     const hostLower = hostname.toLowerCase()
 
-    // Match override by case-insensitive hostname
-    const override =
-      overrides[hostname] ??
-      overrides[hostLower] ??
-      Object.entries(overrides).find(([k]) => k.toLowerCase() === hostLower)?.[1]
+    const override = findOverride(overrides, hostname)
 
     // Skip excluded devices
     if (override?.exclude) return
