@@ -13,6 +13,7 @@ import type { ContextBudget, EventBus } from '@sovereign/core'
 import type { EventStream } from './event-stream.js'
 import type { DeviceMonitor, DiscoveredDevice } from './device-monitor.js'
 import { attachmentHeader, createDeviceFiles, FsError, type DeviceFiles } from './device-files.js'
+import type { NetworkMonitor } from './network-map.js'
 import type { WsHandler } from '@sovereign/primitives'
 
 export interface PersonalityInfo {
@@ -51,6 +52,8 @@ export interface SystemRoutesOptions {
   deviceMonitor?: DeviceMonitor
   /** File viewer backend (tests inject one; defaults to SSH for remote devices). */
   deviceFiles?: DeviceFiles
+  /** Network map — when present, `/api/system/network` serves the live topology. */
+  networkMonitor?: NetworkMonitor
 }
 
 function mockContextBudget(): ContextBudget {
@@ -467,6 +470,18 @@ export function createSystemRoutes(opts: SystemRoutesOptions | SystemModule): Ro
             contextStrategies: metrics.recentContextStrategies().slice(-20)
           }
         })
+      }
+    })
+  }
+
+  // ── Network map ───────────────────────────────────────────────────────
+  const networkMonitor = 'networkMonitor' in opts ? (opts as SystemRoutesOptions).networkMonitor : null
+  if (networkMonitor) {
+    router.get('/api/system/network', async (_req, res) => {
+      try {
+        res.json(await networkMonitor.getMap())
+      } catch (err: any) {
+        res.status(500).json({ error: err?.message ?? 'scan failed' })
       }
     })
   }
