@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }))
 
-import { deviceOf, edgePath, isUnnamed, visibleLinks, type NetLink } from './NetworkTab.jsx'
+import { deviceOf, edgePath, focusHandlers, isUnnamed, visibleLinks, type NetLink } from './NetworkTab.jsx'
 
 const links: NetLink[] = [
   { id: '1', from: 'gw:1', to: 'internet', kind: 'wan' },
@@ -43,6 +43,36 @@ describe('visibleLinks', () => {
 
   it('shows every link touching a focused device', () => {
     expect(ids(visibleLinks(links, 'ts:worker'))).toEqual(['1', '2', '4'])
+  })
+})
+
+describe('focusHandlers', () => {
+  const setup = () => {
+    const calls: Array<[string | null, boolean]> = []
+    const h = focusHandlers(
+      () => 'ts:hub/sovereign',
+      () => (id, sticky) => calls.push([id, sticky]),
+      () => 'ts:hub'
+    )
+    return { h, calls }
+  }
+  const pointer = (pointerType: string) => ({ pointerType }) as PointerEvent
+
+  it('hovers with a mouse and hands the hover back to the card on leave', () => {
+    const { h, calls } = setup()
+    h.onPointerEnter(pointer('mouse'))
+    h.onPointerLeave(pointer('mouse'))
+    expect(calls).toEqual([
+      ['ts:hub/sovereign', false],
+      ['ts:hub', false]
+    ])
+  })
+
+  it('ignores touch hover, so a tap only pins', () => {
+    const { h, calls } = setup()
+    h.onPointerEnter(pointer('touch'))
+    h.onClick({ stopPropagation: () => {} } as MouseEvent)
+    expect(calls).toEqual([['ts:hub/sovereign', true]])
   })
 })
 
