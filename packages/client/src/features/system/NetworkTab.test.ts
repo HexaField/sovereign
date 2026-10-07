@@ -2,7 +2,23 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }))
 
-import { deviceOf, edgePath, focusHandlers, isUnnamed, visibleLinks, type NetLink } from './NetworkTab.jsx'
+import {
+  deviceOf,
+  edgePath,
+  focusHandlers,
+  groupServices,
+  isUnnamed,
+  visibleLinks,
+  type NetLink,
+  type NetService
+} from './NetworkTab.jsx'
+
+const service = (name: string, role: NetService['role'], ports: number[] = [1]): NetService => ({
+  id: `d/${name}`,
+  name,
+  role,
+  ports
+})
 
 const links: NetLink[] = [
   { id: '1', from: 'gw:1', to: 'internet', kind: 'wan' },
@@ -25,10 +41,10 @@ describe('deviceOf', () => {
 
 describe('isUnnamed', () => {
   it('flags bare ports and the Tailscale peer API only', () => {
-    expect(isUnnamed({ id: 'x', name: 'port 43433', ports: [43433] })).toBe(true)
-    expect(isUnnamed({ id: 'x', name: 'Tailscale', ports: [1] })).toBe(true)
-    expect(isUnnamed({ id: 'x', name: 'Tailscale Serve', ports: [5801] })).toBe(false)
-    expect(isUnnamed({ id: 'x', name: 'sovereign', ports: [5801] })).toBe(false)
+    expect(isUnnamed(service('port 43433', 'system', [43433]))).toBe(true)
+    expect(isUnnamed(service('Tailscale', 'system', [1]))).toBe(true)
+    expect(isUnnamed(service('Tailscale Serve', 'system', [5801]))).toBe(false)
+    expect(isUnnamed(service('sovereign', 'system', [5801]))).toBe(false)
   })
 })
 
@@ -86,5 +102,29 @@ describe('edgePath', () => {
 
   it('loops out to the right between boxes at the same height', () => {
     expect(edgePath(box(0, 0), box(0, 10))).toBe('M 100 10 C 126.5 10, 126.5 20, 100 20')
+  })
+})
+
+describe('groupServices', () => {
+  it('sorts services into fixed sections, by name, with outbound-only processes last', () => {
+    const groups = groupServices([
+      service('whisper', 'service'),
+      service('Brave', 'app', []),
+      service('SSH', 'system'),
+      service('ad4m', 'container'),
+      service('litellm', 'service'),
+      service('VS Code', 'app')
+    ])
+    expect(groups.map((g) => [g.label, g.services.map((s) => s.name)])).toEqual([
+      ['Services', ['litellm', 'whisper']],
+      ['Docker', ['ad4m']],
+      ['Apps', ['VS Code']],
+      ['System', ['SSH']],
+      ['Connects out', ['Brave']]
+    ])
+  })
+
+  it('leaves out empty sections', () => {
+    expect(groupServices([service('SSH', 'system')]).map((g) => g.label)).toEqual(['System'])
   })
 })
