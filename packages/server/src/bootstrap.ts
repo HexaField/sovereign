@@ -102,6 +102,7 @@ import {
 import { createBrowserService, BrowserUnavailableError } from '@sovereign/browser'
 import { createExportRoutes } from './routes/export-pdf.js'
 import { createCiWatchService } from './ci-watch/service.js'
+import { createHazardService } from './hazards/service.js'
 import { createAd4mService } from '@sovereign/ad4m'
 import {
   createPresenceModule,
@@ -914,6 +915,23 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   ciMcpDeps.unwatch = (id) => ciWatch.unwatch(id)
   ciWatch.start()
 
+  // Hazard monitor: VicEmergency + CFA for the configured property. Alerts go to
+  // the presence thread the same way CI results do, only past the bar in rules.ts.
+  const hazards = createHazardService({
+    dataDir,
+    config: () => configStore.get<SovereignConfig['hazards']>('hazards') ?? cfg.hazards,
+    notify: async (text) => {
+      const gatewayId = presenceModule.gatewayThreadId()
+      if (!gatewayId) throw new Error('no presence thread to alert')
+      await chatModule.handleSend(gatewayId, text, undefined, { synthRole: 'system' })
+    }
+  })
+  hazards.start()
+  // What the monitor currently holds (alerted items, the district outlook, feed health).
+  app.get('/api/hazards', (_req, res) => {
+    res.json(hazards.status())
+  })
+
   // Bootstrap: start polls for any existing PR-tasks in active states.
   void prPollService.bootstrap().catch((err) => {
     console.warn('[pr-poll] bootstrap failed:', (err as Error).message)
@@ -1624,6 +1642,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     shutdown() {
       prPollService.dispose()
       ciWatch.dispose()
+      hazards.stop()
       ad4mService?.close()
       fileWatcher.stop()
       codeIndex.stop()

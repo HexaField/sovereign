@@ -154,5 +154,17 @@ export const defaults: SovereignConfig = {
       maxSessionSizeMB: 50,
       schedule: '0 4 * * *'
     }
+  },
+  hazards: {
+    enabled: false,
+    label: 'home',
+    lat: 0,
+    lon: 0,
+    fireDistrict: 'Central',
+    fireRadiusKm: 5,
+    anyFireRadiusKm: 1,
+    pollMs: 90_000,
+    forecastPollMs: 1_800_000,
+    timeZone: 'Australia/Melbourne'
   }
 }

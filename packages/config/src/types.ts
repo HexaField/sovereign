@@ -251,6 +251,30 @@ export interface SovereignConfig {
       schedule: string
     }
   }
+  /**
+   * Hazard monitor (Victoria): VicEmergency warnings/incidents and CFA fire
+   * bans and danger ratings for one property. Messages the presence thread
+   * only when something needs attention (server/src/hazards/rules.ts).
+   */
+  hazards: {
+    enabled: boolean
+    /** Name used in alerts, e.g. "the farm". */
+    label: string
+    lat: number
+    lon: number
+    /** CFA fire district as the CFA feed names it, e.g. "Central". */
+    fireDistrict: string
+    /** Uncontrolled vegetation fires within this distance alert. */
+    fireRadiusKm: number
+    /** Any uncontrolled fire within this distance alerts. */
+    anyFireRadiusKm: number
+    /** VicEmergency poll interval. */
+    pollMs: number
+    /** CFA forecast poll interval. */
+    forecastPollMs: number
+    /** Time zone for "today" and "tomorrow". */
+    timeZone: string
+  }
 }
 
 export interface ConfigChange {

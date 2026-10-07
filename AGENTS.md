@@ -431,6 +431,21 @@ System → Devices → a device card → **Files**: browse the whole file system
 - Replaces the old "Disk usage by directory" list (a 12 s-capped `du /` every 5 min per device, cleared between runs — it timed out on big disks and flickered away).
 - Phones (Android/iOS) are not in the device list: no SSH. Wind-tunnel s42 covers the routes.
 
+## Hazard monitor (`packages/server/src/hazards/`)
+
+Watches one property in Victoria and messages the **presence thread** (a queued system card, the same path as CI watch) only when something needs attention. Off by default; set `hazards` in the config (`enabled`, `lat`, `lon`, `label`, `fireDistrict`).
+
+| Feed | Poll | Used for |
+| --- | --- | --- |
+| VicEmergency `events-geojson.json` | `pollMs` (90 s) | Warnings (level in `category1`, area as polygons) and incidents (points) |
+| CFA `tfbfdrforecast_rss.xml` | `forecastPollMs` (30 min) | Total Fire Ban + BOM Fire Danger Rating per fire district, 5 days |
+
+**The bar (`rules.ts`):** Watch and Act / Emergency Warning whose **polygon contains** the property (a warning's incident point beside the property does not count); an uncontrolled vegetation fire within `fireRadiusKm` (5) or any uncontrolled fire within `anyFireRadiusKm` (1); a fire ban or an Extreme/Catastrophic rating for today or tomorrow. Then one message when an alerted item escalates and one when it eases or ends; ratings rolling off the forecast are silent. Advice-level warnings, distant fires and High ratings never message. If VicEmergency stays unreadable 30 min on a fire-ban/High+ day, one "feed down" message.
+
+- State (alerted keys, last "feed down" date) persists in `<dataDir>/hazards/state.json`, so restarts never repeat an alert. A failed send leaves the state unsaved and the next poll retries.
+- `GET /api/hazards` returns the current state, outlook and feed timestamps.
+- Tests use real captures in `hazards/fixtures/` (public data) plus synthetic warnings/fires; there is no wind-tunnel scenario (the feeds are external).
+
 ## CI watch (`packages/server/src/ci-watch/`)
 
 MCP tools `ci_watch` / `ci_watch_list` / `ci_unwatch` let a thread watch the GitHub checks of a PR, branch or commit. The server polls; the thread gets one message (cron envelope `[Cron: CI <target> @ <time>]`) through the chat queue, so it never interrupts a turn.

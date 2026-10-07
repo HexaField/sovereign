@@ -281,6 +281,22 @@ export const schema = {
       },
       additionalProperties: false
     },
+    hazards: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' },
+        label: { type: 'string' },
+        lat: { type: 'number', minimum: -90, maximum: 90 },
+        lon: { type: 'number', minimum: -180, maximum: 180 },
+        fireDistrict: { type: 'string' },
+        fireRadiusKm: { type: 'number', minimum: 0 },
+        anyFireRadiusKm: { type: 'number', minimum: 0 },
+        pollMs: { type: 'number', minimum: 30000 },
+        forecastPollMs: { type: 'number', minimum: 60000 },
+        timeZone: { type: 'string' }
+      },
+      additionalProperties: false
+    },
     deviceOverrides: {
       type: 'object',
       additionalProperties: {
