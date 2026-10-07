@@ -35,6 +35,7 @@ LISTEN 0      4096     100.64.0.1:43433   0.0.0.0:*
 0      0      100.64.0.1:5801   100.64.0.9:50137
 0      0      100.64.0.1:41012  100.64.0.2:22  users:(("ssh",pid=500,fd=3))
 0      0      127.0.0.1:41014   127.0.0.1:5801
+0      0      100.64.0.1:41016  100.64.0.9:22  users:(("ssh",pid=500,fd=4))
 @@PROCS@@
 100\tlitellm.service\t/usr/bin/python3 /home/u/.local/bin/litellm --config c.yaml
 200\tsovereign.service\t/usr/bin/node /srv/sovereign/packages/server/dist/index.js
@@ -93,6 +94,7 @@ LISTEN 0      4096        127.0.0.1:11434 0.0.0.0:* users:(("ollama",pid=10,fd=3
 @@ADDR@@
 enp2s0 192.168.1.199/24
 tailscale0 100.64.0.2/32
+docker0 172.17.0.1/16
 @@ROUTE@@
 default via 192.168.1.1 dev enp2s0
 @@NETDEV@@
@@ -119,9 +121,20 @@ n*:11434
 p800
 cBrave Browser Helper
 f20
-n192.168.1.217:50137->100.64.0.1:5801
+n100.64.0.9:50137->100.64.0.1:5801
 f21
 n192.168.1.217:50140->142.250.70.78:443
+p900
+csshd-session
+f5
+n100.64.0.9:22->100.64.0.1:41016
+f6
+n100.64.0.9:22->100.64.0.1:41016
+@@LISTEN_ALL@@
+tcp4 127.0.0.1.3000
+tcp4 *.22
+tcp6 *.22
+tcp6 fd7a:115c:a1e0::.5801
 @@PROCS@@
 684\t\t/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Code Helper (Plugin)
 800\t\t/Applications/Brave Browser.app/Contents/Frameworks/Brave Browser Helper
@@ -134,6 +147,9 @@ default via 192.168.1.1 dev en0
 @@ARP@@
 ? (192.168.1.1) at 74:24:9f:d6:23:ab on en0 ifscope [ethernet]
 ? (192.168.1.50) at (incomplete) on en0 ifscope [ethernet]
+? (192.168.1.60) at 9c:bf:d:1:ec:d8 on en0 ifscope [ethernet]
+? (192.168.1.255) at ff:ff:ff:ff:ff:ff on en0 ifscope [ethernet]
+? (224.0.0.251) at 1:0:5e:0:0:fb on en0 ifscope permanent [ethernet]
 @@NETSTAT@@
 Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
 lo0        16384 <Link#1>                      60 0 3478 60 0 3478 0
@@ -251,8 +267,9 @@ describe('parseLsof', () => {
 describe('parseScan', () => {
   it('reads every section of a Linux scan', () => {
     const scan = parseScan(HUB_RAW, false)
-    expect(scan.listen).toHaveLength(8)
-    expect(scan.estab).toHaveLength(10)
+    // 0.0.0.0:3101 and [::]:3101 are one wildcard listener.
+    expect(scan.listen).toHaveLength(7)
+    expect(scan.estab).toHaveLength(11)
     expect(scan.procs.get(200)).toEqual({
       unit: 'sovereign.service',
       args: '/usr/bin/node /srv/sovereign/packages/server/dist/index.js'
@@ -281,9 +298,19 @@ describe('parseScan', () => {
 
   it('reads a macOS scan', () => {
     const scan = parseScan(MAC_RAW, true)
-    expect(scan.listen.map((s) => s.port)).toEqual([3000, 11434])
-    expect(scan.estab).toHaveLength(2)
-    expect(scan.neigh).toEqual([{ ip: '192.168.1.1', mac: '74:24:9f:d6:23:ab', iface: 'en0' }])
+    // netstat adds the root-owned sshd listener; truncated IPv6 and duplicates drop out.
+    expect(scan.listen).toEqual([
+      { ip: '127.0.0.1', port: 3000, pid: 684, comm: 'Code Helper (Plugin)' },
+      { ip: '0.0.0.0', port: 11434, pid: 700, comm: 'Ollama' },
+      { ip: '0.0.0.0', port: 22 }
+    ])
+    // lsof lists the sshd socket once per fd.
+    expect(scan.estab).toHaveLength(3)
+    // Short MAC octets are padded; broadcast and multicast entries are not devices.
+    expect(scan.neigh).toEqual([
+      { ip: '192.168.1.1', mac: '74:24:9f:d6:23:ab', iface: 'en0' },
+      { ip: '192.168.1.60', mac: '9c:bf:0d:01:ec:d8', iface: 'en0' }
+    ])
     expect(scan.netdev).toEqual({ rx: 123456, tx: 654321 })
     expect(scan.hardware.cpu).toBe('Apple M4 Pro')
     expect(scan.hardware.memoryBytes).toBe(51539607552)
@@ -302,6 +329,12 @@ describe('targetsFromTailscale', () => {
     expect(byId['ts:laptop'].sshHost).toBe('laptop.ts.net')
     expect(byId['ts:phone'].scannable).toBe(false)
     expect(byId['ts:worker'].tailnet).toEqual({ curAddr: '[2406::1]:41641', relay: 'syd', active: true, bytes: 2000 })
+    expect(targets.map((t) => t.macos)).toEqual([false, false, true, false])
+  })
+
+  it('takes the macOS hint from the override keyed by hostname, not by label', () => {
+    const [, worker] = targetsFromTailscale(TAILSCALE, { worker: { label: 'Field Server', osHint: 'macos' } })
+    expect(worker).toMatchObject({ label: 'Field Server', macos: true })
   })
 })
 
@@ -365,6 +398,35 @@ describe('buildNetworkMap', () => {
     expect(link(map, 'ts:hub', 'ts:laptop')).toMatchObject({ path: 'LAN' })
     expect(link(map, 'ts:hub', 'ts:phone')).toMatchObject({ path: 'relay syd', active: false })
     expect(map.devices.find((d) => d.id === 'ts:phone')).toMatchObject({ kind: 'phone', services: [] })
+  })
+
+  it('counts a connection once when the server side has no pid', () => {
+    // The laptop's sshd listener comes from netstat; its session socket is skipped as server side.
+    expect(link(map, 'ts:hub/sovereign', 'ts:laptop/SSH')).toMatchObject({ connections: 1 })
+    expect(map.links.filter((l) => l.from.startsWith('ts:laptop/SSH'))).toEqual([])
+  })
+
+  it('reads an address two devices share (docker0) as this device', () => {
+    const targets = scanned()
+    const hub = targets.find((t) => t.target.id === 'ts:hub')!
+    hub.scan!.estab.push({ local: { ip: '172.17.0.1', port: 41030, pid: 100 }, peer: { ip: '172.17.0.1', port: 9090 } })
+    const m = buildNetworkMap({ targets })
+    expect(link(m, 'ts:hub/litellm', 'ts:hub/llama-server')).toMatchObject({ connections: 2 })
+    expect(m.links.some((l) => l.from === 'ts:hub/litellm' && l.to.startsWith('ts:worker'))).toBe(false)
+  })
+
+  it('counts a connection between two unlistened ports once, from the higher port', () => {
+    const targets = scanned()
+    const sock = (ip: string, port: number) => ({ ip, port })
+    targets
+      .find((t) => t.target.id === 'ts:hub')!
+      .scan!.estab.push({ local: { ...sock('100.64.0.1', 7000), pid: 300 }, peer: sock('100.64.0.2', 45000) })
+    targets
+      .find((t) => t.target.id === 'ts:worker')!
+      .scan!.estab.push({ local: { ...sock('100.64.0.2', 45000), pid: 10 }, peer: sock('100.64.0.1', 7000) })
+    const m = buildNetworkMap({ targets })
+    expect(link(m, 'ts:worker/ollama', 'ts:hub')).toMatchObject({ connections: 1 })
+    expect(link(m, 'ts:hub/llama-server', 'ts:worker')).toBeUndefined()
   })
 
   it('records an inbound connection from a device nobody scans', () => {

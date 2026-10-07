@@ -64,6 +64,8 @@ interface Rect {
   h: number
 }
 
+type OnFocus = (id: string | null, sticky: boolean) => void
+
 const POLL_MS = 10_000
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -79,6 +81,13 @@ export function isUnnamed(s: NetService): boolean {
   return /^port \d+$/.test(s.name) || s.name === 'Tailscale'
 }
 
+/** Links between whole devices: the LAN, the uplink and tailnet paths. */
+const isDeviceLink = (l: NetLink) => l.kind === 'lan' || l.kind === 'wan' || l.kind === 'tailnet'
+
+/** A link ends at the node: the service itself, or anything on the device. */
+const touches = (l: NetLink, id: string) =>
+  id.includes('/') ? l.from === id || l.to === id : deviceOf(l.from) === id || deviceOf(l.to) === id
+
 /**
  * The links to draw. Without a focus: device-level links and service links
  * across devices, except the Internet ones (most processes have some). With a
@@ -86,11 +95,9 @@ export function isUnnamed(s: NetService): boolean {
  */
 export function visibleLinks(links: NetLink[], focus: string | null): NetLink[] {
   return links.filter((l) => {
-    if (l.kind === 'lan' || l.kind === 'wan' || l.kind === 'tailnet') return true
+    if (isDeviceLink(l)) return true
     if (!focus) return deviceOf(l.from) !== deviceOf(l.to) && l.from !== 'internet' && l.to !== 'internet'
-    return focus.includes('/')
-      ? l.from === focus || l.to === focus
-      : deviceOf(l.from) === focus || deviceOf(l.to) === focus
+    return touches(l, focus)
   })
 }
 
@@ -125,19 +132,10 @@ function fmtBytes(bytes: number): string {
   return `${Math.round(bytes / 1e6)} MB`
 }
 
-function fmtGiB(bytes: number): string {
-  return `${Math.round(bytes / 1024 ** 3)} GB`
-}
-
 function fmtRate(bps: number): string {
   if (bps >= 1e6) return `${(bps / 1e6).toFixed(1)} MB/s`
   if (bps >= 1e3) return `${Math.round(bps / 1e3)} KB/s`
   return `${Math.round(bps)} B/s`
-}
-
-function fmtPorts(ports: number[]): string {
-  if (ports.length <= 3) return ports.map((p) => `:${p}`).join(' ')
-  return `${ports.length} ports`
 }
 
 const EXPOSURE: Record<Exposure, { label: string; color: string; title: string }> = {
@@ -152,6 +150,21 @@ const LINK_COLOR: Record<NetLink['kind'], string> = {
   tailnet: '#3b82f6',
   lan: 'var(--c-text-muted)',
   wan: 'var(--c-text-muted)'
+}
+
+/**
+ * Hover (mouse only: a touch screen never sends the leave, so focus would
+ * stick) and tap to pin. Leaving a chip hands the hover back to its card.
+ */
+export function focusHandlers(id: () => string, onFocus: () => OnFocus, leaveTo: () => string | null = () => null) {
+  return {
+    onPointerEnter: (e: PointerEvent) => e.pointerType === 'mouse' && onFocus()(id(), false),
+    onPointerLeave: (e: PointerEvent) => e.pointerType === 'mouse' && onFocus()(leaveTo(), false),
+    onClick: (e: MouseEvent) => {
+      e.stopPropagation()
+      onFocus()(id(), true)
+    }
+  }
 }
 
 // ── Small parts ────────────────────────────────────────────────────────
@@ -178,50 +191,45 @@ function Meter(props: { pct?: number }) {
   )
 }
 
-function Dot(props: { online: boolean }) {
-  return (
-    <span
-      class="inline-block h-2 w-2 shrink-0 rounded-full"
-      style={{ background: props.online ? '#22c55e' : '#6b7280', opacity: props.online ? 1 : 0.5 }}
-    />
-  )
-}
-
 interface CardProps {
   dev: NetDevice
   services: NetService[]
   focus: string | null
   related: Set<string>
-  onFocus: (id: string | null, sticky: boolean) => void
+  onFocus: OnFocus
   tailnetPath?: string
 }
 
-function ServiceChip(props: { svc: NetService } & Omit<CardProps, 'dev' | 'services' | 'tailnetPath'>) {
+function ServiceChip(props: { svc: NetService } & Pick<CardProps, 'focus' | 'related' | 'onFocus'>) {
   const exp = () => (props.svc.exposure ? EXPOSURE[props.svc.exposure] : undefined)
-  const dim = () => props.focus !== null && props.focus !== props.svc.id && !props.related.has(props.svc.id)
+  const focused = () => props.focus === props.svc.id
+  const dim = () => props.focus !== null && !focused() && !props.related.has(props.svc.id)
   return (
     <button
       data-node={props.svc.id}
       class="flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[11px] transition-opacity"
       style={{
-        background: props.focus === props.svc.id ? 'var(--c-accent)' : 'var(--c-bg)',
-        color: props.focus === props.svc.id ? '#fff' : 'var(--c-text)',
+        background: focused() ? 'var(--c-accent)' : 'var(--c-bg)',
+        color: focused() ? '#fff' : 'var(--c-text)',
         'border-color': props.related.has(props.svc.id) ? '#22c55e' : 'var(--c-border)',
         opacity: dim() ? 0.35 : 1
       }}
       title={[props.svc.unit, exp()?.title, props.svc.ports.length > 3 ? props.svc.ports.join(', ') : '']
         .filter(Boolean)
         .join(' · ')}
-      onMouseEnter={() => props.onFocus(props.svc.id, false)}
-      onMouseLeave={() => props.onFocus(null, false)}
-      onClick={(e) => {
-        e.stopPropagation()
-        props.onFocus(props.svc.id, true)
-      }}
+      {...focusHandlers(
+        () => props.svc.id,
+        () => props.onFocus,
+        () => deviceOf(props.svc.id)
+      )}
     >
       <span class="font-medium">{props.svc.name}</span>
       <Show when={props.svc.ports.length}>
-        <span class="font-mono opacity-70">{fmtPorts(props.svc.ports)}</span>
+        <span class="font-mono opacity-70">
+          {props.svc.ports.length <= 3
+            ? props.svc.ports.map((p) => `:${p}`).join(' ')
+            : `${props.svc.ports.length} ports`}
+        </span>
       </Show>
       <Show when={exp()}>
         <span
@@ -241,25 +249,27 @@ function ServiceChip(props: { svc: NetService } & Omit<CardProps, 'dev' | 'servi
 function HostCard(props: CardProps & { wide?: boolean }) {
   const d = () => props.dev
   const hw = () => d().hardware
+  const muted = { color: 'var(--c-text-muted)' }
   return (
     <div
       data-node={d().id}
       class="rounded-lg border p-3"
-      classList={{ 'w-full': !!props.wide, 'min-w-[260px] max-w-[440px] flex-1': !props.wide }}
+      classList={{ 'w-full': !!props.wide, 'min-w-[min(260px,100%)] max-w-[440px] flex-1': !props.wide }}
       style={{
         background: 'var(--c-bg-raised)',
         'border-color': props.focus === d().id ? 'var(--c-accent)' : d().hub ? '#22c55e' : 'var(--c-border)',
         opacity: d().online ? 1 : 0.55
       }}
-      onMouseEnter={() => props.onFocus(d().id, false)}
-      onMouseLeave={() => props.onFocus(null, false)}
-      onClick={(e) => {
-        e.stopPropagation()
-        props.onFocus(d().id, true)
-      }}
+      {...focusHandlers(
+        () => d().id,
+        () => props.onFocus
+      )}
     >
       <div class="flex flex-wrap items-center gap-2">
-        <Dot online={d().online} />
+        <span
+          class="inline-block h-2 w-2 shrink-0 rounded-full"
+          style={{ background: d().online ? '#22c55e' : '#6b7280', opacity: d().online ? 1 : 0.5 }}
+        />
         <span class="text-sm font-semibold">{d().label}</span>
         <Show when={d().hub}>
           <span
@@ -269,17 +279,17 @@ function HostCard(props: CardProps & { wide?: boolean }) {
             Sovereign
           </span>
         </Show>
-        <span class="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+        <span class="text-[11px]" style={muted}>
           {d().os}
         </span>
         <Show when={d().traffic}>
-          <span class="ml-auto font-mono text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+          <span class="ml-auto font-mono text-[11px]" style={muted}>
             ↓ {fmtRate(d().traffic!.rxBps)} ↑ {fmtRate(d().traffic!.txBps)}
           </span>
         </Show>
       </div>
 
-      <div class="mt-1 flex flex-wrap gap-x-3 font-mono text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+      <div class="mt-1 flex flex-wrap gap-x-3 font-mono text-[10px]" style={muted}>
         <For each={d().lanIPs}>{(ip) => <span>LAN {ip}</span>}</For>
         <Show when={d().tailscaleIP}>
           <span>tailnet {d().tailscaleIP}</span>
@@ -298,7 +308,7 @@ function HostCard(props: CardProps & { wide?: boolean }) {
       <Show when={hw()}>
         <div class="mt-2 grid gap-0.5 text-[11px]" style={{ 'grid-template-columns': 'auto 1fr' }}>
           <Show when={hw()!.cpu}>
-            <span class="pr-2" style={{ color: 'var(--c-text-muted)' }}>
+            <span class="pr-2" style={muted}>
               CPU
             </span>
             <span>
@@ -308,18 +318,18 @@ function HostCard(props: CardProps & { wide?: boolean }) {
             </span>
           </Show>
           <Show when={hw()!.memoryBytes}>
-            <span class="pr-2" style={{ color: 'var(--c-text-muted)' }}>
+            <span class="pr-2" style={muted}>
               Memory
             </span>
             <span>
-              {fmtGiB(hw()!.memoryBytes!)}
+              {Math.round(hw()!.memoryBytes! / 1024 ** 3)} GB
               <Meter pct={d().usage?.memoryPercent} />
             </span>
           </Show>
           <For each={hw()!.gpus}>
             {(gpu, i) => (
               <>
-                <span class="pr-2" style={{ color: 'var(--c-text-muted)' }}>
+                <span class="pr-2" style={muted}>
                   {i() === 0 ? 'GPU' : ''}
                 </span>
                 <span>
@@ -332,7 +342,7 @@ function HostCard(props: CardProps & { wide?: boolean }) {
             )}
           </For>
           <Show when={hw()!.disks.length}>
-            <span class="pr-2" style={{ color: 'var(--c-text-muted)' }}>
+            <span class="pr-2" style={muted}>
               Storage
             </span>
             <span>
@@ -342,7 +352,7 @@ function HostCard(props: CardProps & { wide?: boolean }) {
             </span>
           </Show>
           <Show when={hw()!.peripherals.length}>
-            <span class="pr-2" style={{ color: 'var(--c-text-muted)' }}>
+            <span class="pr-2" style={muted}>
               Devices
             </span>
             <span>{hw()!.peripherals.join(' · ')}</span>
@@ -361,7 +371,7 @@ function HostCard(props: CardProps & { wide?: boolean }) {
   )
 }
 
-function SmallNode(props: { dev: NetDevice; focus: string | null; onFocus: CardProps['onFocus']; sub?: string }) {
+function SmallNode(props: { dev: NetDevice; focus: string | null; onFocus: OnFocus; sub?: string }) {
   const icon = () => ({ internet: '🌐', gateway: '📡', phone: '📱', lan: '▣', host: '🖥' })[props.dev.kind]
   return (
     <div
@@ -372,12 +382,10 @@ function SmallNode(props: { dev: NetDevice; focus: string | null; onFocus: CardP
         'border-color': props.focus === props.dev.id ? 'var(--c-accent)' : 'var(--c-border)',
         opacity: props.dev.online ? 1 : 0.55
       }}
-      onMouseEnter={() => props.onFocus(props.dev.id, false)}
-      onMouseLeave={() => props.onFocus(null, false)}
-      onClick={(e) => {
-        e.stopPropagation()
-        props.onFocus(props.dev.id, true)
-      }}
+      {...focusHandlers(
+        () => props.dev.id,
+        () => props.onFocus
+      )}
       title={props.dev.mac ? `MAC ${props.dev.mac}` : undefined}
     >
       <span>{icon()}</span>
@@ -406,6 +414,7 @@ const NetworkTab: Component = () => {
   const [rects, setRects] = createSignal<Record<string, Rect>>({})
   const [now, setNow] = createSignal(Date.now())
   let canvas: HTMLDivElement | undefined
+  let frame = 0
 
   const focus = () => hovered() ?? pinned()
 
@@ -425,15 +434,19 @@ const NetworkTab: Component = () => {
     }
   }
 
+  /** Edge anchors: every [data-node] box, relative to the canvas. Runs after layout. */
   function measure() {
-    if (!canvas) return
-    const base = canvas.getBoundingClientRect()
-    const out: Record<string, Rect> = {}
-    canvas.querySelectorAll<HTMLElement>('[data-node]').forEach((el) => {
-      const r = el.getBoundingClientRect()
-      out[el.dataset.node!] = { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height }
+    cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(() => {
+      if (!canvas) return
+      const base = canvas.getBoundingClientRect()
+      const out: Record<string, Rect> = {}
+      canvas.querySelectorAll<HTMLElement>('[data-node]').forEach((el) => {
+        const r = el.getBoundingClientRect()
+        out[el.dataset.node!] = { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height }
+      })
+      setRects(out)
     })
-    setRects(out)
   }
 
   onMount(() => {
@@ -442,16 +455,18 @@ const NetworkTab: Component = () => {
       if (live() && !document.hidden) void load()
     }, POLL_MS)
     const tick = setInterval(() => setNow(Date.now()), 1000)
-    const ro = new ResizeObserver(() => measure())
-    if (canvas) ro.observe(canvas)
+    const ro = new ResizeObserver(measure)
+    ro.observe(canvas!)
     onCleanup(() => {
       clearInterval(poll)
       clearInterval(tick)
       ro.disconnect()
+      cancelAnimationFrame(frame)
     })
   })
 
-  createEffect(on([map, showUnnamed], () => requestAnimationFrame(measure)))
+  // A pinned hidden service shows its chip, so pinning can change the layout too.
+  createEffect(on([map, showUnnamed, pinned], measure))
 
   const devices = () => map()?.devices ?? []
   const hub = () => devices().find((d) => d.hub)
@@ -489,52 +504,85 @@ const NetworkTab: Component = () => {
     return out
   })
 
+  // A hidden service draws from its device's card.
   const anchor = (id: string): Rect | undefined => rects()[id] ?? rects()[deviceOf(id)]
 
-  const onFocus = (id: string | null, sticky: boolean) => {
+  const onFocus: OnFocus = (id, sticky) => {
     if (sticky) setPinned((p) => (p === id ? null : id))
     else setHovered(id)
   }
 
   const counts = createMemo(() => {
-    const ds = devices()
-    const tcp = (map()?.links ?? []).filter((l) => l.kind === 'tcp')
+    const hosts = devices().filter((d) => d.kind === 'host' || d.kind === 'phone')
     return {
-      online: ds.filter((d) => (d.kind === 'host' || d.kind === 'phone') && d.online).length,
-      hosts: ds.filter((d) => d.kind === 'host' || d.kind === 'phone').length,
-      services: ds.reduce((n, d) => n + d.services.filter((s) => s.ports.length).length, 0),
-      connections: tcp.reduce((n, l) => n + (l.connections ?? 0), 0)
+      online: hosts.filter((d) => d.online).length,
+      hosts: hosts.length,
+      services: hosts.reduce((n, d) => n + d.services.filter((s) => s.ports.length).length, 0),
+      connections: (map()?.links ?? []).reduce((n, l) => n + (l.connections ?? 0), 0)
     }
   })
 
   const selected = createMemo(() => {
     const id = pinned()
-    if (!id || !map()) return null
-    const links = map()!.links.filter((l) =>
-      id.includes('/') ? l.from === id || l.to === id : deviceOf(l.from) === id || deviceOf(l.to) === id
-    )
+    const m = map()
+    if (!id || !m) return null
+    const service = id.includes('/')
+    const links = m.links.filter((l) => touches(l, id))
     return {
       id,
-      info: byId().get(id),
       service: devices()
         .flatMap((d) => d.services)
         .find((s) => s.id === id),
-      inbound: links.filter(
-        (l) => l.to === id || (!id.includes('/') && deviceOf(l.to) === id && deviceOf(l.from) !== id)
-      ),
-      outbound: links.filter(
-        (l) => l.from === id || (!id.includes('/') && deviceOf(l.from) === id && deviceOf(l.to) !== id)
-      )
+      inbound: links.filter((l) => l.to === id || (!service && deviceOf(l.to) === id && deviceOf(l.from) !== id)),
+      outbound: links.filter((l) => l.from === id || (!service && deviceOf(l.from) === id && deviceOf(l.to) !== id))
     }
   })
-
-  const linkLabel = (l: NetLink) => (l.kind === 'tcp' && focus() && (l.connections ?? 0) > 1 ? `×${l.connections}` : '')
 
   const nodeName = (id: string) => {
     const info = byId().get(id)
     if (!info) return id
     return id.includes('/') ? `${info.label} · ${info.device}` : info.label
   }
+
+  /** Edges for one layer: `over` draws a focused node's links above the cards. */
+  const Edges = (props: { links: NetLink[]; over?: boolean }) => (
+    <For each={props.links}>
+      {(l) => {
+        const a = () => anchor(l.from)
+        const b = () => anchor(l.to)
+        const dim = () =>
+          !props.over && focus() !== null && ![l.from, l.to].some((id) => id === focus() || related().has(id))
+        return (
+          <Show when={a() && b()}>
+            <path
+              d={edgePath(a()!, b()!)}
+              fill="none"
+              stroke={LINK_COLOR[l.kind]}
+              stroke-width={l.kind === 'tailnet' ? 1.5 : 1 + Math.log2(l.connections ?? 1)}
+              opacity={props.over ? 0.95 : dim() ? 0.15 : l.kind === 'lan' || l.kind === 'wan' ? 0.4 : 0.8}
+              class={
+                l.kind === 'lan' || l.kind === 'wan' ? '' : l.kind === 'tailnet' && !l.active ? 'net-idle' : 'net-flow'
+              }
+            />
+            <Show when={props.over && l.kind === 'tcp' && (l.connections ?? 0) > 1}>
+              <text
+                x={(a()!.x + a()!.w / 2 + b()!.x + b()!.w / 2) / 2}
+                y={(a()!.y + a()!.h / 2 + b()!.y + b()!.h / 2) / 2}
+                font-size="10"
+                text-anchor="middle"
+                fill={LINK_COLOR[l.kind]}
+                style={{ 'paint-order': 'stroke', stroke: 'var(--c-bg)', 'stroke-width': '3px' }}
+              >
+                ×{l.connections}
+              </text>
+            </Show>
+          </Show>
+        )
+      }}
+    </For>
+  )
+
+  const buttonStyle = { background: 'transparent', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }
 
   return (
     <div class="flex flex-col gap-3" onClick={() => setPinned(null)}>
@@ -559,29 +607,26 @@ const NetworkTab: Component = () => {
             connections · updated {Math.max(0, Math.round((now() - map()!.collectedAt) / 1000))}s ago
           </span>
         </Show>
-        <div class="ml-auto flex items-center gap-2">
+        <div class="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           <label class="flex cursor-pointer items-center gap-1" style={{ color: 'var(--c-text-muted)' }}>
             <input type="checkbox" checked={showUnnamed()} onChange={(e) => setShowUnnamed(e.currentTarget.checked)} />
             Unnamed ports
           </label>
           <button
             class="cursor-pointer rounded-md border px-2 py-1"
-            style={{ background: 'transparent', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }}
-            onClick={(e) => {
-              e.stopPropagation()
+            style={buttonStyle}
+            onClick={() => {
               setLive(!live())
+              if (live()) void load()
             }}
           >
             {live() ? 'Pause' : 'Resume'}
           </button>
           <button
             class="cursor-pointer rounded-md border px-2 py-1"
-            style={{ background: 'transparent', color: 'var(--c-text)', 'border-color': 'var(--c-border)' }}
+            style={buttonStyle}
             disabled={loading()}
-            onClick={(e) => {
-              e.stopPropagation()
-              void load()
-            }}
+            onClick={() => void load()}
           >
             {loading() ? 'Scanning…' : 'Refresh'}
           </button>
@@ -602,36 +647,7 @@ const NetworkTab: Component = () => {
       <div ref={canvas} class="relative flex flex-col gap-12 pr-10 pb-6">
         {/* Device-level links sit behind the cards; so do service links until something has focus. */}
         <svg class="pointer-events-none absolute inset-0 h-full w-full overflow-visible" style={{ 'z-index': 0 }}>
-          <For each={drawn().filter((l) => !focus() || l.kind === 'lan' || l.kind === 'wan' || l.kind === 'tailnet')}>
-            {(l) => {
-              const a = () => anchor(l.from)
-              const b = () => anchor(l.to)
-              const dim = () =>
-                focus() !== null &&
-                !related().has(l.from) &&
-                !related().has(l.to) &&
-                l.from !== focus() &&
-                l.to !== focus()
-              return (
-                <Show when={a() && b()}>
-                  <path
-                    d={edgePath(a()!, b()!)}
-                    fill="none"
-                    stroke={LINK_COLOR[l.kind]}
-                    stroke-width={l.kind === 'tcp' ? 1 + Math.log2(l.connections ?? 1) : l.kind === 'tailnet' ? 1.5 : 1}
-                    opacity={dim() ? 0.15 : l.kind === 'lan' || l.kind === 'wan' ? 0.4 : 0.8}
-                    class={
-                      l.kind === 'lan' || l.kind === 'wan'
-                        ? ''
-                        : l.kind === 'tailnet' && !l.active
-                          ? 'net-idle'
-                          : 'net-flow'
-                    }
-                  />
-                </Show>
-              )
-            }}
-          </For>
+          <Edges links={focus() ? drawn().filter(isDeviceLink) : drawn()} />
         </svg>
 
         <div class="relative flex flex-wrap items-center justify-center gap-3" style={{ 'z-index': 1 }}>
@@ -684,106 +700,70 @@ const NetworkTab: Component = () => {
           </For>
         </div>
 
-        {/* A focused node's service links draw over the cards. */}
         <svg class="pointer-events-none absolute inset-0 h-full w-full overflow-visible" style={{ 'z-index': 2 }}>
-          <For each={focus() ? drawn().filter((l) => l.kind === 'tcp' || l.kind === 'proxy') : []}>
-            {(l) => {
-              const a = () => anchor(l.from)
-              const b = () => anchor(l.to)
-              return (
-                <Show when={a() && b()}>
-                  <path
-                    d={edgePath(a()!, b()!)}
-                    fill="none"
-                    stroke={LINK_COLOR[l.kind]}
-                    stroke-width={1 + Math.log2(l.connections ?? 1)}
-                    opacity={0.95}
-                    class="net-flow"
-                  />
-                </Show>
-              )
-            }}
-          </For>
-          <For each={drawn()}>
-            {(l) => {
-              const a = () => anchor(l.from)
-              const b = () => anchor(l.to)
-              return (
-                <Show when={a() && b() && linkLabel(l)}>
-                  <text
-                    x={(a()!.x + a()!.w / 2 + b()!.x + b()!.w / 2) / 2}
-                    y={(a()!.y + a()!.h / 2 + b()!.y + b()!.h / 2) / 2}
-                    font-size="10"
-                    text-anchor="middle"
-                    fill={LINK_COLOR[l.kind]}
-                    style={{ 'paint-order': 'stroke', stroke: 'var(--c-bg)', 'stroke-width': '3px' }}
-                  >
-                    {linkLabel(l)}
-                  </text>
-                </Show>
-              )
-            }}
-          </For>
+          <Edges links={focus() ? drawn().filter((l) => !isDeviceLink(l)) : []} over />
         </svg>
       </div>
 
       <Show when={selected()}>
-        <div
-          class="rounded-lg border p-3 text-xs"
-          style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div class="mb-1 text-sm font-semibold">{nodeName(selected()!.id)}</div>
-          <Show when={selected()!.service}>
-            <div class="mb-2 font-mono text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
-              {[
-                selected()!.service!.ports.length
-                  ? `ports ${selected()!.service!.ports.join(', ')}`
-                  : 'connects out only',
-                selected()!.service!.exposure ? EXPOSURE[selected()!.service!.exposure!].title : '',
-                selected()!.service!.unit ?? ''
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </div>
-          </Show>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <For
-              each={
-                [
-                  ['Inbound', selected()!.inbound, 'from'],
-                  ['Outbound', selected()!.outbound, 'to']
-                ] as const
-              }
-            >
-              {([title, links, end]) => (
-                <div>
-                  <div class="mb-1 font-semibold" style={{ color: 'var(--c-text-muted)' }}>
-                    {title}
-                  </div>
-                  <Show when={links.length} fallback={<div style={{ color: 'var(--c-text-muted)' }}>none</div>}>
-                    <For each={links}>
-                      {(l) => (
-                        <button
-                          class="block cursor-pointer border-none bg-transparent p-0 text-left text-xs"
-                          style={{ color: 'var(--c-text)' }}
-                          onClick={() => setPinned(l[end])}
-                        >
-                          <span style={{ color: LINK_COLOR[l.kind] }}>●</span> {nodeName(l[end])}
-                          <span style={{ color: 'var(--c-text-muted)' }}>
-                            {' '}
-                            {l.kind === 'tcp' ? `${l.connections} conn` : l.kind}
-                            {l.path ? ` · ${l.path}` : ''}
-                          </span>
-                        </button>
-                      )}
-                    </For>
-                  </Show>
+        {(sel) => (
+          <div
+            class="rounded-lg border p-3 text-xs"
+            style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div class="mb-1 text-sm font-semibold">{nodeName(sel().id)}</div>
+            <Show when={sel().service}>
+              {(svc) => (
+                <div class="mb-2 font-mono text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+                  {[
+                    svc().ports.length ? `ports ${svc().ports.join(', ')}` : 'connects out only',
+                    svc().exposure ? EXPOSURE[svc().exposure!].title : '',
+                    svc().unit ?? ''
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </div>
               )}
-            </For>
+            </Show>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <For
+                each={
+                  [
+                    ['Inbound', sel().inbound, 'from'],
+                    ['Outbound', sel().outbound, 'to']
+                  ] as const
+                }
+              >
+                {([title, links, end]) => (
+                  <div>
+                    <div class="mb-1 font-semibold" style={{ color: 'var(--c-text-muted)' }}>
+                      {title}
+                    </div>
+                    <Show when={links.length} fallback={<div style={{ color: 'var(--c-text-muted)' }}>none</div>}>
+                      <For each={links}>
+                        {(l) => (
+                          <button
+                            class="block cursor-pointer border-none bg-transparent p-0 text-left text-xs"
+                            style={{ color: 'var(--c-text)' }}
+                            onClick={() => setPinned(l[end])}
+                          >
+                            <span style={{ color: LINK_COLOR[l.kind] }}>●</span> {nodeName(l[end])}
+                            <span style={{ color: 'var(--c-text-muted)' }}>
+                              {' '}
+                              {l.kind === 'tcp' ? `${l.connections} conn` : l.kind}
+                              {l.path ? ` · ${l.path}` : ''}
+                            </span>
+                          </button>
+                        )}
+                      </For>
+                    </Show>
+                  </div>
+                )}
+              </For>
+            </div>
           </div>
-        </div>
+        )}
       </Show>
 
       <div class="flex flex-wrap gap-3 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>

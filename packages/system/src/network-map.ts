@@ -9,8 +9,11 @@
 // throughput from this machine's view.
 
 import os from 'node:os'
-import { execFile, spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { findOverride, SKIP_OS, type DeviceMetrics, type DeviceMonitor, type DeviceOverride } from './device-monitor.js'
+
+const execFileP = promisify(execFile)
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -106,10 +109,12 @@ echo @@VIDEO@@; cat /sys/class/video4linux/*/name 2>/dev/null | sort -u
 echo @@DISK@@; lsblk -dbno NAME,SIZE,TYPE,MODEL 2>/dev/null | awk '$3=="disk"'
 `.trim()
 
+// lsof sees only this user's sockets; netstat adds the root-owned listeners (sshd, …) without a pid.
 const MACOS_SCRIPT = `
 L=$(lsof +c 0 -nP -iTCP -sTCP:LISTEN -F pcn 2>/dev/null); E=$(lsof +c 0 -nP -iTCP -sTCP:ESTABLISHED -F pcn 2>/dev/null)
 echo @@LSOF_LISTEN@@; echo "$L"
 echo @@LSOF_ESTAB@@; echo "$E"
+echo @@LISTEN_ALL@@; netstat -anp tcp 2>/dev/null | awk '$6=="LISTEN"{print $1, $4}'
 echo @@PROCS@@
 P=$(printf '%s\\n%s\\n' "$L" "$E" | sed -n 's/^p//p' | sort -u | paste -sd, -)
 [ -n "$P" ] && ps -o pid=,args= -p "$P" 2>/dev/null | sed -E 's/^ *([0-9]+) /\\1\\t\\t/' | cut -c1-200
@@ -171,7 +176,7 @@ export function splitHostPort(s: string): { ip: string; port: number } | null {
   const rawPort = s.slice(i + 1)
   // A listener's peer column reads `0.0.0.0:*`.
   const port = rawPort === '*' ? 0 : Number(rawPort)
-  if (!Number.isInteger(port)) return null
+  if (!rawPort || !Number.isInteger(port)) return null
   let ip = s.slice(0, i)
   if (ip.startsWith('[') && ip.endsWith(']')) ip = ip.slice(1, -1)
   ip = ip.replace(/%.*$/, '')
@@ -181,8 +186,8 @@ export function splitHostPort(s: string): { ip: string; port: number } | null {
 }
 
 /** Lines of `ss -Htnp` (listening or established): the last two addresses, then the process. */
-export function parseSs(lines: string[]): Array<{ local: Sock; peer: { ip: string; port: number } }> {
-  const out: Array<{ local: Sock; peer: { ip: string; port: number } }> = []
+export function parseSs(lines: string[]): Conn[] {
+  const out: Conn[] = []
   for (const line of lines) {
     const [head, users] = line.split(/\s+users:/)
     const tokens = head.trim().split(/\s+/)
@@ -219,11 +224,27 @@ export function parseLsof(lines: string[]): Array<{ local: Sock; peer?: { ip: st
   return out
 }
 
-/** Collapse a CIDR string into ip + prefix. */
-function cidr(s: string): { ip: string; prefix?: number } {
-  const [ip, p] = s.split('/')
-  return { ip: ip.replace(/%.*$/, ''), ...(p ? { prefix: Number(p) } : {}) }
+const sockKey = (a: { ip: string; port: number }) => `${a.ip}:${a.port}`
+const connKey = (local: { ip: string; port: number }, peer: { ip: string; port: number }) =>
+  `${sockKey(local)}>${sockKey(peer)}`
+
+/** First entry per key: lsof lists a socket once per fd and process that holds it. */
+function uniqueBy<T>(items: T[], key: (t: T) => string): T[] {
+  const seen = new Set<string>()
+  return items.filter((t) => {
+    const k = key(t)
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
 }
+
+/** `arp -an` drops leading zeros (`9c:bf:d:1:ec:d8`). */
+const normMac = (mac: string) =>
+  mac
+    .split(':')
+    .map((o) => o.padStart(2, '0'))
+    .join(':')
 
 /** The bracketed product name lspci gives, or the whole line. */
 function gpuName(line: string): string {
@@ -231,7 +252,7 @@ function gpuName(line: string): string {
   const brackets = [...s.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1])
   const product = brackets[brackets.length - 1]
   // AMD lists every variant of the chip (`Radeon 8050S / 8060S Graphics`): keep the last.
-  return product && !/^AMD\/ATI$/.test(product) ? product.split(' / ').pop()! : s
+  return product && product !== 'AMD/ATI' ? product.split(' / ').pop()! : s
 }
 
 export function parseScan(raw: string, macos: boolean): HostScan {
@@ -249,12 +270,24 @@ export function parseScan(raw: string, macos: boolean): HostScan {
   }
 
   if (macos) {
-    scan.listen = parseLsof(get('LSOF_LISTEN')).map((r) => r.local)
+    const listen = parseLsof(get('LSOF_LISTEN')).map((r) => r.local)
+    for (const line of get('LISTEN_ALL')) {
+      const [proto, addr = ''] = line.trim().split(/\s+/)
+      const i = addr.lastIndexOf('.')
+      const host = addr.slice(0, i)
+      // netstat truncates long IPv6 addresses; only the wildcard and ::1 survive intact.
+      if (i < 0 || (proto === 'tcp6' && host !== '*' && host !== '::1')) continue
+      const sock = splitHostPort(`${host}:${addr.slice(i + 1)}`)
+      if (sock) listen.push(sock)
+    }
+    scan.listen = listen
     scan.estab = parseLsof(get('LSOF_ESTAB')).flatMap((r) => (r.peer ? [{ local: r.local, peer: r.peer }] : []))
   } else {
     scan.listen = parseSs(get('LISTEN')).map((r) => r.local)
     scan.estab = parseSs(get('ESTAB'))
   }
+  scan.listen = uniqueBy(scan.listen, sockKey)
+  scan.estab = uniqueBy(scan.estab, (c) => connKey(c.local, c.peer))
 
   for (const line of get('PROCS')) {
     const [pid, unit, ...args] = line.split('\t')
@@ -264,19 +297,28 @@ export function parseScan(raw: string, macos: boolean): HostScan {
 
   for (const line of get('ADDR')) {
     const [iface, addr] = line.trim().split(/\s+/)
-    if (iface && addr) scan.addrs.push({ iface, ...cidr(addr) })
+    if (!iface || !addr) continue
+    const [ip, prefix] = addr.split('/')
+    scan.addrs.push({ iface, ip: ip.replace(/%.*$/, ''), ...(prefix ? { prefix: Number(prefix) } : {}) })
   }
 
   const route = /via (\S+)(?:.* dev (\S+))?/.exec(get('ROUTE')[0] ?? '')
   if (route) scan.gateway = { ip: route[1], ...(route[2] ? { iface: route[2] } : {}) }
 
+  const neigh: Array<{ ip: string; mac: string; iface: string }> = []
   for (const line of get('NEIGH')) {
-    const m = /^(\d+\.\d+\.\d+\.\d+) dev (\S+) lladdr ([0-9a-f:]+) (?!FAILED|INCOMPLETE)/.exec(line)
-    if (m) scan.neigh.push({ ip: m[1], iface: m[2], mac: m[3] })
+    const m = /^(\d+\.\d+\.\d+\.\d+) dev (\S+) lladdr ([0-9a-f:]+)(?![0-9a-f:]| FAILED| INCOMPLETE)/.exec(line)
+    if (m) neigh.push({ ip: m[1], iface: m[2], mac: m[3] })
   }
   for (const line of get('ARP')) {
     const m = /\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-f:]+) on (\S+)/.exec(line)
-    if (m) scan.neigh.push({ ip: m[1], mac: m[2], iface: m[3] })
+    if (m) neigh.push({ ip: m[1], mac: m[2], iface: m[3] })
+  }
+  for (const n of neigh) {
+    const mac = normMac(n.mac)
+    // Multicast and broadcast entries (group bit set) and empty MACs are not devices.
+    if (parseInt(mac.slice(0, 2), 16) & 1 || /^[0:]+$/.test(mac)) continue
+    scan.neigh.push({ ...n, mac })
   }
 
   for (const line of get('DOCKER')) {
@@ -398,12 +440,6 @@ function processName(args: string | undefined, comm: string | undefined): string
   return exe || comm
 }
 
-function exposureOf(ip: string, tailnetIPs: Set<string>): Exposure {
-  if (ip.startsWith('127.') || ip === '::1') return 'loopback'
-  if (tailnetIPs.has(ip)) return 'tailnet'
-  return 'network'
-}
-
 const EXPOSURE_RANK: Record<Exposure, number> = { loopback: 0, tailnet: 1, network: 2 }
 
 // ── IP helpers ─────────────────────────────────────────────────────────
@@ -454,6 +490,8 @@ export interface NetTarget {
   hub: boolean
   /** SSH (or local bash) can scan it. */
   scannable: boolean
+  /** Scan with the macOS script. */
+  macos: boolean
   sshHost: string
   tailscaleIPs: string[]
   tailnet?: { curAddr: string; relay: string; active: boolean; bytes: number }
@@ -475,37 +513,113 @@ interface Listener {
   sock: Sock
 }
 
+/** A scanned device and what the build learns about it. */
+interface Host {
+  dev: NetDevice
+  scan: HostScan
+  tailnetIPs: Set<string>
+  ownIPs: Set<string>
+  services: Map<string, NetService>
+  /** pid → service id. */
+  pids: Map<number, string>
+  listeners: Listener[]
+  /** Established sockets as `local>peer`, to tell whether this side reports a connection. */
+  conns: Set<string>
+}
+
+function hardwareOf(scan: HostScan, m: DeviceMetrics | undefined): NetHardware | undefined {
+  const hw: NetHardware = { ...scan.hardware, gpus: [...scan.hardware.gpus], disks: [...scan.hardware.disks] }
+  if (!hw.memoryBytes && m?.memory?.totalBytes) hw.memoryBytes = m.memory.totalBytes
+  if (!hw.cores && m?.cpu?.cores) hw.cores = m.cpu.cores
+  const gpu = m?.gpu
+  if (gpu?.name && gpu.memoryTotalMB > 0) {
+    // nvidia-smi names the card and its memory better than lspci.
+    const nvidia = /nvidia|geforce|rtx|gtx/i
+    hw.gpus = [
+      `${gpu.name} · ${Math.round(gpu.memoryTotalMB / 1024)} GB`,
+      ...hw.gpus.filter((g) => !nvidia.test(g) || !nvidia.test(gpu.name))
+    ]
+  }
+  if (!hw.disks.length && m?.storage?.length) {
+    // macOS mounts one APFS container several times; one entry per size is enough.
+    for (const s of m.storage) {
+      if (!hw.disks.some((k) => k.bytes === s.totalBytes)) hw.disks.push({ name: s.mount, bytes: s.totalBytes })
+    }
+  }
+  return hw.cpu || hw.gpus.length || hw.memoryBytes ? hw : undefined
+}
+
 export function buildNetworkMap(input: BuildInput): NetworkMap {
   const devices: NetDevice[] = []
   const linkMap = new Map<string, NetLink>()
   const byId = new Map<string, NetDevice>()
-  // Every IP a device answers on → device id.
+  const hosts = new Map<string, Host>()
+  // Every IP a device answers on → device id; '' when two devices claim it (docker0, fe80::1…).
   const ipOwner = new Map<string, string>()
-  const listeners = new Map<string, Listener[]>()
-  // device id → pid → service id
-  const pidService = new Map<string, Map<number, string>>()
-  const scanned = new Set<string>()
+  const own = (ip: string, id: string) => {
+    const prev = ipOwner.get(ip)
+    ipOwner.set(ip, prev === undefined || prev === id ? id : '')
+  }
+  const addDevice = (dev: NetDevice) => {
+    devices.push(dev)
+    byId.set(dev.id, dev)
+  }
 
   const addLink = (from: string, to: string, kind: NetLinkKind, extra: Partial<NetLink> = {}) => {
     if (from === to) return
     const id = `${kind}:${from}->${to}`
     const existing = linkMap.get(id)
     if (existing) {
-      if (kind === 'tcp') existing.connections = (existing.connections ?? 0) + 1
+      if (kind === 'tcp') existing.connections! += 1
       return
     }
     linkMap.set(id, { id, from, to, kind, ...(kind === 'tcp' ? { connections: 1 } : {}), ...extra })
   }
 
-  const metricsFor = (label: string) => input.metrics?.find((m) => m.hostname === label)
+  /** The service a socket belongs to, created on first sight. */
+  const serviceOf = (h: Host, sock: Sock, listening: boolean): NetService | undefined => {
+    if (!listening && sock.pid !== undefined && h.pids.has(sock.pid)) {
+      return h.services.get(h.pids.get(sock.pid)!)
+    }
+    let name: string | undefined
+    let unit: string | undefined
+    const docker = listening ? h.scan.docker.find((c) => c.ports.includes(sock.port)) : undefined
+    const proc = sock.pid !== undefined ? h.scan.procs.get(sock.pid) : undefined
+    if (docker) {
+      name = docker.name
+      unit = `docker:${docker.name}`
+    } else if (unitName(proc?.unit)) {
+      name = unitName(proc?.unit)
+      unit = proc!.unit
+    } else if (sock.pid !== undefined || sock.comm) {
+      name = processName(proc?.args, sock.comm)
+    }
+    if (!name && listening) {
+      // A socket without a pid: root-owned, not visible without sudo.
+      // tailscaled binds its peer API and Serve to the tailnet address.
+      name = h.tailnetIPs.has(sock.ip)
+        ? h.scan.serve.some((e) => e.port === sock.port)
+          ? 'Tailscale Serve'
+          : 'Tailscale'
+        : (WELL_KNOWN_PORTS[sock.port] ?? `port ${sock.port}`)
+    }
+    if (!name) return undefined
+    const id = `${h.dev.id}/${name}`
+    let svc = h.services.get(id)
+    if (!svc) {
+      svc = { id, name, ports: [], ...(unit ? { unit } : {}) }
+      h.services.set(id, svc)
+    }
+    if (sock.pid !== undefined) h.pids.set(sock.pid, id)
+    return svc
+  }
 
   // ── Devices and their services ──
   for (const { target, scan, error } of input.targets) {
-    const phone = /^(android|ios)$/i.test(target.os)
     const dev: NetDevice = {
       id: target.id,
       label: target.label,
-      kind: phone ? 'phone' : 'host',
+      kind: /^(android|ios)$/i.test(target.os) ? 'phone' : 'host',
       os: target.os,
       online: target.online,
       ...(target.hub ? { hub: true } : {}),
@@ -514,11 +628,10 @@ export function buildNetworkMap(input: BuildInput): NetworkMap {
       services: [],
       ...(error ? { error } : {})
     }
-    for (const ip of target.tailscaleIPs) ipOwner.set(ip, dev.id)
-    devices.push(dev)
-    byId.set(dev.id, dev)
+    addDevice(dev)
+    for (const ip of target.tailscaleIPs) own(ip, dev.id)
 
-    const m = metricsFor(target.label)
+    const m = input.metrics?.find((x) => x.hostname === target.label)
     if (m?.online) {
       dev.usage = {
         ...(m.cpu ? { cpuPercent: m.cpu.usagePercent } : {}),
@@ -528,146 +641,86 @@ export function buildNetworkMap(input: BuildInput): NetworkMap {
     }
     if (input.traffic?.[dev.id]) dev.traffic = input.traffic[dev.id]
     if (!scan) continue
-    scanned.add(dev.id)
 
-    // Hardware: the scan, topped up by the device monitor.
-    const hw: NetHardware = { ...scan.hardware, gpus: [...scan.hardware.gpus], disks: [...scan.hardware.disks] }
-    if (!hw.memoryBytes && m?.memory?.totalBytes) hw.memoryBytes = m.memory.totalBytes
-    if (!hw.cores && m?.cpu?.cores) hw.cores = m.cpu.cores
-    if (m?.gpu?.name && m.gpu.memoryTotalMB > 0) {
-      // nvidia-smi names the card and its memory better than lspci.
-      const vendor = /nvidia|geforce|rtx|gtx/i
-      hw.gpus = [
-        `${m.gpu.name} · ${Math.round(m.gpu.memoryTotalMB / 1024)} GB`,
-        ...hw.gpus.filter((g) => !vendor.test(g) || !vendor.test(m.gpu!.name))
-      ]
-    }
-    if (!hw.disks.length && m?.storage?.length) {
-      // macOS mounts one APFS container several times; one entry per size is enough.
-      for (const s of m.storage) {
-        if (!hw.disks.some((k) => k.bytes === s.totalBytes)) hw.disks.push({ name: s.mount, bytes: s.totalBytes })
-      }
-    }
-    if (hw.cpu || hw.gpus.length || hw.memoryBytes) dev.hardware = hw
+    const hardware = hardwareOf(scan, m)
+    if (hardware) dev.hardware = hardware
 
+    const h: Host = {
+      dev,
+      scan,
+      tailnetIPs: new Set(target.tailscaleIPs),
+      ownIPs: new Set([...target.tailscaleIPs, ...scan.addrs.map((a) => a.ip)]),
+      services: new Map(),
+      pids: new Map(),
+      listeners: [],
+      conns: new Set(scan.estab.map((c) => connKey(c.local, c.peer)))
+    }
+    hosts.set(dev.id, h)
     for (const a of scan.addrs) {
-      ipOwner.set(a.ip, dev.id)
+      own(a.ip, dev.id)
       if (isV4(a.ip) && !isLoopback(a.ip) && scan.gateway?.iface === a.iface) dev.lanIPs.push(a.ip)
     }
 
-    const tailnetIPs = new Set(target.tailscaleIPs)
-    const services = new Map<string, NetService>()
-    const pids = new Map<number, string>()
-    const devListeners: Listener[] = []
-    const dockerPort = new Map<number, string>()
-    for (const c of scan.docker) for (const p of c.ports) dockerPort.set(p, c.name)
-    const servePorts = new Set(scan.serve.map((e) => e.port))
-
-    const service = (name: string, unit?: string): NetService => {
-      let svc = services.get(name)
-      if (!svc) {
-        svc = { id: `${dev.id}/${name}`, name, ports: [], ...(unit ? { unit } : {}) }
-        services.set(name, svc)
-      }
-      return svc
-    }
-    const nameFor = (sock: Sock, listening: boolean): { name: string; unit?: string } | undefined => {
-      if (listening && dockerPort.has(sock.port)) {
-        const name = dockerPort.get(sock.port)!
-        return { name, unit: `docker:${name}` }
-      }
-      const proc = sock.pid !== undefined ? scan.procs.get(sock.pid) : undefined
-      const unit = unitName(proc?.unit)
-      if (unit) return { name: unit, unit: proc!.unit }
-      if (sock.pid !== undefined || sock.comm) {
-        const name = processName(proc?.args, sock.comm)
-        if (name) return { name }
-      }
-      if (!listening) return undefined
-      // tailscaled binds its peer API and Serve to the tailnet address.
-      if (tailnetIPs.has(sock.ip)) return { name: servePorts.has(sock.port) ? 'Tailscale Serve' : 'Tailscale' }
-      return { name: WELL_KNOWN_PORTS[sock.port] ?? `port ${sock.port}` }
-    }
-
     for (const sock of scan.listen) {
-      const n = nameFor(sock, true)!
-      const svc = service(n.name, n.unit)
+      const svc = serviceOf(h, sock, true)!
       if (!svc.ports.includes(sock.port)) svc.ports.push(sock.port)
-      const exp = exposureOf(sock.ip, tailnetIPs)
+      const exp: Exposure = isLoopback(sock.ip) ? 'loopback' : h.tailnetIPs.has(sock.ip) ? 'tailnet' : 'network'
       if (!svc.exposure || EXPOSURE_RANK[exp] > EXPOSURE_RANK[svc.exposure]) svc.exposure = exp
-      if (sock.pid !== undefined) pids.set(sock.pid, svc.id)
-      devListeners.push({ serviceId: svc.id, sock })
+      h.listeners.push({ serviceId: svc.id, sock })
     }
-    for (const svc of services.values()) svc.ports.sort((a, b) => a - b)
-    dev.services = [...services.values()]
-    listeners.set(dev.id, devListeners)
-    pidService.set(dev.id, pids)
+    for (const svc of h.services.values()) svc.ports.sort((a, b) => a - b)
   }
 
-  // ── LAN: gateway and neighbours (seen from any scanned host) ──
-  const hubTarget = input.targets.find((t) => t.target.hub && t.scan) ?? input.targets.find((t) => t.scan)
-  const gw = hubTarget?.scan?.gateway
+  // ── LAN: gateway and neighbours ──
+  const hubScan = (input.targets.find((t) => t.target.hub && t.scan) ?? input.targets.find((t) => t.scan))?.scan
+  const gw = hubScan?.gateway && isV4(hubScan.gateway.ip) ? hubScan.gateway : undefined
   let gatewayId: string | undefined
   let lanPrefix = 24
-  if (gw && isV4(gw.ip)) {
-    const hubAddr = hubTarget!.scan!.addrs.find((a) => a.iface === gw.iface && isV4(a.ip))
-    lanPrefix = hubAddr?.prefix ?? 24
+  if (gw) {
+    lanPrefix = hubScan!.addrs.find((a) => a.iface === gw.iface && isV4(a.ip))?.prefix ?? 24
     gatewayId = `gw:${gw.ip}`
-    const gateway: NetDevice = {
+    addDevice({
       id: gatewayId,
       label: input.lanLabels?.[gw.ip] ?? `Router ${gw.ip}`,
       kind: 'gateway',
       online: true,
       lanIPs: [gw.ip],
       services: []
-    }
-    devices.push(gateway)
-    byId.set(gatewayId, gateway)
-    ipOwner.set(gw.ip, gatewayId)
-    const internet: NetDevice = {
-      id: 'internet',
-      label: 'Internet',
-      kind: 'internet',
-      online: true,
-      lanIPs: [],
-      services: []
-    }
-    devices.push(internet)
-    byId.set('internet', internet)
+    })
+    own(gw.ip, gatewayId)
+    addDevice({ id: 'internet', label: 'Internet', kind: 'internet', online: true, lanIPs: [], services: [] })
     addLink(gatewayId, 'internet', 'wan')
   }
   const onLan = (ip: string) => !!gw && sameSubnet(ip, gw.ip, lanPrefix)
+  const curAddrOf = (t: NetTarget) => (t.tailnet?.curAddr ? splitHostPort(t.tailnet.curAddr)?.ip : undefined)
 
   // A tailnet peer reached directly over the LAN sits on the LAN too.
   for (const { target } of input.targets) {
-    const cur = target.tailnet?.curAddr ? splitHostPort(target.tailnet.curAddr)?.ip : undefined
+    const cur = curAddrOf(target)
     const dev = byId.get(target.id)!
     if (cur && onLan(cur) && !dev.lanIPs.includes(cur)) {
       dev.lanIPs.push(cur)
-      ipOwner.set(cur, dev.id)
+      own(cur, dev.id)
     }
   }
 
   for (const { scan } of input.targets) {
     for (const n of scan?.neigh ?? []) {
       if (!onLan(n.ip) || ipOwner.has(n.ip)) continue
-      const id = `lan:${n.ip}`
-      const dev: NetDevice = {
-        id,
+      addDevice({
+        id: `lan:${n.ip}`,
         label: input.lanLabels?.[n.ip] ?? (isRandomMac(n.mac) ? `Wi-Fi device ${n.ip}` : `LAN device ${n.ip}`),
         kind: 'lan',
         online: true,
         lanIPs: [n.ip],
         mac: n.mac,
         services: []
-      }
-      devices.push(dev)
-      byId.set(id, dev)
-      ipOwner.set(n.ip, id)
+      })
+      own(n.ip, `lan:${n.ip}`)
     }
   }
   if (gatewayId) {
-    for (const dev of devices) if (dev.id !== gatewayId && dev.lanIPs.some(onLan)) addLink(gatewayId, dev.id, 'lan')
+    for (const dev of devices) if (dev.lanIPs.some(onLan)) addLink(gatewayId, dev.id, 'lan')
   }
 
   // ── Tailnet paths from the hub ──
@@ -675,12 +728,12 @@ export function buildNetworkMap(input: BuildInput): NetworkMap {
   if (hub) {
     for (const { target } of input.targets) {
       if (target.hub || !target.online || !target.tailnet) continue
-      const t = target.tailnet
-      const cur = t.curAddr ? splitHostPort(t.curAddr)?.ip : undefined
-      const path = cur ? (onLan(cur) ? 'LAN' : 'direct') : t.relay ? `relay ${t.relay}` : undefined
+      const cur = curAddrOf(target)
+      const relay = target.tailnet.relay
+      const path = cur ? (onLan(cur) ? 'LAN' : 'direct') : relay ? `relay ${relay}` : undefined
       const rate = input.tailnetRates?.[target.id]
       addLink(hub.id, target.id, 'tailnet', {
-        active: t.active,
+        active: target.tailnet.active,
         ...(path ? { path } : {}),
         ...(rate !== undefined ? { rateBps: rate } : {})
       })
@@ -689,79 +742,54 @@ export function buildNetworkMap(input: BuildInput): NetworkMap {
 
   // ── Connections ──
   const listenerAt = (deviceId: string, ip: string, port: number): Listener | undefined => {
-    const list = listeners.get(deviceId) ?? []
+    const list = hosts.get(deviceId)?.listeners ?? []
     return (
       list.find((l) => l.sock.port === port && l.sock.ip === ip) ??
       list.find((l) => l.sock.port === port && l.sock.ip === '0.0.0.0') ??
       (isLoopback(ip) ? list.find((l) => l.sock.port === port && isLoopback(l.sock.ip)) : undefined)
     )
   }
-  const deviceOf = (ip: string, self: string): string | undefined => {
-    if (isLoopback(ip)) return self
+  const deviceOf = (ip: string, h: Host): string | undefined => {
+    if (isLoopback(ip) || h.ownIPs.has(ip)) return h.dev.id
     const owner = ipOwner.get(ip)
-    if (owner) return owner
-    return isPrivate(ip) ? undefined : byId.has('internet') ? 'internet' : undefined
+    if (owner !== undefined) return owner || undefined
+    return !isPrivate(ip) && byId.has('internet') ? 'internet' : undefined
   }
 
-  for (const { target, scan } of input.targets) {
-    if (!scan) continue
-    const self = target.id
-    const pids = pidService.get(self)!
-    const dev = byId.get(self)!
-
-    const clientId = (sock: Sock): string | undefined => {
-      if (sock.pid !== undefined && pids.has(sock.pid)) return pids.get(sock.pid)
-      const proc = sock.pid !== undefined ? scan.procs.get(sock.pid) : undefined
-      const name =
-        unitName(proc?.unit) ?? (sock.pid !== undefined || sock.comm ? processName(proc?.args, sock.comm) : undefined)
-      if (!name) return undefined
-      let svc = dev.services.find((s) => s.name === name)
-      if (!svc) {
-        svc = {
-          id: `${self}/${name}`,
-          name,
-          ports: [],
-          ...(proc?.unit && unitName(proc.unit) ? { unit: proc.unit } : {})
-        }
-        dev.services.push(svc)
-      }
-      if (sock.pid !== undefined) pids.set(sock.pid, svc.id)
-      return svc.id
-    }
-
-    for (const c of scan.estab) {
-      const peerDev = deviceOf(c.peer.ip, self)
+  for (const h of hosts.values()) {
+    const self = h.dev.id
+    for (const c of h.scan.estab) {
+      const peerDev = deviceOf(c.peer.ip, h)
       if (!peerDev) continue
+      // The other end reports this connection itself when its scan saw the socket.
+      const mirrored = !!hosts.get(peerDev)?.conns.has(connKey(c.peer, c.local))
       const served = listenerAt(self, c.local.ip, c.local.port)
       if (served) {
-        // Server side: record only clients nobody else reports — the same
-        // machine and scanned peers report their own client sockets.
-        if (peerDev === self || scanned.has(peerDev)) continue
-        addLink(peerDev, served.serviceId, 'tcp')
+        if (peerDev !== self && !mirrored) addLink(peerDev, served.serviceId, 'tcp')
         continue
       }
-      const from = clientId(c.local) ?? (peerDev === self ? undefined : self)
-      if (!from) continue
-      const to = scanned.has(peerDev) ? (listenerAt(peerDev, c.peer.ip, c.peer.port)?.serviceId ?? peerDev) : peerDev
+      const remote = listenerAt(peerDev, c.peer.ip, c.peer.port)
+      // Neither end shows a listener: count it once, from the end with the higher (ephemeral) port.
+      if (mirrored && !remote && c.local.port < c.peer.port) continue
+      const from = serviceOf(h, c.local, false)?.id ?? (peerDev === self ? undefined : self)
+      const to = remote?.serviceId ?? peerDev
       // A socket into this machine that reaches no listener we can see says nothing.
-      if (to !== self) addLink(from, to, 'tcp')
+      if (from && to !== self) addLink(from, to, 'tcp')
     }
 
-    for (const e of scan.serve) {
-      if (e.target === undefined) continue
-      const front = dev.services.find((s) => s.name === 'Tailscale Serve')
-      const back = listenerAt(self, '127.0.0.1', e.target)
+    const front = h.services.get(`${self}/Tailscale Serve`)
+    for (const e of h.scan.serve) {
+      const back = e.target !== undefined ? listenerAt(self, '127.0.0.1', e.target) : undefined
       if (front && back) addLink(front.id, back.serviceId, 'proxy')
     }
   }
 
   // Unnamed client processes that reach nothing stay out of the picture.
   const linked = new Set<string>()
-  for (const l of linkMap.values()) {
-    linked.add(l.from)
-    linked.add(l.to)
+  for (const l of linkMap.values()) linked.add(l.from).add(l.to)
+  for (const h of hosts.values()) {
+    h.dev.services = [...h.services.values()].filter((s) => s.ports.length > 0 || linked.has(s.id))
   }
-  for (const dev of devices) dev.services = dev.services.filter((s) => s.ports.length > 0 || linked.has(s.id))
 
   return { collectedAt: input.now ?? Date.now(), devices, links: [...linkMap.values()] }
 }
@@ -783,74 +811,43 @@ export interface NetworkMonitorOptions {
 }
 
 function defaultRunScript(target: NetTarget, script: string, timeoutMs: number): Promise<string> {
+  const ssh = [target.sshHost, '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=no', '-o', 'BatchMode=yes']
+  const [cmd, args] = target.hub ? ['bash', ['-s']] : ['ssh', [...ssh, 'bash', '-s']]
   return new Promise((resolve, reject) => {
-    const child = target.hub
-      ? spawn('bash', ['-s'], { stdio: ['pipe', 'pipe', 'ignore'] })
-      : spawn(
-          'ssh',
-          [
-            target.sshHost,
-            '-o',
-            'ConnectTimeout=5',
-            '-o',
-            'StrictHostKeyChecking=no',
-            '-o',
-            'BatchMode=yes',
-            'bash',
-            '-s'
-          ],
-          { stdio: ['pipe', 'pipe', 'ignore'] }
-        )
-    let out = ''
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL')
-      reject(new Error('timed out'))
-    }, timeoutMs)
-    child.stdout!.on('data', (d) => (out += d))
-    child.on('error', (e) => {
-      clearTimeout(timer)
-      reject(e)
+    const opts = { timeout: timeoutMs, killSignal: 'SIGKILL' as const, maxBuffer: 32 << 20 }
+    const child = execFile(cmd, args, opts, (err, stdout) => {
+      // A failing last command still leaves a usable scan.
+      if (!err || (!err.killed && stdout.includes('@@'))) resolve(stdout)
+      else reject(new Error(err.code === 255 ? 'SSH failed' : err.killed ? 'timed out' : err.message))
     })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code === 0 || out.includes('@@')) resolve(out)
-      else reject(new Error(code === 255 ? 'SSH failed' : `exit ${code}`))
-    })
-    child.stdin!.on('error', () => {})
-    child.stdin!.end(script + '\n')
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(script + '\n')
   })
 }
 
-function defaultTailscaleStatus(): Promise<any> {
-  return new Promise((resolve, reject) => {
-    execFile('tailscale', ['status', '--json'], { timeout: 5000 }, (err, stdout) => {
-      if (err) reject(err)
-      else {
-        try {
-          resolve(JSON.parse(stdout))
-        } catch (e) {
-          reject(e)
-        }
-      }
-    })
-  })
+async function defaultTailscaleStatus(): Promise<any> {
+  const { stdout } = await execFileP('tailscale', ['status', '--json'], { timeout: 5000, maxBuffer: 16 << 20 })
+  return JSON.parse(stdout)
 }
 
 /** Tailscale's node list as scan targets. */
 export function targetsFromTailscale(status: any, overrides: Record<string, DeviceOverride>): NetTarget[] {
   const targets: NetTarget[] = []
   const add = (node: any, hub: boolean) => {
-    const hostname: string = node.HostName
+    const hostname: string | undefined = node?.HostName
+    if (!hostname) return
     const override = findOverride(overrides, hostname)
     if (override?.exclude) return
+    const nodeOS: string = node.OS ?? ''
     const online = hub || !!node.Online
     targets.push({
       id: `ts:${hostname.toLowerCase()}`,
       label: override?.label ?? hostname,
-      os: node.OS,
+      os: nodeOS,
       online,
       hub,
-      scannable: online && !SKIP_OS.has(node.OS),
+      scannable: online && !SKIP_OS.has(nodeOS),
+      macos: nodeOS.toLowerCase() === 'macos' || override?.osHint === 'macos',
       sshHost: override?.sshHost ?? node.DNSName?.replace(/\.$/, '') ?? hostname,
       tailscaleIPs: node.TailscaleIPs ?? [],
       ...(hub
@@ -865,10 +862,29 @@ export function targetsFromTailscale(status: any, overrides: Record<string, Devi
           })
     })
   }
-  if (status?.Self) add(status.Self, true)
+  add(status?.Self, true)
   for (const peer of Object.values<any>(status?.Peer ?? {})) add(peer, false)
   return targets
 }
+
+/** This machine alone, when Tailscale is not available. */
+function localTarget(overrides: Record<string, DeviceOverride>): NetTarget {
+  const hostname = os.hostname()
+  const macos = os.platform() === 'darwin'
+  return {
+    id: `ts:${hostname.toLowerCase()}`,
+    label: findOverride(overrides, hostname)?.label ?? hostname,
+    os: macos ? 'macOS' : os.platform(),
+    online: true,
+    hub: true,
+    scannable: true,
+    macos,
+    sshHost: hostname,
+    tailscaleIPs: []
+  }
+}
+
+type Counters = { at: number; tailnet: Map<string, number>; netdev: Map<string, { rx: number; tx: number }> }
 
 export function createNetworkMonitor(options: NetworkMonitorOptions = {}) {
   const overrides = options.overrides ?? {}
@@ -876,47 +892,29 @@ export function createNetworkMonitor(options: NetworkMonitorOptions = {}) {
   const timeoutMs = options.timeoutMs ?? 10_000
   const runScript = options.runScript ?? defaultRunScript
   const tailscaleStatus = options.tailscaleStatus ?? defaultTailscaleStatus
+  const lanLabels: Record<string, string> = {}
+  for (const [key, o] of Object.entries(overrides)) if (isV4(key) && o.label) lanLabels[key] = o.label
 
   let cache: NetworkMap | null = null
   let inflight: Promise<NetworkMap> | null = null
   // Counters from the last scan, for rates.
-  let last: { at: number; tailnet: Map<string, number>; netdev: Map<string, { rx: number; tx: number }> } | null = null
-
-  const lanLabels = (): Record<string, string> => {
-    const out: Record<string, string> = {}
-    for (const [key, o] of Object.entries(overrides)) if (isV4(key) && o.label) out[key] = o.label
-    return out
-  }
+  let last: Counters | null = null
 
   async function scan(): Promise<NetworkMap> {
     let targets: NetTarget[]
     try {
       targets = targetsFromTailscale(await tailscaleStatus(), overrides)
     } catch {
-      const hostname = os.hostname()
-      const override = findOverride(overrides, hostname)
-      targets = [
-        {
-          id: `ts:${hostname.toLowerCase()}`,
-          label: override?.label ?? hostname,
-          os: os.platform() === 'darwin' ? 'macOS' : os.platform(),
-          online: true,
-          hub: true,
-          scannable: true,
-          sshHost: hostname,
-          tailscaleIPs: []
-        }
-      ]
+      targets = [localTarget(overrides)]
     }
 
     const [results, metrics] = await Promise.all([
       Promise.all(
         targets.map(async (target) => {
           if (!target.scannable) return { target }
-          const macos = target.os.toLowerCase() === 'macos' || findOverride(overrides, target.label)?.osHint === 'macos'
           try {
-            const raw = await runScript(target, macos ? MACOS_SCRIPT : LINUX_SCRIPT, timeoutMs)
-            return { target, scan: parseScan(raw, macos) }
+            const raw = await runScript(target, target.macos ? MACOS_SCRIPT : LINUX_SCRIPT, timeoutMs)
+            return { target, scan: parseScan(raw, target.macos) }
           } catch (err: any) {
             return { target, error: `scan failed: ${err?.message ?? err}` }
           }
@@ -928,36 +926,31 @@ export function createNetworkMonitor(options: NetworkMonitorOptions = {}) {
     const now = Date.now()
     const traffic: Record<string, { rxBps: number; txBps: number }> = {}
     const tailnetRates: Record<string, number> = {}
-    const next = { at: now, tailnet: new Map<string, number>(), netdev: new Map<string, { rx: number; tx: number }>() }
+    const next: Counters = { at: now, tailnet: new Map(), netdev: new Map() }
     const dt = last ? (now - last.at) / 1000 : 0
-    for (const r of results) {
-      const id = r.target.id
-      if (r.scan?.netdev) {
-        next.netdev.set(id, r.scan.netdev)
+    const rate = (cur: number, prev: number) => Math.max(0, (cur - prev) / dt)
+    for (const { target, scan } of results) {
+      const id = target.id
+      if (scan?.netdev) {
+        next.netdev.set(id, scan.netdev)
         const prev = last?.netdev.get(id)
-        if (prev && dt > 0) {
-          traffic[id] = {
-            rxBps: Math.max(0, (r.scan.netdev.rx - prev.rx) / dt),
-            txBps: Math.max(0, (r.scan.netdev.tx - prev.tx) / dt)
-          }
-        }
+        if (prev && dt > 0) traffic[id] = { rxBps: rate(scan.netdev.rx, prev.rx), txBps: rate(scan.netdev.tx, prev.tx) }
       }
-      if (r.target.tailnet) {
-        next.tailnet.set(id, r.target.tailnet.bytes)
+      if (target.tailnet) {
+        next.tailnet.set(id, target.tailnet.bytes)
         const prev = last?.tailnet.get(id)
-        if (prev !== undefined && dt > 0) tailnetRates[id] = Math.max(0, (r.target.tailnet.bytes - prev) / dt)
+        if (prev !== undefined && dt > 0) tailnetRates[id] = rate(target.tailnet.bytes, prev)
       }
     }
     last = next
 
-    return buildNetworkMap({ targets: results, metrics, lanLabels: lanLabels(), traffic, tailnetRates, now })
+    return buildNetworkMap({ targets: results, metrics, lanLabels, traffic, tailnetRates, now })
   }
 
   /** The cached map, or a fresh scan. Concurrent callers share one scan. */
   async function getMap(): Promise<NetworkMap> {
     if (cache && Date.now() - cache.collectedAt < cacheTtl) return cache
-    if (inflight) return inflight
-    inflight = scan()
+    inflight ??= scan()
       .then((map) => (cache = map))
       .finally(() => {
         inflight = null
