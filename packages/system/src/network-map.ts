@@ -20,9 +20,16 @@ const execFileP = promisify(execFile)
 /** How far a listener reaches: this machine only, the tailnet, or every network. */
 export type Exposure = 'loopback' | 'tailnet' | 'network'
 
+/**
+ * What runs a service: a systemd unit, a Docker container, a user app, or the
+ * OS itself (root-owned sockets, SSH, DNS, printing, Tailscale).
+ */
+export type ServiceRole = 'service' | 'container' | 'app' | 'system'
+
 export interface NetService {
   id: string
   name: string
+  role: ServiceRole
   /** Listening TCP ports. Empty for a process that only connects out. */
   ports: number[]
   exposure?: Exposure
@@ -398,6 +405,10 @@ const WELL_KNOWN_PORTS: Record<number, string> = {
   11434: 'Ollama'
 }
 
+/** systemd units that belong to the OS, not to anything the user runs. */
+const SYSTEM_UNITS =
+  /^(ssh|sshd|cups|cups-browsed|avahi-daemon|gnome-remote-desktop|NetworkManager|tailscaled|docker|containerd|systemd-.+)$/
+
 const KNOWN_APPS: Array<[RegExp, string]> = [
   [/\.vscode-server|Code Helper|Visual Studio Code/i, 'VS Code'],
   [/\bollama\b/i, 'Ollama'],
@@ -583,16 +594,20 @@ export function buildNetworkMap(input: BuildInput): NetworkMap {
     }
     let name: string | undefined
     let unit: string | undefined
+    let role: ServiceRole = 'system'
     const docker = listening ? h.scan.docker.find((c) => c.ports.includes(sock.port)) : undefined
     const proc = sock.pid !== undefined ? h.scan.procs.get(sock.pid) : undefined
     if (docker) {
       name = docker.name
       unit = `docker:${docker.name}`
+      role = 'container'
     } else if (unitName(proc?.unit)) {
-      name = unitName(proc?.unit)
+      name = unitName(proc?.unit)!
       unit = proc!.unit
+      role = SYSTEM_UNITS.test(name) ? 'system' : 'service'
     } else if (sock.pid !== undefined || sock.comm) {
       name = processName(proc?.args, sock.comm)
+      role = name === 'SSH' ? 'system' : 'app'
     }
     if (!name && listening) {
       // A socket without a pid: root-owned, not visible without sudo.
@@ -602,12 +617,14 @@ export function buildNetworkMap(input: BuildInput): NetworkMap {
           ? 'Tailscale Serve'
           : 'Tailscale'
         : (WELL_KNOWN_PORTS[sock.port] ?? `port ${sock.port}`)
+      // Ollama runs as its own system user, so its socket hides its pid too.
+      if (name === 'Ollama') role = 'service'
     }
     if (!name) return undefined
     const id = `${h.dev.id}/${name}`
     let svc = h.services.get(id)
     if (!svc) {
-      svc = { id, name, ports: [], ...(unit ? { unit } : {}) }
+      svc = { id, name, role, ports: [], ...(unit ? { unit } : {}) }
       h.services.set(id, svc)
     }
     if (sock.pid !== undefined) h.pids.set(sock.pid, id)
