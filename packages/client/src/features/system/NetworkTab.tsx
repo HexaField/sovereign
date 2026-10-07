@@ -11,6 +11,7 @@ type Exposure = 'loopback' | 'tailnet' | 'network'
 export interface NetService {
   id: string
   name: string
+  role: 'service' | 'container' | 'app' | 'system'
   ports: number[]
   exposure?: Exposure
   unit?: string
@@ -79,6 +80,23 @@ export function deviceOf(id: string): string {
 /** tailscaled's peer API and bare port numbers say little; hidden unless asked for. */
 export function isUnnamed(s: NetService): boolean {
   return /^port \d+$/.test(s.name) || s.name === 'Tailscale'
+}
+
+const SERVICE_GROUPS = [
+  ['service', 'Services'],
+  ['container', 'Docker'],
+  ['app', 'Apps'],
+  ['system', 'System'],
+  ['client', 'Connects out']
+] as const
+
+/** A card's services in fixed sections, by name within each; processes without a listener go last. */
+export function groupServices(services: NetService[]): Array<{ label: string; services: NetService[] }> {
+  const key = (s: NetService) => (s.ports.length ? s.role : 'client')
+  return SERVICE_GROUPS.map(([k, label]) => ({
+    label,
+    services: services.filter((s) => key(s) === k).sort((a, b) => a.name.localeCompare(b.name))
+  })).filter((g) => g.services.length)
 }
 
 /** Links between whole devices: the LAN, the uplink and tailnet paths. */
@@ -204,17 +222,18 @@ function ServiceChip(props: { svc: NetService } & Pick<CardProps, 'focus' | 'rel
   const exp = () => (props.svc.exposure ? EXPOSURE[props.svc.exposure] : undefined)
   const focused = () => props.focus === props.svc.id
   const dim = () => props.focus !== null && !focused() && !props.related.has(props.svc.id)
+  const ports = () => props.svc.ports
   return (
     <button
       data-node={props.svc.id}
-      class="flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[11px] transition-opacity"
+      class="flex h-7 min-w-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-left text-[11px] transition-opacity"
       style={{
         background: focused() ? 'var(--c-accent)' : 'var(--c-bg)',
         color: focused() ? '#fff' : 'var(--c-text)',
         'border-color': props.related.has(props.svc.id) ? '#22c55e' : 'var(--c-border)',
         opacity: dim() ? 0.35 : 1
       }}
-      title={[props.svc.unit, exp()?.title, props.svc.ports.length > 3 ? props.svc.ports.join(', ') : '']
+      title={[props.svc.name, props.svc.unit, exp()?.title, ports().length ? `ports ${ports().join(', ')}` : '']
         .filter(Boolean)
         .join(' · ')}
       {...focusHandlers(
@@ -223,24 +242,22 @@ function ServiceChip(props: { svc: NetService } & Pick<CardProps, 'focus' | 'rel
         () => deviceOf(props.svc.id)
       )}
     >
-      <span class="font-medium">{props.svc.name}</span>
-      <Show when={props.svc.ports.length}>
-        <span class="font-mono opacity-70">
-          {props.svc.ports.length <= 3
-            ? props.svc.ports.map((p) => `:${p}`).join(' ')
-            : `${props.svc.ports.length} ports`}
+      <span class="min-w-0 flex-1 truncate font-medium">{props.svc.name}</span>
+      <Show when={ports().length}>
+        <span class="shrink-0 font-mono opacity-70">
+          :{ports()[0]}
+          <Show when={ports().length > 1}>
+            <span class="opacity-70"> +{ports().length - 1}</span>
+          </Show>
         </span>
       </Show>
       <Show when={exp()}>
         <span
-          class="rounded px-1 text-[9px] font-semibold uppercase"
+          class="w-11 shrink-0 rounded text-center text-[9px] font-semibold uppercase"
           style={{ color: exp()!.color, border: `1px solid ${exp()!.color}` }}
         >
           {exp()!.label}
         </span>
-      </Show>
-      <Show when={!props.svc.ports.length}>
-        <span class="text-[9px] uppercase opacity-60">client</span>
       </Show>
     </button>
   )
@@ -360,13 +377,28 @@ function HostCard(props: CardProps & { wide?: boolean }) {
         </div>
       </Show>
 
-      <Show when={props.services.length}>
-        <div class="mt-2 flex flex-wrap gap-1.5">
-          <For each={props.services}>
-            {(svc) => <ServiceChip svc={svc} focus={props.focus} related={props.related} onFocus={props.onFocus} />}
-          </For>
-        </div>
-      </Show>
+      <For each={groupServices(props.services)}>
+        {(group) => (
+          <div class="mt-3">
+            <div
+              class="mb-1 text-[10px] font-semibold tracking-wide uppercase"
+              style={{ color: 'var(--c-text-muted)' }}
+            >
+              {group.label} · {group.services.length}
+            </div>
+            <div
+              class="grid gap-1.5"
+              style={{
+                'grid-template-columns': `repeat(auto-fill, minmax(min(${props.wide ? 240 : 180}px, 100%), 1fr))`
+              }}
+            >
+              <For each={group.services}>
+                {(svc) => <ServiceChip svc={svc} focus={props.focus} related={props.related} onFocus={props.onFocus} />}
+              </For>
+            </div>
+          </div>
+        )}
+      </For>
     </div>
   )
 }
@@ -486,10 +518,7 @@ const NetworkTab: Component = () => {
     return [l.path, l.active ? (l.rateBps ? fmtRate(l.rateBps) : 'active') : 'idle'].join(' · ')
   }
 
-  const servicesOf = (d: NetDevice) =>
-    d.services
-      .filter((s) => showUnnamed() || !isUnnamed(s) || s.id === pinned())
-      .sort((a, b) => Number(!a.ports.length) - Number(!b.ports.length) || a.name.localeCompare(b.name))
+  const servicesOf = (d: NetDevice) => d.services.filter((s) => showUnnamed() || !isUnnamed(s) || s.id === pinned())
 
   const drawn = createMemo(() => visibleLinks(map()?.links ?? [], focus()))
   // Node ids at the far end of the focused node's links.

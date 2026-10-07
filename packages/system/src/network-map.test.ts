@@ -355,6 +355,17 @@ describe('buildNetworkMap', () => {
     expect(svc(map, 'ts:laptop', 'VS Code')).toMatchObject({ ports: [3000] })
   })
 
+  it('gives each service the role of what runs it', () => {
+    const role = (dev: string, name: string) => svc(map, dev, name)?.role
+    expect(role('ts:hub', 'sovereign')).toBe('service')
+    expect(role('ts:hub', 'ad4m-prod')).toBe('container')
+    expect(role('ts:hub', 'SSH')).toBe('system')
+    expect(role('ts:hub', 'Tailscale Serve')).toBe('system')
+    expect(role('ts:hub', 'Claude Code')).toBe('app')
+    expect(role('ts:laptop', 'VS Code')).toBe('app')
+    expect(role('ts:worker', 'ollama')).toBe('service')
+  })
+
   it('links client processes to the listener they reach, counting connections', () => {
     expect(link(map, 'ts:hub/sovereign', 'ts:hub/litellm')).toMatchObject({ kind: 'tcp', connections: 1 })
     expect(link(map, 'ts:hub/litellm', 'ts:hub/llama-server')).toMatchObject({ connections: 1 })
