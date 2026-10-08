@@ -24,12 +24,41 @@ interface PreviewData {
   agentStatus: string
 }
 
+/** Age of `ts` at `now`, in the list's compact form: now, 5m, 3h, 2d. */
+export function shortRelativeTime(ts: number, now: number): string {
+  const diff = now - ts
+  if (diff < 60_000) return 'now'
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`
+  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h`
+  return `${Math.floor(diff / 86400_000)}d`
+}
+
+/**
+ * Apply a `thread.updated` payload ({ threadId, patch } or { thread }) to the list.
+ * `lastActivity` only moves forward: the list's value may come from the backend's
+ * on-disk activity overlay, which can be newer than the registry's.
+ */
+export function applyThreadUpdate(list: ThreadEntry[], payload: any): ThreadEntry[] {
+  const id = payload?.thread?.id ?? payload?.threadId ?? payload?.id
+  if (!id) return list
+  const patch = payload?.patch ?? payload?.thread ?? {}
+  return list.map((t) =>
+    t.id === id
+      ? { ...t, ...patch, lastActivity: Math.max(t.lastActivity ?? 0, patch.lastActivity ?? 0) || t.lastActivity }
+      : t
+  )
+}
+
+// Re-render ages this often so "now" turns into "1m" without new data.
+const CLOCK_MS = 30_000
+
 export default function ThreadList() {
   const [threads, setThreads] = createSignal<ThreadEntry[]>([])
   const [membranes, setMembranes] = createSignal<MembraneMeta[]>([])
   const [previews, setPreviews] = createSignal<Record<string, PreviewData>>({})
   const [search, setSearch] = createSignal('')
   const [loading, setLoading] = createSignal(true)
+  const [now, setNow] = createSignal(Date.now())
 
   const membraneMap = createMemo(() => {
     const m = new Map<string, MembraneMeta>()
@@ -100,11 +129,27 @@ export default function ThreadList() {
       if (ids.length) loadPreviews(ids)
     })
 
+    // The server sends `thread.updated` when a turn finishes (lastActivity) and on
+    // renames/status changes; creations and deletions change membership, so reload.
     wsStore.subscribe(['threads'])
-    const offStatus = wsStore.on('thread.status', () => loadThreads())
+    const offs = [
+      wsStore.on('thread.updated', (msg: any) => setThreads((prev) => applyThreadUpdate(prev, msg?.payload ?? msg))),
+      wsStore.on('thread.created', () => loadThreads()),
+      wsStore.on('thread.deleted', () => loadThreads())
+    ]
+    const clock = setInterval(() => setNow(Date.now()), CLOCK_MS)
+    // Events missed while the tab slept (phone locked, socket reconnecting): catch up on return.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      setNow(Date.now())
+      void loadThreads()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     onCleanup(() => {
-      offStatus()
+      for (const off of offs) off()
       wsStore.unsubscribe(['threads'])
+      clearInterval(clock)
+      document.removeEventListener('visibilitychange', onVisible)
     })
   })
 
@@ -112,14 +157,6 @@ export default function ThreadList() {
     setThreadKey(id)
     window.location.hash = `#thread=${id}`
     closeDashboardModal()
-  }
-
-  function relativeTime(ts: number): string {
-    const diff = Date.now() - ts
-    if (diff < 60_000) return 'now'
-    if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`
-    if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h`
-    return `${Math.floor(diff / 86400_000)}d`
   }
 
   return (
@@ -189,7 +226,9 @@ export default function ThreadList() {
 
                         <span class="truncate text-xs font-medium">{thread.label || thread.id.slice(0, 8)}</span>
 
-                        <span class="ml-auto shrink-0 text-[10px] opacity-40">{relativeTime(thread.lastActivity)}</span>
+                        <span class="ml-auto shrink-0 text-[10px] opacity-40">
+                          {shortRelativeTime(thread.lastActivity, now())}
+                        </span>
                       </div>
 
                       <Show when={preview()?.lastMessage}>

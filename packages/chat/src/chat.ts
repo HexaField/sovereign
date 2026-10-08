@@ -948,6 +948,15 @@ export function createChatModule(
     if (opts?.synthRole && !queued.deduplicated) {
       synthRoleById.set(queued.id, opts.synthRole)
     }
+    // A new message is activity too: without this, a thread's time only moved
+    // when a turn finished, so a long turn showed the previous turn's time.
+    if (!queued.deduplicated) {
+      try {
+        threadManager.touch(threadId)
+      } catch {
+        /* thread may have been deleted */
+      }
+    }
     if (opts?.origin && !queued.deduplicated) {
       // Notify presence-aware consumers (last-origin tracker, etc.).
       bus.emit({
