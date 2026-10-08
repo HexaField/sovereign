@@ -506,7 +506,7 @@ const ChatPanel: Component = () => {
                 />
               </div>
 
-              <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+              <InputArea onSend={sendMessage} threadKey={threadKey()} />
             </Show>
           </Suspense>
         </div>
@@ -566,7 +566,7 @@ const ExpandedChatView: Component = () => {
             />
           </div>
 
-          <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+          <InputArea onSend={sendMessage} threadKey={threadKey()} />
         </Show>
       </Suspense>
     </div>
@@ -620,7 +620,7 @@ const MobileChatPanel: Component = () => {
             mode={simple() ? 'summary' : 'full'}
           />
 
-          <InputArea onSend={sendMessage} onAbort={abortChat} agentStatus={agentStatus()} threadKey={threadKey()} />
+          <InputArea onSend={sendMessage} threadKey={threadKey()} />
         </Show>
       </Suspense>
     </div>

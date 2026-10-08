@@ -1,15 +1,7 @@
 import { createSignal, createEffect, Show, For, onCleanup } from 'solid-js'
 import type { AgentStatus } from '@sovereign/core'
 import { AttachIcon, CloseIcon, LoaderIcon } from '../../ui/icons.js'
-import {
-  inputValue,
-  setInputValue,
-  agentStatus as storeAgentStatus,
-  sendMessage,
-  abortChat,
-  compacting,
-  retryCountdownSeconds
-} from './store.js'
+import { inputValue, setInputValue, sendMessage, compacting, retryCountdownSeconds } from './store.js'
 import { threadKey } from '../threads/store.js'
 import type { SlashCommand } from './slash-commands.js'
 import { isSlashQuery, filterCommands, buildCommandText, moveIndex } from './slash-commands.js'
@@ -103,10 +95,6 @@ export function canSend(text: string, attachments: File[]): boolean {
   return text.trim().length > 0 || attachments.length > 0
 }
 
-export function isAgentBusy(status: AgentStatus): boolean {
-  return status === 'working' || status === 'thinking'
-}
-
 export function getStatusText(status: AgentStatus): string | null {
   if (status === 'working') return 'Working…'
   if (status === 'thinking') return 'Thinking…'
@@ -159,8 +147,6 @@ function saveScratchpadEntries(sk: string, entries: ScratchpadEntry[]): void {
 
 export interface InputAreaProps {
   onSend?: (text: string, attachments?: File[]) => void
-  onAbort?: () => void
-  agentStatus?: AgentStatus
   threadKey?: string
   disabled?: boolean
 }
@@ -642,11 +628,6 @@ export function InputArea(props: InputAreaProps) {
     publishVoiceDraft({ threadKey: threadKey(), text: inputValue(), state, editing: editingTranscript() }, draftActions)
   })
   onCleanup(() => clearVoiceDraft(draftActions))
-
-  const currentAgentStatus = () => props.agentStatus ?? storeAgentStatus()
-  const busy = () => isAgentBusy(currentAgentStatus())
-
-  const isBusyOrStreaming = () => busy()
 
   // ── Long-press send menu ──────────────────────────────────────────
   const [sendMenuOpen, setSendMenuOpen] = createSignal(false)
@@ -1174,74 +1155,56 @@ export function InputArea(props: InputAreaProps) {
             </svg>
           </button>
 
-          {/* Send / Stop button */}
-          <Show
-            when={isBusyOrStreaming()}
-            fallback={
-              <div class="relative" data-send-menu>
-                <button
-                  class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30"
-                  style={{ background: 'var(--c-accent)' }}
-                  disabled={retryCountdownSeconds() > 0 || (!inputValue().trim() && !attachedFiles().length)}
-                  onPointerDown={(e) => {
-                    if (e.button !== 0) return
-                    e.preventDefault()
-                    startLongPress()
-                  }}
-                  onPointerUp={handleSendPointerUp}
-                  onPointerLeave={cancelLongPress}
-                  onContextMenu={(e) => e.preventDefault()}
-                >
-                  <svg
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <line x1="22" y1="2" x2="11" y2="13" />
-                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                  </svg>
-                </button>
-
-                {/* Long-press send options menu */}
-                <Show when={sendMenuOpen()}>
-                  <div
-                    class="absolute right-0 bottom-full z-50 mb-2 min-w-[200px] overflow-hidden rounded-xl shadow-lg"
-                    style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
-                  >
-                    <button
-                      class="flex w-full cursor-pointer items-center gap-2.5 border-none px-4 py-3 text-left text-sm transition-colors"
-                      style={{ background: 'transparent', color: 'var(--c-text)' }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-bg-raised)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                      onClick={handleSendImmediate}
-                    >
-                      <span style={{ 'flex-shrink': '0', 'font-size': '16px' }}>⚡</span>
-                      <span>Send immediately</span>
-                    </button>
-                  </div>
-                </Show>
-              </div>
-            }
-          >
+          {/* Send stays available while the agent works: a message sent mid-turn steers it.
+              Stop lives in the thread settings menu (ChatSettings). */}
+          <div class="relative" data-send-menu>
             <button
-              class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all"
-              style={{ background: 'var(--c-danger, #ef4444)' }}
-              onClick={() => {
-                if (props.onAbort) props.onAbort()
-                else abortChat()
+              class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full border-none text-white transition-all disabled:cursor-default disabled:opacity-30"
+              style={{ background: 'var(--c-accent)' }}
+              disabled={retryCountdownSeconds() > 0 || (!inputValue().trim() && !attachedFiles().length)}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return
+                e.preventDefault()
+                startLongPress()
               }}
-              title="Stop"
+              onPointerUp={handleSendPointerUp}
+              onPointerLeave={cancelLongPress}
+              onContextMenu={(e) => e.preventDefault()}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="6" width="12" height="12" rx="2" />
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>
             </button>
-          </Show>
+
+            {/* Long-press send options menu */}
+            <Show when={sendMenuOpen()}>
+              <div
+                class="absolute right-0 bottom-full z-50 mb-2 min-w-[200px] overflow-hidden rounded-xl shadow-lg"
+                style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
+              >
+                <button
+                  class="flex w-full cursor-pointer items-center gap-2.5 border-none px-4 py-3 text-left text-sm transition-colors"
+                  style={{ background: 'transparent', color: 'var(--c-text)' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-bg-raised)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  onClick={handleSendImmediate}
+                >
+                  <span style={{ 'flex-shrink': '0', 'font-size': '16px' }}>⚡</span>
+                  <span>Send immediately</span>
+                </button>
+              </div>
+            </Show>
+          </div>
         </div>
       </div>
     </div>
