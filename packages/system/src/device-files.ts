@@ -63,8 +63,6 @@ export interface DeviceFilesOptions {
   maxRunMs?: number
 }
 
-/** macOS keeps /Users, /Applications and the rest of the writable tree on this volume. */
-const MACOS_DATA = '/System/Volumes/Data'
 const MAX_WARNINGS = 3
 
 const defaultRemoteShell = (sshHost: string): [string, string[]] => [
@@ -286,11 +284,11 @@ export function createDeviceFiles(options: DeviceFilesOptions = {}) {
     jobs.set(key, job)
     expire(key, job, idleKillMs)
     // -x: stay on this file system. -H: follow $P if it is a symlink. nice: never compete with real work.
-    // At the macOS root, -x stops at the read-only system volume; /Users, /Applications and the rest of
-    // the root's folders live on the data volume, so measure that too and merge by name.
-    const dataRoot = target.osHint === 'macos' && p === '/'
-    const du = `nice -n 19 du -x -H -d 1 -k`
-    const proc = run(target, p, dataRoot ? `${du} "$P"; [ -d ${MACOS_DATA} ] && ${du} ${MACOS_DATA}` : `${du} "$P"`)
+    // macOS: every APFS volume of the boot group reports the same device, so -x does not stop at
+    // /System/Volumes, and the data volume would be counted twice (there and through the /Users,
+    // /Applications… firmlinks). -I skips the Volumes folder where that happens.
+    const skipVolumes = target.osHint === 'macos' && (p === '/' || p === '/System')
+    const proc = run(target, p, `nice -n 19 du -x -H ${skipVolumes ? '-I Volumes ' : ''}-d 1 -k "$P"`)
     job.proc = proc
     job.deadline = setTimeout(() => {
       if (result.done) return
@@ -311,14 +309,8 @@ export function createDeviceFiles(options: DeviceFilesOptions = {}) {
         if (tab < 0) continue
         const bytes = (parseInt(line.slice(0, tab), 10) || 0) * 1024
         const full = line.slice(tab + 1)
-        if (full === p || (dataRoot && full === MACOS_DATA)) {
-          // Both totals arrive at the macOS root: the root is their sum.
-          result.total = (dataRoot && result.total !== undefined ? result.total : 0) + bytes
-        } else {
-          // A name on both volumes keeps the larger (the data-volume side holds the files).
-          const name = path.posix.basename(full)
-          result.sizes[name] = Math.max(result.sizes[name] ?? 0, bytes)
-        }
+        if (full === p) result.total = bytes
+        else result.sizes[path.posix.basename(full)] = bytes
       }
     })
     // Only du's own complaints mean missing sizes; ssh warnings do not.
