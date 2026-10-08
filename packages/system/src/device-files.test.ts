@@ -174,24 +174,24 @@ describe('device files — sizes', () => {
     d.dispose()
   })
 
-  it('at the macOS root, adds the data volume and merges folders by name', async () => {
-    // The system volume alone holds almost nothing of /Users; the data volume holds the files.
+  it('at the macOS root and /System, skips the Volumes folder so the data volume counts once', async () => {
+    // The fake du reports the requested path as the total, plus a `skip` entry when given `-I Volumes`.
     const d = fakeDu(
-      `printf '4\\t/System\\n2\\t/Users\\n20\\t/\\n'
-       case "$S" in *"du -x -H -d 1 -k /System/Volumes/Data"*)
-         printf '100\\t/System/Volumes/Data/Users\\n3\\t/System/Volumes/Data/System\\n200\\t/System/Volumes/Data\\n';; esac`
+      `case "$S" in *"-I Volumes "*) printf '1\\t/skip\\n';; esac; printf '5\\t%s\\n' "$(printf %s "$S" | sed -n "s/^P='\\(.*\\)'$/\\1/p")"`
     )
     const mac: FsTarget = { local: false, sshHost: 'unused', osHint: 'macos' }
-    const get = () => d.sizes('mac', mac, '/')
-    await settle(get)
-    expect(get()).toMatchObject({ done: true, total: 220 * 1024, sizes: { Users: 100 * 1024, System: 4 * 1024 } })
+    for (const p of ['/', '/System']) {
+      const get = () => d.sizes('mac', mac, p)
+      await settle(get)
+      expect(get()).toMatchObject({ done: true, total: 5 * 1024, sizes: { skip: 1024 } })
+    }
     d.dispose()
   })
 
   it('below the macOS root, runs one du as usual', async () => {
     const d = fakeDu(
       `printf '7\\t/Users/josh\\n9\\t/Users\\n'
-       case "$S" in *"/System/Volumes/Data"*) printf '100\\t/System/Volumes/Data/Users\\n';; esac`
+       case "$S" in *"-I Volumes"*) printf '1\\t/Users/skip\\n';; esac`
     )
     const mac: FsTarget = { local: false, sshHost: 'unused', osHint: 'macos' }
     const get = () => d.sizes('mac', mac, '/Users')
