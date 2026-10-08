@@ -16,7 +16,6 @@ import {
   loadHistory,
   validateFile,
   canSend,
-  isAgentBusy,
   getStatusText,
   InputArea
 } from './InputArea.js'
@@ -116,16 +115,10 @@ describe('§4.5 InputArea', () => {
     it('enables send button when at least one attachment is present', () => {
       expect(canSend('', [{ name: 'test.txt' } as File])).toBe(true)
     })
-    it('shows abort button (⬛) only when agentStatus is working or thinking', () => {
-      expect(isAgentBusy('working')).toBe(true)
-      expect(isAgentBusy('thinking')).toBe(true)
-      expect(isAgentBusy('idle')).toBe(false)
-    })
-    it('replaces send button with abort button when agent is working', () => {
-      expect(isAgentBusy('working')).toBe(true)
-    })
-    it('calls abortChat/onAbort callback on abort button click', () => {
-      expect(typeof InputArea).toBe('function')
+    // Send stays enabled while the agent works (a mid-turn message steers it);
+    // Stop moved to the thread settings menu.
+    it('send does not depend on the agent being idle', () => {
+      expect(canSend('steer: use the other file', [])).toBe(true)
     })
   })
 
