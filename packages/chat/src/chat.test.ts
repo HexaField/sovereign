@@ -560,6 +560,19 @@ describe('§2.4 Chat Module (Server)', () => {
     expect(touchSpy).toHaveBeenCalledWith(threadId)
   })
 
+  // Regression: a thread's time only moved when a turn finished, so a long
+  // turn showed the previous turn's time in the Overview list.
+  it('a new message touches the thread at once; a duplicate does not', async () => {
+    const { threadId } = await chatModule.handleSessionCreate()
+    const touchSpy = threadManager.touch as ReturnType<typeof vi.fn>
+    touchSpy.mockClear()
+    await chatModule.handleSend(threadId, 'start a long task')
+    expect(touchSpy).toHaveBeenCalledWith(threadId)
+    touchSpy.mockClear()
+    await chatModule.handleSend(threadId, 'start a long task')
+    expect(touchSpy).not.toHaveBeenCalled()
+  })
+
   // Regression: when the agent emits chat.turn for the assistant but the
   // backend forgets the chat.status:idle (or the order is reversed), the UI
   // stays stuck on "Thinking…" and the Stop button stays armed. The chat
