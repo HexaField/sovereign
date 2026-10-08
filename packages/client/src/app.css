@@ -653,10 +653,15 @@ pre:hover .code-copy-btn {
   text-decoration: underline;
 }
 
+/* A wide table scrolls sideways inside the bubble instead of spilling past it (phones). */
 .msg-assistant table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   border-collapse: collapse;
   margin: 8px 0;
-  width: 100%;
   font-size: 0.9em;
 }
 .msg-assistant th,
@@ -664,6 +669,8 @@ pre:hover .code-copy-btn {
   border: 1px solid var(--c-border);
   padding: 6px 10px;
   text-align: left;
+  /* Columns keep readable lines; the table scrolls rather than crushing text to a word per line. */
+  min-width: 7em;
 }
 .msg-assistant th {
   background: var(--c-hover-bg);
