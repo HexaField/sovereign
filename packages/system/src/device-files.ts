@@ -12,6 +12,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { Writable } from 'node:stream'
 
@@ -45,7 +46,9 @@ export interface DirSizes {
   done: boolean
   /** du could not read some entries (permissions): sizes are lower bounds. */
   partial: boolean
-  /** du never reported the directory (unreachable device, unreadable path). */
+  /** du's first complaints, verbatim (e.g. `du: /x: Permission denied`). */
+  warnings: string[]
+  /** du never reported the directory (unreachable device, unreadable path), or ran too long. */
   error?: string
 }
 
@@ -56,7 +59,13 @@ export interface DeviceFilesOptions {
   sizesTtlMs?: number
   /** Kill a running du nobody has polled for this long (ms). */
   idleKillMs?: number
+  /** Kill any du that runs longer than this, polled or not (ms). */
+  maxRunMs?: number
 }
+
+/** macOS keeps /Users, /Applications and the rest of the writable tree on this volume. */
+const MACOS_DATA = '/System/Volumes/Data'
+const MAX_WARNINGS = 3
 
 const defaultRemoteShell = (sshHost: string): [string, string[]] => [
   'ssh',
@@ -157,6 +166,8 @@ interface SizeJob {
   proc?: ChildProcess
   /** Kills an unpolled du, or drops a finished result. */
   timer?: ReturnType<typeof setTimeout>
+  /** Kills a du that outlives `maxRunMs`. */
+  deadline?: ReturnType<typeof setTimeout>
 }
 
 /** How long a failed size job stays visible, so pollers see it end. */
@@ -166,7 +177,21 @@ export function createDeviceFiles(options: DeviceFilesOptions = {}) {
   const remoteShell = options.remoteShell ?? defaultRemoteShell
   const sizesTtlMs = options.sizesTtlMs ?? 10 * 60_000
   const idleKillMs = options.idleKillMs ?? 60_000
+  const maxRunMs = options.maxRunMs ?? 5 * 60_000
   const jobs = new Map<string, SizeJob>()
+  const homes = new Map<string, string>()
+
+  /** The login user's home directory on the device (cached). */
+  async function homeOf(target: FsTarget): Promise<string> {
+    if (target.local) return os.homedir()
+    const cached = homes.get(target.sshHost)
+    if (cached) return cached
+    const { out } = await collect(run(target, '/', 'printf %s "$HOME"'), 15_000)
+    const home = out.trim()
+    if (!home.startsWith('/')) return '/'
+    homes.set(target.sshHost, home)
+    return home
+  }
 
   /** Run a script with $P set to `p`, on the device. */
   function run(target: FsTarget, p: string, script: string): ChildProcess {
@@ -198,8 +223,9 @@ export function createDeviceFiles(options: DeviceFilesOptions = {}) {
     })
   }
 
+  /** List a directory; no path lists the user's home directory. */
   async function list(target: FsTarget, rawPath: unknown): Promise<FsListing> {
-    const p = cleanPath(rawPath)
+    const p = cleanPath(rawPath === undefined || rawPath === '' ? await homeOf(target) : rawPath)
     if (target.local) {
       let names: fs.Dirent[]
       try {
@@ -255,13 +281,24 @@ export function createDeviceFiles(options: DeviceFilesOptions = {}) {
       if (!existing.result.done) expire(key, existing, idleKillMs)
       return existing.result
     }
-    const result: DirSizes = { path: p, sizes: {}, done: false, partial: false }
+    const result: DirSizes = { path: p, sizes: {}, done: false, partial: false, warnings: [] }
     const job: SizeJob = { result }
     jobs.set(key, job)
     expire(key, job, idleKillMs)
     // -x: stay on this file system. -H: follow $P if it is a symlink. nice: never compete with real work.
-    const proc = run(target, p, `nice -n 19 du -x -H -d 1 -k "$P"`)
+    // At the macOS root, -x stops at the read-only system volume; /Users, /Applications and the rest of
+    // the root's folders live on the data volume, so measure that too and merge by name.
+    const dataRoot = target.osHint === 'macos' && p === '/'
+    const du = `nice -n 19 du -x -H -d 1 -k`
+    const proc = run(target, p, dataRoot ? `${du} "$P"; [ -d ${MACOS_DATA} ] && ${du} ${MACOS_DATA}` : `${du} "$P"`)
     job.proc = proc
+    job.deadline = setTimeout(() => {
+      if (result.done) return
+      const limit = maxRunMs >= 60_000 ? `${Math.round(maxRunMs / 60_000)} min` : `${maxRunMs / 1000} s`
+      result.error = `stopped after ${limit}: folder too large to count`
+      proc.kill('SIGKILL')
+    }, maxRunMs)
+    job.deadline.unref?.()
     let errText = ''
     let buf = ''
     proc.stdout!.on('data', (d: Buffer) => {
@@ -274,20 +311,32 @@ export function createDeviceFiles(options: DeviceFilesOptions = {}) {
         if (tab < 0) continue
         const bytes = (parseInt(line.slice(0, tab), 10) || 0) * 1024
         const full = line.slice(tab + 1)
-        if (full === p) result.total = bytes
-        else result.sizes[path.posix.basename(full)] = bytes
+        if (full === p || (dataRoot && full === MACOS_DATA)) {
+          // Both totals arrive at the macOS root: the root is their sum.
+          result.total = (dataRoot && result.total !== undefined ? result.total : 0) + bytes
+        } else {
+          // A name on both volumes keeps the larger (the data-volume side holds the files).
+          const name = path.posix.basename(full)
+          result.sizes[name] = Math.max(result.sizes[name] ?? 0, bytes)
+        }
       }
     })
     // Only du's own complaints mean missing sizes; ssh warnings do not.
     proc.stderr!.on('data', (d: Buffer) => {
       errText += d.toString()
-      if (/^du: /m.test(errText)) result.partial = true
+      const complaints = errText.match(/^du: .*$/gm)
+      if (complaints) {
+        result.partial = true
+        result.warnings = complaints.slice(0, MAX_WARNINGS)
+      }
     })
     const finish = () => {
       if (result.done) return
       result.done = true
       job.proc = undefined
-      if (result.total === undefined) {
+      clearTimeout(job.deadline)
+      if (result.error) expire(key, job, FAILED_TTL_MS)
+      else if (result.total === undefined) {
         result.error = errText.trim().split('\n').pop() || 'du failed'
         expire(key, job, FAILED_TTL_MS)
       } else expire(key, job, sizesTtlMs)
@@ -349,6 +398,7 @@ export function createDeviceFiles(options: DeviceFilesOptions = {}) {
   function dispose(): void {
     for (const job of jobs.values()) {
       clearTimeout(job.timer)
+      clearTimeout(job.deadline)
       job.proc?.kill('SIGKILL')
     }
     jobs.clear()
