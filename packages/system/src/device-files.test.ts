@@ -51,6 +51,12 @@ describe('device files — list', () => {
     ['local', local],
     ['remote', remote]
   ] as const) {
+    it(`lists the user's home directory when no path is given (${label})`, async () => {
+      // The "remote" shell runs locally, so its $HOME is this user's too.
+      expect((await files.list(target, undefined)).path).toBe(os.homedir())
+      expect((await files.list(target, '')).path).toBe(os.homedir())
+    })
+
     it(`lists a directory's entries with type and size (${label})`, async () => {
       const listing = await files.list(target, root)
       const e = byName(listing.entries)
@@ -138,6 +144,61 @@ describe('device files — sizes', () => {
       error: 'ssh: connect to host x: Connection refused'
     })
     down.dispose()
+  })
+
+  /** A device whose "du" prints `out` on stdout and `err` on stderr; it also sees the script on stdin. */
+  const fakeDu = (body: string, opts = {}) =>
+    createDeviceFiles({ remoteShell: () => ['bash', ['-c', `S=$(cat); ${body}`]], ...opts })
+
+  it('stops a du that runs past the cap, polled or not, with a reason', async () => {
+    const slow = fakeDu('sleep 30', { maxRunMs: 150, idleKillMs: 60_000 })
+    const get = () => slow.sizes('dev', remote, root)
+    await settle(get)
+    expect(get()).toMatchObject({ done: true, error: 'stopped after 0.15 s: folder too large to count' })
+    slow.dispose()
+  })
+
+  it("passes du's first complaints through verbatim", async () => {
+    const d = fakeDu(
+      `printf '1\\t/x/a\\n'; for i in 1 2 3 4; do echo "du: /x/b$i: Permission denied" >&2; done; printf '9\\t/x\\n'`
+    )
+    const get = () => d.sizes('dev', remote, '/x')
+    await settle(get)
+    expect(get()).toMatchObject({
+      done: true,
+      partial: true,
+      total: 9 * 1024,
+      sizes: { a: 1024 },
+      warnings: ['du: /x/b1: Permission denied', 'du: /x/b2: Permission denied', 'du: /x/b3: Permission denied']
+    })
+    d.dispose()
+  })
+
+  it('at the macOS root, adds the data volume and merges folders by name', async () => {
+    // The system volume alone holds almost nothing of /Users; the data volume holds the files.
+    const d = fakeDu(
+      `printf '4\\t/System\\n2\\t/Users\\n20\\t/\\n'
+       case "$S" in *"du -x -H -d 1 -k /System/Volumes/Data"*)
+         printf '100\\t/System/Volumes/Data/Users\\n3\\t/System/Volumes/Data/System\\n200\\t/System/Volumes/Data\\n';; esac`
+    )
+    const mac: FsTarget = { local: false, sshHost: 'unused', osHint: 'macos' }
+    const get = () => d.sizes('mac', mac, '/')
+    await settle(get)
+    expect(get()).toMatchObject({ done: true, total: 220 * 1024, sizes: { Users: 100 * 1024, System: 4 * 1024 } })
+    d.dispose()
+  })
+
+  it('below the macOS root, runs one du as usual', async () => {
+    const d = fakeDu(
+      `printf '7\\t/Users/josh\\n9\\t/Users\\n'
+       case "$S" in *"/System/Volumes/Data"*) printf '100\\t/System/Volumes/Data/Users\\n';; esac`
+    )
+    const mac: FsTarget = { local: false, sshHost: 'unused', osHint: 'macos' }
+    const get = () => d.sizes('mac', mac, '/Users')
+    await settle(get)
+    expect(get()).toMatchObject({ done: true, total: 9 * 1024 })
+    expect(get().sizes).toEqual({ josh: 7 * 1024 })
+    d.dispose()
   })
 })
 

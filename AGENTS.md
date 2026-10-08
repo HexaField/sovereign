@@ -418,16 +418,18 @@ System → Devices → a device card → **Files**: browse the whole file system
 
 | Route | Does |
 | --- | --- |
-| `GET /api/system/devices/:device/fs?path=` | List one directory (name, type, apparent size, mtime) |
-| `GET …/fs/sizes?path=` | Start or poll a `du -x -d 1` job for that directory: child sizes fill in as du prints them; `done`, `total`, `partial` (some folders unreadable) |
+| `GET /api/system/devices/:device/fs?path=` | List one directory (name, type, apparent size, mtime). No `path` lists the login user's `$HOME` (cached per host); the response's `path` says which |
+| `GET …/fs/sizes?path=` | Start or poll a `du -x -d 1` job for that directory: child sizes fill in as du prints them; `done`, `total`, `partial` (some folders unreadable), `warnings` (du's first 3 complaints, verbatim), `error` |
 | `GET …/fs/download?path=` | Stream a file, or a directory as `tar -czf -` |
 
 - `:device` is the device label from `/api/system/devices/metrics` (`hostname` there). `deviceMonitor.findDevice` resolves it to local or SSH (`sshHost`, `osHint`, same BatchMode access as metrics).
 - **Quoting:** every command runs as a script on stdin (`bash -s`, locally or over ssh) with the path set as `P='…'` via `shQuote`; the path is never interpolated unquoted. Paths must be absolute; they are normalised.
 - **Listing:** local uses `fs.readdir`; Linux remotes `find -H -printf`; macOS remotes `find -H -print0 | xargs -0 -r stat -f`. `-H` (and `du -H`) follow the requested path when it is a symlink (macOS `/tmp`, `/var`); links in a listing open like folders.
-- **Sizes:** `nice -n 19`, `-x` (one file system). A finished result is cached 10 min; a running du nobody polls for 60 s is killed by a timer. No sudo: `du:` errors make sizes lower bounds (`partial`). A du that never reports the directory (device unreachable) ends with `error`, cached 10 s. Root of Field Server sizes in ~9 s.
+- **Sizes:** `nice -n 19`, `-x` (one file system). A finished result is cached 10 min; a running du nobody polls for 60 s is killed by a timer, and any du is killed after 5 min (`maxRunMs`) with `error: stopped after 5 min …` — a `du /` on a multi-TB disk otherwise runs for many minutes. No sudo: `du:` errors make sizes lower bounds (`partial`). A du that never reports the directory (device unreachable) ends with `error`, cached 10 s. Root of Field Server sizes in ~9 s.
+- **macOS root:** `du -x /` stays on the read-only system volume, and `/Users`, `/Applications` etc. live on the data volume (firmlinks). At `/` on macOS the job also runs `du -x -d 1 /System/Volumes/Data`; names on both volumes keep the larger size and the total is the sum. Below `/` a single du is right. `/home` on macOS is an autofs mount that is normally empty; home folders are under `/Users`.
+- **Override matching:** `findOverride` folds curly apostrophes to straight ones — macOS names the host `Josh’s MacBook Pro`, config keys are typed with `'`. Before this, such an override (label, `sshHost`) silently did not apply.
 - **Download:** the script prints `@@SOVEREIGN-FS@@DIR|FILE` on stderr before data; any stderr line may carry it (ssh warnings and login shells print first). Missing → 404, unreadable → 403, both before headers. A directory archives its physical path, so a symlinked directory gives the target's contents. If the stream breaks after headers (non-zero exit; tar 1–2 count as success), the response is destroyed so the browser shows a failed download.
-- **UI:** `FileBrowser.tsx` mounts on first open of the Files section, so nothing is counted until asked. Device cards are keyed by hostname: the 30 s metrics poll used to remount every card (keyed by object), which would close an open browser.
+- **UI:** `FileBrowser.tsx` mounts on first open of the Files section and opens the device user's home. Folder sizes count only after the **Sizes** toggle; the toggle stays on while browsing. du's own warning lines show under the list. Device cards are keyed by hostname: the 30 s metrics poll used to remount every card (keyed by object), which would close an open browser.
 - Replaces the old "Disk usage by directory" list (a 12 s-capped `du /` every 5 min per device, cleared between runs — it timed out on big disks and flickered away).
 - Phones (Android/iOS) are not in the device list: no SSH. Wind-tunnel s42 covers the routes.
 

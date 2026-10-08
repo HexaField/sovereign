@@ -1,6 +1,7 @@
-// File system viewer for one tailnet device: browse directories, see what
-// takes up space (folder sizes fill in as the server counts them), and
-// download a file or a whole directory (tar.gz) to this device.
+// File system viewer for one tailnet device: browse directories (starting in
+// the user's home), see what takes up space on request (folder sizes fill in
+// as the server counts them), and download a file or a whole directory
+// (tar.gz) to this device.
 
 import { createSignal, createMemo, onCleanup, Show, For } from 'solid-js'
 
@@ -16,6 +17,7 @@ interface DirSizes {
   total?: number
   done: boolean
   partial: boolean
+  warnings?: string[]
   error?: string
 }
 
@@ -39,6 +41,8 @@ export function FileBrowser(props: { device: string }) {
   const [error, setError] = createSignal<string | null>(null)
   const [loading, setLoading] = createSignal(false)
   const [showAll, setShowAll] = createSignal(false)
+  // Counting runs du on the device, which can take minutes on a big disk: only on request.
+  const [counting, setCounting] = createSignal(false)
   // A newer navigation cancels the older one's requests and size polling.
   let generation = 0
   let pollTimer: ReturnType<typeof setTimeout> | undefined
@@ -59,6 +63,7 @@ export function FileBrowser(props: { device: string }) {
     }
   }
 
+  /** Open a directory; '' opens the device user's home. */
   const open = async (dir: string) => {
     const gen = ++generation
     clearTimeout(pollTimer)
@@ -73,18 +78,27 @@ export function FileBrowser(props: { device: string }) {
       setEntries(body.entries)
       setSizes(null)
       setShowAll(false)
-      void pollSizes(body.path, gen)
+      if (counting()) void pollSizes(body.path, gen)
     } catch (err) {
       if (gen === generation) setError((err as Error).message)
     } finally {
       if (gen === generation) setLoading(false)
     }
   }
-  void open('/')
+  void open('')
 
-  /** A directory's size: known, still counting (undefined), or unknown once du ends (null). */
+  const toggleCounting = () => {
+    const on = !counting()
+    setCounting(on)
+    clearTimeout(pollTimer)
+    if (on) void pollSizes(path(), generation)
+    else setSizes(null)
+  }
+
+  /** A directory's size: known, still counting (undefined), unknown once du ends (null), or not asked for (null). */
   const sizeOf = (e: FsEntry): number | undefined | null => {
     if (e.type !== 'dir') return e.size
+    if (!counting()) return null
     const s = sizes()
     const known = s?.sizes[e.name]
     if (known !== undefined) return known
@@ -106,7 +120,7 @@ export function FileBrowser(props: { device: string }) {
       ...parts.map((name, i) => ({ name, path: `/${parts.slice(0, i + 1).join('/')}` }))
     ]
   })
-  const counting = () => {
+  const progress = () => {
     const s = sizes()
     const dirs = entries().filter((e) => e.type === 'dir').length
     return s && !s.done && dirs > 0 ? `${Object.keys(s.sizes).length} of ${dirs} folders counted` : null
@@ -136,7 +150,19 @@ export function FileBrowser(props: { device: string }) {
           <Show when={sizes()?.total !== undefined}>
             <span>{fmtSize(sizes()!.total!)}</span>
           </Show>
-          <Show when={counting()}>{(text) => <span>{text()}…</span>}</Show>
+          <Show when={progress()}>{(text) => <span>{text()}…</span>}</Show>
+          <button
+            class="rounded border px-1.5 hover:underline"
+            style={{
+              'border-color': counting() ? 'var(--c-accent, #a855f7)' : 'var(--c-border)',
+              color: counting() ? 'var(--c-accent, #a855f7)' : 'var(--c-text-muted)'
+            }}
+            title={counting() ? 'Stop counting folder sizes' : 'Count folder sizes (runs du on the device)'}
+            onClick={toggleCounting}
+            data-testid="fs-sizes-toggle"
+          >
+            {counting() ? 'Sizes on' : 'Sizes'}
+          </button>
           <button class="hover:underline" title="Reload" onClick={() => void open(path())}>
             ↻
           </button>
@@ -197,7 +223,7 @@ export function FileBrowser(props: { device: string }) {
                   <div class="h-full rounded-full" style={{ width: `${pct()}%`, background: '#a855f7' }} />
                 </div>
                 <span class="w-16 shrink-0 text-right font-mono text-[10px]" style={{ color: 'var(--c-text)' }}>
-                  {size() === undefined ? '…' : size() === null ? '—' : fmtSize(size()!)}
+                  {size() === undefined ? '…' : size() === null ? (counting() ? '—' : '') : fmtSize(size()!)}
                 </span>
                 <Show when={e.type !== 'other'} fallback={<span class="w-5 shrink-0" />}>
                   <a
@@ -230,8 +256,14 @@ export function FileBrowser(props: { device: string }) {
       </Show>
       <Show when={sizes()?.partial}>
         <div class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-          Some folders could not be read (permissions): their sizes are lower bounds. "—" marks folders on another disk
-          or unreadable.
+          Some folders could not be read: their sizes are lower bounds. "—" marks folders on another disk or unreadable.
+          <For each={sizes()!.warnings ?? []}>
+            {(w) => (
+              <div class="truncate font-mono" title={w}>
+                {w}
+              </div>
+            )}
+          </For>
         </div>
       </Show>
     </div>
