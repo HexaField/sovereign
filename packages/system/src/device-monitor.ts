@@ -110,12 +110,11 @@ export interface DiscoveredDevice {
 // OS values that SSH collection cannot handle.
 export const SKIP_OS = new Set(['android', 'iOS', 'windows'])
 
-/** The override for a tailscale HostName (case-insensitive). */
+/** The override for a tailscale HostName: case-insensitive, and curly quotes match straight ones (macOS names "Josh’s MacBook"). */
 export function findOverride(overrides: Record<string, DeviceOverride>, hostname: string): DeviceOverride | undefined {
-  const lower = hostname.toLowerCase()
-  return (
-    overrides[hostname] ?? overrides[lower] ?? Object.entries(overrides).find(([k]) => k.toLowerCase() === lower)?.[1]
-  )
+  const norm = (s: string) => s.toLowerCase().replace(/[‘’ʼ]/g, "'")
+  const want = norm(hostname)
+  return overrides[hostname] ?? Object.entries(overrides).find(([k]) => norm(k) === want)?.[1]
 }
 
 // ── Collection scripts ─────────────────────────────────────────────────
@@ -800,7 +799,7 @@ export function createDeviceMonitor(config?: DeviceMonitorConfig) {
       // Tailscale unavailable — fall back to local-only
       console.warn('[device-monitor] tailscale unavailable — collecting local metrics only')
       const hostname = os.hostname()
-      const override = overrides[hostname] ?? overrides[hostname.toLowerCase()]
+      const override = findOverride(overrides, hostname)
       return [collectLocal(override?.label ?? hostname, override?.watchServices ?? ['sovereign'])]
     }
     lastDiscovered = discovered
@@ -816,7 +815,7 @@ export function createDeviceMonitor(config?: DeviceMonitorConfig) {
       } catch {
         // No tailscale: only this machine, under its label.
         const hostname = os.hostname()
-        const override = overrides[hostname] ?? overrides[hostname.toLowerCase()]
+        const override = findOverride(overrides, hostname)
         lastDiscovered = [
           {
             hostname,

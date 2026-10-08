@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { createDeviceMonitor } from './device-monitor.js'
+import { createDeviceMonitor, findOverride } from './device-monitor.js'
+
+describe('findOverride', () => {
+  const overrides = { "josh's macbook pro": { label: 'Macbook', sshHost: 'macbook' }, 'Field-Server': { label: 'FS' } }
+
+  it('matches case-insensitively, and a curly apostrophe in the host name matches a straight one', () => {
+    expect(findOverride(overrides, 'Josh’s MacBook Pro')).toEqual({ label: 'Macbook', sshHost: 'macbook' })
+    expect(findOverride(overrides, "JOSH'S MACBOOK PRO")?.label).toBe('Macbook')
+    expect(findOverride(overrides, 'field-server')?.label).toBe('FS')
+  })
+
+  it('returns nothing for an unknown host', () => {
+    expect(findOverride(overrides, 'Josh’s iPad')).toBeUndefined()
+  })
+})
 
 describe('DeviceMonitor', () => {
   it('collects local device metrics when tailscale unavailable', async () => {
