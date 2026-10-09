@@ -1,4 +1,5 @@
 import { renderMarkdown, escapeHtml } from './markdown.js'
+import { fileRenderKind, fileViewUrl, HTML_SANDBOX } from './file-view.js'
 
 function openFileInWorkspace(filePath: string): void {
   window.dispatchEvent(new CustomEvent('sovereign:open-file', { detail: { path: filePath } }))
@@ -74,6 +75,25 @@ export function registerFileChipHandlers(): void {
     chip.insertAdjacentElement('afterend', panel)
 
     panel.querySelector('.file-chip-expanded-close')!.addEventListener('click', () => panel.remove())
+
+    // HTML renders as a page and images as images, straight from the file.
+    const kind = fileRenderKind(filePath)
+    if (kind === 'html' || kind === 'image') {
+      const src = fileViewUrl(filePath)
+      const body = panel.querySelector('.file-chip-expanded-body')!
+      body.classList.add('file-chip-expanded-body--media')
+      body.innerHTML =
+        kind === 'html'
+          ? `<div class="file-chip-html"><iframe sandbox="${HTML_SANDBOX}" src="${escapeHtml(src)}" title="${escapeHtml(filePath)}"></iframe></div>`
+          : `<img class="file-chip-image" src="${escapeHtml(src)}" alt="${escapeHtml(filePath)}">`
+      panel
+        .querySelector('.file-chip-expanded-header div')!
+        .insertAdjacentHTML(
+          'afterbegin',
+          `<a class="file-chip-expanded-newtab" href="${escapeHtml(src)}" target="_blank" rel="noopener" title="Open in a new tab">⧉</a>`
+        )
+      return
+    }
 
     fetch(`/api/files/workspace/read?path=${encodeURIComponent(filePath)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
