@@ -448,6 +448,7 @@ System → Devices → a device card → **Files**: browse the whole file system
 - `~/` expands with a home dir taken from the first known `/home/<u>/` or `/Users/<u>/` path.
 - Never chipped: unknown paths outside links, paths inside fenced code blocks, paths without an extension, paths with characters outside `[\w.+-]` (spaces, `@`).
 - Results cache per text and workspace-list version: a message renders again once the lists arrive.
+- **Opening a chip** (`lib/file-chip-handlers.ts`) and the **file viewer** (`FilePanel.tsx`) pick a view with `lib/file-view.ts`: HTML renders as a page in an iframe, images (png, jpg, gif, webp, svg…) as `<img>`, markdown rendered, anything else as text. HTML and images load from `GET /api/files/view/<absolute path>` (files under the home dir; `/view/~/…` expands). The path sits in the URL path so a page's relative links (`x.json`, CSS) resolve beside it. HTML and SVG responses carry `Content-Security-Policy: sandbox allow-scripts …`, and the iframe has the same `sandbox`: scripts run, but in an opaque origin with no access to Sovereign's API or storage — also when the page is opened in its own tab. A page's `fetch()` of a sibling file fails (cross-origin from the opaque origin; no CORS on purpose), so pages should embed their data. In the viewer, Edit shows the source.
 
 ## Network map (`packages/system/src/network-map.ts`)
 
