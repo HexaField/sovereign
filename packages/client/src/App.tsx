@@ -23,6 +23,7 @@ import {
 
 // WS + connection stores
 import { wsStore } from './ws/index.js'
+import { pageTitle } from './lib/page-title.js'
 import { initTtsPlayer } from './features/voice/tts-player.js'
 import { initRemoteDictation } from './features/voice/remote-dictation.js'
 import { initConnectionStore, setConnectionStatus } from './features/connection/store.js'
@@ -91,6 +92,12 @@ export default function App() {
 
     const cleanupThreads = initThreadStore(wsStore, activeWorkspace()?.orgId)
     cleanups.push(cleanupThreads)
+
+    // Tab title follows the active thread (and its renames).
+    createEffect(() => {
+      const key = threadKey()
+      document.title = pageTitle(key ? threads().find((t) => t.id === key)?.label : undefined)
+    })
 
     // Keep the workspace/membrane dropdown in sync with the active thread.
     let lastSyncedThreadId: string | null = null
