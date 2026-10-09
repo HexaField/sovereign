@@ -565,10 +565,46 @@ pre:hover .code-copy-btn {
 .file-chip-expanded-open:hover {
   color: var(--c-accent);
 }
+.file-chip-expanded-newtab {
+  color: var(--c-text-muted);
+  font-size: 13px;
+  padding: 0 4px;
+  line-height: 1;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.file-chip-expanded-newtab:hover {
+  color: var(--c-accent);
+}
 .file-chip-expanded-body {
   max-height: 300px;
   overflow: auto;
   padding: 8px;
+}
+/* Rendered HTML and images get room; the page frame can be dragged taller. */
+.file-chip-expanded-body--media {
+  max-height: none;
+  padding: 0;
+}
+.file-chip-html {
+  height: 480px;
+  min-height: 160px;
+  overflow: hidden;
+  resize: vertical;
+  background: #fff;
+}
+.file-chip-html iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.file-chip-image {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  margin: 8px auto;
+  background: repeating-conic-gradient(#8080801a 0% 25%, transparent 0% 50%) 50% / 16px 16px;
 }
 .file-chip-expanded-body pre {
   margin: 0;
