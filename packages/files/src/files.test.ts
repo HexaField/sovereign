@@ -182,6 +182,51 @@ describe('File Routes', () => {
     expect(names.some((n) => n.startsWith('runtime'))).toBe(false)
   })
 
+  it('GET /api/files/view/<path> serves files under home with their type; HTML and SVG sandboxed', async () => {
+    const express = (await import('express')).default
+    const request = (await import('supertest')).default
+    const { createFileRouter } = await import('./routes.js')
+    const home = path.join(tmpDir, 'home')
+    await fs.mkdir(path.join(home, 'my plans'), { recursive: true })
+    await fs.writeFile(path.join(home, 'my plans/tree.html'), '<script>x()</script>')
+    await fs.writeFile(path.join(home, 'my plans/tree.json'), '{"a":1}')
+    await fs.writeFile(path.join(home, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+    await fs.writeFile(path.join(home, 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    const prevHome = process.env.HOME
+    process.env.HOME = home
+    try {
+      const app = express()
+      app.use('/api/files', createFileRouter(service))
+      const enc = (p: string) => p.split('/').map(encodeURIComponent).join('/')
+
+      const html = await request(app).get(`/api/files/view${enc(path.join(home, 'my plans/tree.html'))}`)
+      expect(html.status).toBe(200)
+      expect(html.headers['content-type']).toMatch(/^text\/html/)
+      expect(html.headers['content-security-policy']).toMatch(/^sandbox allow-scripts/)
+      expect(html.text).toBe('<script>x()</script>')
+
+      // A relative link in the page resolves to the file beside it.
+      const json = await request(app).get(`/api/files/view${enc(path.join(home, 'my plans/tree.json'))}`)
+      expect(json.headers['content-type']).toMatch(/^application\/json/)
+      expect(json.headers['content-security-policy']).toBeUndefined()
+
+      const svg = await request(app).get('/api/files/view/~/logo.svg')
+      expect(svg.status).toBe(200)
+      expect(svg.headers['content-type']).toBe('image/svg+xml')
+      expect(svg.headers['content-security-policy']).toMatch(/^sandbox/)
+
+      const png = await request(app).get(`/api/files/view${home}/pic.png`)
+      expect(png.headers['content-type']).toBe('image/png')
+
+      expect((await request(app).get(`/api/files/view${home}/missing.html`)).status).toBe(404)
+      expect((await request(app).get('/api/files/view/etc/hostname')).status).toBe(403)
+      expect((await request(app).get(`/api/files/view${home}/..%2F..%2Fetc%2Fhostname`)).status).toBe(403)
+      expect((await request(app).get(`/api/files/view${home}/my%20plans`)).status).toBe(400)
+    } finally {
+      process.env.HOME = prevHome
+    }
+  })
+
   it('GET /api/files?path=...&project=... returns file content', async () => {
     const express = (await import('express')).default
     const request = (await import('supertest')).default

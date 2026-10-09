@@ -1,6 +1,7 @@
 /**
  * FilePanel — Unified file viewer with universal file tree, multi-file tab bar,
- * edit/view toggle, markdown rendering, image preview, and Monaco editor.
+ * edit/view toggle, markdown rendering, image preview, rendered HTML (sandboxed)
+ * and Monaco editor.
  *
  * The file tree shows ALL registered workspace roots (orgs), not just the
  * active workspace. Open files persist per-tab via sessionStorage.
@@ -8,7 +9,8 @@
  * Desktop: file tree slides out as overlay drawer from left edge.
  * Mobile: file tree fills the view; tapping a file switches to viewer in-place.
  */
-import { Component, Show, For, createSignal, createEffect, onCleanup, onMount, batch } from 'solid-js'
+import { Component, Show, For, createSignal, createEffect, createMemo, onCleanup, onMount, batch } from 'solid-js'
+import { fileViewUrl, HTML_SANDBOX } from '../../../lib/file-view.js'
 import { marked } from 'marked'
 import {
   lastOpenFilePath,
@@ -410,6 +412,8 @@ const FilePanel: Component = () => {
   const [loading, setLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [renderedHtml, setRenderedHtml] = createSignal('')
+  // Changes whenever the file is (re)loaded, so a rendered page or image reloads after a save.
+  const viewVersion = createMemo(() => (fileData(), Date.now()))
   const [editorContent, setEditorContent] = createSignal('')
   const [drawerOpen, setDrawerOpen] = createSignal(false)
   const [ctxMenu, setCtxMenu] = createSignal<{ x: number; y: number; node: FileNode | null; rootPath: string } | null>(
@@ -902,37 +906,35 @@ const FilePanel: Component = () => {
 
     return (
       <Show when={fd()}>
-        {/* Image preview */}
+        {/* Image preview: loaded from the file itself (an SVG runs in the server's CSP sandbox) */}
         <Show when={isImage(e())}>
           <div
             class="flex h-full items-center justify-center overflow-auto p-6"
             style={{ background: 'var(--c-bg-raised, var(--c-bg))' }}
           >
             <div class="flex flex-col items-center gap-3">
-              <Show
-                when={fd()!.encoding === 'base64'}
-                fallback={
-                  <div
-                    class="max-h-[70vh] max-w-full overflow-auto rounded shadow-lg"
-                    style={{
-                      background: 'repeating-conic-gradient(#808080 0% 25%, transparent 0% 50%) 50% / 16px 16px'
-                    }}
-                    innerHTML={fd()!.content}
-                  />
-                }
-              >
-                <img
-                  src={`data:image/${e()};base64,${fd()!.content}`}
-                  alt={fileName(activeFilePath()!)}
-                  class="max-h-[70vh] max-w-full rounded object-contain shadow-lg"
-                  style={{ background: 'repeating-conic-gradient(#808080 0% 25%, transparent 0% 50%) 50% / 16px 16px' }}
-                />
-              </Show>
+              <img
+                src={fileViewUrl(activeFilePath()!, viewVersion())}
+                alt={fileName(activeFilePath()!)}
+                class="max-h-[70vh] max-w-full rounded object-contain shadow-lg"
+                style={{ background: 'repeating-conic-gradient(#808080 0% 25%, transparent 0% 50%) 50% / 16px 16px' }}
+              />
               <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
                 {fileName(activeFilePath()!)} — {formatBytes(fd()!.size)}
               </span>
             </div>
           </div>
+        </Show>
+
+        {/* HTML rendered as a page in a sandboxed frame; Edit shows the source */}
+        <Show when={e() === 'html' || e() === 'htm'}>
+          <iframe
+            src={fileViewUrl(activeFilePath()!, viewVersion())}
+            sandbox={HTML_SANDBOX}
+            title={fileName(activeFilePath()!)}
+            class="h-full w-full border-0"
+            style={{ background: '#fff' }}
+          />
         </Show>
 
         {/* Markdown rendered */}
@@ -944,7 +946,7 @@ const FilePanel: Component = () => {
         </Show>
 
         {/* Plain text / code */}
-        <Show when={!isImage(e()) && e() !== 'md'}>
+        <Show when={!isImage(e()) && e() !== 'md' && e() !== 'html' && e() !== 'htm'}>
           <pre
             class="h-full overflow-auto p-4 text-xs leading-relaxed"
             style={{ 'font-family': 'var(--font-mono, monospace)', color: 'var(--c-text)' }}

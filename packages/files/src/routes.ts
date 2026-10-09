@@ -237,6 +237,7 @@ export function createFileRouter(
   // Content-type lookup for raw file serving
   const CONTENT_TYPE_MAP: Record<string, string> = {
     '.html': 'text/html',
+    '.htm': 'text/html',
     '.css': 'text/css',
     '.js': 'application/javascript',
     '.mjs': 'application/javascript',
@@ -279,6 +280,48 @@ export function createFileRouter(
     '.log': 'text/plain',
     '.env': 'text/plain'
   }
+
+  // GET /api/files/view/<absolute path> — serve a file under the home dir with its own
+  // content type, for chips and the file viewer to render HTML and images. The path
+  // sits in the URL path (not a query), so a page's relative links (its .json, CSS,
+  // images) resolve to the files beside it. HTML and SVG carry a CSP sandbox: they run
+  // in an opaque origin, never with Sovereign's, even when opened in their own tab.
+  router.get(/^\/view(\/.+)$/, (async (req, res) => {
+    const homeDir = os.homedir()
+    let resolved: string
+    try {
+      let p = decodeURIComponent((req.params as Record<string, string>)[0])
+      // Chips may carry ~/ paths when the client does not know the home dir yet.
+      if (p.startsWith('/~/')) p = nodePath.join(homeDir, p.slice(3))
+      resolved = nodePath.resolve(p)
+    } catch {
+      res.status(400).json({ error: 'bad path' })
+      return
+    }
+    if (!resolved.startsWith(homeDir + '/')) {
+      res.status(403).json({ error: 'Path outside home directory' })
+      return
+    }
+    try {
+      const stat = await fs.stat(resolved)
+      if (!stat.isFile()) {
+        res.status(400).json({ error: 'Not a file' })
+        return
+      }
+      const ext = nodePath.extname(resolved).toLowerCase()
+      const contentType = CONTENT_TYPE_MAP[ext] || 'application/octet-stream'
+      res.setHeader('Content-Type', contentType.startsWith('text/') ? `${contentType}; charset=utf-8` : contentType)
+      res.setHeader('Content-Length', stat.size)
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      if (ext === '.html' || ext === '.htm' || ext === '.svg') {
+        res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-popups allow-forms allow-modals')
+      }
+      const { createReadStream } = await import('node:fs')
+      createReadStream(resolved).pipe(res)
+    } catch (err: any) {
+      res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: err.message })
+    }
+  }) as RequestHandler)
 
   // GET /api/files/raw?path=...&project=...&download=1
   router.get('/raw', (async (req, res) => {
