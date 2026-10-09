@@ -159,6 +159,29 @@ describe('File Tree (detailed)', () => {
 })
 
 describe('File Routes', () => {
+  it('GET /api/files/workspace lists files 8 levels deep and leaves out excluded dirs', async () => {
+    const express = (await import('express')).default
+    const request = (await import('supertest')).default
+    const { createFileRouter } = await import('./routes.js')
+    const deep = path.join(tmpDir, 'a/b/c/d/e/f')
+    await fs.mkdir(deep, { recursive: true })
+    await fs.writeFile(path.join(deep, 'deep.md'), 'x')
+    await fs.mkdir(path.join(tmpDir, 'runtime'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'runtime/log.jsonl'), 'x')
+    const app = express()
+    app.use(
+      '/api/files',
+      createFileRouter(service, undefined, undefined, {
+        workspaceRoot: tmpDir,
+        workspaceExclude: [path.join(tmpDir, 'runtime')]
+      })
+    )
+    const res = await request(app).get('/api/files/workspace')
+    const names = (res.body.entries as Array<{ name: string }>).map((e) => e.name)
+    expect(names).toContain('a/b/c/d/e/f/deep.md')
+    expect(names.some((n) => n.startsWith('runtime'))).toBe(false)
+  })
+
   it('GET /api/files?path=...&project=... returns file content', async () => {
     const express = (await import('express')).default
     const request = (await import('supertest')).default

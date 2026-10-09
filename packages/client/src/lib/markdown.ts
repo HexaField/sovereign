@@ -38,6 +38,34 @@ let absoluteToRelative: Map<string, string> = new Map()
 /** Last workspace path we loaded files for */
 let lastWorkspacePath: string | null = null
 
+/** Add `/api/files/workspace` entries (relative name + absolute path) to the chip caches. */
+function indexWorkspaceEntries(entries: Array<{ name: string; path: string; isDirectory?: boolean }>): void {
+  workspaceFiles ??= new Set()
+  for (const e of entries) {
+    if (e.isDirectory) continue
+    const relPath = e.name
+    workspaceFiles.add(relPath)
+    if (!workspaceFilePaths.has(relPath)) workspaceFilePaths.set(relPath, e.path)
+    absoluteToRelative.set(e.path, relPath)
+    // Also store the bare filename (first wins)
+    const bareName = relPath.split('/').pop() || relPath
+    if (!workspaceFilePaths.has(bareName)) {
+      workspaceFiles.add(bareName)
+      workspaceFilePaths.set(bareName, e.path)
+    }
+  }
+}
+
+/** Tests only: replace the chip caches with these workspace entries. */
+export function setWorkspaceFilesForTests(entries: Array<{ name: string; path: string }>): void {
+  workspaceFiles = new Set()
+  workspaceFilePaths = new Map()
+  absoluteToRelative = new Map()
+  cachedHomeDir = null
+  indexWorkspaceEntries(entries)
+  setWsFilesVersion((v) => v + 1)
+}
+
 async function loadWorkspaceFiles(): Promise<void> {
   const ws = activeWorkspace()
   if (!ws) return
@@ -102,21 +130,7 @@ async function loadWorkspaceFiles(): Promise<void> {
       const wsRes = await fetch('/api/files/workspace')
       if (wsRes.ok) {
         const wsData = await wsRes.json()
-        const entries: Array<{ name: string; path: string; isDirectory: boolean }> = wsData.entries || []
-        for (const e of entries) {
-          if (e.isDirectory) continue
-          const relPath = e.name
-          const absPath = e.path
-          workspaceFiles!.add(relPath)
-          if (!workspaceFilePaths.has(relPath)) workspaceFilePaths.set(relPath, absPath)
-          absoluteToRelative.set(absPath, relPath)
-          // Also store bare filename
-          const bareName = relPath.split('/').pop() || relPath
-          if (!workspaceFilePaths.has(bareName)) {
-            workspaceFiles!.add(bareName)
-            workspaceFilePaths.set(bareName, absPath)
-          }
-        }
+        indexWorkspaceEntries(wsData.entries || [])
       }
     } catch {
       /* ignore */
@@ -265,9 +279,15 @@ function injectFileChips(html: string): string {
   if (workspaceFiles && workspaceFiles.size > 0) {
     const filenameRe = buildFilenameRe()
     if (filenameRe) {
-      // Replace <code>FILENAME</code> with chips
+      // Replace <code>FILENAME</code> with chips. Phase 1 skips code spans, so an
+      // absolute or ~/ path in backticks is resolved here (known files only, like Phase 1).
       result = result.replace(/<code>([^<]+)<\/code>/gi, (_match, inner) => {
         const trimmed = inner.trim()
+        if (trimmed.startsWith('/') || trimmed.startsWith('~/')) {
+          const absPath = expandTilde(trimmed)
+          const relPath = absoluteToRelative.get(absPath)
+          return relPath ? makeChip(absPath, relPath) : _match
+        }
         if (workspaceFiles!.has(trimmed)) {
           const fullPath = workspaceFilePaths.get(trimmed) || trimmed
           return makeChip(fullPath, trimmed)
