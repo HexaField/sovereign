@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { renderMarkdown } from './markdown.js'
+import { describe, it, expect, beforeAll } from 'vitest'
+import { renderMarkdown, setWorkspaceFilesForTests } from './markdown.js'
 
 // Access internal module state for testing tilde expansion.
 // The workspace file cache populates absoluteToRelative, which getHomeDir()
@@ -167,5 +167,51 @@ describe('file chip — tilde path expansion', () => {
     // Should chip as an absolute path (Phase 0 unconditional)
     expect(result).toContain('class="file-chip"')
     expect(result).toContain('data-file-path="/absolute/path/to/file.md"')
+  })
+})
+
+// Runs last: it fills the module's workspace caches, which the tests above expect empty.
+describe('file chip — paths known to the workspace', () => {
+  const ROOT = '/home/u/.sovereign'
+  const DEEP = 'membranes/atlas/grants/opportunities/call.md'
+  beforeAll(() =>
+    setWorkspaceFilesForTests([
+      {
+        name: 'membranes/coasys/plans/sdk-auth-tree-2026-10.html',
+        path: `${ROOT}/membranes/coasys/plans/sdk-auth-tree-2026-10.html`
+      },
+      {
+        name: 'membranes/coasys/plans/sdk-auth-tree-2026-10.json',
+        path: `${ROOT}/membranes/coasys/plans/sdk-auth-tree-2026-10.json`
+      },
+      { name: DEEP, path: `${ROOT}/${DEEP}` }
+    ])
+  )
+  const chipFor = (md: string) => renderMarkdown(md).match(/data-file-path="([^"]+)"/)?.[1]
+
+  it('chips a ~/ path in backticks (regression: the adam thread)', () => {
+    expect(chipFor('Page: `~/.sovereign/membranes/coasys/plans/sdk-auth-tree-2026-10.html`.')).toBe(
+      `${ROOT}/membranes/coasys/plans/sdk-auth-tree-2026-10.html`
+    )
+  })
+
+  it('chips an absolute path in backticks', () => {
+    expect(chipFor(`See \`${ROOT}/${DEEP}\``)).toBe(`${ROOT}/${DEEP}`)
+  })
+
+  it('leaves an unknown absolute or ~/ path in backticks as code', () => {
+    const html = renderMarkdown('Run `~/bin/not-a-workspace-file.sh` or `/etc/hosts.conf`')
+    expect(html).not.toContain('file-chip')
+    expect(html).toContain('<code>~/bin/not-a-workspace-file.sh</code>')
+  })
+
+  it('still chips plain-text ~/ paths, relative paths and bare names', () => {
+    expect(chipFor('Open ~/.sovereign/membranes/coasys/plans/sdk-auth-tree-2026-10.json now')).toBe(
+      `${ROOT}/membranes/coasys/plans/sdk-auth-tree-2026-10.json`
+    )
+    expect(chipFor(`Open \`${DEEP}\``)).toBe(`${ROOT}/${DEEP}`)
+    expect(chipFor('The data sits in `sdk-auth-tree-2026-10.json`.')).toBe(
+      `${ROOT}/membranes/coasys/plans/sdk-auth-tree-2026-10.json`
+    )
   })
 })

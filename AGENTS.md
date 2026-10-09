@@ -433,6 +433,22 @@ System → Devices → a device card → **Files**: browse the whole file system
 - Replaces the old "Disk usage by directory" list (a 12 s-capped `du /` every 5 min per device, cleared between runs — it timed out on big disks and flickered away).
 - Phones (Android/iOS) are not in the device list: no SSH. Wind-tunnel s42 covers the routes.
 
+## File chips in messages (`packages/client/src/lib/markdown.ts`)
+
+`renderMarkdown` turns file references in rendered HTML into `.file-chip` spans (click opens the file, ⧉ copies the path). `injectFileChips` runs in phases over marked's output:
+
+| Phase | Matches | Chips when |
+| --- | --- | --- |
+| 0 | Markdown links `[label](href)` with a local href (`/abs`, `~/…`, `file://`, relative) | Always for absolute and `~/` hrefs; for relative or bare names, when the name is known |
+| 1 | Plain-text `/abs/…` and `~/…` paths ending in `.ext` (1–10 chars); skips `<a>`, `<code>`, `<pre>` content | The expanded path is a known file |
+| 2a | A whole inline code span `` `x` ``: an absolute or `~/` path, a relative path, or a bare filename | The path or name is known |
+| 2b | Plain-text relative paths and bare filenames (longest first) | The name is known |
+
+- **Known files** come from two lists the client loads per workspace: each project's tree (`/api/files/tree`, depth 4) and the Sovereign workspace (`/api/files/workspace`, depth 8, minus the runtime data dir). A bare filename maps to the first file with that name.
+- `~/` expands with a home dir taken from the first known `/home/<u>/` or `/Users/<u>/` path.
+- Never chipped: unknown paths outside links, paths inside fenced code blocks, paths without an extension, paths with characters outside `[\w.+-]` (spaces, `@`).
+- Results cache per text and workspace-list version: a message renders again once the lists arrive.
+
 ## Network map (`packages/system/src/network-map.ts`)
 
 System → **Network**: a live map of the tailnet and LAN. It shows each device with its hardware, the services listening on it, and the TCP connections between them. `GET /api/system/network` returns `{ collectedAt, devices, links }`. The scan is cached 8 s and concurrent callers share one scan. The tab polls every 10 s while visible.
