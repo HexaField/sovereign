@@ -19,6 +19,8 @@ export type RootsProvider = () => FileRoot[]
 export interface FileRouterOptions {
   /** Default cwd used to enumerate workspace files for the `/workspace` endpoints. */
   workspaceRoot?: string
+  /** Directories under `workspaceRoot` the `/workspace` listing leaves out (Sovereign's runtime data dir). */
+  workspaceExclude?: string[]
   /** Returns all browsable roots (org paths). Used by GET /roots. */
   getRoots?: RootsProvider
 }
@@ -82,7 +84,10 @@ export function createFileRouter(
       return
     }
     try {
-      const depth = 4
+      // Deep enough for membranes/<id>/grants/opportunities/x.md; the runtime data dir
+      // (logs, sessions, caches) is left out, so the list stays about 1k entries.
+      const depth = 8
+      const excluded = new Set((options.workspaceExclude ?? []).map((p) => nodePath.resolve(p)))
       const skip = new Set([
         'node_modules',
         '.git',
@@ -113,6 +118,7 @@ export function createFileRouter(
           if (skip.has(name) || name.startsWith('.')) continue
           const full = nodePath.join(dir, name)
           const relPath = rel ? `${rel}/${name}` : name
+          if (excluded.has(full)) continue
           try {
             const stat = await fs.stat(full)
             if (stat.isDirectory()) {

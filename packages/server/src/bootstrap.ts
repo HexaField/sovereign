@@ -235,6 +235,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     '/api/files',
     createFileRouter(fileService, undefined, fileProjectResolver, {
       workspaceRoot: cfg.workspace.root,
+      workspaceExclude: [dataDir],
       getRoots: () => orgManager.listOrgs().map((o) => ({ id: o.id, name: o.name, path: o.path }))
     })
   )
