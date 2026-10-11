@@ -182,6 +182,40 @@ describe('File Routes', () => {
     expect(names.some((n) => n.startsWith('runtime'))).toBe(false)
   })
 
+  it('POST /api/files/exists returns only the paths that are files under home', async () => {
+    const express = (await import('express')).default
+    const request = (await import('supertest')).default
+    const { createFileRouter } = await import('./routes.js')
+    const home = path.join(tmpDir, 'home2')
+    await fs.mkdir(path.join(home, 'org/.specs'), { recursive: true })
+    await fs.writeFile(path.join(home, 'org/.specs/PLAN.md'), '# plan')
+    const prevHome = process.env.HOME
+    process.env.HOME = home
+    try {
+      const app = express()
+      app.use(express.json())
+      app.use('/api/files', createFileRouter(service))
+      const plan = path.join(home, 'org/.specs/PLAN.md')
+      const res = await request(app)
+        .post('/api/files/exists')
+        .send({
+          paths: [
+            plan,
+            '~/org/.specs/PLAN.md',
+            path.join(home, 'org/.specs'),
+            `${home}/missing.md`,
+            '/etc/hostname',
+            42
+          ]
+        })
+      expect(res.status).toBe(200)
+      expect(res.body.files.sort()).toEqual([plan, '~/org/.specs/PLAN.md'].sort())
+      expect((await request(app).post('/api/files/exists').send({})).status).toBe(400)
+    } finally {
+      process.env.HOME = prevHome
+    }
+  })
+
   it('GET /api/files/view/<path> serves files under home with their type; HTML and SVG sandboxed', async () => {
     const express = (await import('express')).default
     const request = (await import('supertest')).default

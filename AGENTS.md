@@ -440,13 +440,13 @@ System → Devices → a device card → **Files**: browse the whole file system
 | Phase | Matches | Chips when |
 | --- | --- | --- |
 | 0 | Markdown links `[label](href)` with a local href (`/abs`, `~/…`, `file://`, relative) | Always for absolute and `~/` hrefs; for relative or bare names, when the name is known |
-| 1 | Plain-text `/abs/…` and `~/…` paths ending in `.ext` (1–10 chars); skips `<a>`, `<code>`, `<pre>` content | The expanded path is a known file |
-| 2a | A whole inline code span `` `x` ``: an absolute or `~/` path, a relative path, or a bare filename | The path or name is known |
+| 1 | Plain-text `/abs/…` and `~/…` paths ending in `.ext` (1–10 chars); skips `<a>`, `<code>`, `<pre>` content | The path is a known file, or the server confirms it is a file |
+| 2a | A whole inline code span `` `x` ``: an absolute or `~/` path (as Phase 1), else a relative path or a bare filename | Known, or (absolute/`~/`) confirmed by the server |
 | 2b | Plain-text relative paths and bare filenames (longest first) | The name is known |
 
-- **Known files** come from two lists the client loads per workspace: each project's tree (`/api/files/tree`, depth 4) and the Sovereign workspace (`/api/files/workspace`, depth 8, minus the runtime data dir). A bare filename maps to the first file with that name.
+- **Known files** come from two lists the client loads per workspace: each project's tree (`/api/files/tree`, depth 4) and the Sovereign workspace (`/api/files/workspace`, depth 8, minus the runtime data dir). A bare filename maps to the first file with that name. An absolute or `~/` path in neither list (an org's `.specs`, another repo) is checked once with `POST /api/files/exists` (batched, files under the home dir only); the answer is cached per path and a found file re-renders as a chip (`wsFilesVersion` bump).
 - `~/` expands with a home dir taken from the first known `/home/<u>/` or `/Users/<u>/` path.
-- Never chipped: unknown paths outside links, paths inside fenced code blocks, paths without an extension, paths with characters outside `[\w.+-]` (spaces, `@`).
+- Never chipped: relative paths and bare names no list knows, absolute paths that are not files under the home dir, paths inside fenced code blocks, paths without an extension, paths with characters outside `[\w.+-]` (spaces, `@`).
 - Results cache per text and workspace-list version: a message renders again once the lists arrive.
 - **Opening a chip** (`lib/file-chip-handlers.ts`) and the **file viewer** (`FilePanel.tsx`) pick a view with `lib/file-view.ts`: HTML renders as a page in an iframe, images (png, jpg, gif, webp, svg…) as `<img>`, markdown rendered, anything else as text. HTML and images load from `GET /api/files/view/<absolute path>` (files under the home dir; `/view/~/…` expands). The path sits in the URL path so a page's relative links (`x.json`, CSS) resolve beside it. HTML and SVG responses carry `Content-Security-Policy: sandbox allow-scripts …`, and the iframe has the same `sandbox`: scripts run, but in an opaque origin with no access to Sovereign's API or storage — also when the page is opened in its own tab. A page's `fetch()` of a sibling file fails (cross-origin from the opaque origin; no CORS on purpose), so pages should embed their data. In the viewer, Edit shows the source.
 

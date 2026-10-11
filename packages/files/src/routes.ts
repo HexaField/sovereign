@@ -76,6 +76,31 @@ export function createFileRouter(
     return project
   }
 
+  // POST /api/files/exists { paths } → { files } — which of these absolute (or ~/) paths are
+  // regular files under the home dir. File chips ask about paths no file list knows.
+  router.post('/exists', (async (req, res) => {
+    const homeDir = os.homedir()
+    const paths: unknown = req.body?.paths
+    if (!Array.isArray(paths)) {
+      res.status(400).json({ error: 'paths array required' })
+      return
+    }
+    const asked = paths.filter((p): p is string => typeof p === 'string').slice(0, 200)
+    const files: string[] = []
+    await Promise.all(
+      asked.map(async (p) => {
+        const resolved = nodePath.resolve(p.startsWith('~/') ? nodePath.join(homeDir, p.slice(2)) : p)
+        if (!resolved.startsWith(homeDir + '/')) return
+        try {
+          if ((await fs.stat(resolved)).isFile()) files.push(p)
+        } catch {
+          /* missing or unreadable */
+        }
+      })
+    )
+    res.json({ files })
+  }) as RequestHandler)
+
   // GET /api/files/workspace — list workspace files for file chip resolution.
   const sovereignWorkspace = (options.workspaceRoot ?? '').trim()
   router.get('/workspace', (async (_req, res) => {
