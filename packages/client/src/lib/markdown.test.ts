@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { renderMarkdown, setWorkspaceFilesForTests } from './markdown.js'
 
 // Access internal module state for testing tilde expansion.
@@ -203,6 +203,36 @@ describe('file chip — paths known to the workspace', () => {
     const html = renderMarkdown('Run `~/bin/not-a-workspace-file.sh` or `/etc/hosts.conf`')
     expect(html).not.toContain('file-chip')
     expect(html).toContain('<code>~/bin/not-a-workspace-file.sh</code>')
+  })
+
+  it('asks the server about a path no file list knows, then chips it if it exists (regression: coasys .specs)', async () => {
+    const SPEC = `/home/u/workspaces/coasys/.specs/PLAN_20_AUTH_AND_EVENT_DELIVERY.md`
+    const MISSING = `/home/u/workspaces/coasys/.specs/NOPE.md`
+    const asked: string[][] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: { body: string }) => {
+        const { paths } = JSON.parse(init.body) as { paths: string[] }
+        asked.push(paths)
+        return { ok: true, json: async () => ({ files: paths.filter((p) => p === SPEC) }) }
+      })
+    )
+    const md = `Plan: \`${SPEC}\` and ${MISSING}`
+    // First render: unknown, so plain text, and both paths are queued.
+    expect(renderMarkdown(md)).not.toContain('file-chip')
+    await new Promise((r) => setTimeout(r, 120))
+    // One batch; it may also carry paths earlier renders in this file queued.
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toEqual(expect.arrayContaining([SPEC, MISSING]))
+    // After the answer: the existing file chips, the missing one stays text, nothing is asked again.
+    const html = renderMarkdown(md)
+    expect(chipFor(md)).toBe(SPEC)
+    expect(html).toContain(MISSING)
+    expect(html.match(/file-chip"/g)).toHaveLength(1)
+    renderMarkdown(md)
+    await new Promise((r) => setTimeout(r, 120))
+    expect(asked).toHaveLength(1)
+    vi.unstubAllGlobals()
   })
 
   it('still chips plain-text ~/ paths, relative paths and bare names', () => {

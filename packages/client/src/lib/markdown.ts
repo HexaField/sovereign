@@ -62,6 +62,7 @@ export function setWorkspaceFilesForTests(entries: Array<{ name: string; path: s
   workspaceFilePaths = new Map()
   absoluteToRelative = new Map()
   cachedHomeDir = null
+  checkedPaths.clear()
   indexWorkspaceEntries(entries)
   setWsFilesVersion((v) => v + 1)
 }
@@ -184,6 +185,56 @@ function expandTilde(p: string): string {
 
 // ── File chip injection ──────────────────────────────────────────────────
 
+// ── Paths no file list knows ───────────────────────────────────────────────
+// The file lists cover the workspace and project trees only. Any other absolute or ~/ path
+// (an org's .specs, another repo) is checked once with the server, in a batch; the answer
+// is cached and a found file re-renders as a chip.
+
+/** Path as written → is it a file (undefined = not asked yet). */
+const checkedPaths = new Map<string, boolean>()
+const pendingPaths = new Set<string>()
+let checkTimer: ReturnType<typeof setTimeout> | null = null
+
+function queuePathCheck(path: string): void {
+  if (pendingPaths.has(path)) return
+  pendingPaths.add(path)
+  checkTimer ??= setTimeout(flushPathChecks, 50)
+}
+
+async function flushPathChecks(): Promise<void> {
+  checkTimer = null
+  const paths = [...pendingPaths].slice(0, 200)
+  try {
+    const res = await fetch('/api/files/exists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths })
+    })
+    if (!res.ok) return
+    const found = new Set<string>(((await res.json()) as { files?: string[] }).files ?? [])
+    for (const p of paths) checkedPaths.set(p, found.has(p))
+    if (found.size) setWsFilesVersion((v) => v + 1)
+  } catch {
+    /* server unreachable: leave unasked, a later render asks again */
+  } finally {
+    for (const p of paths) pendingPaths.delete(p)
+    if (pendingPaths.size) checkTimer ??= setTimeout(flushPathChecks, 50)
+  }
+}
+
+/** Chip for an absolute or ~/ path: a known file, or one the server confirmed; else null. */
+function chipForAbsolutePath(path: string): string | null {
+  const absPath = expandTilde(path)
+  const relPath = absoluteToRelative.get(absPath)
+  if (relPath) return makeChip(absPath, relPath)
+  const exists = checkedPaths.get(path)
+  if (exists === undefined) queuePathCheck(path)
+  if (!exists) return null
+  const home = getHomeDir()
+  const display = home && absPath.startsWith(home + '/') ? '~' + absPath.slice(home.length) : path
+  return makeChip(absPath, display)
+}
+
 function makeChip(filePath: string, displayName: string): string {
   return `<span class="file-chip" data-file-path="${filePath}" title="${filePath}">📄 ${displayName}<button class="file-chip-copy" data-copy-path="${filePath}" title="Copy path">⧉</button></span>`
 }
@@ -264,30 +315,22 @@ function injectFileChips(html: string): string {
     (match, tag, path) => {
       if (tag) return tag
       if (!path) return match
-      // Expand ~/... to absolute before cache lookup
-      const absPath = path.startsWith('~/') ? expandTilde(path) : path
-      if (workspaceFiles && absoluteToRelative.size > 0) {
-        const relPath = absoluteToRelative.get(absPath)
-        if (!relPath) return match // Not a known workspace file — leave as plain text
-        return makeChip(absPath, relPath)
-      }
-      return match
+      return chipForAbsolutePath(path) ?? match
     }
   )
+
+  // Phase 2a: an absolute or ~/ path filling a whole code span (Phase 1 skips code spans).
+  result = result.replace(/<code>\s*(~?\/[^<\s]+)\s*<\/code>/gi, (match, path: string) => {
+    return chipForAbsolutePath(path) ?? match
+  })
 
   // Phase 2: workspace filenames in <code> tags and plain text
   if (workspaceFiles && workspaceFiles.size > 0) {
     const filenameRe = buildFilenameRe()
     if (filenameRe) {
-      // Replace <code>FILENAME</code> with chips. Phase 1 skips code spans, so an
-      // absolute or ~/ path in backticks is resolved here (known files only, like Phase 1).
+      // Replace <code>FILENAME</code> (a relative path or bare name) with chips
       result = result.replace(/<code>([^<]+)<\/code>/gi, (_match, inner) => {
         const trimmed = inner.trim()
-        if (trimmed.startsWith('/') || trimmed.startsWith('~/')) {
-          const absPath = expandTilde(trimmed)
-          const relPath = absoluteToRelative.get(absPath)
-          return relPath ? makeChip(absPath, relPath) : _match
-        }
         if (workspaceFiles!.has(trimmed)) {
           const fullPath = workspaceFilePaths.get(trimmed) || trimmed
           return makeChip(fullPath, trimmed)
