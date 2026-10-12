@@ -500,6 +500,11 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   // never interrupting, shown as a system card. Results that arrive before
   // the chat module is wired (a restart notice) wait for it.
   function deliverToParent(parentKey: string, text: string): void {
+    // A deleted parent thread: drop the result rather than wake an archived session.
+    if (input.threadManager && !input.threadManager.get(parentKey)) {
+      console.warn(`[wiring] parent thread ${parentKey} no longer exists — dropping its subagent result`)
+      return
+    }
     if (!chatInjector) {
       pendingParentMessages.push([parentKey, text])
       return

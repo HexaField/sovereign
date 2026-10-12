@@ -436,8 +436,7 @@ export function createClaudeCodeBackend(
 
   /** Build the MCP server map from the latest config + deps.  Called per
    *  session creation so a refreshed AD4M token takes effect immediately.
-   *  When `isSubagent` is true, AD4M is excluded — subagents are implementation
-   *  workers and have no need for the social/neighbourhood layer.
+   *  Subagents get a fixed set (see `selectSubagentMcpServers`).
    *  When `sessionKey` is provided, it is embedded in the MCP URL as a query
    *  parameter so the Sovereign HTTP endpoint can attribute tool calls to the
    *  correct thread — eliminating the race-prone global activeSessionKey. */
@@ -612,7 +611,9 @@ export function createClaudeCodeBackend(
 
   /** Mark a session as active in the liveness index. Idempotent. */
   function markActive(state: ClaudeSessionState, reason: string): void {
-    if (!activeSessions) return
+    // An agents_spawn child never resumes after a restart: the parent gets a
+    // failure instead (rehydrate), so the resume orchestrator must not see it.
+    if (!activeSessions || state.run) return
     const reg = deps.registry?.lookupSession?.(state.sessionKey) ?? null
     const threadKey = reg && 'threadKey' in (reg as object) ? (reg as { threadKey?: string }).threadKey : undefined
     // Bare-UUID scheme: the sessionKey already IS the thread id. Prefer the
@@ -702,10 +703,14 @@ export function createClaudeCodeBackend(
     if (run.timer) clearTimeout(run.timer)
     run.timer = undefined
     persistState(state)
-    // The child's CLI process has nothing left to do: close its input so it exits.
+    // The child's CLI process has nothing left to do. A cut-off run (stop,
+    // timeout) kills it outright: an in-band interrupt can wait forever on a
+    // wedged process. A finished one exits once its input closes.
+    if (failure) state.abortController?.abort()
     setImmediate(() => state.endInput?.())
     const childKey = state.sessionKey
-    const error = failure ?? (run.lastText ? undefined : (run.error ?? 'ended without a result'))
+    // An error result fails the run even after some text; the text goes along.
+    const error = failure ?? run.error ?? (run.lastText ? undefined : 'ended without a result')
     const parentMessage = subagentResultMessage({
       label: state.label ?? childKey,
       childKey,
@@ -725,11 +730,11 @@ export function createClaudeCodeBackend(
       startedAt: Date.now()
     })
   })
-  emitter.on('subagent.completed', (data) => {
-    if (!data.parentKey) return
-    const backendId = bareId(data.childKey)
-    activeSessions?.removeSubagent(data.parentKey, backendId)
-  })
+  for (const event of ['subagent.completed', 'subagent.failed'] as const) {
+    emitter.on(event, (data) => {
+      if (data.parentKey) activeSessions?.removeSubagent(data.parentKey, bareId(data.childKey))
+    })
+  }
 
   function setStatus(status: BackendConnectionStatus, reason?: string) {
     internal.connectionStatus = status
@@ -1441,11 +1446,7 @@ export function createClaudeCodeBackend(
     // benefit. Leave betas empty for all sessions.
     const betas: SdkBeta[] = []
     void effectiveContextWindow // referenced above for future use when betas become available via OAuth
-    const sessionMcpServers = resolveMcpServers({
-      isSubagent: !!state.parentSessionKey,
-      sessionKey: state.sessionKey,
-      cwd: state.cwd
-    })
+    const sessionMcpServers = resolveMcpServers({ isSubagent, sessionKey: state.sessionKey, cwd: state.cwd })
     // Subprocess environment: the `env` field REPLACES the CLI's environment
     // entirely (SDK design), so spread process.env first to preserve PATH,
     // HOME, and other required vars. Every session gets BASH_FIRST_OFF_ENV.
@@ -1519,9 +1520,7 @@ export function createClaudeCodeBackend(
       // docs that subagents have no use for; SUBAGENT.md covers the harness
       // essentials. Top-level sessions keep the full preset + append.
       ...(isSubagent
-        ? combinedAppend
-          ? { systemPrompt: combinedAppend }
-          : {}
+        ? { systemPrompt: combinedAppend }
         : combinedAppend
           ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: combinedAppend } }
           : {}),
@@ -1543,6 +1542,8 @@ export function createClaudeCodeBackend(
       q = query({ prompt: pump.iterable, options: sdkOptions })
     } catch (err: any) {
       emitter.emit('chat.error', { sessionKey: state.sessionKey, error: err?.message ?? String(err) })
+      // No iterator will run, so its finally cannot end the run.
+      if (state.run) finishRun(state)
       return pump
     }
 
@@ -2881,11 +2882,10 @@ export function createClaudeCodeBackend(
       parentSessionKey
     })
     const run: SubagentRun = { startedAt: Date.now() }
-    run.timer = setTimeout(() => {
-      if (run.done) return
-      finishRun(childState, `timed out after ${Math.round(SUBAGENT_TIMEOUT_MS / 60_000)} min`)
-      void abort(childKey)
-    }, opts.timeoutMs ?? SUBAGENT_TIMEOUT_MS)
+    run.timer = setTimeout(
+      () => finishRun(childState, `timed out after ${Math.round(SUBAGENT_TIMEOUT_MS / 60_000)} min`),
+      opts.timeoutMs ?? SUBAGENT_TIMEOUT_MS
+    )
     run.timer.unref?.()
     childState.run = run
     persistRegistry(childState, childKey)
@@ -2910,9 +2910,7 @@ export function createClaudeCodeBackend(
   async function stopSubagent(childKey: string): Promise<void> {
     const state = internal.sessions.get(childKey)
     if (!state?.run) throw new Error(`agents_stop: ${childKey} is not an agents_spawn subagent`)
-    if (state.run.done) return
     finishRun(state, 'stopped by the parent')
-    await abort(childKey)
   }
 
   function getSessionFilePath(sessionKey: string): string | null {
