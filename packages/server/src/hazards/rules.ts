@@ -1,4 +1,4 @@
-// Which hazards genuinely need Alex's attention. Pure: feeds + state in,
+// Which hazards genuinely need the user's attention. Pure: feeds + state in,
 // alerts + next state out. Everything below the bar stays silent.
 //
 // Alert when:
@@ -171,6 +171,6 @@ export function formatAlerts(alerts: HazardAlert[], placeLabel: string): string 
     `[Hazard alert — ${placeLabel}] VicEmergency / CFA:`,
     ...lines,
     '',
-    'Check https://emergency.vic.gov.au and tell Alex what this means for the property and what to do.'
+    'Check https://emergency.vic.gov.au and tell the user what this means for the property and what to do.'
   ].join('\n')
 }
