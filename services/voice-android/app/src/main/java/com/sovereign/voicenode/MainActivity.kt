@@ -103,7 +103,8 @@ class MainActivity : AppCompatActivity() {
 
         // Load saved server URL
         val prefs = getSharedPreferences("sovereign_voice", MODE_PRIVATE)
-        serverInput.setText(prefs.getString("server_url", "https://hub.example-tailnet.ts.net:5801"))
+        // No default URL: an empty field shows the layout's hint.
+        serverInput.setText(prefs.getString("server_url", ""))
 
         toggleButton.setOnClickListener {
             if (serviceRunning) stopVoiceService()
@@ -205,7 +206,7 @@ class MainActivity : AppCompatActivity() {
     private fun startVoiceService() {
         val url = serverInput.text.toString().trimEnd('/')
         if (url.isBlank()) {
-            statusText.text = "Enter a server URL"
+            statusText.text = "Enter a server URL, e.g. https://<host>.<tailnet>.ts.net:5801"
             return
         }
 

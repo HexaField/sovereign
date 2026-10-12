@@ -15,8 +15,8 @@ This phase standardises all repository locations, Sovereign org data, OpenClaw m
 Repositories, workspace references, and org data are inconsistent across machines and configuration files:
 
 - **Mac**: Repos scattered between `~/workspaces/<org>/<repo>` (canonical), `~/Desktop/` (95+ legacy repos), and `~/repos/` (empty, but referenced in memory files)
-- **Alex Ubuntu 22**: Repos in `~/ci-workspace/`, `~/workspaces/`, `~/Desktop/`, `~/repos/`, and `~/` root — no consistent convention
-- **Field Ubuntu 24**: Only `~/ci-workspace/` with CI-related repos
+- **Linux desktop (Ubuntu 22)**: Repos in `~/ci-workspace/`, `~/workspaces/`, `~/Desktop/`, `~/repos/`, and `~/` root — no consistent convention
+- **Linux server (Ubuntu 24)**: Only `~/ci-workspace/` with CI-related repos
 
 Sovereign org data (`orgs.json`) has stale paths:
 
@@ -59,7 +59,7 @@ The canonical repo root on all machines is `~/workspaces/<org>/<repo>`. Each Sov
 | Global | `~/.openclaw/workspace` | `membranes/openclaw/`, `membranes/philosophy/` | — | The agent's home. Philosophy stays here (notes only, no repos). |
 | Companion | `~/workspaces/companionintelligence` | `membranes/companion/` | github | CI-Hub, CI-Portal, CI-Server, CI-Marketplace |
 | Coasys | `~/workspaces/coasys` | `membranes/adam/` | github | AD4M, Flux, WE, and related repos |
-| Hexafield | `~/workspaces/hexafield` | — | github | Alex's personal projects: Sovereign, ad4m-web, stateproof |
+| Hexafield | `~/workspaces/hexafield` | — | github | Personal projects: Sovereign, ad4m-web, stateproof |
 | Atlas Research | `~/workspaces/atlasresearch` | `membranes/atlas/`, `membranes/dweb/`, `membranes/metamyth/`, `membranes/harmony/` | github | Research group workspace. Absorbs dweb, metamyth, harmony membranes. |
 | Connection Engine | `~/workspaces/connectionengine` | — | github | Connection Engine project |
 
@@ -112,7 +112,7 @@ Specifically:
 - All non-active repos (90+) remain on `~/Desktop/`. These are not registered in Sovereign and don't need clean paths. If any become active later, they get moved at that time.
 - Specific retired repos: harmony, holons-game, regen-map, arg-app, arg-website, openclaw.
 
-### §3.2 — Alex Ubuntu 22 (Secondary)
+### §3.2 — Linux desktop (Ubuntu 22) (Secondary)
 
 Standardise to `~/workspaces/<org>/<repo>`:
 
@@ -125,7 +125,7 @@ Standardise to `~/workspaces/<org>/<repo>`:
 
 Desktop repos on Ubuntu are all dormant (old IR Engine, Holochain experiments, etc.) — leave in place.
 
-### §3.3 — Field Ubuntu 24 (CI Target)
+### §3.3 — Linux server (Ubuntu 24) (CI Target)
 
 Standardise to `~/workspaces/<org>/<repo>`:
 

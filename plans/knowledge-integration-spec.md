@@ -172,7 +172,7 @@ The whole integration ships in one cohesive pass — no phased rollout.
 
 ### R9. PRESENCE.md update
 
-- Append the "Knowledge graph" section above to `~/.sovereign/PRESENCE.md`. Manual edit by Alex; not auto-generated.
+- Append the "Knowledge graph" section above to `~/.sovereign/PRESENCE.md`. Manual edit by the user; not auto-generated.
 - The personality file is loaded at session start (per R3 of the presence spec), so the change takes effect on the next internal-thread session start.
 
 ### R10. Daily community rebuild

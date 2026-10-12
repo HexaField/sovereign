@@ -49,10 +49,11 @@ class VoiceNodeService : Service() {
         const val ACTION_TRANSCRIPTION = "com.sovereign.voicenode.TRANSCRIPTION"
         // States: idle, listening, wake_detected, capturing, sending, tts_playing
         // Device name announced to the server — TTS routes by this name
-        const val DEVICE_NAME = "Alex Phone"
+        const val DEVICE_NAME = "Android Phone"
     }
 
-    private var serverUrl = "https://hub.example-tailnet.ts.net:5801"
+    // No default: the user enters their own server URL in MainActivity.
+    private var serverUrl = ""
     private var deviceId = ""
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -89,8 +90,19 @@ class VoiceNodeService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        serverUrl = intent?.getStringExtra(EXTRA_SERVER_URL) ?: serverUrl
+        // A sticky restart delivers a null intent: fall back to the saved URL.
+        serverUrl = intent?.getStringExtra(EXTRA_SERVER_URL)
+            ?: getSharedPreferences("sovereign_voice", MODE_PRIVATE).getString("server_url", serverUrl)
+            ?: ""
         val threshold = intent?.getFloatExtra(EXTRA_THRESHOLD, 0.5f) ?: 0.5f
+
+        if (serverUrl.isBlank()) {
+            // startForegroundService() requires startForeground() before stopping.
+            startForeground(NOTIFICATION_ID, buildNotification("No server URL set"))
+            Log.w(TAG, "No server URL configured — not connecting")
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         startForeground(NOTIFICATION_ID, buildNotification("Listening for wake word..."))
         acquireWakeLock()

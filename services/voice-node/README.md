@@ -16,13 +16,13 @@ Each Sovereign instance trains a wake word matching the configured assistant nam
 
 ```bash
 # Install dependencies and set up the service
-SOVEREIGN_URL=http://hub:5801 ./setup.sh
+SOVEREIGN_URL=http://<sovereign-host>:5801 ./setup.sh
 
 # Test audio devices
 .venv/bin/python voice_node.py --list-devices
 
 # Run manually
-.venv/bin/python voice_node.py --server http://hub:5801
+.venv/bin/python voice_node.py --server http://<sovereign-host>:5801
 
 # Or start via systemd (Linux/Pi)
 systemctl --user enable --now sovereign-voice-node

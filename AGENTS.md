@@ -244,7 +244,7 @@ Critical settings:
 - `drop_params: true` — drops unsupported Anthropic-specific params cleanly.
 - `model_info.supports_extended_thinking: false` — signals the model does not support extended thinking.
 
-### Service setup (the hub — primary machine)
+### Service setup (on the Sovereign host)
 
 ```bash
 # Start the proxy
@@ -427,7 +427,7 @@ System → Devices → a device card → **Files**: browse the whole file system
 - `:device` is the device label from `/api/system/devices/metrics` (`hostname` there). `deviceMonitor.findDevice` resolves it to local or SSH (`sshHost`, `osHint`, same BatchMode access as metrics).
 - **Quoting:** every command runs as a script on stdin (`bash -s`, locally or over ssh) with the path set as `P='…'` via `shQuote`; the path is never interpolated unquoted. Paths must be absolute; they are normalised.
 - **Listing:** local uses `fs.readdir`; Linux remotes `find -H -printf`; macOS remotes `find -H -print0 | xargs -0 -r stat -f`. `-H` (and `du -H`) follow the requested path when it is a symlink (macOS `/tmp`, `/var`); links in a listing open like folders.
-- **Sizes:** `nice -n 19`, `-x` (one file system). A finished result is cached 10 min; a running du nobody polls for 60 s is killed by a timer, and any du is killed after 5 min (`maxRunMs`) with `error: stopped after 5 min …` — a `du /` on a multi-TB disk otherwise runs for many minutes. No sudo: `du:` errors make sizes lower bounds (`partial`). A du that never reports the directory (device unreachable) ends with `error`, cached 10 s. Root of Build Server sizes in ~9 s.
+- **Sizes:** `nice -n 19`, `-x` (one file system). A finished result is cached 10 min; a running du nobody polls for 60 s is killed by a timer, and any du is killed after 5 min (`maxRunMs`) with `error: stopped after 5 min …` — a `du /` on a multi-TB disk otherwise runs for many minutes. No sudo: `du:` errors make sizes lower bounds (`partial`). A du that never reports the directory (device unreachable) ends with `error`, cached 10 s. The root of a typical Linux server sizes in ~9 s.
 - **macOS root:** every APFS volume of the boot volume group reports the same `st_dev` (`stat -f %d` on `/`, `/System/Volumes/Data` and `/Users` all match), so `du -x` does not stop at `/System/Volumes`. At `/` it would count the data volume twice: through `/System/Volumes/Data` and through the `/Users`, `/Applications`… firmlinks. At `/` and `/System` on macOS the job runs `du -I Volumes` to skip that folder. Below them, plain `du -x` is right. Expect `/Users` above `df`'s used figure: du counts every APFS clone in full. `/home` on macOS is an autofs mount that is normally empty; home folders are under `/Users`.
 - **Override matching:** `findOverride` folds curly apostrophes to straight ones — macOS names the host `Alex’s MacBook Pro`, config keys are typed with `'`. Before this, such an override (label, `sshHost`) silently did not apply.
 - **Download:** the script prints `@@SOVEREIGN-FS@@DIR|FILE` on stderr before data; any stderr line may carry it (ssh warnings and login shells print first). Missing → 404, unreadable → 403, both before headers. A directory archives its physical path, so a symlinked directory gives the target's contents. If the stream breaks after headers (non-zero exit; tar 1–2 count as success), the response is destroyed so the browser shows a failed download.

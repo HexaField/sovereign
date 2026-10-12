@@ -140,6 +140,7 @@ Sovereign manages workspaces (per-org / per-project directories under `${SOVEREI
 The adapter MUST maintain an up-to-date workspace-folder index inside `~/.claude/CLAUDE.md` (the Claude Code global user file). Mechanics:
 
 - A Sovereign-owned, fenced block:
+
   ```markdown
   <!-- BEGIN sovereign-workspaces (managed by Sovereign — do not edit by hand) -->
 
@@ -150,6 +151,7 @@ The adapter MUST maintain an up-to-date workspace-folder index inside `~/.claude
   - …
   <!-- END sovereign-workspaces -->
   ```
+
 - Outside the fenced block is user-owned and preserved verbatim. Inside the block is rewritten by Sovereign on every workspace mutation (create / rename / remove / reorder).
 - Updates are debounced (~500 ms) and atomic (tmp-file + rename), same discipline as `agent-backend/shared/sessions-registry.ts`.
 - A `${SOVEREIGN_DATA_DIR}/claude-code/workspace-index.lock` file MUST guard concurrent writes, since the user may also be running `claude` interactively against the same `~/.claude/CLAUDE.md`.

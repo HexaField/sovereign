@@ -14,7 +14,7 @@ Architecture:
     WS ← tts.play events (filtered by deviceId) → speaker playback
 
 Usage:
-    .venv/bin/python voice_node.py --server http://hub:5801
+    .venv/bin/python voice_node.py --server http://<sovereign-host>:5801
 """
 import argparse
 import asyncio

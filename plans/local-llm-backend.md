@@ -423,7 +423,7 @@ Each phase ships independently and delivers value on its own.
 
 ---
 
-## Open Questions (for Alex)
+## Open Questions
 
 1. **Bash sandboxing** — how locked down should subagent shell access get? Same as Claude Code (permissive within cwd), or tighter (allowlist)?
 2. **Model routing granularity** — per-membrane? Per-thread? Per-subagent-depth? Or just default + explicit override?

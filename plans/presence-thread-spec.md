@@ -205,7 +205,7 @@ A dedicated memory file at `~/.sovereign/PRESENCE_MEMORY.md` (or `~/.sovereign/d
 **Key differences from global MEMORY.md:**
 
 - **Proactively updated**: The agent is instructed (via PRESENCE.md) to append observations, conversation summaries, and contextual notes after each interaction
-- **More granular**: Records things like "Alex mentioned he's tired today", "Last voice interaction was about the AD4M governance thread", "Alex asked about weather before heading out"
+- **More granular**: Records things like "The user mentioned being tired today", "Last voice interaction was about the AD4M governance thread", "The user asked about weather before heading out"
 - **Shorter retention**: Entries are date-stamped and the agent is encouraged to prune old entries
 - **Not global**: Only injected into the presence thread session, not all threads
 
@@ -230,7 +230,7 @@ presence_unwatch(threadId: string): void
 presence_watched(): Array<{ threadId: string; label: string; reason?: string }>
 ```
 
-PRESENCE.md instructs the agent to actively manage its watch list based on conversational context — if Alex mentions a project, watch its thread; if a thread goes quiet for days, unwatch it. The watch list persists to disk (`<dataDir>/presence-watched.json`) and survives restarts.
+PRESENCE.md instructs the agent to actively manage its watch list based on conversational context — if the user mentions a project, watch its thread; if a thread goes quiet for days, unwatch it. The watch list persists to disk (`<dataDir>/presence-watched.json`) and survives restarts.
 
 #### Digest Buffer (Server-Side)
 
@@ -323,7 +323,7 @@ The whole spec ships in one pass — no phased rollout. Requirements are grouped
 ### R3. Presence Personality & Memory Layering
 
 - `~/.sovereign/PRESENCE.md` exists as a human-authored personality file (analogous to SOUL.md). It is NOT compiled into the global `~/.claude/CLAUDE.md`.
-- `~/.sovereign/PRESENCE_MEMORY.md` exists as an agent-maintained memory file, writable by the internal agent via `Write`. Location is tracked, not gitignored — Alex can read/prune it.
+- `~/.sovereign/PRESENCE_MEMORY.md` exists as an agent-maintained memory file, writable by the internal agent via `Write`. Location is tracked, not gitignored — the user can read/prune it.
 - The session-prompt-append resolver, when the session belongs to the **internal** thread, appends PRESENCE.md and PRESENCE_MEMORY.md after the membrane CONTEXT.md. The gateway session does NOT get these — it's a normal text agent.
 - Personality/memory paths are passed through `ClaudeCodeBackendDeps` so the resolver can find them. No global compilation step.
 
@@ -394,7 +394,7 @@ Tools resolve their default targets from a small in-memory "last origin per moda
 
 - **Single presence thread** per Sovereign instance. Not per-membrane.
 - **PRESENCE.md is human-authored** (like SOUL.md). The agent reads it, doesn't write it.
-- **PRESENCE_MEMORY.md is agent-maintained**. The agent writes observations. Alex can edit/prune.
+- **PRESENCE_MEMORY.md is agent-maintained**. The agent writes observations. The user can edit/prune.
 - **The presence thread uses the `personal` membrane** by default (private context).
 - **Session continuity**: The presence thread's Claude Code session is long-lived (resumed on server restart like any thread). Memory is injected at session start, so a `/compact` or context overflow will re-load latest memory.
 - **No special UI** needed initially — the presence thread appears in the thread list like any other. The voice widget on the dashboard routes to it. The ⬡ button could be enhanced later to indicate "presence active".
@@ -404,4 +404,4 @@ Tools resolve their default targets from a small in-memory "last origin per moda
 1. **AD4M reply format**: Should the agent's AD4M reply include any special formatting (e.g., quoting the original message)?
 2. **Presence memory location**: `~/.sovereign/PRESENCE_MEMORY.md` (tracked, visible) or `~/.sovereign/data/presence-memory.md` (gitignored, ephemeral)?
 3. **Voice-tab targeting**: The `deviceId` on WS connections — is this stable enough to target TTS back to a specific tab reliably? (Checked: yes, it persists for the WS connection lifetime.)
-4. **Multiple voice tabs**: If Alex has the dashboard open on multiple devices, should TTS go to all of them or just the originating one? Originating only is simpler and more correct.
+4. **Multiple voice tabs**: If the user has the dashboard open on multiple devices, should TTS go to all of them or just the originating one? Originating only is simpler and more correct.

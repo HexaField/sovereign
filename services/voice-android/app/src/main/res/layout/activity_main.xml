@@ -85,7 +85,7 @@
         android:id="@+id/serverInput"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Sovereign server URL"
+        android:hint="https://&lt;host&gt;.&lt;tailnet&gt;.ts.net:5801"
         android:inputType="textUri"
         android:textColor="#CCCCDD"
         android:textColorHint="#555570"

@@ -77,7 +77,7 @@ The agent writes the file via its own `Write` tool — Sovereign doesn't write d
      ```
   4. The agent decides whether to write, and uses its own Write tool. No-op replies are dropped by the parser.
 - [ ] Time-of-day MUST be overridable via `SOVEREIGN_DAILY_MEMORY_AT=23:50` env or `Config` entry.
-- [ ] The memory directory root MUST be configurable via `SOVEREIGN_MEMORY_DIR`, defaulting to `~/.openclaw/workspace/memory/` (per Alex's established convention) until the workspace migration is complete.
+- [ ] The memory directory root MUST be configurable via `SOVEREIGN_MEMORY_DIR`, defaulting to `~/.openclaw/workspace/memory/` (the existing OpenClaw convention) until the workspace migration is complete.
 - [ ] MUST be idempotent: if the daily memory file for `<date>-<thread>` already exists, the prompt SHOULD instruct the agent to _append_ rather than overwrite, or skip if nothing new to add.
 - [ ] MUST be enableable/disableable per-org via `agent.dailyMemory: boolean` in org config. Default ON.
 - [ ] MUST NOT fire for `subagent` or `event-agent` kind sessions — those are ephemeral.
@@ -215,5 +215,5 @@ Once §3 + §4.1–4.3 land, the following MUST pass end-to-end:
 1. **Where do `MemoryKeeper` + `HeartbeatService` live in the module DAG?** Both depend on `RoutingBackend` + `CronService` + a way to enumerate threads. Likely peers of `notifications/` and `meetings/` under `packages/server/src/`. No external dependencies.
 2. **Should heartbeat / daily-memory schedules be visible in the UI cron list?** Pro: discoverable, debuggable. Con: clutter (every thread with heartbeat enabled adds a job). Recommend tagging them (`Job.tags: ['heartbeat'|'daily-memory']`) and filtering them out of the default cron list view, with a toggle to show.
 3. **What happens to in-flight heartbeats when a thread is archived?** SHOULD auto-cancel — the listener that handles thread-archived events SHOULD clean up associated heartbeat crons. Same for daily-memory exclusion.
-4. **TZ handling for daily memory.** OpenClaw runs in the user's local TZ (Melbourne for Alex). Should be config-driven, not hardcoded — `SOVEREIGN_DAILY_MEMORY_AT` accepts `HH:MM` in `process.env.TZ` or a `<HH:MM> <IANA>` form.
+4. **TZ handling for daily memory.** OpenClaw runs in the user's local TZ. Should be config-driven, not hardcoded — `SOVEREIGN_DAILY_MEMORY_AT` accepts `HH:MM` in `process.env.TZ` or a `<HH:MM> <IANA>` form.
 5. **Compaction recorder + memory write race.** If the agent is mid-Write when the SDK starts compacting, the Write may complete after the boundary. Recorder MUST tolerate the file being written by the agent OR by itself — write to a `compactions/agent/` vs `compactions/system/` subdirectory to avoid collision.
