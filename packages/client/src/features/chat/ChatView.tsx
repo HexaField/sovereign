@@ -5,6 +5,7 @@ import type { ChatMessage } from './types.js'
 import { MessageBubble } from './MessageBubble.js'
 import { WorkSection } from './WorkSection.js'
 import { SubagentCard } from './SubagentCard.js'
+import { SubagentResultCard, subagentResultOf } from './SubagentResultCard.js'
 import { AskUserQuestionCard } from './AskUserQuestionCard.js'
 import { pendingQuestions, submitAnswers } from './questions-store.js'
 import { CronResultsBanner } from '../crons/CronResultsBanner.js'
@@ -200,7 +201,7 @@ function AskUserQuestionSlot(props: { toolCallId: string; answered: AskUserQuest
 function extractSubagentSpawns(workItems: WorkItem[]): Array<{ sessionKey: string; task: string }> {
   const spawns: Array<{ sessionKey: string; task: string }> = []
   for (const w of workItems) {
-    if (w.type === 'tool_call' && w.name === 'sessions_spawn') {
+    if (w.type === 'tool_call' && (w.name === 'sessions_spawn' || w.name?.endsWith('agents_spawn'))) {
       // Parse the task from input
       let task = ''
       try {
@@ -214,7 +215,9 @@ function extractSubagentSpawns(workItems: WorkItem[]): Array<{ sessionKey: strin
       const result = workItems.find((r) => r.type === 'tool_result' && r.toolCallId === w.toolCallId)
       if (result?.output) {
         try {
-          const out = typeof result.output === 'string' ? JSON.parse(result.output) : result.output
+          let out = typeof result.output === 'string' ? JSON.parse(result.output) : result.output
+          // MCP tools return [{ type: 'text', text: '<json>' }].
+          if (Array.isArray(out) && typeof out[0]?.text === 'string') out = JSON.parse(out[0].text)
           const sessionKey = out?.childSessionKey || out?.sessionKey || out?.key || ''
           if (sessionKey) {
             spawns.push({ sessionKey, task: task.slice(0, 200) })
@@ -432,6 +435,12 @@ export function ChatView(props: ChatViewProps) {
                 {/* Subagent task prompt — show as a special collapsible card */}
                 {isSubagentTask() ? (
                   <TaskPromptCard content={taskContent()} timestamp={msg.turn.timestamp} />
+                ) : subagentResultOf(msg.turn) ? (
+                  <SubagentResultCard
+                    result={subagentResultOf(msg.turn)!}
+                    timestamp={msg.turn.timestamp}
+                    onView={props.onViewSubagent}
+                  />
                 ) : (
                   /* Message bubble — skip for assistant turns with empty content */
                   (msg.turn.content?.trim() || msg.turn.role !== 'assistant') && (

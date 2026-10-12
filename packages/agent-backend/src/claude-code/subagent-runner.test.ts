@@ -2,12 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  buildSubagentSystemPrompt,
-  findRepoContext,
-  selectSubagentMcpServers,
-  subagentResultMessage
-} from './subagent-runner.js'
+import { buildSubagentSystemPrompt, findRepoContext, selectSubagentMcpServers } from './subagent-runner.js'
 
 describe('claude-code/subagent-runner', () => {
   let root: string
@@ -79,26 +74,6 @@ describe('claude-code/subagent-runner', () => {
       expect(selectSubagentMcpServers({ sovereign: { url: 'u' } }, join(root, 'missing.json'))).toEqual({
         sovereign: { url: 'u' }
       })
-    })
-  })
-
-  describe('subagentResultMessage', () => {
-    it('formats a success and truncates a long result', () => {
-      const msg = subagentResultMessage({
-        label: 'fix',
-        childKey: 'k',
-        durationMs: 150_000,
-        result: 'x'.repeat(12_001)
-      })
-      expect(msg.startsWith('[Subagent done: fix] after 3 min\n\n')).toBe(true)
-      expect(msg).toContain('… (truncated; full transcript in session k)')
-      expect(msg.endsWith('Session: k')).toBe(true)
-    })
-
-    it('formats a failure', () => {
-      expect(subagentResultMessage({ label: 'fix', childKey: 'k', durationMs: 1, error: 'boom' })).toBe(
-        '[Subagent failed: fix] after 1 min — boom\n\nSession: k'
-      )
     })
   })
 })

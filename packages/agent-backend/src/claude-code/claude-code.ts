@@ -73,9 +73,9 @@ import {
   MAX_SUBAGENTS_PER_PARENT,
   selectSubagentMcpServers,
   SUBAGENT_BUILTIN_TOOLS,
-  SUBAGENT_TIMEOUT_MS,
-  subagentResultMessage
+  SUBAGENT_TIMEOUT_MS
 } from './subagent-runner.js'
+import { formatSubagentResult } from '@sovereign/core'
 import { ensureAd4mSkill, ensureLayeredContextFile, findUnreachableAgentModels } from './personality.js'
 import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, SubagentRun, ToolPolicy } from './types.js'
 import { createContextFilter } from './context-filter.js'
@@ -711,9 +711,9 @@ export function createClaudeCodeBackend(
     const childKey = state.sessionKey
     // An error result fails the run even after some text; the text goes along.
     const error = failure ?? run.error ?? (run.lastText ? undefined : 'ended without a result')
-    const parentMessage = subagentResultMessage({
+    const parentMessage = formatSubagentResult({
       label: state.label ?? childKey,
-      childKey,
+      sessionKey: childKey,
       durationMs: Date.now() - run.startedAt,
       result: run.lastText,
       error

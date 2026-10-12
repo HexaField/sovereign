@@ -15,6 +15,28 @@ function assistantTurn(content: string): ParsedTurn {
 }
 
 describe('classifyClaudeCodeTurn', () => {
+  describe('agents_spawn result', () => {
+    const msg = '[Subagent failed: fix] after 2 min — boom\n\nPartial notes.\n\nSession: k1'
+
+    it('flips the replayed user turn to a system subagent-result card', () => {
+      const out = classifyClaudeCodeTurn(userTurn(msg))
+      expect(out.role).toBe('system')
+      expect(out.content).toBe('Partial notes.')
+      expect(out.kind).toEqual({
+        variant: 'subagent-result',
+        label: 'fix',
+        payload: { status: 'failed', minutes: 2, error: 'boom', sessionKey: 'k1' }
+      })
+    })
+
+    it('tags the live system turn the same way', () => {
+      const out = classifyClaudeCodeTurn(systemTurn('[Subagent done: fix] after 1 min\n\nDone.\n\nSession: k1'))
+      expect(out.kind?.variant).toBe('subagent-result')
+      expect(out.kind?.payload).toEqual({ status: 'done', minutes: 1, sessionKey: 'k1' })
+      expect(out.content).toBe('Done.')
+    })
+  })
+
   describe('cron envelope', () => {
     it('flips a [Cron: label @ time] user turn to system + cron-fired kind', () => {
       const out = classifyClaudeCodeTurn(userTurn('[Cron: pr-followup @ 2026-06-15T09:00:00Z] Check PR status.'))
