@@ -2,6 +2,8 @@
 
 Read [PRINCIPLES.md](./PRINCIPLES.md) before making any architectural or implementation decisions. Every contribution must align with these principles — if it doesn't, fix the design, not the principles.
 
+**This repo is public.** Nothing that identifies a deployment goes into tracked files: no real host or tailnet names, LAN/tailnet IPs, MAC addresses, coordinates, home paths, people's names, or captured runtime data (`.data/`, event logs, keys). Tests and docs use neutral stand-ins — `Alex`, `hub`/`worker`/`laptop`, `10.20.30.0/24` or `192.0.2.0/24`, IEEE documentation MACs (`00:00:5e:00:53:xx`), a fictional property location. Deployment-specific values live in the user's config, never in code defaults.
+
 ## Setup — ad4m submodule
 
 The `@coasys/ad4m` SDK lives in a git submodule at `vendor/coasys/ad4m` (pinned to `coasys/ad4m` `dev`); `pnpm-workspace.yaml` resolves `@coasys/ad4m` from its `core/`. Check it out **before** `pnpm install`, or workspace resolution fails on the missing package.
