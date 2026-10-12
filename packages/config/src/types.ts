@@ -258,7 +258,7 @@ export interface SovereignConfig {
    */
   hazards: {
     enabled: boolean
-    /** Name used in alerts, e.g. "the farm". */
+    /** Name used in alerts, e.g. "home". */
     label: string
     lat: number
     lon: number

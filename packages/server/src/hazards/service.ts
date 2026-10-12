@@ -141,7 +141,7 @@ export function createHazardService(deps: HazardServiceDeps) {
       await deps.notify(
         `[Hazard alert — ${cfg.label}] The VicEmergency feed has been unreadable for ${Math.round((t - lastEventsOk) / 60_000)} min ` +
           `on a ${todayOutlook!.totalFireBan ? 'Total Fire Ban' : todayOutlook!.rating} day, so new warnings near the property would go unseen. ` +
-          'Tell Alex to watch the VicEmergency app directly until it recovers.'
+          'Tell the user to watch the VicEmergency app directly until it recovers.'
       )
       commit({ ...state, blindNotified: today })
     }
