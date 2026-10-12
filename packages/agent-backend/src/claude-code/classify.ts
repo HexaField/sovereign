@@ -11,6 +11,7 @@
 // emissions so history and live turns share one classifier.
 
 import type { ParsedTurn, TurnKind } from '@sovereign/core'
+import { parseSubagentResult } from '@sovereign/core'
 
 // ── Cron envelope ────────────────────────────────────────────────────
 // Sovereign's scheduler wraps cron-fired prompts as `[Cron: <label> @ <time>]`.
@@ -198,6 +199,28 @@ function classifyHookOutput(content: string): { content: string; kind: TurnKind 
   }
 }
 
+// ── agents_spawn result ─────────────────────────────────────────────────────
+// The runner delivers a subagent's report as `[Subagent done|failed: …]`
+// (format in @sovereign/core subagent-result). It renders as a result card.
+
+function classifySubagentResult(content: string): { content: string; kind: TurnKind } | null {
+  const r = parseSubagentResult(content)
+  if (!r) return null
+  return {
+    content: r.body,
+    kind: {
+      variant: 'subagent-result',
+      label: r.label,
+      payload: {
+        status: r.status,
+        minutes: r.minutes,
+        ...(r.error ? { error: r.error } : {}),
+        ...(r.sessionKey ? { sessionKey: r.sessionKey } : {})
+      }
+    }
+  }
+}
+
 // ── Pipeline ─────────────────────────────────────────────────────────
 
 /**
@@ -223,6 +246,8 @@ export function classifyClaudeCodeTurn(turn: ParsedTurn): ParsedTurn {
     if (resumed) return { ...turn, content: resumed.content, kind: resumed.kind }
     const err = classifyAgentError(turn.content)
     if (err) return { ...turn, content: err.content, kind: err.kind }
+    const sub = classifySubagentResult(turn.content)
+    if (sub) return { ...turn, content: sub.content, kind: sub.kind }
     return turn
   }
 
@@ -255,6 +280,9 @@ export function classifyClaudeCodeTurn(turn: ParsedTurn): ParsedTurn {
 
     const notif = classifyTaskNotification(turn.content)
     if (notif) return { ...turn, role: 'system', content: notif.content, kind: notif.kind }
+
+    const sub = classifySubagentResult(turn.content)
+    if (sub) return { ...turn, role: 'system', content: sub.content, kind: sub.kind }
 
     const invoke = classifySdkInvoke(turn.content)
     if (invoke) return { ...turn, role: 'system', content: invoke.content, kind: invoke.kind }

@@ -82,22 +82,3 @@ export function selectSubagentMcpServers(configured: Record<string, any>, claude
   for (const name of SUBAGENT_MCP_SERVERS) if (all[name]) out[name] = all[name]
   return out
 }
-
-/** The parent-facing message for a finished child. */
-export function subagentResultMessage(opts: {
-  label: string
-  childKey: string
-  durationMs: number
-  result?: string
-  error?: string
-}): string {
-  const mins = Math.max(1, Math.round(opts.durationMs / 60_000))
-  const head = opts.error
-    ? `[Subagent failed: ${opts.label}] after ${mins} min — ${opts.error}`
-    : `[Subagent done: ${opts.label}] after ${mins} min`
-  const body = (opts.result ?? '').trim()
-  const max = 12_000
-  const text =
-    body.length > max ? `${body.slice(0, max)}\n\n… (truncated; full transcript in session ${opts.childKey})` : body
-  return [head, text, `Session: ${opts.childKey}`].filter(Boolean).join('\n\n')
-}

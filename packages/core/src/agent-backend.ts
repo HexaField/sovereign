@@ -78,6 +78,7 @@ export type TurnKindVariant =
   | 'agent-error'
   | 'hook-output'
   | 'session-resumed'
+  | 'subagent-result'
 
 export interface TurnKind {
   variant: TurnKindVariant
