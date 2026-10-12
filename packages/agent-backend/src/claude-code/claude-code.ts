@@ -1474,6 +1474,8 @@ export function createClaudeCodeBackend(
     const sessionEnv = {
       ...process.env,
       ...BASH_FIRST_OFF_ENV,
+      // Subagents get exactly SUBAGENT_MCP_SERVERS: no claude.ai connectors.
+      ...(isSubagent ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
       ...(useLiteLlm
         ? {
             ANTHROPIC_BASE_URL: cfgAtStart.litellm!.url,

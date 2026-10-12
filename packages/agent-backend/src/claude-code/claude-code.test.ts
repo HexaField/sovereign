@@ -2454,6 +2454,7 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     expect(opts.mcpServers.sovereign.url).toBe('http://localhost:5801/api/mcp/subagent')
     expect(opts.mcpServers.code.args).toEqual(['--edit-roots', `/elsewhere${delimiter}${repo}`])
     expect(opts.mcpServers.ad4m).toBeUndefined()
+    expect(opts.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
   })
 
   it('sends the parent one completion with the final text', async () => {
