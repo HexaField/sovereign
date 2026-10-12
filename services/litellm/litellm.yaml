@@ -1,4 +1,4 @@
-# LiteLLM proxy configuration — the hub (primary machine)
+# LiteLLM proxy configuration — runs on the Sovereign host
 #
 # Routes Anthropic Messages API requests from Sovereign's claude-code backend
 # to local inference backends by model name. This proxy ONLY handles sessions

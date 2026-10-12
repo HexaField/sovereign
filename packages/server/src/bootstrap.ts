@@ -1181,7 +1181,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // ── Voice error → presence-internal self-heal ─────────────────────
   // Critical voice/TTS failures emit `voice.error` on the bus. Route
   // them to the internal presence thread so the agent can diagnose and
-  // recover (e.g. restart F5-TTS, alert Alex).
+  // recover (e.g. restart F5-TTS, alert the user).
   bus.on('voice.error', (event) => {
     const {
       stage,

@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest'
 import { createDeviceMonitor, findOverride } from './device-monitor.js'
 
 describe('findOverride', () => {
-  const overrides = { "alex's macbook pro": { label: 'Macbook', sshHost: 'macbook' }, 'Build Server': { label: 'FS' } }
+  const overrides = { "alex's macbook pro": { label: 'Macbook', sshHost: 'laptop' }, 'Build-Server': { label: 'BS' } }
 
   it('matches case-insensitively, and a curly apostrophe in the host name matches a straight one', () => {
-    expect(findOverride(overrides, 'Alex’s MacBook Pro')).toEqual({ label: 'Macbook', sshHost: 'macbook' })
-    expect(findOverride(overrides, "JOSH'S MACBOOK PRO")?.label).toBe('Macbook')
-    expect(findOverride(overrides, 'build server')?.label).toBe('FS')
+    expect(findOverride(overrides, 'Alex’s MacBook Pro')).toEqual({ label: 'Macbook', sshHost: 'laptop' })
+    expect(findOverride(overrides, "ALEX'S MACBOOK PRO")?.label).toBe('Macbook')
+    expect(findOverride(overrides, 'build-server')?.label).toBe('BS')
   })
 
   it('returns nothing for an unknown host', () => {

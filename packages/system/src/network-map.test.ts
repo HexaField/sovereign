@@ -41,7 +41,7 @@ LISTEN 0      4096     100.64.0.1:43433   0.0.0.0:*
 200\tsovereign.service\t/usr/bin/node /srv/sovereign/packages/server/dist/index.js
 300\tllama-server.service\t/opt/llama/llama-server --model kat.gguf
 400\tsession-3.scope\t/usr/bin/claude --print
-500\tsovereign.service\tssh field -o BatchMode=yes bash -s
+500\tsovereign.service\tssh build -o BatchMode=yes bash -s
 @@ADDR@@
 lo 127.0.0.1/8
 enp1s0 10.20.30.3/24
@@ -154,7 +154,7 @@ default via 10.20.30.1 dev en0
 Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
 lo0        16384 <Link#1>                      60 0 3478 60 0 3478 0
 en0        1500  <Link#11>   a0:b1:c2:d3:e4:f5  900 0 123456 800 0 654321 0
-en0        1500  192.168.1     10.20.30.217    900 - 123456 800 - 654321 -
+en0        1500  10.20.30     10.20.30.217    900 - 123456 800 - 654321 -
 @@CPU@@
 Apple M4 Pro
 14
@@ -205,7 +205,7 @@ const TAILSCALE = {
 
 const OVERRIDES = {
   hub: { label: 'Hub' },
-  worker: { label: 'Build Server', sshHost: 'field' },
+  worker: { label: 'Build Server', sshHost: 'build' },
   gone: { exclude: true },
   '10.20.30.216': { label: 'Printer' }
 }
@@ -325,7 +325,7 @@ describe('targetsFromTailscale', () => {
     expect(targets.map((t) => t.id)).toEqual(['ts:hub', 'ts:worker', 'ts:laptop', 'ts:phone'])
     const byId = Object.fromEntries(targets.map((t) => [t.id, t]))
     expect(byId['ts:hub']).toMatchObject({ label: 'Hub', hub: true, scannable: true })
-    expect(byId['ts:worker']).toMatchObject({ label: 'Build Server', sshHost: 'field', scannable: true })
+    expect(byId['ts:worker']).toMatchObject({ label: 'Build Server', sshHost: 'build', scannable: true })
     expect(byId['ts:laptop'].sshHost).toBe('laptop.ts.net')
     expect(byId['ts:phone'].scannable).toBe(false)
     expect(byId['ts:worker'].tailnet).toEqual({ curAddr: '[2406::1]:41641', relay: 'syd', active: true, bytes: 2000 })

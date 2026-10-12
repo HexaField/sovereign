@@ -36,7 +36,7 @@ Voice as a first-class workspace modality. Meeting model with diarization (speak
 
 ## Phase 9: Workspace Consolidation & Org Standardisation
 
-Standardise all repository locations, Sovereign org data, OpenClaw membrane context files, and memory references across all three machines (Mac, Alex Ubuntu, Field Ubuntu). Canonical repo root: `~/workspaces/<org>/<repo>`. Consolidate dweb, metamyth, and harmony membranes into Atlas Research workspace. Fix stale paths in Sovereign orgs.json, OpenClaw context files, and MEMORY.md. Evaluate and clean up stale worktree clones. Maintain full backwards compatibility with OpenClaw workspace conventions. **Desktop repos are treated as stale/retired and explicitly out of scope for moves.**
+Standardise all repository locations, Sovereign org data, OpenClaw membrane context files, and memory references across all three machines (a Mac, a Linux desktop, a Linux server). Canonical repo root: `~/workspaces/<org>/<repo>`. Consolidate dweb, metamyth, and harmony membranes into Atlas Research workspace. Fix stale paths in Sovereign orgs.json, OpenClaw context files, and MEMORY.md. Evaluate and clean up stale worktree clones. Maintain full backwards compatibility with OpenClaw workspace conventions. **Desktop repos are treated as stale/retired and explicitly out of scope for moves.**
 
 Also documents worktree limitations: worktrees handle code-level parallelism (multiple branches) but NOT runtime-level parallelism (Docker volumes, databases, container names). Phase 10's worktree-agent binding must account for this.
 

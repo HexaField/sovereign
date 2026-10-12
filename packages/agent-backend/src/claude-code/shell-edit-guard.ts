@@ -1,4 +1,4 @@
-// NOT WIRED IN. Alex disabled the deny hook (2026-10-05): shell edits are
+// NOT WIRED IN. The deny hook was disabled (2026-10-05): shell edits are
 // sometimes warranted, and a hard block is too blunt. The parser stays as the
 // candidate first layer of a future decision gate (rules, then possibly a
 // Jev-like decision model). Until then the bash-first steer is off and the

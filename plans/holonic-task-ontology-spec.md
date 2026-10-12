@@ -563,7 +563,7 @@ export interface PresenceModule {
 [ad4m-origin] You were @mentioned in neighbourhood...
 ```
 
-The internal thread sees _what happened_ with precision. It can make informed decisions: "All subtasks of 'Build auth module' completed — notify Alex." Or: "Task 'Design API' assigned to subagent-2 has shown no transient-state update in 15 minutes — investigate."
+The internal thread sees _what happened_ with precision. It can make informed decisions: "All subtasks of 'Build auth module' completed — notify the user." Or: "Task 'Design API' assigned to subagent-2 has shown no transient-state update in 15 minutes — investigate."
 
 ### Proactive wake via subscriptions
 

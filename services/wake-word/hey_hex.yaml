@@ -1,6 +1,6 @@
 # Wake word training config — "Hey Hex"
 #
-# Custom wake phrase for Hex (Alex's Sovereign assistant).
+# Custom wake phrase for Hex (Sovereign's default assistant persona).
 #
 # Run: .venv/bin/python train.py --config hey_hex.yaml
 

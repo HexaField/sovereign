@@ -9,8 +9,11 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER_ENTRY="$REPO_DIR/packages/server/dist/index.js"
 
-export HOME="${HOME:-/Users/alex}"
-export PATH="/Users/alex/.nvm/versions/node/v24.4.1/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+# With HOME unset, bash expands ~ from the password database.
+export HOME="${HOME:-$(cd ~ && pwd)}"
+# Prefer the newest nvm-installed node, when there is one.
+NVM_NODE_BIN="$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -n 1 || true)"
+export PATH="${NVM_NODE_BIN:+$NVM_NODE_BIN:}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 export NODE_ENV="${NODE_ENV:-production}"
 export SOVEREIGN_CONFIG_DIR="${SOVEREIGN_CONFIG_DIR:-$HOME/.sovereign}"
 export SOVEREIGN_DATA_DIR="${SOVEREIGN_DATA_DIR:-$SOVEREIGN_CONFIG_DIR/data}"
