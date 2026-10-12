@@ -38,8 +38,9 @@ export interface SovereignToolDeps {
     ): Promise<Array<{ sessionKey: string; label: string; status: string; task?: string }>>
     spawn(
       parentSessionKey: string,
-      opts: { task: string; label?: string; backend?: string; model?: string }
+      opts: { task: string; cwd?: string; label?: string }
     ): Promise<{ sessionKey: string }>
+    stop(sessionKey: string): Promise<void>
   }
   notifications: {
     send(opts: { title: string; body?: string; severity?: string; entityId?: string }): { id: string }
@@ -421,9 +422,30 @@ export function createSovereignMcpServer(
     ),
 
     // ── subagents ─────────────────────────────────────────────────────────
-    // NOTE: agents_spawn disabled — local-LLM subagents produce unreliable
-    // results. Use Claude Code's built-in Task tool instead. The tool
-    // definition, deps interface, and wiring remain for future re-enable.
+    tool(
+      'agents_spawn',
+      'Delegate a task to a subagent. The subagent runs as its own session in `cwd` (a repo or worktree), with SUBAGENT.md and the repo AGENTS.md as its context, and codegraph, semble, code-edit, browser and the built-in file tools. It never commits, spawns subagents or does destructive actions. The call returns at once with the subagent session key. When the subagent ends, its final report arrives in this thread as one message ([Subagent done: …] or [Subagent failed: …]); end your turn and wait for it. Put every fact the subagent needs in `task`: it does not see this conversation. Max 4 running per thread; 60 min limit.',
+      {
+        task: z.string().describe('The complete, self-contained task.'),
+        cwd: z.string().optional().describe('Absolute working directory for the subagent. Default ~/workspaces.'),
+        label: z.string().optional().describe('Short name shown in the UI and in the result message.')
+      },
+      async (args) => {
+        const parent = deps.currentSessionKey?.()
+        if (!parent) throw new Error('agents_spawn: no calling session')
+        const result = await deps.agents.spawn(parent, { task: args.task, cwd: args.cwd, label: args.label })
+        return okJson({ sessionKey: result.sessionKey, note: 'Result arrives as a message in this thread.' })
+      }
+    ),
+    tool(
+      'agents_stop',
+      'Stop a running subagent started by agents_spawn. The thread receives a [Subagent failed: … stopped by the parent] message.',
+      { sessionKey: z.string() },
+      async (args) => {
+        await deps.agents.stop(args.sessionKey)
+        return okText(`Stopped ${args.sessionKey}.`)
+      }
+    ),
     tool(
       'agents_list',
       'List live subagents, optionally filtered to a specific parent.',

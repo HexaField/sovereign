@@ -117,6 +117,18 @@ export interface ToolPolicyContext {
 /** Per-org / per-session tool-policy callback consulted in PreToolUse. */
 export type ToolPolicy = (ctx: ToolPolicyContext) => ToolPolicyDecision | Promise<ToolPolicyDecision>
 
+/** One `agents_spawn` run. The parent gets one message when it ends. */
+export interface SubagentRun {
+  startedAt: number
+  /** Last assistant text: the result the parent receives. */
+  lastText?: string
+  /** Last error the child reported. */
+  error?: string
+  /** The parent message went out; later events are ignored. */
+  done?: boolean
+  timer?: ReturnType<typeof setTimeout>
+}
+
 /** Live state for a single Claude Code session held by the adapter. */
 export interface ClaudeSessionState {
   /** Canonical Sovereign session key (`agent:main:thread:<x>`). */
@@ -137,6 +149,8 @@ export interface ClaudeSessionState {
   label?: string
   /** Optional parent session key for subagent records. */
   parentSessionKey?: string
+  /** Set on subagents started by `agents_spawn`: the run the parent awaits. */
+  run?: SubagentRun
   /** Per-session context filter instance (Layer 1). Created once per session. */
   contextFilter?: import('./context-filter.js').ContextFilter
   /** Wall-clock ms of the last successful recycle (Layer 2 rate-limiting). */

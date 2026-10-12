@@ -31,7 +31,8 @@ function makeDeps(overrides: Partial<SovereignToolDeps> = {}): SovereignToolDeps
     },
     agents: {
       list: vi.fn().mockResolvedValue([]),
-      spawn: vi.fn().mockResolvedValue({ sessionKey: 'sub-1' })
+      spawn: vi.fn().mockResolvedValue({ sessionKey: 'sub-1' }),
+      stop: vi.fn().mockResolvedValue(undefined)
     },
     notifications: { send: vi.fn().mockReturnValue({ id: 'n1' }) },
     planning: {

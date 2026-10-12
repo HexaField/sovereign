@@ -242,7 +242,7 @@ export function makePresenceAwareAppendResolver(
         const lines: string[] = ['# Subagent Routing Configuration']
         const source = thread?.subagentBackend || thread?.subagentModel ? 'per-thread' : 'global default'
         lines.push(
-          `This thread has ${source} subagent routing configured. It governs Sovereign's \`agents_spawn\`, which stays disabled. Use Claude Code's built-in \`Agent\` tool for subagent work — those subagents run on Claude, not on the routing target below.`
+          `This thread has ${source} subagent routing configured. It governs Sovereign's \`agents_spawn\`, the way to delegate work to a subagent.`
         )
         if (effBackend) {
           lines.push(`- \`agents_spawn\` backend: \`${effBackend}\``)
@@ -435,6 +435,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   // notification into the parent session so the parent model sees the
   // result without polling.
   routingBackend.on('subagent.completed', (data) => {
+    if (data.parentMessage) return deliverToParent(data.parentKey, data.parentMessage)
     const parentRecord = sessionsRegistry.getBySession(data.parentKey) ?? sessionsRegistry.getByThread(data.parentKey)
     const childRecord = sessionsRegistry.getBySession(data.childKey) ?? sessionsRegistry.getByThread(data.childKey)
     if (!parentRecord || !childRecord) return
@@ -455,6 +456,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   })
 
   routingBackend.on('subagent.failed', (data) => {
+    if (data.parentMessage) return deliverToParent(data.parentKey, data.parentMessage)
     const parentRecord = sessionsRegistry.getBySession(data.parentKey) ?? sessionsRegistry.getByThread(data.parentKey)
     const childRecord = sessionsRegistry.getBySession(data.childKey) ?? sessionsRegistry.getByThread(data.childKey)
     if (!parentRecord || !childRecord) return
@@ -475,6 +477,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   // `opts.kind` (e.g. 'cron') flows through so the chat module can emit a
   // role-correct synthetic chat.turn (system for cron, user otherwise).
   let chatInjector: ((threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) | undefined
+  const pendingParentMessages: Array<[string, string]> = []
   cronService = createCronService({
     routing: routingBackend,
     scheduler,
@@ -490,6 +493,20 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     fn: ((threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) | undefined
   ): void => {
     chatInjector = fn
+    for (const [parentKey, text] of pendingParentMessages.splice(0)) deliverToParent(parentKey, text)
+  }
+
+  // agents_spawn results enter the parent thread like a cron fire: queued,
+  // never interrupting, shown as a system card. Results that arrive before
+  // the chat module is wired (a restart notice) wait for it.
+  function deliverToParent(parentKey: string, text: string): void {
+    if (!chatInjector) {
+      pendingParentMessages.push([parentKey, text])
+      return
+    }
+    chatInjector(parentKey, text, { kind: 'cron' }).catch((err) =>
+      console.warn(`[wiring] subagent result delivery failed for ${parentKey}:`, err)
+    )
   }
 
   return {

@@ -1,14 +1,12 @@
 // S26: Subagent Routing — the routing prompt and the tools a thread gets must
 // agree.
 //
-// Since 6041e3e disabled `agents_spawn` (local-LLM subagents proved
-// unreliable), the routing prompt tells the model to use Claude Code's
-// built-in subagent tool. So:
+// `agents_spawn` (Sovereign's subagent runner) lives on the claude-code
+// backend only. So:
 //   A. A local-llm thread's system prompt declares the routing policy, and its
 //      tool list carries no `agents_spawn`.
-//   B. A claude-code thread with the same routing keeps the SDK's subagent
-//      tool, and its prompt names that tool. Stripping it (as the removed
-//      makeSubagentToolBlocker did) left no subagent path at all.
+//   B. A claude-code thread with the same routing gets `agents_spawn`, and its
+//      prompt names it as the delegation path.
 //
 // Self-skips when local-llm backend reports unavailable.
 
@@ -26,8 +24,6 @@ function is404(err: any): boolean {
   return String(err?.message ?? '').includes('→ 404')
 }
 
-/** The SDK names its subagent tool `Agent` (formerly `Task`). */
-const SUBAGENT_TOOLS = ['Agent', 'Task']
 const ROUTING = { subagentBackend: 'local-llm', subagentModel: 'test-model-s26' }
 
 async function mockLog(mockLlmUrl: string): Promise<any[]> {
@@ -115,22 +111,20 @@ export const s26SubagentRouting: Scenario = {
       .sort((a, b) => (b.tools?.length ?? 0) - (a.tools?.length ?? 0))[0]
     const ccTools: string[] = (main?.tools ?? []).map((t: any) => t.name)
     const ccSystem: string = main?.system ?? ''
-    const subagentTool = SUBAGENT_TOOLS.find((t) => ccTools.includes(t))
     // The prompt must name the tool the thread actually gets.
-    const ccRouting = /subagent routing/i.test(ccSystem) && !!subagentTool && ccSystem.includes(`\`${subagentTool}\``)
     const ccSpawn = ccTools.some((t) => t.endsWith('agents_spawn'))
+    const ccRouting = /subagent routing/i.test(ccSystem) && ccSystem.includes('`agents_spawn`')
     metrics.ccToolCount = ccTools.length
     metrics.ccRouting = ccRouting
-    metrics.subagentTool = subagentTool ?? null
 
-    const passed = localRouting && !localSpawn && ccRouting && !!subagentTool && !ccSpawn
+    const passed = localRouting && !localSpawn && ccRouting && ccSpawn
     return cleanup({
       passed,
       summary: passed
-        ? `routing OK — local-llm prompt declares routing ✓, claude-code thread offers ${subagentTool} and ` +
-          `its prompt names it ✓ (${ccTools.length} tools), agents_spawn absent ✓`
+        ? `routing OK — local-llm prompt declares routing ✓, local agents_spawn absent ✓, ` +
+          `claude-code thread offers agents_spawn and its prompt names it ✓ (${ccTools.length} tools)`
         : `routing mismatch — local routing=${localRouting}, local agents_spawn=${localSpawn}, ` +
-          `cc routing prompt=${ccRouting}, cc subagent tool=${subagentTool ?? 'MISSING'}, cc agents_spawn=${ccSpawn}`,
+          `cc routing prompt=${ccRouting}, cc agents_spawn=${ccSpawn}`,
       metrics,
       samples: client.samples
     })

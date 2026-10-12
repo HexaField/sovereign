@@ -105,10 +105,9 @@ describe('makePresenceAwareAppendResolver — subagent routing injection', () =>
     const result = resolver('agent:main:thread:thread-1')
     expect(result).toContain('Subagent Routing')
     expect(result).toContain('local-llm')
-    // The SDK's subagent tool is `Agent`, and it runs on Claude whatever the routing says.
-    expect(result).toContain('built-in `Agent` tool')
-    expect(result).toContain('run on Claude')
-    expect(result).not.toContain('Task tool')
+    // The routing governs agents_spawn, the delegation path.
+    expect(result).toContain('`agents_spawn`, the way to delegate work to a subagent')
+    expect(result).not.toContain('stays disabled')
   })
 
   it('injects subagent routing when thread has subagentModel', () => {

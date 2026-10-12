@@ -537,14 +537,10 @@ describe('claude-code/createClaudeCodeBackend', () => {
     createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stubSdkQuery() })
     // Sovereign no longer writes a workspace-root CLAUDE.md (the global one
     // at ~/.claude/CLAUDE.md is owned by the personality compiler). Only the
-    // layered-context file + default subagent template are seeded into cwd.
-    const expected = [
-      join(cwd, '.claude', 'CLAUDE.md'),
-      join(cwd, '.claude', 'agents', 'sovereign-default-subagent.md')
-    ]
-    for (const p of expected) {
-      expect(require('node:fs').existsSync(p)).toBe(true)
-    }
+    // layered-context file is seeded into cwd; no subagent definition.
+    const fs = require('node:fs')
+    expect(fs.existsSync(join(cwd, '.claude', 'CLAUDE.md'))).toBe(true)
+    expect(fs.existsSync(join(cwd, '.claude', 'agents'))).toBe(false)
   })
 
   it('getHistory reads turns from an on-disk JSONL when present', async () => {
@@ -2360,155 +2356,185 @@ describe('claude-code/session-conflict detection', () => {
   })
 })
 
-describe('claude-code/spawnSubagent — local model path', () => {
+/**
+ * sdkQuery stub for agents_spawn tests. Records every call's options. A child
+ * session (raw string systemPrompt) yields `child` messages after init, or
+ * stays open until aborted when `child` is null.
+ */
+function runnerSdkQuery(child: any[] | null) {
+  const calls: any[] = []
+  const factory = (args: any) => {
+    const options = args?.options ?? {}
+    calls.push(options)
+    const isChild = typeof options.systemPrompt === 'string'
+    const generator = (async function* () {
+      yield { type: 'system', subtype: 'init', session_id: options.sessionId, tools: [], mcp_servers: [] }
+      if (!isChild) return
+      if (child) {
+        // Let sendMessage mark the child working before its turn ends.
+        await new Promise((r) => setTimeout(r, 5))
+        for (const m of child) yield m
+        return
+      }
+      await new Promise<void>((r) => options.abortController?.signal.addEventListener('abort', () => r()))
+    })()
+    return Object.assign(generator, {
+      interrupt: vi.fn(async () => {}),
+      setModel: vi.fn(async () => {}),
+      mcpServerStatus: vi.fn(async () => []),
+      setMcpServers: vi.fn(async () => {}),
+      initializationResult: vi.fn(async () => ({})),
+      supportedCommands: vi.fn(async () => []),
+      supportedModels: vi.fn(async () => []),
+      close: vi.fn(() => {})
+    })
+  }
+  ;(factory as any).calls = calls
+  return factory as any
+}
+
+const tick = async (n = 30) => {
+  for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 1))
+}
+
+describe('claude-code/spawnSubagent — agents_spawn runner', () => {
   let dataDir: string
-  let cwd: string
+  let configDir: string
+  let repo: string
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'sov-cc-spawn-'))
-    cwd = mkdtempSync(join(tmpdir(), 'sov-cc-spawn-cwd-'))
+    configDir = mkdtempSync(join(tmpdir(), 'sov-cc-spawn-cfg-'))
+    repo = mkdtempSync(join(tmpdir(), 'sov-cc-spawn-repo-'))
+    writeFileSync(join(configDir, 'SUBAGENT.md'), '# Subagent rules\n\nNever commit.')
+    writeFileSync(join(repo, 'AGENTS.md'), '# Repo rules\n\nRun pnpm test.')
   })
   afterEach(() => {
-    rmSync(dataDir, { recursive: true, force: true })
-    rmSync(cwd, { recursive: true, force: true })
+    for (const d of [dataDir, configDir, repo]) rmSync(d, { recursive: true, force: true })
   })
 
-  it('creates an independent session (not Task tool message) for a non-Claude model', async () => {
-    const stub = capturingSdkQuery()
-    const spawned: any[] = []
+  async function setup(child: any[] | null, opts: { mcpServers?: Record<string, any> } = {}) {
+    const stub = runnerSdkQuery(child)
     const backend = createClaudeCodeBackend(
-      { dataDir, cwd, agentDir: join(dataDir, 'agent'), litellm: { url: 'http://localhost:4000' } },
+      { dataDir, cwd: dataDir, agentDir: join(dataDir, 'agent'), configDir, mcpServers: opts.mcpServers },
       { sdkQuery: stub }
     )
-    backend.on('subagent.spawned', (ev) => spawned.push(ev))
-
-    // Create the parent session (Claude model)
-    await backend.createSession('parent', { threadKey: 'parent-thread' })
-    backend.sendMessage('parent-thread', 'start').catch(() => {})
-    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
-
-    // Spawn a subagent with a non-Claude (local) model
-    const childKey = await backend.spawnSubagent!('parent-thread', {
-      task: 'implement a sorting function',
-      label: 'sort-task',
-      model: { provider: 'local-llm', model: 'qwen3.8-27b' }
-    })
-
-    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
-
-    // Must NOT be the placeholder key (Task tool path)
-    expect(childKey).not.toMatch(/pending/)
-    // Must use the subagent prefix
-    expect(childKey).toMatch(/^agent:main:subagent:/)
-
-    // A subagent.spawned event must have fired
-    expect(spawned).toHaveLength(1)
-    expect(spawned[0].childKey).toBe(childKey)
-    expect(spawned[0].parentKey).toBe('parent-thread')
-    expect(spawned[0].task).toBe('implement a sorting function')
-  })
-
-  it('returns the <pending> placeholder for a Claude model (native Task tool path)', async () => {
-    const stub = capturingSdkQuery()
-    const backend = createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stub })
-
-    await backend.createSession('parent', { threadKey: 'parent-thread-cc' })
-    backend.sendMessage('parent-thread-cc', 'start').catch(() => {})
-    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
-
-    const childKey = await backend.spawnSubagent!('parent-thread-cc', {
-      task: 'do something',
-      model: { provider: 'claude-code', model: 'claude-haiku-4-5-20251001' }
-    })
-
-    // Claude model → pending placeholder
-    expect(childKey).toMatch(/agent:main:subagent:<pending>/)
-  })
-
-  it('slim personality log fires for local-model subagent session start', async () => {
-    const configDir = mkdtempSync(join(tmpdir(), 'sov-cc-cfg-'))
-    const stub = capturingSdkQuery()
-    // Write a SUBAGENT.md so readSubagentPersonality has something to read
-    writeFileSync(join(configDir, 'SUBAGENT.md'), '# Subagent guardrails\n\nDo not rm -rf.')
-    const logLines: string[] = []
-    const origLog = console.log
-    console.log = (...args: any[]) => {
-      const line = args.join(' ')
-      if (line.includes('[claude-code] subagent')) logLines.push(line)
-      origLog(...args)
+    const events: Array<{ type: string; data: any }> = []
+    for (const type of ['subagent.spawned', 'subagent.completed', 'subagent.failed'] as const) {
+      backend.on(type, (data: any) => events.push({ type, data }))
     }
+    await backend.createSession('parent', { threadKey: 'parent' })
+    return { backend, stub, events }
+  }
 
-    try {
-      const backend = createClaudeCodeBackend(
-        {
-          dataDir,
-          cwd,
-          agentDir: join(dataDir, 'agent'),
-          configDir,
-          litellm: { url: 'http://localhost:4000' }
-        },
-        { sdkQuery: stub }
-      )
+  it('runs the child as its own session with the slim context and fixed tools', async () => {
+    const { backend, stub, events } = await setup(null, {
+      mcpServers: {
+        ad4m: { type: 'http', url: 'x' },
+        code: { type: 'stdio', command: 'code', args: ['--edit-roots', '/elsewhere'] }
+      }
+    })
+    const childKey = await backend.spawnSubagent!('parent', { task: 'fix it', cwd: repo, label: 'fix' })
+    await tick()
 
-      // Create parent session
-      await backend.createSession('parent', { threadKey: 'parent-log' })
-      backend.sendMessage('parent-log', 'start').catch(() => {})
-      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
-
-      // Spawn local-model subagent
-      await backend.spawnSubagent!('parent-log', {
-        task: 'check types',
-        model: { provider: 'local-llm', model: 'qwen3.8-27b' }
-      })
-      // Trigger the child session loop
-      for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r))
-
-      // A log line mentioning slim personality must appear
-      const slimLog = logLines.find((l) => l.includes('slim(SUBAGENT.md'))
-      expect(slimLog).toBeDefined()
-    } finally {
-      console.log = origLog
-      rmSync(configDir, { recursive: true, force: true })
-    }
+    expect(childKey).toMatch(/^[0-9a-f-]{36}$/)
+    expect(events[0]).toMatchObject({ type: 'subagent.spawned', data: { parentKey: 'parent', childKey, label: 'fix' } })
+    const opts = stub.calls.find((o: any) => o.sessionId === childKey)
+    expect(opts.cwd).toBe(repo)
+    expect(opts.systemPrompt).toContain('Never commit.')
+    expect(opts.systemPrompt).toContain(`# Repo context (${join(repo, 'AGENTS.md')})`)
+    expect(opts.systemPrompt).toContain('Run pnpm test.')
+    expect(opts.systemPrompt).not.toContain('claude_code')
+    expect(opts.tools).toEqual(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob'])
+    expect(opts.settingSources).toEqual(['local'])
+    expect(opts.mcpServers.sovereign.url).toBe('http://localhost:5801/api/mcp/subagent')
+    expect(opts.mcpServers.code.args).toEqual(['--edit-roots', `/elsewhere${delimiter}${repo}`])
+    expect(opts.mcpServers.ad4m).toBeUndefined()
   })
 
-  it('uses ~/workspaces cwd for local-model subagent — JSONL path regression', async () => {
-    // Regression: spawnSubagent used to stamp the child session's cwd with
-    // parentState.cwd (e.g. ~/.sovereign). The subprocess runs with
-    // ~/workspaces. The mismatch meant state.sessionFile pointed to
-    // ~/.claude/projects/<parent-cwd-encoded>/<id>.jsonl while the SDK wrote
-    // to ~/.claude/projects/-home-...-workspaces/<id>.jsonl, so getHistory
-    // returned nothing for every LiteLLM subagent thread.
-    const stub = capturingSdkQuery()
-    const backend = createClaudeCodeBackend(
-      { dataDir, cwd, agentDir: join(dataDir, 'agent'), litellm: { url: 'http://localhost:4000' } },
-      { sdkQuery: stub }
+  it('sends the parent one completion with the final text', async () => {
+    const { backend, events } = await setup([
+      { type: 'result', subtype: 'success', result: 'Changed a.ts; tests pass.' }
+    ])
+    const childKey = await backend.spawnSubagent!('parent', { task: 'fix it', cwd: repo, label: 'fix' })
+    await tick()
+
+    const done = events.filter((e) => e.type === 'subagent.completed')
+    expect(done).toHaveLength(1)
+    expect(done[0].data).toMatchObject({ parentKey: 'parent', childKey, result: 'Changed a.ts; tests pass.' })
+    expect(done[0].data.parentMessage).toMatch(/^\[Subagent done: fix\] after 1 min/)
+    expect(done[0].data.parentMessage).toContain('Changed a.ts; tests pass.')
+    expect(events.some((e) => e.type === 'subagent.failed')).toBe(false)
+  })
+
+  it('reports a failure when the child ends with an error and no text', async () => {
+    const { backend, events } = await setup([
+      { type: 'result', subtype: 'error', is_error: true, result: '', message: 'API error 529' }
+    ])
+    await backend.spawnSubagent!('parent', { task: 'fix it', cwd: repo, label: 'fix' })
+    await tick()
+
+    const failed = events.filter((e) => e.type === 'subagent.failed')
+    expect(failed).toHaveLength(1)
+    expect(failed[0].data.error).toBe('API error 529')
+    expect(failed[0].data.parentMessage).toMatch(/^\[Subagent failed: fix\] after 1 min — API error 529/)
+  })
+
+  it('caps running children per parent at 4', async () => {
+    const { backend } = await setup(null)
+    for (let i = 0; i < 4; i++) await backend.spawnSubagent!('parent', { task: `t${i}`, cwd: repo })
+    await expect(backend.spawnSubagent!('parent', { task: 't4', cwd: repo })).rejects.toThrow(/max 4/)
+  })
+
+  it('refuses nested spawns and a cwd that is not a directory', async () => {
+    const { backend } = await setup(null)
+    const childKey = await backend.spawnSubagent!('parent', { task: 't', cwd: repo })
+    await expect(backend.spawnSubagent!(childKey, { task: 'nested', cwd: repo })).rejects.toThrow(/cannot spawn/)
+    await expect(backend.spawnSubagent!('parent', { task: 't', cwd: join(repo, 'AGENTS.md') })).rejects.toThrow(
+      /not a directory/
     )
+  })
 
-    await backend.createSession('parent', { threadKey: 'parent-jpath' })
-    backend.sendMessage('parent-jpath', 'start').catch(() => {})
-    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
+  it('stop ends the run with one failure message', async () => {
+    const { backend, events } = await setup(null)
+    const childKey = await backend.spawnSubagent!('parent', { task: 't', cwd: repo, label: 'slow' })
+    await tick()
+    await backend.stopSubagent!(childKey)
+    await backend.stopSubagent!(childKey)
+    await tick()
 
-    const childKey = await backend.spawnSubagent!('parent-jpath', {
-      task: 'analyse code quality',
-      model: { provider: 'local-llm', model: 'qwen3.8-27b' }
-    })
+    const failed = events.filter((e) => e.type === 'subagent.failed')
+    expect(failed).toHaveLength(1)
+    expect(failed[0].data.error).toBe('stopped by the parent')
+  })
 
-    // Even before the JSONL exists on disk, getSessionFilePath must return a
-    // path rooted in ~/workspaces (state.sessionFile was pre-stamped from cwd).
-    const agentDir = join(dataDir, 'agent')
-    const filePath = backend.getSessionFilePath!(childKey)
+  it('times out a run that exceeds its limit', async () => {
+    const { backend, events } = await setup(null)
+    await backend.spawnSubagent!('parent', { task: 't', cwd: repo, timeoutMs: 20 })
+    await tick(60)
 
-    // The pre-stamped path is always non-null; check its directory component.
-    expect(filePath).not.toBeNull()
-    if (filePath !== null) {
-      // The encoded path must contain 'workspaces' (from ~/workspaces cwd)
-      expect(filePath).toContain('workspaces')
-      // The path must NOT be rooted in the parent's (test-temp) cwd
-      expect(filePath).not.toContain(cwd)
-      // It must be under the configured agentDir's projects/ tree
-      expect(filePath).toContain(join(agentDir, 'projects'))
-    }
+    const failed = events.filter((e) => e.type === 'subagent.failed')
+    expect(failed).toHaveLength(1)
+    expect(failed[0].data.error).toMatch(/^timed out/)
+  })
+
+  it('tells the parent after a restart that cut a run off', async () => {
+    const { backend } = await setup(null)
+    const childKey = await backend.spawnSubagent!('parent', { task: 't', cwd: repo, label: 'cut' })
+    await tick()
+    ;(backend as any).flushState?.()
+
+    const restarted = createClaudeCodeBackend(
+      { dataDir, cwd: dataDir, agentDir: join(dataDir, 'agent'), configDir },
+      { sdkQuery: runnerSdkQuery(null) }
+    )
+    const failed: any[] = []
+    restarted.on('subagent.failed', (d: any) => failed.push(d))
+    await tick()
+
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toMatchObject({ parentKey: 'parent', childKey })
+    expect(failed[0].error).toMatch(/Sovereign restarted/)
   })
 })
 

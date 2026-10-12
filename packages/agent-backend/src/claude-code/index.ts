@@ -10,7 +10,7 @@ export {
   type TaskMcpDeps,
   type CiWatchMcpDeps
 } from './mcp-server.js'
-export { ensureLayeredContextFile, ensureDefaultSubagentFile, ensureAd4mSkill } from './personality.js'
+export { ensureLayeredContextFile, ensureAd4mSkill } from './personality.js'
 export { createPersonalityCompiler } from './personality-compiler.js'
 export type { PersonalityCompiler, PersonalityCompilerOptions, PersonalityManifest } from './personality-compiler.js'
 export {

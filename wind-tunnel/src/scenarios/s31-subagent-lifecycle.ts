@@ -31,10 +31,10 @@ export const s31SubagentLifecycle: Scenario = {
   description: 'spawned/completed events fire for local-llm subagents; cross-backend result notification works',
 
   async run(_ctx: ScenarioContext): Promise<ScenarioResult> {
-    // agents_spawn disabled — local-LLM subagents produce unreliable results.
-    // This scenario tests sovereign_agents_spawn lifecycle events which no
-    // longer fire. Skip until the tool gets re-enabled.
-    return skip('skipped — sovereign_agents_spawn disabled (local-LLM subagents unreliable)')
+    // Local-LLM threads have no agents_spawn (it runs on claude-code only;
+    // local-LLM subagents proved unreliable). The claude-code runner's
+    // lifecycle is covered by claude-code.test.ts "agents_spawn runner".
+    return skip('skipped — local-llm threads have no agents_spawn')
 
     /* eslint-disable no-unreachable */
     const { client, mockLlmUrl } = _ctx

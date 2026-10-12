@@ -21,7 +21,8 @@ function makeDeps(overrides: Partial<SovereignToolDeps> = {}): SovereignToolDeps
     },
     agents: {
       list: vi.fn().mockResolvedValue([{ sessionKey: 'sub-1', label: 'explore', status: 'idle' }]),
-      spawn: vi.fn().mockResolvedValue({ sessionKey: 'agent:main:subagent:abc' })
+      spawn: vi.fn().mockResolvedValue({ sessionKey: 'abc' }),
+      stop: vi.fn().mockResolvedValue(undefined)
     },
     notifications: { send: vi.fn().mockReturnValue({ id: 'n-1' }) },
     planning: {
@@ -85,6 +86,8 @@ describe('claude-code/mcp-server', () => {
         'browser_open',
         'browser_act',
         'browser_close',
+        'agents_spawn',
+        'agents_stop',
         'agents_list',
         'notifications_send',
         'create_issue',
@@ -445,7 +448,35 @@ describe('claude-code/mcp-server', () => {
 
   // ── agents ──────────────────────────────────────────────────────────────
 
-  // agents_spawn tests removed — tool disabled (local-LLM subagents unreliable)
+  describe('agents_spawn', () => {
+    it('spawns under the calling session with task, cwd and label', async () => {
+      const deps = makeDeps()
+      const result = await invoke(getTools(deps), 'agents_spawn', {
+        task: 'fix the bug',
+        cwd: '/repo',
+        label: 'fix'
+      })
+      expect(deps.agents.spawn).toHaveBeenCalledWith('agent:main:thread:t1', {
+        task: 'fix the bug',
+        cwd: '/repo',
+        label: 'fix'
+      })
+      expect((parseResult(result) as any).sessionKey).toBe('abc')
+    })
+
+    it('throws without a calling session', async () => {
+      const deps = makeDeps({ currentSessionKey: () => undefined })
+      await expect(invoke(getTools(deps), 'agents_spawn', { task: 'x' })).rejects.toThrow(/no calling session/)
+    })
+  })
+
+  describe('agents_stop', () => {
+    it('stops the named subagent', async () => {
+      const deps = makeDeps()
+      await invoke(getTools(deps), 'agents_stop', { sessionKey: 'abc' })
+      expect(deps.agents.stop).toHaveBeenCalledWith('abc')
+    })
+  })
 
   describe('agents_list', () => {
     it('returns all agents when no filter', async () => {

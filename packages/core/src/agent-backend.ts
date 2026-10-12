@@ -160,9 +160,18 @@ export interface AgentBackendEvents {
     result: string
     tokenUsage?: TokenUsage
     backendKind?: AgentBackendKind
+    /** Set for agents_spawn runs: the message to deliver into the parent thread. */
+    parentMessage?: string
   }
   /** A subagent failed */
-  'subagent.failed': { parentKey: string; childKey: string; error: string; backendKind?: AgentBackendKind }
+  'subagent.failed': {
+    parentKey: string
+    childKey: string
+    error: string
+    backendKind?: AgentBackendKind
+    /** Set for agents_spawn runs: the message to deliver into the parent thread. */
+    parentMessage?: string
+  }
 }
 
 /**
@@ -333,6 +342,8 @@ export interface CreateSessionOptions {
 export interface SpawnSubagentOptions {
   task: string
   label?: string
+  /** Working directory for the child (a repo or worktree). */
+  cwd?: string
   model?: { provider: string; model: string }
   thinkingLevel?: string
   toolAllowlist?: string[]
@@ -502,6 +513,8 @@ export interface AgentBackend {
 
   /** OPTIONAL — backends that natively support subagents implement this. */
   spawnSubagent?(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string>
+  /** OPTIONAL — end a running spawned subagent. */
+  stopSubagent?(childKey: string): Promise<void>
   /** OPTIONAL — backends with a device identity. */
   getDeviceInfo?(): DeviceInfo | null
 
