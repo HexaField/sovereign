@@ -686,14 +686,11 @@ export function createClaudeCodeBackend(
     }
     persistState(state)
   })
-  // agents_spawn runs end when the child goes idle after its turn.
+  // agents_spawn runs end on their turn's result (see startSessionLoop); the
+  // Stop hook marks the session idle before that result arrives.
   emitter.on('chat.error', (data) => {
     const run = internal.sessions.get(data.sessionKey)?.run
     if (run && !run.done) run.error = data.error
-  })
-  emitter.on('chat.status', (data) => {
-    const state = internal.sessions.get(data.sessionKey)
-    if (data.status === 'idle' && state?.run && !state.run.done) finishRun(state)
   })
 
   /** End an agents_spawn run once: one parent message, result or failure. */
@@ -1622,6 +1619,9 @@ export function createClaudeCodeBackend(
                 console.warn('[context-recycle] auto-trigger error:', err)
               })
             }
+            // An agents_spawn run ends with its turn's result (handleResult
+            // has just recorded the text), unless background tasks continue it.
+            if (state.run && !state.backgroundTaskCount) finishRun(state)
           }
         }
       } catch (err: any) {
@@ -1647,6 +1647,8 @@ export function createClaudeCodeBackend(
         state.abortController = undefined
         state.liveQuery = undefined
         state.agentStatus = 'idle'
+        // A child process that exits mid-run still owes its parent a message.
+        if (state.run) finishRun(state)
         // A recycle announces its own status; an idle from its teardown would
         // release the chat layer's gate for a message still being sent.
         if (!recycleDone.has(state.sessionKey)) {

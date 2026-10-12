@@ -2373,6 +2373,10 @@ function runnerSdkQuery(child: any[] | null) {
       if (child) {
         // Let sendMessage mark the child working before its turn ends.
         await new Promise((r) => setTimeout(r, 5))
+        // The real SDK fires the Stop hook (which marks the session idle)
+        // before it yields the turn's result message.
+        const onStop = options.hooks?.Stop?.[0]?.hooks?.[0]
+        await onStop?.({ hook_event_name: 'Stop', session_id: options.sessionId, background_tasks: [] })
         for (const m of child) yield m
         return
       }
