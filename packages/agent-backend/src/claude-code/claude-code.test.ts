@@ -2363,6 +2363,7 @@ describe('claude-code/session-conflict detection', () => {
  */
 function runnerSdkQuery(child: any[] | null) {
   const calls: any[] = []
+  const results: any[] = []
   const factory = (args: any) => {
     const options = args?.options ?? {}
     calls.push(options)
@@ -2382,7 +2383,7 @@ function runnerSdkQuery(child: any[] | null) {
       }
       await new Promise<void>((r) => options.abortController?.signal.addEventListener('abort', () => r()))
     })()
-    return Object.assign(generator, {
+    const q = Object.assign(generator, {
       interrupt: vi.fn(async () => {}),
       setModel: vi.fn(async () => {}),
       mcpServerStatus: vi.fn(async () => []),
@@ -2392,8 +2393,11 @@ function runnerSdkQuery(child: any[] | null) {
       supportedModels: vi.fn(async () => []),
       close: vi.fn(() => {})
     })
+    results.push(q)
+    return q
   }
   ;(factory as any).calls = calls
+  ;(factory as any).results = results
   return factory as any
 }
 
@@ -2454,6 +2458,7 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     expect(opts.mcpServers.sovereign.url).toBe('http://localhost:5801/api/mcp/subagent')
     expect(opts.mcpServers.code.args).toEqual(['--edit-roots', `/elsewhere${delimiter}${repo}`])
     expect(opts.mcpServers.ad4m).toBeUndefined()
+    expect(opts.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
   })
 
   it('sends the parent one completion with the final text', async () => {
@@ -2484,6 +2489,59 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     expect(failed[0].data.parentMessage).toMatch(/^\[Subagent failed: fix\] after 1 min — API error 529/)
   })
 
+  it('fails a run whose result is an error, keeping the text it wrote', async () => {
+    const { backend, events } = await setup([
+      { type: 'result', subtype: 'error', is_error: true, result: 'Edited a.ts, then', message: 'API error 529' }
+    ])
+    await backend.spawnSubagent!('parent', { task: 'fix it', cwd: repo, label: 'fix' })
+    await tick()
+
+    expect(events.some((e) => e.type === 'subagent.completed')).toBe(false)
+    const failed = events.filter((e) => e.type === 'subagent.failed')
+    expect(failed).toHaveLength(1)
+    expect(failed[0].data.error).toBe('API error 529')
+    expect(failed[0].data.parentMessage).toContain('Edited a.ts, then')
+  })
+
+  it('fails the run at once when the child CLI cannot start', async () => {
+    const runner = runnerSdkQuery(null)
+    const sdkQuery = (args: any) => {
+      if (typeof args?.options?.systemPrompt === 'string') throw new Error('spawn claude ENOENT')
+      return runner(args)
+    }
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd: dataDir, agentDir: join(dataDir, 'agent'), configDir },
+      { sdkQuery: sdkQuery as any }
+    )
+    const failed: any[] = []
+    backend.on('subagent.failed', (d: any) => failed.push(d))
+    await backend.createSession('parent', { threadKey: 'parent' })
+    await backend.spawnSubagent!('parent', { task: 't', cwd: repo })
+    await tick()
+
+    expect(failed).toHaveLength(1)
+    expect(failed[0].error).toBe('spawn claude ENOENT')
+  })
+
+  it('keeps children out of the resume index and drops a failed one from its parent', async () => {
+    const calls: Array<[string, any[]]> = []
+    const activeSessions = new Proxy({} as any, {
+      get: (t, p: string) => (t[p] ??= (...args: any[]) => calls.push([p, args]))
+    })
+    const backend = createClaudeCodeBackend(
+      { dataDir, cwd: dataDir, agentDir: join(dataDir, 'agent'), configDir },
+      { sdkQuery: runnerSdkQuery(null), activeSessions }
+    )
+    await backend.createSession('parent', { threadKey: 'parent' })
+    const childKey = await backend.spawnSubagent!('parent', { task: 't', cwd: repo })
+    await tick()
+    await backend.stopSubagent!(childKey)
+    await tick()
+
+    expect(calls.some(([m, a]) => m === 'upsert' && a[0].sessionKey === childKey)).toBe(false)
+    expect(calls).toContainEqual(['removeSubagent', ['parent', childKey]])
+  })
+
   it('caps running children per parent at 4', async () => {
     const { backend } = await setup(null)
     for (let i = 0; i < 4; i++) await backend.spawnSubagent!('parent', { task: `t${i}`, cwd: repo })
@@ -2499,10 +2557,13 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     )
   })
 
-  it('stop ends the run with one failure message', async () => {
-    const { backend, events } = await setup(null)
+  it('stop ends the run with one failure message and kills the child CLI', async () => {
+    const { backend, stub, events } = await setup(null)
     const childKey = await backend.spawnSubagent!('parent', { task: 't', cwd: repo, label: 'slow' })
     await tick()
+    const child = stub.calls.find((o: any) => o.sessionId === childKey)
+    // A wedged CLI never answers an in-band interrupt; stop must not wait on one.
+    stub.results.at(-1).interrupt.mockImplementation(() => new Promise(() => {}))
     await backend.stopSubagent!(childKey)
     await backend.stopSubagent!(childKey)
     await tick()
@@ -2510,16 +2571,18 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     const failed = events.filter((e) => e.type === 'subagent.failed')
     expect(failed).toHaveLength(1)
     expect(failed[0].data.error).toBe('stopped by the parent')
+    expect(child.abortController.signal.aborted).toBe(true)
   })
 
-  it('times out a run that exceeds its limit', async () => {
-    const { backend, events } = await setup(null)
-    await backend.spawnSubagent!('parent', { task: 't', cwd: repo, timeoutMs: 20 })
+  it('times out a run that exceeds its limit and kills the child CLI', async () => {
+    const { backend, stub, events } = await setup(null)
+    const childKey = await backend.spawnSubagent!('parent', { task: 't', cwd: repo, timeoutMs: 20 })
     await tick(60)
 
     const failed = events.filter((e) => e.type === 'subagent.failed')
     expect(failed).toHaveLength(1)
     expect(failed[0].data.error).toMatch(/^timed out/)
+    expect(stub.calls.find((o: any) => o.sessionId === childKey).abortController.signal.aborted).toBe(true)
   })
 
   it('tells the parent after a restart that cut a run off', async () => {
