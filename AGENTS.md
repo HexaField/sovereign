@@ -437,6 +437,12 @@ System → Devices → a device card → **Files**: browse the whole file system
 - Replaces the old "Disk usage by directory" list (a 12 s-capped `du /` every 5 min per device, cleared between runs — it timed out on big disks and flickered away).
 - Phones (Android/iOS) are not in the device list: no SSH. Wind-tunnel s42 covers the routes.
 
+## File quick-open (Cmd+P / Ctrl+P)
+
+- **Key:** `isQuickOpenKey` in `hooks/useKeyboardShortcuts.ts` — Cmd+P on macOS (Ctrl+P stays "previous line" in text fields), Ctrl+P (or Cmd/Super+P) elsewhere, never inside the terminal (`.xterm`, Ctrl+P is the shell's previous command). Cmd+K and Cmd/Ctrl+P close each other's palette.
+- **Server:** `GET /api/files/search?root=<root id or path>&q=&limit=` (`packages/files/src/file-search.ts`); the root must be one of `/api/files/roots`. The file list comes from `rg --files --hidden -g '!.git' --null` (honours `.gitignore`; looked up on PATH, then `~/.local/bin`, `/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), else a walk that skips `node_modules`/`.git`/`dist`/`build`/`target`/`.venv`. Lists cap at 500k files and are cached 30 s per root (stale served while a fresh one builds). Scoring: query characters in order, file-name matches first, word starts and runs score more; the top N is kept while scanning, so a one-letter query over ~300k files stays near 100 ms.
+- **Client:** `features/workspace/FileQuickOpen.tsx` searches the root whose id matches the active workspace (else `_global`), lists recent tabs before typing, and opens the pick with `sovereign:open-file` (which also switches the main view to files).
+
 ## File chips in messages (`packages/client/src/lib/markdown.ts`)
 
 `renderMarkdown` turns file references in rendered HTML into `.file-chip` spans (click opens the file, ⧉ copies the path). `injectFileChips` runs in phases over marked's output:
