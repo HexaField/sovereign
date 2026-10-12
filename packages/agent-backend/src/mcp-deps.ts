@@ -139,10 +139,9 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         // Priority chain (NON-NEGOTIABLE — thread config is authoritative):
         //   1. Thread-level subagentBackend (highest — per-thread override)
         //   2. Global subagentDefaults.backend (system-wide policy)
-        //   3. Model's explicit opts.backend (advisory — model cannot escape routing)
-        //   4. Parent session's own backend (fallback)
+        //   3. Parent session's own backend (fallback)
         let backend: AgentBackend
-        const effectiveBackend = thread?.subagentBackend ?? defaults?.backend ?? opts.backend
+        const effectiveBackend = thread?.subagentBackend ?? defaults?.backend
         if (effectiveBackend) {
           const target = routing.forKind(effectiveBackend as AgentBackendKind)
           if (!target) throw new Error(`agents_spawn: backend "${effectiveBackend}" not enabled`)
@@ -152,14 +151,20 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         }
         if (!backend.spawnSubagent) throw new Error('agents_spawn: backend does not support subagent spawn')
 
-        // Same priority for model: thread > global > model's request.
-        const effectiveModel = thread?.subagentModel ?? defaults?.model ?? opts.model
+        // Same priority for model: thread > global > the parent's model.
+        const effectiveModel = thread?.subagentModel ?? defaults?.model
         const childKey = await backend.spawnSubagent(parentKey, {
           task: opts.task,
+          cwd: opts.cwd,
           label: opts.label,
           ...(effectiveModel ? { model: { provider: '', model: effectiveModel } } : {})
         })
         return { sessionKey: childKey }
+      },
+      async stop(sessionKey) {
+        const backend = routing.forSession(sessionKey)
+        if (!backend.stopSubagent) throw new Error('agents_stop: backend does not support stopping subagents')
+        await backend.stopSubagent(sessionKey)
       }
     },
     notifications: {

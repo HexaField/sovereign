@@ -69,12 +69,15 @@ import { dispatchSdkMessage } from './events.js'
 import { defaultAgentDir, projectsDirForCwd, sessionJsonlPath } from './path-encoding.js'
 import { withEditRoot } from './config.js'
 import {
-  ensureAd4mSkill,
-  ensureDefaultSubagentFile,
-  ensureLayeredContextFile,
-  findUnreachableAgentModels
-} from './personality.js'
-import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, ToolPolicy } from './types.js'
+  buildSubagentSystemPrompt,
+  MAX_SUBAGENTS_PER_PARENT,
+  selectSubagentMcpServers,
+  SUBAGENT_BUILTIN_TOOLS,
+  SUBAGENT_TIMEOUT_MS,
+  subagentResultMessage
+} from './subagent-runner.js'
+import { ensureAd4mSkill, ensureLayeredContextFile, findUnreachableAgentModels } from './personality.js'
+import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, SubagentRun, ToolPolicy } from './types.js'
 import { createContextFilter } from './context-filter.js'
 import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
@@ -245,21 +248,6 @@ function readGlobalPersonality(agentDir: string): string {
   }
 }
 
-/**
- * Read the compact subagent guardrails file (`${configDir}/SUBAGENT.md`).
- * Used instead of the full CLAUDE.md (27K chars) for local-model subagents —
- * those sessions run on small/fast models where large system prompts hurt TTFT.
- * Returns empty string when the file is missing or configDir is not set.
- */
-function readSubagentPersonality(configDir: string | undefined): string {
-  if (!configDir) return ''
-  try {
-    return fs.readFileSync(path.join(configDir, 'SUBAGENT.md'), 'utf8').trim()
-  } catch {
-    return ''
-  }
-}
-
 const SUBAGENT_SESSION_PREFIX = 'agent:main:subagent:'
 const THREAD_SESSION_PREFIX = 'agent:main:thread:'
 
@@ -392,6 +380,8 @@ interface PersistedClaudeSessionState {
   agentStatus: ClaudeSessionState['agentStatus']
   label?: string
   parentSessionKey?: string
+  /** agents_spawn run: start time, and whether the parent got its message. */
+  run?: { startedAt: number; done?: boolean }
   lastRecycleAt?: number
   recycleFloor?: number
   recycleExhausted?: boolean
@@ -474,11 +464,10 @@ export function createClaudeCodeBackend(
       url: mcpUrl,
       alwaysLoad: true
     }
-    // Subagents don't need AD4M — removing it reduces context overhead and
-    // prevents unnecessary neighbourhood connections in implementation workers.
-    if (isSubagent) {
-      delete servers.ad4m
-    }
+    // Subagents get a fixed set (codegraph, semble, code, narrow sovereign).
+    // Their settingSources skip ~/.claude.json, so its user-scope servers
+    // are merged in here.
+    if (isSubagent) return selectSubagentMcpServers(servers, path.join(home, '.claude.json'))
     return servers
   }
 
@@ -502,15 +491,13 @@ export function createClaudeCodeBackend(
     )
   }
 
-  // Workspace-local seed files — best-effort, never fatal. The global
+  // Workspace-local seed file — best-effort, never fatal. The global
   // personality (~/.claude/CLAUDE.md) is owned by the personality compiler
-  // in bootstrap; only the layered-context file and default subagent get
-  // seeded here.
+  // in bootstrap; only the layered-context file gets seeded here.
   try {
     const initCwd = initConfig.cwd ?? process.cwd()
     fs.mkdirSync(initCwd, { recursive: true })
     ensureLayeredContextFile(initCwd)
-    ensureDefaultSubagentFile(initCwd)
     const initMcp = resolveMcpServers()
     if (initMcp['ad4m'] && initConfig.configDir) ensureAd4mSkill(initConfig.configDir, initAgentDir)
   } catch {
@@ -544,6 +531,7 @@ export function createClaudeCodeBackend(
       agentStatus: state.agentStatus,
       label: state.label,
       parentSessionKey: state.parentSessionKey,
+      run: state.run && { startedAt: state.run.startedAt, done: state.run.done },
       lastRecycleAt: state.lastRecycleAt,
       recycleFloor: state.recycleFloor,
       recycleExhausted: state.recycleExhausted,
@@ -586,12 +574,18 @@ export function createClaudeCodeBackend(
       }
       internal.sessions.set(key, state)
       indexSession(state)
+      if (value.run) state.run = { ...value.run }
       if (value.parentSessionKey) {
         internal.subagentToParent.set(value.backendSessionId, value.parentSessionKey)
-        // Mark subagents that were working before the restart as abandoned —
-        // they can't resume across a process boundary. Emit a system turn so
-        // the parent thread's transcript shows what happened.
-        if (value.agentStatus === 'working' || value.agentStatus === 'thinking') {
+        // An agents_spawn run cut off by the restart: tell the parent once
+        // listeners are attached (they register after construction).
+        if (state.run && !state.run.done) {
+          const s = state
+          setImmediate(() => finishRun(s, 'Sovereign restarted while it ran; the task did not finish'))
+        } else if (value.agentStatus === 'working' || value.agentStatus === 'thinking') {
+          // Other subagents that were working before the restart are abandoned —
+          // they can't resume across a process boundary. Emit a system turn so
+          // the parent thread's transcript shows what happened.
           console.warn(`[claude-code] subagent ${key} was ${value.agentStatus} at shutdown — marking abandoned`)
           emitter.emit('chat.turn', {
             sessionKey: value.parentSessionKey,
@@ -686,8 +680,45 @@ export function createClaudeCodeBackend(
   })
   emitter.on('chat.turn', (data) => {
     const state = internal.sessions.get(data.sessionKey)
-    if (state) persistState(state)
+    if (!state) return
+    if (state.run && !state.run.done && data.turn.role === 'assistant' && data.turn.content?.trim()) {
+      state.run.lastText = data.turn.content
+    }
+    persistState(state)
   })
+  // agents_spawn runs end when the child goes idle after its turn.
+  emitter.on('chat.error', (data) => {
+    const run = internal.sessions.get(data.sessionKey)?.run
+    if (run && !run.done) run.error = data.error
+  })
+  emitter.on('chat.status', (data) => {
+    const state = internal.sessions.get(data.sessionKey)
+    if (data.status === 'idle' && state?.run && !state.run.done) finishRun(state)
+  })
+
+  /** End an agents_spawn run once: one parent message, result or failure. */
+  function finishRun(state: ClaudeSessionState, failure?: string): void {
+    const run = state.run
+    const parentKey = state.parentSessionKey
+    if (!run || run.done || !parentKey) return
+    run.done = true
+    if (run.timer) clearTimeout(run.timer)
+    run.timer = undefined
+    persistState(state)
+    // The child's CLI process has nothing left to do: close its input so it exits.
+    setImmediate(() => state.endInput?.())
+    const childKey = state.sessionKey
+    const error = failure ?? (run.lastText ? undefined : (run.error ?? 'ended without a result'))
+    const parentMessage = subagentResultMessage({
+      label: state.label ?? childKey,
+      childKey,
+      durationMs: Date.now() - run.startedAt,
+      result: run.lastText,
+      error
+    })
+    if (error) emitter.emit('subagent.failed', { parentKey, childKey, error, parentMessage })
+    else emitter.emit('subagent.completed', { parentKey, childKey, result: run.lastText ?? '', parentMessage })
+  }
   emitter.on('subagent.spawned', (data) => {
     if (!data.parentKey) return
     const backendId = bareId(data.childKey)
@@ -1390,27 +1421,21 @@ export function createClaudeCodeBackend(
     //      manager, scoped to the thread's membrane id.
     // Both are joined and appended onto the `claude_code` preset.
     //
-    // Exception: local-model subagents (non-Claude model + parentSessionKey set)
-    // use the compact SUBAGENT.md guardrails instead of the full CLAUDE.md.
-    // At 15 t/s decode, a 27K-char system prompt is 7–30 seconds of wasted
-    // prefill. SUBAGENT.md covers the same operational rules in <2K chars.
+    // Exception: subagents (sessions with a parent, started by agents_spawn)
+    // get only SUBAGENT.md + the repo's AGENTS.md + an environment block as
+    // their whole system prompt (subagent-runner.ts) — no preset, no global
+    // CLAUDE.md, no membrane.
     const cfgAtStart = getConfig()
     const cfgAgentDir = cfgAtStart.agentDir ?? defaultAgentDir(home)
     const isNonClaudeModel = state.model != null && familyForModel(state.model) === null
-    const isLocalSubagent = !!state.parentSessionKey && isNonClaudeModel
-    const globalPersonality = isLocalSubagent
-      ? readSubagentPersonality(cfgAtStart.configDir)
-      : readGlobalPersonality(cfgAgentDir)
-    // Membrane context is orchestrator-level — subagents don't need it.
-    const membraneAppend = isLocalSubagent ? undefined : deps?.resolveAppendSystemPrompt?.(state.sessionKey)
-    const combinedAppend = [globalPersonality, membraneAppend].filter(Boolean).join('\n\n')
-    if (state.parentSessionKey) {
-      console.log(
-        `[claude-code] subagent ${state.sessionKey}: ` +
-          `personality=${isLocalSubagent ? `slim(SUBAGENT.md,${globalPersonality.length}chars)` : `full(CLAUDE.md,${globalPersonality.length}chars)`} ` +
-          `combinedAppend=${combinedAppend.length}chars`
-      )
-    }
+    const isSubagent = !!state.parentSessionKey
+    const combinedAppend = isSubagent
+      ? buildSubagentSystemPrompt({ configDir: cfgAtStart.configDir, cwd: state.cwd, home })
+      : [readGlobalPersonality(cfgAgentDir), deps?.resolveAppendSystemPrompt?.(state.sessionKey)]
+          .filter(Boolean)
+          .join('\n\n')
+    if (isSubagent)
+      console.log(`[claude-code] subagent ${state.sessionKey}: system prompt ${combinedAppend.length} chars`)
     const effectiveContextWindow = state.contextWindow ?? contextWindowFor(state.model)
     // NOTE: The context-1m-2025-08-07 beta enables extended context windows but
     // requires API-key auth. Sovereign exclusively uses Claude.ai OAuth, so
@@ -1461,13 +1486,7 @@ export function createClaudeCodeBackend(
     } as Record<string, string>
 
     const sdkOptions: SdkOptions = {
-      // Local-model subagents: override cwd to ~/workspaces so the SDK project-
-      // hash lookup returns a path with no associated auto-memory. The default
-      // cwd (~/.sovereign) has ~5.4k tokens of project memory that gets injected
-      // into every subagent turn — irrelevant research notes, sovereign internals
-      // — none of which helps the subagent with its task. Subagents work in
-      // specific repos via absolute paths and can cd where they need.
-      cwd: isLocalSubagent ? path.join(home, 'workspaces') : state.cwd,
+      cwd: state.cwd,
       ...(resumeExisting ? { resume: state.backendSessionId } : { sessionId: state.backendSessionId }),
       abortController: abort,
       model: state.model ?? undefined,
@@ -1476,36 +1495,31 @@ export function createClaudeCodeBackend(
       effort: useLiteLlm ? undefined : state.effort,
       ...(betas.length > 0 ? { betas } : {}),
       allowedTools: cfgAtStart.defaultTools ?? DEFAULT_TOOLS,
-      // For local-model subagents: also filter at the schema-injection level.
-      // The SDK default injects ALL built-in schemas regardless of allowedTools —
-      // Workflow, Agent, WebFetch, Task*, Cron*, Monitor, etc. cost ~30k tokens
-      // that the local model processes but can never invoke. `tools` (schema-level)
-      // restricts which schemas get injected; `allowedTools` (permission-level)
-      // restricts which can execute. Apply both for local subagents so the model
-      // only sees schemas for the 7 tools it actually has access to.
-      ...(isLocalSubagent ? { tools: cfgAtStart.defaultTools ?? DEFAULT_TOOLS } : {}),
+      // Subagents: also filter at the schema-injection level. The SDK default
+      // injects ALL built-in schemas regardless of allowedTools (Workflow,
+      // Agent, WebFetch, Task*, Cron*, Monitor, … ~30k tokens). `tools`
+      // restricts which schemas get injected; `allowedTools` which can run.
+      // No Agent in the list: subagents never spawn subagents.
+      ...(isSubagent ? { tools: SUBAGENT_BUILTIN_TOOLS } : {}),
       mcpServers: sessionMcpServers,
       hooks: buildHooks(),
       // Settings sources:
       //   - 'project' always excluded: cozempic mirrors user hooks into
       //     <cwd>/.claude/settings.json, causing double-fires on every event.
-      //   - 'user' excluded for local-model subagents: the 'user' source causes
-      //     the SDK to read ~/.claude/CLAUDE.md (~7k tokens) AND project memory
-      //     (~5.4k tokens) and inject both as <system-reminder> blocks on every
-      //     user turn — 12k tokens the subagent has no use for. Local subagents
-      //     get SUBAGENT.md instead via systemPrompt.append (combinedAppend above).
+      //   - 'user' excluded for subagents: the 'user' source makes the SDK read
+      //     ~/.claude/CLAUDE.md (~14k tokens) AND project memory and inject both
+      //     on every user turn. Subagents get SUBAGENT.md + repo context instead.
       //   - Top-level sessions keep 'user' so CLAUDE.md + memory load normally.
-      settingSources: isLocalSubagent ? ['local'] : ['user', 'local'],
+      settingSources: isSubagent ? ['local'] : ['user', 'local'],
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       includePartialMessages: false,
-      // Local-model subagents: bypass the claude_code preset entirely and use
-      // SUBAGENT.md as the raw system prompt. The preset injects ~5.5k chars of
-      // security policy, pronoun guidance, memory-system instructions, model
-      // catalogue, and context-management docs that subagents have no use for.
-      // SUBAGENT.md already covers the harness essentials (tool behaviour, code
-      // quality, constraints). Top-level sessions keep the full preset + append.
-      ...(isLocalSubagent
+      // Subagents: bypass the claude_code preset entirely and use the subagent
+      // prompt as the raw system prompt. The preset carries security policy,
+      // memory-system instructions, model catalogue and context-management
+      // docs that subagents have no use for; SUBAGENT.md covers the harness
+      // essentials. Top-level sessions keep the full preset + append.
+      ...(isSubagent
         ? combinedAppend
           ? { systemPrompt: combinedAppend }
           : {}
@@ -1707,12 +1721,11 @@ export function createClaudeCodeBackend(
     persistRegistry(state, opts?.threadKey ?? sessionKey, opts?.orgId)
     // Seed the per-cwd workspace files if this session uses a different cwd
     // than the adapter default — gives per-org workspaces their own
-    // layered-context + default-subagent without touching the global
-    // personality (which the compiler owns).
+    // layered-context file without touching the global personality (which
+    // the compiler owns).
     if (opts?.cwd && opts.cwd !== (getConfig().cwd ?? process.cwd())) {
       try {
         ensureLayeredContextFile(opts.cwd)
-        ensureDefaultSubagentFile(opts.cwd)
       } catch {
         /* read-only cwd in tests */
       }
@@ -2831,65 +2844,71 @@ export function createClaudeCodeBackend(
     return changed
   }
 
+  /**
+   * agents_spawn: run a task as an independent child session (its own CLI
+   * process, slim context, fixed tools — see subagent-runner.ts). Returns the
+   * child key at once; the parent receives one message when the run ends
+   * (`subagent.completed` / `subagent.failed` with `parentMessage`).
+   */
   async function spawnSubagent(parentSessionKey: string, opts: SpawnSubagentOptions): Promise<string> {
     const parentState = internal.sessions.get(parentSessionKey)
     if (!parentState) throw new Error(`claude-code: parent session ${parentSessionKey} unknown`)
-
-    const subagentModel = opts.model?.model
-    const isLocalModel = subagentModel != null && familyForModel(subagentModel) === null
-
-    if (isLocalModel) {
-      // Non-Claude model → create an independent claude-code session that routes
-      // through LiteLLM. Task-spawned subagents inherit the parent subprocess
-      // environment, which only gets ANTHROPIC_BASE_URL when the parent itself
-      // is non-Claude — bypassing the Task tool sidesteps that constraint.
-      // The independent session runs startSessionLoop with its own model, which
-      // triggers LiteLLM routing and the slim SUBAGENT.md personality.
-      const childBackendId = randomUUID()
-      const childKey = `${SUBAGENT_SESSION_PREFIX}${childBackendId}`
-
-      // Local-model subagents run as independent Claude Code processes with
-      // cwd = ~/workspaces (see startSessionLoop — isLocalSubagent overrides
-      // state.cwd). The SDK writes the JSONL under that cwd's project dir
-      // (~/.claude/projects/-home-alex-workspaces/<id>.jsonl), not under the
-      // parent's project dir. ensureSessionState must use the same cwd so that
-      // state.sessionFile resolves to the correct location; using parentState.cwd
-      // here stamps the wrong path and makes getHistory return nothing.
-      const childState = ensureSessionState({
-        sessionKey: childKey,
-        backendSessionId: childBackendId,
-        cwd: path.join(home, 'workspaces'),
-        model: subagentModel,
-        label: opts.label,
-        parentSessionKey
-      })
-      persistRegistry(childState, childKey)
-      internal.subagentToParent.set(childBackendId, parentSessionKey)
-
-      emitter.emit('session.info', { sessionKey: childKey, label: opts.label, history: [] })
-
-      sendMessage(childKey, opts.task).catch((err) => {
-        emitter.emit('chat.error', { sessionKey: childKey, error: String(err) })
-        emitter.emit('subagent.failed', { parentKey: parentSessionKey, childKey, error: String(err) })
-        internal.subagentToParent.delete(childBackendId)
-      })
-
-      emitter.emit('subagent.spawned', {
-        parentKey: parentSessionKey,
-        childKey,
-        task: opts.task,
-        label: opts.label ?? opts.task
-      })
-      return childKey
+    if (parentState.parentSessionKey) throw new Error('agents_spawn: a subagent cannot spawn subagents')
+    const running = [...internal.sessions.values()].filter(
+      (s) => s.parentSessionKey === parentSessionKey && s.run && !s.run.done
+    ).length
+    if (running >= MAX_SUBAGENTS_PER_PARENT) {
+      throw new Error(
+        `agents_spawn: ${running} subagents already run for this thread (max ${MAX_SUBAGENTS_PER_PARENT}); wait for one to finish`
+      )
+    }
+    const cwd = path.resolve(opts.cwd?.replace(/^~(?=\/|$)/, home) || path.join(home, 'workspaces'))
+    if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) {
+      throw new Error(`agents_spawn: cwd ${cwd} is not a directory`)
     }
 
-    // Claude model → delegate to the native Task tool. The parent subprocess
-    // handles the spawn; the SubagentStart hook registers the child session.
-    getOrStartSession(parentState)
-    const text = `Use the Task tool to spawn a subagent.\n\nTask: ${opts.task}\n${opts.label ? `Label: ${opts.label}\n` : ''}`
-    parentState.pushUserMessage?.(text)
-    // We don't know the agent_id yet — the hook will register on SubagentStart.
-    return `${SUBAGENT_SESSION_PREFIX}<pending>`
+    const childKey = randomUUID()
+    const childState = ensureSessionState({
+      sessionKey: childKey,
+      backendSessionId: childKey,
+      cwd,
+      model: opts.model?.model ?? parentState.model ?? undefined,
+      label: opts.label ?? opts.task.slice(0, 60),
+      parentSessionKey
+    })
+    const run: SubagentRun = { startedAt: Date.now() }
+    run.timer = setTimeout(() => {
+      if (run.done) return
+      finishRun(childState, `timed out after ${Math.round(SUBAGENT_TIMEOUT_MS / 60_000)} min`)
+      void abort(childKey)
+    }, opts.timeoutMs ?? SUBAGENT_TIMEOUT_MS)
+    run.timer.unref?.()
+    childState.run = run
+    persistRegistry(childState, childKey)
+    persistState(childState)
+    internal.subagentToParent.set(childKey, parentSessionKey)
+
+    emitter.emit('session.info', { sessionKey: childKey, label: childState.label, history: [] })
+    emitter.emit('subagent.spawned', {
+      parentKey: parentSessionKey,
+      childKey,
+      task: opts.task,
+      label: childState.label ?? opts.task
+    })
+    sendMessage(childKey, opts.task).catch((err) => {
+      emitter.emit('chat.error', { sessionKey: childKey, error: String(err) })
+      finishRun(childState, String(err))
+    })
+    return childKey
+  }
+
+  /** agents_stop: end a running child; the parent gets a failure message. */
+  async function stopSubagent(childKey: string): Promise<void> {
+    const state = internal.sessions.get(childKey)
+    if (!state?.run) throw new Error(`agents_stop: ${childKey} is not an agents_spawn subagent`)
+    if (state.run.done) return
+    finishRun(state, 'stopped by the parent')
+    await abort(childKey)
   }
 
   function getSessionFilePath(sessionKey: string): string | null {
@@ -2936,6 +2955,7 @@ export function createClaudeCodeBackend(
     getContextBudget,
     recycleSession,
     spawnSubagent,
+    stopSubagent,
     getSessionFilePath,
     getActivityMap,
     getDeviceInfo,

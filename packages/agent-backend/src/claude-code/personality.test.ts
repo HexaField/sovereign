@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ensureDefaultSubagentFile, ensureLayeredContextFile, findUnreachableAgentModels } from './personality.js'
+import { ensureLayeredContextFile, findUnreachableAgentModels } from './personality.js'
 
 describe('claude-code/personality', () => {
   let cwd: string
@@ -23,13 +23,6 @@ describe('claude-code/personality', () => {
     writeFileSync(path, '# my own layered context\nentirely user-owned.\n')
     ensureLayeredContextFile(cwd)
     expect(readFileSync(path, 'utf-8')).toBe('# my own layered context\nentirely user-owned.\n')
-  })
-
-  it('writes the default subagent template', () => {
-    ensureDefaultSubagentFile(cwd)
-    const path = join(cwd, '.claude', 'agents', 'sovereign-default-subagent.md')
-    expect(existsSync(path)).toBe(true)
-    expect(readFileSync(path, 'utf-8')).toMatch(/sovereign-default-subagent/)
   })
 
   it('flags agent definitions whose model a Claude session cannot reach', () => {
