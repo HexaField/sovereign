@@ -1,4 +1,4 @@
-// File quick-open — Cmd+P / Ctrl+P. Fuzzy-searches the files of the active
+// File quick-open — Cmd+P on macOS, Ctrl+P elsewhere. Fuzzy-searches the files of the active
 // workspace's root (server side, GET /api/files/search) and opens the pick in
 // the file panel, the same way a file chip's "open in workspace" does.
 
@@ -46,14 +46,23 @@ export function openFileFromQuickOpen(path: string): void {
   window.dispatchEvent(new CustomEvent('sovereign:open-file', { detail: { path } }))
 }
 
-let rootsCache: FileRoot[] | null = null
+/** The selection index kept inside a list of `length` items (0 when it is empty). */
+export function clampIndex(i: number, length: number): number {
+  return Math.max(0, Math.min(i, length - 1))
+}
 
-async function loadRoots(): Promise<FileRoot[]> {
-  if (rootsCache) return rootsCache
-  const res = await fetch('/api/files/roots')
-  if (!res.ok) throw new Error(`roots: ${res.status}`)
-  rootsCache = ((await res.json()) as { roots: FileRoot[] }).roots
-  return rootsCache
+let lastRoots: FileRoot[] | null = null
+
+/** Fetched on every open, so an org added since the last one shows up; the last good list covers a failed fetch. */
+export async function loadRoots(): Promise<FileRoot[]> {
+  try {
+    const res = await fetch('/api/files/roots')
+    if (!res.ok) throw new Error(`roots: ${res.status}`)
+    lastRoots = ((await res.json()) as { roots: FileRoot[] }).roots
+  } catch (e) {
+    if (!lastRoots) throw e
+  }
+  return lastRoots
 }
 
 function Highlighted(props: { text: string; positions: number[]; offset: number; hitColor: string }) {
@@ -62,6 +71,32 @@ function Highlighted(props: { text: string; positions: number[]; offset: number;
       {(seg) => <span style={seg.hit ? { color: props.hitColor, 'font-weight': '700' } : undefined}>{seg.text}</span>}
     </For>
   )
+}
+
+export type SearchOutcome = { results: QuickOpenResult[]; total: number } | { error: string }
+
+/** Runs searches, applying only the newest one's outcome; `cancel()` drops any still in flight. */
+export function createFileSearcher(apply: (outcome: SearchOutcome) => void, fetchImpl: typeof fetch = fetch) {
+  let seq = 0
+  return {
+    cancel(): void {
+      seq++
+    },
+    async run(rootId: string, q: string): Promise<void> {
+      const mine = ++seq
+      try {
+        const res = await fetchImpl(
+          `/api/files/search?root=${encodeURIComponent(rootId)}&q=${encodeURIComponent(q)}&limit=50`
+        )
+        const body = await res.json().catch(() => ({}))
+        if (mine !== seq) return
+        if (!res.ok) throw new Error(body.error ?? `search: ${res.status}`)
+        apply({ results: body.results, total: body.total })
+      } catch (e) {
+        if (mine === seq) apply({ error: (e as Error).message })
+      }
+    }
+  }
 }
 
 export function FileQuickOpen() {
@@ -73,7 +108,6 @@ export function FileQuickOpen() {
   const [selectedIdx, setSelectedIdx] = createSignal(0)
   let inputRef: HTMLInputElement | undefined
   let listRef: HTMLDivElement | undefined
-  let seq = 0
   let timer: ReturnType<typeof setTimeout> | undefined
 
   /** Recently opened files, newest first, shown before the user types. */
@@ -91,30 +125,35 @@ export function FileQuickOpen() {
 
   const items = () => (query().trim() ? results() : recents())
 
-  async function search(q: string): Promise<void> {
+  /** The selected row, kept inside the list as it shrinks or grows. */
+  const selected = () => clampIndex(selectedIdx(), items().length)
+
+  const searcher = createFileSearcher((outcome) => {
+    if ('error' in outcome) return setError(outcome.error)
+    setResults(outcome.results)
+    setTotal(outcome.total)
+    setSelectedIdx(0)
+    setError(null)
+  })
+
+  function search(q: string): void {
+    clearTimeout(timer)
     const r = root()
     if (!r || !q.trim()) {
+      searcher.cancel()
       setResults([])
       setTotal(0)
+      setError(null)
       return
     }
-    const mine = ++seq
-    try {
-      const res = await fetch(`/api/files/search?root=${encodeURIComponent(r.id)}&q=${encodeURIComponent(q)}&limit=50`)
-      const body = await res.json()
-      if (mine !== seq) return
-      if (!res.ok) throw new Error(body.error ?? `search: ${res.status}`)
-      setResults(body.results)
-      setTotal(body.total)
-      setError(null)
-    } catch (e) {
-      if (mine === seq) setError((e as Error).message)
-    }
+    void searcher.run(r.id, q)
   }
 
   // Reset and focus on every open; pick the root for the current workspace.
   createEffect(
     on(quickOpenOpen, (open) => {
+      clearTimeout(timer)
+      searcher.cancel()
       if (!open) return
       setQuery('')
       setResults([])
@@ -123,7 +162,11 @@ export function FileQuickOpen() {
       setError(null)
       setTimeout(() => inputRef?.focus(), 0)
       loadRoots()
-        .then((roots) => setRoot(pickRoot(roots, activeWorkspace()?.orgId)))
+        .then((roots) => {
+          setRoot(pickRoot(roots, activeWorkspace()?.orgId))
+          // Typed before the roots arrived: that query found no root to search.
+          if (quickOpenOpen() && query().trim()) search(query())
+        })
         .catch((e) => setError((e as Error).message))
     })
   )
@@ -134,30 +177,30 @@ export function FileQuickOpen() {
     setQuery(value)
     setSelectedIdx(0)
     clearTimeout(timer)
-    timer = setTimeout(() => void search(value), 60)
+    timer = setTimeout(() => search(value), 60)
   }
 
-  const scrollSelected = () => {
-    const el = listRef?.children[selectedIdx()] as HTMLElement | undefined
+  const select = (i: number) => {
+    setSelectedIdx(clampIndex(i, items().length))
+    const el = listRef?.children[selected()] as HTMLElement | undefined
     el?.scrollIntoView({ block: 'nearest' })
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    const list = items()
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setSelectedIdx((i) => Math.min(i + 1, list.length - 1))
-      scrollSelected()
+      select(selected() + 1)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setSelectedIdx((i) => Math.max(i - 1, 0))
-      scrollSelected()
+      select(selected() - 1)
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const item = list[selectedIdx()]
+      const item = items()[selected()]
       if (item) openFileFromQuickOpen(item.path)
     } else if (e.key === 'Escape') {
+      // Stop here, so a modal underneath that also closes on Escape stays open.
       e.preventDefault()
+      e.stopPropagation()
       setQuickOpenOpen(false)
     }
   }
@@ -173,6 +216,9 @@ export function FileQuickOpen() {
         data-testid="file-quick-open"
       >
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Go to file"
           class="mx-3 w-full max-w-xl overflow-hidden rounded-xl shadow-2xl"
           style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
         >
@@ -185,12 +231,17 @@ export function FileQuickOpen() {
               placeholder={root() ? `Search files in ${root()!.name}…` : 'Search files…'}
               value={query()}
               onInput={(e) => onInput(e.currentTarget.value)}
-              onKeyDown={handleKeyDown}
+              on:keydown={handleKeyDown}
+              role="combobox"
+              aria-label="File name"
+              aria-expanded="true"
+              aria-controls="file-quick-open-list"
+              aria-activedescendant={items().length ? `file-quick-open-${selected()}` : undefined}
               spellcheck={false}
               autocomplete="off"
             />
           </div>
-          <div ref={listRef} class="max-h-[50vh] overflow-y-auto">
+          <div ref={listRef} id="file-quick-open-list" role="listbox" class="max-h-[50vh] overflow-y-auto">
             <For
               each={items()}
               fallback={
@@ -203,9 +254,13 @@ export function FileQuickOpen() {
                 const base = item.rel.lastIndexOf('/') + 1
                 return (
                   <button
+                    id={`file-quick-open-${idx()}`}
+                    role="option"
+                    aria-selected={idx() === selected()}
+                    tabIndex={-1}
                     class="flex w-full cursor-pointer items-baseline gap-2 px-3 py-1.5 text-left"
                     style={{
-                      background: idx() === selectedIdx() ? 'var(--c-bg-hover)' : 'transparent',
+                      background: idx() === selected() ? 'var(--c-bg-hover)' : 'transparent',
                       border: 'none',
                       color: 'var(--c-text)'
                     }}

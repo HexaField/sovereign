@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { createFileListCache, listFiles, scorePath, searchFiles } from './file-search.js'
+import { createFileListCache, foldCase, listFiles, scorePath, searchFiles } from './file-search.js'
 
 const FILES = [
   'packages/client/src/features/chat/ChatView.tsx',
@@ -43,6 +43,50 @@ describe('scorePath', () => {
   })
 })
 
+describe('scorePath edge cases', () => {
+  const picked = (q: string, p: string) =>
+    scorePath(q, p)!
+      .positions.map((i) => p[i])
+      .join('')
+
+  it('keeps positions aligned with the path when a character lowercases to two', () => {
+    // 'İ'.toLowerCase() is two code units; a plain toLowerCase shifted every later position.
+    expect(foldCase('İİ/Abc.md')).toHaveLength('İİ/Abc.md'.length)
+    expect(scorePath('abc', 'İİ/Abc.md')!.positions).toEqual([3, 4, 5])
+    expect(picked('İst', 'docs/İstanbul.md')).toBe('İst')
+    expect(picked('STRASSE', 'a/STRASSE.md')).toBe('STRASSE')
+    expect(picked('straße', 'a/Straße.md')).toBe('Straße')
+  })
+
+  it('folds a capital sigma the same in the path and the query', () => {
+    expect(scorePath('οδοσ', 'ΟΔΟΣ.md')).not.toBeNull()
+  })
+
+  it('never gives up a match by preferring a word start', () => {
+    // The word start 'a' of 'a-b' leaves no 'b' after it; the earlier plain 'a' must win.
+    expect(picked('ab', 'xaxb/a-c.ts')).toBe('ab')
+    for (const [q, p] of [
+      ['ab', 'cab/ab.ts'],
+      ['srcab', 'src/a/b/src_ab.ts'],
+      ['aab', 'a_a_a_b'],
+      ['abc', 'a/b/c/abc/x']
+    ]) {
+      const m = scorePath(q, p)!
+      expect(m.positions.map((i) => p[i].toLowerCase()).join('')).toBe(q)
+      expect(m.positions.every((v, i, a) => i === 0 || v > a[i - 1])).toBe(true)
+    }
+  })
+
+  it('handles paths with spaces, slashes in the query and very long paths', () => {
+    expect(picked('myfile', 'docs/My File.txt')).toBe('MyFile')
+    expect(picked('docs/my', 'docs/My File.txt')).toBe('docs/My')
+    const long = `${'deep/'.repeat(2000)}target.ts`
+    const m = scorePath('target', long)!
+    expect(m.positions[0]).toBe(long.length - 'target.ts'.length)
+    expect(scorePath('deep'.repeat(3) + 'zz', long)).toBeNull()
+  })
+})
+
 describe('searchFiles', () => {
   it('ranks the exact file name first and the test file after the source', () => {
     expect(searchFiles(FILES, 'chatview').matches.map((m) => m.path)).toEqual([
@@ -80,6 +124,17 @@ describe('listFiles', () => {
     const { files, truncated } = await listFiles(root)
     expect(truncated).toBe(false)
     expect(files.sort()).toEqual(['.env.example', '.gitignore', 'README.md', 'src/deep/a.ts'])
+  })
+
+  it('keeps a file name holding a newline as one entry', async () => {
+    fs.writeFileSync(path.join(root, 'odd\nname.txt'), '')
+    const { files } = await listFiles(root)
+    expect(files).toContain('odd\nname.txt')
+    expect(files).not.toContain('odd')
+  })
+
+  it('rejects a root that does not exist instead of listing nothing', async () => {
+    await expect(listFiles(path.join(root, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
 

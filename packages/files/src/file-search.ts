@@ -43,28 +43,36 @@ function rgCandidates(): string[] {
 
 function listWithRg(bin: string, root: string): Promise<FileList> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['--files', '--hidden', '--no-messages', '-g', '!.git'], { cwd: root })
+    // NUL-separated so a file name holding a newline stays one entry; stderr ignored so it cannot fill and stall rg.
+    const child = spawn(bin, ['--files', '--hidden', '--null', '--no-messages', '-g', '!.git'], {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
     const files: string[] = []
     let rest = ''
     let truncated = false
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
-      const lines = (rest + chunk).split('\n')
-      rest = lines.pop() ?? ''
-      for (const line of lines) {
-        if (!line) continue
+      if (truncated) return
+      const names = (rest + chunk).split('\0')
+      rest = names.pop() ?? ''
+      for (const name of names) {
+        if (!name) continue
         if (files.length >= MAX_FILES) {
           truncated = true
           child.kill()
           return
         }
-        files.push(line.startsWith('./') ? line.slice(2) : line)
+        files.push(name.startsWith('./') ? name.slice(2) : name)
       }
     })
     child.on('error', reject)
     // rg exits 1 when it finds no files and 2 on partial read errors; both still list what it saw.
     child.on('close', () => {
-      if (rest && files.length < MAX_FILES) files.push(rest)
+      if (rest && !truncated) {
+        if (files.length < MAX_FILES) files.push(rest)
+        else truncated = true
+      }
       resolve({ files, truncated })
     })
   })
@@ -99,6 +107,8 @@ async function listWithWalk(root: string): Promise<FileList> {
 
 /** Every file under `root`. Tries ripgrep first, then a plain walk. */
 export async function listFiles(root: string): Promise<FileList> {
+  // A missing root also fails rg's spawn with ENOENT; check it first so that is not read as "no rg".
+  await fs.access(root)
   for (const bin of rgCandidates()) {
     try {
       return await listWithRg(bin, root)
@@ -159,10 +169,10 @@ function isBoundary(text: string, i: number): boolean {
   return prev === prev.toLowerCase() && text[i] !== text[i].toLowerCase()
 }
 
-/** True when every query character appears in `lower`, in order, from `offset` on. */
-function isSubsequence(query: string, lower: string, offset: number): boolean {
+/** True when `query` from `qi` on appears in `lower`, in order, from `offset` on. */
+function isSubsequence(query: string, lower: string, offset: number, qi = 0): boolean {
   let i = offset
-  for (let qi = 0; qi < query.length; qi++) {
+  for (; qi < query.length; qi++) {
     i = lower.indexOf(query[qi], i)
     if (i < 0) return false
     i++
@@ -193,9 +203,9 @@ function matchIn(
     for (let j = ti; j < lower.length; j++) {
       if (lower[j] !== c) continue
       if (firstPlain < 0) firstPlain = j
-      // Taking a later occurrence must still leave the rest of the query matchable.
-      if ((isBoundary(text, j) || j === prev + 1) && isSubsequence(query.slice(qi + 1), lower, j + 1)) {
-        found = j
+      if (isBoundary(text, j) || j === prev + 1) {
+        // A later pick must leave the rest matchable; if this one does not, no later one will.
+        if (isSubsequence(query, lower, j + 1, qi + 1)) found = j
         break
       }
     }
@@ -210,7 +220,7 @@ function matchIn(
 }
 
 /** Score one path against a query, or null when the query does not match. */
-export function scorePath(rawQuery: string, path: string, lower = path.toLowerCase()): FileMatch | null {
+export function scorePath(rawQuery: string, path: string, lower = foldCase(path)): FileMatch | null {
   const query = normaliseQuery(rawQuery)
   if (!query) return { path, score: 0, positions: [] }
   const base = path.lastIndexOf('/') + 1
@@ -230,7 +240,23 @@ export function scorePath(rawQuery: string, path: string, lower = path.toLowerCa
 }
 
 function normaliseQuery(q: string): string {
-  return q.toLowerCase().replace(/\s+/g, '')
+  return foldCase(q.replace(/\s+/g, ''))
+}
+
+/**
+ * Lowercase one character at a time, keeping the length: an index into the
+ * result is an index into `s`. A character whose lowercase form is longer
+ * (`İ` → `i̇`) stays as it is, and `Σ` always folds to `σ`, so a path and a
+ * query fold alike.
+ */
+export function foldCase(s: string): string {
+  if (/^[\x00-\x7f]*$/.test(s)) return s.toLowerCase()
+  let out = ''
+  for (const ch of s) {
+    const l = ch.toLowerCase()
+    out += l.length === ch.length ? l : ch
+  }
+  return out
 }
 
 /** Lowercased copies of each cached file list, so a keystroke does not redo them. */
@@ -239,7 +265,7 @@ const lowered = new WeakMap<string[], string[]>()
 function lowerOf(files: string[]): string[] {
   let l = lowered.get(files)
   if (!l) {
-    l = files.map((f) => f.toLowerCase())
+    l = files.map(foldCase)
     lowered.set(files, l)
   }
   return l
