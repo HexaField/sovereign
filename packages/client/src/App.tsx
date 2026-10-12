@@ -17,6 +17,7 @@ import {
   autoSelectProject,
   openFileTab,
   setChatExpanded,
+  setMainContentView,
   syncWorkspaceForThread,
   restoreWorkspaceForThread
 } from './features/workspace/store.js'
@@ -43,6 +44,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js'
 // Components
 import { Header } from './features/nav/Header.js'
 import { QuickSwitchModal } from './features/threads/QuickSwitchModal.js'
+import { FileQuickOpen } from './features/workspace/FileQuickOpen.js'
 
 // Lazy-loaded views
 const WorkspaceView = lazy(() => import('./features/workspace/WorkspaceView.js'))
@@ -149,6 +151,7 @@ export default function App() {
     const handleOpenFile = (e: Event) => {
       const { path } = (e as CustomEvent).detail
       setChatExpanded(false)
+      setMainContentView('files')
       openFileTab(path, '_workspace')
       setActiveView('workspace')
     }
@@ -195,6 +198,7 @@ export default function App() {
       </main>
 
       <QuickSwitchModal />
+      <FileQuickOpen />
     </div>
   )
 }

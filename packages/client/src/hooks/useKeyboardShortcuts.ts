@@ -2,6 +2,7 @@ import { createEffect, onCleanup } from 'solid-js'
 import { toggleMode } from '../features/nav/store.js'
 import { toggleChatExpanded, toggleSidebar } from '../features/workspace/store.js'
 import { setQuickSwitchOpen, quickSwitchOpen } from '../features/threads/QuickSwitchModal.js'
+import { setQuickOpenOpen, quickOpenOpen } from '../features/workspace/FileQuickOpen.js'
 
 /**
  * Cmd+1 toggles between workspace and agent modes.
@@ -12,6 +13,13 @@ export const VIEW_SHORTCUTS: Record<string, string> = {}
 
 /** Handle a keyboard event, returning true if it was consumed */
 export function handleShortcut(e: KeyboardEvent): boolean {
+  // Cmd+P (Ctrl+P off macOS) — file quick-open. Ctrl+P also stops the browser's print dialog.
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P')) {
+    e.preventDefault()
+    setQuickOpenOpen(!quickOpenOpen())
+    return true
+  }
+
   if (!e.metaKey) return false
 
   // Cmd+1 — toggle between workspace and agent modes

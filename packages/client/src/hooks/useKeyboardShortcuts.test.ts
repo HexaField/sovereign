@@ -17,6 +17,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 
 import { handleShortcut, VIEW_SHORTCUTS } from './useKeyboardShortcuts.js'
+import { quickOpenOpen, setQuickOpenOpen } from '../features/workspace/FileQuickOpen.js'
 import { activeView, _setActiveView } from '../features/nav/store.js'
 import { chatExpanded, setChatExpanded, sidebarCollapsed, setSidebarCollapsed } from '../features/workspace/store.js'
 
@@ -75,6 +76,19 @@ describe('§8 Keyboard Shortcuts', () => {
     const e = makeKeyEvent('W', true, true)
     expect(handleShortcut(e)).toBe(true)
     expect(e.defaultPrevented).toBe(true)
+  })
+
+  it('Cmd+P and Ctrl+P toggle file quick-open and stop the print dialog', () => {
+    setQuickOpenOpen(false)
+    const cmd = makeKeyEvent('p')
+    expect(handleShortcut(cmd)).toBe(true)
+    expect(cmd.defaultPrevented).toBe(true)
+    expect(quickOpenOpen()).toBe(true)
+    const ctrl = { ...makeKeyEvent('P', false), ctrlKey: true, preventDefault: () => {} } as unknown as KeyboardEvent
+    expect(handleShortcut(ctrl)).toBe(true)
+    expect(quickOpenOpen()).toBe(false)
+    // Cmd+Shift+P stays free for the browser / other bindings.
+    expect(handleShortcut(makeKeyEvent('P', true, true))).toBe(false)
   })
 
   it('ignores events without metaKey', () => {
