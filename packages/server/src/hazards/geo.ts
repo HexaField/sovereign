@@ -68,6 +68,12 @@ function paths(g: Geometry): Position[][] {
   return walk(g.coordinates)
 }
 
+/** One position of the geometry — its first, which is the incident point when the feed gives one. */
+export function anchor(g: Geometry | null | undefined): LatLon | undefined {
+  const first = g ? paths(g)[0]?.[0] : undefined
+  return first ? { lat: first[1], lon: first[0] } : undefined
+}
+
 /** Distance from the point to the nearest point, edge or ring of the geometry (0 when inside). */
 export function distanceKm(g: Geometry | null | undefined, p: LatLon): number {
   if (!g) return Infinity

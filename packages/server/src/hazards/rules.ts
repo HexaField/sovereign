@@ -15,7 +15,7 @@
 // Not Yet Under Control / Not Yet Controlled / Responding / Contained /
 // Under Control / Safe. Unknown levels and statuses lean towards alarm.
 
-import { containsPoint, distanceKm, hasArea, type LatLon } from './geo.js'
+import { anchor, containsPoint, distanceKm, hasArea, haversineKm, type LatLon } from './geo.js'
 import type { DayOutlook, HazardEvent } from './feeds.js'
 
 export interface HazardRulesConfig {
@@ -29,6 +29,8 @@ export interface NotifiedItem {
   summary: string
   /** Consecutive reads the item has been absent from. */
   missed?: number
+  /** Fires: a point of the fire, so a second record of the same fire stays silent. */
+  at?: LatLon
 }
 
 export interface HazardState {
@@ -43,6 +45,13 @@ export interface HazardAlert {
 
 /** Reads an item must stay absent before "eased": a reissue gap or a short feed never reads as an all-clear. */
 export const EASE_AFTER = 3
+
+/**
+ * Fire records this close count as one fire. One fire can appear under two ids
+ * (a CFA incident and a 000 dispatch event, 16 Oct 2026: 20 m apart), so only
+ * the first is announced and only the last to end says "eased".
+ */
+export const SAME_FIRE_KM = 1
 
 const RATING_RANK: Record<string, number> = { extreme: 1, catastrophic: 2 }
 const CONTROLLED = /^(safe|under control|controlled|complete|completed|patrolled|out)$/i
@@ -95,7 +104,8 @@ function liveItems(events: HazardEvent[], cfg: HazardRulesConfig): Map<string, N
       const what = !e.type || /^(other|fire)$/i.test(e.type) ? 'Fire' : /fire/i.test(e.type) ? e.type : `${e.type} fire`
       out.set(`fire:${e.id}`, {
         rank: 1,
-        summary: `${what} at ${e.location}, ${km(d)} — ${e.status || 'status unknown'}.`
+        summary: `${what} at ${e.location}, ${km(d)} — ${e.status || 'status unknown'}.`,
+        at: anchor(e.geometry)
       })
     }
   }
@@ -132,13 +142,23 @@ export function evaluate(input: {
   const next: Record<string, NotifiedItem> = { ...state.notified }
   const alerts: HazardAlert[] = []
 
+  /** Another tracked fire within SAME_FIRE_KM of `item`: the same fire under a second record. */
+  const sameFire = (key: string, item: NotifiedItem, among: Iterable<[string, NotifiedItem]>) => {
+    if (!item.at) return false
+    for (const [k, other] of among)
+      if (k !== key && other.at && haversineKm(item.at, other.at) <= SAME_FIRE_KM) return true
+    return false
+  }
+
   const reconcile = (prefixes: string[], live: Map<string, NotifiedItem>, easeOnEnd: boolean) => {
     for (const [key, item] of live) {
       const before = state.notified[key]
-      if (!before) alerts.push({ key, kind: 'new', text: item.summary })
-      else if (item.rank > before.rank) alerts.push({ key, kind: 'escalated', text: item.summary })
+      // A second record of a fire already announced (or announced this round) stays silent.
+      if (!before && !sameFire(key, item, Object.entries(next))) alerts.push({ key, kind: 'new', text: item.summary })
+      else if (before && item.rank > before.rank) alerts.push({ key, kind: 'escalated', text: item.summary })
       next[key] = item
     }
+    const ended: [string, NotifiedItem][] = []
     for (const [key, before] of Object.entries(state.notified)) {
       if (!prefixes.some((p) => key.startsWith(p)) || live.has(key)) continue
       const missed = (before.missed ?? 0) + 1
@@ -146,8 +166,15 @@ export function evaluate(input: {
         next[key] = { ...before, missed }
         continue
       }
-      if (easeOnEnd) alerts.push({ key, kind: 'eased', text: before.summary })
       delete next[key]
+      if (easeOnEnd) ended.push([key, before])
+    }
+    // A fire has eased only when its last record has gone, and says so once.
+    const announced: [string, NotifiedItem][] = []
+    for (const [key, before] of ended) {
+      if (sameFire(key, before, Object.entries(next)) || sameFire(key, before, announced)) continue
+      alerts.push({ key, kind: 'eased', text: before.summary })
+      announced.push([key, before])
     }
   }
 
