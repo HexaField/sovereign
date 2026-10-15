@@ -443,6 +443,13 @@ System → Devices → a device card → **Files**: browse the whole file system
 - **Server:** `GET /api/files/search?root=<root id or path>&q=&limit=` (`packages/files/src/file-search.ts`); the root must be one of `/api/files/roots`. The file list comes from `rg --files --hidden -g '!.git' --null` (honours `.gitignore`; looked up on PATH, then `~/.local/bin`, `/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), else a walk that skips `node_modules`/`.git`/`dist`/`build`/`target`/`.venv`. Lists cap at 500k files and are cached 30 s per root (stale served while a fresh one builds). Scoring: query characters in order, file-name matches first, word starts and runs score more; the top N is kept while scanning, so a one-letter query over ~300k files stays near 100 ms.
 - **Client:** `features/workspace/FileQuickOpen.tsx` searches the root whose id matches the active workspace (else `_global`), lists recent tabs before typing, and opens the pick with `sovereign:open-file` (which also switches the main view to files).
 
+## File panel tree (`features/workspace/panels/FilePanel.tsx`, `file-tree.ts`)
+
+- **Follows the open file** (as VS Code does): whenever the active file changes, the panel expands its root and every folder above it, and scrolls its row into view; opening the drawer (or the mobile tree) scrolls to it again.
+- **Loading follows the expanded set.** `expandedDirs` is persisted and shared by every FilePanel instance (the app mounts more than one, each with a desktop drawer and an `md:hidden` mobile copy), but each instance loads its own `treeMaps`. An effect loads the children of any expanded folder whose parent is loaded and whose own children are not — so state restored on mount, or set by another instance, fills in. Toggling a folder only changes the set.
+- **Refresh** (`file.changed`) refetches the top level and every expanded folder together and swaps them in at once; replacing only the top level collapsed every open folder.
+- Rows carry `data-tree-path` (absolute path); the scroll moves only the tree's own scroll box.
+
 ## File chips in messages (`packages/client/src/lib/markdown.ts`)
 
 `renderMarkdown` turns file references in rendered HTML into `.file-chip` spans (click opens the file, ⧉ copies the path). `injectFileChips` runs in phases over marked's output:
