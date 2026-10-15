@@ -234,14 +234,18 @@ describe('rules — only what needs attention', () => {
       type: 'GeometryCollection',
       geometries: [point(HOME.lat + 4 * KM, HOME.lon), square(HOME.lat + 4 * KM, HOME.lon, 0.002)]
     }
+    // Separate fires 3 km out, spread around the property so none reads as a second record of another.
+    const at = (bearing: number) => ({
+      geometry: point(HOME.lat + 3 * KM * Math.cos(bearing), HOME.lon + 3 * KM * Math.sin(bearing)) as never
+    })
     const r = run(empty, {
       events: [
-        fire('nyuc', 'Bushfire', 'Not Yet Under Control', 3),
-        fire('nyc', 'Grass Fire', 'Not Yet Controlled', 3),
-        fire('contained', 'Bushfire', 'Contained', 3),
-        fire('patrolled', 'Bushfire', 'Patrolled', 3),
+        fire('nyuc', 'Bushfire', 'Not Yet Under Control', 3, at(0)),
+        fire('nyc', 'Grass Fire', 'Not Yet Controlled', 3, at(1)),
+        fire('contained', 'Bushfire', 'Contained', 3, at(2)),
+        fire('patrolled', 'Bushfire', 'Patrolled', 3, at(3)),
         // FRV files some grass fires under category1 "Other".
-        fire('scrub', 'Grass and Scrub', 'Responding', 3, { category: 'Other' }),
+        fire('scrub', 'Grass and Scrub', 'Responding', 3, { category: 'Other', ...at(4) }),
         // NSW RFS: category2 "Fire", but a mapped burnt area makes it a vegetation fire.
         fire('mapped', 'Fire', 'Not Yet Controlled', 0, { geometry: burnt as never }),
         // District-wide pseudo-incidents: the CFA outlook covers them; never a "fire at 0 km".
@@ -311,6 +315,36 @@ describe('rules — only what needs attention', () => {
     const s4 = settle(s3.state, [warning('w', 'Advice', box)])
     expect(s4.alerts.map((a) => `${a.kind}:${a.key}`)).toEqual(['eased:warning:fire'])
     expect(s4.state.notified).toEqual({})
+  })
+
+  it('treats two records of one fire as one: announced once, eased once when the last record ends', () => {
+    // 16 Oct 2026, Kalorama: a CFA incident and a 000 dispatch event 20 m apart.
+    const cfa = fire('ESTA:2', 'Bushfire', 'Responding', 3.6)
+    const dispatch = fire('ESTA:24', 'Bushfire', 'Responding', 3.6, {
+      geometry: point(HOME.lat + 3.6 * KM, HOME.lon + 0.0002) as never
+    })
+    const other = fire('far-side', 'Bushfire', 'Responding', -3)
+
+    const first = run(empty, { events: [cfa] })
+    expect(first.alerts.map((a) => a.key)).toEqual(['fire:ESTA:2'])
+    // The second record turns up later, beside a separate fire 6.6 km away: only the separate fire is news.
+    const second = run(first.state, { events: [cfa, dispatch, other] })
+    expect(second.alerts.map((a) => a.key)).toEqual(['fire:far-side'])
+
+    // The dispatch record ends first: silent while the CFA record still runs.
+    const dispatchGone = settle(second.state, [cfa, other])
+    expect(dispatchGone.alerts).toEqual([])
+    // Then the fire goes Safe: one "eased" for it.
+    const out = settle(dispatchGone.state, [{ ...cfa, status: 'Safe' }, other])
+    expect(out.alerts.map((a) => `${a.kind}:${a.key}`)).toEqual(['eased:fire:ESTA:2'])
+  })
+
+  it('announces both records of one fire once when they appear and end in the same read', () => {
+    const a = fire('a', 'Bushfire', 'Responding', 3)
+    const b = fire('b', 'Bushfire', 'Responding', 3.3)
+    const s1 = run(empty, { events: [a, b] })
+    expect(s1.alerts).toHaveLength(1)
+    expect(settle(s1.state, []).alerts.map((x) => x.kind)).toEqual(['eased'])
   })
 
   it('waits EASE_AFTER reads before "eased", so a brief gap in the feed says nothing', () => {
