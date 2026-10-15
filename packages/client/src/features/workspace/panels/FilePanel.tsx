@@ -9,7 +9,7 @@
  * Desktop: file tree slides out as overlay drawer from left edge.
  * Mobile: file tree fills the view; tapping a file switches to viewer in-place.
  */
-import { Component, Show, For, createSignal, createEffect, createMemo, onCleanup, onMount, batch } from 'solid-js'
+import { Component, Show, For, createSignal, createEffect, createMemo, on, onCleanup, onMount, batch } from 'solid-js'
 import { fileViewUrl, HTML_SANDBOX } from '../../../lib/file-view.js'
 import { renderMermaidIn } from '../../../lib/mermaid.js'
 import { currentTheme } from '../../theme/store.js'
@@ -29,6 +29,7 @@ import {
 } from '../store.js'
 import { wsStore } from '../../../ws/index.js'
 import { activeFileEffect } from './file-events.js'
+import { ancestorDirs, byDepth, findNode, rootFor, withChildren } from './file-tree.js'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -281,6 +282,7 @@ const TreeNodeItem: Component<{
           color: isActive() ? 'var(--c-accent)' : 'var(--c-text)',
           background: isActive() ? 'var(--c-hover-bg, rgba(255,255,255,0.06))' : 'transparent'
         }}
+        data-tree-path={fullPath()}
         onClick={() => {
           if (isDir()) props.onToggleDir(props.node.path, props.rootPath)
           else props.onSelectFile(fullPath())
@@ -449,52 +451,137 @@ const FilePanel: Component = () => {
     }
   })
 
-  // ── Root toggle — load tree on first expand ──
-  const toggleRoot = async (rootPath: string) => {
-    const s = new Set(expandedRoots())
-    if (s.has(rootPath)) {
-      s.delete(rootPath)
-    } else {
-      s.add(rootPath)
-      // Load tree if not already loaded
-      if (!treeMaps()[rootPath]) {
-        const nodes = await fetchTree(rootPath)
-        setTreeMaps((prev) => ({ ...prev, [rootPath]: nodes }))
-      }
+  // ── Tree loading ──
+  const dirKey = (rootPath: string, dirPath: string) => `${rootPath}:${dirPath}`
+  const expandedIn = (rootPath: string) =>
+    [...expandedDirs()].filter((k) => k.startsWith(rootPath + ':')).map((k) => k.slice(rootPath.length + 1))
+
+  /** Fetch the children of `dirs` and merge them in, parents first. */
+  const loadingDirs = new Set<string>()
+  const loadDirs = async (rootPath: string, dirs: string[]) => {
+    const ordered = byDepth(dirs)
+    ordered.forEach((d) => loadingDirs.add(dirKey(rootPath, d)))
+    try {
+      const fetched = await Promise.all(ordered.map((d) => fetchSubtree(rootPath, d)))
+      setTreeMaps((prev) => {
+        let nodes = prev[rootPath] ?? []
+        ordered.forEach((d, i) => (nodes = withChildren(nodes, d, fetched[i])))
+        return { ...prev, [rootPath]: nodes }
+      })
+    } finally {
+      ordered.forEach((d) => loadingDirs.delete(dirKey(rootPath, d)))
     }
-    setExpandedRoots(s)
   }
 
-  // ── Directory toggle — lazy-load children ──
-  const toggleDir = async (dirPath: string, rootPath: string) => {
-    const key = `${rootPath}:${dirPath}`
-    const s = new Set(expandedDirs())
-    if (s.has(key)) {
-      s.delete(key)
-    } else {
-      s.add(key)
-      const children = await fetchSubtree(rootPath, dirPath)
-      setTreeMaps((prev) => {
-        const rootNodes = prev[rootPath] ?? []
-        return { ...prev, [rootPath]: mergeChildren(rootNodes, dirPath, children) }
+  // Load the children of every expanded folder whose parent is loaded and whose own children
+  // are not. The expanded set is shared (persisted, and synced across panel instances) while
+  // each instance loads its own tree, so loading follows the set rather than the click.
+  createEffect(() => {
+    const maps = treeMaps()
+    expandedDirs()
+    for (const rootPath of expandedRoots()) {
+      const nodes = maps[rootPath]
+      if (!nodes) continue
+      const missing = expandedIn(rootPath).filter((d) => {
+        const n = findNode(nodes, d)
+        return n?.type === 'directory' && !n.children && !loadingDirs.has(dirKey(rootPath, d))
       })
+      if (missing.length) void loadDirs(rootPath, missing)
     }
+  })
+
+  // One load per root at a time, so a reveal waits for a load already under way.
+  const rootLoads = new Map<string, Promise<void>>()
+  // Fetches the top level and every expanded folder together and swaps them in at once,
+  // so a refresh after a file change does not collapse the tree and rebuild it level by level.
+  const reloadRoot = (rootPath: string) => {
+    const dirs = byDepth(expandedIn(rootPath))
+    const p = Promise.all([fetchTree(rootPath), ...dirs.map((d) => fetchSubtree(rootPath, d))])
+      .then(([top, ...subs]) => {
+        let nodes = top
+        dirs.forEach((d, i) => (nodes = withChildren(nodes, d, subs[i])))
+        setTreeMaps((prev) => ({ ...prev, [rootPath]: nodes }))
+      })
+      .then(
+        () => undefined,
+        () => void rootLoads.delete(rootPath)
+      )
+    rootLoads.set(rootPath, p)
+    return p
+  }
+
+  const expandRoot = async (rootPath: string) => {
+    if (!expandedRoots().has(rootPath)) setExpandedRoots((s) => new Set(s).add(rootPath))
+    await (rootLoads.get(rootPath) ?? reloadRoot(rootPath))
+  }
+
+  // ── Root toggle — load tree on first expand ──
+  const toggleRoot = async (rootPath: string) => {
+    if (!expandedRoots().has(rootPath)) return expandRoot(rootPath)
+    setExpandedRoots((prev) => {
+      const s = new Set(prev)
+      s.delete(rootPath)
+      return s
+    })
+  }
+
+  const setExpanded = (s: Set<string>) => {
     setExpandedDirs(s)
     setPersistedExpandedDirs([...s])
   }
 
-  function mergeChildren(nodes: FileNode[], targetPath: string, children: FileNode[]): FileNode[] {
-    return nodes.map((n) => {
-      if (n.path === targetPath && n.type === 'directory') {
-        const merged = children.map((c) => ({ ...c, path: `${targetPath}/${c.path}` }))
-        return { ...n, children: merged }
+  // ── Directory toggle — lazy-load children ──
+  const toggleDir = (dirPath: string, rootPath: string) => {
+    const key = dirKey(rootPath, dirPath)
+    const s = new Set(expandedDirs())
+    if (s.has(key)) {
+      s.delete(key)
+      setExpanded(s)
+      return
+    }
+    setExpanded(s.add(key))
+  }
+
+  // ── Reveal — expand the folders above a file and scroll its row into view (as VS Code does) ──
+  let treeEls: HTMLElement[] = []
+  const scrollToActive = () => {
+    const path = activeFilePath()
+    if (!path) return
+    requestAnimationFrame(() => {
+      for (const box of treeEls) {
+        const row = box.querySelector<HTMLElement>(`[data-tree-path="${CSS.escape(path)}"]`)
+        if (!row) continue
+        const r = row.getBoundingClientRect()
+        const b = box.getBoundingClientRect()
+        if (r.top < b.top || r.bottom > b.bottom) box.scrollTop += r.top - b.top - (b.height - r.height) / 2
       }
-      if (n.type === 'directory' && n.children && targetPath.startsWith(n.path + '/')) {
-        return { ...n, children: mergeChildren(n.children, targetPath, children) }
-      }
-      return n
     })
   }
+
+  const revealFile = async (filePath: string) => {
+    const rootPath = rootFor(roots(), filePath)
+    if (!rootPath) return
+    await expandRoot(rootPath)
+    const dirs = ancestorDirs(filePath.slice(rootPath.length + 1))
+    const keys = dirs.map((d) => dirKey(rootPath, d))
+    // Fetch every unloaded ancestor in one round trip, rather than a level at a time.
+    const nodes = treeMaps()[rootPath] ?? []
+    const unloaded = dirs.filter((d) => !findNode(nodes, d)?.children && !loadingDirs.has(dirKey(rootPath, d)))
+    if (unloaded.length) void loadDirs(rootPath, unloaded)
+    if (keys.some((k) => !expandedDirs().has(k))) setExpanded(new Set([...expandedDirs(), ...keys]))
+  }
+
+  // Scroll once the open file's row exists — its folders load one level at a time.
+  const activeRowLoaded = createMemo(() => {
+    const path = activeFilePath()
+    const rootPath = path ? rootFor(roots(), path) : undefined
+    return !!rootPath && !!findNode(treeMaps()[rootPath] ?? [], path!.slice(rootPath.length + 1))
+  })
+  createEffect(
+    on([activeFilePath, activeRowLoaded], ([, loaded]) => {
+      if (loaded) scrollToActive()
+    })
+  )
 
   // ── File operations (always absolute paths) ──
   const openFile = async (filePath: string) => {
@@ -635,10 +722,8 @@ const FilePanel: Component = () => {
 
   const closeCtxMenu = () => setCtxMenu(null)
 
-  const refreshRoot = async (rootPath: string) => {
-    const nodes = await fetchTree(rootPath)
-    setTreeMaps((prev) => ({ ...prev, [rootPath]: nodes }))
-  }
+  // Reloads the expanded folders too, or they would show empty after a file change.
+  const refreshRoot = (rootPath: string) => reloadRoot(rootPath)
 
   // ── Restore persisted file on mount + subscribe to file changes ──
   onMount(() => {
@@ -697,6 +782,18 @@ const FilePanel: Component = () => {
     setExpandedDirs(new Set(persistedExpandedDirs()))
   })
 
+  // Follow the open file in the tree; scroll to it again whenever the tree comes into view.
+  createEffect(
+    on([activeFilePath, roots], ([path]) => {
+      if (path) void revealFile(path)
+    })
+  )
+  createEffect(
+    on([drawerOpen, mobileFileShowTree], ([open, mobileTree]) => {
+      if (open || mobileTree) scrollToActive()
+    })
+  )
+
   onCleanup(() => {
     if (monacoEditor) monacoEditor.dispose()
     document.removeEventListener('click', closeCtxMenu)
@@ -708,7 +805,13 @@ const FilePanel: Component = () => {
 
   // ── Tree component — renders all roots ──
   const FileTree: Component<{ class?: string }> = (treeProps) => (
-    <div class={`overflow-y-auto ${treeProps.class ?? ''}`}>
+    <div
+      class={`overflow-y-auto ${treeProps.class ?? ''}`}
+      ref={(el) => {
+        treeEls.push(el)
+        onCleanup(() => (treeEls = treeEls.filter((t) => t !== el)))
+      }}
+    >
       <Show
         when={roots().length > 0}
         fallback={
