@@ -673,6 +673,28 @@ pre:hover .code-copy-btn {
   font-size: 12px;
 }
 
+/* Mermaid diagrams in rendered markdown (lib/mermaid.ts) */
+.mermaid-diagram {
+  margin: 0 0 12px;
+  overflow-x: auto;
+  text-align: center;
+}
+.mermaid-diagram svg {
+  height: auto;
+}
+/* Labels are sized off-page, so the page's paragraph styles must not touch them. */
+.mermaid-diagram foreignObject p {
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+.mermaid-error {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--c-danger, #e5484d);
+}
+
 .msg-assistant blockquote {
   margin: 6px 0;
   padding: 4px 12px;

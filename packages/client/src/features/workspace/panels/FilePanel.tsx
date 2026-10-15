@@ -11,6 +11,8 @@
  */
 import { Component, Show, For, createSignal, createEffect, createMemo, onCleanup, onMount, batch } from 'solid-js'
 import { fileViewUrl, HTML_SANDBOX } from '../../../lib/file-view.js'
+import { renderMermaidIn } from '../../../lib/mermaid.js'
+import { currentTheme } from '../../theme/store.js'
 import { marked } from 'marked'
 import {
   lastOpenFilePath,
@@ -412,6 +414,19 @@ const FilePanel: Component = () => {
   const [loading, setLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [renderedHtml, setRenderedHtml] = createSignal('')
+  // A signal, because the markdown view remounts whenever the file type or mode changes.
+  const [markdownEl, setMarkdownEl] = createSignal<HTMLDivElement>()
+  let markdownRender = 0
+  // Write the HTML, then draw its ```mermaid blocks; re-runs on a theme change.
+  createEffect(() => {
+    const html = renderedHtml()
+    currentTheme()
+    const el = markdownEl()
+    if (!el) return
+    el.innerHTML = html
+    const run = ++markdownRender
+    void renderMermaidIn(el, () => run === markdownRender)
+  })
   // Changes whenever the file is (re)loaded, so a rendered page or image reloads after a save.
   const viewVersion = createMemo(() => (fileData(), Date.now()))
   const [editorContent, setEditorContent] = createSignal('')
@@ -941,7 +956,7 @@ const FilePanel: Component = () => {
         <Show when={!isImage(e()) && e() === 'md'}>
           <div
             class="prose prose-invert prose-sm h-full max-w-none overflow-y-auto p-6 [&_a]:text-[var(--c-accent)] [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-[var(--c-accent)] [&_blockquote]:pl-3 [&_blockquote]:text-[var(--c-text-muted)] [&_blockquote]:italic [&_code]:rounded [&_code]:bg-[var(--c-bg-raised)] [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_code]:text-[var(--c-accent)] [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-bold [&_h1]:text-[var(--c-text)] [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:text-[var(--c-text)] [&_h3]:mt-4 [&_h3]:mb-1.5 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-[var(--c-text)] [&_hr]:my-4 [&_hr]:border-[var(--c-border)] [&_li]:mb-1 [&_ol]:mb-3 [&_ol]:pl-5 [&_ol]:text-sm [&_ol]:text-[var(--c-text-muted)] [&_p]:mb-3 [&_p]:text-sm [&_p]:leading-relaxed [&_p]:text-[var(--c-text-muted)] [&_pre]:mb-3 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-[var(--c-bg-raised)] [&_pre]:p-3 [&_pre]:text-xs [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_strong]:font-semibold [&_strong]:text-[var(--c-text)] [&_table]:mb-3 [&_table]:w-full [&_table]:text-sm [&_td]:border-b [&_td]:border-[var(--c-border)] [&_td]:px-2 [&_td]:py-1 [&_td]:text-[var(--c-text-muted)] [&_th]:border-b [&_th]:border-[var(--c-border)] [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:text-[var(--c-text)] [&_ul]:mb-3 [&_ul]:pl-5 [&_ul]:text-sm [&_ul]:text-[var(--c-text-muted)]"
-            innerHTML={renderedHtml()}
+            ref={setMarkdownEl}
           />
         </Show>
 

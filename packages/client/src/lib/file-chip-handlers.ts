@@ -1,5 +1,6 @@
 import { renderMarkdown, escapeHtml } from './markdown.js'
 import { fileRenderKind, fileViewUrl, HTML_SANDBOX } from './file-view.js'
+import { renderMermaidIn } from './mermaid.js'
 
 function openFileInWorkspace(filePath: string): void {
   window.dispatchEvent(new CustomEvent('sovereign:open-file', { detail: { path: filePath } }))
@@ -103,6 +104,7 @@ export function registerFileChipHandlers(): void {
 
         if (ext === 'md' || ext === 'markdown') {
           body.innerHTML = `<div class="file-chip-markdown">${renderMarkdown(data.content)}</div>`
+          void renderMermaidIn(body as HTMLElement)
         } else {
           const lines = data.content.split('\n')
           const lineNums = lines.map((_, i) => `<span class="file-chip-line-num">${i + 1}</span>`).join('\n')
