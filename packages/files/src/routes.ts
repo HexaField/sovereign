@@ -5,6 +5,7 @@ import { Router, type RequestHandler } from 'express'
 import type { FileService } from './files.js'
 import { PathTraversalError, validatePath } from './files.js'
 import { buildTree } from './tree.js'
+import { createFileListCache, searchFiles, type FileList } from './file-search.js'
 
 type ProjectResolver = (project: string) => string
 
@@ -21,8 +22,10 @@ export interface FileRouterOptions {
   workspaceRoot?: string
   /** Directories under `workspaceRoot` the `/workspace` listing leaves out (Sovereign's runtime data dir). */
   workspaceExclude?: string[]
-  /** Returns all browsable roots (org paths). Used by GET /roots. */
+  /** Returns all browsable roots (org paths). Used by GET /roots and GET /search. */
   getRoots?: RootsProvider
+  /** Lists the files under a root for GET /search; defaults to ripgrep with a walk fallback. */
+  listFiles?: (root: string) => Promise<FileList>
 }
 
 export function createFileRouter(
@@ -160,6 +163,30 @@ export function createFileRouter(
 
       await scan(sovereignWorkspace, '', depth)
       res.json({ entries, basePath: sovereignWorkspace })
+    } catch (err: any) {
+      res.status(500).json({ error: err.message })
+    }
+  }) as RequestHandler)
+
+  // GET /api/files/search?root=<root id or path>&q=&limit= — quick-open file search within one browsable root
+  const fileLists = createFileListCache({ list: options.listFiles })
+  router.get('/search', (async (req, res) => {
+    const want = String(req.query.root ?? '')
+    const root = (options.getRoots ? options.getRoots() : []).find((r) => r.id === want || r.path === want)
+    if (!root) {
+      res.status(400).json({ error: 'root must be one of /api/files/roots' })
+      return
+    }
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200)
+    try {
+      const { files, truncated } = await fileLists.get(root.path)
+      const { matches, total } = searchFiles(files, String(req.query.q ?? ''), limit)
+      res.json({
+        root,
+        total,
+        truncated,
+        results: matches.map((m) => ({ rel: m.path, path: nodePath.join(root.path, m.path), positions: m.positions }))
+      })
     } catch (err: any) {
       res.status(500).json({ error: err.message })
     }

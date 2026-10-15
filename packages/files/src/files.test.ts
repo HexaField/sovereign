@@ -182,6 +182,35 @@ describe('File Routes', () => {
     expect(names.some((n) => n.startsWith('runtime'))).toBe(false)
   })
 
+  it('GET /api/files/search ranks files in a known root and refuses other roots', async () => {
+    const express = (await import('express')).default
+    const request = (await import('supertest')).default
+    const { createFileRouter } = await import('./routes.js')
+    const app = express()
+    app.use(
+      '/api/files',
+      createFileRouter(service, undefined, undefined, {
+        getRoots: () => [{ id: 'org', name: 'Org', path: '/srv/org' }],
+        listFiles: async () => ({
+          files: ['repo/src/ChatView.tsx', 'repo/README.md', 'repo/src/chat.ts'],
+          truncated: false
+        })
+      })
+    )
+    const res = await request(app).get('/api/files/search').query({ root: 'org', q: 'chatview' })
+    expect(res.status).toBe(200)
+    expect(res.body.total).toBe(1)
+    expect(res.body.results[0]).toEqual({
+      rel: 'repo/src/ChatView.tsx',
+      path: '/srv/org/repo/src/ChatView.tsx',
+      positions: [9, 10, 11, 12, 13, 14, 15, 16]
+    })
+    expect((await request(app).get('/api/files/search').query({ root: '/srv/org', q: '' })).body.results).toHaveLength(
+      3
+    )
+    expect((await request(app).get('/api/files/search').query({ root: '/etc', q: 'passwd' })).status).toBe(400)
+  })
+
   it('POST /api/files/exists returns only the paths that are files under home', async () => {
     const express = (await import('express')).default
     const request = (await import('supertest')).default
