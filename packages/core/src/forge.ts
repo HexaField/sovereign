@@ -221,6 +221,8 @@ export interface ForgeGraph {
   /** True while the first backfill still runs. */
   syncing: boolean
   lastSyncAt?: string
+  /** The membrane's forge login (the account Forge acts as); the client's "requested from me" filter matches it. */
+  identity?: string
 }
 
 /** String form of a ForgeRef: "github:github.com/coasys/ad4m#1390", branches "…@feat/x". */
