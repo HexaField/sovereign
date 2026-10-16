@@ -90,7 +90,7 @@ const RethinkReport: Component<RethinkReportProps> = (props) => {
             <Show when={error()}>
               <div style={{ color: 'var(--c-error, #ef4444)' }}>{error()}</div>
             </Show>
-            <div class="prose-sm leading-relaxed" innerHTML={html()} />
+            <div class="msg-assistant leading-relaxed" innerHTML={html()} />
           </div>
         </div>
       </div>
