@@ -819,6 +819,9 @@ importers:
       '@sovereign/voice':
         specifier: workspace:*
         version: link:../voice
+      '@sovereign/work-graph':
+        specifier: workspace:*
+        version: link:../work-graph
       '@sovereign/worktrees':
         specifier: workspace:*
         version: link:../worktrees
@@ -1067,6 +1070,34 @@ importers:
       '@types/multer':
         specifier: ^2.1.0
         version: 2.1.0
+
+  packages/work-graph:
+    dependencies:
+      '@sovereign/core':
+        specifier: workspace:*
+        version: link:../core
+      '@sovereign/forges':
+        specifier: workspace:*
+        version: link:../forges
+      '@sovereign/orgs':
+        specifier: workspace:*
+        version: link:../orgs
+      '@sovereign/primitives':
+        specifier: workspace:*
+        version: link:../primitives
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
+      '@types/supertest':
+        specifier: ^7.2.0
+        version: 7.2.0
+      supertest:
+        specifier: ^7.2.2
+        version: 7.2.2
 
   packages/worktrees:
     dependencies:

@@ -297,6 +297,38 @@ export const schema = {
       },
       additionalProperties: false
     },
+    forge: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' },
+        identities: {
+          type: 'object',
+          properties: { github: { type: 'string', minLength: 1 } },
+          additionalProperties: false
+        },
+        planDirs: { type: 'array', items: { type: 'string', minLength: 1 } },
+        repos: {
+          type: 'object',
+          additionalProperties: { type: 'array', items: { type: 'string', minLength: 1 } }
+        },
+        mentions: { type: 'array', items: { type: 'string', minLength: 1 } },
+        pollOpenMs: { type: 'number', minimum: 10000 },
+        pollAllMs: { type: 'number', minimum: 30000 },
+        windowDays: { type: 'number', minimum: 1, maximum: 365 },
+        githubApiUrl: { type: 'string', minLength: 1 },
+        githubToken: { type: 'string', minLength: 1 },
+        rethink: {
+          type: 'object',
+          properties: {
+            times: { type: 'array', items: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' } },
+            maxJobs: { type: 'number', minimum: 0 },
+            tokenBudget: { type: 'number', minimum: 0 }
+          },
+          additionalProperties: false
+        }
+      },
+      additionalProperties: false
+    },
     deviceOverrides: {
       type: 'object',
       additionalProperties: {

@@ -49,6 +49,7 @@
     "@sovereign/thread-presence": "workspace:*",
     "@sovereign/threads": "workspace:*",
     "@sovereign/voice": "workspace:*",
+    "@sovereign/work-graph": "workspace:*",
     "@sovereign/worktrees": "workspace:*",
     "@types/diff": "^8.0.0",
     "@types/js-yaml": "^4.0.9",

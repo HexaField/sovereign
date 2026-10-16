@@ -275,6 +275,38 @@ export interface SovereignConfig {
     /** Time zone for "today" and "tomorrow". */
     timeZone: string
   }
+  /**
+   * Forge (packages/work-graph): the work graph per membrane. Repos come from
+   * each membrane's projects (plus `repos`), never from code.
+   */
+  forge: {
+    enabled: boolean
+    /** The login Forge acts as per forge (assignee writes). Unset: the adapter's own account. */
+    identities: { github?: string }
+    /** Plan dirs: absolute = every membrane; relative = under each membrane content dir, org and project. */
+    planDirs: string[]
+    /** Extra repos per membrane id ("owner/name" or "host/owner/name"). */
+    repos: Record<string, string[]>
+    /** Words besides "@<identity>" that make a comment needs-agent. */
+    mentions: string[]
+    /** Open-items refresh interval. */
+    pollOpenMs: number
+    /** Everything-updated refresh interval (also re-reads branches). */
+    pollAllMs: number
+    /** Default past window in days. */
+    windowDays: number
+    /** GitHub REST base for github.com repos (a mock in the wind tunnel). */
+    githubApiUrl?: string
+    /** GitHub token; unset: GITHUB_TOKEN, GH_TOKEN, then `gh auth token`. */
+    githubToken?: string
+    /** Loop 2 (agent rethink) limits and times. */
+    rethink: {
+      /** Local "HH:MM" times. */
+      times: string[]
+      maxJobs: number
+      tokenBudget: number
+    }
+  }
 }
 
 export interface ConfigChange {

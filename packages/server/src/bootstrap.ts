@@ -105,6 +105,13 @@ import { createBrowserService, BrowserUnavailableError } from '@sovereign/browse
 import { createExportRoutes } from './routes/export-pdf.js'
 import { createCiWatchService } from './ci-watch/service.js'
 import { createHazardService } from './hazards/service.js'
+import { createForgeRegistry } from '@sovereign/forges'
+import {
+  createForgeRouter,
+  createForgeService,
+  createMemoryTaskPort,
+  registerForgeChannel
+} from '@sovereign/work-graph'
 import { createAd4mService } from '@sovereign/ad4m'
 import {
   createPresenceModule,
@@ -938,6 +945,84 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       console.warn('[pr-poll] bootstrap failed:', (err as Error).message)
     })
 
+  // Forge (packages/work-graph), behind forge.enabled at boot. Tasks go
+  // through a temporary in-memory TaskPort (snapshot in <dataDir>/forge/
+  // tasks.json) until the tasks package binds the real one; pr-poll keeps
+  // running beside it until then.
+  const forgeConfig = () => configStore.get<SovereignConfig['forge']>('forge') ?? cfg.forge
+  const forgeService = forgeConfig()?.enabled
+    ? createForgeService({
+        dataDir,
+        config: forgeConfig,
+        scope: {
+          getMembrane: (id) => membraneManager.getMembrane(id),
+          listMembranes: () => membraneManager.listMembranes(),
+          getOrg: (id) => orgManager.getOrg(id),
+          listProjects: (orgId) => orgManager.listProjects(orgId)
+        },
+        forgeRegistry: createForgeRegistry({
+          github: forgeConfig().githubToken ? { token: forgeConfig().githubToken } : {},
+          ...(forgeConfig().githubApiUrl
+            ? { githubHosts: { 'github.com': { apiUrl: forgeConfig().githubApiUrl } } }
+            : {})
+        }),
+        tasks: createMemoryTaskPort({ bus, file: path.join(dataDir, 'forge', 'tasks.json') }),
+        bus,
+        threads: {
+          createThread: async (membrane, label) =>
+            threadManager.create({
+              label,
+              membraneId: membrane,
+              workspaceIds: membraneManager.getMembrane(membrane)?.workspaceIds ?? []
+            }).id,
+          sendToThread: async (threadId, text) => {
+            await chatModule.handleSend(threadId, text, undefined, { origin: { modality: 'text' as const } })
+          },
+          // Like CI watch: queued, never interrupting, shown as a system card.
+          notify: async (threadId, text) => {
+            if (!threadManager.get(threadId)) return
+            await chatModule.handleSend(threadId, text, undefined, { synthRole: 'system' })
+          },
+          presence: (threadId) => {
+            const t = threadManager.get(threadId)
+            return t ? { label: t.label, status: t.agentStatus } : undefined
+          }
+        },
+        subagents: {
+          list: async () => {
+            const out: Array<{ key: string; label: string; parentThreadId: string; cwd?: string; startedAt: number }> =
+              []
+            for (const inst of routingBackend.all()) {
+              const sessions = await inst.backend.listSessions({ kind: 'subagent' }).catch(() => [])
+              for (const s of sessions) {
+                const st = s.agentStatus ?? 'done'
+                if (!s.parentKey || !['running', 'working', 'thinking'].includes(st)) continue
+                out.push({
+                  key: s.key,
+                  label: s.label ?? s.key.slice(0, 8),
+                  parentThreadId: s.parentKey,
+                  ...(s.cwd ? { cwd: s.cwd } : {}),
+                  startedAt: s.startedAt ?? s.lastActivity ?? Date.now()
+                })
+              }
+            }
+            return out
+          }
+        },
+        ciWatch: {
+          list: () =>
+            ciWatch
+              .list()
+              .map((w) => ({ threadKey: w.threadKey, repo: w.repo, target: w.target, createdAt: w.createdAt }))
+        }
+      })
+    : undefined
+  if (forgeService) {
+    app.use(createForgeRouter(forgeService, authMiddleware))
+    registerForgeChannel(wsHandler, bus)
+    forgeService.start()
+  }
+
   // Task REST API — serves the client sidebar panel and task detail views.
   app.use(
     createTaskRoutes({
@@ -1655,6 +1740,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       // Writes the task + Forge meta snapshots; the outbox is already on disk.
       forgePersistence.dispose()
       ciWatch.dispose()
+      forgeService?.stop()
       hazards.stop()
       ad4mService?.close()
       fileWatcher.stop()

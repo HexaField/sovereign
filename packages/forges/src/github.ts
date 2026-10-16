@@ -14,8 +14,10 @@ import type {
   ForgeBranch,
   ForgeComment,
   ForgeIssue,
+  ForgePage,
   ForgeRef,
   ListOpts,
+  PageOpts,
   Review,
   ReviewState
 } from '@sovereign/core'
@@ -48,6 +50,8 @@ export interface GithubForgeOpts extends GithubTransportOpts {
 
 export interface GithubForge extends Forge {
   transport: GithubTransport
+  pageChanges: NonNullable<Forge['pageChanges']>
+  pageIssues: NonNullable<Forge['pageIssues']>
 }
 
 /** Host for refs, from the REST base: an Enterprise `/api/v3` base names its host; anything else is github.com. */
@@ -206,6 +210,32 @@ export function createGithubForge(opts: GithubForgeOpts = {}): GithubForge {
   const maxPages = opts.maxPages ?? 100
   let me: Promise<string> | undefined
 
+  /** One GraphQL page of a connection ordered by updatedAt desc. */
+  async function fetchPage(
+    op: 'changes' | 'issues',
+    repo: string,
+    query: string,
+    vars: Record<string, unknown>,
+    connection: (data: any) => any,
+    after: string | undefined
+  ): Promise<{ items: any[]; cursor?: string; hasNext: boolean }> {
+    const { owner, name } = splitRepo(repo)
+    const started = Date.now()
+    const { data, cost } = await transport.graphql(query, {
+      owner,
+      name,
+      first: pageSize,
+      after: after ?? null,
+      ...vars
+    })
+    if (!data?.repository) throw new GithubError(`GitHub repo not found: ${repo}`, 404)
+    const conn = connection(data.repository)
+    const items = nodes(conn)
+    opts.onPage?.({ op, repo, items: items.length, cost, ms: Date.now() - started })
+    const hasNext = Boolean(conn?.pageInfo?.hasNextPage)
+    return { items, hasNext, ...(hasNext && conn.pageInfo.endCursor ? { cursor: conn.pageInfo.endCursor } : {}) }
+  }
+
   /**
    * Page a connection ordered by updatedAt desc. Items updated at or after
    * `until` are skipped; the first item before `since` ends the paging,
@@ -220,24 +250,13 @@ export function createGithubForge(opts: GithubForgeOpts = {}): GithubForge {
     map: (node: any) => T,
     list: ListOpts
   ): Promise<T[]> {
-    const { owner, name } = splitRepo(repo)
+    splitRepo(repo)
     const since = time(list.since)
     const until = time(list.until)
     const out: T[] = []
     let after: string | undefined
     for (let page = 0; page < maxPages; page++) {
-      const started = Date.now()
-      const { data, cost } = await transport.graphql(query, {
-        owner,
-        name,
-        first: pageSize,
-        after: after ?? null,
-        ...vars
-      })
-      if (!data?.repository) throw new GithubError(`GitHub repo not found: ${repo}`, 404)
-      const conn = connection(data.repository)
-      const items = nodes(conn)
-      opts.onPage?.({ op, repo, items: items.length, cost, ms: Date.now() - started })
+      const { items, cursor, hasNext } = await fetchPage(op, repo, query, vars, connection, after)
       let older = false
       for (const node of items) {
         const updated = time(node.updatedAt)
@@ -248,10 +267,29 @@ export function createGithubForge(opts: GithubForgeOpts = {}): GithubForge {
         if (updated >= until) continue
         out.push(map(node))
       }
-      if (older || !conn?.pageInfo?.hasNextPage) break
-      after = conn.pageInfo.endCursor
+      if (older || !hasNext || !cursor) break
+      after = cursor
     }
     return out
+  }
+
+  /** One page for a resumable backfill: all states, items at or after `until` skipped. */
+  async function onePage<T>(
+    op: 'changes' | 'issues',
+    repo: string,
+    query: string,
+    vars: Record<string, unknown>,
+    connection: (data: any) => any,
+    map: (node: any) => T,
+    page: PageOpts
+  ): Promise<ForgePage<T>> {
+    const until = time(page.until)
+    const { items, cursor, hasNext } = await fetchPage(op, repo, query, vars, connection, page.after)
+    return {
+      items: items.filter((n) => !(time(n.updatedAt) >= until)).map(map),
+      hasNext,
+      ...(cursor ? { cursor } : {})
+    }
   }
 
   /** A REST list with `total_count` and an item key (check runs, statuses), paged by `page`. */
@@ -311,6 +349,32 @@ export function createGithubForge(opts: GithubForgeOpts = {}): GithubForge {
         (r) => r.issues,
         (n) => mapIssue(ctx, n),
         list
+      )
+    },
+
+    pageChanges(repo, page = {}) {
+      const ctx = { host, repo }
+      return onePage(
+        'changes',
+        repo,
+        CHANGES_QUERY,
+        { states: null },
+        (r) => r.pullRequests,
+        (n) => mapChange(ctx, n),
+        page
+      )
+    },
+
+    pageIssues(repo, page = {}) {
+      const ctx = { host, repo }
+      return onePage(
+        'issues',
+        repo,
+        ISSUES_QUERY,
+        { states: null, since: null },
+        (r) => r.issues,
+        (n) => mapIssue(ctx, n),
+        page
       )
     },
 

@@ -204,6 +204,10 @@ export interface SessionSummary {
   /** For subagent sessions: key of the parent session that spawned this one. */
   parentKey?: string
   task?: string
+  /** Working directory of the session (the Forge overlay maps a subagent's cwd → branch → change). */
+  cwd?: string
+  /** For a running subagent: when its run started (ms). */
+  startedAt?: number
 }
 
 /**

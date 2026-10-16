@@ -45,6 +45,7 @@ import { s41RecycleGate } from './s41-recycle-gate.js'
 import { s42DeviceFiles } from './s42-device-files.js'
 import { s43ForgeGithub } from './s43-forge-github.js'
 import { s44TaskPersistence } from './s44-task-persistence.js'
+import { s45ForgeWorkGraph } from './s45-forge-work-graph.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -148,5 +149,7 @@ export const ALL_SCENARIOS: Scenario[] = [
   s43ForgeGithub,
   // Task graph persistence (Forge P0a): tasks, streams, links, views and edges
   // survive a container restart; in the ad4m lane, also an AD4M outage.
-  s44TaskPersistence
+  s44TaskPersistence,
+  // Forge: the work graph service (/api/forge) against the mock GitHub.
+  s45ForgeWorkGraph
 ]
