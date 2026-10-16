@@ -16,6 +16,7 @@
 # Environment:
 #   SOVEREIGN_URL   — override sovereign endpoint (default: http://localhost:5811)
 #   MOCK_LLM_URL    — override mock LLM endpoint (default: http://localhost:8900)
+#   MOCK_GITHUB_URL — override mock GitHub endpoint (default: http://localhost:8910)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -140,4 +141,5 @@ echo ""
 npx tsx src/main.ts \
   --sovereign-url "http://localhost:5811" \
   --mock-llm-url "http://localhost:8900" \
+  --mock-github-url "http://localhost:8910" \
   "${EXTRA_ARGS[@]}"

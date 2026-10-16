@@ -442,6 +442,15 @@ importers:
         specifier: ^7.2.2
         version: 7.2.2
 
+  packages/forges:
+    dependencies:
+      '@sovereign/core':
+        specifier: workspace:*
+        version: link:../core
+      '@sovereign/orgs':
+        specifier: workspace:*
+        version: link:../orgs
+
   packages/git:
     dependencies:
       '@sovereign/core':
@@ -747,6 +756,9 @@ importers:
       '@sovereign/files':
         specifier: workspace:*
         version: link:../files
+      '@sovereign/forges':
+        specifier: workspace:*
+        version: link:../forges
       '@sovereign/git':
         specifier: workspace:*
         version: link:../git

@@ -1,0 +1,132 @@
+{
+  "data": {
+    "rateLimit": { "cost": 4, "remaining": 4980, "resetAt": "2026-03-02T11:00:00Z" },
+    "repository": {
+      "pullRequests": {
+        "pageInfo": { "hasNextPage": true, "endCursor": "Y3Vyc29yOjM=" },
+        "nodes": [
+          {
+            "number": 412,
+            "title": "Sprockets: stream the tooth cache",
+            "body": "Streams the cache instead of loading it whole.\n\n> ### Paired with: acme-labs/gadget#88\n> The gadget side of the same change.\n\nCloses #377",
+            "url": "https://github.com/acme-labs/widget/pull/412",
+            "state": "OPEN",
+            "isDraft": false,
+            "merged": false,
+            "createdAt": "2026-02-26T09:12:00Z",
+            "updatedAt": "2026-03-02T10:30:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "author": { "login": "alex-dev" },
+            "assignees": { "nodes": [{ "login": "alex-dev" }, { "login": "kit-bot" }] },
+            "reviewRequests": {
+              "nodes": [
+                { "requestedReviewer": { "__typename": "User", "login": "sam-reviewer" } },
+                { "requestedReviewer": { "__typename": "Team", "combinedSlug": "acme-labs/core" } }
+              ]
+            },
+            "latestReviews": {
+              "nodes": [
+                { "author": { "login": "sam-reviewer" }, "state": "CHANGES_REQUESTED" },
+                { "author": { "login": "jo-maintainer" }, "state": "APPROVED" },
+                { "author": { "login": "pat-drive-by" }, "state": "COMMENTED" },
+                { "author": { "login": "lee-pending" }, "state": "PENDING" }
+              ]
+            },
+            "labels": { "nodes": [{ "name": "perf" }, { "name": "sprockets" }] },
+            "headRefName": "feat/stream-teeth",
+            "headRefOid": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+            "baseRefName": "dev",
+            "headRepository": { "nameWithOwner": "acme-labs/widget" },
+            "mergeable": "CONFLICTING",
+            "closingIssuesReferences": {
+              "nodes": [
+                { "number": 377, "repository": { "nameWithOwner": "acme-labs/widget" } },
+                { "number": 12, "repository": { "nameWithOwner": "acme-labs/gadget" } }
+              ]
+            },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }] },
+            "timelineItems": {
+              "nodes": [
+                {
+                  "source": {
+                    "__typename": "PullRequest",
+                    "number": 88,
+                    "repository": { "nameWithOwner": "acme-labs/gadget" }
+                  }
+                },
+                {
+                  "source": {
+                    "__typename": "Issue",
+                    "number": 377,
+                    "repository": { "nameWithOwner": "acme-labs/widget" }
+                  }
+                },
+                {
+                  "source": {
+                    "__typename": "Issue",
+                    "number": 377,
+                    "repository": { "nameWithOwner": "acme-labs/widget" }
+                  }
+                },
+                {}
+              ]
+            }
+          },
+          {
+            "number": 415,
+            "title": "WIP: flange refactor",
+            "body": "",
+            "url": "https://github.com/acme-labs/widget/pull/415",
+            "state": "OPEN",
+            "isDraft": true,
+            "merged": false,
+            "createdAt": "2026-03-01T08:00:00Z",
+            "updatedAt": "2026-03-01T18:00:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "author": { "login": "kit-bot" },
+            "assignees": { "nodes": [] },
+            "reviewRequests": { "nodes": [] },
+            "latestReviews": { "nodes": [] },
+            "labels": { "nodes": [] },
+            "headRefName": "feat/flange",
+            "headRefOid": "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+            "baseRefName": "feat/stream-teeth",
+            "headRepository": { "nameWithOwner": "kit-bot/widget" },
+            "mergeable": "UNKNOWN",
+            "closingIssuesReferences": { "nodes": [] },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] },
+            "timelineItems": { "nodes": [] }
+          },
+          {
+            "number": 401,
+            "title": "Fix gear ratio rounding",
+            "body": "Rounds half to even.",
+            "url": "https://github.com/acme-labs/widget/pull/401",
+            "state": "MERGED",
+            "isDraft": false,
+            "merged": true,
+            "createdAt": "2026-02-20T09:00:00Z",
+            "updatedAt": "2026-02-28T12:00:00Z",
+            "closedAt": "2026-02-28T11:59:00Z",
+            "mergedAt": "2026-02-28T11:58:00Z",
+            "author": null,
+            "assignees": { "nodes": [] },
+            "reviewRequests": { "nodes": [] },
+            "latestReviews": { "nodes": [{ "author": { "login": "jo-maintainer" }, "state": "APPROVED" }] },
+            "labels": { "nodes": [{ "name": "bug" }] },
+            "headRefName": "fix/gear-ratio",
+            "headRefOid": "c3d4e5f60718293a4b5c6d7e8f90123456789012",
+            "baseRefName": "dev",
+            "headRepository": null,
+            "mergeable": "MERGEABLE",
+            "closingIssuesReferences": { "nodes": [] },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] },
+            "timelineItems": { "nodes": [] }
+          }
+        ]
+      }
+    }
+  }
+}

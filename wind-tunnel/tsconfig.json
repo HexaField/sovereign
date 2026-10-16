@@ -7,11 +7,11 @@
     "strict": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": "..",
     "resolveJsonModule": true,
     "typeRoots": ["./node_modules/@types", "../node_modules/@types"],
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "mock-llm/**/*.ts"]
+  "include": ["src/**/*.ts", "mock-llm/**/*.ts", "mock-github/**/*.ts"]
 }

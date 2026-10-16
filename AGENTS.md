@@ -203,7 +203,38 @@ To judge a dependency or refactor, run the suite on the change **and** on its pa
 
 - **Mock LLM** (`wind-tunnel/mock-llm/server.ts`) — implements Anthropic `/v1/messages` (SSE streaming) with scripted response support via `POST /mock/script`.
 - **Test client** (`wind-tunnel/src/client.ts`) — HTTP + WebSocket client with `timed()` latency sampling. Unwraps Sovereign's response wrappers (`{ threads: [...] }`, `{ thread: {...} }`, etc.).
+- **Mock GitHub** (`wind-tunnel/mock-github/`, container `mock-github`, host port 8910, `ctx.mockGithubUrl`) — see below.
 - **Scenarios** (`wind-tunnel/src/scenarios/`) — TypeScript modules implementing the `Scenario` interface.
+
+### Mock GitHub (`wind-tunnel/mock-github/`)
+
+Answers what the forge adapter (`packages/forges`) sends, from an in-memory model (`model.ts`) that scenarios seed and mutate. The runner resets it before every scenario, like the mock LLM.
+
+- **GraphQL** `POST /graphql` (or `/api/graphql`), dispatched by operation name: `ForgeChanges`, `ForgeIssues`, `ForgeBranches` (the queries in `packages/forges/src/queries.ts` — rename one and the mock answers with an error). Ordered by `updatedAt` desc, `first` ≤ 100, cursors, `states`, issue `since`. A missing repo answers `NOT_FOUND`, as GitHub does.
+- **REST**: `GET /user`, `GET /repos/:o/:r/pulls/:n`, `…/commits/:ref`, `…/commits/:sha/check-runs`, `…/commits/:sha/status`, `…/compare/:base...:head`, `…/issues/:n/comments`, `…/pulls/:n/comments` (`per_page`/`page` + `Link`), `POST`/`DELETE …/issues/:n/assignees`. GETs carry an ETag and answer 304 to a matching `If-None-Match`. Every API call needs an `Authorization` header (any token).
+- **Derived like GitHub:** "#N", "owner/repo#N" and issue/PR URLs in a body cross-reference their target (timeline items); "Closes/Fixes/Resolves #N" fills `closingIssuesReferences`; the check rollup comes from the head commit's runs and statuses; merging into the default branch closes those issues as completed; a review clears the reviewer's request. A check result does not move a PR's `updatedAt` (GitHub's behaviour too), so a since-sync alone misses CI changes.
+- **Timestamps:** each mutation stamps a time strictly after the last one, so order is stable; seeds may set `createdAt`/`updatedAt`/`closedAt`/`mergedAt` explicitly (past dates make `since` cuts deterministic).
+
+Control API (JSON bodies; every write returns the changed object):
+
+| Route | Body | Does |
+| --- | --- | --- |
+| `POST /mock/github/reset` | — | Empty model, viewer `hex-agent`, clears the log and queued failures |
+| `POST /mock/github/seed` | `{ viewer?, repos: [{ repo, defaultBranch?, branches?, issues?, pulls?, checks? }] }` | Replaces those repos whole (issues are added before PRs, so PR bodies cross-link them) |
+| `POST /mock/github/repo` | `{ repo, defaultBranch? }` | Ensure an empty repo |
+| `POST /mock/github/pr` | `{ repo, number?, title?, body?, state?, isDraft?, author?, assignees?, reviewRequests?, reviews?, labels?, head?, headSha?, base?, headRepo?, mergeable?, closes?, …times }` | Create (next number) or update a PR; bumps `updatedAt`. A new head branch is created |
+| `POST /mock/github/issue` | `{ repo, number?, title?, body?, state?, stateReason?, author?, assignees?, labels?, …times }` | Create or update an issue |
+| `POST /mock/github/review` | `{ repo, number, login, state }` | `APPROVED`/`CHANGES_REQUESTED`/`COMMENTED`/`DISMISSED`, or `REQUESTED` to request one |
+| `POST /mock/github/checks` | `{ repo, sha \| branch \| pr, runs?, statuses?, append? }` | Set check runs (`{ name, status, conclusion }`) and statuses (`{ context, state }`) on a commit |
+| `POST /mock/github/merge` | `{ repo, number, deleteBranch? }` | Merge an open PR |
+| `POST /mock/github/comment` | `{ repo, number, login?, body, review? }` | Issue comment, or a PR review comment with `review: true` |
+| `POST /mock/github/branch` | `{ repo, name, sha?, ahead?, behind?, delete? }` | Upsert or delete a branch; ahead/behind are against the default branch (what `compare` returns) |
+| `POST /mock/github/assign` | `{ repo, number, add?, remove? }` | Change assignees as someone else on GitHub would |
+| `POST /mock/github/fail` | `{ status, count?, path?, method?, retryAfter?, message? }` | The next `count` matching API requests (path prefix) fail with `status`; 403/429 default to a secondary-rate-limit message |
+| `GET /mock/github/log` | — | Every API request: method, path + query, status, GraphQL operation and variables |
+| `GET /mock/github/state` | — | The whole model |
+
+s43 drives the adapter from the runner against this container (there are no Forge server routes yet): mapping, paging and `since`, assignee writes, ETag 304s, retries over injected 502s and a `Retry-After`, merge → issue closed.
 
 ### API response shapes (gotcha)
 
@@ -507,6 +538,17 @@ MCP tools `ci_watch` / `ci_watch_list` / `ci_unwatch` let a thread watch the Git
 - **Cadence:** one loop every 10 s polls every watch in parallel (`CI_POLL.pollMs`); only a watch whose polls fail backs off (20 s doubling to 5 min). Requests carry the last ETag; unchanged answers are 304s, which do not count against the rate limit. Token from `gh auth token`, so any repo the `gh` account can read works (public coasys repos included); no webhook needed.
 - **Follow:** a PR or branch watch moves to the new head after a push (default); `follow: false` stays on the commit.
 - **Limits:** 12 h default timeout; no check after 20 min ends the watch. Watches persist in `<dataDir>/ci-watch/watches.json` and resume after a restart.
+- **Shared fold:** `toCheckStates` lives in `@sovereign/forges` (`checks.ts`), so CI watch and the forge adapter's `checks()` agree on what failed. CI watch keeps its own polling: it needs each check's conclusion, URL and summary for its message, and per-watch ETags and head-following, which `Forge.checks()` (a summary) does not carry.
+
+## Forges (`packages/forges/`)
+
+One interface (`Forge` in `@sovereign/core/forge.ts`) over every code forge; today only GitHub implements it.
+
+- **Adapter** (`github.ts`, `createGithubForge`): lists over GraphQL (`queries.ts`: `ForgeChanges`, `ForgeIssues`, `ForgeBranches`), single reads and the one write (`setAssignees`) over REST. Lists run newest-updated first; items updated at or after `until` are skipped, and paging stops at the first item older than `since`. `state: 'open'` asks for OPEN only. PR bodies pass through unchanged ("Paired with" blocks are the graph builder's job).
+- **Cost (measured on a 300-PR repo, Oct 2026):** a 50-PR page of `ForgeChanges` costs 4 points and takes ~4 s; a 100-PR page costs 7 and takes ~6 s, so the default page is 50 (`pageSize`). `onPage` reports each page's cost and time. The rollup state comes with the list; failed check names only from `checks(ref)` (contexts per PR would multiply the cost).
+- **Transport** (`transport.ts`): REST base `apiUrl` (default `https://api.github.com`, or `$SOVEREIGN_GITHUB_API_URL`), GraphQL at `<apiUrl>/graphql` (`/api/graphql` for an Enterprise `/api/v3` base). Token: `token` option, `$GITHUB_TOKEN`, `$GH_TOKEN`, then `gh auth token` (cached; re-read once on a 401). Retries: 5xx, network errors, GraphQL `RATE_LIMITED`, and 403/429 rate limits, backing off 1 s doubling (capped at `maxWaitMs`, 60 s) or the server's `Retry-After` when longer; a spent primary limit whose reset is further off than `maxWaitMs` fails at once. REST GETs keep an ETag per URL (500 entries) and reuse the body on 304.
+- **Registry** (`registry.ts`, `createForgeRegistry`): `forgeFor(host | { forge, host })` builds one adapter per (forge, host). A self-hosted GitHub host listed in `hosts` gets `https://<host>/api/v3`; `githubHosts` overrides options per host. Other forges need a factory.
+- **Discovery** (`discovery.ts`): `discoverRepos(paths, hosts?)` dedupes forge repos across checkouts and remotes; `primaryRepo(path)` is the checkout's `origin`. Both read `parseForgeRemotes` in `@sovereign/orgs`, which reads a linked worktree's remotes from the main repo's config (`.git` file → `gitdir` → `commondir`) and takes a host → forge map. `parseGitRemotes` keeps its GitHub + Radicle shape for the issues, drafts and review packages.
 
 ## API traps
 
