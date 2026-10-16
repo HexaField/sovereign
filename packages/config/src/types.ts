@@ -299,6 +299,18 @@ export interface SovereignConfig {
     githubApiUrl?: string
     /** GitHub token; unset: GITHUB_TOKEN, GH_TOKEN, then `gh auth token`. */
     githubToken?: string
+    /**
+     * Loop 1's decision-model tier: llama.cpp's `POST <url>/v1/systemone`.
+     * Unset: events the rules cannot place go to Loop 2 (needs-agent).
+     */
+    classifier?: {
+      /** Server base URL, e.g. http://127.0.0.1:8080 (no /v1/systemone). */
+      url: string
+      /** `model` for a llama-server in router mode. */
+      model?: string
+      /** Per-request timeout; default 5000. */
+      timeoutMs?: number
+    }
     /** Loop 2 (agent rethink) limits and times. */
     rethink: {
       /** Local "HH:MM" times. */

@@ -170,9 +170,21 @@ export interface WorkNode {
   ci?: ChecksState
   /** The live one-line status (task transientState). */
   status?: string
+  /** What Loop 2 (rethink) did or said about this node, oldest first. */
+  rethink?: RethinkNote[]
   createdAt: string
   updatedAt: string
   closedAt?: string
+}
+
+/** A rethink action shown on a node's card. */
+export interface RethinkNote {
+  at: string
+  /** note = forge_note; dispatch = a job sent to a thread; draft = a bug-report draft; attention = told the user. */
+  kind: 'note' | 'dispatch' | 'draft' | 'attention'
+  text: string
+  /** The run report it belongs to. */
+  runId?: string
 }
 
 export type WorkEdgeKind = 'base' | 'merged-into' | 'closes' | 'references' | 'paired' | 'plans' | 'subtask' | 'related'

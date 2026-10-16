@@ -317,6 +317,16 @@ export const schema = {
         windowDays: { type: 'number', minimum: 1, maximum: 365 },
         githubApiUrl: { type: 'string', minLength: 1 },
         githubToken: { type: 'string', minLength: 1 },
+        classifier: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', minLength: 1 },
+            model: { type: 'string', minLength: 1 },
+            timeoutMs: { type: 'number', minimum: 100 }
+          },
+          required: ['url'],
+          additionalProperties: false
+        },
         rethink: {
           type: 'object',
           properties: {

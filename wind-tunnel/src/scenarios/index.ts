@@ -47,6 +47,7 @@ import { s43ForgeGithub } from './s43-forge-github.js'
 import { s44TaskPersistence } from './s44-task-persistence.js'
 import { s45ForgeWorkGraph } from './s45-forge-work-graph.js'
 import { s46ForgeWired } from './s46-forge-wired.js'
+import { s47ForgeRethink } from './s47-forge-rethink.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -153,5 +154,7 @@ export const ALL_SCENARIOS: Scenario[] = [
   s44TaskPersistence,
   // Forge: the work graph service (/api/forge) against the mock GitHub.
   s45ForgeWorkGraph,
-  s46ForgeWired
+  s46ForgeWired,
+  // Forge Loop 2: rethink thread, digest prompt, run reports, forge_* tools.
+  s47ForgeRethink
 ]

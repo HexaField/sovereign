@@ -9,10 +9,10 @@ import {
   defaultThreadLabel,
   kindLabel,
   linkedGroups,
-  rethinkNotes,
   shortRef,
   taskSection
 } from './card-model.js'
+import { cardRethinkItems } from './rethink-model.js'
 import type { ForgeApi } from './api.js'
 import { CI_COLORS, REVIEW_COLORS, STATE_COLORS } from './style.js'
 import { threadChoices } from './membrane.js'
@@ -51,7 +51,7 @@ const NodeCard: Component<NodeCardProps> = (props) => {
   const groups = createMemo(() => linkedGroups(n().id, props.edges, props.nodesById))
   const task = createMemo(() => taskSection(n(), props.streams, props.edges, props.nodesById))
   const agent = createMemo(() => agentStatusLine(props.overlay))
-  const notes = createMemo(() => rethinkNotes(n().id, props.edges))
+  const notes = createMemo(() => cardRethinkItems(n().id, n().rethink, props.edges))
   const [error, setError] = createSignal<string | null>(null)
   const [busy, setBusy] = createSignal(false)
 
@@ -452,17 +452,20 @@ const NodeCard: Component<NodeCardProps> = (props) => {
             Rethink notes
           </div>
           <For each={notes()}>
-            {(e) => {
-              const other = e.from === n().id ? e.to : e.from
-              const o = props.nodesById.get(other)
+            {(item) => {
+              const o = item.otherId ? props.nodesById.get(item.otherId) : undefined
               return (
-                <div class="mb-1">
-                  <span style={{ color: '#a855f7' }}>{e.kind}</span> → {o ? shortRef(o) : other}
-                  <Show when={e.confidence !== undefined}>
-                    <span style={muted}> ({Math.round((e.confidence ?? 0) * 100)}%)</span>
+                <div class="mb-1" data-testid="forge-card-rethink-note">
+                  <span style={{ color: '#a855f7' }}>{item.tag}</span>
+                  <Show when={item.otherId}> → {o ? shortRef(o) : item.otherId}</Show>
+                  <Show when={item.confidence !== undefined}>
+                    <span style={muted}> ({Math.round((item.confidence ?? 0) * 100)}%)</span>
                   </Show>
-                  <Show when={e.reason}>
-                    <div style={muted}>{e.reason}</div>
+                  <Show when={item.at}>
+                    <span style={muted}> · {new Date(item.at!).toLocaleString()}</span>
+                  </Show>
+                  <Show when={item.text}>
+                    <div style={muted}>{item.text}</div>
                   </Show>
                 </div>
               )

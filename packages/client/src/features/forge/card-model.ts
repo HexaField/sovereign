@@ -149,8 +149,3 @@ export function agentStatusLine(o: AgentOverlay | undefined): AgentLine {
     return { label: `${o.subagents.length} subagent${o.subagents.length > 1 ? 's' : ''} running`, tone: 'working' }
   return { label: 'Idle', tone: 'idle' }
 }
-
-/** Rethink-sourced edges touching the node: what Loop 2 did here. */
-export function rethinkNotes(nodeId: string, edges: WorkEdge[]): WorkEdge[] {
-  return edges.filter((e) => e.source === 'rethink' && (e.from === nodeId || e.to === nodeId))
-}

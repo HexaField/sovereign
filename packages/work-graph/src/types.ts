@@ -26,6 +26,8 @@ export interface ForgeConfig {
   githubApiUrl?: string
   /** GitHub token; default: GITHUB_TOKEN, GH_TOKEN, then `gh auth token`. */
   githubToken?: string
+  /** Loop 1's decision-model tier: llama.cpp `POST <url>/v1/systemone`. Unset: no model tier. */
+  classifier?: { url: string; model?: string; timeoutMs?: number }
   rethink: { times: string[]; maxJobs: number; tokenBudget: number }
 }
 
@@ -175,6 +177,9 @@ export interface ForgeDigest {
   count: number
   groups: DigestGroup[]
 }
+
+/** What started a rethink run: its cron slot, "Rethink now", or a tool call in the rethink thread outside a run. */
+export type RethinkTrigger = 'schedule' | 'manual' | 'chat'
 
 // ── Overlay sources ────────────────────────────────────────────────────
 

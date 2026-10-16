@@ -6,10 +6,10 @@ import {
   defaultPrompt,
   defaultThreadLabel,
   linkedGroups,
-  rethinkNotes,
   shortRef,
   taskSection
 } from './card-model.js'
+import { cardRethinkItems } from './rethink-model.js'
 import { change, edge, issue, plan, stream, task } from './test-fixtures.js'
 
 const R = 'demo-org/engine'
@@ -60,8 +60,17 @@ describe('linkedGroups', () => {
     expect(linkedGroups(peer.id, edges, nodes).map((x) => x.label)).toEqual(['Paired with'])
   })
 
-  it('rethinkNotes lists only rethink-sourced edges', () => {
-    expect(rethinkNotes(pr.id, edges)).toEqual([expect.objectContaining({ kind: 'related', reason: 'same subsystem' })])
+  it('rethink notes: the node notes newest first, then only rethink-sourced edges', () => {
+    const notes = [
+      { at: '2026-10-16T08:31:00Z', kind: 'note' as const, text: 'Looks stale', runId: 'r1' },
+      { at: '2026-10-16T08:32:00Z', kind: 'dispatch' as const, text: 'Sent to "worker": rebase on dev', runId: 'r1' }
+    ]
+    expect(cardRethinkItems(pr.id, notes, edges)).toEqual([
+      { at: '2026-10-16T08:32:00Z', tag: 'Job', text: 'Sent to "worker": rebase on dev', runId: 'r1' },
+      { at: '2026-10-16T08:31:00Z', tag: 'Note', text: 'Looks stale', runId: 'r1' },
+      { tag: 'related', text: 'same subsystem', otherId: iss.id, confidence: 0.8 }
+    ])
+    expect(cardRethinkItems(base.id, undefined, edges)).toEqual([])
   })
 })
 

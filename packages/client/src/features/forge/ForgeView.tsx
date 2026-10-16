@@ -5,6 +5,15 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, type Component } from 'solid-js'
 import type { AgentOverlay, ForgeView as ForgeViewDef } from '@sovereign/core'
 import ForgePanel from './ForgePanel.js'
+import RethinkReport from './RethinkReport.js'
+import {
+  phaseAfterRuns,
+  phaseAfterStart,
+  phaseLabel,
+  runLinkLabel,
+  type RethinkPhase,
+  type RethinkRuns
+} from './rethink-model.js'
 import type { ThreadChoice } from './NodeCard.js'
 import { createForgeApi } from './api.js'
 import {
@@ -65,6 +74,9 @@ const ForgeView: Component = () => {
   const [allThreads, setAllThreads] = createSignal<ThreadChoice[]>([])
   const [notice, setNotice] = createSignal<string | null>(null)
   const [newTitle, setNewTitle] = createSignal('')
+  const [rethinkPhase, setRethinkPhase] = createSignal<RethinkPhase>({ phase: 'idle' })
+  const [rethinkRuns, setRethinkRuns] = createSignal<RethinkRuns | null>(null)
+  const [reportId, setReportId] = createSignal<string | null>(null)
 
   const threadMembrane = createMemo(() => storeThreads().find((t) => t.id === threadKey())?.membraneId ?? null)
   const membrane = createMemo(() =>
@@ -129,6 +141,9 @@ const ForgeView: Component = () => {
       wsStore.on('forge.updated', (msg: Record<string, unknown>) => {
         if (of(msg).membrane === membrane()) setRefresh((n) => n + 1)
       }),
+      wsStore.on('forge.rethink', (msg: Record<string, unknown>) => {
+        if (of(msg).membrane === membrane()) void loadRuns(membrane()!)
+      }),
       wsStore.on('forge.overlay', (msg: Record<string, unknown>) => {
         const p = of(msg)
         if (p.membrane !== membrane()) return
@@ -184,6 +199,37 @@ const ForgeView: Component = () => {
       setNotice(`${label} failed: ${e instanceof Error ? e.message : String(e)}`)
     }
     setTimeout(() => setNotice(null), 4000)
+  }
+
+  // ── Rethink (Loop 2): status line, latest run, report. ──────────────
+  const loadRuns = async (m: string): Promise<void> => {
+    try {
+      const runs = await api.rethinkRuns(m)
+      if (membrane() !== m) return
+      setRethinkRuns(runs)
+      setRethinkPhase(phaseAfterRuns(rethinkPhase(), runs))
+    } catch {
+      /* no rethink on this server: the controls stay quiet */
+    }
+  }
+  createEffect(
+    on(membrane, (m) => {
+      setRethinkRuns(null)
+      setRethinkPhase({ phase: 'idle' })
+      setReportId(null)
+      if (m) void loadRuns(m)
+    })
+  )
+  const rethinkNow = async (): Promise<void> => {
+    const m = membrane()
+    if (!m) return
+    setRethinkPhase({ phase: 'starting' })
+    try {
+      setRethinkPhase(phaseAfterStart(await api.rethink(m)))
+    } catch (e) {
+      setRethinkPhase({ phase: 'failed', error: e instanceof Error ? e.message : String(e) })
+    }
+    void loadRuns(m)
   }
 
   const openThread = (id: string): void => {
@@ -324,16 +370,51 @@ const ForgeView: Component = () => {
         >
           Sync now
         </button>
+        <Show when={phaseLabel(rethinkPhase())}>
+          <span class="text-xs" style={{ color: 'var(--c-text-muted)' }} data-testid="forge-rethink-status">
+            {phaseLabel(rethinkPhase())}
+          </span>
+        </Show>
+        <Show when={rethinkRuns()?.runs[0]}>
+          {(r) => (
+            <button
+              class="text-xs hover:underline"
+              style={{ color: 'var(--c-accent)' }}
+              onClick={() => setReportId(r().id)}
+              title="Open the run report"
+              data-testid="forge-rethink-last"
+            >
+              {runLinkLabel(r())}
+            </button>
+          )}
+        </Show>
         <button
           class={btn}
           style={btnStyle}
-          disabled={!membrane()}
-          onClick={() => act('Rethink', () => api.rethink(membrane()!))}
+          disabled={!membrane() || rethinkPhase().phase === 'starting' || rethinkPhase().phase === 'running'}
+          onClick={() => void rethinkNow()}
           data-testid="forge-rethink"
         >
           Rethink now
         </button>
       </div>
+
+      <Show when={reportId() && membrane() ? { id: reportId()!, m: membrane()! } : null}>
+        {(r) => (
+          <RethinkReport
+            membrane={r().m}
+            api={api}
+            runs={rethinkRuns()?.runs ?? []}
+            runId={r().id}
+            threadId={rethinkRuns()?.threadId ?? null}
+            onOpenThread={(id) => {
+              setReportId(null)
+              openThread(id)
+            }}
+            onClose={() => setReportId(null)}
+          />
+        )}
+      </Show>
 
       <Show
         when={membrane()}

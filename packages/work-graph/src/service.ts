@@ -14,6 +14,7 @@ import {
   type ForgeGraph,
   type ForgeRef,
   type ForgeView,
+  type RethinkNote,
   type WorkEdgeKind,
   type WorkNode,
   type WorkStream
@@ -39,7 +40,9 @@ import {
   type ForgeDigest,
   type ForgeEvent,
   type PortTask,
+  type RelatedEdgeRecord,
   type RepoCache,
+  type RethinkTrigger,
   type TaskInit,
   type TaskPort,
   type ThreadPresence,
@@ -76,7 +79,13 @@ export interface ForgeServiceDeps {
   ciWatch?: { list(): ActiveCiWatch[] }
   classifier?: ForgeClassifier
   /** Loop 2. Gets the digest; the run is skipped when it is empty. */
-  runRethink?: (membrane: string, digest: ForgeDigest) => Promise<unknown>
+  runRethink?: (
+    membrane: string,
+    digest: ForgeDigest,
+    opts: { trigger: RethinkTrigger }
+  ) => Promise<{ runId?: string } | void>
+  /** Rethink notes per node id, shown on the cards (graph response). */
+  rethinkNotes?: (membrane: string) => Record<string, RethinkNote[]>
   hosts?: HostForges
   branchOf?: (cwd: string) => Promise<string | undefined>
   now?: () => number
@@ -131,7 +140,17 @@ export interface ForgeService {
   overlay(membrane: string): Promise<OverlayResult>
   sync(membrane: string, mode?: 'open' | 'all'): Promise<{ events: number; changed: boolean }>
   backfillStep(membrane: string): Promise<boolean>
-  rethink(membrane: string): Promise<{ ran: boolean; count: number }>
+  rethink(
+    membrane: string,
+    opts?: { trigger?: RethinkTrigger }
+  ): Promise<{ ran: boolean; count: number; runId?: string }>
+  /** A node of the membrane's full history (not only the window). */
+  node(membrane: string, nodeId: string): Promise<WorkNode | undefined>
+  /** A suggested `related` edge between two nodes of the membrane (shown dashed until accepted). */
+  relate(
+    membrane: string,
+    edge: { from: string; to: string; reason: string; confidence: number; source: 'rethink' }
+  ): Promise<RelatedEdgeRecord>
   digest(membrane: string, since?: string): Promise<ForgeDigest>
   events(membrane: string, opts?: { since?: string }): TriagedEvent[]
   assign(input: AssignInput): Promise<{ taskId: string; threadId: string | null; forgeError?: string }>
@@ -1014,11 +1033,12 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const g = windowGraph(applyView(graph, view, { ...(me ? { me } : {}), now: now() }), since, until, now())
       const s = state(membrane)
       const syncs_ = scope.repos.map((r) => syncOf(r)).filter((x): x is RepoSync => Boolean(x))
+      const notes = deps.rethinkNotes?.(membrane) ?? {}
       return {
         membrane,
         since,
         until,
-        nodes: g.nodes,
+        nodes: g.nodes.map((n) => (notes[n.id]?.length ? { ...n, rethink: notes[n.id] } : n)),
         edges: g.edges,
         workstreams: await deps.tasks.streamsOf(membrane),
         syncing: s.syncing || syncs_.some((x) => !x.cache().windowSyncedAt || !x.backfillDone()),
@@ -1043,15 +1063,32 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       return state(membrane).log.read(opts)
     },
 
-    async rethink(membrane) {
+    async rethink(membrane, opts = {}) {
       if (!deps.runRethink) throw new ForgeError('rethink is not available yet', 501)
       const d = await digest(membrane)
       if (!d.count) return { ran: false, count: 0 }
-      await deps.runRethink(membrane, d)
+      const started = await deps.runRethink(membrane, d, { trigger: opts.trigger ?? 'manual' })
       const f = readFile(membrane)
       if (d.cursor) f.rethinkCursor = d.cursor
       writeFile(membrane, f)
-      return { ran: true, count: d.count }
+      return { ran: true, count: d.count, ...(started?.runId ? { runId: started.runId } : {}) }
+    },
+
+    async node(membrane, nodeId) {
+      const { graph } = await full(membrane)
+      return graph.nodes.find((n) => n.id === nodeId)
+    },
+
+    async relate(membrane, edge) {
+      if (edge.from === edge.to) throw new ForgeError('an edge needs two different nodes', 400)
+      const { graph } = await full(membrane)
+      for (const id of [edge.from, edge.to]) {
+        if (!graph.nodes.some((n) => n.id === id)) throw new ForgeError(`node not found: ${id}`, 404)
+      }
+      if (!(edge.confidence >= 0 && edge.confidence <= 1)) throw new ForgeError('confidence must be 0–1', 400)
+      const rec = await deps.tasks.addRelated(membrane, { ...edge, kind: 'related' })
+      emit('forge.updated', { membrane })
+      return rec
     },
 
     async assign(input) {
