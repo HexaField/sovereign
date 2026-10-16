@@ -320,8 +320,13 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
   }
   ctx.globalAlpha = 1
 
-  // Edges.
+  // Edges. A constant width on screen at every zoom; zoomed out to dots,
+  // `references` (the bulk of a busy repo) only for highlighted nodes, so the
+  // structure stays readable.
+  const zoomedOut = detailFor(vp.scale) === 'dot'
   for (const e of layout.edges) {
+    const hot = f.highlight?.has(e.from) || f.highlight?.has(e.to)
+    if (zoomedOut && e.kind === 'references' && !hot) continue
     const a = anchorOf(scene, e.from)
     const b = anchorOf(scene, e.to)
     if (!a || !b || a === b) continue
@@ -331,12 +336,11 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
     const maxY = Math.max(a.y + a.h, b.y + b.h)
     if (maxX < view.x || minX > vx1 || maxY < view.y || minY > vy1) continue
     const s = edgeStyle(e, scene.nodesById.get(e.to))
-    const hot = f.highlight?.has(e.from) || f.highlight?.has(e.to)
     const faded = scene.dimmed.has(e.from) || scene.dimmed.has(e.to)
     ctx.globalAlpha = faded ? 0.12 : hot ? 1 : 0.55
     ctx.strokeStyle = s.color
-    ctx.lineWidth = (hot ? s.width + 1 : s.width) / Math.max(vp.scale, 0.5)
-    ctx.setLineDash(s.dash.map((d) => d / Math.max(vp.scale, 0.5)))
+    ctx.lineWidth = (hot ? s.width + 1 : s.width) / vp.scale
+    ctx.setLineDash(s.dash.map((d) => d / vp.scale))
     // Leave from the side facing the other end.
     const forward = b.x >= a.x + a.w
     const backward = b.x + b.w <= a.x

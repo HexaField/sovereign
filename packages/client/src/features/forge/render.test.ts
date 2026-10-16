@@ -3,7 +3,7 @@ import type { WorkNode } from '@sovereign/core'
 import { computeLayout } from './layout.js'
 import { drawFrame } from './render.js'
 import { buildScene } from './scene.js'
-import { DEFAULT_PALETTE } from './style.js'
+import { DEFAULT_PALETTE, edgeStyle } from './style.js'
 import { NOW, change, edge, issue, merged } from './test-fixtures.js'
 
 /** A 2D context that records calls instead of painting. */
@@ -64,6 +64,14 @@ describe('drawFrame', () => {
     expect(first.args).toEqual([2, 0, 0, 2, 0, 0])
     expect(stats.nodesDrawn).toBe(3)
     expect(stats.edgesDrawn).toBe(2)
+  })
+
+  it('keeps edges one screen width at any zoom, and drops references when zoomed out to dots', () => {
+    const { calls, stats } = frame(nodes, { tx: 400, ty: 20, scale: 0.2 })
+    expect(stats.edgesDrawn).toBe(1)
+    const base = edgeStyle(edge(nodes[1], nodes[0], 'base'), nodes[0])
+    const widths = calls.filter((c) => c.name === 'set:lineWidth').map((c) => c.args[0] as number)
+    expect(widths).toContain(base.width / 0.2)
   })
 
   it('culls nodes and edges outside the viewport', () => {

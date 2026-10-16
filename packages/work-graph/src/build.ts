@@ -167,11 +167,25 @@ export function buildGraph(input: BuildInput): BuiltGraph {
       list.push(c)
       byHead.set(c.head.branch, list)
     }
+    // An integration branch (dev, staging) was a base before any change came
+    // from it; a stack's branch only becomes a base after its own change opened.
+    // Changes into an integration branch join the branch, not its release change.
+    const firstAsBase = new Map<string, number>()
+    for (const c of changes) {
+      if (!c.base.branch) continue
+      const t = Date.parse(c.createdAt)
+      if (t < (firstAsBase.get(c.base.branch) ?? Infinity)) firstAsBase.set(c.base.branch, t)
+    }
+    const integration = (branch: string): boolean =>
+      (firstAsBase.get(branch) ?? Infinity) <
+      Math.min(...(byHead.get(branch) ?? []).map((c) => Date.parse(c.createdAt)))
     const rank = (c: CachedChange) => (c.state === 'open' || c.state === 'draft' ? 2 : c.state === 'merged' ? 1 : 0)
     const headChange = (branch: string, self: CachedChange): CachedChange | undefined =>
-      (byHead.get(branch) ?? [])
-        .filter((c) => c !== self)
-        .sort((a, b) => rank(b) - rank(a) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0]
+      integration(branch)
+        ? undefined
+        : (byHead.get(branch) ?? [])
+            .filter((c) => c !== self)
+            .sort((a, b) => rank(b) - rank(a) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0]
 
     const branchTouch = new Map<string, { updatedAt: string; closedAt?: string }>()
     const target = (c: CachedChange): string => {

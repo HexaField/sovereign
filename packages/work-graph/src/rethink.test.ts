@@ -428,6 +428,16 @@ describe('rethink runner', () => {
       projectId: 'widget'
     })
     expect(drafts[0].body).toContain(`- ${WIDGET}#50 Stream teeth — https://github.com/${WIDGET}/pull/50`)
+    // A draft becomes a forge issue: local items (plans, tasks) never go in one.
+    fs.mkdirSync(path.join(tmp, 'acme', 'widget', 'plans'), { recursive: true })
+    fs.writeFileSync(path.join(tmp, 'acme', 'widget', 'plans', 'gears.md'), '# Private gear plan\n')
+    await service.sync('acme')
+    const plan = (await service.graph('acme')).nodes.find((n) => n.kind === 'plan')
+    expect(plan).toBeDefined()
+    await expect(
+      call('forge_bug_draft', { repo: WIDGET, title: 'x', body: 'y', evidence: [nid(50), plan!.id] })
+    ).rejects.toThrow(/stay private/)
+    expect(drafts).toHaveLength(1)
 
     const g = await service.graph('acme')
     const edge = g.edges.find((e) => e.kind === 'related' && e.from === nid(50) && e.to === nid(51))

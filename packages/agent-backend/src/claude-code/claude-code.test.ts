@@ -180,6 +180,23 @@ describe('claude-code/createClaudeCodeBackend', () => {
     })
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny')
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain('mcp__sovereign__cron_create')
+
+    // Commands that add a remote or publish a repo are denied; others run.
+    const remote = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'git remote add origin git@github.com:someone/notes.git' },
+      tool_use_id: 'tu2'
+    })
+    expect(remote.hookSpecificOutput.permissionDecision).toBe('deny')
+    expect(remote.hookSpecificOutput.permissionDecisionReason).toContain('git remote add')
+    const status = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'git status' },
+      tool_use_id: 'tu3'
+    })
+    expect(status.hookSpecificOutput?.permissionDecision).not.toBe('deny')
   })
 
   // ── Regression: tool_result must be emitted EXACTLY ONCE per tool ──

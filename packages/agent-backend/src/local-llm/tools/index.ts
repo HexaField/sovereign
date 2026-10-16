@@ -13,6 +13,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import type { Dirent } from 'node:fs'
+import { publishDenial, publishReason } from '../../publish-guard.js'
 
 export interface ToolResult {
   content: string
@@ -235,6 +236,8 @@ export function createToolExecutor(config: ToolExecutorConfig) {
   async function executeBash(input: Record<string, unknown>): Promise<ToolResult> {
     const command = typeof input.command === 'string' ? input.command : ''
     if (!command.trim()) return { content: '', error: 'command is required' }
+    const blocked = publishReason(command)
+    if (blocked) return { content: '', error: publishDenial(blocked) }
     const cwd = typeof input.cwd === 'string' && input.cwd.trim() ? path.resolve(input.cwd) : config.cwd
     const pathError = checkAllowedPath(cwd)
     if (pathError) return { content: '', error: pathError }

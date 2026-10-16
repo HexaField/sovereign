@@ -424,6 +424,10 @@ The `PATCH /api/threads/:key/model` route and `update()` were already correct â€
 - **Subagent cards.** The parent message format lives in `@sovereign/core/subagent-result` (`formatSubagentResult` / `parseSubagentResult`). History turns get `kind.variant: 'subagent-result'` from `classify.ts`; the live turn the chat module synthesizes stays raw, so the client's `subagentResultOf` handles both and `ChatView` renders `SubagentResultCard` (status, minutes, report as markdown, "Open session"). The `agents_spawn` tool call itself renders the live `SubagentCard` (`extractSubagentSpawns` reads the MCP `[{ type: 'text' }]` result).
 - **Built-in `Agent` tool.** Main sessions still have it. Its in-process subagents use the parent's API endpoint, so an `~/.claude/agents/*.md` definition whose `model:` names a non-Claude model fails every call with HTTP 404 under a Claude parent; the backend warns at startup (`findUnreachableAgentModels`). Sovereign no longer seeds an agent definition.
 
+## Agents never add remotes or publish
+
+`publish-guard.ts` (agent-backend) is a hard block in both backends: the Claude Code `PreToolUse` hook denies the Bash call, and the local-llm Bash tool returns the denial as its error. It refuses `git remote add|set-url|rename`, `git config` writes of `remote.*.url` / `url.*.insteadOf`, `git push` to a URL or path instead of an existing remote, `git subtree push`, `gh repo create|fork`, and `rad auth|init|publish|seed|push`, `rad node start`, `rad remote add`. Pushing a branch to a remote the repo already has stays allowed. Local repos stay local; the user adds remotes and publishes by hand. Forge rethink bug drafts take only forge items as evidence, never plans or tasks (local files), so an approved draft cannot carry private plan text to a public issue.
+
 ## Edits go through the edit tools, not the shell
 
 Shell edits (sed -i, heredoc rewrites, Python read-modify-write) fail silently and skip the diff review, so Sovereign removes the push toward them and gives the batch power to the tools (`replace_all`, `edit_files`, see Code edit):

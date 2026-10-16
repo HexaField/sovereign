@@ -85,6 +85,25 @@ describe('buildGraph', () => {
     expect(g.edges.every((e) => !e.dashed || e.kind !== 'base')).toBe(true)
   })
 
+  it('sends changes into an integration branch to the branch, not to its release change', () => {
+    const dev = 'github:github.com/acme-labs/widget@dev'
+    const early = change(WIDGET, 10, {
+      state: 'merged',
+      createdAt: '2026-09-01T00:00:00Z',
+      closedAt: '2026-09-02T00:00:00Z'
+    })
+    const release = change(WIDGET, 20, {
+      head: { branch: 'dev', sha: 'r' },
+      base: { branch: 'staging' },
+      createdAt: '2026-10-01T00:00:00Z'
+    })
+    const later = change(WIDGET, 30, { createdAt: '2026-10-05T00:00:00Z' })
+    const g = buildGraph(input({ repos: [cacheOf(WIDGET, [early, release, later])] }))
+    expect(has(g.edges, id(WIDGET, 10), dev, 'merged-into')).toBe(true)
+    expect(has(g.edges, id(WIDGET, 30), dev, 'base')).toBe(true)
+    expect(g.edges.some((e) => e.to === id(WIDGET, 20))).toBe(false)
+  })
+
   it('prefers the open change when two changes share a head branch, and links merges with merged-into', () => {
     const old = change(WIDGET, 1, {
       head: { branch: 'feat/a', sha: 'x' },

@@ -87,6 +87,7 @@ describe('forge service', () => {
     forge = createFakeForge()
     forge.put(
       change(WIDGET, 50, {
+        createdAt: daysAgo(5),
         updatedAt: daysAgo(1),
         title: 'Stream teeth',
         body: '> ### Paired with: acme-labs/gadget#9'

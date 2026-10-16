@@ -93,6 +93,7 @@ import {
 } from '../history-archive.js'
 import { readHistoryLog, historyLogExists, mergeIntoHistoryLog } from '../history-log.js'
 import { attachmentToContentBlock } from './attachment.js'
+import { publishDenial, publishReason } from '../publish-guard.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -881,6 +882,21 @@ export function createClaudeCodeBackend(
               `The target thread is resolved automatically from the calling session.`
           }
         }
+      }
+
+      // No new remotes, no publishing: local repos and private data stay local.
+      if (inp.tool_name === 'Bash') {
+        const command = (inp.tool_input as { command?: unknown } | undefined)?.command
+        const reason = typeof command === 'string' ? publishReason(command) : undefined
+        if (reason)
+          return {
+            continue: true,
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse' as const,
+              permissionDecision: 'deny' as const,
+              permissionDecisionReason: publishDenial(reason)
+            }
+          }
       }
 
       // Record start time for metrics duration tracking. After the redirect

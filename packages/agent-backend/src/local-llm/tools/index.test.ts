@@ -197,6 +197,12 @@ describe('local-llm tools: Bash', () => {
     expect(result.content).toContain('hello-world')
   })
 
+  it('refuses commands that add a remote or publish a repo', async () => {
+    const { execute } = makeExecutor()
+    const result = await execute('Bash', { command: 'gh repo create someone/notes --private --push' })
+    expect(result.error).toContain('gh repo create')
+  })
+
   it('reports a non-zero exit code as an error', async () => {
     const { execute } = makeExecutor()
     const result = await execute('Bash', { command: 'exit 3' })
