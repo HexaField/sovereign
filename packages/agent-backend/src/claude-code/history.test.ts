@@ -7,7 +7,8 @@ import {
   parseClaudeCodeTurns,
   readAllClaudeCodeMessages,
   computeUsageFromFile,
-  latestUsageFromFile
+  latestUsageFromFile,
+  usageSinceFromFile
 } from './history.js'
 
 describe('claude-code/history', () => {
@@ -299,5 +300,53 @@ describe('claude-code/history', () => {
       expect(latest.inputTokens).toBe(5000)
       expect(latest.outputTokens).toBe(100)
     })
+  })
+})
+
+describe('usageSinceFromFile', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cc-usage-'))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('sums API calls since a time, once per message id', () => {
+    const file = join(dir, 's.jsonl')
+    const line = (ts: string, id: string, usage: Record<string, number>) =>
+      JSON.stringify({ type: 'assistant', timestamp: ts, message: { id, role: 'assistant', content: [], usage } })
+    writeFileSync(
+      file,
+      [
+        line('2026-10-16T08:00:00.000Z', 'm0', { input_tokens: 999, output_tokens: 9 }),
+        JSON.stringify({
+          type: 'user',
+          timestamp: '2026-10-16T08:30:00.000Z',
+          message: { role: 'user', content: 'go' }
+        }),
+        line('2026-10-16T08:30:01.000Z', 'm1', {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read_input_tokens: 100,
+          cache_creation_input_tokens: 20
+        }),
+        // The same message's second content block repeats its usage.
+        line('2026-10-16T08:30:01.000Z', 'm1', {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read_input_tokens: 100,
+          cache_creation_input_tokens: 20
+        }),
+        line('2026-10-16T08:30:05.000Z', 'm2', { input_tokens: 3, output_tokens: 40, cache_read_input_tokens: 120 }),
+        'not json'
+      ].join('\n') + '\n'
+    )
+    expect(usageSinceFromFile(file, Date.parse('2026-10-16T08:30:00.000Z'))).toEqual({
+      inputTokens: 13,
+      outputTokens: 45,
+      cacheRead: 220,
+      cacheWrite: 20,
+      calls: 2
+    })
+    expect(usageSinceFromFile(join(dir, 'missing.jsonl'), 0).calls).toBe(0)
   })
 })

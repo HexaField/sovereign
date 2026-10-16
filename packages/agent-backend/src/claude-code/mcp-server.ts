@@ -5,6 +5,7 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
+import { forgeTools, type ForgeMcpDeps } from './forge-tools.js'
 
 /**
  * Sovereign modules surfaced to the agent. Each handler is a thin wrapper —
@@ -109,6 +110,8 @@ export interface SovereignToolDeps {
   tasks?: TaskMcpDeps
   /** CI watcher. When `watch` is bound, registers ci_watch / ci_watch_list / ci_unwatch. */
   ci?: CiWatchMcpDeps
+  /** Forge rethink runner. When bound, registers the forge_* tools in forge-rethink threads only. */
+  forge?: ForgeMcpDeps
 }
 
 /** Subset of the server's CI watcher the MCP layer needs. Methods are bound
@@ -962,6 +965,10 @@ export function createSovereignMcpServer(
       )
     )
   }
+
+  // ── Forge rethink (only in a membrane's forge-rethink thread) ─────────
+  const caller = deps.currentSessionKey?.()
+  tools.push(...forgeTools(deps.forge, caller ? bareThreadKey(caller) : undefined))
 
   const filteredTools = opts?.include ? tools.filter((t) => opts.include!.includes(t.name)) : tools
 

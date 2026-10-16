@@ -64,7 +64,8 @@ import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
 import { createVoiceLlmClients } from './voice-llm.js'
-import type { TaskMcpDeps, CiWatchMcpDeps } from '@sovereign/agent-backend'
+import type { TaskMcpDeps, CiWatchMcpDeps, ForgeMcpDeps } from '@sovereign/agent-backend'
+import { usageSinceFromFile } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
 import { createChatRoutes } from '@sovereign/chat'
@@ -110,7 +111,14 @@ import {
   createForgeRouter,
   createForgeService,
   createMemoryTaskPort,
-  registerForgeChannel
+  createRethinkRouter,
+  createRethinkRunner,
+  createSystemOneClassifier,
+  projectOfRepo,
+  registerForgeChannel,
+  startRethinkSchedule,
+  type ForgeService,
+  type ScopeSource
 } from '@sovereign/work-graph'
 import { createAd4mService } from '@sovereign/ad4m'
 import {
@@ -654,6 +662,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // CI watcher: methods are bound once the chat layer exists (it delivers the
   // notifications); the MCP tools appear from then on.
   const ciMcpDeps: CiWatchMcpDeps = {}
+  // Forge rethink tools: bound once the forge service exists (forge.enabled).
+  const forgeMcpDeps: ForgeMcpDeps = {}
 
   const taskMcpDeps: TaskMcpDeps = {
     create: (opts) =>
@@ -698,6 +708,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     presence: presenceMcpDeps,
     tasks: taskMcpDeps,
     ci: ciMcpDeps,
+    forge: forgeMcpDeps,
     presencePersonalityFile,
     presenceMemoryFile,
     presenceKnowledgeFile
@@ -950,6 +961,89 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // tasks.json) until the tasks package binds the real one; pr-poll keeps
   // running beside it until then.
   const forgeConfig = () => configStore.get<SovereignConfig['forge']>('forge') ?? cfg.forge
+  // Loop 1's decision-model tier (forge.classifier, read per call) and Loop 2's
+  // runner: the membrane's forge-rethink thread, the forge_* tools, run reports.
+  const forgeClassifier = createSystemOneClassifier({
+    config: () => forgeConfig()?.classifier,
+    log: (m) => console.warn(`[forge] ${m}`)
+  })
+  const forgeScope: ScopeSource = {
+    getMembrane: (id) => membraneManager.getMembrane(id),
+    listMembranes: () => membraneManager.listMembranes(),
+    getOrg: (id) => orgManager.getOrg(id),
+    listProjects: (orgId) => orgManager.listProjects(orgId)
+  }
+  const liveThread = (id: string) => {
+    const t = threadManager.get(id)
+    return t && !t.archived ? t : undefined
+  }
+  let forgeServiceRef: ForgeService | undefined
+  let forgeStop = (): void => undefined
+  const forgeRethink = createRethinkRunner({
+    dataDir,
+    service: () => {
+      if (!forgeServiceRef) throw new Error('forge is not enabled')
+      return forgeServiceRef
+    },
+    threads: {
+      find: (membrane, label) =>
+        threadManager.list({ membraneId: membrane }).find((t) => t.label === label && !t.archived)?.id,
+      exists: (id) => Boolean(liveThread(id)),
+      create: async (membrane, label) =>
+        threadManager.create({
+          label,
+          membraneId: membrane,
+          workspaceIds: membraneManager.getMembrane(membrane)?.workspaceIds ?? []
+        }).id,
+      label: (id) => liveThread(id)?.label,
+      busy: (id) => (liveThread(id)?.agentStatus ?? 'idle') !== 'idle',
+      // Like a cron fire: queued, never interrupting, shown as a system card.
+      send: async (id, text) => {
+        await chatModule.handleSend(id, text, undefined, { synthRole: 'system' })
+      },
+      onStatus: (id, cb) => {
+        const h = (d: { threadId?: string; status?: string }) => {
+          if (d.threadId === id && d.status) cb(d.status)
+        }
+        chatModule.chatEvents.on('chat.status', h)
+        return () => chatModule.chatEvents.off('chat.status', h)
+      }
+    },
+    presence: {
+      post: async (text) => {
+        const gatewayId = presenceModule.gatewayThreadId()
+        if (!gatewayId) throw new Error('no presence thread to post to')
+        await chatModule.handleSend(gatewayId, text, undefined, { synthRole: 'system' })
+      }
+    },
+    drafts: {
+      create: (d) => {
+        const draft = draftStore.create(d)
+        bus.emit({
+          type: 'planning.draft.created',
+          timestamp: new Date().toISOString(),
+          source: 'forge',
+          payload: draft
+        })
+        return draft
+      }
+    },
+    projectOf: (membrane, repo) => projectOfRepo(forgeScope, membrane, repo),
+    usage: (threadId, sinceMs) => {
+      const key = chatModule.getSessionKeyForThread(threadId) ?? threadId
+      const file = routingBackend.forSession(key).getSessionFilePath?.(key)
+      if (!file) return undefined
+      const u = usageSinceFromFile(file, sinceMs)
+      return {
+        tokens: u.inputTokens + u.cacheWrite + u.outputTokens,
+        input: u.inputTokens,
+        output: u.outputTokens,
+        cacheWrite: u.cacheWrite,
+        cacheRead: u.cacheRead
+      }
+    },
+    bus
+  })
   const forgeService = forgeConfig()?.enabled
     ? createForgeService({
         dataDir,
@@ -988,6 +1082,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
             return t ? { label: t.label, status: t.agentStatus } : undefined
           }
         },
+        classifier: forgeClassifier,
+        runRethink: (membrane, digest, opts) => forgeRethink.run(membrane, digest, opts),
+        rethinkNotes: (membrane) => forgeRethink.notes(membrane),
         subagents: {
           list: async () => {
             const out: Array<{ key: string; label: string; parentThreadId: string; cwd?: string; startedAt: number }> =
@@ -1021,6 +1118,15 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     app.use(createForgeRouter(forgeService, authMiddleware))
     registerForgeChannel(wsHandler, bus)
     forgeService.start()
+    forgeServiceRef = forgeService
+    app.use(createRethinkRouter(forgeRethink, authMiddleware))
+    forgeMcpDeps.membraneOf = (threadId) => forgeRethink.membraneOfThread(threadId)
+    forgeMcpDeps.call = (threadId, name, args) => forgeRethink.tool(threadId, name, args)
+    const stopSchedule = startRethinkSchedule({ scheduler, bus, service: () => forgeService })
+    forgeStop = () => {
+      stopSchedule()
+      forgeRethink.stop()
+    }
   }
 
   // Task REST API — serves the client sidebar panel and task detail views.
@@ -1741,6 +1847,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       forgePersistence.dispose()
       ciWatch.dispose()
       forgeService?.stop()
+      forgeStop()
       hazards.stop()
       ad4mService?.close()
       fileWatcher.stop()

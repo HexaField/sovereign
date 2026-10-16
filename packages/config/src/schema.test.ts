@@ -24,6 +24,13 @@ describe('Config Schema', () => {
       expect(validate({ forge: { ...forge, pollOpenMs: 10 } }).valid).toBe(false)
       expect(validate({ forge: { ...forge, identities: { gitlab: 'x' } } }).valid).toBe(false)
       expect(invalidConfigPaths({ forge: { ...forge, unknown: 1 } })).toContain('/forge/unknown')
+      const classifier = { url: 'http://127.0.0.1:8080', model: 'decider', timeoutMs: 3000 }
+      expect(validate({ forge: { ...forge, classifier } }).valid).toBe(true)
+      expect(validate({ forge: { ...forge, classifier: { model: 'decider' } } }).valid).toBe(false)
+      expect(validate({ forge: { ...forge, classifier: { ...classifier, timeoutMs: 1 } } }).valid).toBe(false)
+      expect(invalidConfigPaths({ forge: { ...forge, classifier: { ...classifier, extra: 1 } } })).toContain(
+        '/forge/classifier/extra'
+      )
     })
 
     it('accepts config with only some keys (defaults fill rest)', () => {

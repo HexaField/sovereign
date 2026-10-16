@@ -620,6 +620,33 @@ Per membrane: which repos, what happened in them, and who works on what. `create
 - **Config:** `forge.githubApiUrl` / `forge.githubToken` point github.com at another API (the wind tunnel's mock). `/api/config` returns config as stored, so keep a real token out of `githubToken`; the default (`gh auth token`) needs none.
 - **Wind tunnel s45** turns forge on in `docker/config.json` (membrane `forge-wt`, two mock repos) and drives `/api/forge*` end to end.
 
+### Decision-model tier (`classifier.ts`)
+
+- `forge.classifier: { url, model?, timeoutMs? }` (default timeout 5 s). Without it, nothing is classified: whatever the rules leave open goes to Loop 2 as needs-agent (tier `unavailable`). The getter is read on every call, so `PATCH /api/config` applies at once.
+- One `POST <url>/v1/systemone` per unclear event (llama.cpp's decision-model endpoint, TypeSafe-compatible): `{ model?, state, questions: { triage: { type: 'choice', instructions, criteria: { 'needs-agent', info } } } }`. `state` is a compact text: the event type and detail, then the node card (title, state, CI, reviews, branch, assignees, owned or not).
+- The confidence triage compares with 0.7 is `answers.triage.probabilities[choice]`. The response's own `confidence` is 0 when all options are equally likely, so for two options it is no probability; it serves only as a fallback.
+- An HTTP error, a timeout, a transport error or a malformed answer returns no answer and quiets the classifier for 60 s, so a dead model server never slows a sync down. It never throws into sync.
+
+### Loop 2 — rethink (`rethink.ts`, `rethink-schedule.ts`, `rethink-routes.ts`)
+
+- **Thread.** Each membrane has one thread labelled `forge-rethink`, found by label or created, with its id in `<dataDir>/forge/<membrane>/rethink/state.json` (and the card notes beside it).
+- **Run.** `POST /api/forge/rethink?membrane=` or a schedule slot calls `service.rethink`. An empty digest skips the run (`{ ran: false }`). Otherwise `runRethink` opens a run, sends the prompt to the thread as a queued system card and returns `{ runId }`. A second run while one is open is refused (409). The run closes on the thread's first idle after it was busy: a thread busy at the start goes idle once before the prompt's turn starts. A run left open after 30 min closes as `timed-out`. A run report shows `running` from the start and gets rewritten after each action.
+- **Prompt** (`buildRethinkPrompt`, snapshot-tested): the job table of plan §6.3, the limits, the six tools, the membrane's streams, and the digest grouped by stream, then node. Each node gets its id, url, card lines, owner thread (from the overlay), streams and events with their triage tier.
+- **Tools** (`agent-backend/src/claude-code/forge-tools.ts`). The tools are registered only in a membrane's forge-rethink thread, bound late through `ForgeMcpDeps` the way `ci_*` is. Every call names its `membrane`, which must match the thread's.
+  - `forge_relate`: a `related` edge, `source: 'rethink'`, via `service.relate` → `TaskPort.addRelated`. It is drawn dashed until accepted.
+  - `forge_stream_add`: `service.addMember`.
+  - `forge_dispatch`: sends `[Forge rethink · <run>] <ref> …` plus the prompt to the owner thread or a given `threadId`. A node with no owner gets a new thread only when it is in a stream (`service.assign` with `newThread`); otherwise the call is refused.
+  - `forge_bug_draft`: a `packages/drafts` draft (labelled `bug`, evidence appended, org and project resolved from the repo's checkout by `projectOfRepo`). It never posts to the forge; the user publishes it.
+  - `forge_attention`: ONE message per run to the presence (gateway) thread.
+  - `forge_note`: a note on the card.
+  - Each dispatch, draft, attention item and note lands in `WorkNode.rethink` (`RethinkNote`, last 20 per node), which the card shows under "Rethink notes".
+- **Chat runs.** A tool call in the rethink thread with no run open (the user talking to it) opens a `chat` run that closes when that turn ends, so every action gets a report and counts against the limits.
+- **Limits.** At most `forge.rethink.maxJobs` dispatches per run. The token budget (`tokenBudget`) counts the run's fresh tokens: input + cache writes + output of every API call since the run started, read from the session JSONL (`usageSinceFromFile`, once per message id). Cache reads are reported but do not count. Once the budget is spent, dispatches are refused. Refusals return `{ refused }` to the model and are listed in the report under "Refused" and "Limits".
+- **Reports:** `<dataDir>/forge/<membrane>/rethink/<YYYY-MM-DD-HHMM>.md` in local time (`-2`, `-3`… on a clash), with a `.json` beside each. A report gives the status, the trigger (`schedule` / `manual` / `chat`), the digest size and items, the actions by kind, the limits hit and the token usage. `GET /api/forge/rethink/runs?membrane=` returns `{ threadId, active, runs }`, newest first. `GET /api/forge/rethink/runs/:id?membrane=` returns the markdown. The bus event `forge.rethink { membrane, runId, status }` reaches the WS channel `forge`.
+- **Schedule.** The server's scheduler holds one system job per (membrane, `forge.rethink.times` entry), as the cron `MM HH * * *` in local time with payload `kind: 'forge-rethink'`. `reconcileRethinkJobs` keeps matching jobs, so their run history survives. It runs at start, on every `config.changed` under `forge`, and every 5 min. With forge off it removes all the jobs. A due job runs `service.rethink(membrane, { trigger: 'schedule' })` and answers `scheduler.job.completed` / `failed`.
+- **Client.** "Rethink now" shows running, skipped (empty digest), done (actions, limits hit) or failed (`rethink-model.ts`). "Last rethink" opens `RethinkReport.tsx`, which renders the run reports with a run list and opens the rethink thread.
+- **Wind tunnel s47** adds membrane `forge-rt` and repo `acme-labs/sprocket` at runtime (`PATCH /api/config`). It turns an owned change CI-red and runs a rethink. Then it checks the thread, the prompt at the mock LLM, the report, a scripted `forge_relate` edge, a `forge_note` from a chat turn and the empty-digest skip.
+
 ## API traps
 
 - **Thread history** (`GET /api/threads/:threadId/history`) comes from the chat routes, which mount before the threads routes. Its 5 s response cache drops a thread's entry on every `chat.turn` and `chat.message.sent`, so readers without an SSE stream still see new turns.

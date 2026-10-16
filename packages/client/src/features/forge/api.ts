@@ -2,6 +2,7 @@
 
 import type { AgentOverlay, ForgeGraph, ForgeView, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
 import type { AssignBody } from './card-model.js'
+import type { RethinkRuns, RethinkStart } from './rethink-model.js'
 import { windowQuery, type WindowRequest } from './window-model.js'
 
 type Fetch = typeof fetch
@@ -55,8 +56,16 @@ export function createForgeApi(f: Fetch = (...a) => fetch(...a)) {
     sync: async (membrane: string): Promise<void> => {
       await json(await send(`/api/forge/sync?membrane=${enc(membrane)}`, 'POST'))
     },
-    rethink: async (membrane: string): Promise<void> => {
-      await json(await send(`/api/forge/rethink?membrane=${enc(membrane)}`, 'POST'))
+    /** Undefined when the server answers without a body. */
+    rethink: async (membrane: string): Promise<RethinkStart | undefined> =>
+      json(await send(`/api/forge/rethink?membrane=${enc(membrane)}`, 'POST')),
+    rethinkRuns: async (membrane: string): Promise<RethinkRuns> =>
+      json(await f(`/api/forge/rethink/runs?membrane=${enc(membrane)}`)),
+    /** The run report as markdown. */
+    rethinkReport: async (membrane: string, id: string): Promise<string> => {
+      const res = await f(`/api/forge/rethink/runs/${enc(id)}?membrane=${enc(membrane)}`)
+      if (!res.ok) await json(res)
+      return res.text()
     },
     assign: async (body: AssignBody): Promise<{ taskId: string; threadId: string }> =>
       json(await send('/api/forge/assign', 'POST', body)),

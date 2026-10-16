@@ -10,6 +10,7 @@ export {
   type TaskMcpDeps,
   type CiWatchMcpDeps
 } from './mcp-server.js'
+export { forgeTools, FORGE_TOOL_NAMES, type ForgeMcpDeps, type ForgeToolName } from './forge-tools.js'
 export { ensureLayeredContextFile, ensureAd4mSkill } from './personality.js'
 export { createPersonalityCompiler } from './personality-compiler.js'
 export type { PersonalityCompiler, PersonalityCompilerOptions, PersonalityManifest } from './personality-compiler.js'
@@ -18,7 +19,8 @@ export {
   readAllClaudeCodeMessages,
   readRecentClaudeCodeMessages,
   normalizeClaudeCodeEntry,
-  computeUsageFromFile
+  computeUsageFromFile,
+  usageSinceFromFile
 } from './history.js'
 export { encodeCwdToProjectDir, defaultAgentDir, sessionJsonlPath, projectsDirForCwd } from './path-encoding.js'
 export type { ClaudeCodeConfig, ClaudeSessionState } from './types.js'

@@ -1,10 +1,11 @@
 // WS channel 'forge': forge.updated { membrane } after a sync with changes,
-// forge.overlay { membrane, overlays } when the overlay inputs change.
+// forge.overlay { membrane, overlays } when the overlay inputs change,
+// forge.rethink { membrane, runId, status } when a rethink run opens or closes.
 
 import type { EventBus } from '@sovereign/core'
 import type { WsHandler } from '@sovereign/primitives'
 
-export const FORGE_WS_EVENTS = ['forge.updated', 'forge.overlay'] as const
+export const FORGE_WS_EVENTS = ['forge.updated', 'forge.overlay', 'forge.rethink'] as const
 
 export function registerForgeChannel(
   ws: Pick<WsHandler, 'registerChannel' | 'broadcastToChannel'>,

@@ -10,6 +10,7 @@ import type {
   CiWatchMcpDeps,
   SovereignToolDeps
 } from './claude-code/mcp-server.js'
+import type { ForgeMcpDeps } from './claude-code/forge-tools.js'
 import type { RoutingBackend } from './factory.js'
 import type { CronService } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -54,6 +55,8 @@ export interface SovereignMcpDepsInput {
   /** Task service. When set, registers the eight task_* MCP tools. */
   tasks?: TaskMcpDeps
   ci?: CiWatchMcpDeps
+  /** Forge rethink tools (forge_*), registered in forge-rethink threads only. */
+  forge?: ForgeMcpDeps
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -265,6 +268,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.embeddings ? { embeddings: input.embeddings } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
-    ...(input.ci ? { ci: input.ci } : {})
+    ...(input.ci ? { ci: input.ci } : {}),
+    ...(input.forge ? { forge: input.forge } : {})
   }
 }

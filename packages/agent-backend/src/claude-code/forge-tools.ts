@@ -1,0 +1,103 @@
+// Forge rethink tools (Loop 2, packages/work-graph rethink.ts). Registered
+// only in a membrane's `forge-rethink` thread; each call goes to the server's
+// rethink runner, which applies the per-run limits and records the action in
+// the run report and on the node's card.
+
+import { tool } from '@anthropic-ai/claude-agent-sdk'
+import { z } from 'zod'
+
+export type ForgeToolName =
+  | 'forge_relate'
+  | 'forge_stream_add'
+  | 'forge_dispatch'
+  | 'forge_bug_draft'
+  | 'forge_attention'
+  | 'forge_note'
+
+/** Late-bound by the server once the forge service exists. */
+export interface ForgeMcpDeps {
+  /** The membrane whose forge-rethink thread this is; undefined for any other thread. */
+  membraneOf?(threadId: string): string | undefined
+  call?(threadId: string, name: ForgeToolName, args: Record<string, unknown>): Promise<unknown>
+}
+
+const okJson = (obj: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }] })
+
+export const FORGE_TOOL_NAMES: readonly ForgeToolName[] = [
+  'forge_relate',
+  'forge_stream_add',
+  'forge_dispatch',
+  'forge_bug_draft',
+  'forge_attention',
+  'forge_note'
+]
+
+/** The forge_* tools for the calling thread, or none when it is not a forge-rethink thread. */
+export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | undefined): any[] {
+  if (!deps?.membraneOf || !deps.call || !threadId || !deps.membraneOf(threadId)) return []
+  const call = deps.call
+  const membrane = z.string().describe('The membrane id of this rethink run.')
+  const nodeId = z.string().describe('A work-graph node id, e.g. "github:github.com/owner/repo#12".')
+  const run = (name: ForgeToolName) => async (args: Record<string, unknown>) => okJson(await call(threadId, name, args))
+  return [
+    tool(
+      'forge_relate',
+      'Suggest a `related` edge between two work-graph nodes that no script can see (same bug, same subsystem, one blocks the other). Shown dashed on the Forge canvas until the user keeps or deletes it.',
+      {
+        membrane,
+        from: nodeId,
+        to: nodeId,
+        reason: z.string().describe('One sentence: why they are related.'),
+        confidence: z.number().min(0).max(1).describe('0–1.')
+      },
+      run('forge_relate')
+    ),
+    tool(
+      'forge_stream_add',
+      'Put a node in a work stream (creates its task when missing).',
+      { membrane, nodeId, streamId: z.string().describe('The stream id (its task id).') },
+      run('forge_stream_add')
+    ),
+    tool(
+      'forge_dispatch',
+      "Send specific work about a node to its owner thread (or `threadId`): rebase/merge the base in, fix the named failing checks, answer the named review comments. Counted against the run's job limit and token budget; refused past either. Without an owner thread it starts a new thread only for a node in a work stream.",
+      {
+        membrane,
+        nodeId,
+        threadId: z.string().optional().describe('Send here instead of the owner thread.'),
+        prompt: z.string().describe('What to do, with the specific comments or failures.')
+      },
+      run('forge_dispatch')
+    ),
+    tool(
+      'forge_bug_draft',
+      'Draft a bug report with evidence for the user to approve. Creates a draft only: nothing is posted to the forge until the user publishes it.',
+      {
+        membrane,
+        repo: z.string().describe('"owner/name" the issue belongs to.'),
+        title: z.string(),
+        body: z.string().describe('Markdown: what fails, how often, since when.'),
+        evidence: z.array(z.string()).min(1).describe('Node ids that show the bug.')
+      },
+      run('forge_bug_draft')
+    ),
+    tool(
+      'forge_attention',
+      'Post ONE "needs your attention" message to the user (the presence thread) with every item of this run. A second call in the same run is refused.',
+      {
+        membrane,
+        items: z
+          .array(z.object({ nodeId: z.string().optional(), text: z.string() }))
+          .min(1)
+          .describe('One line each: what the user has to decide or do.')
+      },
+      run('forge_attention')
+    ),
+    tool(
+      'forge_note',
+      "Leave a one-line note on a node's card (Rethink notes).",
+      { membrane, nodeId, text: z.string() },
+      run('forge_note')
+    )
+  ]
+}

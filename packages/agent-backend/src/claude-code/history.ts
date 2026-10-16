@@ -274,6 +274,46 @@ export function computeUsageFromFile(filePath: string): {
   return out
 }
 
+/** Usage of the API calls a session made at or after `sinceMs`, read from its
+ *  JSONL. Claude Code writes one line per content block of an assistant
+ *  message, each carrying the same usage, so calls count once per message id. */
+export function usageSinceFromFile(
+  filePath: string,
+  sinceMs: number
+): { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; calls: number } {
+  const out = { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, calls: 0 }
+  let content: string
+  try {
+    content = fs.readFileSync(filePath, 'utf-8')
+  } catch {
+    return out
+  }
+  const seen = new Set<string>()
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const entry = JSON.parse(line)
+      const usage = entry?.message?.usage
+      if (!usage) continue
+      const t = Date.parse(entry.timestamp ?? '')
+      if (!Number.isFinite(t) || t < sinceMs) continue
+      const id = entry.message.id ?? entry.requestId ?? entry.uuid
+      if (id) {
+        if (seen.has(id)) continue
+        seen.add(id)
+      }
+      out.inputTokens += usage.input_tokens ?? 0
+      out.outputTokens += usage.output_tokens ?? 0
+      out.cacheRead += usage.cache_read_input_tokens ?? 0
+      out.cacheWrite += usage.cache_creation_input_tokens ?? 0
+      out.calls++
+    } catch {
+      /* malformed line */
+    }
+  }
+  return out
+}
+
 /** Return the LAST turn's usage from a session file — the actual snapshot of
  *  how many tokens currently fill the context window.  Each turn's
  *  `input_tokens` already covers the full conversation, so only the final
