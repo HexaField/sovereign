@@ -56,8 +56,9 @@ export interface RepoCacheStore {
   save(cache: RepoCache): void
 }
 
-export function createRepoCacheStore(dataDir: string): RepoCacheStore {
-  const dir = path.join(dataDir, 'forge', 'cache')
+/** `sub` names a separate cache dir under <dataDir>/forge (tracked items keep their own). */
+export function createRepoCacheStore(dataDir: string, sub = 'cache'): RepoCacheStore {
+  const dir = path.join(dataDir, 'forge', sub)
   const fileOf = (forge: string, host: string, repo: string) => path.join(dir, cacheFileName(forge, host, repo))
   return {
     dir,

@@ -4,7 +4,7 @@
 // scenarios seed and mutate through /mock/github/*.
 //
 // GraphQL: POST /graphql (or /api/graphql), dispatched by operation name:
-//   ForgeChanges, ForgeIssues, ForgeBranches.
+//   ForgeChanges, ForgeIssues, ForgeBranches, ForgeChange, ForgeIssue.
 // REST: GET /user; GET /repos/:o/:r/pulls/:n; GET …/commits/:ref;
 //   GET …/commits/:sha/check-runs; GET …/commits/:sha/status;
 //   GET …/compare/:base...:head; GET …/issues/:n/comments; GET …/pulls/:n/comments;
@@ -215,6 +215,31 @@ function graphql(body: any): { reply: Reply; operation?: string } {
         }),
         operation
       }
+    }
+    case 'ForgeChange':
+    case 'ForgeIssue': {
+      if (!r) return { reply: notFound(), operation }
+      const n = Number(vars.number)
+      const isPr = operation === 'ForgeChange'
+      const field = isPr ? 'pullRequest' : 'issue'
+      const node = isPr ? r.pulls.get(n) : r.issues.get(n)
+      if (!node) {
+        return {
+          reply: json(200, {
+            data: { rateLimit: RATE, repository: { [field]: null } },
+            errors: [
+              {
+                type: 'NOT_FOUND',
+                path: ['repository', field],
+                message: `Could not resolve to a${isPr ? ' PullRequest' : 'n Issue'} with the number of ${n}.`
+              }
+            ]
+          }),
+          operation
+        }
+      }
+      const out = isPr ? prNode(r, node as MockPr) : issueNode(r, node as MockIssue)
+      return { reply: json(200, { data: { rateLimit: RATE, repository: { [field]: out } } }), operation }
     }
     case 'ForgeBranches': {
       if (!r) return { reply: notFound(), operation }

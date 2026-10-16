@@ -3,7 +3,7 @@ import path from 'node:path'
 import { refKey, type ForgeRef } from '@sovereign/core'
 import { describe, expect, it } from 'vitest'
 import { createGithubForge, hostForApi, mapChange, mapIssue, type PageInfo } from './github.js'
-import { BRANCHES_QUERY, CHANGES_QUERY, ISSUES_QUERY } from './queries.js'
+import { BRANCHES_QUERY, CHANGE_QUERY, CHANGES_QUERY, ISSUE_QUERY, ISSUES_QUERY } from './queries.js'
 
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'fixtures', name), 'utf8'))
 
@@ -244,6 +244,48 @@ describe('listChanges', () => {
     }))
     await expect(forge.listChanges('acme-labs/nope')).rejects.toMatchObject({ status: 404 })
     await expect(forge.listChanges('not-a-repo')).rejects.toThrow(/owner\/name/)
+  })
+})
+
+describe('getChange / getIssue', () => {
+  const pr = fixture('changes-page-1.json').data.repository.pullRequests.nodes[0]
+  const issue = fixture('issues-page.json').data.repository.issues.nodes[0]
+  const ref = (kind: 'change' | 'issue', id: string): ForgeRef => ({
+    forge: 'github',
+    host: 'github.com',
+    repo: 'acme-labs/widget',
+    kind,
+    id
+  })
+
+  it('reads one item by number with the same fields the lists map', async () => {
+    const { forge, sent } = forgeWith((req) => ({
+      body: {
+        data: {
+          rateLimit: { cost: 1 },
+          repository: req.body.query === CHANGE_QUERY ? { pullRequest: pr } : { issue }
+        }
+      }
+    }))
+    const c = await forge.getChange(ref('change', '412'))
+    expect(c).toEqual(mapChange(ctx, pr))
+    expect(await forge.getIssue(ref('issue', String(issue.number)))).toEqual(mapIssue(ctx, issue))
+    expect(sent.map((s) => s.body.query)).toEqual([CHANGE_QUERY, ISSUE_QUERY])
+    expect(sent[0].body.variables).toEqual({ owner: 'acme-labs', name: 'widget', number: 412 })
+    for (const field of ['statusCheckRollup', 'closingIssuesReferences', 'latestReviews', 'timelineItems'])
+      expect(CHANGE_QUERY).toContain(field)
+    expect(CHANGE_QUERY).toContain(CHANGES_QUERY.split('nodes {\n        ')[1].split('\n')[0])
+    expect(ISSUE_QUERY).toContain('stateReason')
+  })
+
+  it('answers undefined for an item GitHub does not have, and fails on other errors', async () => {
+    const missing = forgeWith(() => ({
+      body: { data: { repository: { pullRequest: null } }, errors: [{ type: 'NOT_FOUND', message: 'no PR' }] }
+    }))
+    expect(await missing.forge.getChange(ref('change', '9'))).toBeUndefined()
+    const broken = forgeWith(() => ({ status: 400, body: { message: 'bad' } }), { maxWaitMs: 0 })
+    await expect(broken.forge.getIssue(ref('issue', '9'))).rejects.toMatchObject({ status: 400 })
+    await expect(missing.forge.getChange({ ...ref('change', 'x') })).rejects.toThrow(/number/)
   })
 })
 

@@ -144,7 +144,7 @@ export function agentStatusLine(o: AgentOverlay | undefined): AgentLine {
     return { label: o.thread.status === 'thinking' ? 'Thinking' : 'Working', tone: 'working' }
   if (o.waitingOn === 'ci' || o.ciWatch?.state === 'waiting') return { label: 'Waiting for CI', tone: 'waiting' }
   if (o.waitingOn === 'review') return { label: 'Waiting for review', tone: 'waiting' }
-  if (o.waitingOn === 'josh') return { label: 'Waiting for you', tone: 'waiting' }
+  if (o.waitingOn === 'user') return { label: 'Waiting for you', tone: 'waiting' }
   if (o.subagents.length)
     return { label: `${o.subagents.length} subagent${o.subagents.length > 1 ? 's' : ''} running`, tone: 'working' }
   return { label: 'Idle', tone: 'idle' }

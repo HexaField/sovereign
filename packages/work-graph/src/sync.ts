@@ -11,7 +11,7 @@
 // Branch compare runs only for open changes, cached by head + base sha.
 // Retries and rate-limit waits come from the adapter.
 
-import { refKey, type Change, type Forge, type ForgeIssue } from '@sovereign/core'
+import { refKey, type Change, type Forge, type ForgeIssue, type ForgeRef } from '@sovereign/core'
 import { parsePaired } from './build.js'
 import type { RepoCacheStore } from './cache.js'
 import { diffChange, diffIssue } from './diff.js'
@@ -41,6 +41,11 @@ export interface RepoSync {
   /** Open refresh; the first call runs the window sync. */
   syncOpen(): Promise<SyncResult>
   syncAll(): Promise<SyncResult>
+  /**
+   * Read these items one by one (tasks on a repo their membrane does not
+   * sync). An item's first read sets its baseline and raises no events.
+   */
+  refreshItems(refs: ForgeRef[]): Promise<SyncResult>
   /** One backfill page. */
   backfillStep(): Promise<{ done: boolean; items: number }>
   backfillDone(): boolean
@@ -306,6 +311,33 @@ export function createRepoSync(
     return { events: unique, changed: changed || unique.length > 0 }
   }
 
+  async function refreshItems(refs: ForgeRef[]): Promise<SyncResult> {
+    const changes: { known: Change[]; fresh: Change[] } = { known: [], fresh: [] }
+    const issues: { known: ForgeIssue[]; fresh: ForgeIssue[] } = { known: [], fresh: [] }
+    for (const r of refs) {
+      try {
+        if (r.kind === 'change') {
+          const c = await deps.forge.getChange?.(r)
+          if (c) changes[cache.changes[c.ref.id] ? 'known' : 'fresh'].push(c)
+        } else if (r.kind === 'issue') {
+          const i = await deps.forge.getIssue?.(r)
+          if (i) issues[cache.issues[i.ref.id] ? 'known' : 'fresh'].push(i)
+        }
+      } catch (err) {
+        deps.log?.(`read ${target.repo}#${r.id}: ${(err as Error).message}`)
+      }
+    }
+    const events: ForgeEvent[] = []
+    let changed = merge(changes.fresh, issues.fresh, true, [])
+    if (merge(changes.known, issues.known, false, events)) changed = true
+    if (await readFailedChecks(events)) changed = true
+    if (await readComments(events)) changed = true
+    cache.lastOpenSyncAt = iso(now())
+    deps.store.save(cache)
+    const unique = dedupe(events)
+    return { events: unique, changed: changed || unique.length > 0 }
+  }
+
   async function backfillStep(): Promise<{ done: boolean; items: number }> {
     if (!cache.windowSyncedAt) await windowSync()
     const until = cache.backfillUntil ?? cache.windowSyncedAt
@@ -357,6 +389,7 @@ export function createRepoSync(
     cache: () => cache,
     syncOpen: () => serial(() => refresh('open')),
     syncAll: () => serial(() => refresh('all')),
+    refreshItems: (refs) => serial(() => refreshItems(refs)),
     backfillStep: () => serial(backfillStep),
     backfillDone: () => cache.backfill.changes.done && cache.backfill.issues.done,
     save: () => deps.store.save(cache)

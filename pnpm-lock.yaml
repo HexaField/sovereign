@@ -1089,6 +1089,9 @@ importers:
         specifier: ^5.2.1
         version: 5.2.1
     devDependencies:
+      '@sovereign/tasks':
+        specifier: workspace:*
+        version: link:../tasks
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6

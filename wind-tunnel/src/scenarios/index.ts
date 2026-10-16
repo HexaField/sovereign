@@ -46,6 +46,7 @@ import { s42DeviceFiles } from './s42-device-files.js'
 import { s43ForgeGithub } from './s43-forge-github.js'
 import { s44TaskPersistence } from './s44-task-persistence.js'
 import { s45ForgeWorkGraph } from './s45-forge-work-graph.js'
+import { s46ForgeWired } from './s46-forge-wired.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -151,5 +152,6 @@ export const ALL_SCENARIOS: Scenario[] = [
   // survive a container restart; in the ad4m lane, also an AD4M outage.
   s44TaskPersistence,
   // Forge: the work graph service (/api/forge) against the mock GitHub.
-  s45ForgeWorkGraph
+  s45ForgeWorkGraph,
+  s46ForgeWired
 ]

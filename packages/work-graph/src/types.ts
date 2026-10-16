@@ -1,15 +1,6 @@
 // Work graph — the types the service, its ports and its routes share.
 
-import type {
-  Change,
-  ChecksState,
-  ForgeIssue,
-  ForgeRef,
-  ForgeView,
-  WorkEdgeKind,
-  WorkNode,
-  WorkStream
-} from '@sovereign/core'
+import type { Change, ForgeIssue, ForgeRef, WorkNode } from '@sovereign/core'
 
 // ── Config ─────────────────────────────────────────────────────────────
 
@@ -51,88 +42,18 @@ export const DEFAULT_FORGE_CONFIG: ForgeConfig = {
 }
 
 // ── Task port ──────────────────────────────────────────────────────────
+// The contract lives in @sovereign/core (the tasks package implements it
+// without depending on this one).
 
-export type PortTaskState = 'pending' | 'in_progress' | 'completed' | 'cancelled'
-
-/** Last-known forge status written onto a task (the TaskProvider's status fields). */
-export interface PortTaskStatus {
-  kind: 'change' | 'issue' | 'plan'
-  /** Change state, issue state ("open" / "closed:completed" / "closed:not_planned") or plan state. */
-  state: string
-  checks?: ChecksState
-  failedChecks?: string[]
-  review?: 'approved' | 'changes_requested' | 'review_required' | 'none'
-  /** Comment count at the last poll (issue + review comments). */
-  unresolvedComments?: number
-  lastPolledAt: string
-}
-
-export interface PortTask {
-  id: string
-  name: string
-  state: PortTaskState
-  threadId: string | null
-  transientState: string | null
-  membrane: string | null
-  /** Provider key: refKey(ref) for a change or issue, "plan:<project>/<path>" for a plan; null for a task-only task. */
-  key: string | null
-  parentIds: string[]
-  childIds: string[]
-  /** A WorkStream task. */
-  isStream: boolean
-  status?: PortTaskStatus
-  createdAt: string
-  updatedAt: string
-}
-
-export interface TaskInit {
-  name: string
-  membrane: string
-  kind: 'change' | 'issue' | 'plan'
-  url?: string
-  ref?: ForgeRef
-  plan?: { project: string; path: string }
-}
-
-export interface RelatedEdgeRecord {
-  from: string
-  to: string
-  kind: WorkEdgeKind
-  reason?: string
-  confidence?: number
-  source: 'sync' | 'rethink' | 'josh'
-  /** Accepted by the user: shown as source 'josh'. */
-  accepted: boolean
-  createdAt: string
-}
-
-/**
- * What the work graph needs from the task graph. The tasks package binds
- * this to TaskService; `createMemoryTaskPort` implements it in memory.
- */
-export interface TaskPort {
-  /** The task for a provider key, created when missing (idempotent). */
-  ensureTask(key: string, init: TaskInit): Promise<PortTask>
-  get(taskId: string): Promise<PortTask | undefined>
-  findByKey(key: string): Promise<PortTask | undefined>
-  setThread(taskId: string, threadId: string | null): Promise<void>
-  setState(taskId: string, state: PortTaskState): Promise<void>
-  setTransientState(taskId: string, text: string | null): Promise<void>
-  setStatus(taskId: string, status: PortTaskStatus): Promise<void>
-  /** Every task (streams included) of a membrane. */
-  listByMembrane(membrane: string): Promise<PortTask[]>
-  streamsOf(membrane: string): Promise<WorkStream[]>
-  createStream(membrane: string, name: string, parentId?: string): Promise<WorkStream>
-  addToStream(streamId: string, taskId: string): Promise<void>
-  removeFromStream(streamId: string, taskId: string): Promise<void>
-  getViews(membrane: string): Promise<ForgeView[]>
-  putViews(membrane: string, views: ForgeView[]): Promise<ForgeView[]>
-  listRelated(membrane: string): Promise<RelatedEdgeRecord[]>
-  addRelated(membrane: string, edge: Omit<RelatedEdgeRecord, 'createdAt' | 'accepted'>): Promise<RelatedEdgeRecord>
-  /** false when no such edge exists. */
-  acceptRelated(membrane: string, from: string, to: string, kind: WorkEdgeKind): Promise<boolean>
-  deleteRelated(membrane: string, from: string, to: string, kind: WorkEdgeKind): Promise<boolean>
-}
+export type {
+  PortTask,
+  PortTaskKind,
+  PortTaskState,
+  PortTaskStatus,
+  RelatedEdgeRecord,
+  TaskInit,
+  TaskPort
+} from '@sovereign/core'
 
 // ── Repo cache ─────────────────────────────────────────────────────────
 

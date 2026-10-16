@@ -321,7 +321,7 @@ export function buildGraph(input: BuildInput): BuiltGraph {
       to: r.to,
       kind: r.kind,
       dashed: true,
-      source: r.accepted ? 'josh' : r.source,
+      source: r.accepted ? 'user' : r.source,
       ...(r.reason ? { reason: r.reason } : {}),
       ...(r.confidence !== undefined ? { confidence: r.confidence } : {})
     })

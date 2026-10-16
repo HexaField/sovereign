@@ -1,7 +1,9 @@
-// Task sync — after each Loop 1 sync, tasks attached to forge nodes get the
-// provider status, a state that follows the work (plan §7.3, forward only)
-// and a one-line transientState. The notifier tells owner threads what
-// pr-poll used to tell them (CI red, reviews, merges, new comments).
+// Task sync — after each Loop 1 sync (and each tracked-item read), tasks
+// attached to forge nodes get the provider status, a state that follows the
+// work (plan §7.3, forward only) and a one-line transientState. The notifier
+// tells owner threads what pr-poll used to (CI red and green again, changes
+// requested, approved, merged, closed unmerged, new comments) plus closed
+// issues and conflicts.
 
 import type { WorkEdge, WorkNode } from '@sovereign/core'
 import type {
@@ -14,7 +16,7 @@ import type {
   TaskPort
 } from './types.js'
 
-const TERMINAL: PortTaskState[] = ['completed', 'cancelled']
+export const TERMINAL: PortTaskState[] = ['completed', 'cancelled']
 
 export interface StateContext {
   owned: boolean
@@ -130,12 +132,17 @@ export function providerStatus(
   return undefined
 }
 
-/** Same status apart from the poll time. */
-function sameStatus(a: PortTaskStatus | undefined, b: PortTaskStatus): boolean {
+/**
+ * Same status apart from the poll time. A comment count the new status did
+ * not read keeps the stored one; no failed checks equals an empty list.
+ */
+export function sameStatus(a: PortTaskStatus | undefined, b: PortTaskStatus): boolean {
   if (!a) return false
-  const { lastPolledAt: _a, ...ra } = a
-  const { lastPolledAt: _b, ...rb } = b
-  return JSON.stringify(ra) === JSON.stringify(rb)
+  const norm = (s: PortTaskStatus, comments: number | undefined) =>
+    JSON.stringify([s.kind, s.state, s.checks ?? null, s.failedChecks ?? [], s.review ?? null, comments ?? null])
+  return (
+    norm(a, b.unresolvedComments === undefined ? undefined : a.unresolvedComments) === norm(b, b.unresolvedComments)
+  )
 }
 
 /** pr-poll's thread notifications, from Loop 1 events on owned nodes. */

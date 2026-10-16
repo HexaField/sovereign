@@ -205,6 +205,7 @@ describe('api', () => {
     await api.createStream('demo', 'Child', 's1')
     await api.addMember('s1', 'n#1')
     await api.removeMember('s1', 'n#1')
+    await api.addMember('task://9f2c', 'n#1')
     await api.acceptEdge({ from: 'a/b#1', to: 'a/b#2', kind: 'related' })
     await api.deleteEdge({ from: 'a/b#1', to: 'a/b#2', kind: 'related' })
     expect(calls).toEqual([
@@ -226,6 +227,8 @@ describe('api', () => {
       { url: '/api/forge/streams', method: 'POST', body: { membrane: 'demo', name: 'Child', parentId: 's1' } },
       { url: '/api/forge/streams/s1/members', method: 'POST', body: { nodeId: 'n#1' } },
       { url: '/api/forge/streams/s1/members', method: 'DELETE', body: { nodeId: 'n#1' } },
+      // Stream ids are task ids ("task://<uuid>"): encoded into one path segment.
+      { url: '/api/forge/streams/task%3A%2F%2F9f2c/members', method: 'POST', body: { nodeId: 'n#1' } },
       { url: '/api/forge/edges/a%2Fb%231/a%2Fb%232/related/accept', method: 'POST', body: undefined },
       { url: '/api/forge/edges/a%2Fb%231/a%2Fb%232/related', method: 'DELETE', body: undefined }
     ])

@@ -27,6 +27,8 @@ export interface ChangeProvider {
   checksStatus: ChecksStatus
   reviewDecision: ReviewDecision
   unresolvedComments: number
+  /** Names of the failed checks, when CI is failing. */
+  failedChecks?: string[]
   /** ISO timestamp of the last poll. */
   lastPolledAt: string
 }
@@ -37,6 +39,9 @@ export interface IssueProvider {
   refs: ForgeRef[]
   url: string
   issueState: 'open' | 'closed'
+  closedReason?: 'completed' | 'not_planned'
+  /** Comment count at the last poll, when read. */
+  unresolvedComments?: number
   lastPolledAt: string
 }
 
@@ -138,6 +143,7 @@ export function normalizeProvider(raw: unknown): TaskProvider | undefined {
         checksStatus: p.checksStatus ?? 'unknown',
         reviewDecision: p.reviewDecision ?? 'unknown',
         unresolvedComments: Number(p.unresolvedComments ?? 0),
+        ...(Array.isArray(p.failedChecks) ? { failedChecks: p.failedChecks.map(String) } : {}),
         lastPolledAt: p.lastPolledAt ?? new Date(0).toISOString()
       }
     }
@@ -149,6 +155,8 @@ export function normalizeProvider(raw: unknown): TaskProvider | undefined {
         refs,
         url: String(p.url ?? ''),
         issueState: p.issueState === 'closed' ? 'closed' : 'open',
+        ...(p.closedReason === 'completed' || p.closedReason === 'not_planned' ? { closedReason: p.closedReason } : {}),
+        ...(p.unresolvedComments !== undefined ? { unresolvedComments: Number(p.unresolvedComments) } : {}),
         lastPolledAt: p.lastPolledAt ?? new Date(0).toISOString()
       }
     }
@@ -298,7 +306,8 @@ export interface CreateTaskOpts {
 
 export interface UpdateTaskOpts {
   state?: TaskState
-  transientState?: string
+  /** null clears it. */
+  transientState?: string | null
   name?: string
   description?: string
   /** Pass string to reassign, null to unassign, undefined to leave unchanged. */

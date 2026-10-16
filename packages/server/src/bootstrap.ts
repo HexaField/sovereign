@@ -106,12 +106,7 @@ import { createExportRoutes } from './routes/export-pdf.js'
 import { createCiWatchService } from './ci-watch/service.js'
 import { createHazardService } from './hazards/service.js'
 import { createForgeRegistry } from '@sovereign/forges'
-import {
-  createForgeRouter,
-  createForgeService,
-  createMemoryTaskPort,
-  registerForgeChannel
-} from '@sovereign/work-graph'
+import { createForgeRouter, createForgeService, registerForgeChannel } from '@sovereign/work-graph'
 import { createAd4mService } from '@sovereign/ad4m'
 import {
   createPresenceModule,
@@ -123,7 +118,7 @@ import {
   createTaskService,
   createForgePersistence,
   createTaskDigest,
-  createPrPollService,
+  createForgeTaskPort,
   createTaskImporter,
   createTaskRoutes
 } from '@sovereign/tasks'
@@ -858,27 +853,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     await chatModule.handleSend(threadId, text, undefined, { origin })
   }
 
-  // ── PR-Task Bridge ────────────────────────────────────────────────────
-  // PrPollService monitors GitHub PRs linked to tasks. Created after
-  // chatModule so sendToThread can forward notifications to agent threads.
-  const prPollService = createPrPollService({
-    taskService,
-    bus,
-    sendToThread: async (threadId, text) => {
-      await chatModule.handleSend(threadId, text, undefined, {
-        origin: { modality: 'text' as const }
-      })
-    }
-  })
-
   // Late-bind importItem and sendPrompt onto taskMcpDeps. These require
-  // chatModule + prPollService which exist only after the chat layer.
+  // chatModule, which exists only after the chat layer. An imported PR or
+  // issue is then polled by the forge service (tracked items), not here.
   // Because sharedMcpDeps (in wiring.ts) holds a reference to this
   // object, any future MCP server instance picks up these methods when
   // createSovereignMcpInstance builds a fresh tools array per session.
   const taskImporter = createTaskImporter({
     taskService,
-    prPoll: prPollService,
     sendToThread: async (threadId, text) => {
       await chatModule.handleSend(threadId, text, undefined, {
         origin: { modality: 'text' as const }
@@ -936,98 +918,84 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     res.json(hazards.status())
   })
 
-  // Bootstrap: start polls for any existing PR-tasks in active states, once
-  // the task store has loaded (from AD4M, or from its snapshot when AD4M is down).
-  void taskStore
-    .settled()
-    .then(() => prPollService.bootstrap())
-    .catch((err) => {
-      console.warn('[pr-poll] bootstrap failed:', (err as Error).message)
-    })
-
-  // Forge (packages/work-graph), behind forge.enabled at boot. Tasks go
-  // through a temporary in-memory TaskPort (snapshot in <dataDir>/forge/
-  // tasks.json) until the tasks package binds the real one; pr-poll keeps
-  // running beside it until then.
+  // Forge (packages/work-graph). Its tasks are the task graph above, through
+  // the TaskPort (TaskService for task writes, so task.* events reach the
+  // TaskDigest; the meta store for views and suggested edges). Always
+  // running: forge.enabled (hot) gates the membrane syncs and the overlay,
+  // while PR and issue tasks no membrane sync reads are polled one by one
+  // either way (what pr-poll did). It starts once both stores have loaded.
   const forgeConfig = () => configStore.get<SovereignConfig['forge']>('forge') ?? cfg.forge
-  const forgeService = forgeConfig()?.enabled
-    ? createForgeService({
-        dataDir,
-        config: forgeConfig,
-        scope: {
-          getMembrane: (id) => membraneManager.getMembrane(id),
-          listMembranes: () => membraneManager.listMembranes(),
-          getOrg: (id) => orgManager.getOrg(id),
-          listProjects: (orgId) => orgManager.listProjects(orgId)
-        },
-        forgeRegistry: createForgeRegistry({
-          github: forgeConfig().githubToken ? { token: forgeConfig().githubToken } : {},
-          ...(forgeConfig().githubApiUrl
-            ? { githubHosts: { 'github.com': { apiUrl: forgeConfig().githubApiUrl } } }
-            : {})
-        }),
-        tasks: createMemoryTaskPort({ bus, file: path.join(dataDir, 'forge', 'tasks.json') }),
-        bus,
-        threads: {
-          createThread: async (membrane, label) =>
-            threadManager.create({
-              label,
-              membraneId: membrane,
-              workspaceIds: membraneManager.getMembrane(membrane)?.workspaceIds ?? []
-            }).id,
-          sendToThread: async (threadId, text) => {
-            await chatModule.handleSend(threadId, text, undefined, { origin: { modality: 'text' as const } })
-          },
-          // Like CI watch: queued, never interrupting, shown as a system card.
-          notify: async (threadId, text) => {
-            if (!threadManager.get(threadId)) return
-            await chatModule.handleSend(threadId, text, undefined, { synthRole: 'system' })
-          },
-          presence: (threadId) => {
-            const t = threadManager.get(threadId)
-            return t ? { label: t.label, status: t.agentStatus } : undefined
+  const forgeService = createForgeService({
+    dataDir,
+    config: forgeConfig,
+    scope: {
+      getMembrane: (id) => membraneManager.getMembrane(id),
+      listMembranes: () => membraneManager.listMembranes(),
+      getOrg: (id) => orgManager.getOrg(id),
+      listProjects: (orgId) => orgManager.listProjects(orgId)
+    },
+    forgeRegistry: createForgeRegistry({
+      github: forgeConfig().githubToken ? { token: forgeConfig().githubToken } : {},
+      ...(forgeConfig().githubApiUrl ? { githubHosts: { 'github.com': { apiUrl: forgeConfig().githubApiUrl } } } : {})
+    }),
+    tasks: createForgeTaskPort({ service: taskService, meta: forgePersistence.meta }),
+    bus,
+    threads: {
+      createThread: async (membrane, label) =>
+        threadManager.create({
+          label,
+          membraneId: membrane,
+          workspaceIds: membraneManager.getMembrane(membrane)?.workspaceIds ?? []
+        }).id,
+      sendToThread: async (threadId, text) => {
+        await chatModule.handleSend(threadId, text, undefined, { origin: { modality: 'text' as const } })
+      },
+      // Like CI watch: queued, never interrupting, shown as a system card.
+      notify: async (threadId, text) => {
+        if (!threadManager.get(threadId)) return
+        await chatModule.handleSend(threadId, text, undefined, { synthRole: 'system' })
+      },
+      presence: (threadId) => {
+        const t = threadManager.get(threadId)
+        return t ? { label: t.label, status: t.agentStatus } : undefined
+      }
+    },
+    subagents: {
+      list: async () => {
+        const out: Array<{ key: string; label: string; parentThreadId: string; cwd?: string; startedAt: number }> = []
+        for (const inst of routingBackend.all()) {
+          const sessions = await inst.backend.listSessions({ kind: 'subagent' }).catch(() => [])
+          for (const s of sessions) {
+            const st = s.agentStatus ?? 'done'
+            if (!s.parentKey || !['running', 'working', 'thinking'].includes(st)) continue
+            out.push({
+              key: s.key,
+              label: s.label ?? s.key.slice(0, 8),
+              parentThreadId: s.parentKey,
+              ...(s.cwd ? { cwd: s.cwd } : {}),
+              startedAt: s.startedAt ?? s.lastActivity ?? Date.now()
+            })
           }
-        },
-        subagents: {
-          list: async () => {
-            const out: Array<{ key: string; label: string; parentThreadId: string; cwd?: string; startedAt: number }> =
-              []
-            for (const inst of routingBackend.all()) {
-              const sessions = await inst.backend.listSessions({ kind: 'subagent' }).catch(() => [])
-              for (const s of sessions) {
-                const st = s.agentStatus ?? 'done'
-                if (!s.parentKey || !['running', 'working', 'thinking'].includes(st)) continue
-                out.push({
-                  key: s.key,
-                  label: s.label ?? s.key.slice(0, 8),
-                  parentThreadId: s.parentKey,
-                  ...(s.cwd ? { cwd: s.cwd } : {}),
-                  startedAt: s.startedAt ?? s.lastActivity ?? Date.now()
-                })
-              }
-            }
-            return out
-          }
-        },
-        ciWatch: {
-          list: () =>
-            ciWatch
-              .list()
-              .map((w) => ({ threadKey: w.threadKey, repo: w.repo, target: w.target, createdAt: w.createdAt }))
         }
-      })
-    : undefined
-  if (forgeService) {
-    app.use(createForgeRouter(forgeService, authMiddleware))
-    registerForgeChannel(wsHandler, bus)
-    forgeService.start()
-  }
+        return out
+      }
+    },
+    ciWatch: {
+      list: () =>
+        ciWatch.list().map((w) => ({ threadKey: w.threadKey, repo: w.repo, target: w.target, createdAt: w.createdAt }))
+    }
+  })
+  app.use(createForgeRouter(forgeService, authMiddleware))
+  registerForgeChannel(wsHandler, bus)
+  void Promise.all([taskStore.settled(), forgePersistence.meta.settled()])
+    .then(() => forgeService.start())
+    .catch((err) => console.warn('[forge] start failed:', (err as Error).message))
 
   // Task REST API — serves the client sidebar panel and task detail views.
   app.use(
     createTaskRoutes({
       taskService,
-      prPollService,
+      pollTask: (taskId) => forgeService.pollTask(taskId),
       sendToThread: async (threadId, text) => {
         await chatModule.handleSend(threadId, text, undefined, {
           origin: { modality: 'text' as const }
@@ -1736,11 +1704,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
 
   return {
     shutdown() {
-      prPollService.dispose()
-      // Writes the task + Forge meta snapshots; the outbox is already on disk.
+      // Forge first: it writes tasks. Then the task + Forge meta snapshots
+      // (the outbox is already on disk).
+      forgeService.stop()
       forgePersistence.dispose()
       ciWatch.dispose()
-      forgeService?.stop()
       hazards.stop()
       ad4mService?.close()
       fileWatcher.stop()

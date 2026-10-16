@@ -43,11 +43,14 @@ export const P = {
   reason: 'forge://reason',
   confidence: 'forge://confidence',
   source: 'forge://source',
+  kind: 'forge://kind',
+  accepted: 'forge://accepted',
   // ForgeView
   title: 'forge://title',
   repo: 'forge://repo',
   filters: 'forge://filters',
-  height: 'forge://height'
+  height: 'forge://height',
+  position: 'forge://position'
 } as const
 
 /** Single-valued string literal property. */
@@ -107,6 +110,8 @@ export const FORGE_SHACL_CLASSES: Record<string, object> = {
     properties: [
       scalar('from', P.from, true),
       scalar('to', P.to, true),
+      scalar('kind', P.kind),
+      scalar('accepted', P.accepted),
       scalar('reason', P.reason),
       scalar('confidence', P.confidence),
       scalar('source', P.source, true),
@@ -121,7 +126,8 @@ export const FORGE_SHACL_CLASSES: Record<string, object> = {
       scalar('title', P.title, true),
       collection('repos', P.repo),
       scalar('filters', P.filters),
-      scalar('height', P.height)
+      scalar('height', P.height),
+      scalar('position', P.position)
     ]
   }
 }

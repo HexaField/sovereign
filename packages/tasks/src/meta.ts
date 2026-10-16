@@ -4,46 +4,62 @@
 // restarts. Files: <dir>/meta-outbox.jsonl, <dir>/meta-snapshot.json.
 
 import { randomUUID } from 'node:crypto'
-import type { ForgeFilters, ForgeView } from '@sovereign/core'
+import type { ForgeFilters, ForgeView, WorkEdgeKind, WorkEdgeSource } from '@sovereign/core'
 import type { DurableBackend, DurableStatus } from './durable.js'
 import { createDurable } from './durable.js'
 import type { LinkGraph, LinkPattern, LinkTriple } from './link-graph.js'
 import { fromLiteral, toLiteral } from './link-graph.js'
 import { P, RDF_TYPE, T } from './ontology.js'
 
-export type RelatedEdgeSource = 'sync' | 'rethink' | 'josh'
+export type RelatedEdgeSource = WorkEdgeSource
 
-/** A `related` edge between two work-graph nodes (WorkNode ids). */
+/** A suggested edge between two work-graph nodes (WorkNode ids), `related` unless it says otherwise. */
 export interface RelatedEdge {
   id: string
   from: string
   to: string
+  kind: WorkEdgeKind
   reason: string
   /** 0..1 */
   confidence: number
   source: RelatedEdgeSource
+  /** The user accepted it (the graph shows it as source 'user'). */
+  accepted: boolean
   membrane: string | null
   createdAt: string
 }
 
+/** A view as stored: its place in the membrane's list beside the view itself. */
+export type StoredView = ForgeView & { position?: number }
+
 export interface ForgeMeta {
-  views: Map<string, ForgeView>
+  views: Map<string, StoredView>
   edges: Map<string, RelatedEdge>
 }
 
 export type ForgeMetaOp =
-  | { type: 'view.put'; view: ForgeView }
+  | { type: 'view.put'; view: StoredView }
   | { type: 'view.delete'; id: string }
   | { type: 'edge.put'; edge: RelatedEdge }
   | { type: 'edge.delete'; id: string }
 
-const EDGE_SOURCES: readonly RelatedEdgeSource[] = ['sync', 'rethink', 'josh']
+const EDGE_SOURCES: readonly RelatedEdgeSource[] = ['sync', 'rethink', 'user']
+const EDGE_KINDS: readonly WorkEdgeKind[] = [
+  'base',
+  'merged-into',
+  'closes',
+  'references',
+  'paired',
+  'plans',
+  'subtask',
+  'related'
+]
 
 export function emptyForgeMeta(): ForgeMeta {
   return { views: new Map(), edges: new Map() }
 }
 
-function cloneView(v: ForgeView): ForgeView {
+function cloneView<V extends ForgeView>(v: V): V {
   return structuredClone(v)
 }
 
@@ -64,9 +80,9 @@ export function applyMetaOp(m: ForgeMeta, op: ForgeMetaOp): void {
   }
 }
 
-function reviveView(raw: any): ForgeView | undefined {
+function reviveView(raw: any): StoredView | undefined {
   if (!raw || typeof raw.id !== 'string' || typeof raw.title !== 'string') return undefined
-  const view: ForgeView = {
+  const view: StoredView = {
     id: raw.id,
     membrane: String(raw.membrane ?? ''),
     title: raw.title,
@@ -74,6 +90,7 @@ function reviveView(raw: any): ForgeView | undefined {
     filters: raw.filters && typeof raw.filters === 'object' ? raw.filters : {}
   }
   if (typeof raw.height === 'number' && Number.isFinite(raw.height)) view.height = raw.height
+  if (typeof raw.position === 'number' && Number.isFinite(raw.position)) view.position = raw.position
   return view
 }
 
@@ -83,9 +100,11 @@ function reviveEdge(raw: any): RelatedEdge | undefined {
     id: raw.id,
     from: raw.from,
     to: raw.to,
+    kind: EDGE_KINDS.includes(raw.kind) ? raw.kind : 'related',
     reason: String(raw.reason ?? ''),
     confidence: clampConfidence(Number(raw.confidence ?? 0)),
     source: EDGE_SOURCES.includes(raw.source) ? raw.source : 'rethink',
+    accepted: raw.accepted === true || raw.accepted === 'true',
     membrane: raw.membrane ?? null,
     createdAt: String(raw.createdAt ?? new Date(0).toISOString())
   }
@@ -130,6 +149,8 @@ export function metaOpMutations(op: ForgeMetaOp): { add: LinkTriple[]; removeMat
         ...[...new Set(v.repos)].map((r) => ({ source: v.id, predicate: P.repo, target: toLiteral(r) }))
       ]
       if (v.height !== undefined) add.push({ source: v.id, predicate: P.height, target: toLiteral(String(v.height)) })
+      if (v.position !== undefined)
+        add.push({ source: v.id, predicate: P.position, target: toLiteral(String(v.position)) })
       return { add, removeMatching: [{ source: v.id }] }
     }
     case 'edge.put': {
@@ -138,6 +159,8 @@ export function metaOpMutations(op: ForgeMetaOp): { add: LinkTriple[]; removeMat
         { source: e.id, predicate: RDF_TYPE, target: T.RelatedEdge },
         { source: e.id, predicate: P.from, target: toLiteral(e.from) },
         { source: e.id, predicate: P.to, target: toLiteral(e.to) },
+        { source: e.id, predicate: P.kind, target: toLiteral(e.kind) },
+        { source: e.id, predicate: P.accepted, target: toLiteral(String(e.accepted)) },
         { source: e.id, predicate: P.reason, target: toLiteral(e.reason) },
         { source: e.id, predicate: P.confidence, target: toLiteral(String(e.confidence)) },
         { source: e.id, predicate: P.source, target: toLiteral(e.source) },
@@ -169,6 +192,7 @@ export function forgeMetaFromLinks(links: LinkTriple[]): ForgeMeta {
       else if (l.predicate === P.title) v.title = value
       else if (l.predicate === P.repo) v.repos.push(value)
       else if (l.predicate === P.height) v.height = Number(value)
+      else if (l.predicate === P.position) v.position = Number(value)
       else if (l.predicate === P.filters) {
         try {
           v.filters = JSON.parse(value)
@@ -183,6 +207,8 @@ export function forgeMetaFromLinks(links: LinkTriple[]): ForgeMeta {
       const value = fromLiteral(l.target)
       if (l.predicate === P.from) e.from = value
       else if (l.predicate === P.to) e.to = value
+      else if (l.predicate === P.kind) e.kind = value
+      else if (l.predicate === P.accepted) e.accepted = value
       else if (l.predicate === P.reason) e.reason = value
       else if (l.predicate === P.confidence) e.confidence = Number(value)
       else if (l.predicate === P.source) e.source = value
@@ -219,11 +245,15 @@ export interface SaveViewInput {
   repos?: string[]
   filters?: ForgeFilters
   height?: number
+  /** Place in the membrane's list. */
+  position?: number
 }
 
 export interface AddEdgeInput {
   from: string
   to: string
+  /** Default 'related'. */
+  kind?: WorkEdgeKind
   reason: string
   confidence?: number
   source: RelatedEdgeSource
@@ -231,14 +261,17 @@ export interface AddEdgeInput {
 }
 
 export interface ForgeMetaStore {
-  listViews(membrane?: string): ForgeView[]
-  getView(id: string): ForgeView | null
+  /** Views by position, then in the order they were added. */
+  listViews(membrane?: string): StoredView[]
+  getView(id: string): StoredView | null
   /** Create (no id) or replace (existing id) a view. */
-  saveView(input: SaveViewInput): ForgeView
+  saveView(input: SaveViewInput): StoredView
   deleteView(id: string): boolean
   listEdges(filter?: { membrane?: string; node?: string; source?: RelatedEdgeSource }): RelatedEdge[]
-  /** Add an edge; an edge between the same two nodes (either direction) is updated instead. */
+  /** Add an edge; an edge of the same kind between the same two nodes (either direction) is updated instead. */
   addEdge(input: AddEdgeInput): RelatedEdge
+  /** Mark an edge accepted by the user; false when there is no such edge. */
+  acceptEdge(id: string): boolean
   deleteEdge(id: string): boolean
   status(): DurableStatus
   settled(): Promise<void>
@@ -298,7 +331,11 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
 
   return {
     listViews(membrane) {
-      return [...state().views.values()].filter((v) => membrane === undefined || v.membrane === membrane).map(cloneView)
+      const at = (v: StoredView) => v.position ?? Number.POSITIVE_INFINITY
+      return [...state().views.values()]
+        .filter((v) => membrane === undefined || v.membrane === membrane)
+        .sort((a, b) => (at(a) === at(b) ? 0 : at(a) - at(b)))
+        .map(cloneView)
     },
     getView(id) {
       const v = state().views.get(id)
@@ -307,7 +344,7 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
     saveView(input) {
       if (!input.title?.trim()) throw new Error('A view needs a title')
       if (!input.membrane?.trim()) throw new Error('A view needs a membrane')
-      const view: ForgeView = {
+      const view: StoredView = {
         id: input.id ?? `forge-view://${randomUUID()}`,
         membrane: input.membrane,
         title: input.title.trim(),
@@ -315,6 +352,7 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
         filters: input.filters ?? {}
       }
       if (input.height !== undefined) view.height = input.height
+      if (input.position !== undefined) view.position = input.position
       durable.write({ type: 'view.put', view })
       return cloneView(view)
     },
@@ -334,21 +372,33 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
       if (!input.from || !input.to) throw new Error('An edge needs from and to')
       if (input.from === input.to) throw new Error('An edge cannot join a node to itself')
       if (!EDGE_SOURCES.includes(input.source)) throw new Error(`Unknown edge source: ${input.source}`)
+      const kind = input.kind ?? 'related'
+      if (!EDGE_KINDS.includes(kind)) throw new Error(`Unknown edge kind: ${kind}`)
       const existing = [...state().edges.values()].find(
-        (e) => (e.from === input.from && e.to === input.to) || (e.from === input.to && e.to === input.from)
+        (e) =>
+          e.kind === kind &&
+          ((e.from === input.from && e.to === input.to) || (e.from === input.to && e.to === input.from))
       )
       const edge: RelatedEdge = {
         id: existing?.id ?? `forge-edge://${randomUUID()}`,
         from: existing?.from ?? input.from,
         to: existing?.to ?? input.to,
+        kind,
         reason: input.reason,
         confidence: clampConfidence(input.confidence ?? 0.5),
         source: input.source,
+        accepted: existing?.accepted ?? false,
         membrane: input.membrane ?? existing?.membrane ?? null,
         createdAt: existing?.createdAt ?? new Date().toISOString()
       }
       durable.write({ type: 'edge.put', edge })
       return { ...edge }
+    },
+    acceptEdge(id) {
+      const e = state().edges.get(id)
+      if (!e) return false
+      if (!e.accepted) durable.write({ type: 'edge.put', edge: { ...e, accepted: true } })
+      return true
     },
     deleteEdge(id) {
       if (!state().edges.has(id)) return false

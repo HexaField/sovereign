@@ -34,9 +34,11 @@ export interface OverlayResult {
   overlays: AgentOverlay[]
   /** Subagents no change matched (listed rather than guessed). */
   unmatched: Array<{ key: string; label: string; parentThreadId: string; cwd?: string; branch?: string }>
+  /** Changes an agent picked up that no thread owns yet: auto-link them to this thread. */
+  claims: Array<{ nodeId: string; threadId: string; by: 'subagent' | 'ci-watch' }>
 }
 
-/** What a node waits on: CI pending → ci; review requested with CI green → review; owner idle on a question → josh. */
+/** What a node waits on: CI pending → ci; review requested with CI green → review; owner idle on a question → user. */
 export function waitingOn(
   node: WorkNode,
   ov: Pick<AgentOverlay, 'thread' | 'ciWatch'>,
@@ -45,7 +47,7 @@ export function waitingOn(
   if (node.ci === 'pending' || ov.ciWatch?.state === 'waiting') return 'ci'
   const reviewWanted = node.reviewers.some((r) => r.state === 'requested')
   if (reviewWanted && (node.ci === 'passing' || node.ci === 'none' || node.ci === undefined)) return 'review'
-  if (ov.thread?.status === 'idle' && openQuestion) return 'josh'
+  if (ov.thread?.status === 'idle' && openQuestion) return 'user'
   return null
 }
 
@@ -82,6 +84,11 @@ export function buildOverlay(input: OverlayInput): OverlayResult {
       changeByBranch.set(k, n)
   }
 
+  const owned = new Set(input.tasks.filter((t) => t.threadId && t.key).map((t) => t.key!))
+  const claims: OverlayResult['claims'] = []
+  const claim = (nodeId: string, threadId: string, by: 'subagent' | 'ci-watch') => {
+    if (!owned.has(nodeId) && !claims.some((c) => c.nodeId === nodeId)) claims.push({ nodeId, threadId, by })
+  }
   const unmatched: OverlayResult['unmatched'] = []
   for (const s of input.subagents) {
     const co = s.cwd ? input.checkouts.get(s.cwd) : undefined
@@ -97,6 +104,7 @@ export function buildOverlay(input: OverlayInput): OverlayResult {
       continue
     }
     slot(node.id).subagents.push({ key: s.key, label: s.label, startedAt: s.startedAt })
+    claim(node.id, s.parentThreadId, 'subagent')
   }
 
   for (const w of input.ciWatches) {
@@ -110,6 +118,7 @@ export function buildOverlay(input: OverlayInput): OverlayResult {
       node = changeByBranch.get(`${w.repo.toLowerCase()}\u0000${target.name}`)
     }
     if (!node) continue
+    claim(node.id, w.threadKey, 'ci-watch')
     const o = slot(node.id)
     if (!o.ciWatch || w.createdAt < o.ciWatch.since) o.ciWatch = { state: 'waiting', since: w.createdAt }
   }
@@ -121,7 +130,7 @@ export function buildOverlay(input: OverlayInput): OverlayResult {
     overlays.push({ ...ov, waitingOn: waitingOn(node, ov, Boolean(_q)) })
   }
   overlays.sort((a, b) => a.nodeId.localeCompare(b.nodeId))
-  return { overlays, unmatched }
+  return { overlays, unmatched, claims }
 }
 
 /** Resolve each subagent cwd to its repo and branch. */

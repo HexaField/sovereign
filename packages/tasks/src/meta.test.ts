@@ -67,17 +67,27 @@ describe('forge meta store', () => {
       source: 'rethink',
       membrane: 'coasys'
     })
-    const e2 = meta.addEdge({ from: b, to: a, reason: 'Paired by hand', confidence: 2, source: 'josh' })
+    const e2 = meta.addEdge({ from: b, to: a, reason: 'Paired by hand', confidence: 2, source: 'user' })
     expect(e2.id).toBe(e1.id)
     expect(e2).toMatchObject({
       from: a,
       to: b,
       reason: 'Paired by hand',
       confidence: 1,
-      source: 'josh',
+      source: 'user',
       membrane: 'coasys'
     })
     expect(meta.listEdges({ node: b })).toHaveLength(1)
+    // Another kind between the same pair is another edge.
+    const ref = meta.addEdge({ from: a, to: b, kind: 'references', reason: 'cites it', source: 'rethink' })
+    expect(ref.id).not.toBe(e1.id)
+    expect(() => meta.addEdge({ from: a, to: b, kind: 'nope' as never, reason: '', source: 'sync' })).toThrow(/kind/)
+    expect(e1).toMatchObject({ kind: 'related', accepted: false })
+    expect(meta.acceptEdge(e1.id)).toBe(true)
+    expect(meta.acceptEdge('forge-edge://none')).toBe(false)
+    // Re-adding keeps the acceptance.
+    expect(meta.addEdge({ from: a, to: b, reason: 'again', source: 'rethink' })).toMatchObject({ accepted: true })
+    expect(meta.deleteEdge(ref.id)).toBe(true)
     expect(meta.listEdges({ membrane: 'home' })).toHaveLength(0)
     expect(() => meta.addEdge({ from: a, to: a, reason: '', source: 'sync' })).toThrow(/itself/)
     expect(meta.deleteEdge(e1.id)).toBe(true)
@@ -97,13 +107,22 @@ describe('forge meta store', () => {
       repos: ['coasys/ad4m'],
       filters: { states: ['open'] }
     })
-    const edge = first.addEdge({ from: 'task:1', to: 'plan:we/plans/x.md', reason: 'plan names it', source: 'rethink' })
+    const later = first.saveView({ membrane: 'coasys', title: 'Later', position: 2 })
+    const sooner = first.saveView({ membrane: 'coasys', title: 'Sooner', position: 1 })
+    const added = first.addEdge({
+      from: 'task:1',
+      to: 'plan:we/plans/x.md',
+      reason: 'plan names it',
+      source: 'rethink'
+    })
+    first.acceptEdge(added.id)
+    const edge = { ...added, accepted: true }
     first.dispose()
 
     const second = open(dir, ad4m)
     expect(second.getView(view.id)).toEqual(view)
     expect(second.listEdges()).toEqual([edge])
-    expect(second.status().pending).toBe(2)
+    expect(second.status().pending).toBe(5)
 
     ad4m.up()
     await until(() => second.status().pending === 0 && second.status().loadedFromBackend)
@@ -111,6 +130,7 @@ describe('forge meta store', () => {
     await fresh.settled()
     expect(fresh.getView(view.id)).toEqual(view)
     expect(fresh.listEdges()).toEqual([edge])
+    expect(fresh.listViews('coasys').map((v) => v.id)).toEqual([sooner.id, later.id, view.id])
 
     // Delete replays too, and leaves nothing of the view in AD4M.
     fresh.deleteView(view.id)

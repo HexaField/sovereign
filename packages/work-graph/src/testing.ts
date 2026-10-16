@@ -144,6 +144,21 @@ export function createFakeForge(opts: { paging?: boolean; me?: string } = {}): F
       f.calls.push({ op: 'listIssues', repo, opts: o })
       return structuredClone(listed(f.issues.get(repo) ?? [], o))
     },
+    async getChange(r) {
+      f.calls.push({ op: 'getChange', repo: r.repo, opts: r.id })
+      if (f.failNext) {
+        const e = f.failNext
+        f.failNext = undefined
+        throw e
+      }
+      const c = (f.changes.get(r.repo) ?? []).find((x) => x.ref.id === r.id)
+      return c && structuredClone(c)
+    },
+    async getIssue(r) {
+      f.calls.push({ op: 'getIssue', repo: r.repo, opts: r.id })
+      const i = (f.issues.get(r.repo) ?? []).find((x) => x.ref.id === r.id)
+      return i && structuredClone(i)
+    },
     async listBranches(repo) {
       f.calls.push({ op: 'listBranches', repo })
       return structuredClone(f.branches.get(repo) ?? [])

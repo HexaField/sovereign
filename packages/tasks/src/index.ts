@@ -62,6 +62,7 @@ export type {
   ForgeMetaStoreOptions,
   RelatedEdge,
   RelatedEdgeSource,
+  StoredView,
   SaveViewInput,
   AddEdgeInput
 } from './meta.js'
@@ -73,8 +74,8 @@ export { createForgePersistence } from './bootstrap.js'
 export type { TaskDigest, TaskDigestEntry } from './task-digest.js'
 export { createTaskDigest } from './task-digest.js'
 
-export type { PrPollService, PrPollServiceDeps, ImportPrOpts } from './pr-poll.js'
-export { createPrPollService } from './pr-poll.js'
+export type { ForgeTaskPortDeps } from './forge-port.js'
+export { createForgeTaskPort, statusOf, withStatus, toPortTask } from './forge-port.js'
 
 export type { ImportTarget, ImportInput, ImportOpts, ImportResult, TaskImporter, TaskImporterDeps } from './import.js'
 export { parseImportTarget, parseForgeUrl, createTaskImporter } from './import.js'

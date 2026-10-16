@@ -260,7 +260,7 @@ describe('buildGraph', () => {
       reason: 'same bug',
       confidence: 0.8
     })
-    expect(r.find((e) => e.to === 'task:parent')?.source).toBe('josh')
+    expect(r.find((e) => e.to === 'task:parent')?.source).toBe('user')
   })
 
   it('marks a base branch the last branch list lacks as gone (past)', () => {

@@ -8,12 +8,13 @@
 //
 // A refKey does not say whether #123 is a PR or an issue; the importer asks
 // GitHub (`gh api repos/<repo>/issues/<n>` has `pull_request` for PRs).
+// After the import the work graph polls the item (CI, reviews, merge) and
+// notifies the owner thread; the importer reads only what names the task.
 
 import type { ForgeRef } from '@sovereign/core'
 import { parseRefKey, refKey } from '@sovereign/core'
-import type { PrPollService } from './pr-poll.js'
 import type { TaskService } from './service.js'
-import type { IssueProvider, Task } from './types.js'
+import type { ChangeProvider, IssueProvider, Task } from './types.js'
 import { planKey } from './types.js'
 
 export type ImportTarget =
@@ -82,7 +83,6 @@ type Exec = (cmd: string, args: string[]) => Promise<{ stdout: string }>
 
 export interface TaskImporterDeps {
   taskService: TaskService
-  prPoll: PrPollService
   sendToThread: (threadId: string, text: string) => Promise<void>
   exec: Exec
 }
@@ -106,7 +106,7 @@ export interface TaskImporter {
 }
 
 export function createTaskImporter(deps: TaskImporterDeps): TaskImporter {
-  const { taskService, prPoll, sendToThread, exec } = deps
+  const { taskService, sendToThread, exec } = deps
 
   /** PR or issue? Asks GitHub. */
   async function resolveKind(ref: ForgeRef): Promise<'change' | 'issue'> {
@@ -116,6 +116,10 @@ export function createTaskImporter(deps: TaskImporterDeps): TaskImporter {
 
   async function assignAndPrompt(task: Task, opts: ImportOpts, defaultPrompt: string): Promise<Task> {
     let current = task
+    // Re-importing from a membrane gives a task that had none its membrane.
+    if (!current.membrane && opts.membrane) {
+      current = await taskService.update(current.id, { membrane: opts.membrane, sourceThreadId: opts.sourceThreadId })
+    }
     if (opts.threadId && current.threadId !== opts.threadId) {
       current = await taskService.update(current.id, {
         threadId: opts.threadId,
@@ -167,6 +171,59 @@ export function createTaskImporter(deps: TaskImporterDeps): TaskImporter {
     return { task: await assignAndPrompt(task, opts, prompt), created }
   }
 
+  async function importChange(ref: ForgeRef, opts: ImportOpts): Promise<ImportResult> {
+    const changeRef: ForgeRef = { ...ref, kind: 'change' }
+    const key = refKey(changeRef)
+    const known = await taskService.findByProviderKey(key)
+    let title = known?.name ?? ''
+    let branch = ''
+    let provider: ChangeProvider | undefined
+    const url = `https://github.com/${ref.repo}/pull/${ref.id}`
+    if (!known) {
+      const { stdout } = await exec('gh', [
+        'pr',
+        'view',
+        ref.id,
+        '-R',
+        ref.repo,
+        '--json',
+        'title,state,isDraft,url,headRefName'
+      ])
+      const data = JSON.parse(stdout) as {
+        title?: string
+        state?: string
+        isDraft?: boolean
+        url?: string
+        headRefName?: string
+      }
+      title = data.title ?? ''
+      branch = data.headRefName ?? ''
+      provider = {
+        kind: 'change',
+        refs: [changeRef],
+        url: data.url ?? url,
+        status:
+          data.state === 'MERGED' ? 'merged' : data.state === 'CLOSED' ? 'closed' : data.isDraft ? 'draft' : 'open',
+        checksStatus: 'unknown',
+        reviewDecision: 'unknown',
+        unresolvedComments: 0,
+        lastPolledAt: new Date().toISOString()
+      }
+    }
+    const { task, created } = await taskService.ensureTask(key, {
+      name: `PR #${ref.id}: ${title || ref.repo}`,
+      description: `GitHub PR: ${url}${branch ? `\nBranch: ${branch}` : ''}`,
+      parentTaskIds: opts.parentTaskIds,
+      tags: [...(opts.tags ?? []), 'github-pr'],
+      autoAssign: false,
+      membrane: opts.membrane ?? null,
+      sourceThreadId: opts.sourceThreadId,
+      provider
+    })
+    const prompt = `[PR #${ref.id}] ${title}\n${url}\n\nFetch the PR, its comments and CI (\`gh pr view ${ref.id} -R ${ref.repo} --comments\`, \`gh pr checks ${ref.id} -R ${ref.repo}\`), then address what it needs.`
+    return { task: await assignAndPrompt(task, opts, prompt), created }
+  }
+
   async function importPlan(project: string, planPath: string, opts: ImportOpts): Promise<ImportResult> {
     const key = planKey(project, planPath)
     const base = planPath.split('/').pop()!.replace(/\.md$/i, '')
@@ -199,19 +256,7 @@ export function createTaskImporter(deps: TaskImporterDeps): TaskImporter {
         else kind = await resolveKind(target.ref)
       }
 
-      if (kind === 'issue') return importIssue(target.ref, opts)
-      const before = await taskService.findByProviderKey(asChange)
-      const task = await prPoll.importPr({
-        repo: target.ref.repo,
-        pr: Number(target.ref.id),
-        threadId: opts.threadId,
-        parentTaskIds: opts.parentTaskIds,
-        tags: opts.tags,
-        prompt: opts.prompt,
-        membrane: opts.membrane,
-        sourceThreadId: opts.sourceThreadId
-      })
-      return { task, created: !before }
+      return kind === 'issue' ? importIssue(target.ref, opts) : importChange(target.ref, opts)
     }
   }
 }

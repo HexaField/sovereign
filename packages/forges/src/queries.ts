@@ -16,14 +16,8 @@ const CROSS_REFS = `timelineItems(first: 20, itemTypes: [CROSS_REFERENCED_EVENT]
         }
       }`
 
-/** One page of pull requests, most recently updated first. */
-export const CHANGES_QUERY = `query ForgeChanges($owner: String!, $name: String!, $first: Int!, $after: String, $states: [PullRequestState!]) {
-  rateLimit { cost remaining resetAt }
-  repository(owner: $owner, name: $name) {
-    pullRequests(first: $first, after: $after, states: $states, orderBy: { field: UPDATED_AT, direction: DESC }) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        number title body url state isDraft merged
+/** Every field a pull request maps from (mapChange). */
+const CHANGE_FIELDS = `number title body url state isDraft merged
         createdAt updatedAt closedAt mergedAt
         author { ${ACTOR} }
         assignees(first: 20) { nodes { login } }
@@ -45,8 +39,35 @@ export const CHANGES_QUERY = `query ForgeChanges($owner: String!, $name: String!
         mergeable
         closingIssuesReferences(first: 20) { nodes { number repository { nameWithOwner } } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-        ${CROSS_REFS}
+        ${CROSS_REFS}`
+
+/** Every field an issue maps from (mapIssue). */
+const ISSUE_FIELDS = `number title body url state stateReason
+        createdAt updatedAt closedAt
+        author { ${ACTOR} }
+        assignees(first: 20) { nodes { login } }
+        labels(first: 20) { nodes { name } }
+        ${CROSS_REFS}`
+
+/** One page of pull requests, most recently updated first. */
+export const CHANGES_QUERY = `query ForgeChanges($owner: String!, $name: String!, $first: Int!, $after: String, $states: [PullRequestState!]) {
+  rateLimit { cost remaining resetAt }
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: $first, after: $after, states: $states, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        ${CHANGE_FIELDS}
       }
+    }
+  }
+}`
+
+/** One pull request by number. */
+export const CHANGE_QUERY = `query ForgeChange($owner: String!, $name: String!, $number: Int!) {
+  rateLimit { cost remaining resetAt }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      ${CHANGE_FIELDS}
     }
   }
 }`
@@ -58,13 +79,18 @@ export const ISSUES_QUERY = `query ForgeIssues($owner: String!, $name: String!, 
     issues(first: $first, after: $after, states: $states, filterBy: { since: $since }, orderBy: { field: UPDATED_AT, direction: DESC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title body url state stateReason
-        createdAt updatedAt closedAt
-        author { ${ACTOR} }
-        assignees(first: 20) { nodes { login } }
-        labels(first: 20) { nodes { name } }
-        ${CROSS_REFS}
+        ${ISSUE_FIELDS}
       }
+    }
+  }
+}`
+
+/** One issue by number. */
+export const ISSUE_QUERY = `query ForgeIssue($owner: String!, $name: String!, $number: Int!) {
+  rateLimit { cost remaining resetAt }
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      ${ISSUE_FIELDS}
     }
   }
 }`

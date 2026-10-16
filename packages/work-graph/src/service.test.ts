@@ -302,8 +302,104 @@ describe('forge service', () => {
     const idle = make()
     idle.start()
     await new Promise((r) => setTimeout(r, 50))
-    expect(forge.calls.length).toBe(calls)
+    // No membrane sync; only tracked items (the plan's tasks) are read, one by one.
+    expect(forge.calls.slice(calls).every((c) => c.op === 'getChange' || c.op === 'getIssue')).toBe(true)
     idle.stop()
+  })
+
+  it('serves the membrane identity with the graph', async () => {
+    await service.sync('acme')
+    expect((await service.graph('acme')).identity).toBe('hex-agent')
+    config = { ...config, identities: {} }
+    expect((await make().graph('acme')).identity).toBe('hex-agent')
+  })
+
+  it('makes each plan a work stream of the items it names; links follow the plan, members added by hand stay', async () => {
+    const planFile = path.join(tmp, 'acme', 'widget', 'plans', 'sprockets.md')
+    const planId = 'plan:acme-org/widget/sprockets.md'
+    await service.sync('acme')
+    const stream = (await port.findByKey(planId))!
+    expect(stream).toMatchObject({ isStream: true, name: 'Sprocket rework', state: 'in_progress', membrane: 'acme' })
+    const members = async () =>
+      (await Promise.all((await port.get(stream.id))!.childIds.map((id) => port.get(id)))).map((t) => t!.key).sort()
+    expect(await members()).toEqual([nid(GADGET, 9), nid(WIDGET, 50)].sort())
+    const g = await service.graph('acme')
+    expect(g.nodes.find((n) => n.id === planId)).toMatchObject({ kind: 'plan', taskId: stream.id })
+    expect(g.nodes.find((n) => n.id === nid(WIDGET, 50))!.workstreams).toEqual([stream.id])
+
+    // By hand: #51 added, gadget#9 taken out. A rescan keeps both choices.
+    await service.addMember(stream.id, nid(WIDGET, 51))
+    await service.removeMember(stream.id, nid(GADGET, 9))
+    await service.sync('acme')
+    expect(await members()).toEqual([nid(WIDGET, 50), nid(WIDGET, 51)].sort())
+
+    // The plan drops #50 and names issue #7: #50 leaves, #7 joins, #51 (by hand) stays.
+    fs.writeFileSync(planFile, '# Sprocket rework\n\nStatus: done\n\nNow only #7 in acme-labs/widget.\n')
+    await service.sync('acme')
+    expect(await members()).toEqual([nid(WIDGET, 51), nid(WIDGET, 7)].sort())
+    expect((await port.get(stream.id))!.state).toBe('completed')
+
+    // The plan file goes: its links go, the stream stays.
+    fs.rmSync(planFile)
+    await service.sync('acme')
+    expect(await members()).toEqual([nid(WIDGET, 51)])
+  })
+
+  it('follows a reassignment made outside Forge with the forge assignee', async () => {
+    service.start()
+    await service.sync('acme')
+    const t = await port.ensureTask(nid(WIDGET, 7), { name: 'Issue 7', membrane: 'acme', kind: 'issue' })
+    const reassigned = (newThreadId: string | null) =>
+      bus.emit({
+        type: 'task.reassigned',
+        timestamp: new Date().toISOString(),
+        source: 'tasks',
+        payload: { taskId: t.id, taskName: t.name, threadId: newThreadId, sourceThreadId: 'th-mcp', newThreadId }
+      })
+    reassigned('th-mcp')
+    const writes = () => forge.calls.filter((c) => c.op === 'setAssignees').map((c) => c.opts)
+    expect(await until(() => writes().length === 1)).toBe(true)
+    expect(writes()).toEqual([{ id: '7', add: ['hex-agent'], remove: [] }])
+    expect((await port.get(t.id))!.state).toBe('in_progress')
+    reassigned(null)
+    expect(await until(() => writes().length === 2)).toBe(true)
+    expect(writes()[1]).toEqual({ id: '7', add: [], remove: ['hex-agent'] })
+    // Forge's own writes (source 'forge') are not echoed.
+    await port.setThread(t.id, 'th-x')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(writes()).toHaveLength(2)
+  })
+
+  it('auto-links a change a subagent or a CI watch works on to that thread when nobody owns it', async () => {
+    const widgetDir = path.join(tmp, 'acme', 'widget')
+    service = make({
+      overlayPollMs: 20,
+      subagents: {
+        list: async () => [{ key: 'sub-1', label: 'fix', parentThreadId: 'parent-1', cwd: widgetDir, startedAt: 1 }]
+      },
+      branchOf: async () => 'feat/50',
+      ciWatch: {
+        list: () => [{ threadKey: 'th-ci', repo: WIDGET, target: { kind: 'pr', number: 51 }, createdAt: 1 }]
+      }
+    })
+    await service.sync('acme')
+    const owned = await port.ensureTask(nid(GADGET, 9), { name: 'G9', membrane: 'acme', kind: 'change' })
+    await port.setThread(owned.id, 'someone')
+    service.start()
+    const ownerOf = async (id: string) => (await port.findByKey(id))?.threadId
+    const done = async () =>
+      (await ownerOf(nid(WIDGET, 50))) === 'parent-1' && (await ownerOf(nid(WIDGET, 51))) === 'th-ci'
+    const end = Date.now() + 3000
+    while (!(await done()) && Date.now() < end) await new Promise((r) => setTimeout(r, 20))
+    expect(await done()).toBe(true)
+    expect(await ownerOf(nid(GADGET, 9))).toBe('someone')
+    expect((await port.findByKey(nid(WIDGET, 50)))!.state).toBe('in_progress')
+    expect(
+      forge.calls
+        .filter((c) => c.op === 'setAssignees')
+        .map((c) => (c.opts as { id: string }).id)
+        .sort()
+    ).toEqual(['50', '51'])
   })
 
   describe('routes', () => {
@@ -329,7 +425,7 @@ describe('forge service', () => {
       ).toEqual([nid(WIDGET, 50)])
       expect((await request(a).get('/api/forge/search?membrane=acme')).status).toBe(400)
       const ov = await request(a).get('/api/forge/overlay?membrane=acme')
-      expect(ov.body).toEqual({ overlays: [], unmatched: [] })
+      expect(ov.body).toEqual({ overlays: [], unmatched: [], claims: [] })
       const st = await request(a).get('/api/forge/status?membrane=acme')
       expect(st.body).toMatchObject({ membrane: 'acme', identity: 'hex-agent', plans: 1 })
       expect(st.body.repos.map((r: { repo: string }) => r.repo)).toEqual([WIDGET, GADGET])
@@ -388,23 +484,30 @@ describe('forge service', () => {
       expect(st.status).toBe(201)
       expect(st.body).toMatchObject({ name: 'Plan 20', membrane: 'acme', memberCount: 0 })
       const add = await request(a)
-        .post(`/api/forge/streams/${st.body.id}/members`)
+        .post(`/api/forge/streams/${encodeURIComponent(st.body.id)}/members`)
         .send({ nodeId: nid(WIDGET, 50) })
       expect(add.status).toBe(200)
       const g = await request(a).get('/api/forge?membrane=acme')
-      expect(g.body.workstreams).toEqual([expect.objectContaining({ id: st.body.id, memberCount: 1 })])
-      expect(g.body.nodes.find((n: { id: string }) => n.id === nid(WIDGET, 50)).workstreams).toEqual([st.body.id])
+      // Beside the plan's own stream (the fixture plan names #50 and gadget#9).
+      expect(g.body.workstreams).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: st.body.id, memberCount: 1 }),
+          expect.objectContaining({ name: 'Sprocket rework', memberCount: 2 })
+        ])
+      )
+      expect(g.body.nodes.find((n: { id: string }) => n.id === nid(WIDGET, 50)).workstreams).toHaveLength(2)
+      expect(g.body.nodes.find((n: { id: string }) => n.id === nid(WIDGET, 50)).workstreams).toContain(st.body.id)
       expect(
         (
           await request(a)
-            .delete(`/api/forge/streams/${st.body.id}/members`)
+            .delete(`/api/forge/streams/${encodeURIComponent(st.body.id)}/members`)
             .send({ nodeId: nid(WIDGET, 50) })
         ).status
       ).toBe(200)
       expect(
         (
           await request(a)
-            .delete(`/api/forge/streams/${st.body.id}/members`)
+            .delete(`/api/forge/streams/${encodeURIComponent(st.body.id)}/members`)
             .send({ nodeId: nid(WIDGET, 50) })
         ).status
       ).toBe(404)
@@ -431,7 +534,7 @@ describe('forge service', () => {
       expect(accept.status).toBe(200)
       const after = await request(a).get('/api/forge?membrane=acme')
       expect(after.body.edges.find((e: { kind: string }) => e.kind === 'related')).toMatchObject({
-        source: 'josh',
+        source: 'user',
         reason: 'same sprocket'
       })
       expect(

@@ -1,5 +1,10 @@
-// Forge service — one per server. Per membrane: scope, sync loops, plans,
-// graph, event log + triage, task sync + notifier, assignee sync, overlay.
+// Forge service — one per server. Per membrane: scope, sync loops, plans
+// (each a work stream), graph, event log + triage, task sync + notifier,
+// assignee sync, overlay + auto-link. Across membranes: tracked items — PR
+// and issue tasks whose repo their membrane does not sync (or that have no
+// membrane) are read one by one, so their owner threads still hear about CI,
+// reviews and merges. That poll runs with `forge.enabled` off too: it is
+// what replaced pr-poll.
 
 import path from 'node:path'
 import {
@@ -15,14 +20,14 @@ import {
 } from '@sovereign/core'
 import { repoKey, type ForgeRegistry, type ForgeRepo } from '@sovereign/forges'
 import type { HostForges } from '@sovereign/orgs'
-import { applyView, buildGraph, searchGraph, windowGraph, type BuiltGraph } from './build.js'
+import { applyView, buildGraph, planRefKey, searchGraph, windowGraph, type BuiltGraph } from './build.js'
 import { createRepoCacheStore, readJson, writeJsonAtomic } from './cache.js'
 import { buildDigest, createEventLog, safeSegment, triage, type EventLog } from './events.js'
 import { buildOverlay, currentBranch, resolveCheckouts, type OverlayResult } from './overlay.js'
 import { isPlanPath, scanPlans, type Plan } from './plans.js'
 import { resolveScope, type MembraneScope, type ScopeSource } from './scope.js'
 import { createRepoSync, type RepoSync } from './sync.js'
-import { syncTasks } from './task-sync.js'
+import { syncTasks, TERMINAL } from './task-sync.js'
 import {
   DEFAULT_FORGE_CONFIG,
   type ActiveCiWatch,
@@ -40,6 +45,9 @@ import {
   type ThreadPresence,
   type TriagedEvent
 } from './types.js'
+
+/** sourceThreadId of the task writes the work graph makes (the TaskPort's); its own events are not reacted to. */
+export const FORGE_SOURCE = 'forge'
 
 export class ForgeError extends Error {
   readonly status: number
@@ -127,6 +135,10 @@ export interface ForgeService {
   digest(membrane: string, since?: string): Promise<ForgeDigest>
   events(membrane: string, opts?: { since?: string }): TriagedEvent[]
   assign(input: AssignInput): Promise<{ taskId: string; threadId: string | null; forgeError?: string }>
+  /** Re-read a task's forge item now: its membrane's sync when that covers it, else the item alone. */
+  pollTask(taskId: string): Promise<void>
+  /** Read every tracked item (PR/issue tasks no membrane sync covers) now. */
+  pollTracked(): Promise<{ items: number; events: number }>
   getViews(membrane: string): Promise<ForgeView[]>
   putViews(membrane: string, views: ForgeView[]): Promise<ForgeView[]>
   createStream(membrane: string, name: string, parentId?: string): Promise<WorkStream>
@@ -155,6 +167,11 @@ interface MembraneFile {
   rethinkCursor?: string
   /** nodeId → the login Forge added as assignee (only those may be removed). */
   assignedByForge: Record<string, string>
+  /**
+   * Plan id → the node ids the plan named at the last scan, and those whose
+   * stream membership the plan itself added (only those follow the plan).
+   */
+  planLinks?: Record<string, { named: string[]; linked: string[] }>
 }
 
 export function resolveConfig(c: Partial<ForgeConfig> | undefined): ForgeConfig {
@@ -188,6 +205,11 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
   const log = deps.log ?? ((m: string) => console.log(`[forge] ${m}`))
   const store = createRepoCacheStore(deps.dataDir)
   const syncs = new Map<string, RepoSync>()
+  // Tracked items keep their own caches: a membrane that syncs the same repo
+  // must still see every change as an event of its own.
+  const trackedStore = createRepoCacheStore(deps.dataDir, 'tracked')
+  const trackedSyncs = new Map<string, RepoSync>()
+  let lastTrackedAt = 0
   const states = new Map<string, MembraneState>()
   const identities = new Map<string, Promise<string | undefined>>()
   const timers: Array<ReturnType<typeof setInterval>> = []
@@ -248,6 +270,56 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     return s
   }
 
+  function trackedSyncOf(r: Pick<ForgeRef, 'forge' | 'host' | 'repo'>): RepoSync | undefined {
+    const k = repoKey(r)
+    let s = trackedSyncs.get(k)
+    if (s) return s
+    const forge = forgeOf(r)
+    if (!forge) return undefined
+    s = createRepoSync(
+      { forge: r.forge, host: r.host, repo: r.repo },
+      { forge, store: trackedStore, windowDays: cfg().windowDays, watched: () => watchedIds, now, log }
+    )
+    trackedSyncs.set(k, s)
+    return s
+  }
+
+  const sameRepo = (a: Pick<ForgeRef, 'forge' | 'host' | 'repo'>, b: Pick<ForgeRef, 'forge' | 'host' | 'repo'>) =>
+    a.forge === b.forge && a.host === b.host && a.repo.toLowerCase() === b.repo.toLowerCase()
+
+  /** The forge ref of a PR or issue task. */
+  function refOfTask(t: PortTask): ForgeRef | undefined {
+    if (!t.key || (t.kind !== 'change' && t.kind !== 'issue')) return undefined
+    return parseRefKey(t.key, t.kind)
+  }
+
+  /** A task whose item its membrane's own sync reads (forge on, membrane synced, repo in scope). */
+  function coveredBySync(t: PortTask, ref: ForgeRef, synced: Set<string>): boolean {
+    if (!t.membrane || !synced.has(t.membrane)) return false
+    return (state(t.membrane).scope ?? scopeOf(t.membrane)).repos.some((r) => sameRepo(r, ref))
+  }
+
+  /** Tracked items of a membrane's tasks, as caches holding just those items. */
+  function trackedCaches(scope: MembraneScope, tasks: PortTask[]): RepoCache[] {
+    const byRepo = new Map<string, RepoCache>()
+    for (const t of tasks) {
+      const ref = refOfTask(t)
+      if (!ref || scope.repos.some((r) => sameRepo(r, ref))) continue
+      const c = trackedSyncs.get(repoKey(ref))?.cache()
+      const item = c && (ref.kind === 'change' ? c.changes[ref.id] : c.issues[ref.id])
+      if (!c || !item) continue
+      const k = repoKey(ref)
+      let out = byRepo.get(k)
+      if (!out) {
+        out = { ...c, changes: {}, issues: {} }
+        byRepo.set(k, out)
+      }
+      if (ref.kind === 'change') out.changes[ref.id] = item as CachedChange
+      else out.issues[ref.id] = item as CachedIssue
+    }
+    return [...byRepo.values()]
+  }
+
   function caches(scope: MembraneScope) {
     return scope.repos.map((r) => syncOf(r)?.cache()).filter((c): c is NonNullable<typeof c> => Boolean(c))
   }
@@ -259,7 +331,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const ref = parseRefKey(nodeId, 'change')
     if (!ref) return undefined
     const r = scope.repos.find((x) => x.forge === ref.forge && x.host === ref.host && x.repo === ref.repo)
-    const sync = r && syncOf(r)
+    const sync = r ? syncOf(r) : trackedSyncs.get(repoKey(ref))
     if (!sync) return undefined
     const c = sync.cache()
     const change = c.changes[ref.id]
@@ -292,7 +364,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const s = state(membrane)
     if (!s.plansScanned) rescanPlans(membrane, scope)
     const [tasks, related] = await Promise.all([deps.tasks.listByMembrane(membrane), deps.tasks.listRelated(membrane)])
-    return { graph: buildGraph({ repos: caches(scope), plans: s.plans, tasks, related }), tasks }
+    const repos = [...caches(scope), ...trackedCaches(scope, tasks)]
+    return { graph: buildGraph({ repos, plans: s.plans, tasks, related }), tasks }
   }
 
   /** Rescan plans; plan_changed events for files whose text changed (after the first scan). */
@@ -320,9 +393,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
 
   async function refreshWatched() {
     const ids = new Set<string>()
-    for (const m of membranes()) {
-      for (const t of await deps.tasks.listByMembrane(m)) if (t.key && t.threadId) ids.add(t.key)
-    }
+    for (const t of await deps.tasks.listForgeItems()) if (t.key && t.threadId) ids.add(t.key)
     watchedIds = ids
   }
 
@@ -414,7 +485,12 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       events.push(...planEvents)
       changed ||= planEvents.length > 0
 
-      const { graph, tasks } = await full(membrane, scope)
+      let { graph, tasks } = await full(membrane, scope)
+      // Plans first: a plan's stream and the tasks it adds get their state in this same sync.
+      if (await syncPlanStreams(membrane, graph)) {
+        changed = true
+        ;({ graph, tasks } = await full(membrane, scope))
+      }
       const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
 
       // Forge-added assignees removed on the forge: forget the marker.
@@ -440,13 +516,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         item: (id) => itemOf(scope, id)?.item,
         now: iso()
       })
-      for (const n of ts.notifications) {
-        try {
-          await (deps.threads.notify ?? deps.threads.sendToThread)(n.threadId, n.text)
-        } catch (err) {
-          log(`notify ${n.threadId}: ${(err as Error).message}`)
-        }
-      }
+      await notifyAll(ts.notifications)
       s.lastSyncAt = iso()
       s.lastError = s.repoErrors.size ? [...s.repoErrors].map(([r, m]) => `${r}: ${m}`).join('; ') : undefined
       if (mode === 'all') s.lastAllAt = now()
@@ -457,6 +527,164 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     } finally {
       s.syncing = false
     }
+  }
+
+  async function notifyAll(list: Array<{ threadId: string; text: string }>) {
+    for (const n of list) {
+      try {
+        await (deps.threads.notify ?? deps.threads.sendToThread)(n.threadId, n.text)
+      } catch (err) {
+        log(`notify ${n.threadId}: ${(err as Error).message}`)
+      }
+    }
+  }
+
+  /**
+   * Read tracked items: PR and issue tasks whose membrane's sync does not
+   * read them (forge off, a repo outside the membrane, no membrane). Open
+   * tasks only, as pr-poll did; `only` reads one task whatever its state.
+   */
+  let trackedChain: Promise<unknown> = Promise.resolve()
+  function pollTracked(only?: string): Promise<{ items: number; events: number }> {
+    const run = trackedChain.then(
+      () => pollTrackedOnce(only),
+      () => pollTrackedOnce(only)
+    )
+    trackedChain = run.catch(() => undefined)
+    return run
+  }
+
+  async function pollTrackedOnce(only?: string): Promise<{ items: number; events: number }> {
+    lastTrackedAt = now()
+    await refreshWatched().catch(() => undefined)
+    const synced = new Set(cfg().enabled ? membranes() : [])
+    const groups = new Map<string, { ref: ForgeRef; refs: ForgeRef[]; tasks: PortTask[] }>()
+    for (const t of await deps.tasks.listForgeItems()) {
+      const ref = refOfTask(t)
+      if (!ref || (only ? t.id !== only : TERMINAL.includes(t.state))) continue
+      if (!only && coveredBySync(t, ref, synced)) continue
+      const k = repoKey(ref)
+      const g = groups.get(k) ?? { ref, refs: [], tasks: [] }
+      g.refs.push(ref)
+      g.tasks.push(t)
+      groups.set(k, g)
+    }
+    let items = 0
+    let eventCount = 0
+    for (const g of groups.values()) {
+      const rs = trackedSyncOf(g.ref)
+      if (!rs) {
+        log(`tracked ${g.ref.repo}: no adapter for ${g.ref.forge}:${g.ref.host}`)
+        continue
+      }
+      const res = await rs.refreshItems(g.refs)
+      items += g.refs.length
+      eventCount += res.events.length
+      const graph = buildGraph({ repos: [rs.cache()], plans: [], tasks: g.tasks, related: [] })
+      const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
+      const c = rs.cache()
+      const ts = await syncTasks(deps.tasks, {
+        tasks: g.tasks,
+        nodes,
+        edges: graph.edges,
+        events: res.events,
+        item: (id) => {
+          const ref = parseRefKey(id, 'change')
+          return ref ? (c.changes[ref.id] ?? c.issues[ref.id]) : undefined
+        },
+        now: iso()
+      })
+      await notifyAll(ts.notifications)
+      // A membrane's event log and canvas hear about its tracked items too.
+      for (const m of new Set(g.tasks.map((t) => t.membrane).filter((m): m is string => Boolean(m)))) {
+        if (!deps.scope.getMembrane(m)) continue
+        const keys = new Set(g.tasks.filter((t) => t.membrane === m).map((t) => t.key))
+        const mine = res.events.filter((e) => keys.has(e.nodeId))
+        if (mine.length) state(m).log.append(await triageAll(mine, graph, g.tasks, await identityFor(g.ref)))
+        if (res.changed || mine.length || ts.updated) emit('forge.updated', { membrane: m })
+      }
+    }
+    return { items, events: eventCount }
+  }
+
+  async function pollTask(taskId: string): Promise<void> {
+    const t = await deps.tasks.get(taskId)
+    if (!t) throw new ForgeError(`Task not found: ${taskId}`, 404)
+    const ref = refOfTask(t)
+    if (!ref) throw new ForgeError(`task ${taskId} has no PR or issue`, 400)
+    const synced = new Set(cfg().enabled ? membranes() : [])
+    if (coveredBySync(t, ref, synced)) await sync(t.membrane!, 'open')
+    else await pollTracked(taskId)
+  }
+
+  /**
+   * Each plan is a work stream (keyed by the plan id); every item it names
+   * gets a task in it. Links the plan added follow the plan: an item it
+   * stops naming leaves the stream. Members added by hand are never removed,
+   * and an item the user took out stays out while the plan keeps naming it.
+   */
+  async function syncPlanStreams(membrane: string, graph: BuiltGraph): Promise<boolean> {
+    const s = state(membrane)
+    const file = readFile(membrane)
+    const prev = file.planLinks ?? {}
+    const next: NonNullable<MembraneFile['planLinks']> = {}
+    const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
+    let changed = false
+    for (const p of s.plans) {
+      const stream = await deps.tasks.ensureTask(p.id, { name: p.title, membrane, kind: 'plan', stream: true })
+      const was = prev[p.id] ?? { named: [], linked: [] }
+      if (!prev[p.id]) changed = true
+      const naming = new Map<string, { kind?: 'change' | 'issue'; host: string; repo: string; n: number }>()
+      for (const r of p.refs) naming.set(planRefKey(r.host, r.repo, r.number), { ...r, n: r.number })
+      const named = was.named.filter((id) => naming.has(id))
+      const linked = new Set(was.linked)
+      const members = new Set(stream.childIds)
+      for (const [id, r] of naming) {
+        if (named.includes(id)) continue
+        const node = nodes.get(id)
+        const kind = node?.kind === 'change' || node?.kind === 'issue' ? node.kind : r.kind
+        // Kind unknown (not synced yet, a short reference): try again next scan.
+        if (!kind) continue
+        const task = node
+          ? await taskFor(membrane, node)
+          : await deps.tasks.ensureTask(id, { name: `${r.repo}#${r.n}`, membrane, kind })
+        if (!members.has(task.id)) {
+          await deps.tasks.addToStream(stream.id, task.id)
+          members.add(task.id)
+          linked.add(id)
+          changed = true
+        }
+        named.push(id)
+      }
+      for (const id of [...linked]) {
+        if (naming.has(id)) continue
+        linked.delete(id)
+        const t = await deps.tasks.findByKey(id)
+        if (t && members.has(t.id)) {
+          await deps.tasks.removeFromStream(stream.id, t.id)
+          members.delete(t.id)
+          changed = true
+        }
+      }
+      next[p.id] = { named, linked: [...linked] }
+    }
+    // A plan that is gone names nothing: its links go, its stream stays.
+    for (const [planId, was] of Object.entries(prev)) {
+      if (next[planId] || !was.linked.length) continue
+      const stream = await deps.tasks.findByKey(planId)
+      for (const id of was.linked) {
+        const t = await deps.tasks.findByKey(id)
+        if (stream && t && stream.childIds.includes(t.id)) {
+          await deps.tasks.removeFromStream(stream.id, t.id)
+          changed = true
+        }
+      }
+    }
+    if (JSON.stringify(next) !== JSON.stringify(prev)) {
+      file.planLinks = next
+      writeFile(membrane, file)
+    }
+    return changed
   }
 
   async function backfillStep(membrane: string): Promise<boolean> {
@@ -510,6 +738,9 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
 
   async function tick() {
     const c = cfg()
+    if (now() - lastTrackedAt >= c.pollOpenMs) {
+      await pollTracked().catch((err) => log(`tracked: ${(err as Error).message}`))
+    }
     if (!c.enabled) return
     for (const m of membranes()) {
       const s = state(m)
@@ -544,7 +775,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     overlayBusy = true
     try {
       for (const m of membranes()) {
-        const o = await overlay(m)
+        let o = await overlay(m)
+        if (await applyClaims(m, o.claims)) o = await overlay(m)
         const json = JSON.stringify(o.overlays)
         const s = state(m)
         if (json !== s.overlayJson) {
@@ -558,6 +790,41 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     } finally {
       overlayBusy = false
     }
+  }
+
+  /** Auto-link (plan §7.6): a change a subagent or CI watch works on, with no owner, goes to that thread. */
+  async function applyClaims(membrane: string, claims: OverlayResult['claims']): Promise<boolean> {
+    let any = false
+    for (const c of claims) {
+      if (!deps.threads.presence(c.threadId)) continue
+      try {
+        await api.assign({ membrane, nodeId: c.nodeId, threadId: c.threadId })
+        log(`auto-link ${c.nodeId} → ${c.threadId} (${c.by})`)
+        any = true
+      } catch (err) {
+        log(`auto-link ${c.nodeId}: ${(err as Error).message}`)
+      }
+    }
+    return any
+  }
+
+  /** A thread took or dropped a task outside Forge (task_update, the tasks API, an import): follow on the forge. */
+  async function onReassigned(taskId: string, threadId: string | null) {
+    const t = await deps.tasks.get(taskId)
+    if (!t?.key || (t.kind !== 'change' && t.kind !== 'issue')) return
+    if (threadId && t.state === 'pending') await deps.tasks.setState(t.id, 'in_progress')
+    if (threadId) watchedIds.add(t.key)
+    await writeAssignee(t.membrane, t.key, t.kind, Boolean(threadId))
+    if (t.membrane && deps.scope.getMembrane(t.membrane)) emit('forge.updated', { membrane: t.membrane })
+  }
+
+  /** Rescan a membrane's plans after an edit: events, streams, a graph update. */
+  async function plansChanged(m: string, events: ForgeEvent[]) {
+    const s = state(m)
+    const { graph, tasks } = await full(m)
+    if (events.length) s.log.append(await triageAll(events, graph, tasks, cfg().identities.github))
+    const linked = await syncPlanStreams(m, graph)
+    if (events.length || linked) emit('forge.updated', { membrane: m })
   }
 
   async function membraneOfNode(nodeId: string, hint?: string): Promise<string> {
@@ -579,6 +846,61 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     return { node, tasks }
   }
 
+  /**
+   * Two-way assignee sync (W5): an owner thread adds the membrane's forge
+   * identity as assignee; unassigning removes it only when Forge added it.
+   * Returns the forge's error message, if the write failed.
+   */
+  async function writeAssignee(
+    membrane: string | null,
+    nodeId: string,
+    kind: 'change' | 'issue',
+    on: boolean
+  ): Promise<string | undefined> {
+    const ref = parseRefKey(nodeId, kind)
+    if (!ref) return undefined
+    const forge = forgeOf(ref)
+    if (!forge?.capabilities.assignees) return undefined
+    const m = membrane ?? ''
+    const file = readFile(m)
+    const scope =
+      membrane && deps.scope.getMembrane(membrane) ? (state(membrane).scope ?? scopeOf(membrane)) : undefined
+    const found = scope ? itemOf(scope, nodeId) : itemOfTracked(ref)
+    try {
+      if (on) {
+        const identity = await identityFor(ref)
+        if (!identity || found?.item.assignees.some((a) => a.toLowerCase() === identity.toLowerCase())) return undefined
+        await forge.setAssignees(ref, [identity], [])
+        if (found) {
+          found.item.assignees = [...found.item.assignees, identity]
+          found.sync.save()
+        }
+        file.assignedByForge[nodeId] = identity
+      } else {
+        const login = file.assignedByForge[nodeId]
+        if (!login) return undefined
+        await forge.setAssignees(ref, [], [login])
+        if (found) {
+          found.item.assignees = found.item.assignees.filter((a) => a !== login)
+          found.sync.save()
+        }
+        delete file.assignedByForge[nodeId]
+      }
+      writeFile(m, file)
+      return undefined
+    } catch (err) {
+      log(`assignee ${nodeId}: ${(err as Error).message}`)
+      return (err as Error).message
+    }
+  }
+
+  function itemOfTracked(ref: ForgeRef): { sync: RepoSync; item: CachedChange | CachedIssue } | undefined {
+    const sync = trackedSyncs.get(repoKey(ref))
+    const c = sync?.cache()
+    const item = c && (c.changes[ref.id] ?? c.issues[ref.id])
+    return sync && item ? { sync, item } : undefined
+  }
+
   /** The task behind a node, created when missing. */
   async function taskFor(membrane: string, node: WorkNode): Promise<PortTask> {
     if (node.taskId) {
@@ -593,9 +915,11 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       ...(node.url ? { url: node.url } : {})
     }
     if (node.kind === 'plan') {
+      // The key names the plan: "plan:<project>/<path in its plan dir>".
       const rest = node.id.slice('plan:'.length)
-      const plan = state(membrane).plans.find((p) => p.id === node.id)
-      init.plan = { project: plan?.project ?? rest.split('/')[0], path: plan?.file ?? rest }
+      const project = rest.split('/')[0]
+      init.plan = { project, path: rest.slice(project.length + 1) }
+      init.stream = true
     } else {
       const ref = parseRefKey(node.id, node.kind)
       if (ref) init.ref = ref
@@ -603,7 +927,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     return deps.tasks.ensureTask(node.id, init)
   }
 
-  return {
+  const api: ForgeService = {
     start() {
       if (started) return
       started = true
@@ -629,13 +953,37 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
             if (!s.scope || !isPlanPath(s.scope.planDirs, changedPath)) continue
             const events = rescanPlans(m, s.scope)
             if (!events.length) continue
-            void (async () => {
-              const { graph, tasks } = await full(m)
-              s.log.append(await triageAll(events, graph, tasks, cfg().identities.github))
-              emit('forge.updated', { membrane: m })
-            })().catch((err) => log(`plans ${m}: ${(err as Error).message}`))
+            void plansChanged(m, events).catch((err) => log(`plans ${m}: ${(err as Error).message}`))
           }
         })
+      )
+      // Assignment outside Forge sets the forge assignee too; a new imported
+      // task gets its first read soon rather than at the next poll.
+      let trackedSoon: ReturnType<typeof setTimeout> | undefined
+      disposers.push(
+        deps.bus.on('task.reassigned', (e) => {
+          const p = e.payload as { taskId?: string; sourceThreadId?: string; newThreadId?: string | null }
+          if (!p?.taskId || p.sourceThreadId === FORGE_SOURCE) return
+          void onReassigned(p.taskId, p.newThreadId ?? null).catch((err) =>
+            log(`reassigned ${p.taskId}: ${(err as Error).message}`)
+          )
+        }),
+        deps.bus.on('task.created', (e) => {
+          const p = e.payload as { taskId?: string; sourceThreadId?: string; threadId?: string | null }
+          if (p?.sourceThreadId === FORGE_SOURCE) return
+          // Created already owned (a task made for a thread): the same as an assignment.
+          if (p?.taskId && p.threadId)
+            void onReassigned(p.taskId, p.threadId).catch((err) =>
+              log(`created ${p.taskId}: ${(err as Error).message}`)
+            )
+          if (trackedSoon) return
+          trackedSoon = setTimeout(() => {
+            trackedSoon = undefined
+            void pollTracked().catch((err) => log(`tracked: ${(err as Error).message}`))
+          }, 1000)
+          trackedSoon.unref?.()
+        }),
+        () => trackedSoon && clearTimeout(trackedSoon)
       )
       void tick()
     },
@@ -662,7 +1010,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         view = (await deps.tasks.getViews(membrane)).find((v) => v.id === opts.view)
         if (!view && opts.view !== 'all') throw new ForgeError(`unknown view: ${opts.view}`, 404)
       }
-      const me = scope.repos[0] ? await identityFor(scope.repos[0]) : undefined
+      const me = scope.repos[0] ? await identityFor(scope.repos[0]) : cfg().identities.github
       const g = windowGraph(applyView(graph, view, { ...(me ? { me } : {}), now: now() }), since, until, now())
       const s = state(membrane)
       const syncs_ = scope.repos.map((r) => syncOf(r)).filter((x): x is RepoSync => Boolean(x))
@@ -674,7 +1022,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         edges: g.edges,
         workstreams: await deps.tasks.streamsOf(membrane),
         syncing: s.syncing || syncs_.some((x) => !x.cache().windowSyncedAt || !x.backfillDone()),
-        ...(s.lastSyncAt ? { lastSyncAt: s.lastSyncAt } : {})
+        ...(s.lastSyncAt ? { lastSyncAt: s.lastSyncAt } : {}),
+        ...(me ? { identity: me } : {})
       }
     },
 
@@ -707,29 +1056,13 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
 
     async assign(input) {
       const membrane = await membraneOfNode(input.nodeId, input.membrane)
-      const scope = state(membrane).scope ?? scopeOf(membrane)
       const { node } = await nodeIn(membrane, input.nodeId)
       const task = await taskFor(membrane, node)
-      const file = readFile(membrane)
-      const found = itemOf(scope, node.id)
-      const forge = found && forgeOf({ forge: found.ref.forge, host: found.ref.host })
-      const identity = found ? await identityFor({ forge: found.ref.forge, host: found.ref.host }) : undefined
-      let forgeError: string | undefined
+      const forgeItem = node.kind === 'change' || node.kind === 'issue' ? node.kind : undefined
 
       if (input.threadId === null) {
         await deps.tasks.setThread(task.id, null)
-        const login = file.assignedByForge[node.id]
-        if (login && found && forge) {
-          try {
-            await forge.setAssignees(found.ref, [], [login])
-            found.item.assignees = found.item.assignees.filter((a) => a !== login)
-            found.sync.save()
-            delete file.assignedByForge[node.id]
-            writeFile(membrane, file)
-          } catch (err) {
-            forgeError = (err as Error).message
-          }
-        }
+        const forgeError = forgeItem ? await writeAssignee(membrane, node.id, forgeItem, false) : undefined
         emit('forge.updated', { membrane })
         return { taskId: task.id, threadId: null, ...(forgeError ? { forgeError } : {}) }
       }
@@ -741,28 +1074,16 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       if (!threadId) throw new ForgeError('threadId or newThread is required', 400)
       await deps.tasks.setThread(task.id, threadId)
       if (task.state === 'pending') await deps.tasks.setState(task.id, 'in_progress')
-
-      if (found && forge && identity && forge.capabilities.assignees) {
-        const has = found.item.assignees.some((a) => a.toLowerCase() === identity.toLowerCase())
-        if (!has) {
-          try {
-            await forge.setAssignees(found.ref, [identity], [])
-            found.item.assignees = [...found.item.assignees, identity]
-            found.sync.save()
-            file.assignedByForge[node.id] = identity
-            writeFile(membrane, file)
-          } catch (err) {
-            forgeError = (err as Error).message
-            log(`assign ${node.id}: ${forgeError}`)
-          }
-        }
-      }
+      const forgeError = forgeItem ? await writeAssignee(membrane, node.id, forgeItem, true) : undefined
       const prompt = input.prompt?.trim() || (input.newThread ? defaultPrompt(node) : undefined)
       if (prompt) await deps.threads.sendToThread(threadId, prompt)
       watchedIds.add(node.id)
       emit('forge.updated', { membrane })
       return { taskId: task.id, threadId, ...(forgeError ? { forgeError } : {}) }
     },
+
+    pollTask,
+    pollTracked: () => pollTracked(),
 
     async getViews(membrane) {
       scopeOf(membrane)
@@ -883,4 +1204,5 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       }
     }
   }
+  return api
 }

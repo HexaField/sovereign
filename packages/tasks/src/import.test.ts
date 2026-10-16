@@ -2,7 +2,6 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTaskImporter, parseImportTarget } from './import.js'
-import { createPrPollService } from './pr-poll.js'
 import { createTaskService, type TaskService } from './service.js'
 import { createInMemoryTaskStore } from './store.js'
 import { makeBus } from './testing/helpers.js'
@@ -95,12 +94,11 @@ describe('task importer', () => {
 
   function importer() {
     const sendToThread = async (threadId: string, text: string) => void sent.push({ threadId, text })
-    const prPoll = createPrPollService({ taskService: svc, bus: makeBus().bus, sendToThread, execFn: exec as never })
-    return { importer: createTaskImporter({ taskService: svc, prPoll, sendToThread, exec: exec as never }), prPoll }
+    return { importer: createTaskImporter({ taskService: svc, sendToThread, exec: exec as never }) }
   }
 
   it('imports a refKey that GitHub says is a PR, once', async () => {
-    const { importer: imp, prPoll } = importer()
+    const { importer: imp } = importer()
     const first = await imp.import({ ref: 'github:github.com/org/repo#42', membrane: 'coasys', sourceThreadId: 't' })
     const again = await imp.import({ url: 'https://github.com/org/repo/pull/42', sourceThreadId: 't' })
     expect(first.created).toBe(true)
@@ -109,7 +107,26 @@ describe('task importer', () => {
     expect(first.task).toMatchObject({ membrane: 'coasys', provider: { kind: 'change', status: 'open' } })
     // The second import knew the item: no second "PR or issue?" call.
     expect(exec.mock.calls.filter((c) => c[1][0] === 'api')).toHaveLength(1)
-    prPoll.dispose()
+    expect(first.task).toMatchObject({ name: 'PR #42: Add the widget', state: 'pending', threadId: null })
+    expect(first.task.description).toContain('Branch: feat/widget')
+    expect(sent).toEqual([])
+  })
+
+  it('imports a PR URL for a thread: assigned, in progress, prompted; a later import adds a missing membrane', async () => {
+    const { importer: imp } = importer()
+    exec.mockImplementationOnce(async () => ({ stdout: JSON.stringify({ ...JSON.parse(prJson()), isDraft: true }) }))
+    const { task } = await imp.import({
+      url: 'https://github.com/org/repo/pull/9',
+      threadId: 'th',
+      sourceThreadId: 't'
+    })
+    expect(task).toMatchObject({ threadId: 'th', state: 'in_progress', membrane: null, provider: { status: 'draft' } })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ threadId: 'th' })
+    expect(sent[0].text).toContain('gh pr checks 9 -R org/repo')
+    const again = await imp.import({ url: 'https://github.com/org/repo/pull/9', membrane: 'acme', sourceThreadId: 't' })
+    expect(again).toMatchObject({ created: false, task: { id: task.id, membrane: 'acme' } })
+    expect(exec.mock.calls.filter((c) => c[1][0] === 'pr')).toHaveLength(1)
   })
 
   it('imports a refKey that GitHub says is an issue, assigns it and sends the prompt', async () => {

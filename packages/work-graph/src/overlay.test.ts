@@ -50,7 +50,7 @@ describe('waitingOn', () => {
     expect(
       waitingOn(node(1, { ci: 'failing', reviewers: [{ login: 'jo', state: 'requested' }] }), {}, false)
     ).toBeNull()
-    expect(waitingOn(node(1), { thread: { id: 't', label: 't', status: 'idle' } }, true)).toBe('josh')
+    expect(waitingOn(node(1), { thread: { id: 't', label: 't', status: 'idle' } }, true)).toBe('user')
     expect(waitingOn(node(1), { thread: { id: 't', label: 't', status: 'working' } }, true)).toBeNull()
   })
 })

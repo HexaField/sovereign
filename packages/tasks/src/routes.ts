@@ -1,12 +1,12 @@
 // Tasks Module — REST API Routes
 //
-// Exposes the task graph to the client UI (and the Forge tab). The MCP tools
-// handle agent interactions; these routes serve the panels and the canvas.
+// Exposes the task graph to the client UI. The MCP tools handle agent
+// interactions. Forge views and suggested edges are served by the work graph
+// (/api/forge/*, packages/work-graph routes), which reaches them via TaskPort.
 
 import { Router } from 'express'
 import type { Request, Response } from 'express'
 import type { TaskService } from './service.js'
-import type { PrPollService } from './pr-poll.js'
 import type { TaskImporter } from './import.js'
 import type { ForgeMetaStore } from './meta.js'
 import type { ListTaskFilter, TaskState } from './types.js'
@@ -14,9 +14,11 @@ import { PROVIDER_KINDS, TASK_STATES } from './types.js'
 
 export interface TaskRouteDeps {
   taskService: TaskService
-  prPollService: PrPollService
   importer?: TaskImporter
-  meta?: ForgeMetaStore
+  /** Persistence health of the Forge meta store, shown beside the task store's. */
+  meta?: Pick<ForgeMetaStore, 'status'>
+  /** Re-read a task's forge item now (the work graph's poll); absent = 503. */
+  pollTask?: (taskId: string) => Promise<void>
   /** Send a prompt to a thread. */
   sendToThread: (threadId: string, text: string) => Promise<void>
   /** Resolve a thread label from its id. */
@@ -64,7 +66,7 @@ export function parseListFilter(q: Record<string, unknown>): ListTaskFilter {
 }
 
 export function createTaskRoutes(deps: TaskRouteDeps): Router {
-  const { taskService, prPollService, sendToThread, resolveLabel, importer, meta, membraneOf } = deps
+  const { taskService, pollTask, sendToThread, resolveLabel, importer, meta, membraneOf } = deps
   const router = Router()
 
   // GET /api/tasks — list tasks with optional filters
@@ -252,51 +254,21 @@ export function createTaskRoutes(deps: TaskRouteDeps): Router {
     }
   })
 
-  // POST /api/tasks/:id/poll — force a single poll tick
+  // POST /api/tasks/:id/poll — re-read the task's PR or issue now
   router.post('/api/tasks/:id/poll', async (req: Request, res: Response) => {
+    if (!pollTask) {
+      res.status(503).json({ error: 'forge polling not available' })
+      return
+    }
     try {
       const taskId = taskIdOf(String(req.params.id))
-      await prPollService.pollOnce(taskId)
+      await pollTask(taskId)
       const task = await taskService.get(taskId)
       res.json(task)
     } catch (err) {
       fail(res, err)
     }
   })
-
-  // ── Forge views and related edges ──────────────────────────────────
-  if (meta) {
-    router.get('/api/forge/views', (req: Request, res: Response) => {
-      res.json({ views: meta.listViews(str(req.query.membrane)) })
-    })
-    router.post('/api/forge/views', (req: Request, res: Response) => {
-      try {
-        res.status(201).json(meta.saveView(req.body))
-      } catch (err) {
-        res.status(400).json({ error: (err as Error).message })
-      }
-    })
-    router.delete('/api/forge/views/:id', (req: Request, res: Response) => {
-      const id = decodeURIComponent(String(req.params.id))
-      const ok = meta.deleteView(id.startsWith('forge-view://') ? id : `forge-view://${id}`)
-      res.status(ok ? 200 : 404).json({ deleted: ok })
-    })
-    router.get('/api/forge/edges', (req: Request, res: Response) => {
-      res.json({ edges: meta.listEdges({ membrane: str(req.query.membrane), node: str(req.query.node) }) })
-    })
-    router.post('/api/forge/edges', (req: Request, res: Response) => {
-      try {
-        res.status(201).json(meta.addEdge(req.body))
-      } catch (err) {
-        res.status(400).json({ error: (err as Error).message })
-      }
-    })
-    router.delete('/api/forge/edges/:id', (req: Request, res: Response) => {
-      const id = decodeURIComponent(String(req.params.id))
-      const ok = meta.deleteEdge(id.startsWith('forge-edge://') ? id : `forge-edge://${id}`)
-      res.status(ok ? 200 : 404).json({ deleted: ok })
-    })
-  }
 
   return router
 }

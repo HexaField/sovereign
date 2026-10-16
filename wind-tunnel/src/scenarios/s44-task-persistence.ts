@@ -1,8 +1,9 @@
 // S43: Task graph persistence (Forge P0a).
 //
 // Creates a work stream, tasks, a plan task (REST import), assigns and links
-// them, adds a Forge view and a related edge, and imports a plan through the
-// MCP `task_import` tool. Then restarts the Sovereign container and checks
+// them, saves two Forge views (PUT /api/forge/views, the work graph's route
+// into the same perspective), and imports a plan through the MCP
+// `task_import` tool. Then restarts the Sovereign container and checks
 // everything is still there, read back from the store on disk (the base lane
 // has no AD4M, so the snapshot is the store).
 //
@@ -93,6 +94,8 @@ export const s44TaskPersistence: Scenario = {
     metrics.backendAtStart = status0.tasks.backend
 
     // ── Build a small graph through REST ───────────────────────────────
+    if (!(await client.membranes()).some((m: any) => m.id === 'swt-forge'))
+      await client.post('/api/membranes', { id: 'swt-forge', name: 'Task persistence wind tunnel', workspaceIds: [] })
     const thread = await client.timed('create-thread', () => client.post('/api/threads', { label: 'swt-s44-tasks' }))
     const threadId: string = (thread?.thread ?? thread).id
     const tag = `s44-${Date.now()}`
@@ -112,16 +115,19 @@ export const s44TaskPersistence: Scenario = {
     const planAgain = await post(base, '/api/tasks/import', { plan: { project: 'swt', path: `plans/${tag}.md` } })
     check(planImport.created === true && planAgain.created === false, 'plan import is idempotent')
     check(planAgain.task.id === planImport.task.id, 'plan re-import returns the same task')
-    const view = await post(base, '/api/forge/views', {
+    // Forge views are the work graph's (membrane-scoped, through the TaskPort
+    // into the same perspective); the membrane must exist.
+    const view = {
+      id: `${tag}-view`,
       membrane: 'swt-forge',
       title: `${tag} view`,
-      repos: ['example-org/example-repo']
-    })
-    const edge = await post(base, '/api/forge/edges', {
-      from: `task:${t1.id}`,
-      to: `task:${t2.id}`,
-      reason: 'same feature',
-      source: 'josh'
+      repos: ['example-org/example-repo'],
+      filters: {}
+    }
+    await json(`${base}/api/forge/views?membrane=swt-forge`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ views: [view, { ...view, id: `${tag}-second`, title: 'second', repos: [] }] })
     })
 
     // ── MCP: task_import of a plan through the model ───────────────────
@@ -190,13 +196,9 @@ export const s44TaskPersistence: Scenario = {
       )
       const views = (await json(`${base}/api/forge/views?membrane=swt-forge`)).views
       check(
-        views.some((v: any) => v.id === view.id && v.repos[0] === 'example-org/example-repo'),
-        `${when}: view`
-      )
-      const edges = (await json(`${base}/api/forge/edges?node=${encodeURIComponent(`task:${t1.id}`)}`)).edges
-      check(
-        edges.some((e: any) => e.id === edge.id && e.source === 'josh'),
-        `${when}: edge`
+        views.map((v: any) => v.id).join() === `${view.id},${tag}-second` &&
+          views[0].repos[0] === 'example-org/example-repo',
+        `${when}: views in order`
       )
     }
 
@@ -247,8 +249,12 @@ export const s44TaskPersistence: Scenario = {
     for (const id of [t1.id, t2.id, stream.id, planImport.task.id, ...(mcpTaskId ? [mcpTaskId] : [])]) {
       await patch(base, `/api/tasks/${uuidOf(id)}`, { state: 'cancelled' }).catch(() => {})
     }
-    await fetch(`${base}/api/forge/views/${encodeURIComponent(view.id)}`, { method: 'DELETE' }).catch(() => {})
-    await fetch(`${base}/api/forge/edges/${encodeURIComponent(edge.id)}`, { method: 'DELETE' }).catch(() => {})
+    await fetch(`${base}/api/forge/views?membrane=swt-forge`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ views: [] })
+    }).catch(() => {})
+    await client.del('/api/membranes/swt-forge').catch(() => {})
     client.disconnectWs()
     await client.deleteThread(threadId).catch(() => {})
 
@@ -256,7 +262,7 @@ export const s44TaskPersistence: Scenario = {
     return {
       passed,
       summary: passed
-        ? `tasks, stream, links, plan import (REST + MCP), view and edge survived a restart (store backend: ${metrics.backendAfterRestart})${ad4mLane ? ' and an AD4M outage' : ''}`
+        ? `tasks, stream, links, plan import (REST + MCP) and ordered views survived a restart (store backend: ${metrics.backendAfterRestart})${ad4mLane ? ' and an AD4M outage' : ''}`
         : `failed: ${failures.join('; ')}`,
       metrics: { ...metrics, failures },
       samples: client.samples

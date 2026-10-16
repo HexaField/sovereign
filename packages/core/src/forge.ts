@@ -130,6 +130,10 @@ export interface Forge {
   pageIssues?(repo: string, opts?: PageOpts): Promise<ForgePage<ForgeIssue>>
   /** Ahead/behind of a branch against the repo's default branch. */
   compare(repo: string, base: string, head: string): Promise<{ ahead: number; behind: number }>
+  /** One change, read alone (tracked items outside every synced repo); undefined when it does not exist. */
+  getChange?(ref: ForgeRef): Promise<Change | undefined>
+  /** One issue, read alone; undefined when it does not exist. */
+  getIssue?(ref: ForgeRef): Promise<ForgeIssue | undefined>
   checks(ref: ForgeRef): Promise<CheckSummary | undefined>
   comments(ref: ForgeRef): Promise<ForgeComment[]>
   /** The one write the Forge tab makes (assign ↔ forge assignee). */
@@ -173,13 +177,16 @@ export interface WorkNode {
 
 export type WorkEdgeKind = 'base' | 'merged-into' | 'closes' | 'references' | 'paired' | 'plans' | 'subtask' | 'related'
 
+/** Who made an edge: Loop 1 sync, Loop 2 rethink, or the user (by hand, or accepting a rethink edge). */
+export type WorkEdgeSource = 'sync' | 'rethink' | 'user'
+
 export interface WorkEdge {
   from: string
   to: string
   kind: WorkEdgeKind
   /** Future-facing: references, plans, related, closes on an open issue. */
   dashed: boolean
-  source: 'sync' | 'rethink' | 'josh'
+  source: WorkEdgeSource
   reason?: string
   confidence?: number
 }
@@ -189,7 +196,8 @@ export interface AgentOverlay {
   thread?: { id: string; label: string; status: 'working' | 'thinking' | 'idle' }
   subagents: { key: string; label: string; startedAt: number }[]
   ciWatch?: { state: 'waiting' | 'passed' | 'failed'; since: number }
-  waitingOn?: 'ci' | 'review' | 'josh' | null
+  /** user = the owner thread is idle on a question to the user. */
+  waitingOn?: 'ci' | 'review' | 'user' | null
 }
 
 export interface WorkStream {
@@ -242,6 +250,98 @@ export interface ForgeGraph {
   lastSyncAt?: string
   /** The membrane's forge login (the account Forge acts as); the client's "requested from me" filter matches it. */
   identity?: string
+}
+
+// ── Task port ──────────────────────────────────────────────────────────
+// What the work graph needs from the task graph. @sovereign/tasks binds it
+// (createForgeTaskPort); the work graph's tests use an in-memory one.
+
+export type PortTaskState = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+export type PortTaskKind = 'change' | 'issue' | 'plan'
+
+/** Last-known forge status written onto a task (the TaskProvider's status fields). */
+export interface PortTaskStatus {
+  kind: PortTaskKind
+  /** Change state, issue state ("open" / "closed:completed" / "closed:not_planned") or plan state. */
+  state: string
+  checks?: ChecksState
+  failedChecks?: string[]
+  review?: 'approved' | 'changes_requested' | 'review_required' | 'none'
+  /** Comment count at the last poll (issue + review comments); absent = not read. */
+  unresolvedComments?: number
+  lastPolledAt: string
+}
+
+export interface PortTask {
+  id: string
+  name: string
+  state: PortTaskState
+  threadId: string | null
+  transientState: string | null
+  membrane: string | null
+  /** Provider key: refKey(ref) for a change or issue, "plan:<project>/<path>" for a plan; null for a task-only task. */
+  key: string | null
+  /** Provider kind; absent for a task-only task. */
+  kind?: PortTaskKind
+  parentIds: string[]
+  childIds: string[]
+  /** A WorkStream task. */
+  isStream: boolean
+  status?: PortTaskStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TaskInit {
+  name: string
+  membrane: string
+  kind: PortTaskKind
+  url?: string
+  ref?: ForgeRef
+  plan?: { project: string; path: string }
+  /** Make the task a work stream (an existing task for the key becomes one). */
+  stream?: boolean
+}
+
+export interface RelatedEdgeRecord {
+  from: string
+  to: string
+  kind: WorkEdgeKind
+  reason?: string
+  confidence?: number
+  source: WorkEdgeSource
+  /** Accepted by the user: shown as source 'user'. */
+  accepted: boolean
+  createdAt: string
+}
+
+export interface TaskPort {
+  /** The task for a provider key, created when missing (idempotent). */
+  ensureTask(key: string, init: TaskInit): Promise<PortTask>
+  get(taskId: string): Promise<PortTask | undefined>
+  findByKey(key: string): Promise<PortTask | undefined>
+  setThread(taskId: string, threadId: string | null): Promise<void>
+  setState(taskId: string, state: PortTaskState): Promise<void>
+  setTransientState(taskId: string, text: string | null): Promise<void>
+  setStatus(taskId: string, status: PortTaskStatus): Promise<void>
+  /** Every task (streams included) of a membrane. */
+  listByMembrane(membrane: string): Promise<PortTask[]>
+  /** Every task with a change or issue provider, any membrane or none. */
+  listForgeItems(): Promise<PortTask[]>
+  streamsOf(membrane: string): Promise<WorkStream[]>
+  createStream(membrane: string, name: string, parentId?: string): Promise<WorkStream>
+  addToStream(streamId: string, taskId: string): Promise<void>
+  removeFromStream(streamId: string, taskId: string): Promise<void>
+  /** A membrane's saved views, in order. */
+  getViews(membrane: string): Promise<ForgeView[]>
+  /** Replace a membrane's views (the order is kept). */
+  putViews(membrane: string, views: ForgeView[]): Promise<ForgeView[]>
+  listRelated(membrane: string): Promise<RelatedEdgeRecord[]>
+  /** An edge already there (same from, to, kind) is returned as it is. */
+  addRelated(membrane: string, edge: Omit<RelatedEdgeRecord, 'createdAt' | 'accepted'>): Promise<RelatedEdgeRecord>
+  /** false when no such edge exists. */
+  acceptRelated(membrane: string, from: string, to: string, kind: WorkEdgeKind): Promise<boolean>
+  deleteRelated(membrane: string, from: string, to: string, kind: WorkEdgeKind): Promise<boolean>
 }
 
 /** String form of a ForgeRef: "github:github.com/coasys/ad4m#1390", branches "…@feat/x". */

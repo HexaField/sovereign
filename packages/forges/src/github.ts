@@ -22,7 +22,7 @@ import type {
   ReviewState
 } from '@sovereign/core'
 import { rollupToChecks, summarizeChecks, toCheckStates } from './checks.js'
-import { BRANCHES_QUERY, CHANGES_QUERY, ISSUES_QUERY } from './queries.js'
+import { BRANCHES_QUERY, CHANGE_QUERY, CHANGES_QUERY, ISSUE_QUERY, ISSUES_QUERY } from './queries.js'
 import { createGithubTransport, GithubError, type GithubTransport, type GithubTransportOpts } from './transport.js'
 
 export interface PageInfo {
@@ -52,6 +52,8 @@ export interface GithubForge extends Forge {
   transport: GithubTransport
   pageChanges: NonNullable<Forge['pageChanges']>
   pageIssues: NonNullable<Forge['pageIssues']>
+  getChange: NonNullable<Forge['getChange']>
+  getIssue: NonNullable<Forge['getIssue']>
 }
 
 /** Host for refs, from the REST base: an Enterprise `/api/v3` base names its host; anything else is github.com. */
@@ -313,6 +315,28 @@ export function createGithubForge(opts: GithubForgeOpts = {}): GithubForge {
     return n
   }
 
+  /** One item by number; undefined when GitHub has no such item (or repo). */
+  async function readOne<T>(
+    op: 'changes' | 'issues',
+    r: ForgeRef,
+    query: string,
+    pick: (repo: any) => any,
+    map: (node: any) => T
+  ): Promise<T | undefined> {
+    const n = numberOf(r)
+    const { owner, name } = splitRepo(r.repo)
+    const started = Date.now()
+    try {
+      const { data, cost } = await transport.graphql(query, { owner, name, number: n })
+      opts.onPage?.({ op, repo: r.repo, items: 1, cost, ms: Date.now() - started })
+      const node = data?.repository ? pick(data.repository) : undefined
+      return node ? map(node) : undefined
+    } catch (err) {
+      if (err instanceof GithubError && err.status === 404) return undefined
+      throw err
+    }
+  }
+
   const mapComment = (c: any): ForgeComment => ({
     author: login(c.user),
     body: c.body ?? '',
@@ -375,6 +399,26 @@ export function createGithubForge(opts: GithubForgeOpts = {}): GithubForge {
         (r) => r.issues,
         (n) => mapIssue(ctx, n),
         page
+      )
+    },
+
+    getChange(r) {
+      return readOne(
+        'changes',
+        r,
+        CHANGE_QUERY,
+        (x) => x.pullRequest,
+        (n) => mapChange({ host, repo: r.repo }, n)
+      )
+    },
+
+    getIssue(r) {
+      return readOne(
+        'issues',
+        r,
+        ISSUE_QUERY,
+        (x) => x.issue,
+        (n) => mapIssue({ host, repo: r.repo }, n)
       )
     },
 

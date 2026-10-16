@@ -1,23 +1,14 @@
-// An in-memory TaskPort: tests, and the server until the tasks package binds
-// the real one. With `file` it keeps a JSON snapshot so a restart keeps
-// assignments, streams, views and related edges. With `bus` it emits the
-// same task.* events TaskService does, so presence and the task digest hear
-// about forge-driven changes.
+// An in-memory TaskPort for the work graph's own tests. The server binds the
+// real one (@sovereign/tasks createForgeTaskPort); task-port.contract.test.ts
+// holds both to the same contract. With `bus` it emits the task.* events
+// TaskService emits.
 
 import crypto from 'node:crypto'
 import type { EventBus, ForgeView, WorkEdgeKind, WorkStream } from '@sovereign/core'
-import { readJson, writeJsonAtomic } from './cache.js'
 import type { PortTask, PortTaskState, PortTaskStatus, RelatedEdgeRecord, TaskInit, TaskPort } from './types.js'
-
-interface Snapshot {
-  tasks: PortTask[]
-  views: Record<string, ForgeView[]>
-  related: Record<string, RelatedEdgeRecord[]>
-}
 
 export interface MemoryTaskPortOpts {
   bus?: EventBus
-  file?: string
   now?: () => number
   /** Source tag on emitted events. */
   source?: string
@@ -25,25 +16,17 @@ export interface MemoryTaskPortOpts {
 
 export interface MemoryTaskPort extends TaskPort {
   /** Create a task with no forge item (a decision, a purchase). */
-  createTask(membrane: string, name: string, parentId?: string): Promise<PortTask>
+  createTask(membrane: string | null, name: string, parentId?: string): Promise<PortTask>
+  /** Create a task for a forge key with no membrane (an import from a thread outside every membrane). */
+  importTask(key: string, kind: 'change' | 'issue', name: string, threadId?: string): Promise<PortTask>
   all(): PortTask[]
 }
 
 export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskPort {
   const now = () => new Date((opts.now ?? Date.now)()).toISOString()
-  const snap: Snapshot = (opts.file && readJson<Snapshot>(opts.file)) || { tasks: [], views: {}, related: {} }
-  const tasks = new Map(snap.tasks.map((t) => [t.id, t]))
-  const views = new Map(Object.entries(snap.views ?? {}))
-  const related = new Map(Object.entries(snap.related ?? {}))
-
-  function persist() {
-    if (!opts.file) return
-    writeJsonAtomic(opts.file, {
-      tasks: [...tasks.values()],
-      views: Object.fromEntries(views),
-      related: Object.fromEntries(related)
-    } satisfies Snapshot)
-  }
+  const tasks = new Map<string, PortTask>()
+  const views = new Map<string, ForgeView[]>()
+  const related = new Map<string, RelatedEdgeRecord[]>()
 
   function emit(type: string, t: PortTask, extra: Record<string, unknown> = {}) {
     opts.bus?.emit({
@@ -66,16 +49,23 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
     return t
   }
 
-  function make(membrane: string, name: string, key: string | null, isStream: boolean): PortTask {
+  function make(
+    membrane: string | null,
+    name: string,
+    key: string | null,
+    isStream: boolean,
+    kind?: PortTask['kind']
+  ): PortTask {
     const at = now()
     const t: PortTask = {
-      id: crypto.randomUUID(),
+      id: `task://${crypto.randomUUID()}`,
       name,
       state: 'pending',
       threadId: null,
       transientState: null,
       membrane,
       key,
+      ...(kind ? { kind } : {}),
       parentIds: [],
       childIds: [],
       isStream,
@@ -104,32 +94,43 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
     if (!c.parentIds.includes(parentId)) c.parentIds.push(parentId)
   }
 
-  const stream = (t: PortTask): WorkStream => ({
-    id: t.id,
-    name: t.name,
-    membrane: t.membrane ?? '',
-    ...(t.parentIds.find((p) => tasks.get(p)?.isStream)
-      ? { parentId: t.parentIds.find((p) => tasks.get(p)?.isStream) }
-      : {}),
-    memberCount: t.childIds.length
-  })
+  const stream = (t: PortTask): WorkStream => {
+    const parentId = t.parentIds.find((p) => tasks.get(p)?.isStream)
+    return {
+      id: t.id,
+      name: t.name,
+      membrane: t.membrane ?? '',
+      ...(parentId ? { parentId } : {}),
+      memberCount: t.childIds.length
+    }
+  }
 
   const sameEdge = (e: RelatedEdgeRecord, from: string, to: string, kind: WorkEdgeKind) =>
     e.from === from && e.to === to && e.kind === kind
 
+  const byKey = (key: string) => [...tasks.values()].find((t) => t.key === key)
+
   return {
     async ensureTask(key: string, init: TaskInit) {
-      const found = [...tasks.values()].find((t) => t.key === key)
-      if (found) return found
-      const t = make(init.membrane, init.name, key, false)
-      persist()
+      const found = byKey(key)
+      if (found) {
+        if (init.stream) found.isStream = true
+        found.membrane ??= init.membrane
+        return found
+      }
+      const t = make(init.membrane, init.name, key, Boolean(init.stream), init.kind)
       emit('task.created', t)
       return t
     },
     async createTask(membrane, name, parentId) {
       const t = make(membrane, name, null, false)
       if (parentId) link(parentId, t.id)
-      persist()
+      emit('task.created', t)
+      return t
+    },
+    async importTask(key, kind, name, threadId) {
+      const t = make(null, name, key, false, kind)
+      if (threadId) t.threadId = threadId
       emit('task.created', t)
       return t
     },
@@ -137,7 +138,7 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
       return tasks.get(id)
     },
     async findByKey(key) {
-      return [...tasks.values()].find((t) => t.key === key)
+      return byKey(key)
     },
     async setThread(id, threadId) {
       const t = must(id)
@@ -145,7 +146,6 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
       const old = t.threadId
       t.threadId = threadId
       t.updatedAt = now()
-      persist()
       emit('task.reassigned', t, { oldThreadId: old, newThreadId: threadId })
     },
     async setState(id, state: PortTaskState) {
@@ -154,7 +154,6 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
       const old = t.state
       t.state = state
       t.updatedAt = now()
-      persist()
       emit('task.state_changed', t, { oldState: old, newState: state })
     },
     async setTransientState(id, text) {
@@ -162,17 +161,19 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
       if (t.transientState === text) return
       t.transientState = text
       t.updatedAt = now()
-      persist()
       emit('task.transient_updated', t, { transientState: text ?? undefined })
     },
     async setStatus(id, status: PortTaskStatus) {
       const t = must(id)
+      if (!t.key) throw new Error(`Task ${id} has no forge item`)
       t.status = status
-      persist()
       emit('task.provider_updated', t)
     },
     async listByMembrane(membrane) {
       return [...tasks.values()].filter((t) => t.membrane === membrane)
+    },
+    async listForgeItems() {
+      return [...tasks.values()].filter((t) => t.kind === 'change' || t.kind === 'issue')
     },
     async streamsOf(membrane) {
       return [...tasks.values()].filter((t) => t.isStream && t.membrane === membrane).map(stream)
@@ -181,14 +182,13 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
       if (parentId && !tasks.get(parentId)?.isStream) throw new Error(`Not a work stream: ${parentId}`)
       const t = make(membrane, name, null, true)
       if (parentId) link(parentId, t.id)
-      persist()
       emit('task.created', t)
       return stream(t)
     },
     async addToStream(streamId, taskId) {
       if (!must(streamId).isStream) throw new Error(`Not a work stream: ${streamId}`)
+      if (must(taskId).parentIds.includes(streamId)) return
       link(streamId, taskId)
-      persist()
       emit('task.linked', must(taskId), { parentId: streamId, childId: taskId })
     },
     async removeFromStream(streamId, taskId) {
@@ -196,35 +196,31 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
       const t = must(taskId)
       s.childIds = s.childIds.filter((c) => c !== taskId)
       t.parentIds = t.parentIds.filter((p) => p !== streamId)
-      persist()
       emit('task.unlinked', t, { parentId: streamId, childId: taskId })
     },
     async getViews(membrane) {
-      return views.get(membrane) ?? []
+      return structuredClone(views.get(membrane) ?? [])
     },
     async putViews(membrane, list) {
-      views.set(membrane, list)
-      persist()
-      return list
+      views.set(membrane, structuredClone(list))
+      return structuredClone(list)
     },
     async listRelated(membrane) {
-      return related.get(membrane) ?? []
+      return (related.get(membrane) ?? []).map((e) => ({ ...e }))
     },
     async addRelated(membrane, edge) {
       const list = related.get(membrane) ?? []
       const existing = list.find((e) => sameEdge(e, edge.from, edge.to, edge.kind))
-      if (existing) return existing
+      if (existing) return { ...existing }
       const rec: RelatedEdgeRecord = { ...edge, accepted: false, createdAt: now() }
       list.push(rec)
       related.set(membrane, list)
-      persist()
-      return rec
+      return { ...rec }
     },
     async acceptRelated(membrane, from, to, kind) {
       const e = (related.get(membrane) ?? []).find((x) => sameEdge(x, from, to, kind))
       if (!e) return false
       e.accepted = true
-      persist()
       return true
     },
     async deleteRelated(membrane, from, to, kind) {
@@ -232,7 +228,6 @@ export function createMemoryTaskPort(opts: MemoryTaskPortOpts = {}): MemoryTaskP
       const next = list.filter((x) => !sameEdge(x, from, to, kind))
       if (next.length === list.length) return false
       related.set(membrane, next)
-      persist()
       return true
     },
     all: () => [...tasks.values()]
