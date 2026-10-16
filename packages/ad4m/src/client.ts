@@ -42,11 +42,24 @@ export interface Ad4mClientManager {
 export function createAd4mClientManager(opts: {
   host: string // http(s):// or ws(s):// URL — normalized to http internally
   tokenFile: string
+  /** Health check period. Default 15 s. */
+  healthIntervalMs?: number
+  /** A health check that has not answered by then counts as failed. Default 10 s. */
+  statusTimeoutMs?: number
+  /** SDK client factory (tests). */
+  createClient?: (host: string, token?: string) => Ad4mClient
 }): Ad4mClientManager {
+  const healthIntervalMs = opts.healthIntervalMs ?? 15_000
+  const statusTimeoutMs = opts.statusTimeoutMs ?? 10_000
+  const makeClient = opts.createClient ?? ((host: string, token?: string) => new Ad4mClient(host, token))
   let sdkClient: Ad4mClient | null = null
+  let token: string | undefined
   let connected = false
   let closed = false
+  let checking = false
+  let everChecked = false
   let healthTimer: ReturnType<typeof setInterval> | null = null
+  let firstTimer: ReturnType<typeof setTimeout> | null = null
   const connectedCbs = new Set<() => void>()
 
   function normalizeHost(h: string): string {
@@ -63,43 +76,57 @@ export function createAd4mClientManager(opts: {
     }
   }
 
-  function connect(token?: string) {
-    if (closed) return
-    sdkClient = new Ad4mClient(normalizeHost(opts.host), token)
-
-    healthTimer = setInterval(async () => {
-      if (!sdkClient || closed) return
+  /** Probe the executor. A failed or unanswered probe replaces the SDK client:
+   *  once the executor has been unreachable, the SDK's websocket can stay
+   *  wedged (calls await a readiness promise that never settles), so the old
+   *  client would never see the executor come back. Consumers pick up the new
+   *  instance through onConnected, as after setToken. */
+  async function check() {
+    const client = sdkClient
+    if (!client || closed || checking) return
+    checking = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        client.agent.status(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no answer within ${statusTimeoutMs} ms`)), statusTimeoutMs)
+        })
+      ])
+      if (client !== sdkClient || closed) return
+      if (!connected) {
+        connected = true
+        console.log('[ad4m] connected to', opts.host)
+        fireConnected()
+      }
+    } catch (e) {
+      if (client !== sdkClient || closed) return
+      if (connected) console.warn('[ad4m] health check failed — disconnected:', (e as Error)?.message)
+      else if (!everChecked) console.warn('[ad4m] initial connect failed:', (e as Error)?.message)
+      connected = false
       try {
-        await sdkClient.agent.status()
-        if (!connected) {
-          connected = true
-          console.log('[ad4m] connected to', opts.host)
-          fireConnected()
-        }
+        client.close()
       } catch {
-        if (connected) console.warn('[ad4m] health check failed — disconnected')
-        connected = false
+        /* already closed */
       }
-    }, 15_000)
-
-    setTimeout(async () => {
-      if (!sdkClient || closed) return
-      try {
-        await sdkClient.agent.status()
-        if (!connected) {
-          connected = true
-          console.log('[ad4m] connected to', opts.host)
-          fireConnected()
-        }
-      } catch (e) {
-        console.warn('[ad4m] initial connect failed:', (e as Error)?.message)
-        connected = false
-      }
-    }, 1000)
+      sdkClient = makeClient(normalizeHost(opts.host), token)
+    } finally {
+      clearTimeout(timer)
+      everChecked = true
+      checking = false
+    }
   }
 
-  const token = readToken(opts.tokenFile)
-  connect(token ?? undefined)
+  function connect(newToken?: string) {
+    if (closed) return
+    token = newToken
+    everChecked = false
+    sdkClient = makeClient(normalizeHost(opts.host), token)
+    healthTimer = setInterval(() => void check(), healthIntervalMs)
+    firstTimer = setTimeout(() => void check(), 1000)
+  }
+
+  connect(readToken(opts.tokenFile) ?? undefined)
 
   return {
     getClient: () => sdkClient,
@@ -114,17 +141,20 @@ export function createAd4mClientManager(opts: {
       }
       return () => connectedCbs.delete(cb)
     },
-    setToken(token: string) {
+    setToken(newToken: string) {
       if (healthTimer) clearInterval(healthTimer)
+      if (firstTimer) clearTimeout(firstTimer)
       sdkClient?.close()
       sdkClient = null
       connected = false
-      connect(token)
+      checking = false
+      connect(newToken)
     },
     close() {
       closed = true
       connected = false
       if (healthTimer) clearInterval(healthTimer)
+      if (firstTimer) clearTimeout(firstTimer)
       sdkClient?.close()
       sdkClient = null
     }

@@ -1,208 +1,201 @@
 // TaskStore — storage abstraction for the holonic task graph.
 //
-// Two implementations:
-//   - createAd4mTaskStore() — real persistence via AD4M perspective
-//   - createInMemoryTaskStore() — fast, deterministic, for tests
+// Two implementations over the same in-memory TaskGraph (graph.ts):
+//   - createInMemoryTaskStore()  — process-lifetime only (tests)
+//   - createResilientTaskStore() — runtime: AD4M `sovereign-forge` perspective,
+//     with an outbox while AD4M is down and a local snapshot for restarts
 //
 // The TaskService delegates all persistence through this interface.
 
-import type { Task, TaskListItem, TaskProvider, TaskRef, TaskState } from './types.js'
+import path from 'node:path'
+import { createAd4mTaskBackend } from './ad4m-store.js'
+import type { Durable, DurableStatus } from './durable.js'
+import { createDurable } from './durable.js'
+import type { TaskGraph, TaskOp } from './graph.js'
+import {
+  ancestors,
+  applyTaskOp,
+  emptyTaskGraph,
+  findByProviderKey,
+  listTasks,
+  normalizeTaskOp,
+  readTask,
+  taskGraphFromData,
+  taskGraphToData,
+  taskGraphToOps
+} from './graph.js'
+import type { LinkGraph } from './link-graph.js'
+import type { ListTaskFilter, Task, TaskFields, TaskListItem, TaskRecord } from './types.js'
 
 export interface TaskStore {
   /** Create a new task. Returns the created task. */
-  create(task: Omit<Task, 'parentTasks' | 'childTasks'>): Promise<Task>
+  create(task: TaskRecord): Promise<Task>
   /** Get a task by id with resolved parent/child refs. Returns null when absent. */
   get(id: string): Promise<Task | null>
-  /** List all tasks, optionally filtered. */
-  list(filter?: {
-    state?: TaskState
-    threadId?: string | null
-    parentId?: string
-    rootsOnly?: boolean
-  }): Promise<TaskListItem[]>
-  /** Update scalar properties on a task. Returns the updated task. */
-  update(
-    id: string,
-    fields: Partial<
-      Pick<Task, 'name' | 'state' | 'threadId' | 'description' | 'transientState' | 'updatedAt' | 'tags' | 'provider'>
-    >
-  ): Promise<Task>
-  /** Add a parent/child link (bidirectional). */
+  /** List tasks, optionally filtered. */
+  list(filter?: ListTaskFilter): Promise<TaskListItem[]>
+  /** Update fields on a task. Returns the updated task. */
+  update(id: string, fields: TaskFields): Promise<Task>
+  /** Add a parent/child link. */
   addLink(parentId: string, childId: string): Promise<void>
-  /** Remove a parent/child link (bidirectional). */
+  /** Remove a parent/child link. */
   removeLink(parentId: string, childId: string): Promise<void>
   /** Walk ancestors of a task (for cycle detection). Returns set of ancestor ids. */
   ancestors(taskId: string): Promise<Set<string>>
+  /** The task whose provider key (refKey or "plan:<project>/<path>") is `key`. */
+  findByProviderKey(key: string): Promise<Task | null>
+  /** Persistence state; in-memory stores report backend 'off'. */
+  status(): DurableStatus
+  /** Resolves once the store has finished its first load attempt. */
+  settled(): Promise<void>
+  /** Replay pending writes and load from the backend now (no-op without one). */
+  sync(): Promise<void>
   /** Dispose resources. */
   dispose(): void
 }
 
-// ── In-memory implementation ──────────────────────────────────────────
+/** A TaskStore over a TaskGraph that some `write` keeps current. */
+function createGraphStore(deps: {
+  graph: () => TaskGraph
+  write: (op: TaskOp) => void
+  status: () => DurableStatus
+  settled: () => Promise<void>
+  sync: () => Promise<void>
+  dispose: () => void
+}): TaskStore {
+  const { graph, write } = deps
 
-interface StoredTask {
-  id: string
-  name: string
-  state: TaskState
-  threadId: string | null
-  description: string | null
-  transientState: string | null
-  createdAt: string
-  updatedAt: string | null
-  tags: string[]
-  provider?: TaskProvider
-  parentIds: Set<string>
-  childIds: Set<string>
-}
-
-export function createInMemoryTaskStore(): TaskStore {
-  const tasks = new Map<string, StoredTask>()
-
-  function resolveRef(id: string): TaskRef | null {
-    const t = tasks.get(id)
-    if (!t) return null
-    return { id: t.id, name: t.name, state: t.state }
-  }
-
-  function toTask(stored: StoredTask): Task {
-    const parentTasks: TaskRef[] = []
-    for (const pid of stored.parentIds) {
-      const ref = resolveRef(pid)
-      if (ref) parentTasks.push(ref)
-    }
-    const childTasks: TaskRef[] = []
-    for (const cid of stored.childIds) {
-      const ref = resolveRef(cid)
-      if (ref) childTasks.push(ref)
-    }
-    const task: Task = {
-      id: stored.id,
-      name: stored.name,
-      state: stored.state,
-      threadId: stored.threadId,
-      description: stored.description,
-      transientState: stored.transientState,
-      createdAt: stored.createdAt,
-      updatedAt: stored.updatedAt,
-      parentTasks,
-      childTasks,
-      tags: [...stored.tags]
-    }
-    if (stored.provider) task.provider = { ...stored.provider }
-    return task
+  function mustGet(id: string): Task {
+    const t = readTask(graph(), id)
+    if (!t) throw new Error(`Task not found: ${id}`)
+    return t
   }
 
   return {
     async create(task) {
-      const stored: StoredTask = {
-        id: task.id,
-        name: task.name,
-        state: task.state,
-        threadId: task.threadId,
-        description: task.description,
-        transientState: task.transientState,
-        createdAt: task.createdAt,
-        updatedAt: task.updatedAt,
-        tags: [...task.tags],
-        provider: task.provider ? { ...task.provider } : undefined,
-        parentIds: new Set(),
-        childIds: new Set()
-      }
-      tasks.set(task.id, stored)
-      return toTask(stored)
+      if (graph().tasks.has(task.id)) throw new Error(`Task already exists: ${task.id}`)
+      write({ type: 'task.put', task: { ...task, tags: [...task.tags] } })
+      return mustGet(task.id)
     },
 
     async get(id) {
-      const stored = tasks.get(id)
-      if (!stored) return null
-      return toTask(stored)
+      return readTask(graph(), id)
     },
 
     async list(filter) {
-      const results: TaskListItem[] = []
-      for (const stored of tasks.values()) {
-        if (filter?.state && stored.state !== filter.state) continue
-        if (filter?.threadId !== undefined) {
-          if (filter.threadId === null && stored.threadId !== null) continue
-          if (filter.threadId !== null && stored.threadId !== filter.threadId) continue
-        }
-        if (filter?.parentId) {
-          if (!stored.parentIds.has(filter.parentId)) continue
-        }
-        if (filter?.rootsOnly && stored.parentIds.size > 0) continue
-        const item: TaskListItem = {
-          id: stored.id,
-          name: stored.name,
-          state: stored.state,
-          threadId: stored.threadId,
-          transientState: stored.transientState,
-          childCount: stored.childIds.size,
-          parentCount: stored.parentIds.size
-        }
-        if (stored.provider) {
-          item.provider = {
-            kind: stored.provider.kind,
-            repo: stored.provider.repo,
-            number: stored.provider.number,
-            prStatus: stored.provider.prStatus,
-            checksStatus: stored.provider.checksStatus,
-            reviewDecision: stored.provider.reviewDecision,
-            url: stored.provider.url
-          }
-        }
-        results.push(item)
-      }
-      return results
+      return listTasks(graph(), filter)
     },
 
     async update(id, fields) {
-      const stored = tasks.get(id)
-      if (!stored) throw new Error(`Task not found: ${id}`)
-      if (fields.name !== undefined) stored.name = fields.name
-      if (fields.state !== undefined) stored.state = fields.state
-      if (fields.threadId !== undefined) stored.threadId = fields.threadId
-      if (fields.description !== undefined) stored.description = fields.description
-      if (fields.transientState !== undefined) stored.transientState = fields.transientState
-      if (fields.updatedAt !== undefined) stored.updatedAt = fields.updatedAt
-      if (fields.tags !== undefined) stored.tags = [...fields.tags]
-      if (fields.provider !== undefined) stored.provider = fields.provider ? { ...fields.provider } : undefined
-      return toTask(stored)
+      mustGet(id)
+      const clean: TaskFields = {}
+      for (const [k, v] of Object.entries(fields)) if (v !== undefined) (clean as Record<string, unknown>)[k] = v
+      if (Object.keys(clean).length > 0) write({ type: 'task.update', id, fields: clean })
+      return mustGet(id)
     },
 
     async addLink(parentId, childId) {
-      const parent = tasks.get(parentId)
-      const child = tasks.get(childId)
-      if (!parent) throw new Error(`Parent task not found: ${parentId}`)
-      if (!child) throw new Error(`Child task not found: ${childId}`)
-      parent.childIds.add(childId)
-      child.parentIds.add(parentId)
+      const g = graph()
+      if (!g.tasks.has(parentId)) throw new Error(`Parent task not found: ${parentId}`)
+      if (!g.tasks.has(childId)) throw new Error(`Child task not found: ${childId}`)
+      if (g.children.get(parentId)?.has(childId)) return
+      write({ type: 'link.add', parentId, childId })
     },
 
     async removeLink(parentId, childId) {
-      const parent = tasks.get(parentId)
-      const child = tasks.get(childId)
-      if (parent) parent.childIds.delete(childId)
-      if (child) child.parentIds.delete(parentId)
+      if (!graph().children.get(parentId)?.has(childId)) return
+      write({ type: 'link.remove', parentId, childId })
     },
 
     async ancestors(taskId) {
-      const visited = new Set<string>()
-      const queue = [taskId]
-      while (queue.length > 0) {
-        const current = queue.pop()!
-        const stored = tasks.get(current)
-        if (!stored) continue
-        for (const pid of stored.parentIds) {
-          if (!visited.has(pid)) {
-            visited.add(pid)
-            queue.push(pid)
-          }
-        }
-      }
-      return visited
+      return ancestors(graph(), taskId)
     },
 
-    dispose() {
-      tasks.clear()
-    }
+    async findByProviderKey(key) {
+      const rec = findByProviderKey(graph(), key)
+      return rec ? readTask(graph(), rec.id) : null
+    },
+
+    status: deps.status,
+    settled: deps.settled,
+    sync: deps.sync,
+    dispose: deps.dispose
   }
+}
+
+// ── In-memory implementation ──────────────────────────────────────────
+
+export function createInMemoryTaskStore(): TaskStore {
+  let g = emptyTaskGraph()
+  return createGraphStore({
+    graph: () => g,
+    write: (op) => applyTaskOp(g, op),
+    status: () => ({ backend: 'off', loadedFromBackend: false, pending: 0, deadLettered: 0 }),
+    settled: async () => {},
+    sync: async () => {},
+    dispose: () => {
+      g = emptyTaskGraph()
+    }
+  })
+}
+
+// ── Resilient (AD4M + outbox + snapshot) implementation ───────────────
+
+export interface ResilientStoreOptions {
+  /** Directory for outbox.jsonl, snapshot.json (normally <dataDir>/tasks). */
+  dir: string
+  /** Opens the perspective; throws while AD4M is unreachable. null = local only. */
+  connect: (() => Promise<LinkGraph>) | null
+  /** AD4M reconnect signal. */
+  onReconnect?: (cb: () => void) => () => void
+  retryMs?: number
+  callTimeoutMs?: number
+  snapshotDelayMs?: number
+  log?: Pick<Console, 'log' | 'warn' | 'error'>
+}
+
+export const TASK_OUTBOX_FILE = 'outbox.jsonl'
+export const TASK_SNAPSHOT_FILE = 'snapshot.json'
+
+export function createTaskDurable(opts: ResilientStoreOptions): Durable<TaskGraph, TaskOp> {
+  const connect = opts.connect
+  return createDurable<TaskGraph, TaskOp>({
+    name: 'tasks',
+    dir: opts.dir,
+    outboxFile: TASK_OUTBOX_FILE,
+    snapshotFile: TASK_SNAPSHOT_FILE,
+    connect: connect ? async () => createAd4mTaskBackend(await connect()) : null,
+    onReconnect: opts.onReconnect,
+    empty: emptyTaskGraph,
+    apply: applyTaskOp,
+    serialize: taskGraphToData,
+    deserialize: (raw) => taskGraphFromData(raw as never),
+    reviveOp: normalizeTaskOp,
+    seedOps: taskGraphToOps,
+    isEmpty: (g) => g.tasks.size === 0,
+    retryMs: opts.retryMs,
+    callTimeoutMs: opts.callTimeoutMs,
+    snapshotDelayMs: opts.snapshotDelayMs,
+    log: opts.log
+  })
+}
+
+/** The runtime TaskStore: reads from memory, writes through to AD4M, queues
+ *  writes in `<dir>/outbox.jsonl` while AD4M is unreachable, and restarts
+ *  from `<dir>/snapshot.json` when AD4M is down at boot. */
+export function createResilientTaskStore(opts: ResilientStoreOptions): TaskStore {
+  const durable = createTaskDurable(opts)
+  return createGraphStore({
+    graph: durable.state,
+    write: durable.write,
+    status: durable.status,
+    settled: durable.settled,
+    sync: durable.sync,
+    dispose: durable.dispose
+  })
+}
+
+/** Default file locations under a Sovereign data dir. */
+export function taskStoreDir(dataDir: string): string {
+  return path.join(dataDir, 'tasks')
 }

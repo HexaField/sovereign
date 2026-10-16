@@ -26,6 +26,12 @@ services:
     ports:
       # MCP exposed to the host so the s10 scenario can inject + verify.
       - "14561:3001"
+    # Sovereign sits only on the `windtunnel` network (base compose); the
+    # provision step uses the default one. Without both, `ad4m` does not even
+    # resolve from Sovereign.
+    networks:
+      - default
+      - windtunnel
 
   ad4m-provision:
     image: node:22-bookworm-slim

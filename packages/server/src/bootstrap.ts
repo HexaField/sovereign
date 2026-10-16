@@ -8,6 +8,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type express from 'express'
 import type http from 'node:http'
 import type https from 'node:https'
@@ -112,10 +114,10 @@ import {
 } from '@sovereign/presence'
 import {
   createTaskService,
-  createInMemoryTaskStore,
+  createForgePersistence,
   createTaskDigest,
-  bootstrapTaskPerspective,
   createPrPollService,
+  createTaskImporter,
   createTaskRoutes
 } from '@sovereign/tasks'
 import { createForestRoutes } from './forest/routes.js'
@@ -129,6 +131,8 @@ import { registerMeetingRoutes } from '@sovereign/meetings'
 import { registerMeetingsChannel } from '@sovereign/meetings'
 import { wireStatusAggregator } from './status/wiring.js'
 import { createWsHandler } from '@sovereign/primitives'
+
+const execFileAsync = promisify(execFile)
 
 export interface BootstrapInput {
   app: express.Express
@@ -617,32 +621,16 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const presenceKnowledgeFile = path.join(configDir, 'PRESENCE_KNOWLEDGE.md')
 
   // ── Task service ────────────────────────────────────────────────────
-  // In-memory store provides immediate availability. When AD4M connects,
-  // bootstrapTaskPerspective creates/finds the `hex-tasks` perspective and
-  // the AD4M-backed store can replace it (future enhancement). For now the
-  // in-memory store covers all test and runtime paths — tasks survive
-  // within a process lifetime, and the AD4M perspective bootstrap runs in
-  // the background for schema registration.
-  const taskStore = createInMemoryTaskStore()
+  // Tasks (and Forge views + related edges) live in the `sovereign-forge`
+  // AD4M perspective. Reads come from an in-memory copy; writes go to AD4M,
+  // or to <dataDir>/tasks/outbox.jsonl while AD4M is down, replayed in order
+  // when it returns. A restart with AD4M down loads <dataDir>/tasks/snapshot.json.
+  // Without AD4M configured, the snapshot alone persists them.
+  const forgePersistence = createForgePersistence({ ad4m: ad4mService?.client(), dataDir })
+  const taskStore = forgePersistence.taskStore
   const taskService = createTaskService({ store: taskStore, bus })
-
-  // Bootstrap the AD4M perspective in the background (non-blocking).
-  // Creates the `hex-tasks` perspective + registers SHACL schema when AD4M
-  // connects. Does not block server startup.
-  const agentName = cfg.identity?.agentName ?? 'Hex'
-  if (ad4mService) {
-    bootstrapTaskPerspective({
-      ad4m: ad4mService.client(),
-      agentName,
-      dataDir: path.join(dataDir, 'tasks')
-    })
-      .then((uuid) => {
-        if (uuid) console.log(`[tasks] AD4M perspective ready: ${uuid}`)
-      })
-      .catch((err) => {
-        console.warn('[tasks] AD4M bootstrap failed:', (err as Error)?.message)
-      })
-  }
+  /** A thread's membrane: the default membrane of tasks it creates. */
+  const membraneOfThread = (threadId: string) => threadManager.get(threadId)?.membraneId
 
   // Wave 4: Stop the PresenceDigest's chat.turn.completed listener.
   // TaskDigest replaces it as the sole operational-context source.
@@ -661,7 +649,11 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const ciMcpDeps: CiWatchMcpDeps = {}
 
   const taskMcpDeps: TaskMcpDeps = {
-    create: (opts) => taskService.create(opts as any),
+    create: (opts) =>
+      taskService.create({
+        ...(opts as any),
+        membrane: opts.membrane ?? membraneOfThread(opts.sourceThreadId) ?? null
+      }),
     update: (taskId, opts) => taskService.update(taskId, opts as any) as any,
     get: (taskId) => taskService.get(taskId) as any,
     list: (filter) => taskService.list(filter as any) as any,
@@ -872,23 +864,27 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     }
   })
 
-  // Late-bind importPr and sendPrompt onto taskMcpDeps. These require
+  // Late-bind importItem and sendPrompt onto taskMcpDeps. These require
   // chatModule + prPollService which exist only after the chat layer.
   // Because sharedMcpDeps (in wiring.ts) holds a reference to this
   // object, any future MCP server instance picks up these methods when
   // createSovereignMcpInstance builds a fresh tools array per session.
-  taskMcpDeps.importPr = async (opts) => {
-    const task = await prPollService.importPr({
-      repo: opts.repo as string,
-      pr: opts.pr as number,
-      threadId: opts.threadId as string | undefined,
-      parentTaskIds: opts.parentTaskIds as string[] | undefined,
-      tags: opts.tags as string[] | undefined,
-      prompt: opts.prompt as string | undefined,
-      pollIntervalMinutes: opts.pollIntervalMinutes as number | undefined,
-      sourceThreadId: opts.sourceThreadId as string
+  const taskImporter = createTaskImporter({
+    taskService,
+    prPoll: prPollService,
+    sendToThread: async (threadId, text) => {
+      await chatModule.handleSend(threadId, text, undefined, {
+        origin: { modality: 'text' as const }
+      })
+    },
+    exec: (cmd, args) => execFileAsync(cmd, args, { maxBuffer: 16 * 1024 * 1024 })
+  })
+  taskMcpDeps.importItem = async (opts) => {
+    const result = await taskImporter.import({
+      ...opts,
+      membrane: opts.membrane ?? membraneOfThread(opts.threadId ?? opts.sourceThreadId) ?? null
     })
-    return task as any
+    return result as any
   }
 
   taskMcpDeps.sendPrompt = async (taskId, prompt) => {
@@ -933,10 +929,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     res.json(hazards.status())
   })
 
-  // Bootstrap: start polls for any existing PR-tasks in active states.
-  void prPollService.bootstrap().catch((err) => {
-    console.warn('[pr-poll] bootstrap failed:', (err as Error).message)
-  })
+  // Bootstrap: start polls for any existing PR-tasks in active states, once
+  // the task store has loaded (from AD4M, or from its snapshot when AD4M is down).
+  void taskStore
+    .settled()
+    .then(() => prPollService.bootstrap())
+    .catch((err) => {
+      console.warn('[pr-poll] bootstrap failed:', (err as Error).message)
+    })
 
   // Task REST API — serves the client sidebar panel and task detail views.
   app.use(
@@ -948,7 +948,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
           origin: { modality: 'text' as const }
         })
       },
-      resolveLabel: (threadId) => threadManager.get(threadId)?.label
+      resolveLabel: (threadId) => threadManager.get(threadId)?.label,
+      importer: taskImporter,
+      meta: forgePersistence.meta,
+      membraneOf: membraneOfThread
     })
   )
 
@@ -1649,6 +1652,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   return {
     shutdown() {
       prPollService.dispose()
+      // Writes the task + Forge meta snapshots; the outbox is already on disk.
+      forgePersistence.dispose()
       ciWatch.dispose()
       hazards.stop()
       ad4mService?.close()

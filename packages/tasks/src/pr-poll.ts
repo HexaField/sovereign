@@ -1,6 +1,6 @@
 // PR Poll Service — monitors GitHub PRs linked to tasks.
 //
-// For each task with a `provider` of kind `github-pr`, runs a periodic
+// For each task with a `change` provider on GitHub, runs a periodic
 // poll via the `gh` CLI. Compares the fetched state against the stored
 // provider metadata and emits bus events + thread notifications when
 // something changes.
@@ -15,7 +15,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { EventBus } from '@sovereign/core'
 import type { TaskService } from './service.js'
-import type { TaskProvider } from './types.js'
+import { refKey } from '@sovereign/core'
+import type { ChangeProvider, ChecksStatus, ReviewDecision, Task } from './types.js'
 
 const execFileAsync = promisify(execFile)
 const TAG = '[pr-poll]'
@@ -38,13 +39,15 @@ export interface ImportPrOpts {
   tags?: string[]
   prompt?: string
   pollIntervalMinutes?: number
+  /** Membrane for a newly created task. */
+  membrane?: string | null
   sourceThreadId: string
 }
 
 export interface PrPollService {
   /** Import a GitHub PR as a task. Fetches initial state, creates the task,
    *  starts polling, and optionally sends an initial prompt. */
-  importPr(opts: ImportPrOpts): Promise<import('./types.js').Task>
+  importPr(opts: ImportPrOpts): Promise<Task>
   /** Start polling for a specific task. */
   start(taskId: string, intervalMs?: number): void
   /** Stop polling for a specific task. */
@@ -67,8 +70,29 @@ interface PollEntry {
   timerId: ReturnType<typeof setInterval>
 }
 
-/** Map GitHub PR state strings to our TaskProvider.prStatus. */
-function mapPrStatus(state: string, isDraft: boolean): TaskProvider['prStatus'] {
+/** A GitHub change provider's repo and PR number (its primary ref). */
+function prOf(p: ChangeProvider): { repo: string; number: number } {
+  return { repo: p.refs[0].repo, number: Number(p.refs[0].id) }
+}
+
+/** True for a change provider this service can poll (a GitHub PR). */
+function isGithubChange(p: Task['provider']): p is ChangeProvider {
+  return p?.kind === 'change' && p.refs[0]?.forge === 'github'
+}
+
+function changeProvider(
+  repo: string,
+  pr: number
+): Omit<ChangeProvider, 'status' | 'checksStatus' | 'reviewDecision' | 'unresolvedComments' | 'lastPolledAt'> {
+  return {
+    kind: 'change',
+    refs: [{ forge: 'github', host: 'github.com', repo, kind: 'change', id: String(pr) }],
+    url: `https://github.com/${repo}/pull/${pr}`
+  }
+}
+
+/** Map GitHub PR state strings to ChangeProvider.status. */
+function mapPrStatus(state: string, isDraft: boolean): ChangeProvider['status'] {
   if (isDraft) return 'draft'
   if (state === 'MERGED') return 'merged'
   if (state === 'CLOSED') return 'closed'
@@ -76,7 +100,7 @@ function mapPrStatus(state: string, isDraft: boolean): TaskProvider['prStatus'] 
 }
 
 /** Determine aggregate CI check status from statusCheckRollup. */
-function mapChecksStatus(rollup: Array<{ state?: string; conclusion?: string }>): TaskProvider['checksStatus'] {
+function mapChecksStatus(rollup: Array<{ state?: string; conclusion?: string }>): ChecksStatus {
   if (!rollup || rollup.length === 0) return 'unknown'
   const hasFailure = rollup.some(
     (c) => c.conclusion === 'FAILURE' || c.conclusion === 'ERROR' || c.conclusion === 'CANCELLED'
@@ -91,7 +115,7 @@ function mapChecksStatus(rollup: Array<{ state?: string; conclusion?: string }>)
 }
 
 /** Map review decision string. */
-function mapReviewDecision(decision: string | null): TaskProvider['reviewDecision'] {
+function mapReviewDecision(decision: string | null): ReviewDecision {
   if (decision === 'APPROVED') return 'approved'
   if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
   if (decision === 'REVIEW_REQUIRED') return 'review_required'
@@ -99,16 +123,17 @@ function mapReviewDecision(decision: string | null): TaskProvider['reviewDecisio
 }
 
 /** Map PR state to task state. */
-function prStateToTaskState(provider: TaskProvider): 'in_progress' | 'completed' | 'cancelled' {
-  if (provider.prStatus === 'merged') return 'completed'
-  if (provider.prStatus === 'closed') return 'cancelled'
+function prStateToTaskState(provider: ChangeProvider): 'in_progress' | 'completed' | 'cancelled' {
+  if (provider.status === 'merged') return 'completed'
+  if (provider.status === 'closed') return 'cancelled'
   return 'in_progress'
 }
 
 /** Build a default prompt for a newly imported PR when none was provided. */
-function buildDefaultPrompt(provider: TaskProvider, title: string, branch: string): string {
+function buildDefaultPrompt(provider: ChangeProvider, title: string, branch: string): string {
+  const { repo, number } = prOf(provider)
   const lines = [
-    `[PR #${provider.number}] ${title}`,
+    `[PR #${number}] ${title}`,
     provider.url,
     '',
     `Branch: ${branch}`,
@@ -117,11 +142,11 @@ function buildDefaultPrompt(provider: TaskProvider, title: string, branch: strin
   ]
   if (provider.checksStatus === 'failing') {
     lines.push(
-      `CI checks have failed. Run \`gh pr checks ${provider.number} -R ${provider.repo}\` to see which checks failed and address the failures.`
+      `CI checks have failed. Run \`gh pr checks ${number} -R ${repo}\` to see which checks failed and address the failures.`
     )
   } else if (provider.reviewDecision === 'changes_requested') {
     lines.push(
-      `Changes have been requested. Run \`gh pr view ${provider.number} -R ${provider.repo} --comments\` to read the review comments and address them.`
+      `Changes have been requested. Run \`gh pr view ${number} -R ${repo} --comments\` to read the review comments and address them.`
     )
   } else {
     lines.push(
@@ -132,11 +157,12 @@ function buildDefaultPrompt(provider: TaskProvider, title: string, branch: strin
 }
 
 /** Build a human-readable transient state line. */
-function buildTransient(provider: TaskProvider): string {
-  const parts: string[] = [`PR #${provider.number}`]
-  if (provider.prStatus === 'merged') return `PR #${provider.number} merged`
-  if (provider.prStatus === 'closed') return `PR #${provider.number} closed`
-  if (provider.prStatus === 'draft') parts.push('draft')
+function buildTransient(provider: ChangeProvider): string {
+  const { number } = prOf(provider)
+  const parts: string[] = [`PR #${number}`]
+  if (provider.status === 'merged') return `PR #${number} merged`
+  if (provider.status === 'closed') return `PR #${number} closed`
+  if (provider.status === 'draft') parts.push('draft')
   if (provider.checksStatus === 'failing') parts.push('CI failing')
   else if (provider.checksStatus === 'passing') parts.push('CI passing')
   else if (provider.checksStatus === 'pending') parts.push('CI pending')
@@ -196,7 +222,7 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
   /** Run a single poll tick for a task. */
   async function tick(taskId: string): Promise<void> {
     const task = await taskService.get(taskId)
-    if (!task?.provider || task.provider.kind !== 'github-pr') {
+    if (!task?.provider || !isGithubChange(task.provider)) {
       // Task deleted or provider removed — stop polling
       stop(taskId)
       return
@@ -209,16 +235,16 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
     }
 
     const prev = task.provider
-    const fetched = await fetchPrState(prev.repo, prev.number)
+    const { repo, number } = prOf(prev)
+    const fetched = await fetchPrState(repo, number)
     if (!fetched) return // fetch failed — skip this tick
 
     const now = new Date().toISOString()
-    const updated: TaskProvider = {
-      kind: 'github-pr',
+    const updated: ChangeProvider = {
+      kind: 'change',
+      refs: prev.refs,
       url: prev.url,
-      repo: prev.repo,
-      number: prev.number,
-      prStatus: mapPrStatus(fetched.state, fetched.isDraft),
+      status: mapPrStatus(fetched.state, fetched.isDraft),
       checksStatus: mapChecksStatus(fetched.statusCheckRollup),
       reviewDecision: mapReviewDecision(fetched.reviewDecision),
       lastPolledAt: now,
@@ -227,7 +253,7 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
 
     // Detect changes
     const changes: string[] = []
-    if (prev.prStatus !== updated.prStatus) changes.push(`status: ${prev.prStatus} → ${updated.prStatus}`)
+    if (prev.status !== updated.status) changes.push(`status: ${prev.status} → ${updated.status}`)
     if (prev.checksStatus !== updated.checksStatus) changes.push(`CI: ${prev.checksStatus} → ${updated.checksStatus}`)
     if (prev.reviewDecision !== updated.reviewDecision)
       changes.push(`review: ${prev.reviewDecision} → ${updated.reviewDecision}`)
@@ -260,36 +286,34 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
 
       if (prev.checksStatus !== updated.checksStatus) {
         if (updated.checksStatus === 'failing') {
-          notifications.push(
-            `[PR #${updated.number}] CI check failed. Run \`gh pr checks ${updated.number} -R ${updated.repo}\` for details.`
-          )
+          notifications.push(`[PR #${number}] CI check failed. Run \`gh pr checks ${number} -R ${repo}\` for details.`)
         } else if (updated.checksStatus === 'passing' && prev.checksStatus === 'failing') {
-          notifications.push(`[PR #${updated.number}] CI checks now passing.`)
+          notifications.push(`[PR #${number}] CI checks now passing.`)
         }
       }
 
       if (prev.reviewDecision !== updated.reviewDecision) {
         if (updated.reviewDecision === 'changes_requested') {
           notifications.push(
-            `[PR #${updated.number}] Changes requested. Run \`gh pr view ${updated.number} -R ${updated.repo} --comments\` to see review comments.`
+            `[PR #${number}] Changes requested. Run \`gh pr view ${number} -R ${repo} --comments\` to see review comments.`
           )
         } else if (updated.reviewDecision === 'approved') {
-          notifications.push(`[PR #${updated.number}] Approved.`)
+          notifications.push(`[PR #${number}] Approved.`)
         }
       }
 
-      if (prev.prStatus !== updated.prStatus) {
-        if (updated.prStatus === 'merged') {
-          notifications.push(`[PR #${updated.number}] Merged.`)
-        } else if (updated.prStatus === 'closed') {
-          notifications.push(`[PR #${updated.number}] Closed without merge.`)
+      if (prev.status !== updated.status) {
+        if (updated.status === 'merged') {
+          notifications.push(`[PR #${number}] Merged.`)
+        } else if (updated.status === 'closed') {
+          notifications.push(`[PR #${number}] Closed without merge.`)
         }
       }
 
       if (prev.unresolvedComments < updated.unresolvedComments) {
         const newCount = updated.unresolvedComments - prev.unresolvedComments
         notifications.push(
-          `[PR #${updated.number}] ${newCount} new comment${newCount > 1 ? 's' : ''}. Run \`gh pr view ${updated.number} -R ${updated.repo} --comments\` to review.`
+          `[PR #${number}] ${newCount} new comment${newCount > 1 ? 's' : ''}. Run \`gh pr view ${number} -R ${repo} --comments\` to review.`
         )
       }
 
@@ -327,9 +351,10 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
     void tick(taskId).then(async () => {
       // Fill entry metadata from task
       const task = await taskService.get(taskId)
-      if (task?.provider && task.provider.kind === 'github-pr') {
-        entry.repo = task.provider.repo
-        entry.pr = task.provider.number
+      if (isGithubChange(task?.provider)) {
+        const { repo, number } = prOf(task.provider)
+        entry.repo = repo
+        entry.pr = number
       }
     })
   }
@@ -347,25 +372,24 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
       if (!fetched) throw new Error(`Failed to fetch PR #${opts.pr} from ${opts.repo}`)
 
       const now = new Date().toISOString()
-      const url = `https://github.com/${opts.repo}/pull/${opts.pr}`
-      const provider: TaskProvider = {
-        kind: 'github-pr',
-        url,
-        repo: opts.repo,
-        number: opts.pr,
-        prStatus: mapPrStatus(fetched.state, fetched.isDraft),
+      const provider: ChangeProvider = {
+        ...changeProvider(opts.repo, opts.pr),
+        status: mapPrStatus(fetched.state, fetched.isDraft),
         checksStatus: mapChecksStatus(fetched.statusCheckRollup),
         reviewDecision: mapReviewDecision(fetched.reviewDecision),
         lastPolledAt: now,
         unresolvedComments: fetched.unresolvedComments
       }
+      const url = provider.url
 
-      const task = await taskService.create({
+      // Idempotent: re-importing a tracked PR refreshes its task.
+      const { task, created } = await taskService.ensureTask(refKey(provider.refs[0]), {
         name: `PR #${opts.pr}: ${fetched.title || opts.repo}`,
         description: `GitHub PR: ${url}\nBranch: ${fetched.headBranch}`,
         parentTaskIds: opts.parentTaskIds,
         tags: [...(opts.tags ?? []), 'github-pr'],
         autoAssign: !!opts.threadId,
+        membrane: opts.membrane ?? null,
         sourceThreadId: opts.sourceThreadId,
         provider
       })
@@ -379,11 +403,12 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
         })
       }
 
-      // Set initial transient state
+      // Set initial transient state (a re-import also refreshes the provider)
       const transient = buildTransient(provider)
       await taskService.update(task.id, {
-        state: 'in_progress',
+        state: created ? 'in_progress' : prStateToTaskState(provider),
         transientState: transient,
+        ...(created ? {} : { provider }),
         sourceThreadId: opts.sourceThreadId
       })
 
@@ -411,11 +436,11 @@ export function createPrPollService(deps: PrPollServiceDeps): PrPollService {
     stop,
 
     async bootstrap() {
-      // Find all tasks with a github-pr provider in active states
+      // Find all tasks with a GitHub change provider in active states
       const allTasks = await taskService.list()
       for (const item of allTasks) {
         if (item.state === 'completed' || item.state === 'cancelled') continue
-        if (!item.provider || item.provider.kind !== 'github-pr') continue
+        if (!isGithubChange(item.provider)) continue
         start(item.id)
       }
       console.log(TAG, `bootstrap: started ${polls.size} PR poll(s)`)

@@ -644,4 +644,85 @@ describe('claude-code/mcp-server', () => {
       expect(result.content[0].text).toContain('m-gone')
     })
   })
+
+  describe('task tools', () => {
+    function taskDeps() {
+      return {
+        create: vi.fn().mockResolvedValue({ id: 'task://1', name: 'n', state: 'pending', threadId: null }),
+        update: vi.fn().mockResolvedValue({}),
+        get: vi.fn().mockResolvedValue(null),
+        list: vi.fn().mockResolvedValue([]),
+        link: vi.fn().mockResolvedValue(undefined),
+        unlink: vi.fn().mockResolvedValue(undefined),
+        summary: vi.fn().mockResolvedValue({}),
+        importItem: vi.fn().mockResolvedValue({ task: { id: 'task://1' }, created: true })
+      }
+    }
+
+    it('offers task_import instead of task_import_pr', () => {
+      const names = Object.keys(getTools(makeDeps({ tasks: taskDeps() })))
+      expect(names).toContain('task_import')
+      expect(names).not.toContain('task_import_pr')
+    })
+
+    it('task_import forwards a refKey, a URL or a plan with the calling thread', async () => {
+      const tasks = taskDeps()
+      const tools = getTools(makeDeps({ tasks }))
+      await invoke(tools, 'task_import', { ref: 'github:github.com/org/repo#12', threadId: 't9' })
+      await invoke(tools, 'task_import', { url: 'https://github.com/org/repo/issues/3' })
+      const result = await invoke(tools, 'task_import', {
+        plan: { project: 'sovereign', path: 'plans/forge.md' },
+        parentTaskIds: ['task://stream'],
+        membrane: 'coasys'
+      })
+      expect(tasks.importItem.mock.calls.map((c) => c[0])).toEqual([
+        expect.objectContaining({ ref: 'github:github.com/org/repo#12', threadId: 't9', sourceThreadId: 't1' }),
+        expect.objectContaining({ url: 'https://github.com/org/repo/issues/3', sourceThreadId: 't1' }),
+        expect.objectContaining({
+          plan: { project: 'sovereign', path: 'plans/forge.md' },
+          parentTaskIds: ['task://stream'],
+          membrane: 'coasys'
+        })
+      ])
+      expect(parseResult(result)).toEqual({ task: { id: 'task://1' }, created: true })
+    })
+
+    it('task_import needs exactly one of ref, url or plan', async () => {
+      const tasks = taskDeps()
+      const tools = getTools(makeDeps({ tasks }))
+      await expect(invoke(tools, 'task_import', {})).rejects.toThrow(/exactly one/)
+      await expect(
+        invoke(tools, 'task_import', { ref: 'org/repo#1', url: 'https://github.com/org/repo/pull/1' })
+      ).rejects.toThrow(/exactly one/)
+      expect(tasks.importItem).not.toHaveBeenCalled()
+    })
+
+    it('task_list passes the Forge filters through', async () => {
+      const tasks = taskDeps()
+      await invoke(getTools(makeDeps({ tasks })), 'task_list', {
+        membrane: 'coasys',
+        repo: 'coasys/ad4m',
+        workstream: 'task://s',
+        providerKind: 'change',
+        streamsOnly: true
+      })
+      expect(tasks.list).toHaveBeenCalledWith(
+        expect.objectContaining({
+          membrane: 'coasys',
+          repo: 'coasys/ad4m',
+          workstream: 'task://s',
+          providerKind: 'change',
+          isStream: true
+        })
+      )
+    })
+
+    it('task_create with stream: true creates an unassigned stream', async () => {
+      const tasks = taskDeps()
+      await invoke(getTools(makeDeps({ tasks })), 'task_create', { name: 'Plan 20', stream: true, autoAssign: true })
+      expect(tasks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Plan 20', isStream: true, autoAssign: false, sourceThreadId: 't1' })
+      )
+    })
+  })
 })
