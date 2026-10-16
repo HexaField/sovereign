@@ -144,6 +144,26 @@ describe('event log and digest', () => {
     expect(again.read()).toHaveLength(5)
     expect(again.coverage()).toEqual(log.coverage())
     expect(again.read({ verdict: 'needs-agent' })).toHaveLength(3)
+    // The torn line does not swallow the next event.
+    again.append([t(ev('conflict'), 'needs-agent')])
+    expect(createEventLog(dir, 'acme').read()).toHaveLength(6)
+  })
+
+  it('an event logged after a digest read it never lands behind the cursor', () => {
+    const log = createEventLog(dir, 'acme')
+    log.append([t({ ...ev('conflict'), at: '2026-10-16T10:00:05.000Z' }, 'needs-agent')])
+    const cursor = log.read()[0].at
+    // Detected earlier, logged later (a slow triage while another path logged).
+    log.append([t({ ...ev('commented'), at: '2026-10-16T10:00:01.000Z' }, 'needs-agent')])
+    expect(log.read({ since: cursor }).map((e) => e.type)).toEqual(['commented'])
+  })
+
+  it('keeps the newest events once the log passes its cap', () => {
+    const log = createEventLog(dir, 'acme', 8)
+    for (let i = 0; i < 10; i++) log.append([t({ ...ev('pushed'), detail: { i } }, 'info')])
+    expect(log.count()).toBe(7)
+    expect(log.read().map((e) => e.detail.i)).toEqual([3, 4, 5, 6, 7, 8, 9])
+    expect(createEventLog(dir, 'acme', 8).count()).toBe(7)
   })
 
   it('digest: needs-agent since the cursor, grouped by stream then node, with card data', () => {

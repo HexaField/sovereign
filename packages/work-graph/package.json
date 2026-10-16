@@ -19,6 +19,7 @@
     "test": "vitest run --root ../.. packages/work-graph/"
   },
   "dependencies": {
+    "@sovereign/config": "workspace:*",
     "@sovereign/core": "workspace:*",
     "@sovereign/forges": "workspace:*",
     "@sovereign/orgs": "workspace:*",

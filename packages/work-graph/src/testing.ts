@@ -1,21 +1,49 @@
 // Test helpers: an in-memory Forge with GitHub's list semantics (newest
-// updated first, since/until cuts, cursors) and item builders. Made-up
-// orgs, repos and logins only.
+// updated first, since/until cuts, cursors), item builders, and the server's
+// TaskPort without AD4M. Made-up orgs, repos and logins only.
 
-import type {
-  Change,
-  CheckSummary,
-  Forge,
-  ForgeBranch,
-  ForgeComment,
-  ForgeIssue,
-  ForgePage,
-  ForgeRef,
-  ListOpts,
-  PageOpts
+import path from 'node:path'
+import {
+  createEventBus,
+  type Change,
+  type CheckSummary,
+  type EventBus,
+  type Forge,
+  type ForgeBranch,
+  type ForgeComment,
+  type ForgeIssue,
+  type ForgePage,
+  type ForgeRef,
+  type ListOpts,
+  type PageOpts,
+  type PortTask,
+  type TaskPort
 } from '@sovereign/core'
+import { createForgeMetaStore, createForgeTaskPort, createInMemoryTaskStore, createTaskService } from '@sovereign/tasks'
 
 export const HOST = 'github.com'
+
+export interface TestTaskPort extends TaskPort {
+  /** A PR or issue task no membrane holds, as `task_import` from a thread outside every membrane makes. */
+  importTask(key: string, kind: 'change' | 'issue', name: string, threadId?: string): Promise<PortTask>
+  dispose(): void
+}
+
+/** The TaskPort the server binds (TaskService + the Forge meta store), kept in memory and `dir`; task.* events go to `bus`. */
+export function createTestTaskPort(dir: string, bus: EventBus = createEventBus(path.join(dir, 'bus'))): TestTaskPort {
+  const service = createTaskService({ store: createInMemoryTaskStore(), bus })
+  const meta = createForgeMetaStore({ dir, connect: null })
+  const port = createForgeTaskPort({ service, meta })
+  return {
+    ...port,
+    async importTask(key, kind, name, threadId) {
+      const t = await port.ensureTask(key, { name, membrane: 'import', kind })
+      await service.update(t.id, { membrane: null, ...(threadId ? { threadId } : {}), sourceThreadId: 'test' })
+      return (await port.get(t.id))!
+    },
+    dispose: () => meta.dispose()
+  }
+}
 
 export function ref(repo: string, n: number | string, kind: ForgeRef['kind'] = 'change'): ForgeRef {
   return { forge: 'github', host: HOST, repo, kind, id: String(n) }

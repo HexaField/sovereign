@@ -1,14 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import type { AgentOverlay, WorkNode } from '@sovereign/core'
-import {
-  agentStatusLine,
-  assignBody,
-  defaultPrompt,
-  defaultThreadLabel,
-  linkedGroups,
-  shortRef,
-  taskSection
-} from './card-model.js'
+import { defaultWorkPrompt, type AgentOverlay, type WorkNode } from '@sovereign/core'
+import { agentStatusLine, assignBody, defaultThreadLabel, linkedGroups, shortRef, taskSection } from './card-model.js'
 import { cardRethinkItems } from './rethink-model.js'
 import { change, edge, issue, plan, stream, task } from './test-fixtures.js'
 
@@ -79,14 +71,14 @@ describe('assign', () => {
 
   it('prefills the label and the prompt from the node', () => {
     expect(defaultThreadLabel(pr)).toBe('engine#42 Fix the flaky socket test')
-    expect(defaultPrompt(pr)).toMatch(
+    expect(defaultWorkPrompt(pr)).toMatch(
       /^Work on https:\/\/github\.com\/demo-org\/engine\/pull\/42: fetch the PR, its comments and CI, then /
     )
-    expect(defaultPrompt(issue(R, 7))).toMatch(
+    expect(defaultWorkPrompt(issue(R, 7))).toMatch(
       /^Work on https:\/\/github\.com\/demo-org\/engine\/issues\/7: fetch the issue, its comments/
     )
-    expect(defaultPrompt(plan('plans/roll.md'))).toContain('the plan "Plan plans/roll.md"')
-    expect(defaultPrompt(task('t1'))).toContain('"Task t1"')
+    expect(defaultWorkPrompt(plan('plans/roll.md'))).toContain('the plan "Plan plans/roll.md"')
+    expect(defaultWorkPrompt(task('t1'))).toContain('"Task t1"')
     expect(defaultThreadLabel(change(R, 1, { title: 'x'.repeat(100) })).length).toBe(60)
   })
 

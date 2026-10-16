@@ -1,4 +1,4 @@
-// Forge — the Hex menu's work graph (plan §8). One membrane at a time; its
+// Forge — the Hex menu's work graph. One membrane at a time; its
 // saved graphs stack as panels (or one shows solo). Each panel loads its own
 // window; overlays and live updates are shared per membrane.
 

@@ -1,47 +1,11 @@
 // Work graph — the types the service, its ports and its routes share.
 
+import { defaults, type SovereignConfig } from '@sovereign/config'
 import type { Change, ForgeIssue, ForgeRef, WorkNode } from '@sovereign/core'
 
-// ── Config ─────────────────────────────────────────────────────────────
-
-/** `forge` in config.json (packages/config types + defaults + schema). */
-export interface ForgeConfig {
-  enabled: boolean
-  /** The login Forge acts as on each forge (assignee writes). Without one, the adapter's own identity is used. */
-  identities: { github?: string }
-  /**
-   * Plan directories. Absolute paths serve every membrane; relative paths
-   * resolve against the membrane's content dir, each of its orgs and each
-   * of its projects.
-   */
-  planDirs: string[]
-  /** Extra repos per membrane ("owner/name" or "host/owner/name"), beside those its projects' remotes name. */
-  repos: Record<string, string[]>
-  /** Words that make a comment needs-agent (besides "@<identity>"). */
-  mentions: string[]
-  pollOpenMs: number
-  pollAllMs: number
-  windowDays: number
-  /** GitHub REST base for every github.com repo (the wind tunnel's mock). */
-  githubApiUrl?: string
-  /** GitHub token; default: GITHUB_TOKEN, GH_TOKEN, then `gh auth token`. */
-  githubToken?: string
-  /** Loop 1's decision-model tier: llama.cpp `POST <url>/v1/systemone`. Unset: no model tier. */
-  classifier?: { url: string; model?: string; timeoutMs?: number }
-  rethink: { times: string[]; maxJobs: number; tokenBudget: number }
-}
-
-export const DEFAULT_FORGE_CONFIG: ForgeConfig = {
-  enabled: false,
-  identities: {},
-  planDirs: ['plans', 'docs/plans', '.specs'],
-  repos: {},
-  mentions: [],
-  pollOpenMs: 120_000,
-  pollAllMs: 600_000,
-  windowDays: 21,
-  rethink: { times: ['08:30', '17:30'], maxJobs: 6, tokenBudget: 200_000 }
-}
+/** `forge` in config.json. */
+export type ForgeConfig = SovereignConfig['forge']
+export const DEFAULT_FORGE_CONFIG: ForgeConfig = defaults.forge
 
 // ── Task port ──────────────────────────────────────────────────────────
 // The contract lives in @sovereign/core (the tasks package implements it

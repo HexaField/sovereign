@@ -1073,6 +1073,9 @@ importers:
 
   packages/work-graph:
     dependencies:
+      '@sovereign/config':
+        specifier: workspace:*
+        version: link:../config
       '@sovereign/core':
         specifier: workspace:*
         version: link:../core

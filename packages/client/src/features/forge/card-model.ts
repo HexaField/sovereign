@@ -75,24 +75,6 @@ export function defaultThreadLabel(n: WorkNode): string {
   return base.length > 60 ? `${base.slice(0, 59)}…` : base
 }
 
-/** The assign prompt's default text (plan §8). */
-export function defaultPrompt(n: WorkNode): string {
-  const target = n.url ?? (n.kind === 'plan' ? `the plan "${n.title}" (${n.id.replace(/^plan:/, '')})` : `"${n.title}"`)
-  switch (n.kind) {
-    case 'change':
-      return `Work on ${target}: fetch the PR, its comments and CI, then address the review comments and failing checks, merge the base in if it is behind, and push.`
-    case 'issue':
-      return `Work on ${target}: fetch the issue, its comments and any linked PRs, then fix it on a branch and open a PR that closes it.`
-    case 'branch':
-      return `Work on the branch ${n.branch?.head ?? n.title}${n.repo ? ` in ${n.repo}` : ''}: fetch it, compare it with its base, then finish the work and open a PR.`
-    case 'plan':
-      return `Work on ${target}: read the plan and the PRs and issues it names, then take the next open step.`
-    case 'task':
-    default:
-      return `Work on the task ${target}: read its parent streams and linked items, then do it and report back.`
-  }
-}
-
 export interface AssignChoice {
   nodeId: string
   /** Existing thread id, or null for a new thread. */

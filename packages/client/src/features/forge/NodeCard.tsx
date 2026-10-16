@@ -1,11 +1,10 @@
-// The selected node's card: an HTML overlay on the canvas (plan §8).
+// The selected node's card: an HTML overlay on the canvas.
 
 import { createMemo, createSignal, For, Show, type Component } from 'solid-js'
-import type { AgentOverlay, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
+import { defaultWorkPrompt, type AgentOverlay, type WorkEdge, type WorkNode, type WorkStream } from '@sovereign/core'
 import {
   agentStatusLine,
   assignBody,
-  defaultPrompt,
   defaultThreadLabel,
   kindLabel,
   linkedGroups,
@@ -63,7 +62,7 @@ const NodeCard: Component<NodeCardProps> = (props) => {
   const [assigned, setAssigned] = createSignal<{ threadId: string; taskId: string } | null>(null)
   const openAssign = (): void => {
     setNewLabel(defaultThreadLabel(n()))
-    setPrompt(defaultPrompt(n()))
+    setPrompt(defaultWorkPrompt(n()))
     setThreadId(props.overlay?.thread?.id ?? '__new__')
     setAssigned(null)
     setAssignOpen(true)

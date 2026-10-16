@@ -123,8 +123,16 @@ export function createGithubTransport(opts: GithubTransportOpts = {}): GithubTra
     return token
   }
 
+  // Set when GitHub says to stop (a spent primary limit, or a rate limit that
+  // outlasted the retries): until then every call fails without a request.
+  let blockedUntil = 0
+
   /** One HTTP exchange with retries. Returns the final response and its text. */
   async function send(url: string, init: RequestInit & { headers: Record<string, string> }) {
+    if (Date.now() < blockedUntil) {
+      const s = Math.ceil((blockedUntil - Date.now()) / 1000)
+      throw new GithubError(`GitHub rate limit: no requests for another ${s} s (${url})`, 429)
+    }
     let refreshed = false
     for (let attempt = 0; ; attempt++) {
       const headers = { ...init.headers, Authorization: `Bearer ${await getToken()}` }
@@ -145,8 +153,10 @@ export function createGithubTransport(opts: GithubTransportOpts = {}): GithubTra
       const text = res.status === 304 || res.status === 204 ? '' : await res.text()
       const limited = rateLimitWait(res, text, Date.now())
       const transient = res.status >= 500 && res.status <= 599
+      if (limited && attempt >= retries) blockedUntil = Date.now() + limited.ms
       if ((limited || transient) && attempt < retries) {
         if (limited?.hard && limited.ms > maxWaitMs) {
+          blockedUntil = Date.now() + limited.ms
           throw new GithubError(
             `GitHub rate limit spent: resets in ${Math.ceil(limited.ms / 1000)} s (${url})`,
             res.status

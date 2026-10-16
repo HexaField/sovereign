@@ -5,11 +5,10 @@ import { createEventBus, type BusEvent, type EventBus, type ForgeGraph } from '@
 import express from 'express'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createMemoryTaskPort, type MemoryTaskPort } from './memory-task-port.js'
 import { createForgeRouter } from './routes.js'
 import { resolveScope, type ScopeSource } from './scope.js'
 import { createForgeService, type ForgeService, type ForgeServiceDeps } from './service.js'
-import { change, createFakeForge, issue, type FakeForge } from './testing.js'
+import { change, createFakeForge, createTestTaskPort, issue, type FakeForge, type TestTaskPort } from './testing.js'
 import type { ForgeConfig } from './types.js'
 
 const WIDGET = 'acme-labs/widget'
@@ -27,7 +26,7 @@ function checkout(dir: string, remote: string) {
 describe('forge service', () => {
   let tmp: string
   let forge: FakeForge
-  let port: MemoryTaskPort
+  let port: TestTaskPort
   let bus: EventBus
   let service: ForgeService
   let now: number
@@ -108,7 +107,7 @@ describe('forge service', () => {
       { name: 'dev', sha: 'd1' },
       { name: 'feat/50', sha: 'sha-50-1' }
     ])
-    port = createMemoryTaskPort()
+    port = createTestTaskPort(path.join(tmp, 'tasks'))
     bus = createEventBus(path.join(tmp, 'bus'))
     bus.on('forge.*', (e) => {
       busEvents.push(e)
@@ -117,6 +116,7 @@ describe('forge service', () => {
   })
   afterEach(() => {
     service.stop()
+    port.dispose()
     fs.rmSync(tmp, { recursive: true, force: true })
   })
 
@@ -400,6 +400,76 @@ describe('forge service', () => {
         .map((c) => (c.opts as { id: string }).id)
         .sort()
     ).toEqual(['50', '51'])
+  })
+
+  it('a repo two membranes sync: each logs its events and tells its own owner threads', async () => {
+    const ms = [
+      { id: 'acme', workspaceIds: ['acme-org'] },
+      { id: 'beta', workspaceIds: [] }
+    ]
+    scope = { ...scope, getMembrane: (id) => ms.find((m) => m.id === id), listMembranes: () => ms }
+    config = { ...config, repos: { acme: [GADGET], beta: [GADGET] } }
+    service = make()
+    await service.sync('acme')
+    await service.sync('beta')
+    await service.assign({ membrane: 'beta', nodeId: nid(GADGET, 9), threadId: 'beta-owner' })
+    sent = []
+    now += 120_000
+    forge.put(change(GADGET, 9, { state: 'merged', updatedAt: new Date(now).toISOString() }))
+    now += 60_000
+    await service.sync('acme')
+    await service.sync('beta')
+    const merged = (m: string) => service.events(m).filter((e) => e.type === 'merged' && e.nodeId === nid(GADGET, 9))
+    expect(merged('acme')).toHaveLength(1)
+    expect(merged('beta')).toHaveLength(1)
+    expect(sent).toEqual([{ threadId: 'beta-owner', text: '[PR #9] Merged.' }])
+  })
+
+  it('an assignment made while a sync runs keeps its marker in state.json', async () => {
+    await service.sync('acme')
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const ensure = port.ensureTask.bind(port)
+    let held = false
+    port.ensureTask = async (key, init) => {
+      if (init.kind === 'plan') {
+        held = true
+        await gate
+      }
+      return ensure(key, init)
+    }
+    // The plan now names #51 too, so this sync rewrites its plan links.
+    fs.writeFileSync(
+      path.join(tmp, 'acme', 'widget', 'plans', 'sprockets.md'),
+      '# Sprocket rework\n\nStatus: in progress\n\nCovers #50 and #51 in acme-labs/widget.\n'
+    )
+    now += 120_000
+    const syncing = service.sync('acme')
+    expect(await until(() => held)).toBe(true)
+    await service.assign({ membrane: 'acme', nodeId: nid(WIDGET, 50), threadId: 'owner' })
+    release()
+    await syncing
+    const file = JSON.parse(fs.readFileSync(path.join(tmp, 'data', 'forge', 'acme', 'state.json'), 'utf8'))
+    expect(file.assignedByForge).toEqual({ [nid(WIDGET, 50)]: 'hex-agent' })
+    expect(file.planLinks['plan:acme-org/widget/sprockets.md'].named).toContain(nid(WIDGET, 51))
+  })
+
+  it('a stream of one membrane takes no members or child streams through another', async () => {
+    const ms = [
+      { id: 'acme', workspaceIds: ['acme-org'] },
+      { id: 'beta', workspaceIds: [] }
+    ]
+    scope = { ...scope, getMembrane: (id) => ms.find((m) => m.id === id), listMembranes: () => ms }
+    config = { ...config, repos: { acme: [GADGET], beta: [WIDGET] } }
+    service = make()
+    await service.sync('acme')
+    await service.sync('beta')
+    const stream = await service.createStream('acme', 'Gears')
+    await expect(service.addMember(stream.id, nid(WIDGET, 50), 'beta')).rejects.toMatchObject({ status: 404 })
+    await expect(service.removeMember(stream.id, nid(WIDGET, 50), 'beta')).rejects.toMatchObject({ status: 404 })
+    await expect(service.createStream('beta', 'Sub', stream.id)).rejects.toMatchObject({ status: 404 })
+    expect((await port.get(stream.id))!.childIds).toEqual([])
+    expect(await service.addMember(stream.id, nid(WIDGET, 50), 'acme')).toMatchObject({ taskId: expect.any(String) })
   })
 
   describe('routes', () => {

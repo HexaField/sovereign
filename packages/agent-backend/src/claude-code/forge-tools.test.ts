@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { FORGE_TOOL_NAMES, type ForgeMcpDeps } from './forge-tools.js'
+import { FORGE_TOOLS } from '@sovereign/core'
+import type { ForgeMcpDeps } from './forge-tools.js'
 import { createSovereignMcpServer, type SovereignToolDeps } from './mcp-server.js'
 
 const RETHINK = 'rethink-thread'
@@ -34,9 +35,9 @@ describe('forge rethink MCP tools', () => {
   })
 
   it('are registered only in a forge-rethink thread, and only once bound', () => {
-    expect(Object.keys(tools(deps(RETHINK, forge())))).toEqual(expect.arrayContaining([...FORGE_TOOL_NAMES]))
+    expect(Object.keys(tools(deps(RETHINK, forge())))).toEqual(expect.arrayContaining([...FORGE_TOOLS]))
     expect(Object.keys(tools(deps(`agent:main:thread:${RETHINK}`, forge())))).toContain('forge_note')
-    for (const absent of FORGE_TOOL_NAMES) {
+    for (const absent of FORGE_TOOLS) {
       expect(Object.keys(tools(deps('other-thread', forge())))).not.toContain(absent)
       expect(Object.keys(tools(deps(RETHINK, {})))).not.toContain(absent)
       expect(Object.keys(tools(deps(RETHINK)))).not.toContain(absent)

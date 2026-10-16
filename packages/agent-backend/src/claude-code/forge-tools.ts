@@ -4,15 +4,8 @@
 // the run report and on the node's card.
 
 import { tool } from '@anthropic-ai/claude-agent-sdk'
+import type { ForgeToolName } from '@sovereign/core'
 import { z } from 'zod'
-
-export type ForgeToolName =
-  | 'forge_relate'
-  | 'forge_stream_add'
-  | 'forge_dispatch'
-  | 'forge_bug_draft'
-  | 'forge_attention'
-  | 'forge_note'
 
 /** Late-bound by the server once the forge service exists. */
 export interface ForgeMcpDeps {
@@ -22,15 +15,6 @@ export interface ForgeMcpDeps {
 }
 
 const okJson = (obj: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }] })
-
-export const FORGE_TOOL_NAMES: readonly ForgeToolName[] = [
-  'forge_relate',
-  'forge_stream_add',
-  'forge_dispatch',
-  'forge_bug_draft',
-  'forge_attention',
-  'forge_note'
-]
 
 /** The forge_* tools for the calling thread, or none when it is not a forge-rethink thread. */
 export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | undefined): any[] {

@@ -163,10 +163,33 @@ describe('retries', () => {
         body: { message: 'API rate limit exceeded' }
       }
     ])
-    await expect(
-      createGithubTransport({ apiUrl: API, token: 'x', fetch: far.fetchFn }).rest('GET', 'user')
-    ).rejects.toThrow(/rate limit spent/)
+    const t = createGithubTransport({ apiUrl: API, token: 'x', fetch: far.fetchFn })
+    await expect(t.rest('GET', 'user')).rejects.toThrow(/rate limit spent/)
     expect(far.calls).toHaveLength(1)
+    // Until the reset, calls fail without asking GitHub again.
+    await expect(t.graphql('{ viewer { login } }')).rejects.toMatchObject({ status: 429 })
+    expect(far.calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(3600_000)
+    void t.rest('GET', 'user').catch(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(far.calls).toHaveLength(2)
+  })
+
+  it('stops asking for a while once a secondary rate limit outlasts the retries', async () => {
+    const { calls, fetchFn } = scripted([
+      { status: 403, headers: { 'retry-after': '30' }, body: { message: 'You have exceeded a secondary rate limit.' } }
+    ])
+    const t = createGithubTransport({ apiUrl: API, token: 'x', fetch: fetchFn, retries: 1 })
+    const done = expect(t.rest('GET', 'user')).rejects.toMatchObject({ status: 403 })
+    await vi.advanceTimersByTimeAsync(30_000)
+    await done
+    expect(calls).toHaveLength(2)
+    await expect(t.rest('GET', 'user')).rejects.toMatchObject({ status: 429 })
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(30_000)
+    void t.rest('GET', 'user').catch(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(3)
   })
 
   it('does not retry a plain 403 or 404', async () => {

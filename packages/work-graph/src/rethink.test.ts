@@ -5,7 +5,6 @@ import { createEventBus, type BusEvent, type EventBus, type WorkNode } from '@so
 import express from 'express'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMemoryTaskPort, type MemoryTaskPort } from './memory-task-port.js'
 import {
   buildRethinkPrompt,
   createRethinkRunner,
@@ -19,7 +18,7 @@ import {
 import { createRethinkRouter } from './rethink-routes.js'
 import type { ScopeSource } from './scope.js'
 import { createForgeService, type ForgeService } from './service.js'
-import { change, createFakeForge, type FakeForge } from './testing.js'
+import { change, createFakeForge, createTestTaskPort, type FakeForge, type TestTaskPort } from './testing.js'
 import type { ForgeConfig, ForgeDigest, TriagedEvent } from './types.js'
 
 const WIDGET = 'acme-labs/widget'
@@ -168,7 +167,7 @@ describe('renderRunReport', () => {
 describe('rethink runner', () => {
   let tmp: string
   let forge: FakeForge
-  let port: MemoryTaskPort
+  let port: TestTaskPort
   let bus: EventBus
   let service: ForgeService
   let runner: RethinkRunner
@@ -195,6 +194,7 @@ describe('rethink runner', () => {
       threads: {
         find: (m, label) => [...threads].find(([, t]) => t.membrane === m && t.label === label)?.[0],
         exists: (id) => threads.has(id),
+        membraneOf: (id) => threads.get(id)?.membrane,
         create: async (m, label) => {
           const id = `thread-${threads.size + 1}`
           threads.set(id, { label, membrane: m, busy: false })
@@ -254,7 +254,7 @@ describe('rethink runner', () => {
     forge.put(change(WIDGET, 50, { updatedAt: '2026-10-15T00:00:00Z', title: 'Stream teeth' }))
     forge.put(change(WIDGET, 51, { updatedAt: '2026-10-14T00:00:00Z', title: 'Gear ratio' }))
     forge.put(change(WIDGET, 52, { updatedAt: '2026-10-13T00:00:00Z', title: 'Axle grease' }))
-    port = createMemoryTaskPort()
+    port = createTestTaskPort(path.join(tmp, 'tasks'))
     bus = createEventBus(path.join(tmp, 'bus'))
     bus.on('forge.*', (e) => void events.push(e))
     runner = makeRunner()
@@ -291,6 +291,7 @@ describe('rethink runner', () => {
   afterEach(() => {
     runner.stop()
     service.stop()
+    port.dispose()
     fs.rmSync(tmp, { recursive: true, force: true })
   })
 
@@ -497,6 +498,44 @@ describe('rethink runner', () => {
       kind: 'dispatch',
       text: expect.stringContaining('Sent to "Sprocket worker"')
     })
+  })
+
+  it('parallel tool calls in one turn still respect the job limit and the one attention post', async () => {
+    await service.rethink('acme')
+    const rt = runner.threadOf('acme')!
+    const call = (name: Parameters<RethinkRunner['tool']>[1], args: Record<string, unknown>) =>
+      runner.tool(rt, name, { membrane: 'acme', ...args })
+    const results = await Promise.all(
+      [1, 2, 3].map((i) => call('forge_dispatch', { nodeId: nid(50), prompt: `job ${i}` }))
+    )
+    expect(results.filter((r) => r.dispatched)).toHaveLength(2)
+    expect(results.filter((r) => r.refused)).toHaveLength(1)
+    expect(sent.filter((s) => s.threadId === 'owner-1')).toHaveLength(2)
+
+    const posts = await Promise.all([1, 2].map((i) => call('forge_attention', { items: [{ text: `item ${i}` }] })))
+    expect(posts.filter((r) => r.posted)).toHaveLength(1)
+    expect(posted).toHaveLength(1)
+  })
+
+  it('forge_dispatch to a given thread only reaches a thread of the membrane or an owner of its items', async () => {
+    threads.set('elsewhere', { label: 'Other membrane', membrane: 'other', busy: false })
+    threads.set('acme-chat', { label: 'Acme chat', membrane: 'acme', busy: false })
+    await service.rethink('acme')
+    const rt = runner.threadOf('acme')!
+    const dispatch = (threadId: string) =>
+      runner.tool(rt, 'forge_dispatch', { membrane: 'acme', nodeId: nid(50), threadId, prompt: 'look' })
+    await expect(dispatch('elsewhere')).rejects.toMatchObject({ status: 403 })
+    expect(sent.some((s) => s.threadId === 'elsewhere')).toBe(false)
+    expect(await dispatch('acme-chat')).toMatchObject({ dispatched: true, threadId: 'acme-chat' })
+    threads.get('owner-1')!.membrane = 'other'
+    expect(await dispatch('owner-1')).toMatchObject({ dispatched: true, threadId: 'owner-1' })
+  })
+
+  it('two runs started together make one rethink thread', async () => {
+    const digest = await service.digest('acme')
+    const results = await Promise.allSettled([runner.run('acme', digest), runner.run('acme', digest)])
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect([...threads.values()].filter((t) => t.label === 'forge-rethink')).toHaveLength(1)
   })
 
   it('tools only work in the membrane rethink thread; outside a run they open a chat run', async () => {

@@ -44,16 +44,20 @@ export const SYSTEMONE_QUESTION = {
 } as const
 
 const DEFAULT_TIMEOUT_MS = 5000
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+export const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
-function detailText(detail: Record<string, unknown>): string {
-  const out: string[] = []
-  for (const [k, v] of Object.entries(detail)) {
-    if (v === undefined || v === null || v === '') continue
-    const text = Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' | ') : v
-    out.push(`${k}: ${clip(typeof text === 'string' ? text : JSON.stringify(text), 400)}`)
-  }
-  return out.join('\n')
+/** "key: value" per set detail field, each value on one line and clipped to `max`. */
+export function detailParts(detail: Record<string, unknown>, max: number): string[] {
+  return Object.entries(detail)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => {
+      const text = Array.isArray(v)
+        ? v.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' | ')
+        : typeof v === 'string'
+          ? v
+          : JSON.stringify(v)
+      return `${k}: ${clip(text.replace(/\s+/g, ' ').trim(), max)}`
+    })
 }
 
 /** The node card as plain lines (also used by the rethink prompt). */
@@ -83,8 +87,7 @@ export function nodeCardLines(node: WorkNode): string[] {
 export function classifierState(input: { event: ForgeEvent; node?: WorkNode; owned: boolean }): string {
   const { event, node, owned } = input
   const lines = [`Event: ${event.type.replace(/_/g, ' ')}`]
-  const detail = detailText(event.detail)
-  if (detail) lines.push(detail)
+  lines.push(...detailParts(event.detail, 400))
   lines.push('')
   if (node) lines.push(...nodeCardLines(node))
   else lines.push(`Item: ${event.nodeId}`)

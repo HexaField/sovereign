@@ -1,9 +1,8 @@
 // Task sync — after each Loop 1 sync (and each tracked-item read), tasks
 // attached to forge nodes get the provider status, a state that follows the
-// work (plan §7.3, forward only) and a one-line transientState. The notifier
-// tells owner threads what pr-poll used to (CI red and green again, changes
-// requested, approved, merged, closed unmerged, new comments) plus closed
-// issues and conflicts.
+// work (forward only) and a one-line transientState. The notifier tells owner
+// threads about CI red and green again, changes requested, approved, merged,
+// closed unmerged, new comments, closed issues and conflicts.
 
 import type { WorkEdge, WorkNode } from '@sovereign/core'
 import type {
@@ -145,7 +144,7 @@ export function sameStatus(a: PortTaskStatus | undefined, b: PortTaskStatus): bo
   )
 }
 
-/** pr-poll's thread notifications, from Loop 1 events on owned nodes. */
+/** The owner thread's notification for a Loop 1 event, if any. */
 export function notificationFor(e: ForgeEvent, node: WorkNode): string | undefined {
   const isChange = node.kind === 'change'
   const tag = `[${isChange ? 'PR' : 'Issue'} #${node.number}]`

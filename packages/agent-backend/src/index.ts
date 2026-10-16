@@ -53,7 +53,6 @@ export {
   type TaskMcpDeps,
   type CiWatchMcpDeps,
   type ForgeMcpDeps,
-  type ForgeToolName,
   usageSinceFromFile,
   type PersonalityCompiler,
   type PersonalityCompilerOptions,

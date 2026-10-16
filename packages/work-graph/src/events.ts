@@ -132,9 +132,14 @@ export async function triage(
 
 export interface EventLog {
   file: string
+  /**
+   * Each event's `at` is moved past the last logged one when needed, so a
+   * digest cursor (the last `at` it read) never skips an event logged later.
+   */
   append(events: TriagedEvent[]): void
   /** Events after `since` (exclusive ISO time), oldest first. */
   read(opts?: { since?: string; verdict?: TriageVerdict; nodeId?: string }): TriagedEvent[]
+  count(): number
   coverage(): TriageCoverage
 }
 
@@ -142,7 +147,8 @@ export function safeSegment(s: string): string {
   return s.replace(/[^\w.-]+/g, '_') || '_'
 }
 
-export function createEventLog(dataDir: string, membrane: string): EventLog {
+/** Past `maxEvents` the log is rewritten with its newest three quarters. */
+export function createEventLog(dataDir: string, membrane: string, maxEvents = 20_000): EventLog {
   const file = path.join(dataDir, 'forge', safeSegment(membrane), 'events.jsonl')
   const cov = emptyCoverage()
   const readAll = (): TriagedEvent[] => {
@@ -163,15 +169,45 @@ export function createEventLog(dataDir: string, membrane: string): EventLog {
     }
     return out
   }
-  for (const e of readAll()) countTier(cov, e)
+  const existing = readAll()
+  for (const e of existing) countTier(cov, e)
+  let count = existing.length
+  let lastAt = existing.reduce((a, e) => (e.at > a ? e.at : a), '')
+  // A crash can leave a torn last line; the next append must not continue it.
+  let torn = false
+  try {
+    const size = fs.statSync(file).size
+    const fd = fs.openSync(file, 'r')
+    const last = Buffer.alloc(1)
+    if (size) fs.readSync(fd, last, 0, 1, size - 1)
+    fs.closeSync(fd)
+    torn = size > 0 && last[0] !== 0x0a
+  } catch {
+    // no log yet
+  }
   return {
     file,
     append(events) {
       if (!events.length) return
+      const stamped = events.map((e) => {
+        const at = e.at > lastAt ? e.at : new Date(Date.parse(lastAt) + 1).toISOString()
+        lastAt = at
+        return at === e.at ? e : { ...e, at }
+      })
       fs.mkdirSync(path.dirname(file), { recursive: true })
-      fs.appendFileSync(file, events.map((e) => JSON.stringify(e)).join('\n') + '\n')
-      for (const e of events) countTier(cov, e)
+      fs.appendFileSync(file, (torn ? '\n' : '') + stamped.map((e) => JSON.stringify(e)).join('\n') + '\n')
+      torn = false
+      for (const e of stamped) countTier(cov, e)
+      count += stamped.length
+      if (count > maxEvents) {
+        const keep = readAll().slice(-Math.floor(maxEvents * 0.75))
+        const tmp = `${file}.tmp`
+        fs.writeFileSync(tmp, keep.map((e) => JSON.stringify(e)).join('\n') + '\n')
+        fs.renameSync(tmp, file)
+        count = keep.length
+      }
     },
+    count: () => count,
     read(opts = {}) {
       return readAll().filter(
         (e) =>

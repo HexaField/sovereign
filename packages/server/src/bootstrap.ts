@@ -661,7 +661,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // CI watcher: methods are bound once the chat layer exists (it delivers the
   // notifications); the MCP tools appear from then on.
   const ciMcpDeps: CiWatchMcpDeps = {}
-  // Forge rethink tools: bound once the forge service exists (forge.enabled).
+  // Forge rethink tools: bound once the forge service exists.
   const forgeMcpDeps: ForgeMcpDeps = {}
 
   const taskMcpDeps: TaskMcpDeps = {
@@ -938,7 +938,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // TaskDigest; the meta store for views and suggested edges). Always
   // running: forge.enabled (hot) gates the membrane syncs and the overlay,
   // while PR and issue tasks no membrane sync reads are polled one by one
-  // either way (what pr-poll did). It starts once both stores have loaded.
+  // either way. It starts once both stores have loaded.
   const forgeConfig = () => configStore.get<SovereignConfig['forge']>('forge') ?? cfg.forge
   // Loop 1's decision-model tier (forge.classifier, read per call) and Loop 2's
   // runner: the membrane's forge-rethink thread, the forge_* tools, run reports.
@@ -973,6 +973,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       find: (membrane, label) =>
         threadManager.list({ membraneId: membrane }).find((t) => t.label === label && !t.archived)?.id,
       exists: (id) => Boolean(liveThread(id)),
+      membraneOf: (id) => liveThread(id)?.membraneId,
       create: async (membrane, label) => createMembraneThread(membrane, label),
       label: (id) => liveThread(id)?.label,
       busy: (id) => (liveThread(id)?.agentStatus ?? 'idle') !== 'idle',

@@ -1,5 +1,4 @@
-// One TaskPort contract, two implementations: the in-memory port the work
-// graph's tests use, and the real one the server binds (@sovereign/tasks:
+// The TaskPort contract against the port the server binds (@sovereign/tasks:
 // TaskService + the Forge meta store, persisted without AD4M here).
 
 import fs from 'node:fs'
@@ -8,7 +7,6 @@ import path from 'node:path'
 import { createEventBus, type BusEvent, type EventBus, type TaskPort } from '@sovereign/core'
 import { createForgePersistence, createForgeTaskPort, createTaskService } from '@sovereign/tasks'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createMemoryTaskPort } from './memory-task-port.js'
 
 interface Made {
   port: TaskPort
@@ -28,7 +26,6 @@ afterEach(() => {
 })
 
 const IMPLS: Array<{ name: string; make: (bus?: EventBus) => Promise<Made> }> = [
-  { name: 'memory', make: async (bus) => ({ port: createMemoryTaskPort({ bus }), dispose: () => undefined }) },
   {
     name: 'tasks (TaskService + meta store)',
     make: async (bus) => {

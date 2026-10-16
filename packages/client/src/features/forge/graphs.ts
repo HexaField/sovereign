@@ -3,8 +3,6 @@
 
 import type { ForgeFilters, ForgeView } from '@sovereign/core'
 
-export const DEFAULT_PANEL_HEIGHT = 460
-
 export type Arrangement = { mode: 'all' } | { mode: 'solo'; id: string }
 
 export function newViewId(existing: ForgeView[], rand: () => number = Math.random): string {

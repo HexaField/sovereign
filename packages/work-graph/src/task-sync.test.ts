@@ -1,6 +1,9 @@
 import type { WorkNode } from '@sovereign/core'
-import { describe, expect, it } from 'vitest'
-import { createMemoryTaskPort } from './memory-task-port.js'
+import { describe, expect, it, onTestFinished } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { createTestTaskPort } from './testing.js'
 import { nextTaskState, notificationFor, statusLine, syncTasks, type StateContext } from './task-sync.js'
 import type { CachedChange, ForgeEvent, PortTaskState } from './types.js'
 
@@ -124,7 +127,12 @@ describe('syncTasks', () => {
       replay: async function* () {},
       history: () => []
     }
-    const port = createMemoryTaskPort({ bus: bus as never })
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wg-task-sync-'))
+    const port = createTestTaskPort(dir, bus as never)
+    onTestFinished(() => {
+      port.dispose()
+      fs.rmSync(dir, { recursive: true, force: true })
+    })
     const merged = node({ state: 'merged' })
     const t = await port.ensureTask(merged.id, { name: 'x', membrane: 'acme', kind: 'change' })
     await port.setThread(t.id, 'thread-1')

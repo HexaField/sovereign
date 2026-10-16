@@ -356,6 +356,34 @@ export interface TaskPort {
   deleteRelated(membrane: string, from: string, to: string, kind: WorkEdgeKind): Promise<boolean>
 }
 
+/** What a thread assigned to a node is asked to do, unless the user writes the prompt. */
+export function defaultWorkPrompt(n: WorkNode): string {
+  const target = n.url ?? (n.kind === 'plan' ? `the plan "${n.title}" (${n.id.replace(/^plan:/, '')})` : `"${n.title}"`)
+  switch (n.kind) {
+    case 'change':
+      return `Work on ${target}: fetch the PR, its comments and CI, then address the review comments and failing checks, merge the base in if it is behind, and push.`
+    case 'issue':
+      return `Work on ${target}: fetch the issue, its comments and any linked PRs, then fix it on a branch and open a PR that closes it.`
+    case 'branch':
+      return `Work on the branch ${n.branch?.head ?? n.title}${n.repo ? ` in ${n.repo}` : ''}: fetch it, compare it with its base, then finish the work and open a PR.`
+    case 'plan':
+      return `Work on ${target}: read the plan and the PRs and issues it names, then take the next open step.`
+    default:
+      return `Work on the task ${target}: read its parent streams and linked items, then do it and report back.`
+  }
+}
+
+/** The Loop 2 tools, registered only in a membrane's forge-rethink thread. */
+export const FORGE_TOOLS = [
+  'forge_relate',
+  'forge_stream_add',
+  'forge_dispatch',
+  'forge_bug_draft',
+  'forge_attention',
+  'forge_note'
+] as const
+export type ForgeToolName = (typeof FORGE_TOOLS)[number]
+
 /** String form of a ForgeRef: "github:github.com/coasys/ad4m#1390", branches "…@feat/x". */
 export function refKey(ref: ForgeRef): string {
   const sep = ref.kind === 'branch' ? '@' : '#'

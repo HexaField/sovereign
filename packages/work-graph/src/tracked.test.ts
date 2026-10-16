@@ -9,10 +9,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { createEventBus, type EventBus } from '@sovereign/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createMemoryTaskPort, type MemoryTaskPort } from './memory-task-port.js'
 import type { ScopeSource } from './scope.js'
 import { createForgeService, type ForgeService } from './service.js'
-import { change, createFakeForge, issue, type FakeForge } from './testing.js'
+import { change, createFakeForge, createTestTaskPort, issue, type FakeForge, type TestTaskPort } from './testing.js'
 import type { ForgeConfig } from './types.js'
 
 const THING = 'other-org/thing'
@@ -22,7 +21,7 @@ const key = (repo: string, n: number) => `github:github.com/${repo}#${n}`
 describe('tracked items (pr-poll parity)', () => {
   let tmp: string
   let forge: FakeForge
-  let port: MemoryTaskPort
+  let port: TestTaskPort
   let bus: EventBus
   let service: ForgeService
   let sent: Array<{ threadId: string; text: string }>
@@ -33,7 +32,7 @@ describe('tracked items (pr-poll parity)', () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wg-tracked-'))
     sent = []
     forge = createFakeForge()
-    port = createMemoryTaskPort()
+    port = createTestTaskPort(path.join(tmp, 'tasks'))
     bus = createEventBus(path.join(tmp, 'bus'))
     config = {}
     scope = {
@@ -59,6 +58,7 @@ describe('tracked items (pr-poll parity)', () => {
   })
   afterEach(() => {
     service.stop()
+    port.dispose()
     fs.rmSync(tmp, { recursive: true, force: true })
   })
 
@@ -168,7 +168,8 @@ describe('tracked items (pr-poll parity)', () => {
       payload: { taskId: t.id, taskName: t.name, threadId: 'th-1', sourceThreadId: 'th-1' }
     })
     const end = Date.now() + 3000
-    while (!(await port.get(t.id))!.status && Date.now() < end) await new Promise((r) => setTimeout(r, 20))
+    while ((await port.get(t.id))!.status?.checks !== 'failing' && Date.now() < end)
+      await new Promise((r) => setTimeout(r, 20))
     expect((await port.get(t.id))!.status).toMatchObject({ checks: 'failing' })
   })
 
