@@ -16,6 +16,7 @@ export {
 } from './fold-system-events.js'
 export * from './ask-user-question.js'
 export * from './subagent-result.js'
+export * from './forge.js'
 
 /**
  * A message in the server-side queue waiting to be sent to the agent.
