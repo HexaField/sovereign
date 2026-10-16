@@ -24,6 +24,24 @@ services:
       timeout: 2s
       retries: 10
 
+  mock-github:
+    build:
+      context: ../mock-github
+      dockerfile: ../docker/mock-github.Dockerfile
+    ports:
+      - "8910:8910"
+    environment:
+      PORT: "8910"
+      MOCK_VERBOSE: "1"
+    networks:
+      windtunnel:
+        ipv4_address: 172.28.0.11
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8910/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
+      interval: 1s
+      timeout: 2s
+      retries: 10
+
   sovereign:
     build:
       context: ../../
@@ -64,6 +82,8 @@ services:
       - windtunnel
     depends_on:
       mock-llm:
+        condition: service_healthy
+      mock-github:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5801/health"]

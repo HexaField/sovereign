@@ -28,6 +28,7 @@
     "@sovereign/diff": "workspace:*",
     "@sovereign/drafts": "workspace:*",
     "@sovereign/files": "workspace:*",
+    "@sovereign/forges": "workspace:*",
     "@sovereign/git": "workspace:*",
     "@sovereign/issues": "workspace:*",
     "@sovereign/meetings": "workspace:*",

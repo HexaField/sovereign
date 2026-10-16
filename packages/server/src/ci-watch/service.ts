@@ -8,6 +8,10 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { toCheckStates, type CheckState } from '@sovereign/forges'
+
+// The fold of check runs + statuses is shared with the forge adapter's checks().
+export { toCheckStates, type CheckState }
 
 const execFileAsync = promisify(execFile)
 const TAG = '[ci-watch]'
@@ -30,14 +34,6 @@ export interface CiWatch {
   shaChanges: number
   createdAt: number
   expiresAt: number
-}
-
-export interface CheckState {
-  name: string
-  state: 'pending' | 'success' | 'failure' | 'neutral'
-  conclusion?: string
-  url?: string
-  summary?: string
 }
 
 export interface CiSnapshot {
@@ -98,8 +94,6 @@ export const CI_POLL = {
   noChecksTimeoutMs: 20 * 60_000
 }
 
-const FAILED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale', 'error'])
-
 /** Default GitHub client: fetch with the `gh` CLI's token. */
 export function createGithubGet(exec: typeof execFileAsync = execFileAsync): GithubGet {
   let token: string | undefined
@@ -126,44 +120,6 @@ export function createGithubGet(exec: typeof execFileAsync = execFileAsync): Git
     return { status: res.status, etag: res.headers.get('etag') ?? undefined, body }
   }
   return get
-}
-
-const RANK: Record<CheckState['state'], number> = { failure: 3, pending: 2, neutral: 1, success: 0 }
-
-/** Fold check runs and commit statuses into one state per check name. When
- *  two sources post the same name, the worse state wins. */
-export function toCheckStates(checkRuns: any[], statuses: any[]): CheckState[] {
-  const out = new Map<string, CheckState>()
-  const keep = (c: CheckState) => {
-    const prev = out.get(c.name)
-    if (!prev || RANK[c.state] > RANK[prev.state]) out.set(c.name, c)
-  }
-  for (const r of checkRuns) {
-    const conclusion = r.status === 'completed' ? (r.conclusion ?? 'neutral') : undefined
-    keep({
-      name: r.name,
-      state: !conclusion
-        ? 'pending'
-        : conclusion === 'success'
-          ? 'success'
-          : FAILED.has(conclusion)
-            ? 'failure'
-            : 'neutral',
-      conclusion: conclusion ?? r.status,
-      url: r.html_url ?? r.details_url,
-      summary: r.output?.title ?? undefined
-    })
-  }
-  for (const s of statuses) {
-    keep({
-      name: s.context,
-      state: s.state === 'pending' ? 'pending' : s.state === 'success' ? 'success' : 'failure',
-      conclusion: s.state,
-      url: s.target_url ?? undefined,
-      summary: s.description ?? undefined
-    })
-  }
-  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
 /** Restrict to the watched checks; report filters that match nothing yet. */

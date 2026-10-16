@@ -43,6 +43,7 @@ import { s39OverlappingReplies } from './s39-overlapping-replies.js'
 import { s40PttStream } from './s40-ptt-stream.js'
 import { s41RecycleGate } from './s41-recycle-gate.js'
 import { s42DeviceFiles } from './s42-device-files.js'
+import { s43ForgeGithub } from './s43-forge-github.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -140,5 +141,8 @@ export const ALL_SCENARIOS: Scenario[] = [
   s39OverlappingReplies,
   s40PttStream,
   s41RecycleGate,
-  s42DeviceFiles
+  s42DeviceFiles,
+  // Forge: the GitHub adapter (packages/forges) driven from the runner
+  // against the mock GitHub container.
+  s43ForgeGithub
 ]
