@@ -212,6 +212,29 @@ describe('listChanges', () => {
     expect(b.sent).toHaveLength(1)
   })
 
+  it('pageChanges reads one page at a cursor, skips items at or after until, and hands back the next cursor', async () => {
+    const { forge, sent } = forgeWith(route, { pageSize: 3 })
+    const first = await forge.pageChanges('acme-labs/widget', { until: '2026-03-01T18:00:00Z' })
+    expect(first.hasNext).toBe(true)
+    expect(first.cursor).toBe('Y3Vyc29yOjM=')
+    const second = await forge.pageChanges('acme-labs/widget', { after: first.cursor, until: '2026-03-01T18:00:00Z' })
+    expect([...first.items, ...second.items].map((c) => c.ref.id)).toEqual(['401', '399', '350'])
+    expect(sent.map((s) => s.body.variables.after)).toEqual([null, 'Y3Vyc29yOjM='])
+    expect(sent[0].body.variables.states).toBeNull()
+    const last = fixture('changes-page-2.json')
+    last.data.repository.pullRequests.pageInfo.hasNextPage = false
+    const end = await forgeWith(() => ({ body: last })).forge.pageChanges('acme-labs/widget', { after: 'x' })
+    expect(end.hasNext).toBe(false)
+    expect(end.cursor).toBeUndefined()
+  })
+
+  it('pageIssues sends the issues query with no since filter', async () => {
+    const { forge, sent } = forgeWith(() => ({ body: fixture('issues-page.json') }))
+    await forge.pageIssues('acme-labs/widget')
+    expect(sent[0].body.query).toBe(ISSUES_QUERY)
+    expect(sent[0].body.variables).toMatchObject({ since: null, states: null, after: null })
+  })
+
   it('fails on a missing repo and on a malformed repo name', async () => {
     const { forge } = forgeWith(() => ({
       body: {

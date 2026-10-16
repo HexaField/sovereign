@@ -101,6 +101,21 @@ export interface ListOpts {
   state?: 'open' | 'all'
 }
 
+/** One page of a newest-updated-first list, resumable from `cursor`. */
+export interface ForgePage<T> {
+  items: T[]
+  /** Pass as `after` to read the next page; absent when there is none. */
+  cursor?: string
+  hasNext: boolean
+}
+
+export interface PageOpts {
+  /** Cursor of the previous page. */
+  after?: string
+  /** Skip items updated at or after this ISO time. */
+  until?: string
+}
+
 /** One forge adapter. Today only GitHub implements it. */
 export interface Forge {
   kind: ForgeKind
@@ -109,6 +124,10 @@ export interface Forge {
   listChanges(repo: string, opts?: ListOpts): Promise<Change[]>
   listIssues(repo: string, opts?: ListOpts): Promise<ForgeIssue[]>
   listBranches(repo: string): Promise<ForgeBranch[]>
+  /** One page of changes (all states), for a resumable backfill. Optional: without it a backfill is one listChanges call. */
+  pageChanges?(repo: string, opts?: PageOpts): Promise<ForgePage<Change>>
+  /** One page of issues (all states), for a resumable backfill. */
+  pageIssues?(repo: string, opts?: PageOpts): Promise<ForgePage<ForgeIssue>>
   /** Ahead/behind of a branch against the repo's default branch. */
   compare(repo: string, base: string, head: string): Promise<{ ahead: number; behind: number }>
   checks(ref: ForgeRef): Promise<CheckSummary | undefined>

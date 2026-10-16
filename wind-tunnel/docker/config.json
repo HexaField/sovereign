@@ -55,5 +55,14 @@
     "model": "default",
     "debounceMs": 500,
     "maxSummaryWords": 100
+  },
+  "forge": {
+    "enabled": true,
+    "identities": { "github": "hex-agent" },
+    "repos": { "forge-wt": ["acme-labs/widget", "acme-labs/gadget"] },
+    "githubApiUrl": "http://mock-github:8910",
+    "githubToken": "wind-tunnel",
+    "pollOpenMs": 600000,
+    "pollAllMs": 600000
   }
 }

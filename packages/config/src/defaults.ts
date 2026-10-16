@@ -166,5 +166,16 @@ export const defaults: SovereignConfig = {
     pollMs: 90_000,
     forecastPollMs: 1_800_000,
     timeZone: 'Australia/Melbourne'
+  },
+  forge: {
+    enabled: false,
+    identities: {},
+    planDirs: ['plans', 'docs/plans', '.specs'],
+    repos: {},
+    mentions: [],
+    pollOpenMs: 120_000,
+    pollAllMs: 600_000,
+    windowDays: 21,
+    rethink: { times: ['08:30', '17:30'], maxJobs: 6, tokenBudget: 200_000 }
   }
 }

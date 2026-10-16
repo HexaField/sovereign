@@ -2112,7 +2112,9 @@ export function createClaudeCodeBackend(
         label: state.label,
         lastActivity,
         agentStatus: state.agentStatus,
-        parentKey: state.parentSessionKey
+        parentKey: state.parentSessionKey,
+        ...(state.cwd ? { cwd: state.cwd } : {}),
+        ...(state.run?.startedAt ? { startedAt: state.run.startedAt } : {})
       })
     }
     return out
