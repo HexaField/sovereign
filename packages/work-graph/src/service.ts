@@ -1055,7 +1055,9 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         nodes: g.nodes.map((n) => (notes[n.id]?.length ? { ...n, rethink: notes[n.id] } : n)),
         edges: g.edges,
         workstreams: await deps.tasks.streamsOf(membrane),
-        syncing: s.syncing || syncs_.some((x) => !x.cache().windowSyncedAt || !x.backfillDone()),
+        ...(cfg().enabled
+          ? { syncing: s.syncing || syncs_.some((x) => !x.cache().windowSyncedAt || !x.backfillDone()) }
+          : { syncing: false, syncOff: true }),
         ...(s.lastSyncAt ? { lastSyncAt: s.lastSyncAt } : {}),
         ...(me ? { identity: me } : {})
       }

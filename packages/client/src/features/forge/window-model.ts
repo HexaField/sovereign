@@ -28,6 +28,7 @@ export interface WindowState {
   /** EMPTY_PAGES_TO_STOP empty older pages in a row: stop asking for history on pan. */
   exhausted: boolean
   syncing: boolean
+  syncOff?: boolean
   lastSyncAt?: string
   identity?: string
 }
@@ -125,6 +126,7 @@ export function applyWindow(state: WindowState, graph: ForgeGraph, req: WindowRe
     emptyOlder,
     exhausted: emptyOlder >= EMPTY_PAGES_TO_STOP,
     syncing: graph.syncing,
+    syncOff: graph.syncOff,
     lastSyncAt: graph.lastSyncAt ?? state.lastSyncAt,
     identity: graph.identity ?? state.identity
   }

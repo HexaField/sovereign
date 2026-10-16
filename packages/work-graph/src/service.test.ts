@@ -304,6 +304,8 @@ describe('forge service', () => {
     await new Promise((r) => setTimeout(r, 50))
     // No membrane sync; only tracked items (the plan's tasks) are read, one by one.
     expect(forge.calls.slice(calls).every((c) => c.op === 'getChange' || c.op === 'getIssue')).toBe(true)
+    // The graph says sync is off instead of "syncing" forever.
+    expect(await idle.graph('acme')).toMatchObject({ syncing: false, syncOff: true })
     idle.stop()
   })
 

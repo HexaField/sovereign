@@ -255,6 +255,9 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
         <Show when={win().syncing}>
           <span style={{ color: 'var(--c-warning, #f59e0b)' }}>· first sync running…</span>
         </Show>
+        <Show when={win().syncOff}>
+          <span data-testid="forge-sync-off">· GitHub sync off (forge.enabled)</span>
+        </Show>
         <Show when={win().lastSyncAt}>
           <span>· synced {new Date(win().lastSyncAt!).toLocaleTimeString()}</span>
         </Show>

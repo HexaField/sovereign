@@ -259,6 +259,8 @@ export interface ForgeGraph {
   workstreams: WorkStream[]
   /** True while the first backfill still runs. */
   syncing: boolean
+  /** GitHub sync is off (`forge.enabled` false): only plans and tracked tasks show. */
+  syncOff?: boolean
   lastSyncAt?: string
   /** The membrane's forge login (the account Forge acts as); the client's "requested from me" filter matches it. */
   identity?: string
