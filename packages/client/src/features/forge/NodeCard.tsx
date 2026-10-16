@@ -1,7 +1,13 @@
 // The selected node's card: an HTML overlay on the canvas.
 
 import { createMemo, createSignal, For, Show, type Component } from 'solid-js'
-import { defaultWorkPrompt, type AgentOverlay, type WorkEdge, type WorkNode, type WorkStream } from '@sovereign/core'
+import {
+  defaultWorkPrompt,
+  type AgentOverlay,
+  type WorkEdge,
+  type WorkNode,
+  type WorkStream
+} from '@sovereign/core/forge'
 import {
   agentStatusLine,
   assignBody,

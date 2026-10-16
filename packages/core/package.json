@@ -26,6 +26,11 @@
       "types": "./src/subagent-result.ts",
       "development": "./src/subagent-result.ts",
       "default": "./dist/subagent-result.js"
+    },
+    "./forge": {
+      "types": "./src/forge.ts",
+      "development": "./src/forge.ts",
+      "default": "./dist/forge.js"
     }
   },
   "publishConfig": {
@@ -33,7 +38,8 @@
       ".": "./dist/index.js",
       "./fold-system-events": "./dist/fold-system-events.js",
       "./ask-user-question": "./dist/ask-user-question.js",
-      "./subagent-result": "./dist/subagent-result.js"
+      "./subagent-result": "./dist/subagent-result.js",
+      "./forge": "./dist/forge.js"
     },
     "main": "dist/index.js",
     "types": "dist/index.d.ts"

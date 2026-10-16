@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { defaultWorkPrompt, type AgentOverlay, type WorkNode } from '@sovereign/core'
+import { defaultWorkPrompt, type AgentOverlay, type WorkNode } from '@sovereign/core/forge'
 import { agentStatusLine, assignBody, defaultThreadLabel, linkedGroups, shortRef, taskSection } from './card-model.js'
 import { cardRethinkItems } from './rethink-model.js'
 import { change, edge, issue, plan, stream, task } from './test-fixtures.js'
