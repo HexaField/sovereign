@@ -10,7 +10,9 @@
 //
 // Subtasks are one link per pair, parent → child: `forge://subtask`.
 // Scalar values are AD4M string literals; provider and filters are JSON text
-// in a string literal.
+// in a string literal. Property names avoid the executor's synthetic instance
+// fields (id, createdAt, updatedAt, author, timestamp): it refuses classes that
+// reuse them, so the timestamps are `created` / `updated`.
 
 export const FORGE_PERSPECTIVE_NAME = 'sovereign-forge'
 
@@ -92,8 +94,8 @@ const TASK_PROPERTIES = [
   scalar('transientState', P.transientState),
   scalar('description', P.description),
   collection('tags', P.tag),
-  scalar('createdAt', P.createdAt, true),
-  scalar('updatedAt', P.updatedAt),
+  scalar('created', P.createdAt, true),
+  scalar('updated', P.updatedAt),
   scalar('threadId', P.threadId),
   scalar('membrane', P.membrane),
   scalar('providerKind', P.providerKind),
@@ -116,7 +118,7 @@ export const FORGE_SHACL_CLASSES: Record<string, object> = {
       scalar('confidence', P.confidence),
       scalar('source', P.source, true),
       scalar('membrane', P.membrane),
-      scalar('createdAt', P.createdAt, true)
+      scalar('created', P.createdAt, true)
     ]
   },
   ForgeView: {
