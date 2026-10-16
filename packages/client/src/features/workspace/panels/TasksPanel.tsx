@@ -10,14 +10,25 @@ import { ExternalLinkIcon, SendIcon, RefreshIcon } from '../../../ui/icons.js'
 
 // ── Types ───────────────────────────────────────────────────────────────
 
-interface TaskProviderSummary {
-  kind: string
-  repo: string
-  number: number
-  prStatus: string
-  checksStatus: string
-  reviewDecision: string
-  url: string
+/** The task's provider (mirrors @sovereign/tasks TaskProvider). */
+type TaskProviderSummary =
+  | {
+      kind: 'change'
+      refs: Array<{ repo: string; id: string }>
+      url: string
+      status: string
+      checksStatus: string
+      reviewDecision: string
+      unresolvedComments: number
+      lastPolledAt: string
+    }
+  | { kind: 'issue'; refs: Array<{ repo: string; id: string }>; url: string; issueState: string; lastPolledAt: string }
+  | { kind: 'plan'; project: string; path: string; status: string }
+
+/** "#123" for a PR or issue, the file name for a plan. */
+function providerLabel(p: TaskProviderSummary): string {
+  if (p.kind === 'plan') return p.path.split('/').pop() ?? p.path
+  return `#${p.refs[0]?.id ?? '?'}`
 }
 
 interface TaskListItem {
@@ -43,17 +54,7 @@ interface TaskDetail {
   parentTasks: Array<{ id: string; name: string; state: string }>
   childTasks: Array<{ id: string; name: string; state: string }>
   tags: string[]
-  provider?: {
-    kind: string
-    url: string
-    repo: string
-    number: number
-    prStatus: string
-    checksStatus: string
-    reviewDecision: string
-    lastPolledAt: string
-    unresolvedComments: number
-  }
+  provider?: TaskProviderSummary
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -148,34 +149,44 @@ async function refreshTask(taskId: string): Promise<void> {
 // ── PR Badge ────────────────────────────────────────────────────────────
 
 const PrBadge: Component<{ provider: TaskProviderSummary }> = (props) => {
+  const change = () => (props.provider.kind === 'change' ? props.provider : null)
+  const url = () => (props.provider.kind === 'plan' ? undefined : props.provider.url)
   return (
     <div class="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-      <span style={{ color: checksColor(props.provider.checksStatus) }}>
-        {props.provider.checksStatus === 'passing' ? '●' : props.provider.checksStatus === 'failing' ? '✕' : '○'}
-      </span>
-      <a
-        href={props.provider.url}
-        target="_blank"
-        rel="noopener"
-        class="hover:underline"
-        style={{ color: 'var(--c-text-muted)' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        #{props.provider.number}
-      </a>
-      <Show when={props.provider.reviewDecision && props.provider.reviewDecision !== 'unknown'}>
-        <span
-          style={{
-            color:
-              props.provider.reviewDecision === 'approved'
-                ? '#22c55e'
-                : props.provider.reviewDecision === 'changes_requested'
-                  ? '#ef4444'
-                  : 'var(--c-text-muted)'
-          }}
+      <Show when={change()}>
+        {(c) => (
+          <span style={{ color: checksColor(c().checksStatus) }}>
+            {c().checksStatus === 'passing' ? '●' : c().checksStatus === 'failing' ? '✕' : '○'}
+          </span>
+        )}
+      </Show>
+      <Show when={url()} fallback={<span>{providerLabel(props.provider)}</span>}>
+        <a
+          href={url()}
+          target="_blank"
+          rel="noopener"
+          class="hover:underline"
+          style={{ color: 'var(--c-text-muted)' }}
+          onClick={(e) => e.stopPropagation()}
         >
-          {reviewLabel(props.provider.reviewDecision)}
-        </span>
+          {providerLabel(props.provider)}
+        </a>
+      </Show>
+      <Show when={change() && change()!.reviewDecision !== 'unknown' ? change() : null}>
+        {(c) => (
+          <span
+            style={{
+              color:
+                c().reviewDecision === 'approved'
+                  ? '#22c55e'
+                  : c().reviewDecision === 'changes_requested'
+                    ? '#ef4444'
+                    : 'var(--c-text-muted)'
+            }}
+          >
+            {reviewLabel(c().reviewDecision)}
+          </span>
+        )}
       </Show>
     </div>
   )
@@ -325,9 +336,9 @@ const TaskDetailView: Component<{
                 </Show>
 
                 {/* PR Provider details */}
-                <Show when={task.provider && task.provider.kind === 'github-pr'}>
+                <Show when={task.provider && task.provider.kind === 'change'}>
                   {(() => {
-                    const prov = task.provider!
+                    const prov = task.provider as Extract<TaskProviderSummary, { kind: 'change' }>
                     return (
                       <div
                         class="mb-2 rounded p-2 text-xs"
@@ -335,7 +346,7 @@ const TaskDetailView: Component<{
                       >
                         <div class="mb-1 flex items-center justify-between">
                           <span class="font-medium" style={{ color: 'var(--c-text)' }}>
-                            PR #{prov.number}
+                            PR #{prov.refs[0]?.id}
                           </span>
                           <a
                             href={prov.url}
@@ -351,8 +362,8 @@ const TaskDetailView: Component<{
                         <div class="flex flex-wrap gap-2 text-[10px]">
                           <span>
                             Status:{' '}
-                            <span style={{ color: prov.prStatus === 'open' ? '#22c55e' : 'var(--c-text-muted)' }}>
-                              {prov.prStatus}
+                            <span style={{ color: prov.status === 'open' ? '#22c55e' : 'var(--c-text-muted)' }}>
+                              {prov.status}
                             </span>
                           </span>
                           <span>
@@ -548,7 +559,7 @@ const TasksPanel: Component = () => {
               when={(tasks() ?? []).length > 0}
               fallback={
                 <p class="p-3 text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                  No tasks yet. Use <code>task_create</code> or <code>task_import_pr</code> from an agent thread.
+                  No tasks yet. Use <code>task_create</code> or <code>task_import</code> from an agent thread.
                 </p>
               }
             >

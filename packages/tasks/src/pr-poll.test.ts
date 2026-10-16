@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import { createPrPollService, type PrPollService } from './pr-poll.js'
 import { createTaskService, type TaskService } from './service.js'
 import { createInMemoryTaskStore } from './store.js'
-import type { TaskProvider } from './types.js'
+import type { LegacyGithubPrProvider } from './types.js'
 
 // ── Test helpers ────────────────────────────────────────────────────────
 
@@ -90,13 +90,14 @@ describe('PrPollService — importPr', () => {
     expect(task.name).toBe('PR #42: Add widget feature')
     expect(task.state).toBe('in_progress')
     expect(task.provider).toBeDefined()
-    expect(task.provider!.kind).toBe('github-pr')
-    expect(task.provider!.repo).toBe('org/repo')
-    expect(task.provider!.number).toBe(42)
-    expect(task.provider!.prStatus).toBe('open')
-    expect(task.provider!.checksStatus).toBe('passing')
-    expect(task.provider!.reviewDecision).toBe('review_required')
-    expect(task.provider!.url).toBe('https://github.com/org/repo/pull/42')
+    expect(task.provider).toMatchObject({
+      kind: 'change',
+      refs: [{ forge: 'github', host: 'github.com', repo: 'org/repo', kind: 'change', id: '42' }],
+      status: 'open',
+      checksStatus: 'passing',
+      reviewDecision: 'review_required',
+      url: 'https://github.com/org/repo/pull/42'
+    })
     expect(task.tags).toContain('github-pr')
   })
 
@@ -195,6 +196,29 @@ describe('PrPollService — importPr', () => {
     pollService.dispose()
   })
 
+  it('re-importing a tracked PR reuses its task, refreshes it and reassigns', async () => {
+    const first = await pollService.importPr({ repo: 'org/repo', pr: 42, sourceThreadId: 'thread-1' })
+    execFn.mockImplementation(async () => ({ stdout: ghPrResponse({ state: 'MERGED' }) }))
+    const second = await pollService.importPr({
+      repo: 'org/repo',
+      pr: 42,
+      threadId: 'thread-2',
+      sourceThreadId: 'thread-1'
+    })
+    expect(second.id).toBe(first.id)
+    expect(second.threadId).toBe('thread-2')
+    expect(second.state).toBe('completed')
+    expect(second.provider).toMatchObject({ status: 'merged' })
+    expect(await taskService.list()).toHaveLength(1)
+    pollService.dispose()
+  })
+
+  it('records the membrane on a new PR task', async () => {
+    const task = await pollService.importPr({ repo: 'org/repo', pr: 42, membrane: 'coasys', sourceThreadId: 't1' })
+    expect(task.membrane).toBe('coasys')
+    pollService.dispose()
+  })
+
   it('throws when gh CLI fetch fails', async () => {
     const failExec = makeExecFn(new Error('gh: not found'))
     const failPoll = createPrPollService({
@@ -224,7 +248,7 @@ describe('PrPollService — importPr', () => {
       sourceThreadId: 't1'
     })
 
-    expect(task.provider!.prStatus).toBe('draft')
+    expect(task.provider).toMatchObject({ status: 'draft' })
     draftPoll.dispose()
   })
 })
@@ -271,7 +295,7 @@ describe('PrPollService — pollOnce', () => {
     await pollService.pollOnce(task.id)
 
     const updated = await taskService.get(task.id)
-    expect(updated!.provider!.checksStatus).toBe('failing')
+    expect(updated!.provider).toMatchObject({ checksStatus: 'failing' })
     expect(sentMessages.some((m) => m.text.includes('CI check failed'))).toBe(true)
   })
 
@@ -292,7 +316,7 @@ describe('PrPollService — pollOnce', () => {
 
     const updated = await taskService.get(task.id)
     expect(updated!.state).toBe('completed')
-    expect(updated!.provider!.prStatus).toBe('merged')
+    expect(updated!.provider).toMatchObject({ status: 'merged' })
     expect(sentMessages.some((m) => m.text.includes('Merged'))).toBe(true)
   })
 
@@ -313,7 +337,7 @@ describe('PrPollService — pollOnce', () => {
 
     const updated = await taskService.get(task.id)
     expect(updated!.state).toBe('cancelled')
-    expect(updated!.provider!.prStatus).toBe('closed')
+    expect(updated!.provider).toMatchObject({ status: 'closed' })
   })
 
   it('notifies thread on review changes requested', async () => {
@@ -391,7 +415,7 @@ describe('PrPollService — bootstrap', () => {
         reviewDecision: 'unknown',
         lastPolledAt: new Date().toISOString(),
         unresolvedComments: 0
-      } as TaskProvider
+      } as LegacyGithubPrProvider
     })
     await taskService.update(task.id, { state: 'in_progress', sourceThreadId: 't1' })
 
@@ -424,7 +448,7 @@ describe('PrPollService — bootstrap', () => {
         reviewDecision: 'approved',
         lastPolledAt: new Date().toISOString(),
         unresolvedComments: 0
-      } as TaskProvider
+      } as LegacyGithubPrProvider
     })
     await taskService.update(task.id, { state: 'completed', sourceThreadId: 't1' })
 

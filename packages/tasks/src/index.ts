@@ -1,11 +1,21 @@
-// @sovereign/tasks — holonic task ontology for cross-thread task
-// coordination. Tasks form a DAG stored in the `hex-tasks` AD4M
-// perspective. Sovereign MCP tools wrap the service layer; the
-// TaskDigest replaces PresenceDigest for the presence system.
+// @sovereign/tasks — holonic task graph for cross-thread task coordination
+// and the Forge work graph. Tasks form a DAG persisted in the
+// `sovereign-forge` AD4M perspective (with an outbox and a local snapshot
+// while AD4M is down). Sovereign MCP tools wrap the service layer; the
+// TaskDigest feeds the presence system.
 
 export type {
   Task,
+  TaskRecord,
+  TaskFields,
   TaskProvider,
+  ChangeProvider,
+  IssueProvider,
+  PlanProvider,
+  LegacyGithubPrProvider,
+  ProviderKind,
+  ChecksStatus,
+  ReviewDecision,
   TaskRef,
   TaskListItem,
   TaskSummary,
@@ -17,24 +27,57 @@ export type {
   ListTaskFilter,
   SubscribeFilter
 } from './types.js'
-export { TASK_STATES, TASK_SHACL_SCHEMA } from './types.js'
+export {
+  TASK_STATES,
+  PROVIDER_KINDS,
+  normalizeProvider,
+  providerKey,
+  providerRepos,
+  planKey,
+  parsePlanKey
+} from './types.js'
 
-export type { TaskStore } from './store.js'
-export { createInMemoryTaskStore } from './store.js'
+export type { TaskStore, ResilientStoreOptions } from './store.js'
+export {
+  createInMemoryTaskStore,
+  createResilientTaskStore,
+  taskStoreDir,
+  TASK_OUTBOX_FILE,
+  TASK_SNAPSHOT_FILE
+} from './store.js'
 
-export type { TaskService, TaskServiceDeps } from './service.js'
+export type { DurableStatus } from './durable.js'
+
+export type { TaskService, TaskServiceDeps, EnsureTaskInit, CreateStreamOpts } from './service.js'
 export { createTaskService } from './service.js'
 
-export { createAd4mTaskStore } from './ad4m-store.js'
+export type { LinkGraph, LinkTriple, LinkPattern } from './link-graph.js'
+export { createInMemoryLinkGraph } from './link-graph.js'
+export { FORGE_PERSPECTIVE_NAME, FORGE_SHACL_CLASSES } from './ontology.js'
+export type { ForgePerspective, ForgePerspectiveOptions } from './ad4m-perspective.js'
+export { createForgePerspective } from './ad4m-perspective.js'
+
+export type {
+  ForgeMetaStore,
+  ForgeMetaStoreOptions,
+  RelatedEdge,
+  RelatedEdgeSource,
+  SaveViewInput,
+  AddEdgeInput
+} from './meta.js'
+export { createForgeMetaStore, META_OUTBOX_FILE, META_SNAPSHOT_FILE } from './meta.js'
+
+export type { ForgePersistence, ForgePersistenceOptions } from './bootstrap.js'
+export { createForgePersistence } from './bootstrap.js'
 
 export type { TaskDigest, TaskDigestEntry } from './task-digest.js'
 export { createTaskDigest } from './task-digest.js'
 
-export type { TaskBootstrapOpts } from './bootstrap.js'
-export { bootstrapTaskPerspective } from './bootstrap.js'
-
 export type { PrPollService, PrPollServiceDeps, ImportPrOpts } from './pr-poll.js'
 export { createPrPollService } from './pr-poll.js'
+
+export type { ImportTarget, ImportInput, ImportOpts, ImportResult, TaskImporter, TaskImporterDeps } from './import.js'
+export { parseImportTarget, parseForgeUrl, createTaskImporter } from './import.js'
 
 export type { TaskRouteDeps } from './routes.js'
 export { createTaskRoutes } from './routes.js'

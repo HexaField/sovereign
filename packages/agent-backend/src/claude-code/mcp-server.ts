@@ -163,6 +163,10 @@ export interface TaskMcpDeps {
     autoAssign?: boolean
     sourceThreadId: string
     provider?: Record<string, unknown>
+    /** Membrane id; the server defaults it to the calling thread's membrane. */
+    membrane?: string | null
+    /** Create the task as a work stream. */
+    isStream?: boolean
   }): Promise<{ id: string; name: string; state: string; threadId: string | null }>
   update(
     taskId: string,
@@ -183,19 +187,25 @@ export interface TaskMcpDeps {
     threadId?: string | null
     parentId?: string
     rootsOnly?: boolean
+    membrane?: string
+    repo?: string
+    workstream?: string
+    providerKind?: 'change' | 'issue' | 'plan' | 'none'
+    isStream?: boolean
   }): Promise<Array<Record<string, unknown>>>
   link(parentId: string, childId: string, sourceThreadId: string): Promise<void>
   unlink(parentId: string, childId: string, sourceThreadId: string): Promise<void>
   summary(resolveLabel?: (threadId: string) => string | undefined): Promise<Record<string, unknown>>
-  /** Import a GitHub PR as a task. Returns the created task + starts polling. */
-  importPr?(opts: {
-    repo: string
-    pr: number
+  /** Import a PR, issue or plan as a task (idempotent). Returns { task, created }. */
+  importItem?(opts: {
+    ref?: string
+    url?: string
+    plan?: { project: string; path: string; name?: string }
     threadId?: string
     parentTaskIds?: string[]
     tags?: string[]
     prompt?: string
-    pollIntervalMinutes?: number
+    membrane?: string
     sourceThreadId: string
   }): Promise<Record<string, unknown>>
   /** Send a prompt to a task's assigned thread. */
@@ -617,7 +627,12 @@ export function createSovereignMcpServer(
           description: z.string().optional().describe('What needs doing (markdown).'),
           parentTaskIds: z.array(z.string()).optional().describe('IRIs of parent tasks (holonic — many-to-many).'),
           tags: z.array(z.string()).optional().describe('Freeform labels.'),
-          autoAssign: z.boolean().optional().default(true).describe('Assign to the calling thread. Defaults to true.')
+          autoAssign: z.boolean().optional().default(true).describe('Assign to the calling thread. Defaults to true.'),
+          stream: z
+            .boolean()
+            .optional()
+            .describe('Create a work stream: a task whose children are its members. Streams are never auto-assigned.'),
+          membrane: z.string().optional().describe("Membrane id. Default: the calling thread's membrane.")
         },
         async (args) => {
           const sourceThreadId = deps.currentSessionKey?.() ? bareThreadKey(deps.currentSessionKey()!) : 'unknown'
@@ -626,7 +641,9 @@ export function createSovereignMcpServer(
             description: args.description,
             parentTaskIds: args.parentTaskIds,
             tags: args.tags,
-            autoAssign: args.autoAssign,
+            autoAssign: args.stream ? false : args.autoAssign,
+            ...(args.stream ? { isStream: true } : {}),
+            ...(args.membrane ? { membrane: args.membrane } : {}),
             sourceThreadId
           })
           return okJson(result)
@@ -672,19 +689,35 @@ export function createSovereignMcpServer(
       ),
       tool(
         'task_list',
-        'List tasks with optional filtering by state, thread, parent, or roots-only.',
+        'List tasks. Filters combine: state, thread, parent, roots-only, membrane, repo, work stream, provider kind, streams only.',
         {
           state: z.enum(['pending', 'in_progress', 'completed', 'cancelled']).optional(),
           threadId: z.string().nullable().optional().describe('Filter by assigned thread (null = unassigned).'),
           parentId: z.string().optional().describe('Only direct children of this task.'),
-          rootsOnly: z.boolean().optional().describe('Only tasks with no parents.')
+          rootsOnly: z.boolean().optional().describe('Only tasks with no parents.'),
+          membrane: z.string().optional().describe('Only tasks of this membrane.'),
+          repo: z.string().optional().describe('Only PR/issue tasks of this "owner/name" repo.'),
+          workstream: z
+            .string()
+            .optional()
+            .describe("A work stream's task IRI: every task below it, through nested streams."),
+          providerKind: z
+            .enum(['change', 'issue', 'plan', 'none'])
+            .optional()
+            .describe('change = PR, issue, plan, or none (task-only work).'),
+          streamsOnly: z.boolean().optional().describe('Only work streams.')
         },
         async (args) => {
           const result = await tasks.list({
             state: args.state,
             threadId: args.threadId,
             parentId: args.parentId,
-            rootsOnly: args.rootsOnly
+            rootsOnly: args.rootsOnly,
+            membrane: args.membrane,
+            repo: args.repo,
+            workstream: args.workstream,
+            providerKind: args.providerKind,
+            ...(args.streamsOnly ? { isStream: true } : {})
           })
           return okJson(result)
         }
@@ -748,38 +781,48 @@ export function createSovereignMcpServer(
       )
     )
 
-    // ── PR-task bridge tools (only when importPr/sendPrompt wired) ───
-    if (tasks.importPr) {
-      const importPr = tasks.importPr
+    // ── Import + prompt tools (only when importItem/sendPrompt wired) ───
+    if (tasks.importItem) {
+      const importItem = tasks.importItem
       tools.push(
         tool(
-          'task_import_pr',
-          'Import a GitHub PR as a task in the holonic task graph. Starts polling for CI/review changes. Optionally assigns a thread and sends an initial prompt.',
+          'task_import',
+          'Track a GitHub PR, a GitHub issue or a plan as a task. Idempotent: an item already tracked returns its existing task (created: false). Give exactly one of ref, url or plan. A PR is polled for CI/review changes. With threadId, assigns that thread and sends it a prompt (yours, or a default telling it to fetch and work the item).',
           {
-            repo: z.string().describe('GitHub repo slug (e.g. "coasys/we").'),
-            pr: z.number().int().positive().describe('PR number.'),
-            threadId: z.string().optional().describe('Thread to assign. Omit to leave unassigned.'),
-            parentTaskIds: z.array(z.string()).optional().describe('Parent task IRIs.'),
-            tags: z.array(z.string()).optional().describe('Freeform labels.'),
-            prompt: z.string().optional().describe('Initial prompt to send to the assigned thread.'),
-            pollIntervalMinutes: z
-              .number()
-              .int()
-              .min(1)
-              .max(60)
+            ref: z
+              .string()
               .optional()
-              .describe('Poll interval in minutes. Default: 5.')
+              .describe(
+                'Item key: "github:github.com/owner/name#123" or the shorthand "owner/name#123" (PR or issue).'
+              ),
+            url: z.string().optional().describe('GitHub PR or issue URL, e.g. https://github.com/owner/name/pull/123.'),
+            plan: z
+              .object({
+                project: z.string().describe('Project id.'),
+                path: z.string().describe('Plan file path, relative to the project.'),
+                name: z.string().optional().describe('Task name. Default: "Plan: <file name>".')
+              })
+              .optional()
+              .describe('A plan file.'),
+            threadId: z.string().optional().describe('Thread to assign. Omit to leave unassigned.'),
+            parentTaskIds: z.array(z.string()).optional().describe('Parent task IRIs (e.g. a work stream).'),
+            tags: z.array(z.string()).optional().describe('Freeform labels.'),
+            prompt: z.string().optional().describe('Prompt to send to the assigned thread.'),
+            membrane: z.string().optional().describe("Membrane id. Default: the calling thread's membrane.")
           },
           async (args) => {
+            const given = [args.ref, args.url, args.plan].filter((v) => v !== undefined && v !== '')
+            if (given.length !== 1) throw new Error('task_import: give exactly one of ref, url or plan')
             const sourceThreadId = deps.currentSessionKey?.() ? bareThreadKey(deps.currentSessionKey()!) : 'unknown'
-            const result = await importPr({
-              repo: args.repo,
-              pr: args.pr,
+            const result = await importItem({
+              ref: args.ref,
+              url: args.url,
+              plan: args.plan,
               threadId: args.threadId,
               parentTaskIds: args.parentTaskIds,
               tags: args.tags,
               prompt: args.prompt,
-              pollIntervalMinutes: args.pollIntervalMinutes,
+              membrane: args.membrane,
               sourceThreadId
             })
             return okJson(result)

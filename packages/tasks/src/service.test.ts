@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { createTaskService, type TaskService } from './service.js'
-import { createInMemoryTaskStore } from './store.js'
-import type { TaskEventPayload, TaskState } from './types.js'
+import { createInMemoryTaskStore, createResilientTaskStore, type TaskStore } from './store.js'
+import type { ChangeProvider, TaskEventPayload, TaskState } from './types.js'
+import { cleanupTempDirs, createFakeAd4m, quietLog, tempDir } from './testing/helpers.js'
 
 // ── Test bus ──────────────────────────────────────────────────────────
 
@@ -422,91 +423,268 @@ describe('TaskService — cross-thread event emission', () => {
 
 // ── T4: Provider (PR-Task Bridge) ───────────────────────────────────────
 
-describe('TaskService — provider', () => {
+const changeProvider: ChangeProvider = {
+  kind: 'change',
+  refs: [{ forge: 'github', host: 'github.com', repo: 'org/repo', kind: 'change', id: '42' }],
+  url: 'https://github.com/org/repo/pull/42',
+  status: 'open',
+  checksStatus: 'passing',
+  reviewDecision: 'review_required',
+  unresolvedComments: 0,
+  lastPolledAt: '2026-09-15T00:00:00.000Z'
+}
+
+/** Run a suite against the in-memory store and the resilient store (fake AD4M up). */
+const STORES: Array<[string, () => TaskStore]> = [
+  ['in-memory store', () => createInMemoryTaskStore()],
+  [
+    'resilient store',
+    () => {
+      const ad4m = createFakeAd4m()
+      return createResilientTaskStore({ dir: tempDir(), connect: ad4m.connect, snapshotDelayMs: 1, log: quietLog() })
+    }
+  ]
+]
+
+afterAll(cleanupTempDirs)
+
+describe.each(STORES)('TaskService — provider (%s)', (_name, makeStore) => {
   let svc: TaskService
   let events: Array<{ type: string; payload: unknown }>
-
-  const sampleProvider = {
-    kind: 'github-pr' as const,
-    url: 'https://github.com/org/repo/pull/42',
-    repo: 'org/repo',
-    number: 42,
-    prStatus: 'open' as const,
-    checksStatus: 'passing' as const,
-    reviewDecision: 'review_required' as const,
-    lastPolledAt: '2026-09-15T00:00:00.000Z',
-    unresolvedComments: 0
-  }
 
   beforeEach(() => {
     const { bus, events: e } = makeBus()
     events = e
-    svc = createTaskService({ store: createInMemoryTaskStore(), bus })
+    svc = createTaskService({ store: makeStore(), bus })
   })
+  afterEach(() => svc.dispose())
 
   it('creates a task with provider metadata', async () => {
-    const task = await svc.create({
-      name: 'PR #42',
-      sourceThreadId: 't1',
-      provider: sampleProvider
-    })
-
-    expect(task.provider).toBeDefined()
-    expect(task.provider!.kind).toBe('github-pr')
-    expect(task.provider!.number).toBe(42)
-    expect(task.provider!.repo).toBe('org/repo')
+    const task = await svc.create({ name: 'PR #42', sourceThreadId: 't1', provider: changeProvider })
+    expect(task.provider).toEqual(changeProvider)
   })
 
   it('persists provider through get', async () => {
+    const task = await svc.create({ name: 'PR #42', sourceThreadId: 't1', provider: changeProvider })
+    expect((await svc.get(task.id))!.provider).toEqual(changeProvider)
+  })
+
+  it('converts a legacy github-pr provider to a change provider', async () => {
     const task = await svc.create({
       name: 'PR #42',
       sourceThreadId: 't1',
-      provider: sampleProvider
+      provider: {
+        kind: 'github-pr',
+        url: 'https://github.com/org/repo/pull/42',
+        repo: 'org/repo',
+        number: 42,
+        prStatus: 'open',
+        checksStatus: 'passing',
+        reviewDecision: 'review_required',
+        lastPolledAt: '2026-09-15T00:00:00.000Z',
+        unresolvedComments: 0
+      }
     })
-
-    const fetched = await svc.get(task.id)
-    expect(fetched!.provider).toEqual(sampleProvider)
+    expect(task.provider).toEqual(changeProvider)
   })
 
   it('updates provider and emits task.provider_updated', async () => {
-    const task = await svc.create({
-      name: 'PR #42',
-      sourceThreadId: 't1',
-      provider: sampleProvider
-    })
-
+    const task = await svc.create({ name: 'PR #42', sourceThreadId: 't1', provider: changeProvider })
     const updated = await svc.update(task.id, {
-      provider: { ...sampleProvider, checksStatus: 'failing' },
+      provider: { ...changeProvider, checksStatus: 'failing' },
       sourceThreadId: 't1'
     })
-
-    expect(updated.provider!.checksStatus).toBe('failing')
-
+    expect(updated.provider).toMatchObject({ kind: 'change', checksStatus: 'failing' })
     const providerEvent = events.find((e) => e.type === 'task.provider_updated')
-    expect(providerEvent).toBeTruthy()
     expect((providerEvent!.payload as TaskEventPayload).taskId).toBe(task.id)
   })
 
-  it('includes provider summary in list items', async () => {
-    await svc.create({
-      name: 'PR #42',
-      sourceThreadId: 't1',
-      provider: sampleProvider
-    })
-
+  it('includes the provider in list items', async () => {
+    await svc.create({ name: 'PR #42', sourceThreadId: 't1', provider: changeProvider })
     const list = await svc.list()
     expect(list).toHaveLength(1)
-    expect(list[0].provider).toBeDefined()
-    expect(list[0].provider!.kind).toBe('github-pr')
-    expect(list[0].provider!.prStatus).toBe('open')
-    expect(list[0].provider!.checksStatus).toBe('passing')
+    expect(list[0].provider).toEqual(changeProvider)
   })
 
   it('omits provider from list items when task has no provider', async () => {
     await svc.create({ name: 'Plain task', sourceThreadId: 't1' })
-
     const list = await svc.list()
-    expect(list).toHaveLength(1)
     expect(list[0].provider).toBeUndefined()
+  })
+
+  it('refuses a second task for the same provider key', async () => {
+    await svc.create({ name: 'PR #42', sourceThreadId: 't1', provider: changeProvider })
+    await expect(svc.create({ name: 'again', sourceThreadId: 't1', provider: changeProvider })).rejects.toThrow(
+      /already exists/
+    )
+    const other = await svc.create({ name: 'other', sourceThreadId: 't1' })
+    await expect(svc.update(other.id, { provider: changeProvider, sourceThreadId: 't1' })).rejects.toThrow(
+      /already exists/
+    )
+  })
+})
+
+describe.each(STORES)('TaskService — ensureTask (%s)', (_name, makeStore) => {
+  let svc: TaskService
+  let events: Array<{ type: string; payload: unknown }>
+  const key = 'github:github.com/org/repo#42'
+
+  beforeEach(() => {
+    const { bus, events: e } = makeBus()
+    events = e
+    svc = createTaskService({ store: makeStore(), bus })
+  })
+  afterEach(() => svc.dispose())
+
+  it('creates the task once and returns the same task afterwards', async () => {
+    const first = await svc.ensureTask(key, { name: 'PR #42', sourceThreadId: 't1', provider: changeProvider })
+    const second = await svc.ensureTask(key, { name: 'renamed', sourceThreadId: 't2', provider: changeProvider })
+    expect(first.created).toBe(true)
+    expect(second.created).toBe(false)
+    expect(second.task.id).toBe(first.task.id)
+    expect(second.task.name).toBe('PR #42')
+    expect(await svc.list()).toHaveLength(1)
+    expect(events.filter((e) => e.type === 'task.created')).toHaveLength(1)
+  })
+
+  it('creates one task under concurrent calls', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        svc.ensureTask(key, { name: 'PR', sourceThreadId: 't', provider: changeProvider })
+      )
+    )
+    expect(new Set(results.map((r) => r.task.id)).size).toBe(1)
+    expect(results.filter((r) => r.created)).toHaveLength(1)
+    expect(await svc.list()).toHaveLength(1)
+  })
+
+  it('derives a plan provider from a plan key', async () => {
+    const { task, created } = await svc.ensureTask('plan:sovereign/plans/forge.md', {
+      name: 'Forge plan',
+      sourceThreadId: 't1'
+    })
+    expect(created).toBe(true)
+    expect(task.provider).toEqual({ kind: 'plan', project: 'sovereign', path: 'plans/forge.md', status: 'planned' })
+    expect((await svc.ensureTask('plan:sovereign/plans/forge.md', { name: 'x', sourceThreadId: 't1' })).task.id).toBe(
+      task.id
+    )
+  })
+
+  it('needs a provider for an unknown forge key, and a matching one', async () => {
+    await expect(svc.ensureTask(key, { name: 'x', sourceThreadId: 't' })).rejects.toThrow(/no provider/)
+    await expect(
+      svc.ensureTask('github:github.com/org/repo#43', { name: 'x', sourceThreadId: 't', provider: changeProvider })
+    ).rejects.toThrow(/does not match/)
+  })
+
+  it('adds parent links on an existing task without duplicating them', async () => {
+    const stream = await svc.createStream({ name: 'Stream', sourceThreadId: 't' })
+    await svc.ensureTask(key, { name: 'PR', sourceThreadId: 't', provider: changeProvider })
+    await svc.ensureTask(key, { name: 'PR', sourceThreadId: 't', provider: changeProvider, parentTaskIds: [stream.id] })
+    const { task } = await svc.ensureTask(key, {
+      name: 'PR',
+      sourceThreadId: 't',
+      provider: changeProvider,
+      parentTaskIds: [stream.id]
+    })
+    expect(task.parentTasks.map((p) => p.id)).toEqual([stream.id])
+  })
+
+  it('finds a task by provider key', async () => {
+    const { task } = await svc.ensureTask(key, { name: 'PR', sourceThreadId: 't', provider: changeProvider })
+    expect((await svc.findByProviderKey(key))!.id).toBe(task.id)
+    expect(await svc.findByProviderKey('github:github.com/org/repo#999')).toBeNull()
+  })
+})
+
+describe.each(STORES)('TaskService — work streams and filters (%s)', (_name, makeStore) => {
+  let svc: TaskService
+
+  beforeEach(() => {
+    svc = createTaskService({ store: makeStore(), bus: makeBus().bus })
+  })
+  afterEach(() => svc.dispose())
+
+  async function seed() {
+    const stream = await svc.createStream({ name: 'Plan 20', membrane: 'coasys', sourceThreadId: 't' })
+    const sub = await svc.createStream({
+      name: 'Plan 20 — SFU',
+      membrane: 'coasys',
+      parentStreamIds: [stream.id],
+      sourceThreadId: 't'
+    })
+    const pr = await svc.create({ name: 'PR', membrane: 'coasys', provider: changeProvider, sourceThreadId: 't' })
+    const issue = await svc.create({
+      name: 'Issue',
+      membrane: 'coasys',
+      sourceThreadId: 't',
+      provider: {
+        kind: 'issue',
+        refs: [{ forge: 'github', host: 'github.com', repo: 'Org/Other', kind: 'issue', id: '7' }],
+        url: 'https://github.com/Org/Other/issues/7',
+        issueState: 'open',
+        lastPolledAt: '2026-10-01T00:00:00.000Z'
+      }
+    })
+    const plain = await svc.create({ name: 'Decide the gate box', membrane: 'home', sourceThreadId: 't' })
+    await svc.addToStream(stream.id, pr.id, 't')
+    await svc.addToStream(sub.id, issue.id, 't')
+    return { stream, sub, pr, issue, plain }
+  }
+
+  it('creates streams unassigned and flagged', async () => {
+    const { stream } = await seed()
+    expect(stream.isStream).toBe(true)
+    expect(stream.threadId).toBeNull()
+    expect(stream.membrane).toBe('coasys')
+  })
+
+  it('lists streams with nesting and member counts', async () => {
+    const { stream, sub } = await seed()
+    const streams = await svc.listStreams('coasys')
+    expect(streams).toHaveLength(2)
+    expect(streams.find((s) => s.id === stream.id)).toEqual({
+      id: stream.id,
+      name: 'Plan 20',
+      membrane: 'coasys',
+      memberCount: 2
+    })
+    expect(streams.find((s) => s.id === sub.id)).toMatchObject({ parentId: stream.id, memberCount: 1 })
+    expect(await svc.listStreams('home')).toEqual([])
+  })
+
+  it('filters by workstream through nested streams', async () => {
+    const { stream, sub, pr, issue } = await seed()
+    const ids = (await svc.list({ workstream: stream.id })).map((t) => t.id).sort()
+    expect(ids).toEqual([sub.id, pr.id, issue.id].sort())
+    expect((await svc.list({ workstream: sub.id })).map((t) => t.id)).toEqual([issue.id])
+  })
+
+  it('filters by membrane, repo (case-insensitive), provider kind and stream flag', async () => {
+    const { pr, issue, plain, stream, sub } = await seed()
+    expect((await svc.list({ membrane: 'home' })).map((t) => t.id)).toEqual([plain.id])
+    expect((await svc.list({ repo: 'org/other' })).map((t) => t.id)).toEqual([issue.id])
+    expect((await svc.list({ providerKind: 'change' })).map((t) => t.id)).toEqual([pr.id])
+    expect((await svc.list({ providerKind: 'none', isStream: false })).map((t) => t.id)).toEqual([plain.id])
+    expect((await svc.list({ isStream: true })).map((t) => t.id).sort()).toEqual([stream.id, sub.id].sort())
+    expect(await svc.list({ membrane: 'coasys', repo: 'org/repo', providerKind: 'issue' })).toEqual([])
+  })
+
+  it('removes a member from a stream', async () => {
+    const { stream, pr } = await seed()
+    await svc.removeFromStream(stream.id, pr.id, 't')
+    expect((await svc.list({ workstream: stream.id })).map((t) => t.id)).not.toContain(pr.id)
+  })
+
+  it('refuses to add to a task that is not a stream', async () => {
+    const { plain, pr } = await seed()
+    await expect(svc.addToStream(plain.id, pr.id, 't')).rejects.toThrow(/not a work stream/)
+  })
+
+  it('sets membrane and stream flag through update', async () => {
+    const { plain } = await seed()
+    const updated = await svc.update(plain.id, { membrane: 'coasys', isStream: true, sourceThreadId: 't' })
+    expect(updated.membrane).toBe('coasys')
+    expect(updated.isStream).toBe(true)
   })
 })
