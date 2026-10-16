@@ -437,7 +437,7 @@ export function createSovereignMcpServer(
     // ── subagents ─────────────────────────────────────────────────────────
     tool(
       'agents_spawn',
-      'Delegate a task to a subagent. The subagent runs as its own session in `cwd` (a repo or worktree), with SUBAGENT.md and the repo AGENTS.md as its context, and codegraph, semble, code-edit, browser and the built-in file tools. It never commits, spawns subagents or does destructive actions. The call returns at once with the subagent session key. When the subagent ends, its final report arrives in this thread as one message ([Subagent done: …] or [Subagent failed: …]); end your turn and wait for it. Put every fact the subagent needs in `task`: it does not see this conversation. Max 4 running per thread; 60 min limit.',
+      'Delegate a task to a subagent. The subagent runs as its own session in `cwd` (a repo or worktree), with SUBAGENT.md and the repo AGENTS.md as its context, and codegraph, semble, code-edit, browser and the built-in file tools. It never commits, spawns subagents or does destructive actions. The call returns at once with the subagent session key. When the subagent ends, its final report arrives in this thread as one message ([Subagent done: …] or [Subagent failed: …]); end your turn and wait for it. Put every fact the subagent needs in `task`: it does not see this conversation. Max 4 running per thread; 2 h limit.',
       {
         task: z.string().describe('The complete, self-contained task.'),
         cwd: z.string().optional().describe('Absolute working directory for the subagent. Default ~/workspaces.'),
