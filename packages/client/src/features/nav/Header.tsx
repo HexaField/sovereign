@@ -38,7 +38,7 @@ export function getViewModeLabel(mode: string): string {
 const AGENT_TAB_DEFS: Array<{ tab: AgentTab; label: string }> = [
   { tab: 'overview', label: 'Overview' },
   { tab: 'forest', label: 'Forest' },
-  { tab: 'tasks', label: 'Tasks' },
+  { tab: 'forge', label: 'Forge' },
   { tab: 'system', label: 'System' }
 ]
 
