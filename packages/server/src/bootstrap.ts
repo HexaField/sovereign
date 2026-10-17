@@ -413,7 +413,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   if (cfg.voice.transcribeUrl) {
     registerVoiceStreamChannel({
       ws: wsHandler,
-      transcribeUrl: cfg.voice.transcribeUrl,
+      transcribeUrl: () => configStore.get<SovereignConfig['voice']>('voice')?.transcribeUrl || cfg.voice.transcribeUrl,
       // Push-to-talk on a voice node streams here and lands in the presence thread.
       presence: {
         threadId: () => voiceGatewayId?.(),
