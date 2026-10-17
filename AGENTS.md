@@ -171,7 +171,7 @@ REST: `GET/POST /api/tasks`, `GET/PATCH /api/tasks/:id`, `POST /api/tasks/link`,
 
 TaskDigest replaced PresenceDigest as the sole operational-context injection. The PresenceDigest's `chat.turn.completed` listener gets disposed at bootstrap. WatchStore and its MCP tools (`presence_watch`, `presence_unwatch`, `presence_watched`) have been fully removed.
 
-A debounced proactive-wake listener (`task.state_changed`, `task.created`) forwards a trigger message to the internal thread so TaskDigest entries surface immediately — not deferred until the next external event.
+Task events never wake the internal thread on their own: TaskDigest entries ride along with its next external trigger. A wake per `task.state_changed` / `task.created` (removed 2026-10-17) turned every Forge sync into an internal turn that told the user nothing; owner threads get Forge's notices, and Forge rethink posts the one "needs your attention" list.
 
 ## Presence system
 

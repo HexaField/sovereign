@@ -1145,32 +1145,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     })
   }
 
-  // ── Proactive task wake ──────────────────────────────────────────────
-  // When a task state changes, wake the presence-internal thread so the
-  // TaskDigest's accumulated entries surface immediately — not deferred
-  // until the next external trigger. Debounced (5 s) to batch rapid
-  // state transitions into a single wake.
-  {
-    let wakeTimer: ReturnType<typeof setTimeout> | null = null
-    const scheduleWake = () => {
-      if (wakeTimer) return
-      wakeTimer = setTimeout(async () => {
-        wakeTimer = null
-        const internalId = presenceModule.internalThreadId()
-        if (!internalId) return
-        try {
-          await chatModule.handleSend(internalId, '[Task state changed]', undefined, {
-            origin: { modality: 'text' as const }
-          })
-        } catch (err: unknown) {
-          console.warn('[tasks] proactive wake failed:', (err as Error)?.message)
-        }
-      }, 5000)
-    }
-    bus.on('task.state_changed', scheduleWake)
-    bus.on('task.created', scheduleWake)
-  }
-
   // Shared by voice response + conversation summary below — both pair a
   // completed turn with recent thread history via the same session lookup.
   const getRecentTurns = async (threadId: string, limit: number): Promise<Array<{ role: string; content: string }>> => {
