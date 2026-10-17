@@ -463,6 +463,15 @@ While speech-to-text streams, the transcript shows in the thread as an outlined 
 - **A resume starts a new segment after the current text** (`voice/streaming.ts`), so edits made while paused stay. A paused segment's final transcript that lands after the resume is dropped (`owedFinals`); one that lands while the user edits is ignored by `InputArea`.
 - **Server path:** wind-tunnel s38 drives `voice-stream.start/chunk/stop` against the mock `/transcribe` and checks the interim and final transcripts.
 
+## TTS services
+
+`voice.ttsUrl` points at one HTTP service with a fixed API: `POST /synthesize` `{text}` → WAV, `POST /synthesize/stream` `{text}` → NDJSON, one line per sentence (`index`, `total`, `sentence`, `audio` = base64 WAV, `durationMs`, `rtf`, `done`), `GET /health`. Any engine that serves this API can be swapped in by changing `voice.ttsUrl` alone.
+
+- `services/f5-tts/`: F5-TTS on PyTorch ROCm (flow matching, voice clone; weights CC-BY-NC).
+- `services/qwen-tts/`: an adapter in front of [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp)'s `tts-server` (Qwen3-TTS 1.7B Base, GGML on Vulkan; code MIT, weights Apache-2.0). The adapter registers one cloned voice (`QWEN_TTS_REF_AUDIO` + `QWEN_TTS_REF_TEXT`) and re-registers it if the engine restarts. Unit templates in `systemd/`.
+- **The reference transcript must match the clip exactly.** In-context cloning (both engines) aligns the transcript to the audio; words that are not in the clip degrade every reply.
+- **On AMD iGPUs, prefer GGML/Vulkan over PyTorch ROCm for autoregressive TTS.** PyTorch ROCm recompiles kernels for each new sequence length and launches small kernels slowly (Qwen3-TTS: RTF 1.7–22 on PyTorch, 0.25 on qwentts.cpp Vulkan).
+
 ## Voice replies: one speaker per device name
 
 TTS routes by device **name** (announced with `ws.device-name`), because a page refresh mints a fresh connection deviceId. Several connections share a name on one machine: browser tabs, plus a voice node or the Android app. `wsHandler.sendSpeechToDeviceName` gives the audio to **one** of them and the reply without `audio` to the rest, so their UI still updates:
