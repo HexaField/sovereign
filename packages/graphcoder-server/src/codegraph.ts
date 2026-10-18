@@ -36,12 +36,26 @@ interface Internals {
 
 let loaded: Internals | undefined
 
+/** A file of codegraph's per-platform package, the one this reader is pinned to */
+function platformFile(rel: string): string {
+  const sdk = require.resolve('@colbymchenry/codegraph')
+  return createRequire(sdk).resolve(`@colbymchenry/codegraph-${process.platform}-${process.arch}/${rel}`)
+}
+
+/**
+ * The command that runs this codegraph version's CLI: its launcher, which starts the bundled Node with the flags it
+ * needs. On Windows the bundled node.exe runs the entry directly, as codegraph's own npm shim does.
+ */
+export function codegraphCommand(): { command: string; args: string[] } {
+  if (process.platform === 'win32') {
+    return { command: platformFile('node.exe'), args: ['--liftoff-only', platformFile('lib/dist/bin/codegraph.js')] }
+  }
+  return { command: platformFile('bin/codegraph'), args: [] }
+}
+
 function internals(): Internals {
   if (loaded) return loaded
-  const sdk = require.resolve('@colbymchenry/codegraph')
-  const lib = createRequire(sdk).resolve(
-    `@colbymchenry/codegraph-${process.platform}-${process.arch}/lib/dist/index.js`
-  )
+  const lib = platformFile('lib/dist/index.js')
   const dir = path.join(path.dirname(lib), 'db')
   const { createDatabase } = require(path.join(dir, 'sqlite-adapter.js'))
   const { QueryBuilder } = require(path.join(dir, 'queries.js'))

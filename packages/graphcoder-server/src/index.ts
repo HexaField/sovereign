@@ -5,11 +5,15 @@
 export {
   createGraphcoderService,
   UnknownRepoError,
+  type GraphcoderOptions,
   type GraphcoderPorts,
   type GraphcoderService,
   type GraphcoderStatus,
   type RepoStats
 } from './service.js'
 export { createGraphcoderRouter } from './routes.js'
-export { hasCodegraphIndex, indexPath, openCodegraphIndex } from './codegraph.js'
+export { codegraphCommand, hasCodegraphIndex, indexPath, openCodegraphIndex } from './codegraph.js'
+export { createCodegraphIndexer, type CodegraphIndexerOptions, type Indexer } from './indexer.js'
+export { createStructureStore, STRUCTURE_VERSION, type CachedStructure, type StructureStore } from './structure.js'
+export { parseTestCases, readTestFiles } from './test-files.js'
 export { createNodeRepoFiles } from './repo-files.js'

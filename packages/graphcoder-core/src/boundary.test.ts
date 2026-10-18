@@ -88,6 +88,18 @@ describe('Sovereign → Graphcoder boundary', () => {
     expect(outside.length).toBeGreaterThan(100)
   })
 
+  it('keeps the client feature (features/graphcoder) to its own files, solid-js, and Forge and contract types', () => {
+    const feature = sources(path.join(packagesDir, 'client', 'src', 'features', 'graphcoder'))
+    expect(feature.length).toBeGreaterThan(3)
+    const types = new Set(['@sovereign/core/forge', '@sovereign/graphcoder-core/contract'])
+    const allowed = (ref: ImportRef) =>
+      ref.specifier.startsWith('./') ||
+      ref.specifier === 'solid-js' ||
+      ref.specifier === 'vitest' ||
+      (ref.typeOnly && types.has(ref.specifier))
+    expect(boundaryViolations(feature, allowed)).toEqual([])
+  })
+
   it('lets other packages import only the contract types', () => {
     const allowed = (ref: ImportRef) =>
       !isGraphcoder(ref.specifier) || (ref.specifier === '@sovereign/graphcoder-core/contract' && ref.typeOnly)

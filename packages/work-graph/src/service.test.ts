@@ -166,6 +166,39 @@ describe('forge service', () => {
     expect(older.nodes.map((n) => n.id)).toEqual([nid(WIDGET, 30)])
   })
 
+  it('asks the injected structureOf for every open change of a checked-out repo once per head, and carries the answer', async () => {
+    service.stop()
+    const asked: string[] = []
+    const widgetDir = path.join(tmp, 'acme', 'widget')
+    service = make({
+      structureOf: async (repoPath, base, head) => {
+        asked.push(`${repoPath} ${base} ${head}`)
+        if (head === 'sha-51-1') throw new Error('index broke')
+        return {
+          base: 'b'.repeat(40),
+          head,
+          modules: [],
+          symbols: { added: [], removed: [], modified: [] },
+          reach: 2,
+          parts: 1,
+          tests: [],
+          violations: []
+        }
+      }
+    })
+    await service.sync('acme')
+    await service.sync('acme')
+    await new Promise((r) => setTimeout(r, 0))
+    // gadget has no local checkout; #30 is merged
+    expect(asked.sort()).toEqual([`${widgetDir} origin/dev sha-50-1`, `${widgetDir} origin/feat/50 sha-51-1`])
+    const g = await service.graph('acme')
+    const byId = new Map(g.nodes.map((n) => [n.id, n]))
+    expect(byId.get(nid(WIDGET, 50))!.structure).toMatchObject({ state: 'ready', reach: 2, head: 'sha-50-1' })
+    expect(byId.get(nid(WIDGET, 51))!.structure).toMatchObject({ state: 'failed', error: 'index broke' })
+    expect(byId.get(nid(GADGET, 9))!.structure).toBeUndefined()
+    expect((await service.node('acme', nid(WIDGET, 50)))!.structure).toMatchObject({ state: 'ready' })
+  })
+
   it('assign: ensures the task, sets the thread, adds only its own identity on the forge, sends the prompt', async () => {
     await service.sync('acme')
     const r = await service.assign({ nodeId: nid(WIDGET, 51), newThread: { label: 'Widget 51' } })

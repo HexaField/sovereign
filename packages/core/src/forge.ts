@@ -174,9 +174,34 @@ export interface WorkNode {
   status?: string
   /** What Loop 2 (rethink) did or said about this node, oldest first. */
   rethink?: RethinkNote[]
+  /** An open change's code structure (Graphcoder), when the host wires it in and the repo has a local checkout. */
+  structure?: WorkNodeStructure
   createdAt: string
   updatedAt: string
   closedAt?: string
+}
+
+/**
+ * The structure of a change as its node carries it: state and the numbers a card shows. The full structure
+ * (symbols, modules, tests) comes from Graphcoder's `GET /api/graphcoder/structure/cached?path=&base=&head=`.
+ */
+export interface WorkNodeStructure {
+  state: 'computing' | 'ready' | 'failed'
+  /** Local checkout the structure is computed in */
+  path: string
+  /** Computing: the base ref asked for (`origin/dev`); ready: the merge-base sha */
+  base: string
+  /** Head sha */
+  head: string
+  /** Ready: how far the change spreads (diameter of its changed symbols) and in how many separate parts */
+  reach?: number
+  parts?: number
+  /** Ready: modules touched, symbols added + removed + modified, tests that reach the change */
+  modules?: number
+  symbols?: number
+  tests?: number
+  /** Failed: why */
+  error?: string
 }
 
 /** A rethink action shown on a node's card. */

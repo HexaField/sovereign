@@ -49,9 +49,51 @@ describe('Sovereign GitPort', () => {
     const { repo, port } = setup()
     const files = await port.diffRefs(repo, 'main', 'feature')
     expect(files.sort((x, y) => (x.path < y.path ? -1 : 1))).toEqual([
-      { path: 'alpha.ts', status: 'renamed', oldPath: 'a.ts' },
-      { path: 'b.ts', status: 'added' }
+      { path: 'alpha.ts', status: 'renamed', oldPath: 'a.ts', hunks: [] },
+      { path: 'b.ts', status: 'added', hunks: [{ baseStart: 0, baseLines: 0, headStart: 1, headLines: 1 }] }
     ])
+  })
+
+  it('resolves refs to commits and finds merge bases', async () => {
+    const { repo, first, port } = setup()
+    expect(await port.resolve(repo, 'main')).toBe(git(repo, 'rev-parse', 'main'))
+    expect(await port.resolve(repo, 'no-such-ref')).toBeNull()
+    expect(await port.mergeBase(repo, 'main', 'feature')).toBe(first)
+    git(repo, 'checkout', '-q', '--orphan', 'island')
+    git(repo, 'commit', '-qm', 'unrelated')
+    git(repo, 'checkout', '-q', 'main')
+    expect(await port.mergeBase(repo, 'main', 'island')).toBeNull()
+  })
+
+  it('moves a checkout to another ref', async () => {
+    const { repo, first, port } = setup()
+    const checkout = await port.checkout(repo, first)
+    try {
+      await checkout.switchTo('feature')
+      expect(git(checkout.path, 'rev-parse', 'HEAD')).toBe(git(repo, 'rev-parse', 'feature'))
+      expect(fs.readdirSync(checkout.path).sort()).toEqual(['.git', 'alpha.ts', 'b.ts'])
+    } finally {
+      await checkout.release()
+    }
+  })
+
+  it('fetches a remote branch by its tracking name, and a commit it lacks by sha', async () => {
+    const { repo, port } = setup()
+    const clone = path.join(tmp!, 'clone')
+    git(tmp!, 'clone', '-q', repo, clone)
+    // upstream moves on: feature gains a commit, and a branch the clone never saw holds another
+    git(repo, 'checkout', '-q', 'feature')
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'more feature')
+    git(repo, 'checkout', '-q', '-b', 'unseen')
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'unseen work')
+    const unseen = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'checkout', '-q', 'main')
+    expect(await port.resolve(clone, unseen)).toBeNull()
+
+    await port.fetch(clone, ['origin/feature', unseen, 'main'])
+    expect(git(clone, 'rev-parse', 'origin/feature')).toBe(git(repo, 'rev-parse', 'feature'))
+    expect(await port.resolve(clone, unseen)).toBe(unseen)
+    await expect(port.fetch(clone, ['0'.repeat(40)])).rejects.toThrow()
   })
 
   it('checks a ref out into a temporary worktree under the data dir and releases it', async () => {
@@ -82,6 +124,9 @@ describe('Sovereign GitPort', () => {
     await expect(port.checkout(repo, '--orphan=x')).rejects.toThrow(/Not a git ref/)
     await expect(port.diffRefs(repo, 'main', '-p')).rejects.toThrow(/Not a git ref/)
     await expect(port.log(repo, { since: '--all' })).rejects.toThrow(/Not a git ref/)
+    await expect(port.resolve(repo, '--all')).rejects.toThrow(/Not a git ref/)
+    await expect(port.mergeBase(repo, 'main', '--all')).rejects.toThrow(/Not a git ref/)
+    await expect(port.fetch(repo, ['--upload-pack=x'])).rejects.toThrow(/Not a git ref/)
   })
 
   it('logs commits after a ref, touching given paths, newest first', async () => {
@@ -115,35 +160,56 @@ describe('mountGraphcoder', () => {
   it('mounts nothing when graphcoder is off', async () => {
     tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'graphcoder-mount-')))
     const app = express()
-    expect(mountGraphcoder(app, { enabled: false, codeIndex: noRoots, dataDir: tmp, requireAuth: allow })).toBe(false)
+    expect(
+      mountGraphcoder(app, { enabled: false, codeIndex: noRoots, dataDir: tmp, requireAuth: allow })
+    ).toBeUndefined()
     expect((await request(app).get('/api/graphcoder/status')).status).toBe(404)
   })
 
   const hasCodegraph = spawnSync('codegraph', ['--version']).status === 0
-  it.skipIf(!hasCodegraph)('serves the counts of a checkout the code index tracks when on', async () => {
-    tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'graphcoder-mount-')))
-    const repo = path.join(tmp, 'org', 'app')
-    fs.mkdirSync(repo, { recursive: true })
-    fs.writeFileSync(path.join(repo, 'a.ts'), 'export function alpha() { return 1 }\nexport class Beta {}\n')
-    git(repo, 'init', '-q')
-    execFileSync('codegraph', ['init', repo], { stdio: 'ignore' })
-    const app = express()
-    const codeIndex = { status: () => ({ enabled: true, roots: [{ root: repo, state: 'ok' as const }] }) }
-    expect(
-      mountGraphcoder(app, { enabled: true, codeIndex, dataDir: path.join(tmp, 'data'), requireAuth: allow })
-    ).toBe(true)
-    expect((await request(app).get('/api/graphcoder/status')).body).toEqual({ enabled: true, repos: [repo] })
-    const stats = await request(app).get('/api/graphcoder/repos/stats').query({ path: repo })
-    expect(stats.status).toBe(200)
-    expect(stats.body).toMatchObject({
-      path: repo,
-      fileCount: 1,
-      nodesByKind: { function: 1, class: 1 },
-      annotations: 0
-    })
-    expect(stats.body.nodeCount).toBeGreaterThanOrEqual(3)
-    expect((await request(app).get('/api/graphcoder/repos/stats').query({ path: tmp })).status).toBe(404)
-  })
+  it.skipIf(!hasCodegraph)(
+    'serves the counts and change structures of a checkout the code index tracks when on',
+    async () => {
+      tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'graphcoder-mount-')))
+      const repo = path.join(tmp, 'org', 'app')
+      fs.mkdirSync(repo, { recursive: true })
+      fs.writeFileSync(path.join(repo, 'a.ts'), 'export function alpha() { return 1 }\nexport class Beta {}\n')
+      git(repo, 'init', '-q', '-b', 'main')
+      git(repo, 'add', 'a.ts')
+      git(repo, 'commit', '-qm', 'first')
+      git(repo, 'checkout', '-qb', 'feature')
+      fs.writeFileSync(path.join(repo, 'a.ts'), 'export function alpha() { return 2 }\nexport class Beta {}\n')
+      git(repo, 'commit', '-qam', 'alpha returns 2')
+      git(repo, 'checkout', '-q', 'main')
+      execFileSync('codegraph', ['init', repo], { stdio: 'ignore' })
+      const app = express()
+      const codeIndex = { status: () => ({ enabled: true, roots: [{ root: repo, state: 'ok' as const }] }) }
+      const dataDir = path.join(tmp, 'data')
+      const structureOf = mountGraphcoder(app, { enabled: true, codeIndex, dataDir, requireAuth: allow })
+      expect(structureOf).toBeTypeOf('function')
+      expect((await request(app).get('/api/graphcoder/status')).body).toEqual({ enabled: true, repos: [repo] })
+      const stats = await request(app).get('/api/graphcoder/repos/stats').query({ path: repo })
+      expect(stats.status).toBe(200)
+      expect(stats.body).toMatchObject({
+        path: repo,
+        fileCount: 1,
+        nodesByKind: { function: 1, class: 1 },
+        annotations: 0
+      })
+      expect(stats.body.nodeCount).toBeGreaterThanOrEqual(3)
+      expect((await request(app).get('/api/graphcoder/repos/stats').query({ path: tmp })).status).toBe(404)
+
+      const structure = await structureOf!(repo, 'main', 'feature')
+      expect(structure.symbols.modified.map((s) => s.name)).toEqual(['alpha'])
+      expect(structure.modules).toEqual([{ module: '.', label: '.', added: 0, removed: 0, modified: 1 }])
+      const cached = await request(app)
+        .get('/api/graphcoder/structure/cached')
+        .query({ path: repo, base: 'main', head: 'feature' })
+      expect(cached.body).toEqual({ state: 'ready', structure })
+      expect(fs.readdirSync(path.join(dataDir, 'graphcoder', 'checkouts'))).toEqual([])
+      expect((await worktreeList(repo)).map((w) => w.worktree)).toEqual([repo])
+    }
+  )
 })
 
 describe('code-index GraphSource', () => {

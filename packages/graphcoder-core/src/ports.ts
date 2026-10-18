@@ -22,12 +22,25 @@ export interface CodeGraphHandle {
   close(): void
 }
 
+/**
+ * One `@@ -baseStart,baseLines +headStart,headLines @@` of a zero-context diff. Lines are 1-based. A side with no
+ * lines (`baseLines` or `headLines` 0) names the line after which the other side's lines go in or come out.
+ */
+export interface Hunk {
+  baseStart: number
+  baseLines: number
+  headStart: number
+  headLines: number
+}
+
 export interface ChangedFile {
   /** Repo-relative path; the new path for a rename */
   path: string
   status: 'added' | 'modified' | 'deleted' | 'renamed'
   /** The old path of a rename */
   oldPath?: string
+  /** The changed lines; empty for a binary file or a pure rename */
+  hunks: Hunk[]
 }
 
 export interface Commit {
@@ -42,10 +55,21 @@ export interface Commit {
 /** A temporary checkout of one ref. `release` removes it; the checkout is never inside the user's repo. */
 export interface Checkout {
   path: string
+  /** Moves this checkout, detached, to another ref of the same repo (files only; anything untracked stays). */
+  switchTo(ref: string): Promise<void>
   release(): Promise<void>
 }
 
 export interface GitPort {
+  /** The commit a ref names, as a full sha; null when it names none. */
+  resolve(repoPath: string, ref: string): Promise<string | null>
+  /** The best common ancestor of two commits, as a full sha; null when they share none. */
+  mergeBase(repoPath: string, a: string, b: string): Promise<string | null>
+  /**
+   * Brings refs up to date from the remotes: `<remote>/<branch>` fetches that branch from that remote; a commit
+   * sha the repo lacks is fetched from each remote in turn. Anything else is left alone. Rejects when a fetch fails.
+   */
+  fetch(repoPath: string, refs: string[]): Promise<void>
   /** Files `head` changes since its merge base with `base` (what a pull request from head into base shows). */
   diffRefs(repoPath: string, base: string, head: string): Promise<ChangedFile[]>
   /** Checks `ref` out, detached, into a temporary worktree. */

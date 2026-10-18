@@ -175,6 +175,8 @@ export interface PackageInfo {
   name: string
   /** Names of the packages its manifest depends on */
   deps: string[]
+  /** Repo-relative directory of the manifest (`''` for the root), when read from a repo (`readPackages`) */
+  dir?: string
 }
 
 /** Why edge hygiene drops an edge */
@@ -272,10 +274,18 @@ function resolverRejection(edge: GraphEdge, target: GraphNode): EdgeRejection | 
   const confidence = typeof meta['confidence'] === 'number' ? meta['confidence'] : null
   if (confidence === null) return edge.kind === 'imports' ? null : 'low-confidence'
   if (confidence < MIN_CONFIDENCE) return 'low-confidence'
-  const resolvedBy = typeof meta['resolvedBy'] === 'string' ? meta['resolvedBy'] : ''
-  // A bare `Json(…)` or `Tool` matched to some enum's variant by name is almost never that variant
-  if (NAME_ONLY_RESOLVERS.has(resolvedBy) && target.kind === 'enum_member') return 'enum-member'
-  return PRECISE_RESOLVERS.has(resolvedBy) || !COMMON_NAMES.has(target.name.toLowerCase()) ? null : 'common-name'
+  return nameNoise(edge, target)
+}
+
+/**
+ * The name checks alone: a name-only match onto an enum variant (a bare `Json(…)` or `Tool` is almost never that
+ * variant), or a common name no import path bound. Test reach uses these without the confidence cut.
+ */
+export function nameNoise(edge: GraphEdge, target: GraphNode): 'enum-member' | 'common-name' | null {
+  const resolvedBy = edge.metadata?.['resolvedBy']
+  const by = typeof resolvedBy === 'string' ? resolvedBy : ''
+  if (NAME_ONLY_RESOLVERS.has(by) && target.kind === 'enum_member') return 'enum-member'
+  return PRECISE_RESOLVERS.has(by) || !COMMON_NAMES.has(target.name.toLowerCase()) ? null : 'common-name'
 }
 
 /**

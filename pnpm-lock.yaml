@@ -253,6 +253,9 @@ importers:
       '@playwright/test':
         specifier: ^1.40.0
         version: 1.57.0
+      '@sovereign/graphcoder-core':
+        specifier: workspace:*
+        version: link:../graphcoder-core
       '@storybook/addon-essentials':
         specifier: ^8.6.14
         version: 8.6.14(@types/react@19.2.7)(storybook@8.6.15(prettier@3.7.4))
@@ -496,6 +499,9 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
     devDependencies:
       '@types/express':
         specifier: ^5.0.6
@@ -1122,6 +1128,9 @@ importers:
       '@sovereign/forges':
         specifier: workspace:*
         version: link:../forges
+      '@sovereign/graphcoder-core':
+        specifier: workspace:*
+        version: link:../graphcoder-core
       '@sovereign/orgs':
         specifier: workspace:*
         version: link:../orgs

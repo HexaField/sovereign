@@ -22,6 +22,7 @@
     "@sovereign/config": "workspace:*",
     "@sovereign/core": "workspace:*",
     "@sovereign/forges": "workspace:*",
+    "@sovereign/graphcoder-core": "workspace:*",
     "@sovereign/orgs": "workspace:*",
     "@sovereign/primitives": "workspace:*",
     "express": "^5.2.1"

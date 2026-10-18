@@ -1,0 +1,45 @@
+diff --git a/src/geometry.ts b/src/geometry.ts
+index a6dd24e..ec3a757 100644
+--- a/src/geometry.ts
++++ b/src/geometry.ts
+@@ -1,4 +1,4 @@
+-import { add, multiply } from './math.js'
++import { add } from './math.js'
+ 
+ export class Point {
+   constructor(
+@@ -9,8 +9,4 @@ export class Point {
+   translate(dx: number, dy: number): Point {
+     return new Point(add(this.x, dx), add(this.y, dy))
+   }
+-
+-  scale(factor: number): Point {
+-    return new Point(multiply(this.x, factor), multiply(this.y, factor))
+-  }
+ }
+diff --git a/src/index.ts b/src/index.ts
+index cb8790c..ca63638 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,2 +1,2 @@
+-export { add, multiply } from './math.js'
++export { add, negate } from './math.js'
+ export { Point } from './geometry.js'
+diff --git a/src/math.ts b/src/math.ts
+index de02a22..6c7f331 100644
+--- a/src/math.ts
++++ b/src/math.ts
+@@ -1,9 +1,8 @@
+ export function add(a: number, b: number): number {
+-  return a + b
++  const sum = b + a
++  return sum
+ }
+ 
+-export function multiply(a: number, b: number): number {
+-  let total = 0
+-  for (let i = 0; i < b; i++) total = add(total, a)
+-  return total
++export function negate(a: number): number {
++  return -a
+ }

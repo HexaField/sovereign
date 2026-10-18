@@ -26,12 +26,11 @@ function sourceOf(repos: string[], opened: string[] = []): GraphSource {
   }
 }
 
-/** P0 never reaches git; any call is a test failure */
-const noGit: GitPort = {
-  diffRefs: () => Promise.reject(new Error('git used')),
-  checkout: () => Promise.reject(new Error('git used')),
-  log: () => Promise.reject(new Error('git used'))
-}
+/** Stats never reach git; any call is a test failure */
+const used = () => Promise.reject(new Error('git used'))
+const noGit: GitPort = { resolve: used, mergeBase: used, fetch: used, diffRefs: used, checkout: used, log: used }
+/** Stats never reach the structure cache */
+const noCache = { cacheDir: '/nonexistent/graphcoder-cache' }
 
 function app(service: ReturnType<typeof createGraphcoderService>, denied = false) {
   const a = express()
@@ -46,7 +45,10 @@ function app(service: ReturnType<typeof createGraphcoderService>, denied = false
 describe.skipIf(!hasCodegraphCli)('graphcoder service and routes over an indexed fixture', () => {
   it('lists the checkouts it can open', async () => {
     fixture = indexedFixture()
-    const service = createGraphcoderService({ graph: sourceOf([fixture.repo, '/srv/b', '/srv/a']), git: noGit })
+    const service = createGraphcoderService(
+      { graph: sourceOf([fixture.repo, '/srv/b', '/srv/a']), git: noGit },
+      noCache
+    )
     expect(await service.status()).toEqual({ enabled: true, repos: ['/srv/a', '/srv/b', fixture.repo].sort() })
     const res = await request(app(service)).get('/api/graphcoder/status')
     expect(res.status).toBe(200)
@@ -55,7 +57,7 @@ describe.skipIf(!hasCodegraphCli)('graphcoder service and routes over an indexed
 
   it('returns node, edge and file counts, node kinds and the annotation count of a listed checkout', async () => {
     fixture = indexedFixture()
-    const service = createGraphcoderService({ graph: sourceOf([fixture.repo]), git: noGit })
+    const service = createGraphcoderService({ graph: sourceOf([fixture.repo]), git: noGit }, noCache)
     const res = await request(app(service)).get('/api/graphcoder/repos/stats').query({ path: fixture.repo })
     expect(res.status).toBe(200)
     expect(res.body).toEqual({
@@ -71,7 +73,7 @@ describe.skipIf(!hasCodegraphCli)('graphcoder service and routes over an indexed
 
   it('accepts an unnormalised spelling of a listed path', async () => {
     fixture = indexedFixture()
-    const service = createGraphcoderService({ graph: sourceOf([fixture.repo]), git: noGit })
+    const service = createGraphcoderService({ graph: sourceOf([fixture.repo]), git: noGit }, noCache)
     const spelled = `${path.dirname(fixture.repo)}/./tiny-ts/`
     expect((await service.repoStats(spelled)).path).toBe(fixture.repo)
   })
@@ -80,7 +82,7 @@ describe.skipIf(!hasCodegraphCli)('graphcoder service and routes over an indexed
 describe('graphcoder routes refuse what they must', () => {
   it('opens nothing outside the listed checkouts', async () => {
     const opened: string[] = []
-    const service = createGraphcoderService({ graph: sourceOf(['/srv/indexed'], opened), git: noGit })
+    const service = createGraphcoderService({ graph: sourceOf(['/srv/indexed'], opened), git: noGit }, noCache)
     await expect(service.repoStats('/etc')).rejects.toBeInstanceOf(UnknownRepoError)
     await expect(service.repoStats('/srv/indexed/../../etc')).rejects.toBeInstanceOf(UnknownRepoError)
     const res = await request(app(service)).get('/api/graphcoder/repos/stats').query({ path: '/srv/other' })
@@ -90,20 +92,20 @@ describe('graphcoder routes refuse what they must', () => {
   })
 
   it('needs a path', async () => {
-    const service = createGraphcoderService({ graph: sourceOf([]), git: noGit })
+    const service = createGraphcoderService({ graph: sourceOf([]), git: noGit }, noCache)
     expect((await request(app(service)).get('/api/graphcoder/repos/stats')).status).toBe(400)
     expect((await request(app(service)).get('/api/graphcoder/repos/stats?path=a&path=b')).status).toBe(400)
   })
 
   it('reports an index it cannot read as a server error', async () => {
-    const service = createGraphcoderService({ graph: sourceOf(['/srv/no-index']), git: noGit })
+    const service = createGraphcoderService({ graph: sourceOf(['/srv/no-index']), git: noGit }, noCache)
     const res = await request(app(service)).get('/api/graphcoder/repos/stats').query({ path: '/srv/no-index' })
     expect(res.status).toBe(500)
     expect(res.body.error).toMatch(/No CodeGraph index/)
   })
 
   it('runs the auth middleware on every route', async () => {
-    const service = createGraphcoderService({ graph: sourceOf([]), git: noGit })
+    const service = createGraphcoderService({ graph: sourceOf([]), git: noGit }, noCache)
     expect((await request(app(service, true)).get('/api/graphcoder/status')).status).toBe(401)
     expect((await request(app(service, true)).get('/api/graphcoder/repos/stats?path=/x')).status).toBe(401)
   })

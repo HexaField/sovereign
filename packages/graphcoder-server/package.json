@@ -26,7 +26,8 @@
   "dependencies": {
     "@colbymchenry/codegraph": "1.5.0",
     "@sovereign/graphcoder-core": "workspace:*",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

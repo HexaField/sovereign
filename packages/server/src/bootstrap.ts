@@ -307,8 +307,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   registerWorktreesChannel(wsHandler, bus)
 
   // Graphcoder: code structure over the code index. Behind `graphcoder.enabled`,
-  // read at boot; off, nothing of it is mounted.
-  mountGraphcoder(app, { enabled: cfg.graphcoder.enabled, codeIndex, dataDir, requireAuth: authMiddleware })
+  // read at boot; off, nothing of it is mounted. On, the Forge gets the
+  // structure of each open PR through `graphcoderStructureOf`.
+  const graphcoderStructureOf = mountGraphcoder(app, {
+    enabled: cfg.graphcoder.enabled,
+    codeIndex,
+    dataDir,
+    requireAuth: authMiddleware
+  })
 
   // Config router
   app.use('/api/config', createConfigRouter(configStore))
@@ -1080,7 +1086,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     ciWatch: {
       list: () =>
         ciWatch.list().map((w) => ({ threadKey: w.threadKey, repo: w.repo, target: w.target, createdAt: w.createdAt }))
-    }
+    },
+    ...(graphcoderStructureOf ? { structureOf: graphcoderStructureOf } : {})
   })
   forgeServiceRef = forgeService
   app.use(createForgeRouter(forgeService, authMiddleware))

@@ -49,6 +49,7 @@ import { s45ForgeWorkGraph } from './s45-forge-work-graph.js'
 import { s46ForgeWired } from './s46-forge-wired.js'
 import { s47ForgeRethink } from './s47-forge-rethink.js'
 import { s48Graphcoder } from './s48-graphcoder.js'
+import { s49GraphcoderStructure } from './s49-graphcoder-structure.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -159,5 +160,7 @@ export const ALL_SCENARIOS: Scenario[] = [
   // Forge Loop 2: rethink thread, digest prompt, run reports, forge_* tools.
   s47ForgeRethink,
   // Graphcoder P0: status and stats of an indexed checkout the code index found.
-  s48Graphcoder
+  s48Graphcoder,
+  // Graphcoder P1: the structure of a change (symbols, module, reach, tests), then cached.
+  s49GraphcoderStructure
 ]

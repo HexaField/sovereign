@@ -24,6 +24,7 @@ import {
   type WorkStream
 } from '@sovereign/core'
 import { repoKey, type ForgeRegistry, type ForgeRepo } from '@sovereign/forges'
+import type { StructureOf } from '@sovereign/graphcoder-core/contract'
 import type { HostForges } from '@sovereign/orgs'
 import { applyView, buildGraph, searchGraph, windowGraph, type BuiltGraph } from './build.js'
 import { createRepoCacheStore, readJson, writeJsonAtomic } from './cache.js'
@@ -32,6 +33,7 @@ import { buildOverlay, currentBranch, resolveCheckouts, type OverlayResult } fro
 import { isPlanPath, planMakesStream, scanPlans, type Plan } from './plans.js'
 import { resolveScope, type MembraneScope, type ScopeSource } from './scope.js'
 import { createRepoSync, type RepoSync } from './sync.js'
+import { createStructureHook } from './structure.js'
 import { syncTasks, TERMINAL } from './task-sync.js'
 import {
   DEFAULT_FORGE_CONFIG,
@@ -94,6 +96,11 @@ export interface ForgeServiceDeps {
   branchOf?: (cwd: string) => Promise<string | undefined>
   now?: () => number
   log?: (msg: string) => void
+  /**
+   * The code structure of a change (Graphcoder's, wired in at bootstrap). Asked for each open change of a synced repo
+   * whose head is new; the result rides on the change's node. Absent: nodes carry no structure.
+   */
+  structureOf?: StructureOf
   /** Delay between backfill pages (low priority). Default 3 s. */
   backfillDelayMs?: number
   /** Overlay recompute interval. Default 10 s. */
@@ -244,6 +251,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
   const now = deps.now ?? Date.now
   const iso = () => new Date(now()).toISOString()
   const log = deps.log ?? ((m: string) => console.log(`[forge] ${m}`))
+  const structures = deps.structureOf ? createStructureHook(deps.structureOf, log) : undefined
   const store = createRepoCacheStore(deps.dataDir)
   const syncs = new Map<string, RepoSync>()
   // Tracked items keep their own caches: a membrane that syncs the same repo
@@ -540,6 +548,11 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
           log(`sync ${membrane} ${r.repo}: ${(err as Error).message}`)
         }
       }
+      // Fire and forget: the hook queues the requests and keeps their errors to itself
+      const changesOf = (r: ForgeRepo) => Object.values(syncOf(r)?.cache().changes ?? {})
+      if (structures)
+        for (const r of scope.repos)
+          structures.request(r.checkouts, changesOf(r), () => emit('forge.updated', { membrane }))
       const planEvents = rescanPlans(membrane, scope)
       events.push(...planEvents)
       changed ||= planEvents.length > 0
@@ -1112,6 +1125,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
             const { relatedStreams: _all, ...rest } = out
             out = related.length ? { ...rest, relatedStreams: related } : rest
           }
+          if (structures) out = structures.attach(out)
           return notes[n.id]?.length ? { ...out, rethink: notes[n.id] } : out
         }),
         edges: g.edges,
@@ -1151,7 +1165,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
 
     async node(membrane, nodeId) {
       const { graph } = await full(membrane)
-      return graph.nodes.find((n) => n.id === nodeId)
+      const n = graph.nodes.find((x) => x.id === nodeId)
+      return n && structures ? structures.attach(n) : n
     },
 
     async relate(membrane, edge) {

@@ -3,6 +3,7 @@
 
 import { For, Show, type Component } from 'solid-js'
 import type { AgentOverlay } from '@sovereign/core'
+import { ReachBadge } from '../graphcoder/ReachBadge.js'
 import { KANBAN_COLUMNS, type KanbanCard, type KanbanColumn } from './kanban-model.js'
 import { CI_COLORS, REVIEW_COLORS, reviewSummary, ringFor } from './style.js'
 
@@ -71,6 +72,7 @@ const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: bool
         <Show when={props.card.epic}>
           <span style={{ color: '#a855f7' }}>{props.card.epic}</span>
         </Show>
+        <ReachBadge structure={n().structure} />
       </div>
     </button>
   )

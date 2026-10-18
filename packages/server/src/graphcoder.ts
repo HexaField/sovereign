@@ -3,12 +3,15 @@
 //
 //   GraphSource ← the code index: every checkout under the org roots that has a
 //                 codegraph index, kept fresh by code-index; opened read-only.
-//   GitPort     ← @sovereign/git's CLI and @sovereign/worktrees' worktree
-//                 commands. Checkouts are detached worktrees under
-//                 <dataDir>/graphcoder/checkouts, never inside the user's repo.
+//   GitPort     ← git (refs, merge bases, fetches, zero-context diffs) and
+//                 @sovereign/worktrees' worktree commands. Checkouts are
+//                 detached worktrees under <dataDir>/graphcoder/checkouts,
+//                 never inside the user's repo.
 //
+// Structures of changes are cached under <dataDir>/graphcoder/structure.
 // AiPort is not wired: nothing in Graphcoder calls a model yet. Removing
-// packages/graphcoder-* takes this file and its one call in bootstrap.ts.
+// packages/graphcoder-* takes this file, its call in bootstrap.ts and the
+// `structureOf` the work graph gets from it.
 
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -19,7 +22,8 @@ import type { Express, NextFunction, Request, Response } from 'express'
 import type { CodeIndex } from '@sovereign/code-index'
 import { hasIndex } from '@sovereign/code-index'
 import { createGitCli, type GitCli } from '@sovereign/git'
-import type { Checkout, GitPort, GraphSource } from '@sovereign/graphcoder-core'
+import { parseUnifiedDiff, type Checkout, type GitPort, type GraphSource } from '@sovereign/graphcoder-core'
+import type { StructureOf } from '@sovereign/graphcoder-core/contract'
 import { createGraphcoderRouter, createGraphcoderService, openCodegraphIndex } from '@sovereign/graphcoder-server'
 import { worktreeAddDetached, worktreeRemove } from '@sovereign/worktrees'
 
@@ -54,6 +58,20 @@ export interface SovereignGitPort extends GitPort {
   releaseLeftovers(): Promise<number>
 }
 
+const FULL_SHA = /^[0-9a-f]{40}$/
+const FETCH_TIMEOUT_MS = 120_000
+
+/** git in `cwd`, stdout trimmed; never prompts for credentials */
+async function run(cwd: string, args: string[], timeout = 60_000): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    timeout,
+    maxBuffer: 256 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  })
+  return stdout.trim()
+}
+
 export function createSovereignGitPort(git: GitCli, checkoutsDir: string): SovereignGitPort {
   const root = path.resolve(checkoutsDir)
 
@@ -65,12 +83,69 @@ export function createSovereignGitPort(git: GitCli, checkoutsDir: string): Sover
     return path.dirname(stdout.trim())
   }
 
+  const resolve = async (repoPath: string, ref: string): Promise<string | null> => {
+    assertRef(ref)
+    try {
+      return await run(repoPath, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`])
+    } catch {
+      return null
+    }
+  }
+
   return {
+    resolve,
+
+    mergeBase: async (repoPath, a, b) => {
+      assertRef(a)
+      assertRef(b)
+      try {
+        return await run(repoPath, ['merge-base', '--end-of-options', a, b])
+      } catch {
+        return null
+      }
+    },
+
+    fetch: async (repoPath, refs) => {
+      const remotes = (await run(repoPath, ['remote'])).split('\n').filter(Boolean)
+      const fetchFrom = (remote: string, what: string) =>
+        run(repoPath, ['fetch', '--no-tags', '--quiet', '--end-of-options', remote, what], FETCH_TIMEOUT_MS)
+      for (const ref of refs) {
+        assertRef(ref)
+        const remote = remotes.find((r) => ref.startsWith(`${r}/`))
+        // A branch fetched by name also moves its remote-tracking ref (the configured refspec covers it)
+        if (remote) await fetchFrom(remote, ref.slice(remote.length + 1))
+        else if (FULL_SHA.test(ref) && !(await resolve(repoPath, ref))) {
+          let lastError: Error | undefined
+          for (const r of remotes) {
+            try {
+              await fetchFrom(r, ref)
+              if (await resolve(repoPath, ref)) break
+            } catch (err) {
+              lastError = err as Error
+            }
+          }
+          if (!(await resolve(repoPath, ref))) throw lastError ?? new Error(`No remote of ${repoPath} has ${ref}`)
+        }
+      }
+    },
+
     diffRefs: async (repoPath, base, head) => {
       assertRef(base)
       assertRef(head)
-      const files = await git.branchDiffStat(repoPath, base, head)
-      return files.map((f) => ({ path: f.path, status: f.status, ...(f.oldPath ? { oldPath: f.oldPath } : {}) }))
+      return parseUnifiedDiff(
+        await run(repoPath, [
+          '-c',
+          'core.quotePath=off',
+          'diff',
+          '-U0',
+          '-M',
+          '--no-color',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--end-of-options',
+          `${base}...${head}`
+        ])
+      )
     },
 
     checkout: async (repoPath, ref): Promise<Checkout> => {
@@ -84,6 +159,10 @@ export function createSovereignGitPort(git: GitCli, checkoutsDir: string): Sover
       let released: Promise<void> | undefined
       return {
         path: dir,
+        switchTo: async (to) => {
+          assertRef(to)
+          await run(dir, ['checkout', '--quiet', '--detach', to])
+        },
         release: () =>
           (released ??= worktreeRemove(repo, dir).catch((err) => {
             released = undefined
@@ -123,12 +202,19 @@ export interface MountGraphcoderOptions {
   requireAuth: (req: Request, res: Response, next: NextFunction) => void
 }
 
-/** Mounts Graphcoder's routes over Sovereign's ports when enabled; off, mounts nothing. True when mounted. */
-export function mountGraphcoder(app: Express, opts: MountGraphcoderOptions): boolean {
-  if (!opts.enabled) return false
-  const git = createSovereignGitPort(createGitCli(), path.join(opts.dataDir, 'graphcoder', 'checkouts'))
+/**
+ * Mounts Graphcoder's routes over Sovereign's ports when enabled; off, mounts nothing. Returns the structure of a
+ * change for the work graph's PR cards (the Forge link), or undefined when off.
+ */
+export function mountGraphcoder(app: Express, opts: MountGraphcoderOptions): StructureOf | undefined {
+  if (!opts.enabled) return undefined
+  const dir = path.join(opts.dataDir, 'graphcoder')
+  const git = createSovereignGitPort(createGitCli(), path.join(dir, 'checkouts'))
   git.releaseLeftovers().catch((err) => console.error('[graphcoder] leftover checkouts:', (err as Error).message))
-  const service = createGraphcoderService({ graph: createCodeIndexGraphSource(opts.codeIndex), git })
+  const service = createGraphcoderService(
+    { graph: createCodeIndexGraphSource(opts.codeIndex), git },
+    { cacheDir: path.join(dir, 'structure'), log: (msg) => console.log(`[graphcoder] ${msg}`) }
+  )
   app.use(createGraphcoderRouter(service, opts.requireAuth))
-  return true
+  return (repoPath, base, head) => service.structureOf(repoPath, base, head)
 }

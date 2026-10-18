@@ -72,10 +72,10 @@ describe('readPackages', () => {
       'scripts/run.ts',
       'top.ts'
     ])
-    expect(packages.get('crates/exec/src/main.rs')).toEqual({ name: 'exec', deps: ['log'] })
+    expect(packages.get('crates/exec/src/main.rs')).toEqual({ name: 'exec', deps: ['log'], dir: 'crates/exec' })
     // files of one package share one PackageInfo, which hygiene compares by identity
     expect(packages.get('crates/exec/src/deep/mod.rs')).toBe(packages.get('crates/exec/src/main.rs'))
-    expect(packages.get('web/src/app.ts')).toEqual({ name: 'web', deps: ['root'] })
+    expect(packages.get('web/src/app.ts')).toEqual({ name: 'web', deps: ['root'], dir: 'web' })
     // a root with a workspace-only Cargo.toml has no package of its own there
     expect(packages.get('broken/x.ts')).toBeUndefined()
     expect(packages.get('scripts/run.ts')).toBeUndefined()

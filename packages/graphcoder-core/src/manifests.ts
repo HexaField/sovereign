@@ -43,16 +43,22 @@ const parentDir = (path: string) => (path.includes('/') ? path.slice(0, path.las
 
 /**
  * The nearest package manifest (Cargo.toml with a `[package]`, else package.json) at or above each file's
- * directory, up to the repo root. Paths are repo-relative. Files under no manifest are absent from the result.
+ * directory, up to the repo root, with its `dir`. Paths are repo-relative. Files under no manifest are absent from
+ * the result.
  */
 export async function readPackages(files: RepoFiles, filePaths: Iterable<string>): Promise<Map<string, PackageInfo>> {
   const byDir = new Map<string, Promise<PackageInfo | null>>()
   const manifestIn = async (dir: string): Promise<PackageInfo | null> => {
     const prefix = dir === '' ? '' : `${dir}/`
     const cargo = await files.read(`${prefix}Cargo.toml`)
-    if (cargo !== null) return parseCargoManifest(cargo)
-    const pkg = await files.read(`${prefix}package.json`)
-    return pkg === null ? null : parsePackageJson(pkg, dir.split('/').pop() || '.')
+    const pkg = cargo !== null ? null : await files.read(`${prefix}package.json`)
+    const info =
+      cargo !== null
+        ? parseCargoManifest(cargo)
+        : pkg === null
+          ? null
+          : parsePackageJson(pkg, dir.split('/').pop() || '.')
+    return info && { ...info, dir }
   }
   const lookup = (dir: string): Promise<PackageInfo | null> => {
     let found = byDir.get(dir)

@@ -15,9 +15,12 @@ export interface SymbolRef {
   filePath: string
 }
 
-/** One module (a module annotation in `.graphcoder/`) and how much of it a change touches */
+/**
+ * One module and how much of it a change touches. Until a repo has a module map (P2) a module is a directory:
+ * a package and the first directory below its source root (`rust-executor/src/perspectives`).
+ */
 export interface ModuleTouch {
-  /** Annotation slug */
+  /** Module id: the directory, repo-relative (a module annotation's slug once a map exists) */
   module: string
   label: string
   added: number
@@ -54,12 +57,22 @@ export interface Violation {
 
 /** What a change (head against its merge base with base) does to the structure of a repository */
 export interface ChangeStructure {
+  /** The merge base the change is measured from: a full commit sha */
   base: string
+  /** The head commit: a full commit sha */
   head: string
+  /** Most touched first */
   modules: ModuleTouch[]
+  /** Each list by file, then line */
   symbols: { added: SymbolRef[]; removed: SymbolRef[]; modified: SymbolRef[] }
-  /** Symbols outside the change that reach a changed one */
+  /**
+   * How far the change spreads: the diameter of the changed symbols, the most hops between two of them on the
+   * structure graph (see `changeReach` in graphcoder-core). 0 for one symbol or none.
+   */
   reach: number
+  /** Separate pieces the changed symbols fall into on that graph; `reach` is the widest piece's diameter */
+  parts: number
+  /** Nearest first */
   tests: TestRef[]
   violations: Violation[]
 }

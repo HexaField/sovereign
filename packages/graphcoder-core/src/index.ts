@@ -64,6 +64,7 @@ export {
   importedNames,
   isTestPath,
   MIN_CONFIDENCE,
+  nameNoise,
   type EdgeHygiene,
   type EdgeHygieneOptions,
   type EdgeRejection,
@@ -71,4 +72,26 @@ export {
   type TestRanges
 } from './hygiene.js'
 export { parseCargoManifest, parsePackageJson, readPackages } from './manifests.js'
+
+export { hunkLines, parseUnifiedDiff } from './structure/unified-diff.js'
+export { changedSymbols, isSymbol, symbolsOnLines, type SymbolChanges } from './structure/changes.js'
+export { directoryModules, type ModuleId, type ModuleOf } from './structure/modules.js'
+export { changeReach, type ChangeReach } from './structure/reach.js'
+export {
+  REACH_EDGE_KINDS,
+  seedBelongsTo,
+  testsReaching,
+  type TestCase,
+  type TestFile,
+  type TestReachOptions
+} from './structure/test-reach.js'
+export { matchingBrace, rustTestCases, rustTestRanges } from './structure/rust-tests.js'
+export {
+  computeChangeStructure,
+  symbolRef,
+  testCodeOf,
+  testEdgeFilter,
+  type ChangeStructureInput,
+  type StructureSide
+} from './structure/compute.js'
 export { createMemoryFiles } from './memory-files.js'

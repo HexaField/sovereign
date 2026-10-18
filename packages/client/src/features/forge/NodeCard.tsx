@@ -18,6 +18,7 @@ import {
   shortRef,
   taskSection
 } from './card-model.js'
+import { StructureSection } from '../graphcoder/StructureSection.js'
 import { EpicStatusSelect } from './EpicStatusSelect.js'
 import { cardRethinkItems } from './rethink-model.js'
 import type { ForgeApi } from './api.js'
@@ -233,6 +234,8 @@ const NodeCard: Component<NodeCardProps> = (props) => {
             <dd>{new Date(n().closedAt!).toLocaleString()}</dd>
           </Show>
         </dl>
+
+        <Show when={n().structure}>{(s) => <StructureSection structure={s()} />}</Show>
 
         <Show when={groups().length}>
           <div class={sectionTitle} style={muted}>
