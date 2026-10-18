@@ -163,7 +163,7 @@ describe('kanbanCards', () => {
     const s = stream('task://s1', 'Billing')
     const cols = board([issue(REPO, 1, { workstreams: [s.id] })], [], { streams: [s] })
     expect(cols.get('todo')![0].epic).toBe('Billing')
-    expect([...cols.keys()]).toEqual(['ready', 'needs-work', 'in-review', 'in-progress', 'todo'])
+    expect([...cols.keys()]).toEqual(['todo', 'in-progress', 'needs-work', 'in-review', 'ready'])
   })
 
   it('lists what the panel shows: the same filters and epic focus as the canvas', () => {
