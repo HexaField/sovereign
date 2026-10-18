@@ -64,10 +64,13 @@ export function resolveScope(
     projects.map((p) => p.repoPath),
     opts.hosts
   )
-  const byKey = new Map(discovered.map((r) => [repoKey(r), r]))
+  // Opt-in: only the repos configured for the membrane sync. Discovery only
+  // finds their local checkouts (worktree-aware remotes).
+  const local = new Map(discovered.map((r) => [repoKey(r), r]))
+  const byKey = new Map<string, ForgeRepo>()
   for (const spec of opts.repos?.[membraneId] ?? []) {
     const r = parseRepoSpec(spec)
-    if (r && !byKey.has(repoKey(r))) byKey.set(repoKey(r), { ...r, checkouts: [] })
+    if (r && !byKey.has(repoKey(r))) byKey.set(repoKey(r), local.get(repoKey(r)) ?? { ...r, checkouts: [] })
   }
   const repos = [...byKey.values()].filter((r) => r.forge === 'github')
 

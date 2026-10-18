@@ -83,7 +83,7 @@ describe('forge service', () => {
       getOrg: (id) => (id === 'acme-org' ? { id, path: path.join(tmp, 'acme') } : undefined),
       listProjects: (orgId) => (orgId === 'acme-org' ? [{ id: 'widget', name: 'widget', repoPath: widgetDir }] : [])
     }
-    config = { enabled: true, identities: { github: 'hex-agent' }, repos: { acme: [GADGET] } }
+    config = { enabled: true, identities: { github: 'hex-agent' }, repos: { acme: [WIDGET, GADGET] } }
     forge = createFakeForge()
     forge.put(
       change(WIDGET, 50, {
@@ -121,9 +121,16 @@ describe('forge service', () => {
     fs.rmSync(tmp, { recursive: true, force: true })
   })
 
-  it('scopes a membrane: project remotes + configured repos, plan dirs of its projects', () => {
+  it('scopes a membrane: only the configured repos (a listed repo keeps its local checkout), plan dirs of its projects', () => {
     const s = resolveScope(scope, 'acme', { planDirs: ['plans', 'docs/plans'], repos: config.repos })!
     expect(s.repos.map((r) => r.repo)).toEqual([WIDGET, GADGET])
+    expect(s.repos.find((r) => r.repo === WIDGET)!.checkouts.map((c) => c.path)).toEqual([
+      path.join(tmp, 'acme', 'widget')
+    ])
+    // A project's remote is never synced unless it is listed.
+    const optIn = resolveScope(scope, 'acme', { planDirs: [], repos: { acme: [GADGET] } })!
+    expect(optIn.repos.map((r) => r.repo)).toEqual([GADGET])
+    expect(resolveScope(scope, 'acme', { planDirs: [] })!.repos).toEqual([])
     expect(s.planDirs.map((d) => [d.project, d.repo])).toEqual([['acme-org/widget', WIDGET]])
     expect(service.membranes()).toEqual(['acme'])
   })
@@ -563,7 +570,7 @@ describe('forge service', () => {
       { id: 'beta', workspaceIds: [] }
     ]
     scope = { ...scope, getMembrane: (id) => ms.find((m) => m.id === id), listMembranes: () => ms }
-    config = { ...config, repos: { acme: [GADGET], beta: [WIDGET] } }
+    config = { ...config, repos: { acme: [WIDGET, GADGET], beta: [WIDGET] } }
     service = make()
     await service.sync('acme')
     await service.sync('beta')

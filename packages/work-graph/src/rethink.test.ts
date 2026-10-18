@@ -248,6 +248,7 @@ describe('rethink runner', () => {
     config = {
       enabled: true,
       identities: { github: 'hex-agent' },
+      repos: { acme: [WIDGET] },
       rethink: { times: ['08:30'], maxJobs: 2, tokenBudget: 10_000 }
     }
     forge = createFakeForge()
