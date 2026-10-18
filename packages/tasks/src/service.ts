@@ -372,7 +372,9 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           name: s.name,
           membrane: s.membrane ?? '',
           ...(parent ? { parentId: parent.id } : {}),
-          memberCount: s.childCount
+          memberCount: s.childCount,
+          ...(s.state === 'cancelled' ? { archived: true } : {}),
+          ...(s.provider?.kind === 'plan' ? { plan: providerKey(s.provider) } : {})
         })
       }
       return out

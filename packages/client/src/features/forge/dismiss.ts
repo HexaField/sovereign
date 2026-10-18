@@ -4,12 +4,19 @@
 
 import { onCleanup, onMount } from 'solid-js'
 
-export function useDismiss(isOpen: () => boolean, inside: () => HTMLElement | undefined, close: () => void): void {
+/** `inside`: the element(s) a pointerdown may hit without closing (the popover, and the button that toggles it). */
+export function useDismiss(
+  isOpen: () => boolean,
+  inside: () => HTMLElement | undefined | Array<HTMLElement | undefined>,
+  close: () => void
+): void {
   onMount(() => {
     const onDown = (e: PointerEvent): void => {
       if (!isOpen()) return
-      const el = inside()
-      if (el && e.target instanceof Node && el.contains(e.target)) return
+      const els = inside()
+      for (const el of Array.isArray(els) ? els : [els]) {
+        if (el && e.target instanceof Node && el.contains(e.target)) return
+      }
       close()
     }
     const onKey = (e: KeyboardEvent): void => {

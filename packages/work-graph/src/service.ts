@@ -25,7 +25,7 @@ import { applyView, buildGraph, planRefKey, searchGraph, windowGraph, type Built
 import { createRepoCacheStore, readJson, writeJsonAtomic } from './cache.js'
 import { buildDigest, createEventLog, safeSegment, triage, type EventLog } from './events.js'
 import { buildOverlay, currentBranch, resolveCheckouts, type OverlayResult } from './overlay.js'
-import { isPlanPath, scanPlans, type Plan } from './plans.js'
+import { isPlanPath, planMakesStream, scanPlans, type Plan } from './plans.js'
 import { resolveScope, type MembraneScope, type ScopeSource } from './scope.js'
 import { createRepoSync, type RepoSync } from './sync.js'
 import { syncTasks, TERMINAL } from './task-sync.js'
@@ -130,12 +130,21 @@ export interface ForgeStatus {
   events: number
 }
 
+/** A work stream with its members, as the epics refine prompt lists them. */
+export interface Epic extends WorkStream {
+  members: Array<{ id: string; title: string }>
+}
+
 export interface ForgeService {
   start(): void
   stop(): void
   config(): ForgeConfig
   membranes(): string[]
-  graph(membrane: string, opts?: { view?: string; since?: string; until?: string }): Promise<ForgeGraph>
+  /** `archived` keeps archived work streams in `workstreams`. */
+  graph(
+    membrane: string,
+    opts?: { view?: string; since?: string; until?: string; archived?: boolean }
+  ): Promise<ForgeGraph>
   search(membrane: string, q: string): Promise<{ nodes: WorkNode[]; edges: BuiltGraph['edges'] }>
   overlay(membrane: string): Promise<OverlayResult>
   sync(membrane: string, mode?: 'open' | 'all'): Promise<{ events: number; changed: boolean }>
@@ -163,6 +172,17 @@ export interface ForgeService {
   createStream(membrane: string, name: string, parentId?: string): Promise<WorkStream>
   addMember(streamId: string, nodeId: string, membrane?: string): Promise<{ taskId: string }>
   removeMember(streamId: string, nodeId: string, membrane?: string): Promise<boolean>
+  /** The membrane's work streams; archived ones only with `archived`. */
+  streams(membrane: string, opts?: { archived?: boolean }): Promise<WorkStream[]>
+  /** Every work stream of the membrane, archived ones included, with its members (not its child streams). */
+  epics(membrane: string): Promise<Epic[]>
+  renameStream(streamId: string, name: string, membrane?: string): Promise<WorkStream>
+  /** Archive (the stream's task is cancelled) or bring back (pending). */
+  archiveStream(streamId: string, archived: boolean, membrane?: string): Promise<WorkStream>
+  /** Move a stream under another stream, or to the top (null). */
+  setStreamParent(streamId: string, parentId: string | null, membrane?: string): Promise<WorkStream>
+  /** Move every member and child stream of `fromId` into `intoId`, then archive `fromId`. */
+  mergeStreams(fromId: string, intoId: string, membrane?: string): Promise<{ members: number; streams: number }>
   acceptEdge(from: string, to: string, kind: WorkEdgeKind, membrane?: string): Promise<boolean>
   deleteEdge(from: string, to: string, kind: WorkEdgeKind, membrane?: string): Promise<boolean>
   status(membrane: string): Promise<ForgeStatus>
@@ -646,10 +666,11 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
   }
 
   /**
-   * Each plan is a work stream (keyed by the plan id); every item it names
-   * gets a task in it. Links the plan added follow the plan: an item it
-   * stops naming leaves the stream. Members added by hand are never removed,
-   * and an item the user took out stays out while the plan keeps naming it.
+   * A plan that names a forge item and is not done is a work stream (keyed by
+   * the plan id); every item it names gets a task in it. Links the plan added
+   * follow the plan: an item it stops naming leaves the stream. Members added
+   * by hand are never removed, and an item the user took out stays out while
+   * the plan keeps naming it.
    */
   async function syncPlanStreams(membrane: string, graph: BuiltGraph): Promise<boolean> {
     const s = state(membrane)
@@ -658,8 +679,15 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
     let changed = false
     for (const p of s.plans) {
-      const stream = await deps.tasks.ensureTask(p.id, { name: p.title, membrane, kind: 'plan', stream: true })
+      if (!planMakesStream(p)) continue
       const was = prev[p.id] ?? { named: [], linked: [] }
+      const existing = await deps.tasks.findByKey(p.id)
+      // An archived plan stream stays as the user left it.
+      if (existing?.isStream && existing.state === 'cancelled') {
+        if (prev[p.id]) next[p.id] = was
+        continue
+      }
+      const stream = await deps.tasks.ensureTask(p.id, { name: p.title, membrane, kind: 'plan', stream: true })
       if (!prev[p.id]) changed = true
       const naming = new Map<string, { kind?: 'change' | 'issue'; host: string; repo: string; n: number }>()
       for (const r of p.refs) naming.set(planRefKey(r.host, r.repo, r.number), { ...r, n: r.number })
@@ -695,17 +723,26 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       }
       next[p.id] = { named, linked: [...linked] }
     }
-    // A plan that is gone names nothing: its links go, its stream stays.
-    for (const [planId, was] of Object.entries(prev)) {
-      if (next[planId] || !was.linked.length) continue
-      const stream = await deps.tasks.findByKey(planId)
-      for (const id of was.linked) {
+    // A plan stream whose plan no longer qualifies (gone, done, names no item):
+    // the links the plan added go; with nothing left in it, it stops being a
+    // stream (the plan task stays). Archived ones stay as they are.
+    const planStreams = (await deps.tasks.listByMembrane(membrane)).filter(
+      (t) => t.isStream && t.kind === 'plan' && t.key && !next[t.key]
+    )
+    for (const t of planStreams) if (t.state === 'cancelled' && prev[t.key!]) next[t.key!] = prev[t.key!]
+    const retired = planStreams.filter((t) => t.state !== 'cancelled')
+    for (const stream of retired) {
+      const members = new Set(stream.childIds)
+      for (const id of prev[stream.key!]?.linked ?? []) {
         const t = await deps.tasks.findByKey(id)
-        if (stream && t && stream.childIds.includes(t.id)) {
+        if (t && members.has(t.id)) {
           await deps.tasks.removeFromStream(stream.id, t.id)
-          changed = true
+          members.delete(t.id)
         }
       }
+      // Members added by hand or child streams keep it as an ordinary stream.
+      if (!members.size) await deps.tasks.setStream(stream.id, false)
+      if (!members.size || members.size !== stream.childIds.length) changed = true
     }
     if (JSON.stringify(next) !== JSON.stringify(prev)) updateFile(membrane, (f) => (f.planLinks = next))
     return changed
@@ -871,6 +908,12 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const membrane = stream.membrane ?? hint ?? (nodeId ? await membraneOfNode(nodeId) : undefined)
     if (!membrane) throw new ForgeError(`work stream ${streamId} has no membrane`, 400)
     return { stream, membrane }
+  }
+
+  async function streamOf(membrane: string, streamId: string): Promise<WorkStream> {
+    const w = (await deps.tasks.streamsOf(membrane)).find((x) => x.id === streamId)
+    if (!w) throw new ForgeError(`not a work stream of ${membrane}: ${streamId}`, 404)
+    return w
   }
 
   async function nodeIn(membrane: string, nodeId: string): Promise<{ node: WorkNode; tasks: PortTask[] }> {
@@ -1048,13 +1091,19 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const s = state(membrane)
       const syncs_ = scope.repos.map((r) => syncOf(r)).filter((x): x is RepoSync => Boolean(x))
       const notes = deps.rethinkNotes?.(membrane) ?? {}
+      const streams = (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || !w.archived)
+      const shown = new Set(streams.map((w) => w.id))
       return {
         membrane,
         since,
         until,
-        nodes: g.nodes.map((n) => (notes[n.id]?.length ? { ...n, rethink: notes[n.id] } : n)),
+        nodes: g.nodes.map((n) => {
+          const workstreams = n.workstreams.filter((w) => shown.has(w))
+          const out = workstreams.length === n.workstreams.length ? n : { ...n, workstreams }
+          return notes[n.id]?.length ? { ...out, rethink: notes[n.id] } : out
+        }),
         edges: g.edges,
-        workstreams: await deps.tasks.streamsOf(membrane),
+        workstreams: streams,
         ...(cfg().enabled
           ? { syncing: s.syncing || syncs_.some((x) => !x.cache().windowSyncedAt || !x.backfillDone()) }
           : { syncing: false, syncOff: true }),
@@ -1188,6 +1237,84 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       await deps.tasks.removeFromStream(streamId, node.taskId)
       emit('forge.updated', { membrane })
       return true
+    },
+
+    async streams(membrane, opts = {}) {
+      scopeOf(membrane)
+      return (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || !w.archived)
+    },
+
+    async epics(membrane) {
+      const { graph, tasks } = await full(membrane)
+      const byId = new Map(tasks.map((t) => [t.id, t]))
+      const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
+      return (await deps.tasks.streamsOf(membrane)).map((w) => ({
+        ...w,
+        members: (byId.get(w.id)?.childIds ?? [])
+          .map((id) => byId.get(id))
+          .filter((t): t is PortTask => Boolean(t) && !t!.isStream)
+          .map((t) => {
+            const id = t.key ?? `task:${t.id}`
+            return { id, title: nodes.get(id)?.title ?? t.name }
+          })
+      }))
+    },
+
+    async renameStream(streamId, name, hint) {
+      const { membrane } = await streamIn(streamId, hint)
+      if (!name.trim()) throw new ForgeError('name is required', 400)
+      await deps.tasks.setName(streamId, name.trim())
+      emit('forge.updated', { membrane })
+      return streamOf(membrane, streamId)
+    },
+
+    async archiveStream(streamId, archived, hint) {
+      const { membrane } = await streamIn(streamId, hint)
+      await deps.tasks.setState(streamId, archived ? 'cancelled' : 'pending')
+      emit('forge.updated', { membrane })
+      return streamOf(membrane, streamId)
+    },
+
+    async setStreamParent(streamId, parentId, hint) {
+      const { stream, membrane } = await streamIn(streamId, hint)
+      if (parentId === streamId) throw new ForgeError('a stream cannot be its own parent', 400)
+      if (parentId) {
+        await streamIn(parentId, membrane)
+        if (!stream.parentIds.includes(parentId)) await deps.tasks.addToStream(parentId, streamId)
+      }
+      for (const p of stream.parentIds) {
+        if (p !== parentId && (await deps.tasks.get(p))?.isStream) await deps.tasks.removeFromStream(p, streamId)
+      }
+      emit('forge.updated', { membrane })
+      return streamOf(membrane, streamId)
+    },
+
+    async mergeStreams(fromId, intoId, hint) {
+      const { stream: from, membrane } = await streamIn(fromId, hint)
+      const { stream: into } = await streamIn(intoId, membrane)
+      if (fromId === intoId) throw new ForgeError('a stream cannot merge into itself', 400)
+      // Walk up from `into`: merging a stream into its own sub-stream would make a cycle.
+      const seen = new Set<string>()
+      for (const up = [...into.parentIds]; up.length; ) {
+        const id = up.pop()!
+        if (id === fromId) throw new ForgeError('a stream cannot merge into its own sub-stream', 400)
+        if (seen.has(id)) continue
+        seen.add(id)
+        up.push(...((await deps.tasks.get(id))?.parentIds ?? []))
+      }
+      let members = 0
+      let streams = 0
+      for (const id of from.childIds) {
+        const child = await deps.tasks.get(id)
+        if (!child) continue
+        if (!into.childIds.includes(id)) await deps.tasks.addToStream(intoId, id)
+        await deps.tasks.removeFromStream(fromId, id)
+        if (child.isStream) streams++
+        else members++
+      }
+      await deps.tasks.setState(fromId, 'cancelled')
+      emit('forge.updated', { membrane })
+      return { members, streams }
     },
 
     async acceptEdge(from, to, kind, hint) {

@@ -66,7 +66,8 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
       service.graph(requireMembrane(req), {
         ...(str(req.query.view) ? { view: str(req.query.view) } : {}),
         ...(str(req.query.since) ? { since: str(req.query.since) } : {}),
-        ...(str(req.query.until) ? { until: str(req.query.until) } : {})
+        ...(str(req.query.until) ? { until: str(req.query.until) } : {}),
+        ...(req.query.archived === '1' || req.query.archived === 'true' ? { archived: true } : {})
       })
     )
   )
@@ -168,6 +169,16 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
     })
   )
 
+  router.get(
+    '/api/forge/streams',
+    requireAuth,
+    handle(async (req) => ({
+      streams: await service.streams(requireMembrane(req), {
+        archived: req.query.archived === '1' || req.query.archived === 'true'
+      })
+    }))
+  )
+
   router.post(
     '/api/forge/streams',
     requireAuth,
@@ -180,6 +191,17 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
       if (parentId !== undefined && typeof parentId !== 'string') throw bad('parentId must be a string')
       return service.createStream(membrane, name, parentId)
     }, 201)
+  )
+
+  router.post(
+    '/api/forge/streams/:id/archive',
+    requireAuth,
+    json,
+    handle((req) => {
+      const archived = req.body?.archived
+      if (archived !== undefined && typeof archived !== 'boolean') throw bad('archived must be a boolean')
+      return service.archiveStream(String(req.params.id), archived !== false, param(req, 'membrane'))
+    })
   )
 
   router.post(

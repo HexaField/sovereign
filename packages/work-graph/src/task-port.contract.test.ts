@@ -101,6 +101,20 @@ describe.each(IMPLS)('TaskPort contract: $name', ({ make }) => {
       (await port.ensureTask(change(3), { name: 'C', membrane: 'acme', kind: 'change', stream: true })).isStream
     ).toBe(true)
     expect((await port.streamsOf('acme')).map((x) => x.id).sort()).toEqual([plan.id, t.id].sort())
+    expect((await port.streamsOf('acme')).find((x) => x.id === plan.id)).toMatchObject({
+      plan: 'plan:widget/plans/p.md'
+    })
+
+    // Rename; a cancelled stream reads as archived; setStream(false) makes it a plain task again.
+    await port.setName(plan.id, 'P renamed')
+    await port.setState(t.id, 'cancelled')
+    const listed = await port.streamsOf('acme')
+    expect(listed.find((x) => x.id === plan.id)).toMatchObject({ name: 'P renamed' })
+    expect(listed.find((x) => x.id === plan.id)).not.toHaveProperty('archived')
+    expect(listed.find((x) => x.id === t.id)).toMatchObject({ archived: true })
+    await port.setStream(plan.id, false)
+    expect(await port.get(plan.id)).toMatchObject({ isStream: false, key: 'plan:widget/plans/p.md' })
+    expect((await port.streamsOf('acme')).map((x) => x.id)).toEqual([t.id])
     dispose()
   })
 

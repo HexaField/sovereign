@@ -35,7 +35,6 @@ import { activeWorkspace } from '../workspace/store.js'
 
 const LS_MEMBRANE = 'sovereign:forge:membrane'
 const LS_ARRANGEMENT = 'sovereign:forge:arrangement:'
-const LS_STREAMS = 'sovereign:forge:streams-open'
 
 const readLs = (k: string): string | null => {
   try {
@@ -63,7 +62,6 @@ const ForgeView: Component = () => {
   const [arrangement, setArrangement] = createSignal<Arrangement>({ mode: 'all' })
   const [overlays, setOverlays] = createSignal<Map<string, AgentOverlay>>(new Map())
   const [refresh, setRefresh] = createSignal(0)
-  const [streamsOpen, setStreamsOpen] = createSignal(readLs(LS_STREAMS) === '1')
   const [graphsOpen, setGraphsOpen] = createSignal(false)
   let graphsEl: HTMLDivElement | undefined
   useDismiss(
@@ -344,17 +342,6 @@ const ForgeView: Component = () => {
           </Show>
         </div>
 
-        <button
-          class={btn}
-          style={{ ...btnStyle, color: streamsOpen() ? 'var(--c-accent)' : 'var(--c-text)' }}
-          onClick={() => {
-            setStreamsOpen(!streamsOpen())
-            writeLs(LS_STREAMS, streamsOpen() ? '1' : '0')
-          }}
-          data-testid="forge-streams-toggle"
-        >
-          ◆ Streams
-        </button>
         <span class="flex-1" />
         <Show when={notice()}>
           <span class="text-xs" style={{ color: 'var(--c-text-muted)' }} data-testid="forge-notice">
@@ -436,7 +423,6 @@ const ForgeView: Component = () => {
                       api={api}
                       overlays={overlays}
                       refresh={refresh}
-                      streamsOpen={streamsOpen}
                       threads={threadsForPicker}
                       onViewChange={(patch) => commitViews(updateView(views(), id, patch))}
                       onOpenThread={openThread}

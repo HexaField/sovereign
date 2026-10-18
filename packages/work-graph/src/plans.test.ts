@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { isPlanPath, planRefs, planStatus, planTitle, scanPlans } from './plans.js'
+import { isPlanPath, planMakesStream, planRefs, planStatus, planTitle, scanPlans } from './plans.js'
 
 describe('plan parsing', () => {
   it('takes the title from the first heading, else the file name', () => {
@@ -80,5 +80,21 @@ describe('scanPlans', () => {
     expect(isPlanPath(dirs, path.join(tmp, 'plans', 'sub', 'b.md'))).toBe(true)
     expect(isPlanPath(dirs, path.join(tmp, 'plans', 'notes.txt'))).toBe(false)
     expect(isPlanPath(dirs, path.join(tmp, 'elsewhere.md'))).toBe(false)
+  })
+})
+
+describe('planMakesStream', () => {
+  const ref = { host: 'github.com', repo: 'acme-labs/widget', number: 3 }
+  it('needs a named forge item and a plan that is not done', () => {
+    expect(planMakesStream({ refs: [ref], status: 'planned' })).toBe(true)
+    expect(planMakesStream({ refs: [ref], status: 'in_progress' })).toBe(true)
+    expect(planMakesStream({ refs: [], status: 'in_progress' })).toBe(false)
+    expect(planMakesStream({ refs: [ref], status: 'done' })).toBe(false)
+    expect(
+      planMakesStream({
+        refs: planRefs('Status: shipped. See #3 in acme-labs/widget', ['acme-labs/widget']),
+        status: planStatus('Status: shipped')
+      })
+    ).toBe(false)
   })
 })

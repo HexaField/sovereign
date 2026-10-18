@@ -1,15 +1,16 @@
 // One graph panel: its own window of the work graph, filters, canvas,
-// stream menu and node card.
+// epics panel and node card.
 
 import { batch, createEffect, createMemo, createSignal, on, onCleanup, Show, type Component } from 'solid-js'
 import type { AgentOverlay, ForgeFilters, ForgeView } from '@sovereign/core'
 import ForgeCanvas, { type CanvasHandle } from './ForgeCanvas.js'
 import FilterBar from './FilterBar.js'
 import NodeCard, { type ThreadChoice } from './NodeCard.js'
-import StreamMenu from './StreamMenu.js'
+import EpicsPanel from './EpicsPanel.js'
 import type { ForgeApi } from './api.js'
 import { keyDirection, walkEdge } from './edge-walk.js'
-import { applyFilters, filterOptions, streamFocus } from './filters.js'
+import { clearEpics, epicFocus } from './epics-model.js'
+import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
 import { viewFilters } from './graphs.js'
 import { computeLayout, xToTime } from './layout.js'
 import { binDaysFor, COLLAPSE_SCALE } from './lod.js'
@@ -36,7 +37,6 @@ export interface ForgePanelProps {
   overlays: () => Map<string, AgentOverlay>
   /** Bumps on 'forge.updated' for this membrane. */
   refresh: () => number
-  streamsOpen: () => boolean
   threads: () => ThreadChoice[]
   onViewChange: (patch: Partial<Omit<ForgeView, 'id' | 'membrane'>>) => void
   onOpenThread: (id: string) => void
@@ -52,7 +52,6 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   const [loading, setLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [selected, setSelected] = createSignal<string | null>(null)
-  const [focusStream, setFocusStream] = createSignal<string | null>(null)
   const [searching, setSearching] = createSignal(false)
   const [lod, setLod] = createSignal<{ key: number; scale: number }>({ key: 0, scale: 1 })
   let canvas: CanvasHandle | undefined
@@ -105,10 +104,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   const filtered = createMemo(() =>
     applyFilters(nodes(), filters(), { me: win().identity, overlays: props.overlays(), now: Date.now() })
   )
-  const focus = createMemo(() => {
-    const s = focusStream()
-    return s ? streamFocus(s, nodes(), layout().edges) : null
-  })
+  const focus = createMemo(() => epicFocus(filters(), win().workstreams, nodes(), layout().edges))
   const visibility = createMemo(() => {
     const f = filtered()
     const fs = focus()
@@ -125,7 +121,9 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     const v = visibility()
     return buildScene(layout(), nodesById(), v.visible, v.dimmed, lod().scale)
   })
-  const options = createMemo(() => filterOptions(nodes(), win().workstreams))
+  // Option order holds across loads and picks (stableOptions).
+  let lastOptions: FilterOptions | undefined
+  const options = createMemo(() => (lastOptions = stableOptions(lastOptions, filterOptions(nodes()), filters())))
   const highlight = createMemo(() => {
     const id = selected()
     return id ? new Set([id]) : undefined
@@ -207,7 +205,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     }
     if (e.key === 'Escape') {
       if (selected()) setSelected(null)
-      else if (focusStream()) setFocusStream(null)
+      else if (filters().workstreams?.length) setFilters(clearEpics(props.view.filters))
       else if (filters().text) setFilters({ ...props.view.filters, text: undefined })
       return
     }
@@ -228,7 +226,6 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   const createStream = async (name: string, parentId?: string): Promise<void> => {
     const s = await props.api.createStream(props.membrane, name, parentId)
     setWin((w) => ({ ...w, workstreams: [...w.workstreams.filter((x) => x.id !== s.id), s] }))
-    setFocusStream(s.id)
   }
 
   const sinceLabel = createMemo(() => new Date(win().since).toLocaleDateString())
@@ -270,6 +267,17 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
           </span>
         </Show>
         <span class="flex-1" />
+        <EpicsPanel
+          membrane={props.membrane}
+          streams={win().workstreams}
+          filters={props.view.filters}
+          onChange={setFilters}
+          api={props.api}
+          onCreate={createStream}
+          onArchiveChanged={() => void load(initialRequest(Date.now()))}
+          onOpenThread={props.onOpenThread}
+          refresh={props.refresh}
+        />
         <button
           class="rounded border px-2 py-0.5 disabled:opacity-40"
           style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
@@ -298,14 +306,6 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
         hasIdentity={!!win().identity}
       />
       <div class="flex min-h-0 flex-1">
-        <Show when={props.streamsOpen()}>
-          <StreamMenu
-            streams={win().workstreams}
-            focused={focusStream()}
-            onFocus={setFocusStream}
-            onCreate={createStream}
-          />
-        </Show>
         <div class="relative min-w-0 flex-1" onPointerDown={() => root.focus({ preventScroll: true })}>
           <ForgeCanvas
             scene={scene}

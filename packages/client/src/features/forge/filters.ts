@@ -1,7 +1,9 @@
 // Filters — pure. Values within one filter OR together; filters AND together.
-// Non-matching nodes hide, or dim when `dim` is set.
+// Non-matching nodes hide, or dim when `dim` is set. Selected epics
+// (`workstreams`) are not a filter here: they focus the canvas (streamFocus,
+// epics-model.ts), so their members' neighbours can show too.
 
-import type { AgentOverlay, ForgeFilters, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
+import type { AgentOverlay, ForgeFilters, WorkEdge, WorkNode } from '@sovereign/core'
 import { DAY_MS } from './layout.js'
 
 export interface FilterContext {
@@ -61,7 +63,6 @@ export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: FilterContext)
   if (f.requestedFromMe && !(ctx.me && n.reviewers.some((r) => r.login === ctx.me && r.state === 'requested')))
     return false
   if (!some(f.labels, n.labels)) return false
-  if (!some(f.workstreams, n.workstreams)) return false
   if (!agentMatches(f.agent, ctx.overlays?.get(n.id))) return false
   if (f.updatedWithinDays !== undefined && f.updatedWithinDays > 0) {
     const t = Date.parse(n.updatedAt)
@@ -124,8 +125,9 @@ export function toggleFilterValue(f: ForgeFilters, key: ListFilterKey, value: st
   return out as ForgeFilters
 }
 
+/** Drop every filter and the epic selection; the display toggles (dim, epic neighbours) stay. */
 export function clearFilters(f: ForgeFilters): ForgeFilters {
-  return f.dim ? { dim: true } : {}
+  return { ...(f.dim ? { dim: true } : {}), ...(f.epicNeighbours === false ? { epicNeighbours: false } : {}) }
 }
 
 export interface FilterOption {
@@ -142,11 +144,12 @@ export interface FilterOptions {
   assignees: FilterOption[]
   reviewers: FilterOption[]
   labels: FilterOption[]
-  workstreams: FilterOption[]
 }
 
+export type OptionKey = keyof FilterOptions
+
 /** The values present in the loaded graph, with counts, most common first. */
-export function filterOptions(nodes: WorkNode[], streams: WorkStream[]): FilterOptions {
+export function filterOptions(nodes: WorkNode[]): FilterOptions {
   const tally = () => new Map<string, number>()
   const t = {
     repos: tally(),
@@ -155,8 +158,7 @@ export function filterOptions(nodes: WorkNode[], streams: WorkStream[]): FilterO
     authors: tally(),
     assignees: tally(),
     reviewers: tally(),
-    labels: tally(),
-    workstreams: tally()
+    labels: tally()
   }
   const add = (m: Map<string, number>, v: string | undefined) => {
     if (v) m.set(v, (m.get(v) ?? 0) + 1)
@@ -169,12 +171,10 @@ export function filterOptions(nodes: WorkNode[], streams: WorkStream[]): FilterO
     for (const a of new Set(n.assignees)) add(t.assignees, a)
     for (const r of new Set(n.reviewers.map((x) => x.login))) add(t.reviewers, r)
     for (const l of new Set(n.labels)) add(t.labels, l)
-    for (const s of new Set(n.workstreams)) add(t.workstreams, s)
   }
-  const names = new Map(streams.map((s) => [s.id, s.name]))
-  const list = (m: Map<string, number>, label: (v: string) => string = (v) => v): FilterOption[] =>
+  const list = (m: Map<string, number>): FilterOption[] =>
     [...m.entries()]
-      .map(([value, count]) => ({ value, label: label(value), count }))
+      .map(([value, count]) => ({ value, label: value, count }))
       .sort((a, b) => b.count - a.count || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
   return {
     repos: list(t.repos),
@@ -185,17 +185,84 @@ export function filterOptions(nodes: WorkNode[], streams: WorkStream[]): FilterO
     authors: list(t.authors),
     assignees: list(t.assignees),
     reviewers: list(t.reviewers),
-    labels: list(t.labels),
-    workstreams: list(t.workstreams, (v) => names.get(v) ?? v)
+    labels: list(t.labels)
   }
 }
 
-/** One-click stream focus: the stream's members and their direct neighbours. */
-export function streamFocus(streamId: string, nodes: WorkNode[], edges: WorkEdge[]): Set<string> {
+const OPTION_KEYS: OptionKey[] = ['repos', 'states', 'zones', 'authors', 'assignees', 'reviewers', 'labels']
+
+export interface FilterMenu {
+  key: OptionKey
+  label: string
+}
+
+/** The chips always shown; the rest wait behind "More". */
+export const PRIMARY_MENUS: FilterMenu[] = [
+  { key: 'repos', label: 'Repo' },
+  { key: 'states', label: 'State' },
+  { key: 'assignees', label: 'Assignee' }
+]
+export const MORE_MENUS: FilterMenu[] = [
+  { key: 'zones', label: 'Zone' },
+  { key: 'authors', label: 'Author' },
+  { key: 'reviewers', label: 'Reviewer' },
+  { key: 'labels', label: 'Label' }
+]
+
+/** How many values are selected in the chips behind "More" (shown on the chip). */
+export function moreActiveCount(f: ForgeFilters): number {
+  return MORE_MENUS.reduce((n, m) => n + ((f[m.key] as string[] | undefined)?.length ?? 0), 0)
+}
+
+/**
+ * Options in an order that holds while the user picks: values already listed
+ * keep their place, with the count of the latest load (0 when it has none),
+ * new values follow in `next`'s order, and a selected value never seen is
+ * added at 0. A pick changes the saved view, which the server applies to the
+ * window it serves: ordering by the fresh counts re-sorted the menu under the
+ * cursor on every click, and dropped every value the pick filtered out.
+ */
+export function stableOptions(
+  prev: FilterOptions | undefined,
+  next: FilterOptions,
+  selected: ForgeFilters
+): FilterOptions {
+  const out = {} as FilterOptions
+  for (const key of OPTION_KEYS) {
+    const fresh = new Map(next[key].map((o) => [o.value, o]))
+    const chosen = new Set((selected[key] as string[] | undefined) ?? [])
+    const list: FilterOption[] = []
+    const seen = new Set<string>()
+    for (const o of prev?.[key] ?? []) {
+      list.push(fresh.get(o.value) ?? { ...o, count: 0 })
+      seen.add(o.value)
+    }
+    for (const o of next[key]) {
+      if (seen.has(o.value)) continue
+      list.push(o)
+      seen.add(o.value)
+    }
+    for (const v of chosen) if (!seen.has(v)) list.push({ value: v, label: v, count: 0 })
+    out[key] = list
+  }
+  return out
+}
+
+/** Stream focus: the members of these streams and, with `neighbours`, their direct neighbours. */
+export function streamFocus(
+  streamIds: string | string[],
+  nodes: WorkNode[],
+  edges: WorkEdge[],
+  neighbours = true
+): Set<string> {
+  const ids = new Set(typeof streamIds === 'string' ? [streamIds] : streamIds)
   const members = new Set(
-    nodes.filter((n) => n.workstreams.includes(streamId) || n.taskId === streamId).map((n) => n.id)
+    nodes
+      .filter((n) => n.workstreams.some((w) => ids.has(w)) || (n.taskId !== undefined && ids.has(n.taskId)))
+      .map((n) => n.id)
   )
   const out = new Set(members)
+  if (!neighbours) return out
   const known = new Set(nodes.map((n) => n.id))
   for (const e of edges) {
     if (members.has(e.from) && known.has(e.to)) out.add(e.to)

@@ -6,7 +6,9 @@
 // mock answers the prompt with a forge_relate call (a dashed `rethink` edge
 // in the graph); a chat message in the rethink thread gets a forge_note call
 // (a note on the card, in a "chat" run). A second rethink with nothing new
-// is skipped.
+// is skipped. POST /api/forge/epics/refine sends the user's request and the
+// epic list to the same thread; the mock answers with forge_stream_rename,
+// and the renamed epic shows in the graph.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
 import { waitForThreadIdle } from '../wait.js'
@@ -17,6 +19,7 @@ const id = (n: number) => `github:github.com/${R}#${n}`
 const SHA = (c: string) => c.repeat(40)
 const RELATE_ID = 'toolu_s47_forge_relate'
 const NOTE_ID = 'toolu_s47_forge_note'
+const RENAME_ID = 'toolu_s47_forge_stream_rename'
 
 const SEED = {
   viewer: 'hex-agent',
@@ -227,6 +230,53 @@ export const s47ForgeRethink: Scenario = {
         )
         metrics.runs = list.runs.map((r: any) => `${r.id}:${r.trigger}:${r.status}`)
       }
+
+      // ── 5. Refine epics: the request reaches the rethink thread; a scripted rename lands ──
+      const epic = await client.post('/api/forge/streams', { membrane: M, name: 'S47 sprocket parts' })
+      await client.post(`/api/forge/streams/${encodeURIComponent(epic.id)}/members`, { membrane: M, nodeId: id(1) })
+      await script({
+        pattern: `Forge epics . ${M}`,
+        once: true,
+        needsTools: true,
+        toolUse: {
+          id: RENAME_ID,
+          name: 'mcp__sovereign__forge_stream_rename',
+          input: { membrane: M, streamId: epic.id, name: 'S47 drivetrain' }
+        }
+      })
+      const refined = await client.timed('forge-refine', () =>
+        client.post('/api/forge/epics/refine', { membrane: M, prompt: 's47-refine: call the sprocket epic drivetrain' })
+      )
+      check(
+        typeof refined?.threadId === 'string' && (!rethinkThread || refined.threadId === rethinkThread),
+        `refine answers the rethink thread: ${JSON.stringify(refined)}`
+      )
+      let refinePrompted = false
+      for (let i = 0; i < 80 && !refinePrompted; i++) {
+        const log = JSON.stringify(await mockLog(mockLlmUrl))
+        refinePrompted =
+          log.includes(`[Forge epics · ${M}]`) &&
+          log.includes('s47-refine: call the sprocket epic drivetrain') &&
+          log.includes(epic.id)
+        if (!refinePrompted) await sleep(250)
+      }
+      check(refinePrompted, 'the mock LLM received the refine prompt with the epic list')
+      const renameResult = await client.timed('forge-stream-rename', () => toolResult(mockLlmUrl, RENAME_ID, 30000))
+      check(
+        Boolean(renameResult?.includes('"renamed": true')),
+        `forge_stream_rename result: ${renameResult?.slice(0, 160)}`
+      )
+      g = await graph()
+      check(
+        g.workstreams.some((s: any) => s.id === epic.id && s.name === 'S47 drivetrain'),
+        `renamed epic in the graph: ${JSON.stringify(g.workstreams.map((s: any) => s.name))}`
+      )
+      if (refined?.threadId) await waitForThreadIdle(client, refined.threadId, 20000).catch(() => false)
+      list = await untilRunEnds(20000)
+      check(
+        list.runs.some((r: any) => r.trigger === 'chat' && r.actions?.epic === 1),
+        `the rename landed in a run report: ${JSON.stringify(list.runs.map((r: any) => r.actions))}`
+      )
     } finally {
       for (const th of threads) await client.deleteThread(th).catch(() => undefined)
       await client.patch('/api/config', { forge: { repos: { [M]: [] } } }).catch(() => undefined)
@@ -237,7 +287,7 @@ export const s47ForgeRethink: Scenario = {
       passed: problems.length === 0,
       summary: problems.length
         ? `${problems.length} problem(s): ${problems.slice(0, 4).join('; ')}`
-        : 'rethink thread, digest prompt, run report, forge_relate edge, forge_note, empty-digest skip',
+        : 'rethink thread, digest prompt, run report, forge_relate edge, forge_note, empty-digest skip, epics refine + forge_stream_rename',
       metrics: { ...metrics, problems },
       samples: client.samples.filter((s) => s.name.startsWith('forge'))
     }

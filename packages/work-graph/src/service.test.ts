@@ -337,15 +337,115 @@ describe('forge service', () => {
     expect(await members()).toEqual([nid(WIDGET, 50), nid(WIDGET, 51)].sort())
 
     // The plan drops #50 and names issue #7: #50 leaves, #7 joins, #51 (by hand) stays.
-    fs.writeFileSync(planFile, '# Sprocket rework\n\nStatus: done\n\nNow only #7 in acme-labs/widget.\n')
+    fs.writeFileSync(planFile, '# Sprocket rework\n\nStatus: in progress\n\nNow only #7 in acme-labs/widget.\n')
     await service.sync('acme')
     expect(await members()).toEqual([nid(WIDGET, 51), nid(WIDGET, 7)].sort())
-    expect((await port.get(stream.id))!.state).toBe('completed')
 
-    // The plan file goes: its links go, the stream stays.
+    // Done: no longer a plan stream. Its links go; #51 (by hand) keeps it an ordinary stream.
+    fs.writeFileSync(planFile, '# Sprocket rework\n\nStatus: done\n\nNow only #7 in acme-labs/widget.\n')
+    await service.sync('acme')
+    expect(await members()).toEqual([nid(WIDGET, 51)])
+    expect(await port.get(stream.id)).toMatchObject({ isStream: true, state: 'completed' })
+
+    // The plan file goes: the stream with its hand-added member stays.
     fs.rmSync(planFile)
     await service.sync('acme')
     expect(await members()).toEqual([nid(WIDGET, 51)])
+    expect((await port.get(stream.id))!.isStream).toBe(true)
+  })
+
+  it('a plan that names no item, or is done, makes no stream; it stays a plan node', async () => {
+    const dir = path.join(tmp, 'acme', 'widget', 'plans')
+    fs.writeFileSync(path.join(dir, 'idea.md'), '# Loose idea\n\nNothing tracked yet.\n')
+    fs.writeFileSync(path.join(dir, 'shipped.md'), '# Shipped\n\nStatus: done\n\nLanded as #51 in acme-labs/widget.\n')
+    await service.sync('acme')
+    const g = await service.graph('acme')
+    expect(g.workstreams.map((w) => w.name)).toEqual(['Sprocket rework'])
+    expect(g.workstreams[0]).toMatchObject({ plan: 'plan:acme-org/widget/sprockets.md', memberCount: 2 })
+    for (const id of ['plan:acme-org/widget/idea.md', 'plan:acme-org/widget/shipped.md']) {
+      expect(g.nodes.find((n) => n.id === id)).toMatchObject({ kind: 'plan' })
+      expect((await port.findByKey(id))?.isStream ?? false).toBe(false)
+    }
+  })
+
+  it('a plan stream that stops qualifying with only plan links stops being a stream; a child stream keeps one', async () => {
+    const dir = path.join(tmp, 'acme', 'widget', 'plans')
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nCovers #51 in acme-labs/widget.\n')
+    await service.sync('acme')
+    const sprockets = (await port.findByKey('plan:acme-org/widget/sprockets.md'))!
+    const gears = (await port.findByKey('plan:acme-org/widget/gears.md'))!
+    expect(gears.isStream).toBe(true)
+    const sub = await service.createStream('acme', 'Sprocket follow-ups', sprockets.id)
+    const handMade = await service.createStream('acme', 'Hand-made, empty')
+
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nNo items any more.\n')
+    fs.writeFileSync(path.join(dir, 'sprockets.md'), '# Sprocket rework\n\nStatus: done\n')
+    await service.sync('acme')
+    const g = await service.graph('acme')
+    // Gears had only what its plan added: a plain plan task again, still on its plan node.
+    expect(await port.get(gears.id)).toMatchObject({ isStream: false, childIds: [] })
+    expect(g.nodes.find((n) => n.id === 'plan:acme-org/widget/gears.md')).toMatchObject({ taskId: gears.id })
+    // Sprockets keeps its child stream, so it stays (without the plan's items); hand-made streams are never touched.
+    expect(await port.get(sprockets.id)).toMatchObject({ isStream: true, childIds: [sub.id] })
+    expect(g.workstreams.map((w) => w.id).sort()).toEqual([sprockets.id, sub.id, handMade.id].sort())
+  })
+
+  it('archive hides a stream from the graph (unless asked for), and a plan sync never brings it back', async () => {
+    const planId = 'plan:acme-org/widget/sprockets.md'
+    await service.sync('acme')
+    const stream = (await port.findByKey(planId))!
+    const archived = await service.archiveStream(stream.id, true, 'acme')
+    expect(archived).toMatchObject({ archived: true })
+    let g = await service.graph('acme')
+    expect(g.workstreams).toEqual([])
+    expect(g.nodes.find((n) => n.id === nid(WIDGET, 50))!.workstreams).toEqual([])
+    expect((await service.graph('acme', { archived: true })).workstreams).toEqual([
+      expect.objectContaining({ id: stream.id, archived: true })
+    ])
+
+    // The plan now names #51 too: an archived stream takes nothing and stays archived.
+    fs.writeFileSync(
+      path.join(tmp, 'acme', 'widget', 'plans', 'sprockets.md'),
+      '# Sprocket rework\n\nStatus: in progress\n\nCovers #50 and #51 in acme-labs/widget.\n'
+    )
+    await service.sync('acme')
+    expect(await port.get(stream.id)).toMatchObject({ state: 'cancelled', isStream: true })
+    expect((await port.get(stream.id))!.childIds).toHaveLength(2)
+
+    // Brought back: the plan's links resume.
+    expect(await service.archiveStream(stream.id, false, 'acme')).not.toHaveProperty('archived')
+    await service.sync('acme')
+    g = await service.graph('acme')
+    expect(g.workstreams.map((w) => w.id)).toEqual([stream.id])
+    expect(g.nodes.find((n) => n.id === nid(WIDGET, 51))!.workstreams).toEqual([stream.id])
+  })
+
+  it('renames, nests, merges and lists epics', async () => {
+    await service.sync('acme')
+    const plan = (await port.findByKey('plan:acme-org/widget/sprockets.md'))!
+    const a = await service.createStream('acme', 'Alpha')
+    const b = await service.createStream('acme', 'Beta')
+    const child = await service.createStream('acme', 'Beta child', b.id)
+    await service.addMember(b.id, nid(WIDGET, 51), 'acme')
+    await service.addMember(b.id, nid(WIDGET, 50), 'acme')
+
+    expect(await service.renameStream(a.id, '  Alpha prime ', 'acme')).toMatchObject({ name: 'Alpha prime' })
+    await expect(service.renameStream(a.id, ' ', 'acme')).rejects.toMatchObject({ status: 400 })
+
+    expect(await service.setStreamParent(a.id, plan.id, 'acme')).toMatchObject({ parentId: plan.id })
+    expect(await service.setStreamParent(a.id, null, 'acme')).not.toHaveProperty('parentId')
+    await expect(service.setStreamParent(a.id, a.id, 'acme')).rejects.toMatchObject({ status: 400 })
+
+    await expect(service.mergeStreams(b.id, child.id, 'acme')).rejects.toMatchObject({ status: 400 })
+    expect(await service.mergeStreams(b.id, a.id, 'acme')).toEqual({ members: 2, streams: 1 })
+    const epics = await service.epics('acme')
+    const alpha = epics.find((e) => e.id === a.id)!
+    expect(alpha.members.map((x) => x.id).sort()).toEqual([nid(WIDGET, 50), nid(WIDGET, 51)].sort())
+    expect(alpha.members.find((x) => x.id === nid(WIDGET, 50))!.title).toBe('Stream teeth')
+    expect(epics.find((e) => e.id === child.id)).toMatchObject({ parentId: a.id })
+    expect(epics.find((e) => e.id === b.id)).toMatchObject({ archived: true, members: [] })
+    expect(epics.find((e) => e.id === plan.id)).toMatchObject({ plan: 'plan:acme-org/widget/sprockets.md' })
+    expect(busEvents.filter((e) => e.type === 'forge.updated').length).toBeGreaterThan(5)
   })
 
   it('follows a reassignment made outside Forge with the forge assignee', async () => {
@@ -591,6 +691,23 @@ describe('forge service', () => {
             .send({ nodeId: nid(WIDGET, 50) })
         ).status
       ).toBe(404)
+
+      // Archive: gone from the graph, back with ?archived=1; archived: false brings it back.
+      const arch = `/api/forge/streams/${encodeURIComponent(st.body.id)}/archive`
+      expect((await request(a).post(arch).send({ membrane: 'acme', archived: 'yes' })).status).toBe(400)
+      const archived = await request(a).post(arch).send({ membrane: 'acme' })
+      expect(archived.body).toMatchObject({ id: st.body.id, archived: true })
+      const ids = async (q = '') =>
+        (await request(a).get(`/api/forge?membrane=acme${q}`)).body.workstreams.map((w: { id: string }) => w.id)
+      expect(await ids()).not.toContain(st.body.id)
+      expect(await ids('&archived=1')).toContain(st.body.id)
+      const listed = async (q = '') =>
+        (await request(a).get(`/api/forge/streams?membrane=acme${q}`)).body.streams.map((w: { id: string }) => w.id)
+      expect(await listed()).not.toContain(st.body.id)
+      expect(await listed('&archived=1')).toContain(st.body.id)
+      expect((await request(a).get('/api/forge/streams')).status).toBe(400)
+      await request(a).post(arch).send({ membrane: 'acme', archived: false })
+      expect(await ids()).toContain(st.body.id)
 
       await port.addRelated('acme', {
         from: nid(WIDGET, 50),

@@ -7,10 +7,14 @@ import {
   filterOptions,
   hasActiveFilters,
   matchesFilters,
+  moreActiveCount,
+  MORE_MENUS,
+  PRIMARY_MENUS,
+  stableOptions,
   streamFocus,
   toggleFilterValue
 } from './filters.js'
-import { NOW, change, edge, issue, iso, merged, stream } from './test-fixtures.js'
+import { NOW, change, edge, issue, iso, merged } from './test-fixtures.js'
 
 const R = 'demo-org/engine'
 const R2 = 'demo-org/app'
@@ -52,7 +56,8 @@ describe('matchesFilters', () => {
     expect(ids({ labels: ['perf'] })).toEqual([1, 4])
     expect(ids({ assignees: ['hexbot'] })).toEqual([1])
     expect(ids({ reviewers: ['robin'] })).toEqual([2])
-    expect(ids({ workstreams: ['s1'] })).toEqual([1])
+    // Epics focus the canvas (epics-model.ts); they are not a filter.
+    expect(ids({ workstreams: ['s1'] })).toEqual([1, 2, 3, 4])
     expect(ids({ updatedWithinDays: 7 })).toEqual([1, 3, 4])
   })
 
@@ -122,17 +127,51 @@ describe('filter editing', () => {
     expect(hasActiveFilters({ requestedFromMe: true })).toBe(true)
     expect(clearFilters({ repos: [R], dim: true })).toEqual({ dim: true })
     expect(clearFilters({ repos: [R] })).toEqual({})
+    // The epic selection goes; the neighbours preference stays.
+    expect(clearFilters({ workstreams: ['s1'], epicNeighbours: false })).toEqual({ epicNeighbours: false })
   })
 
-  it('lists options with counts, stream names resolved', () => {
-    const o = filterOptions(all, [stream('s1', 'Indexer work')])
+  it('lists options with counts', () => {
+    const o = filterOptions(all)
     expect(o.repos).toEqual([
       { value: R, label: R, count: 3 },
       { value: R2, label: R2, count: 1 }
     ])
-    expect(o.workstreams).toEqual([{ value: 's1', label: 'Indexer work', count: 1 }])
+    expect(o).not.toHaveProperty('workstreams')
     expect(o.zones.map((z) => z.value)).toEqual(['past', 'present', 'future'])
     expect(o.labels[0]).toEqual({ value: 'perf', label: 'perf', count: 2 })
+  })
+})
+
+describe('stableOptions', () => {
+  const values = (o: { value: string }[]) => o.map((x) => x.value)
+
+  it('keeps the first order while picks reload a narrower window, and keeps filtered-out values', () => {
+    const first = stableOptions(undefined, filterOptions(all), {})
+    expect(values(first.labels)).toEqual(['perf', 'bug', 'ui'])
+    // The user picks "ui"; the server then serves only b, where "ui" is the only label.
+    const picked = { labels: ['ui'] }
+    const next = stableOptions(first, filterOptions([b]), picked)
+    expect(values(next.labels)).toEqual(['perf', 'bug', 'ui'])
+    expect(next.labels.map((x) => x.count)).toEqual([0, 0, 1])
+    // A later load where "bug" outnumbers "perf" still does not move anything.
+    const busy = [d, issue(R, 5, { labels: ['bug'] }), issue(R, 6, { labels: ['bug'] })]
+    expect(values(stableOptions(next, filterOptions(busy), picked).labels)).toEqual(['perf', 'bug', 'ui'])
+  })
+
+  it('appends values new to the panel, and a selected value it never saw', () => {
+    const first = stableOptions(undefined, filterOptions([a]), {})
+    const next = stableOptions(first, filterOptions(all), { authors: ['robin-ghost'] })
+    expect(values(next.repos)).toEqual([R, R2])
+    expect(values(next.authors)).toEqual(['alex', 'sam', 'robin-ghost'])
+    expect(next.authors[2].count).toBe(0)
+  })
+
+  it('splits the chips: Repo, State, Assignee shown; Zone, Author, Reviewer, Label behind More', () => {
+    expect(PRIMARY_MENUS.map((m) => m.label)).toEqual(['Repo', 'State', 'Assignee'])
+    expect(MORE_MENUS.map((m) => m.label)).toEqual(['Zone', 'Author', 'Reviewer', 'Label'])
+    expect(moreActiveCount({ repos: [R], labels: ['ui', 'perf'], zones: ['past'] })).toBe(3)
+    expect(moreActiveCount({ repos: [R] })).toBe(0)
   })
 })
 
@@ -147,5 +186,12 @@ describe('streamFocus', () => {
   it('includes the stream task node itself', () => {
     const st = { ...issue(R, 0), id: 'task:s1', kind: 'task' as const, taskId: 's1' }
     expect(streamFocus('s1', [st], []).has('task:s1')).toBe(true)
+  })
+
+  it('takes several streams, and leaves the neighbours out on request', () => {
+    const e = { ...b, id: 'b2', workstreams: ['s2'] }
+    const edges = [edge(a, d, 'closes')]
+    expect([...streamFocus(['s1', 's2'], [...all, e], edges)].sort()).toEqual([a.id, d.id, 'b2'].sort())
+    expect([...streamFocus(['s1', 's2'], [...all, e], edges, false)].sort()).toEqual([a.id, 'b2'].sort())
   })
 })

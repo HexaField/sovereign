@@ -234,6 +234,28 @@ describe('api', () => {
     ])
   })
 
+  it('epics: list (archived on request), archive, refine', async () => {
+    const { calls, api } = recorder({ streams: [{ id: 's1' }], threadId: 'rt-1' })
+    expect(await api.streams('demo')).toEqual([{ id: 's1' }])
+    await api.streams('demo', true)
+    await api.archiveStream('demo', 'task://9f2c', true)
+    expect(await api.refineEpics('demo', 'merge the indexer epics')).toMatchObject({ threadId: 'rt-1' })
+    expect(calls).toEqual([
+      { url: '/api/forge/streams?membrane=demo', method: 'GET', body: undefined },
+      { url: '/api/forge/streams?membrane=demo&archived=1', method: 'GET', body: undefined },
+      {
+        url: '/api/forge/streams/task%3A%2F%2F9f2c/archive',
+        method: 'POST',
+        body: { membrane: 'demo', archived: true }
+      },
+      {
+        url: '/api/forge/epics/refine',
+        method: 'POST',
+        body: { membrane: 'demo', prompt: 'merge the indexer epics' }
+      }
+    ])
+  })
+
   it('sync and rethink accept an empty 202', async () => {
     const { calls, api } = recorder(null, 202)
     await api.sync('demo')

@@ -6,7 +6,9 @@
 //   streams    POST /api/forge/streams + members → a stream task in /api/tasks
 //   assign     a node to a new thread → task in_progress in /api/tasks, assignee on GitHub
 //   merge      a merge on GitHub → its task completed after one sync
-//   plans      a plan file in the membrane's plans/ → a stream task holding what it names
+//   plans      a plan file in the membrane's plans/ → a stream task holding what it names;
+//              a plan naming no item stays a plan node and makes no epic
+//   archive    an archived epic leaves the graph; ?archived=1 and GET /api/forge/streams list it
 //   task_update  PATCH /api/tasks/:id { threadId } (what the MCP tool calls) → assignee on GitHub
 //   pr-poll    a PR task on a repo outside forge.repos, owned by a thread with no
 //              membrane → read on its own; CI red on the mock → the owner is told
@@ -54,6 +56,8 @@ const SEED = {
 }
 
 const PLAN = '# S46 rollout\\n\\nStatus: in progress\\n\\nRepo: acme-labs/widget\\n\\nShips #30, then closes #32.\\n'
+/** Names no PR or issue: a plan node, never an epic. */
+const IDEA = '# S46 idea\\n\\nNothing tracked yet.\\n'
 
 export const s46ForgeWired: Scenario = {
   id: 's46',
@@ -142,6 +146,7 @@ export const s46ForgeWired: Scenario = {
       contentPath: CONTENT
     })
     sh(`mkdir -p ${CONTENT}/plans && printf "${PLAN}" > ${CONTENT}/plans/s46-rollout.md`)
+    sh(`printf "${IDEA}" > ${CONTENT}/plans/s46-idea.md`)
 
     try {
       // ── Views: ordered, replaced, used by the graph ───────────────────
@@ -179,6 +184,12 @@ export const s46ForgeWired: Scenario = {
         )
         check(node(g, id(W, 30))?.workstreams?.includes(planNode.taskId), '#30 in the plan lane')
       }
+      const ideaNode = g.nodes.find((n: any) => n.kind === 'plan' && n.title === 'S46 idea')
+      check(Boolean(ideaNode), 'a plan without items is still a plan node')
+      check(
+        !g.workstreams.some((s: any) => s.name === 'S46 idea'),
+        `a plan without items makes no epic: ${g.workstreams.map((s: any) => s.name)}`
+      )
       check(
         (await graph('&view=mine')).nodes.every((n: any) => !n.repo || n.repo === W),
         'the saved view filters the graph'
@@ -198,6 +209,30 @@ export const s46ForgeWired: Scenario = {
       check(
         streams.some((s: any) => s.id === stream.id && s.memberCount === 1),
         'the stream is a work stream in /api/tasks'
+      )
+
+      // ── Archive hides the epic; ?archived=1 and the streams list bring it back ──
+      const arch = await client.post(`/api/forge/streams/${encodeURIComponent(stream.id)}/archive`, {
+        membrane: M,
+        archived: true
+      })
+      check(arch?.archived === true, `archive answer ${JSON.stringify(arch)}`)
+      const hidden = await graph()
+      check(!hidden.workstreams.some((s: any) => s.id === stream.id), 'an archived epic leaves the graph')
+      check(!node(hidden, id(W, 31))?.workstreams?.includes(stream.id), '#31 no longer shows the archived epic')
+      check(
+        (await graph('&archived=1')).workstreams.some((s: any) => s.id === stream.id && s.archived),
+        '?archived=1 lists the archived epic'
+      )
+      const listed = (await client.get(`/api/forge/streams?membrane=${M}&archived=1`)).streams
+      check(
+        listed.some((s: any) => s.id === stream.id && s.archived),
+        'GET /api/forge/streams?archived=1 lists it'
+      )
+      await client.post(`/api/forge/streams/${encodeURIComponent(stream.id)}/archive`, { membrane: M, archived: false })
+      check(
+        (await graph()).workstreams.some((s: any) => s.id === stream.id),
+        'unarchived: back in the graph'
       )
 
       // ── Assign #30 to a new thread ────────────────────────────────────

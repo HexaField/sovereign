@@ -125,6 +125,11 @@ export function parsePlan(
   }
 }
 
+/** A plan becomes a work stream only while it names a forge item and is not done. */
+export function planMakesStream(p: Pick<Plan, 'refs' | 'status'>): boolean {
+  return p.refs.length > 0 && p.status !== 'done'
+}
+
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build'])
 
 function listMarkdown(dir: string, depth = 0, out: string[] = []): string[] {

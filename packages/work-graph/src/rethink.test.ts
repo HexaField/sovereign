@@ -459,6 +459,72 @@ describe('rethink runner', () => {
     expect(md).toContain('- forge_attention: one forge_attention per run')
   })
 
+  it('refine sends the request and the epics to the rethink thread; the epic tools change streams outside the run limits', async () => {
+    const axles = await service.createStream('acme', 'Axles')
+    await service.addMember(axles.id, nid(52), 'acme')
+    const gears = await service.createStream('acme', 'Gears')
+    await service.addMember(gears.id, nid(51), 'acme')
+    await expect(runner.refine('acme', '  ')).rejects.toMatchObject({ status: 400 })
+    await expect(runner.refine('nope', 'tidy')).rejects.toMatchObject({ status: 404 })
+
+    const { threadId } = await runner.refine('acme', 'Merge gears into axles\nand call it Drivetrain')
+    expect(threadId).toBe(runner.threadOf('acme'))
+    expect(threads.get(threadId)?.label).toBe('forge-rethink')
+    const msg = sent[sent.length - 1]
+    expect(msg.threadId).toBe(threadId)
+    expect(msg.text).toContain('[Forge epics · acme]')
+    expect(msg.text).toContain('> Merge gears into axles\n> and call it Drivetrain')
+    expect(msg.text).toContain(
+      `### Axles (\`${axles.id}\`)\n- Source: hand-made\n- Parent: none\n- Archived: no\n- Members: 1`
+    )
+    expect(msg.text).toContain(`  - \`${nid(52)}\` Axle grease`)
+    expect(msg.text).toContain('Do not dispatch work')
+    expect(msg.text).toContain('`forge_stream_merge { membrane, fromId, intoId }`')
+
+    // No dispatches allowed: the epic tools still work.
+    config = { ...config, rethink: { ...config.rethink!, maxJobs: 0 } }
+    const call = (name: Parameters<typeof runner.tool>[1], args: Record<string, unknown>) =>
+      runner.tool(threadId, name, { membrane: 'acme', ...args })
+    const created = await call('forge_stream_create', { name: 'Wheels', parentId: axles.id })
+    expect(created).toMatchObject({ created: true, stream: { name: 'Wheels', parentId: axles.id } })
+    const wheels = (created.stream as { id: string }).id
+    expect(await call('forge_stream_rename', { streamId: axles.id, name: 'Drivetrain' })).toMatchObject({
+      stream: { name: 'Drivetrain' }
+    })
+    await expect(call('forge_stream_parent', { streamId: wheels })).rejects.toMatchObject({ status: 400 })
+    expect((await call('forge_stream_parent', { streamId: wheels, parentId: null })).stream).not.toHaveProperty(
+      'parentId'
+    )
+    expect(await call('forge_stream_merge', { fromId: gears.id, intoId: axles.id })).toMatchObject({
+      merged: true,
+      members: 1,
+      streams: 0
+    })
+    expect(await call('forge_stream_remove', { nodeId: nid(52), streamId: axles.id })).toEqual({ removed: true })
+    await expect(call('forge_stream_remove', { nodeId: nid(52), streamId: axles.id })).rejects.toMatchObject({
+      status: 404
+    })
+    await expect(call('forge_stream_archive', { streamId: wheels })).rejects.toMatchObject({ status: 400 })
+    expect(await call('forge_stream_archive', { streamId: wheels, archived: true })).toMatchObject({ archived: true })
+
+    const g = await service.graph('acme')
+    expect(g.workstreams.map((w) => w.name)).toEqual(['Drivetrain'])
+    expect(g.nodes.find((n) => n.id === nid(51))!.workstreams).toEqual([axles.id])
+    expect((await service.graph('acme', { archived: true })).workstreams.map((w) => w.name).sort()).toEqual([
+      'Drivetrain',
+      'Gears',
+      'Wheels'
+    ])
+
+    status(threadId, 'idle')
+    const run = runner.runs('acme')[0]
+    expect(run).toMatchObject({ trigger: 'chat', status: 'done', actions: { epic: 6, refused: 0, dispatch: 0 } })
+    const md = runner.report('acme', run.id)!
+    expect(md).toContain('### Epic changes')
+    expect(md).toContain(`- forge_stream_rename: ${axles.id} renamed to "Drivetrain"`)
+    expect(events.filter((e) => e.type === 'forge.updated').length).toBeGreaterThanOrEqual(6)
+  })
+
   it('limits: max jobs, token budget, no new thread outside a stream', async () => {
     await service.rethink('acme')
     const rt = runner.threadOf('acme')!
@@ -601,5 +667,16 @@ describe('rethink runner', () => {
     await request(app).get('/api/forge/rethink/runs/../../state?membrane=acme').expect(404)
     await request(app).get('/api/forge/rethink/runs/2020-01-01-0000?membrane=acme').expect(404)
     await request(app).get('/api/forge/rethink/runs').expect(400)
+
+    // Refine: the request goes to the same thread.
+    await request(app).post('/api/forge/epics/refine').send({ membrane: 'acme' }).expect(400)
+    await request(app).post('/api/forge/epics/refine').send({ prompt: 'tidy' }).expect(400)
+    await request(app).post('/api/forge/epics/refine').send({ membrane: 'nope', prompt: 'tidy' }).expect(404)
+    const refine = await request(app)
+      .post('/api/forge/epics/refine')
+      .send({ membrane: 'acme', prompt: 'Fewer epics please' })
+      .expect(200)
+    expect(refine.body).toEqual({ threadId: runner.threadOf('acme') })
+    expect(sent[sent.length - 1].text).toContain('> Fewer epics please')
   })
 })

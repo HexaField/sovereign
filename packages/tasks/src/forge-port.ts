@@ -255,6 +255,18 @@ export function createForgeTaskPort(deps: ForgeTaskPortDeps): TaskPort {
       return { id: s.id, name: s.name, membrane, ...(parentId ? { parentId } : {}), memberCount: 0 }
     },
 
+    async setName(id, name) {
+      const t = await must(id)
+      if (t.name === name) return
+      await service.update(id, { name, sourceThreadId: source })
+    },
+
+    async setStream(id, isStream) {
+      const t = await must(id)
+      if (t.isStream === isStream) return
+      await service.update(id, { isStream, sourceThreadId: source })
+    },
+
     addToStream: (streamId, taskId) => service.addToStream(streamId, taskId, source),
     removeFromStream: (streamId, taskId) => service.removeFromStream(streamId, taskId, source),
 

@@ -219,6 +219,10 @@ export interface WorkStream {
   membrane: string
   parentId?: string
   memberCount: number
+  /** Archived (its task is cancelled): left out of the graph unless asked for. */
+  archived?: boolean
+  /** The plan key ("plan:<project>/<path>") of a stream a plan file made; absent for a hand-made stream. */
+  plan?: string
 }
 
 export interface ForgeView {
@@ -240,7 +244,10 @@ export interface ForgeFilters {
   reviewers?: string[]
   requestedFromMe?: boolean
   labels?: string[]
+  /** Selected epics (work stream ids): the client focuses the canvas on their members. */
   workstreams?: string[]
+  /** false = show only the selected epics' members, not their direct neighbours too (default on). */
+  epicNeighbours?: boolean
   agent?: 'any' | 'waiting-ci' | 'waiting-review'
   updatedWithinDays?: number
   text?: string
@@ -344,6 +351,9 @@ export interface TaskPort {
   listForgeItems(): Promise<PortTask[]>
   streamsOf(membrane: string): Promise<WorkStream[]>
   createStream(membrane: string, name: string, parentId?: string): Promise<WorkStream>
+  setName(taskId: string, name: string): Promise<void>
+  /** Make a task a work stream, or a plain task again (its links stay). */
+  setStream(taskId: string, isStream: boolean): Promise<void>
   addToStream(streamId: string, taskId: string): Promise<void>
   removeFromStream(streamId: string, taskId: string): Promise<void>
   /** A membrane's saved views, in order. */
@@ -382,7 +392,13 @@ export const FORGE_TOOLS = [
   'forge_dispatch',
   'forge_bug_draft',
   'forge_attention',
-  'forge_note'
+  'forge_note',
+  'forge_stream_create',
+  'forge_stream_rename',
+  'forge_stream_archive',
+  'forge_stream_remove',
+  'forge_stream_merge',
+  'forge_stream_parent'
 ] as const
 export type ForgeToolName = (typeof FORGE_TOOLS)[number]
 

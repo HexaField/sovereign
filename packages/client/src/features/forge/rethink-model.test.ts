@@ -49,6 +49,8 @@ describe('rethink status', () => {
     const done = phaseAfterRuns(running, list())
     expect(done).toEqual({ phase: 'done', run: run() })
     expect(actionCount(run())).toBe(5)
+    // Epic changes (forge_stream_* tools) count as actions.
+    expect(actionCount(run({ actions: { ...run().actions, epic: 3 } }))).toBe(8)
     expect(phaseLabel(done)).toBe('Rethink done: 5 actions, 1 limit hit')
     expect(phaseLabel({ phase: 'done', run: run({ status: 'timed-out', limitsHit: 0 }) })).toBe(
       'Rethink timed out: 5 actions'

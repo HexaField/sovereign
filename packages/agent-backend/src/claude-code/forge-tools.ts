@@ -22,6 +22,7 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
   const call = deps.call
   const membrane = z.string().describe('The membrane id of this rethink run.')
   const nodeId = z.string().describe('A work-graph node id, e.g. "github:github.com/owner/repo#12".')
+  const streamId = z.string().describe('The stream id (its task id).')
   const run = (name: ForgeToolName) => async (args: Record<string, unknown>) => okJson(await call(threadId, name, args))
   return [
     tool(
@@ -82,6 +83,46 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
       "Leave a one-line note on a node's card (Rethink notes).",
       { membrane, nodeId, text: z.string() },
       run('forge_note')
+    ),
+    tool(
+      'forge_stream_create',
+      'Create a work stream (an epic), optionally under a parent stream. Not counted against the run limits.',
+      { membrane, name: z.string(), parentId: z.string().optional().describe('The parent stream id.') },
+      run('forge_stream_create')
+    ),
+    tool(
+      'forge_stream_rename',
+      'Rename a work stream. Not counted against the run limits.',
+      { membrane, streamId, name: z.string() },
+      run('forge_stream_rename')
+    ),
+    tool(
+      'forge_stream_archive',
+      'Archive a work stream (hidden from the Forge epics list) or bring it back (`archived: false`). A plan sync never brings back an archived stream. Not counted against the run limits.',
+      { membrane, streamId, archived: z.boolean() },
+      run('forge_stream_archive')
+    ),
+    tool(
+      'forge_stream_remove',
+      'Take a node out of a work stream. Not counted against the run limits.',
+      { membrane, nodeId, streamId },
+      run('forge_stream_remove')
+    ),
+    tool(
+      'forge_stream_merge',
+      'Move every member and child stream of one work stream into another, then archive the first. Not counted against the run limits.',
+      {
+        membrane,
+        fromId: z.string().describe('The stream to empty and archive.'),
+        intoId: z.string().describe('The stream that receives its members.')
+      },
+      run('forge_stream_merge')
+    ),
+    tool(
+      'forge_stream_parent',
+      'Nest a work stream under another, or move it to the top level (`parentId: null`). Not counted against the run limits.',
+      { membrane, streamId, parentId: z.string().nullable().describe('The new parent stream id, or null.') },
+      run('forge_stream_parent')
     )
   ]
 }

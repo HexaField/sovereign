@@ -352,6 +352,10 @@ describe('windowGraph / applyView / searchGraph', () => {
       id(WIDGET, 3)
     ])
     expect(applyView(g, { ...v, filters: { dim: true, authors: ['nobody'] } }).nodes).toHaveLength(g.nodes.length)
+    // Selected epics narrow on the client (with their neighbours), never in the served window.
+    expect(applyView(g, { ...v, repos: [], filters: { workstreams: ['no-such-stream'] } }).nodes).toHaveLength(
+      g.nodes.length
+    )
   })
 
   it('searches title, number, branch and author across the full history', () => {

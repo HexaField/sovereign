@@ -404,14 +404,15 @@ export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: { me?: string;
   return true
 }
 
-/** A view's base filter: its repos, then its filters. `dim` keeps every node (the client dims). */
+/** A view's base filter: its repos, then its filters but its epics. `dim` keeps every node (the client dims). */
 export function applyView(
   g: BuiltGraph,
   view: ForgeView | undefined,
   ctx: { me?: string; now?: number } = {}
 ): BuiltGraph {
   if (!view) return g
-  const filters: ForgeFilters = { ...view.filters }
+  // Selected epics narrow on the client, with their neighbours: the window keeps every stream's nodes.
+  const { workstreams: _epics, ...filters }: ForgeFilters = { ...view.filters }
   if (view.repos.length)
     filters.repos = filters.repos?.length ? filters.repos.filter((r) => view.repos.includes(r)) : view.repos
   const keep = (n: WorkNode) => {

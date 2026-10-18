@@ -76,6 +76,18 @@ export function createForgeApi(f: Fetch = (...a) => fetch(...a)) {
         .views ?? views,
     createStream: async (membrane: string, name: string, parentId?: string): Promise<WorkStream> =>
       json(await send('/api/forge/streams', 'POST', parentId ? { membrane, name, parentId } : { membrane, name })),
+    /** The membrane's epics; archived ones only with `archived`. */
+    streams: async (membrane: string, archived = false): Promise<WorkStream[]> =>
+      (
+        await json<{ streams: WorkStream[] }>(
+          await f(`/api/forge/streams?membrane=${enc(membrane)}${archived ? '&archived=1' : ''}`)
+        )
+      ).streams ?? [],
+    archiveStream: async (membrane: string, streamId: string, archived: boolean): Promise<WorkStream> =>
+      json(await send(`/api/forge/streams/${enc(streamId)}/archive`, 'POST', { membrane, archived })),
+    /** Sends the request, with the current epics, to the membrane's forge-rethink thread. */
+    refineEpics: async (membrane: string, prompt: string): Promise<{ threadId: string }> =>
+      json(await send('/api/forge/epics/refine', 'POST', { membrane, prompt })),
     addMember: async (streamId: string, nodeId: string): Promise<void> => {
       await json(await send(`/api/forge/streams/${enc(streamId)}/members`, 'POST', { nodeId }))
     },

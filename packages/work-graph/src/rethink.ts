@@ -1,6 +1,8 @@
 // Loop 2 — rethink. One turn per run in the membrane's `forge-rethink`
-// thread: a script-built prompt from the digest, six tools (forge_*), per-run
+// thread: a script-built prompt from the digest, the forge_* tools, per-run
 // limits, and a run report per run under <dataDir>/forge/<membrane>/rethink/.
+// The same thread takes "refine epics" requests (refine): the epic tools
+// (forge_stream_*) change work streams and count against no limit.
 //
 // A run opens when the prompt is sent and closes when the thread's turn ends
 // (the first idle after it was busy), or after `runTimeoutMs`. A forge_* call
@@ -21,7 +23,7 @@ import type { ScopeSource } from './scope.js'
 import { writeJsonAtomic, readJson } from './cache.js'
 import { clip, detailParts, nodeCardLines } from './classifier.js'
 import { safeSegment } from './events.js'
-import { ForgeError, type ForgeService } from './service.js'
+import { ForgeError, type Epic, type ForgeService } from './service.js'
 import type { ForgeDigest, RethinkTrigger, TriagedEvent } from './types.js'
 
 export const RETHINK_THREAD_LABEL = 'forge-rethink'
@@ -66,6 +68,8 @@ export type RethinkAction =
   | { kind: 'draft'; at: string; draftId: string; repo: string; title: string; evidence: string[] }
   | { kind: 'attention'; at: string; items: Array<{ nodeId?: string; text: string }> }
   | { kind: 'note'; at: string; nodeId: string; text: string }
+  /** A change to the epics (work streams) through a forge_stream_* tool other than forge_stream_add. */
+  | { kind: 'epic'; at: string; tool: ForgeToolName; text: string }
   | { kind: 'refused'; at: string; tool: ForgeToolName; reason: string }
 
 export interface RethinkRun {
@@ -203,6 +207,53 @@ export function buildRethinkPrompt(input: {
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
+/** Members listed per epic in the refine prompt; the rest are counted. */
+export const REFINE_MEMBERS_PER_EPIC = 25
+
+/** The message POST /api/forge/epics/refine sends to the membrane's forge-rethink thread. */
+export function buildEpicsRefinePrompt(input: { membrane: string; prompt: string; epics: Epic[] }): string {
+  const { membrane, prompt, epics } = input
+  const m = JSON.stringify(membrane)
+  const byId = new Map(epics.map((e) => [e.id, e]))
+  const out: string[] = []
+  out.push(`[Forge epics · ${membrane}]`, '')
+  out.push(
+    `The user wants to refine the epics (work streams) of membrane ${m}. Their request, verbatim:`,
+    '',
+    ...prompt.split('\n').map((l) => `> ${l}`),
+    ''
+  )
+  out.push(
+    `Change epics only with these tools (pass \`membrane: ${m}\` to each):`,
+    '',
+    '- `forge_stream_create { membrane, name, parentId? }` — a new epic.',
+    '- `forge_stream_rename { membrane, streamId, name }`',
+    '- `forge_stream_archive { membrane, streamId, archived }` — archive (hide) or bring back an epic.',
+    '- `forge_stream_add { membrane, nodeId, streamId }` — put an item in an epic.',
+    '- `forge_stream_remove { membrane, nodeId, streamId }` — take an item out of an epic.',
+    '- `forge_stream_merge { membrane, fromId, intoId }` — move every item and sub-epic of one epic into another, then archive the first.',
+    '- `forge_stream_parent { membrane, streamId, parentId }` — nest an epic under another (`parentId: null` moves it to the top).',
+    '',
+    'Do not dispatch work, post attention, draft bug reports or open issues for this request. When done, reply with a short summary of what changed.',
+    ''
+  )
+  out.push(`## Epics (${epics.length})`, '')
+  if (!epics.length) out.push('None yet.', '')
+  for (const e of epics) {
+    const parent = e.parentId ? byId.get(e.parentId) : undefined
+    out.push(`### ${e.name} (\`${e.id}\`)`)
+    out.push(`- Source: ${e.plan ? `plan \`${e.plan}\`` : 'hand-made'}`)
+    out.push(`- Parent: ${parent ? `${parent.name} (\`${parent.id}\`)` : e.parentId ? `\`${e.parentId}\`` : 'none'}`)
+    out.push(`- Archived: ${e.archived ? 'yes' : 'no'}`)
+    out.push(`- Members: ${e.members.length}`)
+    for (const x of e.members.slice(0, REFINE_MEMBERS_PER_EPIC)) out.push(`  - \`${x.id}\` ${oneLine(x.title)}`)
+    if (e.members.length > REFINE_MEMBERS_PER_EPIC)
+      out.push(`  - … and ${e.members.length - REFINE_MEMBERS_PER_EPIC} more`)
+    out.push('')
+  }
+  return out.join('\n').trimEnd() + '\n'
+}
+
 export function renderRunReport(run: RethinkRun): string {
   const out: string[] = []
   const of = <K extends RethinkAction['kind']>(k: K) =>
@@ -246,6 +297,7 @@ export function renderRunReport(run: RethinkRun): string {
       of('attention').flatMap((a) => a.items.map((i) => `- ${i.nodeId ? `${i.nodeId}: ` : ''}${oneLine(i.text)}`))
     ],
     ['Notes', of('note').map((a) => `- ${a.nodeId}: ${oneLine(a.text)}`)],
+    ['Epic changes', of('epic').map((a) => `- ${a.tool}: ${oneLine(a.text)}`)],
     ['Refused', of('refused').map((a) => `- ${a.tool}: ${a.reason}`)]
   ]
   let any = false
@@ -273,7 +325,7 @@ export function renderRunReport(run: RethinkRun): string {
 }
 
 function summaryOf(run: RethinkRun, file: string): RethinkRunSummary {
-  const actions = { relate: 0, stream: 0, dispatch: 0, draft: 0, attention: 0, note: 0, refused: 0 }
+  const actions = { relate: 0, stream: 0, dispatch: 0, draft: 0, attention: 0, note: 0, epic: 0, refused: 0 }
   for (const a of run.actions) actions[a.kind]++
   return {
     id: run.id,
@@ -321,7 +373,21 @@ export interface RethinkRunnerDeps {
   /** Late-bound: the service is built with this runner's runRethink. */
   service: () => Pick<
     ForgeService,
-    'config' | 'membranes' | 'node' | 'relate' | 'addMember' | 'assign' | 'overlay' | 'graph'
+    | 'config'
+    | 'membranes'
+    | 'node'
+    | 'relate'
+    | 'addMember'
+    | 'assign'
+    | 'overlay'
+    | 'graph'
+    | 'epics'
+    | 'createStream'
+    | 'removeMember'
+    | 'renameStream'
+    | 'archiveStream'
+    | 'setStreamParent'
+    | 'mergeStreams'
   >
   threads: {
     /** A live (not archived) thread of the membrane with this label. */
@@ -372,6 +438,8 @@ export interface RethinkRunner {
   run(membrane: string, digest: ForgeDigest, opts?: { trigger?: RethinkTrigger }): Promise<{ runId: string }>
   /** A forge_* tool call from a thread. Throws on bad input; returns `{ refused }` at a limit. */
   tool(threadId: string, name: ForgeToolName, args: Record<string, unknown>): Promise<Record<string, unknown>>
+  /** Send the user's epics request, with the current epics, to the membrane's forge-rethink thread. */
+  refine(membrane: string, prompt: string): Promise<{ threadId: string }>
   /** The membrane whose forge-rethink thread this is. */
   membraneOfThread(threadId: string): string | undefined
   threadOf(membrane: string): string | undefined
@@ -740,6 +808,60 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
         emit('forge.updated', { membrane: m })
         return { posted: true, items: items.length }
       }
+      case 'forge_stream_create': {
+        const name_ = str(args, 'name')
+        const parentId = str(args, 'parentId', false)
+        const s = await svc.createStream(m, name_, parentId || undefined)
+        record(m, run, { kind: 'epic', at, tool: name, text: `created "${s.name}" (${s.id})` })
+        return { created: true, stream: s }
+      }
+      case 'forge_stream_rename': {
+        const streamId = str(args, 'streamId')
+        const s = await svc.renameStream(streamId, str(args, 'name'), m)
+        record(m, run, { kind: 'epic', at, tool: name, text: `${streamId} renamed to "${s.name}"` })
+        return { renamed: true, stream: s }
+      }
+      case 'forge_stream_archive': {
+        const streamId = str(args, 'streamId')
+        if (typeof args.archived !== 'boolean') throw new ForgeError('archived must be true or false', 400)
+        const s = await svc.archiveStream(streamId, args.archived, m)
+        record(m, run, {
+          kind: 'epic',
+          at,
+          tool: name,
+          text: `${args.archived ? 'archived' : 'unarchived'} "${s.name}"`
+        })
+        return { archived: args.archived, stream: s }
+      }
+      case 'forge_stream_remove': {
+        const nodeId = str(args, 'nodeId')
+        const streamId = str(args, 'streamId')
+        if (!(await svc.removeMember(streamId, nodeId, m)))
+          throw new ForgeError(`${nodeId} is not a member of ${streamId}`, 404)
+        record(m, run, { kind: 'epic', at, tool: name, text: `${nodeId} out of ${streamId}` })
+        return { removed: true }
+      }
+      case 'forge_stream_merge': {
+        const fromId = str(args, 'fromId')
+        const intoId = str(args, 'intoId')
+        const res = await svc.mergeStreams(fromId, intoId, m)
+        record(m, run, {
+          kind: 'epic',
+          at,
+          tool: name,
+          text: `${fromId} merged into ${intoId} (${res.members} item(s), ${res.streams} sub-epic(s)); ${fromId} archived`
+        })
+        return { merged: true, ...res }
+      }
+      case 'forge_stream_parent': {
+        const streamId = str(args, 'streamId')
+        if (!('parentId' in args) || (args.parentId !== null && typeof args.parentId !== 'string'))
+          throw new ForgeError('parentId must be a stream id or null', 400)
+        const parentId = typeof args.parentId === 'string' && args.parentId.trim() ? args.parentId.trim() : null
+        const s = await svc.setStreamParent(streamId, parentId, m)
+        record(m, run, { kind: 'epic', at, tool: name, text: `${streamId} under ${parentId ?? 'the top level'}` })
+        return { moved: true, stream: s }
+      }
       case 'forge_note': {
         const nodeId = str(args, 'nodeId')
         const text = clip(str(args, 'text'), 500)
@@ -779,6 +901,14 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
       return { runId: run.id }
     },
     tool,
+    async refine(m, prompt) {
+      const text = prompt.trim()
+      if (!text) throw new ForgeError('prompt is required', 400)
+      const epics = await deps.service().epics(m)
+      const threadId = await ensureThread(m)
+      await deps.threads.send(threadId, buildEpicsRefinePrompt({ membrane: m, prompt: text, epics }))
+      return { threadId }
+    },
     membraneOfThread,
     threadOf: (m) => state(m).threadId,
     notes: (m) => state(m).notes,
