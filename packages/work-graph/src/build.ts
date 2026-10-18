@@ -65,7 +65,13 @@ function changeZone(state: CachedChange['state']): Zone {
 }
 
 function taskNodeState(s: PortTask['state']): WorkNodeState {
-  return s === 'completed' ? 'done' : s === 'cancelled' ? 'cancelled' : s === 'in_progress' ? 'in_progress' : 'planned'
+  return s === 'completed'
+    ? 'done'
+    : s === 'cancelled'
+      ? 'cancelled'
+      : s === 'in_progress' || s === 'paused'
+        ? s
+        : 'planned'
 }
 
 export function buildGraph(input: BuildInput): BuiltGraph {

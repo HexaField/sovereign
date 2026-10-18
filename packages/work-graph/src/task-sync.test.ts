@@ -64,7 +64,9 @@ describe('nextTaskState (plan §7.3, forward only)', () => {
     ['reopened issue → in_progress', 'completed', issue('open'), ctx({ reopened: true }), 'in_progress'],
     ['in_progress never goes back to pending', 'in_progress', issue('open'), ctx(), undefined],
     ['plan done → completed', 'in_progress', node({ kind: 'plan', state: 'done' }), ctx(), 'completed'],
-    ['plan in progress → in_progress', 'pending', node({ kind: 'plan', state: 'in_progress' }), ctx(), 'in_progress']
+    ['plan in progress → in_progress', 'pending', node({ kind: 'plan', state: 'in_progress' }), ctx(), 'in_progress'],
+    ['a paused task stays paused while its change is open', 'paused', change('open'), ctx({ owned: true }), undefined],
+    ['a paused task completes when its change merges', 'paused', change('merged'), ctx(), 'completed']
   ]
   for (const [name, from, n, c, to] of cases) it(name, () => expect(nextTaskState(from, n, c)).toBe(to))
 })
@@ -171,5 +173,32 @@ describe('syncTasks', () => {
     })
     expect(again.updated).toBe(0)
     expect(events.length).toBe(before)
+  })
+
+  it("never moves a work stream's state: that is its epic status, the user's", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wg-task-sync-'))
+    const port = createTestTaskPort(dir)
+    onTestFinished(() => {
+      port.dispose()
+      fs.rmSync(dir, { recursive: true, force: true })
+    })
+    const plan = node({ id: 'plan:acme-org/widget/p.md', kind: 'plan', state: 'in_progress', branch: undefined })
+    const t = await port.ensureTask(plan.id, { name: 'P', membrane: 'acme', kind: 'plan', stream: true })
+    await port.setThread(t.id, 'thread-1')
+    const sync = async (n: WorkNode) =>
+      syncTasks(port, {
+        tasks: await port.listByMembrane('acme'),
+        nodes: new Map([[n.id, n]]),
+        edges: [],
+        events: [],
+        item: () => undefined,
+        now: '2026-10-16T00:00:00.000Z'
+      })
+    // Owned, plan in progress: a plain plan task would go in_progress; the epic stays planned.
+    await sync(plan)
+    expect((await port.get(t.id))!.state).toBe('pending')
+    await port.setState(t.id, 'paused')
+    await sync({ ...plan, state: 'done' })
+    expect((await port.get(t.id))!).toMatchObject({ state: 'paused', transientState: 'plan done' })
   })
 })

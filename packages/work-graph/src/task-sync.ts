@@ -223,12 +223,15 @@ export async function syncTasks(port: TaskPort, input: TaskSyncInput): Promise<T
       await port.setStatus(t.id, status)
       touched = true
     }
-    const next = nextTaskState(t.state, node, {
-      owned: Boolean(t.threadId),
-      reopened: reopened.has(node.id),
-      changeOpen: openChangeFor.has(node.id),
-      ...(issueReason ? { issueReason } : {})
-    })
+    // A work stream's state is its epic status, which the user sets.
+    const next = t.isStream
+      ? undefined
+      : nextTaskState(t.state, node, {
+          owned: Boolean(t.threadId),
+          reopened: reopened.has(node.id),
+          changeOpen: openChangeFor.has(node.id),
+          ...(issueReason ? { issueReason } : {})
+        })
     if (next) {
       await port.setState(t.id, next)
       touched = true

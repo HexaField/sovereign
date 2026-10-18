@@ -63,6 +63,8 @@ function stateColor(state: string): string {
   switch (state) {
     case 'in_progress':
       return 'var(--c-accent)'
+    case 'paused':
+      return '#f59e0b'
     case 'completed':
       return '#22c55e'
     case 'cancelled':
@@ -76,6 +78,8 @@ function stateLabel(state: string): string {
   switch (state) {
     case 'in_progress':
       return 'In Progress'
+    case 'paused':
+      return 'Paused'
     case 'completed':
       return 'Completed'
     case 'cancelled':
@@ -511,7 +515,7 @@ const TasksPanel: Component = () => {
 
   const sortedTasks = () => {
     const list = tasks() ?? []
-    const order: Record<string, number> = { in_progress: 0, pending: 1, completed: 2, cancelled: 3 }
+    const order: Record<string, number> = { in_progress: 0, pending: 1, paused: 2, completed: 3, cancelled: 4 }
     return [...list].sort((a, b) => (order[a.state] ?? 99) - (order[b.state] ?? 99))
   }
 

@@ -1,12 +1,14 @@
-// Epics panel: pick the epics (work streams) the canvas focuses on, make,
-// archive and bring back epics, and send a "refine epics" request to the
-// membrane's forge-rethink thread. Opens from the "Epics (n)" button as a
+// Epics panel: pick the epics (work streams) the canvas focuses on, by status
+// (Active / Planned / Paused / Archived chips) or one by one, make epics, set
+// their status, and send a "refine epics" request to the membrane's
+// forge-rethink thread. Opens from the "Epics (n)" button as a
 // dropdown or as a centred window; the header button switches between the
 // two and the choice persists. Logic lives in epics-model.ts.
 
-import { createEffect, createMemo, createSignal, For, on, Show, type Component, type JSX } from 'solid-js'
+import { createMemo, createSignal, For, Show, type Component, type JSX } from 'solid-js'
 import { Portal } from 'solid-js/web'
-import type { ForgeFilters, WorkStream } from '@sovereign/core'
+import type { EpicStatus, ForgeFilters, WorkStream } from '@sovereign/core'
+import { EPIC_STATUSES } from '@sovereign/core/forge'
 import type { ForgeApi } from './api.js'
 import { useDismiss } from './dismiss.js'
 import {
@@ -18,28 +20,32 @@ import {
   orderEpics,
   otherEpicsMode,
   parseEpicsMode,
+  pickedEpics,
   searchEpics,
   selectedEpics,
   setDim,
   setEpicNeighbours,
   setEpicRelated,
+  shownEpics,
+  shownStatuses,
   toggleEpic,
+  toggleEpicStatus,
   type EpicsMode
 } from './epics-model.js'
+import { EpicStatusSelect } from './EpicStatusSelect.js'
+import { EPIC_STATUS_COLORS, EPIC_STATUS_LABELS } from './style.js'
 
 export interface EpicsPanelProps {
   membrane: string
-  /** The membrane's epics (archived ones excluded), as the graph serves them. */
+  /** The membrane's epics as the graph serves them (archived ones only while the Archived chip is on). */
   streams: WorkStream[]
   filters: ForgeFilters
   onChange: (f: ForgeFilters) => void
-  api: Pick<ForgeApi, 'streams' | 'archiveStream' | 'refineEpics'>
+  api: Pick<ForgeApi, 'setStreamStatus' | 'refineEpics'>
   onCreate: (name: string, parentId?: string) => Promise<void>
-  /** An epic was archived or brought back: reload the window. */
-  onArchiveChanged: () => void
+  /** An epic's status changed: reload the window. */
+  onStatusChanged: () => void
   onOpenThread: (id: string) => void
-  /** Bumps on 'forge.updated' for this membrane. */
-  refresh: () => number
 }
 
 type RefineState =
@@ -71,8 +77,6 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
   const [open, setOpen] = createSignal(false)
   const [mode, setMode] = createSignal<EpicsMode>(readMode())
   const [query, setQuery] = createSignal('')
-  const [showArchived, setShowArchived] = createSignal(false)
-  const [archived, setArchived] = createSignal<WorkStream[]>([])
   const [name, setName] = createSignal('')
   const [parent, setParent] = createSignal('')
   const [busy, setBusy] = createSignal(false)
@@ -87,21 +91,13 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
     () => setOpen(false)
   )
 
-  const rows = createMemo(() => orderEpics(props.streams))
+  const rows = createMemo(() => orderEpics(shownEpics(props.filters, props.streams)))
   const shown = createMemo(() => searchEpics(rows(), query()))
+  /** Ticked rows: the epics picked one by one. */
+  const picked = createMemo(() => new Set(pickedEpics(props.filters, props.streams)))
+  /** Picked, or every listed epic while status chips select. */
   const selected = createMemo(() => new Set(selectedEpics(props.filters, props.streams)))
-  const archivedRows = createMemo(() => orderEpics(archived().filter((s) => s.archived)))
-
-  createEffect(
-    on([open, showArchived, () => props.refresh(), () => props.membrane], async ([isOpen, wanted]) => {
-      if (!isOpen || !wanted) return
-      try {
-        setArchived(await props.api.streams(props.membrane, true))
-      } catch (e) {
-        setError(errorMessage(e))
-      }
-    })
-  )
+  const statusChosen = (s: EpicStatus): boolean => props.filters.epicStatus?.includes(s) === true
 
   const switchMode = (): void => {
     const next = otherEpicsMode(mode())
@@ -124,13 +120,15 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
     }
   }
 
-  const archive = async (s: WorkStream, archiving: boolean): Promise<void> => {
+  const setStatus = async (s: WorkStream, status: EpicStatus): Promise<void> => {
+    if (status === s.status) return
     setError(null)
     try {
-      await props.api.archiveStream(props.membrane, s.id, archiving)
-      if (archiving && selected().has(s.id)) props.onChange(toggleEpic(props.filters, s.id))
-      if (showArchived()) setArchived(await props.api.streams(props.membrane, true))
-      props.onArchiveChanged()
+      await props.api.setStreamStatus(props.membrane, s.id, status)
+      // A picked epic whose new status is not listed leaves the selection.
+      if (picked().has(s.id) && !shownStatuses(props.filters).includes(status))
+        props.onChange(toggleEpic(props.filters, s.id))
+      props.onStatusChanged()
     } catch (e) {
       setError(errorMessage(e))
     }
@@ -164,7 +162,7 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
   const body = (): JSX.Element => (
     <>
       <div class="flex items-center gap-2 border-b px-3 py-1.5" style={{ 'border-color': 'var(--c-border)' }}>
-        <span class="flex-1 text-xs font-semibold">Epics ({props.streams.length})</span>
+        <span class="flex-1 text-xs font-semibold">Epics ({rows().length})</span>
         <button
           class={btn}
           style={field}
@@ -191,16 +189,37 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
             onInput={(e) => setQuery(e.currentTarget.value)}
             data-testid="forge-epics-search"
           />
-          <Show when={selected().size}>
+          <Show when={picked().size || props.filters.epicStatus?.length}>
             <button
               class={btn}
               style={field}
+              title="Clear the picked epics and the status chips"
               onClick={() => props.onChange(clearEpics(props.filters))}
               data-testid="forge-epics-clear"
             >
               Clear ({selected().size})
             </button>
           </Show>
+        </div>
+        <div class="flex items-center gap-1" role="group" aria-label="Epic status">
+          <For each={EPIC_STATUSES}>
+            {(s) => (
+              <button
+                class={btn}
+                style={{
+                  ...field,
+                  color: statusChosen(s) ? EPIC_STATUS_COLORS[s].fg : 'var(--c-text-muted)',
+                  background: statusChosen(s) ? EPIC_STATUS_COLORS[s].bg : 'var(--c-bg)'
+                }}
+                aria-pressed={statusChosen(s)}
+                title={`Show ${EPIC_STATUS_LABELS[s].toLowerCase()} epics; with none ticked below, select them all`}
+                onClick={() => props.onChange(toggleEpicStatus(props.filters, s))}
+                data-testid={`forge-epics-status-${s}`}
+              >
+                {EPIC_STATUS_LABELS[s]}
+              </button>
+            )}
+          </For>
         </div>
         <div class="flex items-center gap-1" role="group" aria-label="What an epic shows">
           <For each={[false, true]}>
@@ -238,14 +257,21 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
             (v) => props.onChange(setDim(props.filters, v)),
             'forge-epics-dim'
           )}
-          {toggleRow('Show archived', showArchived(), setShowArchived, 'forge-epics-show-archived')}
         </div>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto py-1" data-testid="forge-epics-list">
         <Show
           when={shown().length}
-          fallback={<div class="px-3 py-2 opacity-60">{props.streams.length ? 'No epic matches' : 'No epics yet'}</div>}
+          fallback={
+            <div class="px-3 py-2 opacity-60">
+              {rows().length
+                ? 'No epic matches'
+                : props.streams.length
+                  ? 'No epic with these statuses'
+                  : 'No epics yet'}
+            </div>
+          }
         >
           <For each={shown()}>
             {({ stream: s, depth }) => (
@@ -260,7 +286,7 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
                 >
                   <input
                     type="checkbox"
-                    checked={selected().has(s.id)}
+                    checked={picked().has(s.id)}
                     onChange={() => props.onChange(toggleEpic(props.filters, s.id))}
                   />
                   <span class="truncate" style={{ color: selected().has(s.id) ? 'var(--c-accent)' : 'var(--c-text)' }}>
@@ -278,38 +304,7 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
                     <span style={{ color: 'var(--c-text-muted)' }}> · {epicCounts(s).related}</span>
                   </Show>
                 </span>
-                <button
-                  class="rounded px-1 text-[10px] opacity-0 group-hover:opacity-100 hover:bg-[var(--c-bg)] focus:opacity-100"
-                  style={{ color: 'var(--c-text-muted)' }}
-                  title="Archive this epic"
-                  onClick={() => void archive(s, true)}
-                  data-testid="forge-epic-archive"
-                >
-                  Archive
-                </button>
-              </div>
-            )}
-          </For>
-        </Show>
-        <Show when={showArchived()}>
-          <div
-            class="px-3 pt-2 pb-0.5 text-[10px] font-semibold tracking-wider uppercase"
-            style={{ color: 'var(--c-text-muted)' }}
-          >
-            Archived ({archivedRows().length})
-          </div>
-          <For each={archivedRows()}>
-            {({ stream: s }) => (
-              <div class="flex items-center gap-1 px-3 py-0.5 opacity-70" data-testid="forge-epic-archived">
-                <span class="flex-1 truncate">{s.name}</span>
-                <span style={{ color: 'var(--c-text-muted)' }}>{s.memberCount}</span>
-                <button
-                  class="rounded px-1 text-[10px] hover:bg-[var(--c-hover-bg)]"
-                  onClick={() => void archive(s, false)}
-                  data-testid="forge-epic-unarchive"
-                >
-                  Unarchive
-                </button>
+                <EpicStatusSelect status={s.status} onChange={(v) => void setStatus(s, v)} />
               </div>
             )}
           </For>

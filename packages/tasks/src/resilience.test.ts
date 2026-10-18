@@ -255,6 +255,30 @@ describe('resilient task store — restarts', () => {
     fresh.dispose()
   })
 
+  it('keeps a paused task through the outbox, a restart and AD4M', async () => {
+    const ad4m = createFakeAd4m()
+    const dir = tempDir()
+    const first = open(dir, ad4m)
+    await first.settled()
+    await first.create(record('task://epic', { isStream: true, state: 'in_progress' }))
+    await until(() => first.status().pending === 0)
+    ad4m.down()
+    await first.update('task://epic', { state: 'paused' })
+    first.dispose()
+
+    const second = open(dir, ad4m)
+    expect(await second.get('task://epic')).toMatchObject({ state: 'paused', isStream: true })
+    ad4m.up()
+    await until(() => second.status().pending === 0 && second.status().loadedFromBackend)
+    expect(await second.get('task://epic')).toMatchObject({ state: 'paused' })
+    expect(ad4m.count({ source: 'task://epic', predicate: P.state, target: toLiteral('paused') })).toBe(1)
+    const fresh = open(tempDir(), ad4m)
+    await fresh.settled()
+    expect(await fresh.get('task://epic')).toMatchObject({ state: 'paused', isStream: true })
+    second.dispose()
+    fresh.dispose()
+  })
+
   it('a local-only store restarts from its snapshot and keeps no outbox', async () => {
     const dir = tempDir()
     const first = open(dir, null)

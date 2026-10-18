@@ -8,7 +8,11 @@
 import path from 'node:path'
 import {
   defaultWorkPrompt,
+  EPIC_STATUSES,
+  epicStatusOf,
   parseRefKey,
+  stateOfEpicStatus,
+  type EpicStatus,
   type EventBus,
   type Forge,
   type ForgeGraph,
@@ -180,8 +184,8 @@ export interface ForgeService {
   /** Every work stream of the membrane, archived ones included, with its members (not its child streams). */
   epics(membrane: string): Promise<Epic[]>
   renameStream(streamId: string, name: string, membrane?: string): Promise<WorkStream>
-  /** Archive (the stream's task is cancelled) or bring back (pending). */
-  archiveStream(streamId: string, archived: boolean, membrane?: string): Promise<WorkStream>
+  /** Set an epic's status (its task's state: `stateOfEpicStatus`); the user's call, which plan sync never overrides. */
+  setStreamStatus(streamId: string, status: EpicStatus, membrane?: string): Promise<WorkStream>
   /** Move a stream under another stream, or to the top (null). */
   setStreamParent(streamId: string, parentId: string | null, membrane?: string): Promise<WorkStream>
   /** Move every member and child stream of `fromId` into `intoId`, then archive `fromId`. */
@@ -541,7 +545,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       changed ||= planEvents.length > 0
 
       let { graph, tasks } = await full(membrane, scope)
-      // Plans first: a new plan's stream gets its state in this same sync.
+      // Plans first: a new plan's stream is in the graph this sync builds.
       if (await syncPlanStreams(membrane, tasks)) {
         changed = true
         ;({ graph, tasks } = await full(membrane, scope))
@@ -681,6 +685,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
    * it (`WorkNode.relatedStreams`). A plan stream whose plan no longer
    * qualifies (gone, done, names no item) and has no members or child streams
    * stops being a stream (the plan task stays). Archived ones stay as they are.
+   * The plan's `Status:` line sets the epic's status when it becomes a stream
+   * (in progress → active, else planned); after that the status is the user's.
    */
   async function syncPlanStreams(membrane: string, tasks: PortTask[]): Promise<boolean> {
     let changed = await migrateOwnership(membrane, tasks)
@@ -690,12 +696,14 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       if (!planMakesStream(p)) continue
       qualifying.add(p.id)
       if ((await deps.tasks.findByKey(p.id))?.isStream) continue
-      await deps.tasks.ensureTask(p.id, { name: p.title, membrane, kind: 'plan', stream: true })
+      const t = await deps.tasks.ensureTask(p.id, { name: p.title, membrane, kind: 'plan', stream: true })
+      const initial = stateOfEpicStatus(p.status === 'in_progress' ? 'active' : 'planned')
+      if (t.state !== initial) await deps.tasks.setState(t.id, initial)
       changed = true
     }
     for (const t of tasks) {
       if (!t.isStream || t.kind !== 'plan' || !t.key || qualifying.has(t.key)) continue
-      if (t.state === 'cancelled' || t.childIds.length) continue
+      if (epicStatusOf(t.state) === 'archived' || t.childIds.length) continue
       await deps.tasks.setStream(t.id, false)
       changed = true
     }
@@ -1088,7 +1096,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const syncs_ = scope.repos.map((r) => syncOf(r)).filter((x): x is RepoSync => Boolean(x))
       const notes = deps.rethinkNotes?.(membrane) ?? {}
       const streams = withRelatedCounts(
-        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || !w.archived),
+        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || w.status !== 'archived'),
         graph.nodes
       )
       const shown = new Set(streams.map((w) => w.id))
@@ -1177,7 +1185,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       }
       if (!threadId) throw new ForgeError('threadId or newThread is required', 400)
       await deps.tasks.setThread(task.id, threadId)
-      if (task.state === 'pending') await deps.tasks.setState(task.id, 'in_progress')
+      // An epic's status is the user's: a thread on its plan node does not make it active.
+      if (task.state === 'pending' && !task.isStream) await deps.tasks.setState(task.id, 'in_progress')
       const forgeError = forgeItem ? await writeAssignee(membrane, node.id, forgeItem, true) : undefined
       const prompt = input.prompt?.trim() || (input.newThread ? defaultWorkPrompt(node) : undefined)
       if (prompt) await deps.threads.sendToThread(threadId, prompt)
@@ -1247,7 +1256,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       scopeOf(membrane)
       const { graph } = await full(membrane)
       return withRelatedCounts(
-        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || !w.archived),
+        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || w.status !== 'archived'),
         graph.nodes
       )
     },
@@ -1277,9 +1286,11 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       return streamOf(membrane, streamId)
     },
 
-    async archiveStream(streamId, archived, hint) {
+    async setStreamStatus(streamId, status, hint) {
       const { membrane } = await streamIn(streamId, hint)
-      await deps.tasks.setState(streamId, archived ? 'cancelled' : 'pending')
+      if (!EPIC_STATUSES.includes(status))
+        throw new ForgeError(`status must be one of ${EPIC_STATUSES.join(', ')}`, 400)
+      await deps.tasks.setState(streamId, stateOfEpicStatus(status))
       emit('forge.updated', { membrane })
       return streamOf(membrane, streamId)
     },

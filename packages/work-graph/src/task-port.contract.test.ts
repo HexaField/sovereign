@@ -105,13 +105,15 @@ describe.each(IMPLS)('TaskPort contract: $name', ({ make }) => {
       plan: 'plan:widget/plans/p.md'
     })
 
-    // Rename; a cancelled stream reads as archived; setStream(false) makes it a plain task again.
+    // Rename; the state reads as the epic status (paused → paused, cancelled → archived); setStream(false) makes it a plain task again.
+    expect((await port.streamsOf('acme')).find((x) => x.id === plan.id)).toMatchObject({ status: 'planned' })
     await port.setName(plan.id, 'P renamed')
+    await port.setState(plan.id, 'paused')
     await port.setState(t.id, 'cancelled')
     const listed = await port.streamsOf('acme')
-    expect(listed.find((x) => x.id === plan.id)).toMatchObject({ name: 'P renamed' })
-    expect(listed.find((x) => x.id === plan.id)).not.toHaveProperty('archived')
-    expect(listed.find((x) => x.id === t.id)).toMatchObject({ archived: true })
+    expect(listed.find((x) => x.id === plan.id)).toMatchObject({ name: 'P renamed', status: 'paused' })
+    expect(listed.find((x) => x.id === t.id)).toMatchObject({ status: 'archived' })
+    expect(await port.get(plan.id)).toMatchObject({ state: 'paused' })
     await port.setStream(plan.id, false)
     expect(await port.get(plan.id)).toMatchObject({ isStream: false, key: 'plan:widget/plans/p.md' })
     expect((await port.streamsOf('acme')).map((x) => x.id)).toEqual([t.id])

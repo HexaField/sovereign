@@ -10,7 +10,7 @@
 // waker subscriptions consume them downstream.
 
 import { randomUUID } from 'node:crypto'
-import type { EventBus, WorkStream } from '@sovereign/core'
+import { epicStatusOf, type EventBus, type WorkStream } from '@sovereign/core'
 import type { DurableStatus } from './durable.js'
 import type { TaskStore } from './store.js'
 import type {
@@ -394,7 +394,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           membrane: s.membrane ?? '',
           ...(parent ? { parentId: parent.id } : {}),
           memberCount: s.childCount,
-          ...(s.state === 'cancelled' ? { archived: true } : {}),
+          status: epicStatusOf(s.state),
           ...(s.provider?.kind === 'plan' ? { plan: providerKey(s.provider) } : {})
         })
       }

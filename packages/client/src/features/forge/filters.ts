@@ -99,6 +99,7 @@ export function hasActiveFilters(f: ForgeFilters): boolean {
     !!f.requestedFromMe ||
     !!f.labels?.length ||
     !!f.workstreams?.length ||
+    !!f.epicStatus?.length ||
     !!f.agent ||
     !!f.updatedWithinDays ||
     !!f.text?.trim()
@@ -114,6 +115,7 @@ export type ListFilterKey =
   | 'reviewers'
   | 'labels'
   | 'workstreams'
+  | 'epicStatus'
 
 /** Add the value to a list filter, or take it out if present; an emptied list is removed. */
 export function toggleFilterValue(f: ForgeFilters, key: ListFilterKey, value: string): ForgeFilters {

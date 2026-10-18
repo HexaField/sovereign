@@ -4,7 +4,7 @@
 // the run report and on the node's card.
 
 import { tool } from '@anthropic-ai/claude-agent-sdk'
-import type { ForgeToolName } from '@sovereign/core'
+import { EPIC_STATUSES, type ForgeToolName } from '@sovereign/core'
 import { z } from 'zod'
 
 /** Late-bound by the server once the forge service exists. */
@@ -97,10 +97,10 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
       run('forge_stream_rename')
     ),
     tool(
-      'forge_stream_archive',
-      'Archive a work stream (hidden from the Forge epics list) or bring it back (`archived: false`). A plan sync never brings back an archived stream. Not counted against the run limits.',
-      { membrane, streamId, archived: z.boolean() },
-      run('forge_stream_archive')
+      'forge_stream_status',
+      'Set a work stream’s (epic’s) status: active, planned, paused or archived (hidden from the Forge graph; any other status brings it back). The status is the user’s call: a plan sync never changes it. Not counted against the run limits.',
+      { membrane, streamId, status: z.enum(EPIC_STATUSES) },
+      run('forge_stream_status')
     ),
     tool(
       'forge_stream_remove',

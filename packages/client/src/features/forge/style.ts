@@ -1,7 +1,15 @@
 // Colours and line styles — pure. Canvas cannot read CSS variables directly,
 // so the renderer gets a resolved Palette (see readPalette in ForgeCanvas).
 
-import type { AgentOverlay, ChecksState, ReviewState, WorkEdge, WorkNode, WorkNodeState } from '@sovereign/core'
+import type {
+  AgentOverlay,
+  ChecksState,
+  EpicStatus,
+  ReviewState,
+  WorkEdge,
+  WorkNode,
+  WorkNodeState
+} from '@sovereign/core'
 
 export interface Palette {
   bg: string
@@ -33,7 +41,23 @@ export const STATE_COLORS: Record<WorkNodeState, string> = {
   planned: '#f59e0b',
   done: '#a855f7',
   in_progress: '#3b82f6',
+  paused: '#eab308',
   cancelled: '#6b7280'
+}
+
+/** The coloured label of an epic's status: planned grey, active green, paused amber, archived muted. */
+export const EPIC_STATUS_COLORS: Record<EpicStatus, { fg: string; bg: string }> = {
+  planned: { fg: '#9ca3af', bg: 'rgba(156,163,175,0.15)' },
+  active: { fg: '#22c55e', bg: 'rgba(34,197,94,0.15)' },
+  paused: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.15)' },
+  archived: { fg: '#6b7280', bg: 'rgba(107,114,128,0.10)' }
+}
+
+export const EPIC_STATUS_LABELS: Record<EpicStatus, string> = {
+  active: 'Active',
+  planned: 'Planned',
+  paused: 'Paused',
+  archived: 'Archived'
 }
 
 export const CI_COLORS: Record<ChecksState, string | null> = {

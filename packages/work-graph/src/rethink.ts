@@ -16,7 +16,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import type { EventBus, ForgeToolName, RethinkNote, WorkNode, WorkStream } from '@sovereign/core'
+import type { EpicStatus, EventBus, ForgeToolName, RethinkNote, WorkNode, WorkStream } from '@sovereign/core'
 import { discoverRepos } from '@sovereign/forges'
 import type { HostForges } from '@sovereign/orgs'
 import type { ScopeSource } from './scope.js'
@@ -230,7 +230,7 @@ export function buildEpicsRefinePrompt(input: { membrane: string; prompt: string
     '',
     '- `forge_stream_create { membrane, name, parentId? }` — a new epic.',
     '- `forge_stream_rename { membrane, streamId, name }`',
-    '- `forge_stream_archive { membrane, streamId, archived }` — archive (hide) or bring back an epic.',
+    '- `forge_stream_status { membrane, streamId, status }` — set an epic’s status: `active`, `planned`, `paused` or `archived` (hidden from the graph; any other status brings it back).',
     '- `forge_stream_add { membrane, nodeId, streamId }` — make the epic the item’s owner (a PR or issue moves out of any other epic).',
     '- `forge_stream_remove { membrane, nodeId, streamId }` — take an item out of an epic.',
     '- `forge_stream_merge { membrane, fromId, intoId }` — move every item and sub-epic of one epic into another, then archive the first.',
@@ -248,7 +248,7 @@ export function buildEpicsRefinePrompt(input: { membrane: string; prompt: string
     out.push(`### ${e.name} (\`${e.id}\`)`)
     out.push(`- Source: ${e.plan ? `plan \`${e.plan}\`` : 'hand-made'}`)
     out.push(`- Parent: ${parent ? `${parent.name} (\`${parent.id}\`)` : e.parentId ? `\`${e.parentId}\`` : 'none'}`)
-    out.push(`- Archived: ${e.archived ? 'yes' : 'no'}`)
+    out.push(`- Status: ${e.status}`)
     for (const [label, items] of [
       ['Owned', e.members],
       ['Related (named by its plan, not owned)', e.related]
@@ -394,7 +394,7 @@ export interface RethinkRunnerDeps {
     | 'createStream'
     | 'removeMember'
     | 'renameStream'
-    | 'archiveStream'
+    | 'setStreamStatus'
     | 'setStreamParent'
     | 'mergeStreams'
   >
@@ -830,17 +830,12 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
         record(m, run, { kind: 'epic', at, tool: name, text: `${streamId} renamed to "${s.name}"` })
         return { renamed: true, stream: s }
       }
-      case 'forge_stream_archive': {
+      case 'forge_stream_status': {
         const streamId = str(args, 'streamId')
-        if (typeof args.archived !== 'boolean') throw new ForgeError('archived must be true or false', 400)
-        const s = await svc.archiveStream(streamId, args.archived, m)
-        record(m, run, {
-          kind: 'epic',
-          at,
-          tool: name,
-          text: `${args.archived ? 'archived' : 'unarchived'} "${s.name}"`
-        })
-        return { archived: args.archived, stream: s }
+        const status = str(args, 'status') as EpicStatus
+        const s = await svc.setStreamStatus(streamId, status, m)
+        record(m, run, { kind: 'epic', at, tool: name, text: `"${s.name}" set to ${s.status}` })
+        return { status: s.status, stream: s }
       }
       case 'forge_stream_remove': {
         const nodeId = str(args, 'nodeId')

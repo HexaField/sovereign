@@ -1,6 +1,6 @@
 // Forge HTTP client. Every call takes a fetch, so tests pass their own.
 
-import type { AgentOverlay, ForgeGraph, ForgeView, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
+import type { AgentOverlay, EpicStatus, ForgeGraph, ForgeView, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
 import type { AssignBody } from './card-model.js'
 import type { RethinkRuns, RethinkStart } from './rethink-model.js'
 import { windowQuery, type WindowRequest } from './window-model.js'
@@ -42,8 +42,14 @@ export function createForgeApi(f: Fetch = (...a) => fetch(...a)) {
       body: body === undefined ? undefined : JSON.stringify(body)
     })
   return {
-    graph: async (membrane: string, req: WindowRequest, view?: string, signal?: AbortSignal): Promise<ForgeGraph> =>
-      json(await f(`/api/forge?${windowQuery(membrane, req, view)}`, { signal })),
+    /** `archived` includes archived epics (the Archived status chip). */
+    graph: async (
+      membrane: string,
+      req: WindowRequest,
+      view?: string,
+      opts: { signal?: AbortSignal; archived?: boolean } = {}
+    ): Promise<ForgeGraph> =>
+      json(await f(`/api/forge?${windowQuery(membrane, req, view, opts.archived)}`, { signal: opts.signal })),
     search: async (
       membrane: string,
       q: string,
@@ -76,15 +82,8 @@ export function createForgeApi(f: Fetch = (...a) => fetch(...a)) {
         .views ?? views,
     createStream: async (membrane: string, name: string, parentId?: string): Promise<WorkStream> =>
       json(await send('/api/forge/streams', 'POST', parentId ? { membrane, name, parentId } : { membrane, name })),
-    /** The membrane's epics; archived ones only with `archived`. */
-    streams: async (membrane: string, archived = false): Promise<WorkStream[]> =>
-      (
-        await json<{ streams: WorkStream[] }>(
-          await f(`/api/forge/streams?membrane=${enc(membrane)}${archived ? '&archived=1' : ''}`)
-        )
-      ).streams ?? [],
-    archiveStream: async (membrane: string, streamId: string, archived: boolean): Promise<WorkStream> =>
-      json(await send(`/api/forge/streams/${enc(streamId)}/archive`, 'POST', { membrane, archived })),
+    setStreamStatus: async (membrane: string, streamId: string, status: EpicStatus): Promise<WorkStream> =>
+      json(await send(`/api/forge/streams/${enc(streamId)}/status`, 'POST', { membrane, status })),
     /** Sends the request, with the current epics, to the membrane's forge-rethink thread. */
     refineEpics: async (membrane: string, prompt: string): Promise<{ threadId: string }> =>
       json(await send('/api/forge/epics/refine', 'POST', { membrane, prompt })),

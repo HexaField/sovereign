@@ -7,6 +7,9 @@ import { z } from 'zod'
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
 import { forgeTools, type ForgeMcpDeps } from './forge-tools.js'
 
+/** @sovereign/tasks TASK_STATES (this package does not depend on it). `paused` = set aside: an epic's paused status. */
+const TASK_STATES = ['pending', 'in_progress', 'paused', 'completed', 'cancelled'] as const
+
 /**
  * Sovereign modules surfaced to the agent. Each handler is a thin wrapper —
  * no business logic.
@@ -657,7 +660,12 @@ export function createSovereignMcpServer(
         'Update task properties. Sets updatedAt automatically. Emits typed bus events for state, thread, and transient changes.',
         {
           taskId: z.string().describe('The task IRI to update.'),
-          state: z.enum(['pending', 'in_progress', 'completed', 'cancelled']).optional().describe('New task state.'),
+          state: z
+            .enum(TASK_STATES)
+            .optional()
+            .describe(
+              "New task state. paused = set aside (a work stream's paused status); cancelled archives a stream."
+            ),
           transientState: z.string().optional().describe('Freeform live status line.'),
           name: z.string().optional(),
           description: z.string().optional(),
@@ -694,7 +702,7 @@ export function createSovereignMcpServer(
         'task_list',
         'List tasks. Filters combine: state, thread, parent, roots-only, membrane, repo, work stream, provider kind, streams only.',
         {
-          state: z.enum(['pending', 'in_progress', 'completed', 'cancelled']).optional(),
+          state: z.enum(TASK_STATES).optional(),
           threadId: z.string().nullable().optional().describe('Filter by assigned thread (null = unassigned).'),
           parentId: z.string().optional().describe('Only direct children of this task.'),
           rootsOnly: z.boolean().optional().describe('Only tasks with no parents.'),
@@ -757,10 +765,7 @@ export function createSovereignMcpServer(
         {
           taskId: z.string().optional().describe('Watch a specific task.'),
           threadId: z.string().optional().describe('Watch all tasks assigned to a thread.'),
-          state: z
-            .enum(['pending', 'in_progress', 'completed', 'cancelled'])
-            .optional()
-            .describe('Watch for transitions to this state.')
+          state: z.enum(TASK_STATES).optional().describe('Watch for transitions to this state.')
         },
         async (_args) => {
           // Subscriptions require AD4M waker integration. The bus-based

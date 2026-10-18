@@ -113,7 +113,7 @@ export function edge(
 }
 
 export function stream(id: string, name: string, over: Partial<WorkStream> = {}): WorkStream {
-  return { id, name, membrane: 'demo', memberCount: 0, ...over }
+  return { id, name, membrane: 'demo', memberCount: 0, status: 'planned', ...over }
 }
 
 /** Fisher–Yates with a fixed LCG, so a "shuffled" input is reproducible. */

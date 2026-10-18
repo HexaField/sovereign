@@ -109,7 +109,7 @@ describe('buildRethinkPrompt', () => {
       digest,
       limits: { maxJobs: 6, tokenBudget: 200_000 },
       owners: new Map([[nid(50), { threadId: 'owner-1', label: 'Sprocket worker', status: 'idle' }]]),
-      streams: [{ id: 'stream-1', name: 'Sprockets', membrane: 'acme', memberCount: 2 }]
+      streams: [{ id: 'stream-1', name: 'Sprockets', membrane: 'acme', memberCount: 2, status: 'active' }]
     })
     expect(prompt).toMatchSnapshot()
   })
@@ -127,11 +127,12 @@ describe('buildEpicsRefinePrompt', () => {
           membrane: 'acme',
           memberCount: 1,
           relatedCount: 1,
+          status: 'active',
           plan: 'plan:acme-org/widget/sprockets.md',
           members: [{ id: nid(50), title: 'Stream teeth' }],
           related: [{ id: nid(51), title: 'Axle grease' }]
         },
-        { id: 'e2', name: 'Gears', membrane: 'acme', memberCount: 0, members: [], related: [] }
+        { id: 'e2', name: 'Gears', membrane: 'acme', memberCount: 0, status: 'paused', members: [], related: [] }
       ]
     })
     expect(prompt).toContain('A PR or issue is owned by at most one epic')
@@ -139,7 +140,11 @@ describe('buildEpicsRefinePrompt', () => {
       `- Owned: 1\n  - \`${nid(50)}\` Stream teeth\n- Related (named by its plan, not owned): 1\n  - \`${nid(51)}\` Axle grease`
     )
     // An epic with nothing related lists no related section.
-    expect(prompt).toMatch(/### Gears \(`e2`\)\n- Source: hand-made\n- Parent: none\n- Archived: no\n- Owned: 0\n?$/)
+    expect(prompt).toContain(
+      '### Sprockets (`e1`)\n- Source: plan `plan:acme-org/widget/sprockets.md`\n- Parent: none\n- Status: active'
+    )
+    expect(prompt).toMatch(/### Gears \(`e2`\)\n- Source: hand-made\n- Parent: none\n- Status: paused\n- Owned: 0\n?$/)
+    expect(prompt).toContain('`forge_stream_status { membrane, streamId, status }`')
   })
 })
 
@@ -505,7 +510,7 @@ describe('rethink runner', () => {
     expect(msg.text).toContain('[Forge epics · acme]')
     expect(msg.text).toContain('> Merge gears into axles\n> and call it Drivetrain')
     expect(msg.text).toContain(
-      `### Axles (\`${axles.id}\`)\n- Source: hand-made\n- Parent: none\n- Archived: no\n- Owned: 1`
+      `### Axles (\`${axles.id}\`)\n- Source: hand-made\n- Parent: none\n- Status: planned\n- Owned: 1`
     )
     expect(msg.text).toContain(`  - \`${nid(52)}\` Axle grease`)
     expect(msg.text).toContain('Do not dispatch work')
@@ -534,11 +539,20 @@ describe('rethink runner', () => {
     await expect(call('forge_stream_remove', { nodeId: nid(52), streamId: axles.id })).rejects.toMatchObject({
       status: 404
     })
-    await expect(call('forge_stream_archive', { streamId: wheels })).rejects.toMatchObject({ status: 400 })
-    expect(await call('forge_stream_archive', { streamId: wheels, archived: true })).toMatchObject({ archived: true })
+    await expect(call('forge_stream_status', { streamId: wheels })).rejects.toMatchObject({ status: 400 })
+    await expect(call('forge_stream_status', { streamId: wheels, status: 'done' })).rejects.toMatchObject({
+      status: 400
+    })
+    expect(await call('forge_stream_status', { streamId: axles.id, status: 'active' })).toMatchObject({
+      status: 'active',
+      stream: { status: 'active' }
+    })
+    expect(await call('forge_stream_status', { streamId: wheels, status: 'archived' })).toMatchObject({
+      status: 'archived'
+    })
 
     const g = await service.graph('acme')
-    expect(g.workstreams.map((w) => w.name)).toEqual(['Drivetrain'])
+    expect(g.workstreams.map((w) => [w.name, w.status])).toEqual([['Drivetrain', 'active']])
     expect(g.nodes.find((n) => n.id === nid(51))!.workstreams).toEqual([axles.id])
     expect((await service.graph('acme', { archived: true })).workstreams.map((w) => w.name).sort()).toEqual([
       'Drivetrain',
@@ -548,10 +562,11 @@ describe('rethink runner', () => {
 
     status(threadId, 'idle')
     const run = runner.runs('acme')[0]
-    expect(run).toMatchObject({ trigger: 'chat', status: 'done', actions: { epic: 6, refused: 0, dispatch: 0 } })
+    expect(run).toMatchObject({ trigger: 'chat', status: 'done', actions: { epic: 7, refused: 0, dispatch: 0 } })
     const md = runner.report('acme', run.id)!
     expect(md).toContain('### Epic changes')
     expect(md).toContain(`- forge_stream_rename: ${axles.id} renamed to "Drivetrain"`)
+    expect(md).toContain('- forge_stream_status: "Drivetrain" set to active')
     expect(events.filter((e) => e.type === 'forge.updated').length).toBeGreaterThanOrEqual(6)
   })
 

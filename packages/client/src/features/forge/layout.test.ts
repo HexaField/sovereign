@@ -123,7 +123,7 @@ describe('computeLayout', () => {
   it("keeps a stack in its root's lane, left → right, even when its PRs belong to other streams too", () => {
     const g = sampleGraph()
     // The root also sits in an earlier-ranked stream; the root was updated last.
-    const other = { id: 'a-other', name: 'A other', membrane: 'm', memberCount: 1 }
+    const other = { id: 'a-other', name: 'A other', membrane: 'm', memberCount: 1, status: 'active' as const }
     const stack = g.stack.map((n, i) =>
       i === 0
         ? { ...n, workstreams: ['a-other', ...n.workstreams], updatedAt: new Date(NOW - 60_000).toISOString() }
@@ -147,7 +147,7 @@ describe('computeLayout', () => {
 
   it('puts a related node in the epic lane only with Owned + related, marked related; the owner lane wins', () => {
     const g = sampleGraph()
-    const other = { id: 'z-other', name: 'Z other', membrane: 'm', memberCount: 0 }
+    const other = { id: 'z-other', name: 'Z other', membrane: 'm', memberCount: 0, status: 'active' as const }
     const rel = { ...g.coreOpen, relatedStreams: ['s-stack'] }
     const ownedRel = { ...g.issues[0], workstreams: ['z-other'], relatedStreams: ['s-stack'] }
     const nodes = g.nodes.map((n) => (n.id === rel.id ? rel : n.id === ownedRel.id ? ownedRel : n))

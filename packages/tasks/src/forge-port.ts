@@ -15,7 +15,7 @@ import type {
   WorkEdgeKind,
   WorkStream
 } from '@sovereign/core'
-import { parseRefKey } from '@sovereign/core'
+import { epicStatusOf, parseRefKey } from '@sovereign/core'
 import type { ForgeMetaStore, RelatedEdge } from './meta.js'
 import type { TaskService } from './service.js'
 import type { Task, TaskProvider } from './types.js'
@@ -252,7 +252,14 @@ export function createForgeTaskPort(deps: ForgeTaskPortDeps): TaskPort {
         ...(parentId ? { parentStreamIds: [parentId] } : {}),
         sourceThreadId: source
       })
-      return { id: s.id, name: s.name, membrane, ...(parentId ? { parentId } : {}), memberCount: 0 }
+      return {
+        id: s.id,
+        name: s.name,
+        membrane,
+        ...(parentId ? { parentId } : {}),
+        memberCount: 0,
+        status: epicStatusOf(s.state)
+      }
     },
 
     async setName(id, name) {

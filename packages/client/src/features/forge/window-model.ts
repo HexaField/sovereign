@@ -225,11 +225,12 @@ export function trimToCap(state: WindowState, cap: number, focus: number): Windo
   }
 }
 
-/** Query string for GET /api/forge. */
-export function windowQuery(membrane: string, req: WindowRequest, view?: string): string {
+/** Query string for GET /api/forge; `archived` asks for archived epics too. */
+export function windowQuery(membrane: string, req: WindowRequest, view?: string, archived?: boolean): string {
   const p = new URLSearchParams({ membrane })
   if (view) p.set('view', view)
   p.set('since', new Date(req.since).toISOString())
   if (req.until !== null) p.set('until', new Date(req.until).toISOString())
+  if (archived) p.set('archived', '1')
   return p.toString()
 }

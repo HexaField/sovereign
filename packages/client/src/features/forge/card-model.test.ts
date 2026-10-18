@@ -123,6 +123,11 @@ describe('card sections', () => {
     // A plan's own epic is not offered as its owner.
     const own = taskSection(plan('p.md', { taskId: 's1' }), [stream('s1', 'One'), stream('s2', 'Two')], [], nodes)
     expect(own.options.map((x) => x.id)).toEqual(['s2'])
+    // The epic the node itself is, whose status the card sets; none for an item that is no epic.
+    expect(own.epic).toMatchObject({ id: 's1', status: 'planned' })
+    expect(s.epic).toBeUndefined()
+    // An owner the window does not hold was not served: archived.
+    expect(taskSection(task('x', { workstreams: ['gone'] }), [], [], nodes).owner).toMatchObject({ status: 'archived' })
   })
 
   it('agentStatusLine', () => {

@@ -181,8 +181,8 @@ describe('event log and digest', () => {
       t({ ...ev('conflict', {}, 'gone'), at: '2026-10-16T05:00:00.000Z' }, 'needs-agent')
     ]
     const streams = [
-      { id: 's1', name: 'Plan 20', membrane: 'acme', memberCount: 2 },
-      { id: 's2', name: 'Other', membrane: 'acme', memberCount: 1 }
+      { id: 's1', name: 'Plan 20', membrane: 'acme', memberCount: 2, status: 'active' as const },
+      { id: 's2', name: 'Other', membrane: 'acme', memberCount: 1, status: 'planned' as const }
     ]
     const d = buildDigest('acme', events, nodes, streams, '2026-10-15T12:00:00.000Z')
     expect(d.count).toBe(4)

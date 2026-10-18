@@ -146,7 +146,7 @@ export interface Forge {
 
 export type WorkNodeKind = 'change' | 'issue' | 'branch' | 'plan' | 'task'
 export type Zone = 'past' | 'present' | 'future'
-export type WorkNodeState = ChangeState | 'planned' | 'done' | 'in_progress' | 'cancelled'
+export type WorkNodeState = ChangeState | 'planned' | 'done' | 'in_progress' | 'paused' | 'cancelled'
 
 export interface WorkNode {
   /** refKey(ref) for forge items; "plan:<project>/<path>"; "task:<taskId>". */
@@ -223,8 +223,8 @@ export interface WorkStream {
   memberCount: number
   /** Graph nodes related to the stream (a plan of it names them) without being members; set by the work graph. */
   relatedCount?: number
-  /** Archived (its task is cancelled): left out of the graph unless asked for. */
-  archived?: boolean
+  /** From its task's state (`epicStatusOf`); an archived stream is left out of the graph unless asked for. */
+  status: EpicStatus
   /** The plan key ("plan:<project>/<path>") of a stream a plan file made; absent for a hand-made stream. */
   plan?: string
 }
@@ -250,6 +250,11 @@ export interface ForgeFilters {
   labels?: string[]
   /** Selected epics (work stream ids): the client focuses the canvas on their members. */
   workstreams?: string[]
+  /**
+   * Epic statuses the epics panel shows (empty = every status but archived). Statuses
+   * chosen and no epic picked in `workstreams`: every epic with those statuses is selected.
+   */
+  epicStatus?: EpicStatus[]
   /** false = show only the selected epics' members, not their direct neighbours too (default on). */
   epicNeighbours?: boolean
   /** true = the selected epics' related items count too ("Owned + related"); default owned only. */
@@ -283,7 +288,30 @@ export interface ForgeGraph {
 // What the work graph needs from the task graph. @sovereign/tasks binds it
 // (createForgeTaskPort); the work graph's tests use an in-memory one.
 
-export type PortTaskState = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+export type PortTaskState = 'pending' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
+
+/** An epic's (work stream's) status: the user's call, stored as its task's state. */
+export type EpicStatus = 'planned' | 'active' | 'paused' | 'archived'
+export const EPIC_STATUSES: readonly EpicStatus[] = ['active', 'planned', 'paused', 'archived']
+
+const EPIC_STATE: Record<EpicStatus, PortTaskState> = {
+  planned: 'pending',
+  active: 'in_progress',
+  paused: 'paused',
+  archived: 'cancelled'
+}
+
+/** pending → planned, in_progress → active, paused → paused, cancelled or completed → archived. */
+export function epicStatusOf(state: PortTaskState): EpicStatus {
+  if (state === 'completed') return 'archived'
+  return (Object.keys(EPIC_STATE) as EpicStatus[]).find((s) => EPIC_STATE[s] === state) ?? 'planned'
+}
+
+/** The task state an epic status is stored as. */
+export function stateOfEpicStatus(status: EpicStatus): PortTaskState {
+  return EPIC_STATE[status]
+}
+
 export type PortTaskKind = 'change' | 'issue' | 'plan'
 
 /** Last-known forge status written onto a task (the TaskProvider's status fields). */
@@ -402,7 +430,7 @@ export const FORGE_TOOLS = [
   'forge_note',
   'forge_stream_create',
   'forge_stream_rename',
-  'forge_stream_archive',
+  'forge_stream_status',
   'forge_stream_remove',
   'forge_stream_merge',
   'forge_stream_parent'

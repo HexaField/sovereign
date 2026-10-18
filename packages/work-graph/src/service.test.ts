@@ -477,17 +477,17 @@ describe('forge service', () => {
     expect(g.workstreams.map((w) => w.id).sort()).toEqual([sprockets.id, sub.id, handMade.id].sort())
   })
 
-  it('archive hides a stream from the graph (unless asked for), and a plan sync never brings it back', async () => {
+  it('archived hides a stream from the graph (unless asked for), and a plan sync never brings it back', async () => {
     const planId = 'plan:acme-org/widget/sprockets.md'
     await service.sync('acme')
     const stream = (await port.findByKey(planId))!
-    const archived = await service.archiveStream(stream.id, true, 'acme')
-    expect(archived).toMatchObject({ archived: true })
+    const archived = await service.setStreamStatus(stream.id, 'archived', 'acme')
+    expect(archived).toMatchObject({ status: 'archived' })
     let g = await service.graph('acme')
     expect(g.workstreams).toEqual([])
     expect(g.nodes.find((n) => n.id === nid(WIDGET, 50))).not.toHaveProperty('relatedStreams')
     const all = await service.graph('acme', { archived: true })
-    expect(all.workstreams).toEqual([expect.objectContaining({ id: stream.id, archived: true })])
+    expect(all.workstreams).toEqual([expect.objectContaining({ id: stream.id, status: 'archived' })])
     expect(all.nodes.find((n) => n.id === nid(WIDGET, 50))!.relatedStreams).toEqual([stream.id])
 
     // The plan now names #51 too: an archived stream stays archived and owns nothing.
@@ -498,15 +498,51 @@ describe('forge service', () => {
     await service.sync('acme')
     expect(await port.get(stream.id)).toMatchObject({ state: 'cancelled', isStream: true, childIds: [] })
 
-    // Brought back: it shows again, related to what the plan names.
-    expect(await service.archiveStream(stream.id, false, 'acme')).not.toHaveProperty('archived')
+    // Brought back as paused: it shows again, related to what the plan names, and stays paused.
+    expect(await service.setStreamStatus(stream.id, 'paused', 'acme')).toMatchObject({ status: 'paused' })
+    now += 120_000
     await service.sync('acme')
     g = await service.graph('acme')
-    expect(g.workstreams.map((w) => w.id)).toEqual([stream.id])
+    expect(g.workstreams.map((w) => [w.id, w.status])).toEqual([[stream.id, 'paused']])
     expect(g.nodes.find((n) => n.id === nid(WIDGET, 51))).toMatchObject({
       workstreams: [],
       relatedStreams: [stream.id]
     })
+  })
+
+  it("a plan's Status line sets its epic's status once; after that the status is the user's", async () => {
+    const dir = path.join(tmp, 'acme', 'widget', 'plans')
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nCovers #51 in acme-labs/widget.\n')
+    await service.sync('acme')
+    const status = async () =>
+      Object.fromEntries((await service.graph('acme')).workstreams.map((w) => [w.name, w.status]))
+    // "Status: in progress" → active; no Status line → planned.
+    expect(await status()).toEqual({ 'Sprocket rework': 'active', Gears: 'planned' })
+    const sprockets = (await port.findByKey('plan:acme-org/widget/sprockets.md'))!
+    const gears = (await port.findByKey('plan:acme-org/widget/gears.md'))!
+
+    // The user's status holds through plan edits, syncs and an assigned thread.
+    await service.setStreamStatus(sprockets.id, 'planned', 'acme')
+    await service.setStreamStatus(gears.id, 'paused', 'acme')
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nStatus: in progress\n\nCovers #51 in acme-labs/widget.\n')
+    await service.assign({ membrane: 'acme', nodeId: 'plan:acme-org/widget/sprockets.md', threadId: 'thread-1' })
+    now += 120_000
+    await service.sync('acme')
+    expect(await status()).toEqual({ 'Sprocket rework': 'planned', Gears: 'paused' })
+    expect(await port.get(gears.id)).toMatchObject({ state: 'paused' })
+
+    // Done in the plan, with no members: no longer a stream.
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nStatus: done\n\nCovers #51 in acme-labs/widget.\n')
+    now += 120_000
+    await service.sync('acme')
+    expect(await port.get(gears.id)).toMatchObject({ isStream: false })
+    expect(await status()).toEqual({ 'Sprocket rework': 'planned' })
+
+    // A completed stream counts as archived.
+    await port.setState(sprockets.id, 'completed')
+    expect(await status()).toEqual({})
+    expect((await service.streams('acme', { archived: true })).map((w) => w.status)).toEqual(['archived'])
+    await expect(service.setStreamStatus(sprockets.id, 'done' as never, 'acme')).rejects.toMatchObject({ status: 400 })
   })
 
   it('renames, nests, merges and lists epics', async () => {
@@ -532,7 +568,7 @@ describe('forge service', () => {
     expect(alpha.members.map((x) => x.id).sort()).toEqual([nid(WIDGET, 50), nid(WIDGET, 51)].sort())
     expect(alpha.members.find((x) => x.id === nid(WIDGET, 50))!.title).toBe('Stream teeth')
     expect(epics.find((e) => e.id === child.id)).toMatchObject({ parentId: a.id })
-    expect(epics.find((e) => e.id === b.id)).toMatchObject({ archived: true, members: [] })
+    expect(epics.find((e) => e.id === b.id)).toMatchObject({ status: 'archived', members: [] })
     expect(epics.find((e) => e.id === plan.id)).toMatchObject({ plan: 'plan:acme-org/widget/sprockets.md' })
     expect(busEvents.filter((e) => e.type === 'forge.updated').length).toBeGreaterThan(5)
   })
@@ -786,11 +822,13 @@ describe('forge service', () => {
         ).status
       ).toBe(404)
 
-      // Archive: gone from the graph, back with ?archived=1; archived: false brings it back.
-      const arch = `/api/forge/streams/${encodeURIComponent(st.body.id)}/archive`
-      expect((await request(a).post(arch).send({ membrane: 'acme', archived: 'yes' })).status).toBe(400)
-      const archived = await request(a).post(arch).send({ membrane: 'acme' })
-      expect(archived.body).toMatchObject({ id: st.body.id, archived: true })
+      // Status: archived is gone from the graph, back with ?archived=1; any other status brings it back.
+      expect(st.body).toMatchObject({ status: 'planned' })
+      const arch = `/api/forge/streams/${encodeURIComponent(st.body.id)}/status`
+      expect((await request(a).post(arch).send({ membrane: 'acme', status: 'done' })).status).toBe(400)
+      expect((await request(a).post(arch).send({ membrane: 'acme' })).status).toBe(400)
+      const archived = await request(a).post(arch).send({ membrane: 'acme', status: 'archived' })
+      expect(archived.body).toMatchObject({ id: st.body.id, status: 'archived' })
       const ids = async (q = '') =>
         (await request(a).get(`/api/forge?membrane=acme${q}`)).body.workstreams.map((w: { id: string }) => w.id)
       expect(await ids()).not.toContain(st.body.id)
@@ -800,8 +838,11 @@ describe('forge service', () => {
       expect(await listed()).not.toContain(st.body.id)
       expect(await listed('&archived=1')).toContain(st.body.id)
       expect((await request(a).get('/api/forge/streams')).status).toBe(400)
-      await request(a).post(arch).send({ membrane: 'acme', archived: false })
+      expect((await request(a).post(arch).send({ membrane: 'acme', status: 'active' })).body).toMatchObject({
+        status: 'active'
+      })
       expect(await ids()).toContain(st.body.id)
+      expect((await port.get(st.body.id))!.state).toBe('in_progress')
 
       await port.addRelated('acme', {
         from: nid(WIDGET, 50),

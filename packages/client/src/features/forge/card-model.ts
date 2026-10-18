@@ -107,10 +107,14 @@ export function assignBody(c: AssignChoice): AssignBody {
 /** The epic that owns the node, the epics it is only related to, the epics it could move to, and its child tasks. */
 export function taskSection(n: WorkNode, streams: WorkStream[], edges: WorkEdge[], nodesById: Map<string, WorkNode>) {
   const byId = new Map(streams.map((s) => [s.id, s]))
-  const of = (id: string): WorkStream => byId.get(id) ?? { id, name: id, membrane: '', memberCount: 0 }
+  // A stream the window does not hold was not served: archived (or gone).
+  const of = (id: string): WorkStream =>
+    byId.get(id) ?? { id, name: id, membrane: '', memberCount: 0, status: 'archived' }
   const ownerId = n.workstreams[0]
   return {
     owner: ownerId ? of(ownerId) : undefined,
+    /** The epic the node's own task is (a plan's epic), whose status the card sets. */
+    epic: n.taskId ? byId.get(n.taskId) : undefined,
     related: (n.relatedStreams ?? []).map(of),
     /** Epics the owner select offers (the owner included; a plan's own epic is not its owner). */
     options: streams.filter((s) => s.id !== n.taskId),

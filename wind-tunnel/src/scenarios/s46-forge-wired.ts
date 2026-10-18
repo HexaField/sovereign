@@ -9,7 +9,9 @@
 //   plans      a plan file in the membrane's plans/ → a stream task related to what it names
 //              (owning none of it); a plan naming no item stays a plan node and makes no epic
 //   ownership  an item added to a second epic leaves the first (one owner per PR or issue)
-//   archive    an archived epic leaves the graph; ?archived=1 and GET /api/forge/streams list it
+//   status     a plan epic starts at its Status line (active); a hand-made one planned; paused
+//              stays through a sync; archived leaves the graph; ?archived=1 and GET
+//              /api/forge/streams list it
 //   task_update  PATCH /api/tasks/:id { threadId } (what the MCP tool calls) → assignee on GitHub
 //   pr-poll    a PR task on a repo outside forge.repos, owned by a thread with no
 //              membrane → read on its own; CI red on the mock → the owner is told
@@ -176,6 +178,10 @@ export const s46ForgeWired: Scenario = {
           planTask.isStream === true && planTask.state === 'in_progress',
           `plan stream task ${planTask.isStream}/${planTask.state}`
         )
+        check(
+          g.workstreams.find((s: any) => s.id === planNode.taskId)?.status === 'active',
+          'a plan epic with "Status: in progress" starts active'
+        )
         // A plan relates what it names to its epic; it owns none of it.
         check(planTask.childTasks.length === 0, `plan stream members ${planTask.childTasks.length} (want none)`)
         const planStream = g.workstreams.find((s: any) => s.id === planNode.taskId)
@@ -235,28 +241,38 @@ export const s46ForgeWired: Scenario = {
         )
       }
 
-      // ── Archive hides the epic; ?archived=1 and the streams list bring it back ──
-      const arch = await client.post(`/api/forge/streams/${encodeURIComponent(stream.id)}/archive`, {
-        membrane: M,
-        archived: true
-      })
-      check(arch?.archived === true, `archive answer ${JSON.stringify(arch)}`)
+      // ── Status: paused holds through a sync; archived hides the epic; ?archived=1 and the streams list bring it back ──
+      const setStatus = (sid: string, status: string) =>
+        client.post(`/api/forge/streams/${encodeURIComponent(sid)}/status`, { membrane: M, status })
+      check(stream?.status === 'planned', `a new epic is planned: ${JSON.stringify(stream)}`)
+      if (planNode?.taskId) {
+        check((await setStatus(planNode.taskId, 'paused'))?.status === 'paused', 'plan epic paused')
+        await sync()
+        check(
+          (await graph()).workstreams.find((s: any) => s.id === planNode.taskId)?.status === 'paused',
+          'a plan sync keeps the user’s status'
+        )
+        check((await task(planNode.taskId)).state === 'paused', 'a paused epic is a paused task in /api/tasks')
+        await setStatus(planNode.taskId, 'active')
+      }
+      const arch = await setStatus(stream.id, 'archived')
+      check(arch?.status === 'archived', `archive answer ${JSON.stringify(arch)}`)
       const hidden = await graph()
       check(!hidden.workstreams.some((s: any) => s.id === stream.id), 'an archived epic leaves the graph')
       check(!node(hidden, id(W, 31))?.workstreams?.includes(stream.id), '#31 no longer shows the archived epic')
       check(
-        (await graph('&archived=1')).workstreams.some((s: any) => s.id === stream.id && s.archived),
+        (await graph('&archived=1')).workstreams.some((s: any) => s.id === stream.id && s.status === 'archived'),
         '?archived=1 lists the archived epic'
       )
       const listed = (await client.get(`/api/forge/streams?membrane=${M}&archived=1`)).streams
       check(
-        listed.some((s: any) => s.id === stream.id && s.archived),
+        listed.some((s: any) => s.id === stream.id && s.status === 'archived'),
         'GET /api/forge/streams?archived=1 lists it'
       )
-      await client.post(`/api/forge/streams/${encodeURIComponent(stream.id)}/archive`, { membrane: M, archived: false })
+      await setStatus(stream.id, 'active')
       check(
-        (await graph()).workstreams.some((s: any) => s.id === stream.id),
-        'unarchived: back in the graph'
+        (await graph()).workstreams.some((s: any) => s.id === stream.id && s.status === 'active'),
+        'active again: back in the graph'
       )
 
       // ── Assign #30 to a new thread ────────────────────────────────────

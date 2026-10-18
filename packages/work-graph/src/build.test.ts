@@ -173,7 +173,11 @@ describe('buildGraph', () => {
         updatedAt: '2026-10-01T00:00:00Z'
       }
     ]
-    const tasks = [task({ id: 't1', name: 'Decide the gate box' }), task({ id: 't2', state: 'completed' })]
+    const tasks = [
+      task({ id: 't1', name: 'Decide the gate box' }),
+      task({ id: 't2', state: 'completed' }),
+      task({ id: 't3', state: 'paused' })
+    ]
     const g = buildGraph(input({ repos, plans, tasks }))
     const zone = (nid: string) => g.nodes.find((n) => n.id === nid)?.zone
     expect([zone(id(WIDGET, 1)), zone(id(WIDGET, 2)), zone(id(WIDGET, 3)), zone(id(WIDGET, 4))]).toEqual([
@@ -192,6 +196,7 @@ describe('buildGraph', () => {
       title: 'Decide the gate box'
     })
     expect(zone('task:t2')).toBe('past')
+    expect(g.nodes.find((n) => n.id === 'task:t3')).toMatchObject({ state: 'paused', zone: 'future' })
   })
 
   it('links closes (dashed while the issue is open), references (from the mentioning item) and plans', () => {

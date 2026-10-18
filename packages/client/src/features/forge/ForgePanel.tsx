@@ -9,7 +9,7 @@ import NodeCard, { type ThreadChoice } from './NodeCard.js'
 import EpicsPanel from './EpicsPanel.js'
 import type { ForgeApi } from './api.js'
 import { keyDirection, walkEdge } from './edge-walk.js'
-import { clearEpics, epicFocus, laneStreams, panelShown, panelVisibility } from './epics-model.js'
+import { clearEpics, epicFocus, laneStreams, panelShown, panelVisibility, wantsArchived } from './epics-model.js'
 import KanbanBoard from './KanbanBoard.js'
 import { kanbanCards, type ForgeMode } from './kanban-model.js'
 import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
@@ -70,7 +70,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     inflight.add(key)
     setLoading(true)
     try {
-      const graph = await props.api.graph(props.membrane, req, props.view.id)
+      const graph = await props.api.graph(props.membrane, req, props.view.id, { archived: wantsArchived(filters()) })
       batch(() => {
         if (req.side === 'initial') setLayoutNow(Date.now())
         setWin((s) => trimToCap(applyWindow(s, graph, req), NODE_CAP, lastFocusTime))
@@ -84,13 +84,9 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     }
   }
 
-  // Initial load, and a refetch of the live window on every forge.updated.
-  createEffect(
-    on(
-      () => props.refresh(),
-      () => void load(initialRequest(Date.now()))
-    )
-  )
+  // Initial load, and a refetch of the live window on every forge.updated and
+  // when the Archived epic chip turns on or off.
+  createEffect(on([() => props.refresh(), () => wantsArchived(filters())], () => void load(initialRequest(Date.now()))))
 
   // ── Derived graph state ──────────────────────────────────────────
   const nodes = createMemo(() => [...win().nodes.values()])
@@ -211,7 +207,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     }
     if (e.key === 'Escape') {
       if (selected()) setSelected(null)
-      else if (filters().workstreams?.length) setFilters(clearEpics(props.view.filters))
+      else if (filters().workstreams?.length || filters().epicStatus?.length) setFilters(clearEpics(props.view.filters))
       else if (filters().text) setFilters({ ...props.view.filters, text: undefined })
       return
     }
@@ -280,9 +276,8 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
           onChange={setFilters}
           api={props.api}
           onCreate={createStream}
-          onArchiveChanged={() => void load(initialRequest(Date.now()))}
+          onStatusChanged={() => void load(initialRequest(Date.now()))}
           onOpenThread={props.onOpenThread}
-          refresh={props.refresh}
         />
         <button
           class="rounded border px-2 py-0.5 disabled:opacity-40"

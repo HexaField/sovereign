@@ -5,19 +5,27 @@ import {
   epicFocus,
   epicSource,
   epicsButtonLabel,
+  focusedEpics,
   laneStreams,
   orderEpics,
   otherEpicsMode,
+  panelShown,
+  panelVisibility,
   parseEpicsMode,
+  pickedEpics,
   searchEpics,
   selectedEpics,
   setDim,
   setEpicNeighbours,
   setEpicRelated,
+  shownEpics,
+  shownStatuses,
   toggleEpic,
+  toggleEpicStatus,
+  wantsArchived,
   withSubEpics
 } from './epics-model.js'
-import { applyFilters, clearFilters } from './filters.js'
+import { applyFilters, clearFilters, hasActiveFilters } from './filters.js'
 import { change, edge, issue, NOW, shuffled, stream } from './test-fixtures.js'
 
 const R = 'demo-org/engine'
@@ -163,6 +171,77 @@ describe('laneStreams', () => {
   })
   it('makes lanes of only the selected epics and their sub-epics', () => {
     expect(laneStreams({ workstreams: ['p'] }, all).map((s) => s.id)).toEqual(['p', 'c'])
+  })
+})
+
+describe('status chips', () => {
+  const act1 = stream('act1', 'Identity', { status: 'active' })
+  const actSub = stream('act-sub', 'Identity follow-ups', { parentId: 'act1', status: 'paused' })
+  const act2 = stream('act2', 'Indexer', { status: 'active' })
+  const planned = stream('pl', 'Someday', { status: 'planned' })
+  const paused = stream('pa', 'AI assistant', { status: 'paused' })
+  const gone = stream('ar', 'Old', { status: 'archived' })
+  const all = [act1, actSub, act2, planned, paused, gone]
+  const ids = (xs: { id: string }[]) => xs.map((x) => x.id)
+
+  it('lists every status but archived with none chosen, else the chosen ones', () => {
+    expect(shownStatuses({})).toEqual(['active', 'planned', 'paused'])
+    expect(ids(shownEpics({}, all))).toEqual(['act1', 'act-sub', 'act2', 'pl', 'pa'])
+    expect(ids(shownEpics({ epicStatus: ['archived'] }, all))).toEqual(['ar'])
+    expect(ids(shownEpics({ epicStatus: ['paused', 'active'] }, all))).toEqual(['act1', 'act-sub', 'act2', 'pa'])
+  })
+
+  it('selects every epic of the chosen statuses while none is picked; picks win, within the shown statuses', () => {
+    expect(selectedEpics({}, all)).toEqual([])
+    expect(selectedEpics({ epicStatus: ['active'] }, all)).toEqual(['act1', 'act2'])
+    expect(selectedEpics({ epicStatus: ['active'], workstreams: ['act2'] }, all)).toEqual(['act2'])
+    expect(pickedEpics({ epicStatus: ['active'], workstreams: ['act2'] }, all)).toEqual(['act2'])
+    // A pick of a status not shown drops out; with no pick left, the status selects.
+    expect(selectedEpics({ epicStatus: ['active'], workstreams: ['pa'] }, all)).toEqual(['act1', 'act2'])
+    expect(selectedEpics({ workstreams: ['ar', 'pa'] }, all)).toEqual(['pa'])
+    // Sub-epics join only when their status is shown.
+    expect(focusedEpics({ epicStatus: ['active'] }, all)).toEqual(['act1', 'act2'])
+    expect(focusedEpics({ epicStatus: ['active', 'paused'], workstreams: ['act1'] }, all).sort()).toEqual(
+      ['act-sub', 'act1'].sort()
+    )
+  })
+
+  it('canvas focus, lanes and Kanban all follow a status selection', () => {
+    const inIdentity = change(R, 1, { workstreams: ['act1'] })
+    const inIndexer = issue(R, 2, { workstreams: ['act2'] })
+    const inAssistant = change(R, 3, { workstreams: ['pa'] })
+    const loose = issue(R, 4)
+    const nodes = [inIdentity, inIndexer, inAssistant, loose]
+    const f = { epicStatus: ['active' as const], epicNeighbours: false }
+    const focus = epicFocus(f, all, nodes, [])
+    expect(focus).toEqual(new Set([inIdentity.id, inIndexer.id]))
+    expect(ids(laneStreams(f, all))).toEqual(['act1', 'act2'])
+    // The Kanban lists panelShown(panelVisibility(…)), the same sets the canvas draws.
+    const filtered = applyFilters(nodes, f, { now: NOW })
+    expect(panelShown(panelVisibility(filtered, focus, false))).toEqual(new Set([inIdentity.id, inIndexer.id]))
+    const dimmed = panelVisibility(filtered, focus, true)
+    expect(dimmed.visible.size).toBe(4)
+    expect(panelShown(dimmed)).toEqual(new Set([inIdentity.id, inIndexer.id]))
+    // Picking one active epic narrows it to that epic.
+    expect(epicFocus({ ...f, workstreams: ['act2'] }, all, nodes, [])).toEqual(new Set([inIndexer.id]))
+    // No status, no pick: no focus; lanes for every non-archived epic.
+    expect(epicFocus({}, all, nodes, [])).toBeNull()
+    expect(ids(laneStreams({}, all))).toEqual(['act1', 'act-sub', 'act2', 'pl', 'pa'])
+  })
+
+  it('toggles chips, clears them with the picks, labels the button and asks for archived epics', () => {
+    let f = toggleEpicStatus({}, 'active')
+    f = toggleEpicStatus(f, 'paused')
+    expect(f).toEqual({ epicStatus: ['active', 'paused'] })
+    expect(toggleEpicStatus(f, 'active')).toEqual({ epicStatus: ['paused'] })
+    expect(toggleEpicStatus({ epicStatus: ['active'] }, 'active')).toEqual({})
+    expect(epicsButtonLabel(f, all)).toBe('Epics: Active, Paused (4)')
+    expect(epicsButtonLabel({ ...f, workstreams: ['act1'] }, all)).toBe('Epics (1/4)')
+    expect(epicsButtonLabel({}, all)).toBe('Epics (5)')
+    expect(clearEpics({ ...f, workstreams: ['act1'], dim: true })).toEqual({ dim: true })
+    expect(hasActiveFilters({ epicStatus: ['planned'] })).toBe(true)
+    expect(wantsArchived(f)).toBe(false)
+    expect(wantsArchived({ epicStatus: ['archived'] })).toBe(true)
   })
 })
 

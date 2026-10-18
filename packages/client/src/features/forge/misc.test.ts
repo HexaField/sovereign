@@ -234,19 +234,17 @@ describe('api', () => {
     ])
   })
 
-  it('epics: list (archived on request), archive, refine', async () => {
-    const { calls, api } = recorder({ streams: [{ id: 's1' }], threadId: 'rt-1' })
-    expect(await api.streams('demo')).toEqual([{ id: 's1' }])
-    await api.streams('demo', true)
-    await api.archiveStream('demo', 'task://9f2c', true)
+  it('epics: the graph with archived epics, status, refine', async () => {
+    const { calls, api } = recorder({ threadId: 'rt-1' })
+    await api.graph('demo', { since: 0, until: null, side: 'initial' }, undefined, { archived: true })
+    await api.setStreamStatus('demo', 'task://9f2c', 'paused')
     expect(await api.refineEpics('demo', 'merge the indexer epics')).toMatchObject({ threadId: 'rt-1' })
     expect(calls).toEqual([
-      { url: '/api/forge/streams?membrane=demo', method: 'GET', body: undefined },
-      { url: '/api/forge/streams?membrane=demo&archived=1', method: 'GET', body: undefined },
+      { url: '/api/forge?membrane=demo&since=1970-01-01T00%3A00%3A00.000Z&archived=1', method: 'GET', body: undefined },
       {
-        url: '/api/forge/streams/task%3A%2F%2F9f2c/archive',
+        url: '/api/forge/streams/task%3A%2F%2F9f2c/status',
         method: 'POST',
-        body: { membrane: 'demo', archived: true }
+        body: { membrane: 'demo', status: 'paused' }
       },
       {
         url: '/api/forge/epics/refine',

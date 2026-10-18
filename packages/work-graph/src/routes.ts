@@ -1,7 +1,7 @@
 // Forge REST routes.
 
 import express, { Router, type Request, type Response } from 'express'
-import type { ForgeView, WorkEdgeKind } from '@sovereign/core'
+import { EPIC_STATUSES, type EpicStatus, type ForgeView, type WorkEdgeKind } from '@sovereign/core'
 import { ForgeError, type ForgeService } from './service.js'
 
 export type Auth = (req: Request, res: Response, next: () => void) => void
@@ -194,13 +194,13 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
   )
 
   router.post(
-    '/api/forge/streams/:id/archive',
+    '/api/forge/streams/:id/status',
     requireAuth,
     json,
     handle((req) => {
-      const archived = req.body?.archived
-      if (archived !== undefined && typeof archived !== 'boolean') throw bad('archived must be a boolean')
-      return service.archiveStream(String(req.params.id), archived !== false, param(req, 'membrane'))
+      const status = req.body?.status
+      if (!EPIC_STATUSES.includes(status)) throw bad(`status must be one of ${EPIC_STATUSES.join(', ')}`)
+      return service.setStreamStatus(String(req.params.id), status as EpicStatus, param(req, 'membrane'))
     })
   )
 

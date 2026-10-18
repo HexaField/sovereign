@@ -7,8 +7,9 @@
 // in the graph); a chat message in the rethink thread gets a forge_note call
 // (a note on the card, in a "chat" run). A second rethink with nothing new
 // is skipped. POST /api/forge/epics/refine sends the user's request and the
-// epic list to the same thread; the mock answers with forge_stream_rename,
-// and the renamed epic shows in the graph.
+// epic list (with each epic's status) to the same thread; the mock answers
+// with forge_stream_rename, and the renamed epic shows in the graph. A chat
+// turn's forge_stream_status pauses it.
 
 import type { Scenario, ScenarioContext, ScenarioResult } from '../scenario.js'
 import { waitForThreadIdle } from '../wait.js'
@@ -20,6 +21,7 @@ const SHA = (c: string) => c.repeat(40)
 const RELATE_ID = 'toolu_s47_forge_relate'
 const NOTE_ID = 'toolu_s47_forge_note'
 const RENAME_ID = 'toolu_s47_forge_stream_rename'
+const STATUS_ID = 'toolu_s47_forge_stream_status'
 
 const SEED = {
   viewer: 'hex-agent',
@@ -266,6 +268,11 @@ export const s47ForgeRethink: Scenario = {
         refineLog.includes('A PR or issue is owned by at most one epic') && refineLog.includes('- Owned: 1'),
         'the refine prompt explains single ownership and lists the epic’s owned item'
       )
+      check(
+        refineLog.includes('- Status: planned') &&
+          refineLog.includes('forge_stream_status { membrane, streamId, status }'),
+        'the refine prompt gives each epic its status and offers forge_stream_status'
+      )
       const renameResult = await client.timed('forge-stream-rename', () => toolResult(mockLlmUrl, RENAME_ID, 30000))
       check(
         Boolean(renameResult?.includes('"renamed": true')),
@@ -282,6 +289,32 @@ export const s47ForgeRethink: Scenario = {
         list.runs.some((r: any) => r.trigger === 'chat' && r.actions?.epic === 1),
         `the rename landed in a run report: ${JSON.stringify(list.runs.map((r: any) => r.actions))}`
       )
+
+      // ── 6. forge_stream_status from a chat turn: the epic is paused ──
+      if (refined?.threadId) {
+        await script({
+          pattern: 's47-status',
+          once: true,
+          needsTools: true,
+          toolUse: {
+            id: STATUS_ID,
+            name: 'mcp__sovereign__forge_stream_status',
+            input: { membrane: M, streamId: epic.id, status: 'paused' }
+          }
+        })
+        await client.sendMessage(refined.threadId, 's47-status: pause the drivetrain epic')
+        const statusResult = await client.timed('forge-stream-status', () => toolResult(mockLlmUrl, STATUS_ID, 30000))
+        check(
+          Boolean(statusResult?.includes('"status": "paused"')),
+          `forge_stream_status result: ${statusResult?.slice(0, 160)}`
+        )
+        g = await graph()
+        check(
+          g.workstreams.some((s: any) => s.id === epic.id && s.status === 'paused'),
+          `paused epic in the graph: ${JSON.stringify(g.workstreams.map((s: any) => [s.name, s.status]))}`
+        )
+        await waitForThreadIdle(client, refined.threadId, 20000).catch(() => false)
+      }
     } finally {
       for (const th of threads) await client.deleteThread(th).catch(() => undefined)
       await client.patch('/api/config', { forge: { repos: { [M]: [] } } }).catch(() => undefined)
@@ -292,7 +325,7 @@ export const s47ForgeRethink: Scenario = {
       passed: problems.length === 0,
       summary: problems.length
         ? `${problems.length} problem(s): ${problems.slice(0, 4).join('; ')}`
-        : 'rethink thread, digest prompt, run report, forge_relate edge, forge_note, empty-digest skip, epics refine + forge_stream_rename',
+        : 'rethink thread, digest prompt, run report, forge_relate edge, forge_note, empty-digest skip, epics refine + forge_stream_rename, forge_stream_status',
       metrics: { ...metrics, problems },
       samples: client.samples.filter((s) => s.name.startsWith('forge'))
     }

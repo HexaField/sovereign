@@ -4,6 +4,7 @@ import { createMemo, createSignal, For, Show, type Component } from 'solid-js'
 import {
   defaultWorkPrompt,
   type AgentOverlay,
+  type EpicStatus,
   type WorkEdge,
   type WorkNode,
   type WorkStream
@@ -17,6 +18,7 @@ import {
   shortRef,
   taskSection
 } from './card-model.js'
+import { EpicStatusSelect } from './EpicStatusSelect.js'
 import { cardRethinkItems } from './rethink-model.js'
 import type { ForgeApi } from './api.js'
 import { CI_COLORS, REVIEW_COLORS, STATE_COLORS } from './style.js'
@@ -107,6 +109,12 @@ const NodeCard: Component<NodeCardProps> = (props) => {
       // The server moves a PR or issue out of its old epic itself; other nodes may sit in several, so drop the rest here.
       const moved = id && (n().kind === 'change' || n().kind === 'issue')
       if (!moved) for (const old of n().workstreams) if (old !== id) await props.api.removeMember(old, n().id)
+      props.onChanged()
+    })
+
+  const setEpicStatus = (id: string, status: EpicStatus) =>
+    run(async () => {
+      await props.api.setStreamStatus(props.membrane, id, status)
       props.onChanged()
     })
 
@@ -291,6 +299,18 @@ const NodeCard: Component<NodeCardProps> = (props) => {
             </Show>
           </div>
         </Show>
+        <Show when={task().epic}>
+          {(epic) => (
+            <label class="mt-1 flex items-center gap-1" title="This item is an epic">
+              <span style={muted}>Epic status:</span>
+              <EpicStatusSelect
+                status={epic().status}
+                disabled={busy()}
+                onChange={(s) => setEpicStatus(epic().id, s)}
+              />
+            </label>
+          )}
+        </Show>
         <Show when={task().children.length}>
           <div class="mt-1" style={muted}>
             Child tasks
@@ -324,6 +344,15 @@ const NodeCard: Component<NodeCardProps> = (props) => {
               </Show>
               <For each={task().options}>{(s) => <option value={s.id}>{s.name}</option>}</For>
             </select>
+            <Show when={task().owner && props.streams.find((s) => s.id === task().owner!.id)}>
+              {(owner) => (
+                <EpicStatusSelect
+                  status={owner().status}
+                  disabled={busy()}
+                  onChange={(s) => setEpicStatus(owner().id, s)}
+                />
+              )}
+            </Show>
           </label>
         </Show>
         <Show when={task().related.length}>

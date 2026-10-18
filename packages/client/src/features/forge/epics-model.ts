@@ -5,9 +5,14 @@
 // focus the canvas on their members (and, by default, their neighbours). An
 // epic owns its members; a plan's epic is also related to what the plan names,
 // which joins the focus with "Owned + related" (`filters.epicRelated`).
+// Status chips (`filters.epicStatus`) pick which epics the panel lists; with
+// statuses chosen and no epic picked, every listed epic is selected, so
+// "Active" focuses the canvas, lanes and Kanban on every active epic.
 
-import type { ForgeFilters, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
+import type { EpicStatus, ForgeFilters, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
+import { EPIC_STATUSES } from '@sovereign/core/forge'
 import { streamFocus, toggleFilterValue } from './filters.js'
+import { EPIC_STATUS_LABELS } from './style.js'
 
 export type EpicsMode = 'dropdown' | 'modal'
 export const LS_EPICS_MODE = 'sovereign:forge:epics-mode'
@@ -70,10 +75,40 @@ export function searchEpics(rows: EpicRow[], q: string): EpicRow[] {
   return rows.filter((r) => keep.has(r.stream.id))
 }
 
-/** The selected epics that exist in `streams` (an archived or removed one drops out). */
-export function selectedEpics(f: ForgeFilters, streams: WorkStream[]): string[] {
-  const ids = new Set(streams.map((s) => s.id))
+/** The statuses the panel lists: the chosen ones, else every status but archived. */
+export function shownStatuses(f: ForgeFilters): EpicStatus[] {
+  const chosen = EPIC_STATUSES.filter((s) => f.epicStatus?.includes(s))
+  return chosen.length ? chosen : EPIC_STATUSES.filter((s) => s !== 'archived')
+}
+
+/** The epics the panel lists: those with a shown status. */
+export function shownEpics(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
+  const statuses = new Set(shownStatuses(f))
+  return streams.filter((s) => statuses.has(s.status))
+}
+
+/** The epics picked one by one that the panel lists (an epic of a hidden status, archived or removed drops out). */
+export function pickedEpics(f: ForgeFilters, streams: WorkStream[]): string[] {
+  const ids = new Set(shownEpics(f, streams).map((s) => s.id))
   return (f.workstreams ?? []).filter((id) => ids.has(id))
+}
+
+/**
+ * The selected epics: the picked ones; with none picked and statuses chosen,
+ * every epic with those statuses; else none.
+ */
+export function selectedEpics(f: ForgeFilters, streams: WorkStream[]): string[] {
+  const picked = pickedEpics(f, streams)
+  if (picked.length || !f.epicStatus?.length) return picked
+  return shownEpics(f, streams).map((s) => s.id)
+}
+
+/** The selection with its sub-epics, kept to the shown statuses: whose members the canvas, lanes and Kanban focus on. */
+export function focusedEpics(f: ForgeFilters, streams: WorkStream[]): string[] {
+  const selected = selectedEpics(f, streams)
+  if (!selected.length) return []
+  const shown = new Set(shownEpics(f, streams).map((s) => s.id))
+  return withSubEpics(selected, streams).filter((id) => shown.has(id))
 }
 
 /** The selection with every sub-epic of a selected epic. */
@@ -98,9 +133,9 @@ export function epicFocus(
   nodes: WorkNode[],
   edges: WorkEdge[]
 ): Set<string> | null {
-  const selected = selectedEpics(f, streams)
-  if (!selected.length) return null
-  return streamFocus(withSubEpics(selected, streams), nodes, edges, f.epicNeighbours !== false, f.epicRelated === true)
+  const focused = focusedEpics(f, streams)
+  if (!focused.length) return null
+  return streamFocus(focused, nodes, edges, f.epicNeighbours !== false, f.epicRelated === true)
 }
 
 /**
@@ -127,18 +162,19 @@ export function panelShown(v: { visible: Set<string>; dimmed: Set<string> }): Se
   return v.dimmed.size ? new Set([...v.visible].filter((id) => !v.dimmed.has(id))) : v.visible
 }
 
-/** The streams the canvas makes lanes of: with epics selected, only those (and their sub-epics). */
+/** The streams the canvas makes lanes of: with epics selected, those (and their sub-epics); else every shown epic. */
 export function laneStreams(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
-  const selected = selectedEpics(f, streams)
-  if (!selected.length) return streams
-  const keep = new Set(withSubEpics(selected, streams))
+  const focused = focusedEpics(f, streams)
+  if (!focused.length) return shownEpics(f, streams)
+  const keep = new Set(focused)
   return streams.filter((s) => keep.has(s.id))
 }
 
 export const toggleEpic = (f: ForgeFilters, id: string): ForgeFilters => toggleFilterValue(f, 'workstreams', id)
 
+/** Drop the epic selection: the picked epics and the status chips. */
 export function clearEpics(f: ForgeFilters): ForgeFilters {
-  const { workstreams: _drop, ...rest } = f
+  const { workstreams: _drop, epicStatus: _status, ...rest } = f
   return rest
 }
 
@@ -165,11 +201,22 @@ export function setDim(f: ForgeFilters, on: boolean): ForgeFilters {
   return on ? { ...rest, dim: true } : rest
 }
 
-/** "Epics (12)", or "Epics (2/12)" while two are selected. */
+/** "Epics (12)"; "Epics (2/12)" while two are picked; "Epics: Active, Paused (7)" while statuses select. */
 export function epicsButtonLabel(f: ForgeFilters, streams: WorkStream[]): string {
-  const n = selectedEpics(f, streams).length
-  return n ? `Epics (${n}/${streams.length})` : `Epics (${streams.length})`
+  const shown = shownEpics(f, streams).length
+  const picked = pickedEpics(f, streams).length
+  if (picked) return `Epics (${picked}/${shown})`
+  if (f.epicStatus?.length)
+    return `Epics: ${shownStatuses(f)
+      .map((s) => EPIC_STATUS_LABELS[s])
+      .join(', ')} (${shown})`
+  return `Epics (${shown})`
 }
+
+export const toggleEpicStatus = (f: ForgeFilters, s: EpicStatus): ForgeFilters => toggleFilterValue(f, 'epicStatus', s)
+
+/** Whether the window needs archived epics from the server (`?archived=1`): the Archived chip is on. */
+export const wantsArchived = (f: ForgeFilters): boolean => f.epicStatus?.includes('archived') === true
 
 /** "Plan: <project>/<path>" for an epic a plan file made, else "" (made by hand or by the rethink thread). */
 export const epicSource = (s: WorkStream): string => (s.plan ? `Plan: ${s.plan.replace(/^plan:/, '')}` : '')

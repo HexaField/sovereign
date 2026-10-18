@@ -8,9 +8,10 @@
 import type { ChangeState, ForgeRef } from '@sovereign/core'
 import { refKey } from '@sovereign/core'
 
-export type TaskState = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+/** `paused`: set aside, neither in flight nor done (an epic's "paused" status). */
+export type TaskState = 'pending' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
 
-export const TASK_STATES: readonly TaskState[] = ['pending', 'in_progress', 'completed', 'cancelled'] as const
+export const TASK_STATES: readonly TaskState[] = ['pending', 'in_progress', 'paused', 'completed', 'cancelled'] as const
 
 // ── Providers ─────────────────────────────────────────────────────────
 

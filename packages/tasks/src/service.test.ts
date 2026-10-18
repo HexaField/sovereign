@@ -159,6 +159,21 @@ describe('TaskService — CRUD', () => {
     )
   })
 
+  it('accepts paused, emits the state change and filters by it', async () => {
+    const task = await svc.create({ name: 'T', sourceThreadId: 't1', state: 'in_progress' })
+    events.length = 0
+    expect(await svc.update(task.id, { state: 'paused', sourceThreadId: 't1' })).toMatchObject({ state: 'paused' })
+    expect(events.find((e) => e.type === 'task.state_changed')?.payload).toMatchObject({
+      oldState: 'in_progress',
+      newState: 'paused'
+    })
+    expect((await svc.list({ state: 'paused' })).map((t) => t.id)).toEqual([task.id])
+    // Set aside: neither in flight nor unassigned work.
+    const summary = await svc.summary()
+    expect(summary.inFlight.map((t) => t.taskId)).not.toContain(task.id)
+    expect(summary.unassigned.map((t) => t.taskId)).not.toContain(task.id)
+  })
+
   // T1.11: Update throws on absent task
   it('throws when updating a nonexistent task', async () => {
     await expect(svc.update('task://nope', { name: 'X', sourceThreadId: 't1' })).rejects.toThrow('Task not found')
@@ -647,7 +662,8 @@ describe.each(STORES)('TaskService — work streams and filters (%s)', (_name, m
       id: stream.id,
       name: 'Plan 20',
       membrane: 'coasys',
-      memberCount: 2
+      memberCount: 2,
+      status: 'planned'
     })
     expect(streams.find((s) => s.id === sub.id)).toMatchObject({ parentId: stream.id, memberCount: 1 })
     expect(await svc.listStreams('home')).toEqual([])
