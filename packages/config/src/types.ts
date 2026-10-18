@@ -317,6 +317,8 @@ export interface SovereignConfig {
       times: string[]
       maxJobs: number
       tokenBudget: number
+      /** Label of the thread that runs a membrane's rethink, per membrane id. Unset: `forge-rethink`. */
+      threads?: Record<string, string>
     }
   }
   /**

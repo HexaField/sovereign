@@ -332,7 +332,8 @@ export const schema = {
           properties: {
             times: { type: 'array', items: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' } },
             maxJobs: { type: 'number', minimum: 0 },
-            tokenBudget: { type: 'number', minimum: 0 }
+            tokenBudget: { type: 'number', minimum: 0 },
+            threads: { type: 'object', additionalProperties: { type: 'string', minLength: 1 } }
           },
           additionalProperties: false
         }

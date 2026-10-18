@@ -369,6 +369,21 @@ describe('rethink runner', () => {
     expect([...threads.values()].filter((t) => t.label === 'forge-rethink')).toHaveLength(1)
   })
 
+  it('runs in the thread forge.rethink.threads names for the membrane, moving off the old one', async () => {
+    await service.rethink('acme')
+    const old = runner.threadOf('acme')!
+    status(old, 'working')
+    status(old, 'idle')
+
+    threads.set('acme-main', { label: 'acme main', membrane: 'acme', busy: false })
+    config = { ...config, rethink: { ...config.rethink!, threads: { acme: 'acme main' } } }
+    now += 60_000
+    await runner.run('acme', await service.digest('acme', '1970-01-01T00:00:00Z'))
+    expect(runner.threadOf('acme')).toBe('acme-main')
+    expect(sent[sent.length - 1].threadId).toBe('acme-main')
+    expect(runner.membraneOfThread(old)).toBeUndefined()
+  })
+
   it('a thread busy at the start goes idle once before the run turn', async () => {
     const res = await service.rethink('acme')
     const rt = runner.threadOf('acme')!
