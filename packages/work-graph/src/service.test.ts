@@ -324,7 +324,7 @@ describe('forge service', () => {
     expect((await make().graph('acme')).identity).toBe('hex-agent')
   })
 
-  it('makes each plan a work stream of the items it names; links follow the plan, members added by hand stay', async () => {
+  it('makes each plan a work stream related to the items it names; it owns only what is added by hand', async () => {
     const planFile = path.join(tmp, 'acme', 'widget', 'plans', 'sprockets.md')
     const planId = 'plan:acme-org/widget/sprockets.md'
     await service.sync('acme')
@@ -332,33 +332,109 @@ describe('forge service', () => {
     expect(stream).toMatchObject({ isStream: true, name: 'Sprocket rework', state: 'in_progress', membrane: 'acme' })
     const members = async () =>
       (await Promise.all((await port.get(stream.id))!.childIds.map((id) => port.get(id)))).map((t) => t!.key).sort()
-    expect(await members()).toEqual([nid(GADGET, 9), nid(WIDGET, 50)].sort())
-    const g = await service.graph('acme')
-    expect(g.nodes.find((n) => n.id === planId)).toMatchObject({ kind: 'plan', taskId: stream.id })
-    expect(g.nodes.find((n) => n.id === nid(WIDGET, 50))!.workstreams).toEqual([stream.id])
+    expect(await members()).toEqual([])
+    const node = (g: ForgeGraph, id: string) => g.nodes.find((n) => n.id === id)!
+    let g = await service.graph('acme')
+    expect(node(g, planId)).toMatchObject({ kind: 'plan', taskId: stream.id })
+    expect(node(g, nid(WIDGET, 50))).toMatchObject({ workstreams: [], relatedStreams: [stream.id] })
+    expect(node(g, nid(GADGET, 9))).toMatchObject({ workstreams: [], relatedStreams: [stream.id] })
+    expect(g.workstreams).toEqual([expect.objectContaining({ id: stream.id, memberCount: 0, relatedCount: 2 })])
 
-    // By hand: #51 added, gadget#9 taken out. A rescan keeps both choices.
+    // By hand: #51 and #50 join. Owned wins over related: #50 is no longer listed as related.
     await service.addMember(stream.id, nid(WIDGET, 51))
-    await service.removeMember(stream.id, nid(GADGET, 9))
+    await service.addMember(stream.id, nid(WIDGET, 50))
     await service.sync('acme')
     expect(await members()).toEqual([nid(WIDGET, 50), nid(WIDGET, 51)].sort())
+    g = await service.graph('acme')
+    expect(node(g, nid(WIDGET, 50)).workstreams).toEqual([stream.id])
+    expect(node(g, nid(WIDGET, 50))).not.toHaveProperty('relatedStreams')
+    expect(g.workstreams[0]).toMatchObject({ memberCount: 2, relatedCount: 1 })
 
-    // The plan drops #50 and names issue #7: #50 leaves, #7 joins, #51 (by hand) stays.
+    // The plan drops #50 and names issue #7: #50 stays owned, #7 is related only.
     fs.writeFileSync(planFile, '# Sprocket rework\n\nStatus: in progress\n\nNow only #7 in acme-labs/widget.\n')
     await service.sync('acme')
-    expect(await members()).toEqual([nid(WIDGET, 51), nid(WIDGET, 7)].sort())
+    expect(await members()).toEqual([nid(WIDGET, 50), nid(WIDGET, 51)].sort())
+    g = await service.graph('acme')
+    expect(node(g, nid(WIDGET, 7))).toMatchObject({ workstreams: [], relatedStreams: [stream.id] })
+    expect(node(g, nid(GADGET, 9))).not.toHaveProperty('relatedStreams')
 
-    // Done: no longer a plan stream. Its links go; #51 (by hand) keeps it an ordinary stream.
-    fs.writeFileSync(planFile, '# Sprocket rework\n\nStatus: done\n\nNow only #7 in acme-labs/widget.\n')
-    await service.sync('acme')
-    expect(await members()).toEqual([nid(WIDGET, 51)])
-    expect(await port.get(stream.id)).toMatchObject({ isStream: true, state: 'completed' })
-
-    // The plan file goes: the stream with its hand-added member stays.
+    // The plan file goes: the stream with its hand-added members stays, related to nothing.
     fs.rmSync(planFile)
     await service.sync('acme')
-    expect(await members()).toEqual([nid(WIDGET, 51)])
+    expect(await members()).toEqual([nid(WIDGET, 50), nid(WIDGET, 51)].sort())
     expect((await port.get(stream.id))!.isStream).toBe(true)
+    expect((await service.graph('acme')).nodes.some((n) => n.relatedStreams)).toBe(false)
+  })
+
+  it('a change or issue has one owning epic: every add path moves it; task-only items and sub-epics may sit in several', async () => {
+    await service.sync('acme')
+    const a = await service.createStream('acme', 'Alpha')
+    const b = await service.createStream('acme', 'Beta')
+    const c = await service.createStream('acme', 'Gamma')
+    const owners = async (id: string) => (await service.graph('acme')).nodes.find((n) => n.id === id)!.workstreams
+
+    await service.addMember(a.id, nid(WIDGET, 50), 'acme')
+    await service.addMember(b.id, nid(WIDGET, 50), 'acme')
+    expect(await owners(nid(WIDGET, 50))).toEqual([b.id])
+
+    // Merging moves it again; the TaskPort itself enforces it too.
+    await service.addMember(c.id, nid(WIDGET, 51), 'acme')
+    await service.mergeStreams(b.id, c.id, 'acme')
+    expect(await owners(nid(WIDGET, 50))).toEqual([c.id])
+    const t51 = (await port.findByKey(nid(WIDGET, 51)))!
+    await port.addToStream(a.id, t51.id)
+    expect(await owners(nid(WIDGET, 51))).toEqual([a.id])
+
+    // A task-only item and a sub-epic keep every stream they are in.
+    const sub = await service.createStream('acme', 'Sub', a.id)
+    await port.addToStream(c.id, sub.id)
+    expect((await port.get(sub.id))!.parentIds.sort()).toEqual([a.id, c.id].sort())
+    const task = await port.service.create({ name: 'Loose task', membrane: 'acme', sourceThreadId: 't' })
+    await port.addToStream(a.id, task.id)
+    await port.addToStream(c.id, task.id)
+    expect(await owners(`task:${task.id}`)).toEqual(expect.arrayContaining([a.id, c.id]))
+  })
+
+  it('migrates plan-added members to related, and keeps one owner per item (the first epic by name)', async () => {
+    const planId = 'plan:acme-org/widget/sprockets.md'
+    await service.sync('acme')
+    const plan = (await port.findByKey(planId))!
+    const zeta = await service.createStream('acme', 'Zeta')
+    const alpha = await service.createStream('acme', 'Alpha')
+    // Data as an older build left it: the plan added #50 and gadget#9; #51 was put in two epics by hand.
+    for (const id of [nid(WIDGET, 50), nid(GADGET, 9)]) await service.addMember(plan.id, id, 'acme')
+    await service.addMember(zeta.id, nid(WIDGET, 51), 'acme')
+    const t51 = (await port.findByKey(nid(WIDGET, 51)))!
+    await port.store.addLink(alpha.id, t51.id)
+    await port.store.addLink(plan.id, t51.id)
+    const file = path.join(tmp, 'data', 'forge', 'acme', 'state.json')
+    const prev = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        ...prev,
+        planLinks: { [planId]: { named: [nid(WIDGET, 50), nid(GADGET, 9)], linked: [nid(WIDGET, 50), nid(GADGET, 9)] } }
+      })
+    )
+
+    now += 120_000
+    await service.sync('acme')
+    const g = await service.graph('acme')
+    const node = (id: string) => g.nodes.find((n) => n.id === id)!
+    expect(node(nid(WIDGET, 50))).toMatchObject({ workstreams: [], relatedStreams: [plan.id] })
+    expect(node(nid(GADGET, 9))).toMatchObject({ workstreams: [], relatedStreams: [plan.id] })
+    // #51: Alpha < Sprocket rework < Zeta by name, so Alpha keeps it.
+    expect(node(nid(WIDGET, 51)).workstreams).toEqual([alpha.id])
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).not.toHaveProperty('planLinks')
+    const counts = Object.fromEntries(g.workstreams.map((w) => [w.name, [w.memberCount, w.relatedCount]]))
+    expect(counts).toEqual({ Alpha: [1, 0], Zeta: [0, 0], 'Sprocket rework': [0, 2] })
+
+    // Idempotent: a second sync changes nothing.
+    const before = JSON.stringify((await service.graph('acme')).nodes.map((n) => [n.id, n.workstreams]))
+    now += 120_000
+    await service.sync('acme')
+    expect(JSON.stringify((await service.graph('acme')).nodes.map((n) => [n.id, n.workstreams]))).toBe(before)
   })
 
   it('a plan that names no item, or is done, makes no stream; it stays a plan node', async () => {
@@ -368,7 +444,11 @@ describe('forge service', () => {
     await service.sync('acme')
     const g = await service.graph('acme')
     expect(g.workstreams.map((w) => w.name)).toEqual(['Sprocket rework'])
-    expect(g.workstreams[0]).toMatchObject({ plan: 'plan:acme-org/widget/sprockets.md', memberCount: 2 })
+    expect(g.workstreams[0]).toMatchObject({
+      plan: 'plan:acme-org/widget/sprockets.md',
+      memberCount: 0,
+      relatedCount: 2
+    })
     for (const id of ['plan:acme-org/widget/idea.md', 'plan:acme-org/widget/shipped.md']) {
       expect(g.nodes.find((n) => n.id === id)).toMatchObject({ kind: 'plan' })
       expect((await port.findByKey(id))?.isStream ?? false).toBe(false)
@@ -405,26 +485,28 @@ describe('forge service', () => {
     expect(archived).toMatchObject({ archived: true })
     let g = await service.graph('acme')
     expect(g.workstreams).toEqual([])
-    expect(g.nodes.find((n) => n.id === nid(WIDGET, 50))!.workstreams).toEqual([])
-    expect((await service.graph('acme', { archived: true })).workstreams).toEqual([
-      expect.objectContaining({ id: stream.id, archived: true })
-    ])
+    expect(g.nodes.find((n) => n.id === nid(WIDGET, 50))).not.toHaveProperty('relatedStreams')
+    const all = await service.graph('acme', { archived: true })
+    expect(all.workstreams).toEqual([expect.objectContaining({ id: stream.id, archived: true })])
+    expect(all.nodes.find((n) => n.id === nid(WIDGET, 50))!.relatedStreams).toEqual([stream.id])
 
-    // The plan now names #51 too: an archived stream takes nothing and stays archived.
+    // The plan now names #51 too: an archived stream stays archived and owns nothing.
     fs.writeFileSync(
       path.join(tmp, 'acme', 'widget', 'plans', 'sprockets.md'),
       '# Sprocket rework\n\nStatus: in progress\n\nCovers #50 and #51 in acme-labs/widget.\n'
     )
     await service.sync('acme')
-    expect(await port.get(stream.id)).toMatchObject({ state: 'cancelled', isStream: true })
-    expect((await port.get(stream.id))!.childIds).toHaveLength(2)
+    expect(await port.get(stream.id)).toMatchObject({ state: 'cancelled', isStream: true, childIds: [] })
 
-    // Brought back: the plan's links resume.
+    // Brought back: it shows again, related to what the plan names.
     expect(await service.archiveStream(stream.id, false, 'acme')).not.toHaveProperty('archived')
     await service.sync('acme')
     g = await service.graph('acme')
     expect(g.workstreams.map((w) => w.id)).toEqual([stream.id])
-    expect(g.nodes.find((n) => n.id === nid(WIDGET, 51))!.workstreams).toEqual([stream.id])
+    expect(g.nodes.find((n) => n.id === nid(WIDGET, 51))).toMatchObject({
+      workstreams: [],
+      relatedStreams: [stream.id]
+    })
   })
 
   it('renames, nests, merges and lists epics', async () => {
@@ -539,29 +621,30 @@ describe('forge service', () => {
     await service.sync('acme')
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
-    const ensure = port.ensureTask.bind(port)
     let held = false
-    port.ensureTask = async (key, init) => {
-      if (init.kind === 'plan') {
+    const planId = 'plan:acme-org/widget/sprockets.md'
+    const find = port.findByKey.bind(port)
+    port.findByKey = async (key) => {
+      if (key === planId && !held) {
         held = true
         await gate
       }
-      return ensure(key, init)
+      return find(key)
     }
-    // The plan now names #51 too, so this sync rewrites its plan links.
-    fs.writeFileSync(
-      path.join(tmp, 'acme', 'widget', 'plans', 'sprockets.md'),
-      '# Sprocket rework\n\nStatus: in progress\n\nCovers #50 and #51 in acme-labs/widget.\n'
-    )
+    // Plan links an older build left: this sync migrates them and drops them from state.json.
+    const file = path.join(tmp, 'data', 'forge', 'acme', 'state.json')
+    const prev = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({ ...prev, planLinks: { [planId]: { named: [], linked: [] } } }))
     now += 120_000
     const syncing = service.sync('acme')
     expect(await until(() => held)).toBe(true)
     await service.assign({ membrane: 'acme', nodeId: nid(WIDGET, 50), threadId: 'owner' })
     release()
     await syncing
-    const file = JSON.parse(fs.readFileSync(path.join(tmp, 'data', 'forge', 'acme', 'state.json'), 'utf8'))
-    expect(file.assignedByForge).toEqual({ [nid(WIDGET, 50)]: 'hex-agent' })
-    expect(file.planLinks['plan:acme-org/widget/sprockets.md'].named).toContain(nid(WIDGET, 51))
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'))
+    expect(after.assignedByForge).toEqual({ [nid(WIDGET, 50)]: 'hex-agent' })
+    expect(after).not.toHaveProperty('planLinks')
   })
 
   it('a stream of one membrane takes no members or child streams through another', async () => {
@@ -668,15 +751,19 @@ describe('forge service', () => {
         .send({ nodeId: nid(WIDGET, 50) })
       expect(add.status).toBe(200)
       const g = await request(a).get('/api/forge?membrane=acme')
-      // Beside the plan's own stream (the fixture plan names #50 and gadget#9).
+      // Beside the plan's own stream (the fixture plan names #50 and gadget#9: related, not members;
+      // #50 owned by Plan 20 stays related to it).
       expect(g.body.workstreams).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ id: st.body.id, memberCount: 1 }),
-          expect.objectContaining({ name: 'Sprocket rework', memberCount: 2 })
+          expect.objectContaining({ id: st.body.id, memberCount: 1, relatedCount: 0 }),
+          expect.objectContaining({ name: 'Sprocket rework', memberCount: 0, relatedCount: 2 })
         ])
       )
-      expect(g.body.nodes.find((n: { id: string }) => n.id === nid(WIDGET, 50)).workstreams).toHaveLength(2)
-      expect(g.body.nodes.find((n: { id: string }) => n.id === nid(WIDGET, 50)).workstreams).toContain(st.body.id)
+      const plan = g.body.workstreams.find((w: { name: string }) => w.name === 'Sprocket rework')
+      expect(g.body.nodes.find((n: { id: string }) => n.id === nid(WIDGET, 50))).toMatchObject({
+        workstreams: [st.body.id],
+        relatedStreams: [plan.id]
+      })
       expect(
         (
           await request(a)

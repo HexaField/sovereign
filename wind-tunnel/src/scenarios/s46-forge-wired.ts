@@ -6,8 +6,9 @@
 //   streams    POST /api/forge/streams + members → a stream task in /api/tasks
 //   assign     a node to a new thread → task in_progress in /api/tasks, assignee on GitHub
 //   merge      a merge on GitHub → its task completed after one sync
-//   plans      a plan file in the membrane's plans/ → a stream task holding what it names;
-//              a plan naming no item stays a plan node and makes no epic
+//   plans      a plan file in the membrane's plans/ → a stream task related to what it names
+//              (owning none of it); a plan naming no item stays a plan node and makes no epic
+//   ownership  an item added to a second epic leaves the first (one owner per PR or issue)
 //   archive    an archived epic leaves the graph; ?archived=1 and GET /api/forge/streams list it
 //   task_update  PATCH /api/tasks/:id { threadId } (what the MCP tool calls) → assignee on GitHub
 //   pr-poll    a PR task on a repo outside forge.repos, owned by a thread with no
@@ -175,14 +176,20 @@ export const s46ForgeWired: Scenario = {
           planTask.isStream === true && planTask.state === 'in_progress',
           `plan stream task ${planTask.isStream}/${planTask.state}`
         )
-        const members = await Promise.all(planTask.childTasks.map((c: any) => task(c.id)))
-        const keys = members.map((t: any) => `${t.provider?.refs?.[0]?.repo}#${t.provider?.refs?.[0]?.id}`).sort()
-        check(keys.join() === [`${W}#30`, `${W}#32`].join(), `plan stream members ${keys}`)
+        // A plan relates what it names to its epic; it owns none of it.
+        check(planTask.childTasks.length === 0, `plan stream members ${planTask.childTasks.length} (want none)`)
+        const planStream = g.workstreams.find((s: any) => s.id === planNode.taskId)
         check(
-          g.workstreams.some((s: any) => s.id === planNode.taskId),
-          'plan stream in the graph workstreams'
+          planStream?.memberCount === 0 && planStream?.relatedCount === 2,
+          `plan stream in the graph workstreams, 0 owned + 2 related: ${JSON.stringify(planStream)}`
         )
-        check(node(g, id(W, 30))?.workstreams?.includes(planNode.taskId), '#30 in the plan lane')
+        for (const n of [30, 32]) {
+          const x = node(g, id(W, n))
+          check(
+            x?.relatedStreams?.includes(planNode.taskId) && !x?.workstreams?.length,
+            `#${n} related to the plan epic, owned by none: ${JSON.stringify([x?.workstreams, x?.relatedStreams])}`
+          )
+        }
       }
       const ideaNode = g.nodes.find((n: any) => n.kind === 'plan' && n.title === 'S46 idea')
       check(Boolean(ideaNode), 'a plan without items is still a plan node')
@@ -210,6 +217,23 @@ export const s46ForgeWired: Scenario = {
         streams.some((s: any) => s.id === stream.id && s.memberCount === 1),
         'the stream is a work stream in /api/tasks'
       )
+
+      // ── One owner: #32 joins the plan epic by hand, then moves to the hand-made one ──
+      if (planNode?.taskId) {
+        const add32 = (sid: string) =>
+          client.post(`/api/forge/streams/${encodeURIComponent(sid)}/members`, { nodeId: id(W, 32) })
+        await add32(planNode.taskId)
+        check(
+          node(await graph(), id(W, 32))?.workstreams?.join() === planNode.taskId,
+          '#32 owned by the plan epic once added by hand'
+        )
+        await add32(stream.id)
+        const moved = node(await graph(), id(W, 32))
+        check(
+          moved?.workstreams?.join() === stream.id && moved?.relatedStreams?.includes(planNode.taskId),
+          `#32 moved to the hand-made epic, still related to the plan: ${JSON.stringify([moved?.workstreams, moved?.relatedStreams])}`
+        )
+      }
 
       // ── Archive hides the epic; ?archived=1 and the streams list bring it back ──
       const arch = await client.post(`/api/forge/streams/${encodeURIComponent(stream.id)}/archive`, {
@@ -262,7 +286,7 @@ export const s46ForgeWired: Scenario = {
       const t32 = (await client.get(`/api/tasks?membrane=${M}&providerKind=issue`)).tasks.find(
         (t: any) => t.provider?.refs?.[0]?.id === '32'
       )
-      check(Boolean(t32), 'the plan made a task for issue #32')
+      check(Boolean(t32), 'issue #32 has a task (added to an epic by hand)')
       if (t32) {
         await patch(`/api/tasks/${uuidOf(t32.id)}`, { threadId: owner.id })
         check(

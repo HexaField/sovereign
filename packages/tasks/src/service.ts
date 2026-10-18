@@ -47,7 +47,7 @@ export interface TaskService {
   ensureTask(key: string, init: EnsureTaskInit): Promise<{ task: Task; created: boolean }>
   /** Create a work stream (a task flagged isStream, unassigned). */
   createStream(opts: CreateStreamOpts): Promise<Task>
-  /** Add a task to a stream (a subtask link under the stream). */
+  /** Add a task to a stream (a subtask link under the stream). A PR or issue leaves any other stream it was in. */
   addToStream(streamId: string, taskId: string, sourceThreadId: string): Promise<void>
   removeFromStream(streamId: string, taskId: string, sourceThreadId: string): Promise<void>
   /** Streams, optionally of one membrane. memberCount counts direct members. */
@@ -84,6 +84,14 @@ function validateState(state: string): asserts state is TaskState {
   if (!TASK_STATES.includes(state as TaskState)) {
     throw new Error(`Invalid task state: "${state}". Valid states: ${TASK_STATES.join(', ')}`)
   }
+}
+
+/**
+ * A PR or issue task belongs to at most one work stream (its owning epic).
+ * Task-only tasks, plans and sub-streams may sit in several.
+ */
+export function ownedByOneStream(t: Pick<Task, 'isStream' | 'provider'>): boolean {
+  return !t.isStream && (t.provider?.kind === 'change' || t.provider?.kind === 'issue')
 }
 
 export function createTaskService(deps: TaskServiceDeps): TaskService {
@@ -123,7 +131,14 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     })
 
     if (opts.parentTaskIds?.length) {
-      for (const parentId of opts.parentTaskIds) await store.addLink(parentId, id)
+      // A PR or issue has one owning stream: of several stream parents, the last one given wins.
+      const owned = ownedByOneStream(task)
+      const parents = await Promise.all(opts.parentTaskIds.map((p) => store.get(p)))
+      const lastStream = owned ? parents.map((p) => p?.isStream).lastIndexOf(true) : -1
+      for (const [i, parentId] of opts.parentTaskIds.entries()) {
+        if (lastStream >= 0 && parents[i]?.isStream && i !== lastStream) continue
+        await store.addLink(parentId, id)
+      }
       task = (await store.get(id)) ?? task
     }
 
@@ -152,6 +167,12 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     }
     if (child.parentTasks.some((p) => p.id === parentId)) return
 
+    // A PR or issue has one owning stream: joining one leaves the others.
+    if (parent.isStream && ownedByOneStream(child)) {
+      for (const p of child.parentTasks) {
+        if ((await store.get(p.id))?.isStream) await unlinkTasks(p.id, childId, sourceThreadId)
+      }
+    }
     await store.addLink(parentId, childId)
 
     emit(bus, 'task.linked', {

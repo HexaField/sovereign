@@ -21,7 +21,7 @@ import {
 } from '@sovereign/core'
 import { repoKey, type ForgeRegistry, type ForgeRepo } from '@sovereign/forges'
 import type { HostForges } from '@sovereign/orgs'
-import { applyView, buildGraph, planRefKey, searchGraph, windowGraph, type BuiltGraph } from './build.js'
+import { applyView, buildGraph, searchGraph, windowGraph, type BuiltGraph } from './build.js'
 import { createRepoCacheStore, readJson, writeJsonAtomic } from './cache.js'
 import { buildDigest, createEventLog, safeSegment, triage, type EventLog } from './events.js'
 import { buildOverlay, currentBranch, resolveCheckouts, type OverlayResult } from './overlay.js'
@@ -130,9 +130,12 @@ export interface ForgeStatus {
   events: number
 }
 
-/** A work stream with its members, as the epics refine prompt lists them. */
+/** A work stream with its members and related items, as the epics refine prompt lists them. */
 export interface Epic extends WorkStream {
+  /** Items it owns (its member tasks, not its child streams). */
   members: Array<{ id: string; title: string }>
+  /** Items related to it without being members (a plan of it names them). */
+  related: Array<{ id: string; title: string }>
 }
 
 export interface ForgeService {
@@ -207,10 +210,10 @@ interface MembraneFile {
   /** nodeId → the login Forge added as assignee (only those may be removed). */
   assignedByForge: Record<string, string>
   /**
-   * Plan id → the node ids the plan named at the last scan, and those whose
-   * stream membership the plan itself added (only those follow the plan).
+   * Written by builds before single ownership: plan id → the items the plan
+   * named and those it added to its stream. Read once by migrateOwnership, then dropped.
    */
-  planLinks?: Record<string, { named: string[]; linked: string[] }>
+  planLinks?: Record<string, { named?: string[]; linked?: string[] }>
 }
 
 export function resolveConfig(c: Partial<ForgeConfig> | undefined): ForgeConfig {
@@ -224,6 +227,13 @@ export function resolveConfig(c: Partial<ForgeConfig> | undefined): ForgeConfig 
     planDirs: c?.planDirs ?? d.planDirs,
     mentions: c?.mentions ?? d.mentions
   }
+}
+
+/** Each stream's relatedCount: the nodes related to it (and not owned by it). */
+export function withRelatedCounts(streams: WorkStream[], nodes: WorkNode[]): WorkStream[] {
+  const counts = new Map<string, number>()
+  for (const n of nodes) for (const id of n.relatedStreams ?? []) counts.set(id, (counts.get(id) ?? 0) + 1)
+  return streams.map((w) => ({ ...w, relatedCount: counts.get(w.id) ?? 0 }))
 }
 
 export function createForgeService(deps: ForgeServiceDeps): ForgeService {
@@ -531,8 +541,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       changed ||= planEvents.length > 0
 
       let { graph, tasks } = await full(membrane, scope)
-      // Plans first: a plan's stream and the tasks it adds get their state in this same sync.
-      if (await syncPlanStreams(membrane, graph)) {
+      // Plans first: a new plan's stream gets its state in this same sync.
+      if (await syncPlanStreams(membrane, tasks)) {
         changed = true
         ;({ graph, tasks } = await full(membrane, scope))
       }
@@ -667,84 +677,70 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
 
   /**
    * A plan that names a forge item and is not done is a work stream (keyed by
-   * the plan id); every item it names gets a task in it. Links the plan added
-   * follow the plan: an item it stops naming leaves the stream. Members added
-   * by hand are never removed, and an item the user took out stays out while
-   * the plan keeps naming it.
+   * the plan id). It owns nothing: the builder relates the items it names to
+   * it (`WorkNode.relatedStreams`). A plan stream whose plan no longer
+   * qualifies (gone, done, names no item) and has no members or child streams
+   * stops being a stream (the plan task stays). Archived ones stay as they are.
    */
-  async function syncPlanStreams(membrane: string, graph: BuiltGraph): Promise<boolean> {
-    const s = state(membrane)
-    const prev = readFile(membrane).planLinks ?? {}
-    const next: NonNullable<MembraneFile['planLinks']> = {}
-    const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
-    let changed = false
-    for (const p of s.plans) {
+  async function syncPlanStreams(membrane: string, tasks: PortTask[]): Promise<boolean> {
+    let changed = await migrateOwnership(membrane, tasks)
+    if (changed) tasks = await deps.tasks.listByMembrane(membrane)
+    const qualifying = new Set<string>()
+    for (const p of state(membrane).plans) {
       if (!planMakesStream(p)) continue
-      const was = prev[p.id] ?? { named: [], linked: [] }
-      const existing = await deps.tasks.findByKey(p.id)
-      // An archived plan stream stays as the user left it.
-      if (existing?.isStream && existing.state === 'cancelled') {
-        if (prev[p.id]) next[p.id] = was
-        continue
-      }
-      const stream = await deps.tasks.ensureTask(p.id, { name: p.title, membrane, kind: 'plan', stream: true })
-      if (!prev[p.id]) changed = true
-      const naming = new Map<string, { kind?: 'change' | 'issue'; host: string; repo: string; n: number }>()
-      for (const r of p.refs) naming.set(planRefKey(r.host, r.repo, r.number), { ...r, n: r.number })
-      const named = was.named.filter((id) => naming.has(id))
-      const linked = new Set(was.linked)
-      const members = new Set(stream.childIds)
-      for (const [id, r] of naming) {
-        if (named.includes(id)) continue
-        const node = nodes.get(id)
-        const kind = node?.kind === 'change' || node?.kind === 'issue' ? node.kind : r.kind
-        // Kind unknown (not synced yet, a short reference): try again next scan.
-        if (!kind) continue
-        const task = node
-          ? await taskFor(membrane, node)
-          : await deps.tasks.ensureTask(id, { name: `${r.repo}#${r.n}`, membrane, kind })
-        if (!members.has(task.id)) {
-          await deps.tasks.addToStream(stream.id, task.id)
-          members.add(task.id)
-          linked.add(id)
-          changed = true
-        }
-        named.push(id)
-      }
-      for (const id of [...linked]) {
-        if (naming.has(id)) continue
-        linked.delete(id)
-        const t = await deps.tasks.findByKey(id)
-        if (t && members.has(t.id)) {
+      qualifying.add(p.id)
+      if ((await deps.tasks.findByKey(p.id))?.isStream) continue
+      await deps.tasks.ensureTask(p.id, { name: p.title, membrane, kind: 'plan', stream: true })
+      changed = true
+    }
+    for (const t of tasks) {
+      if (!t.isStream || t.kind !== 'plan' || !t.key || qualifying.has(t.key)) continue
+      if (t.state === 'cancelled' || t.childIds.length) continue
+      await deps.tasks.setStream(t.id, false)
+      changed = true
+    }
+    return changed
+  }
+
+  /**
+   * Data from before single ownership. Plan sync used to add every item a plan
+   * named to the plan's stream (`planLinks[plan].linked`): those links go, once,
+   * and `planLinks` leaves the membrane file (the plan relates them now). Then
+   * a change or issue still in more than one stream keeps the first by stream
+   * name (links carry no time) and leaves the rest; that pass is a condition,
+   * so it finds nothing once the data is clean.
+   */
+  async function migrateOwnership(membrane: string, tasks: PortTask[]): Promise<boolean> {
+    let changed = false
+    const planLinks = readFile(membrane).planLinks
+    if (planLinks) {
+      for (const [planId, { linked = [] }] of Object.entries(planLinks)) {
+        const stream = await deps.tasks.findByKey(planId)
+        if (!stream?.isStream) continue
+        for (const id of linked) {
+          const t = await deps.tasks.findByKey(id)
+          if (!t || !stream.childIds.includes(t.id)) continue
           await deps.tasks.removeFromStream(stream.id, t.id)
-          members.delete(t.id)
           changed = true
         }
       }
-      next[p.id] = { named, linked: [...linked] }
+      updateFile(membrane, (f) => delete f.planLinks)
+      if (changed) tasks = await deps.tasks.listByMembrane(membrane)
     }
-    // A plan stream whose plan no longer qualifies (gone, done, names no item):
-    // the links the plan added go; with nothing left in it, it stops being a
-    // stream (the plan task stays). Archived ones stay as they are.
-    const planStreams = (await deps.tasks.listByMembrane(membrane)).filter(
-      (t) => t.isStream && t.kind === 'plan' && t.key && !next[t.key]
-    )
-    for (const t of planStreams) if (t.state === 'cancelled' && prev[t.key!]) next[t.key!] = prev[t.key!]
-    const retired = planStreams.filter((t) => t.state !== 'cancelled')
-    for (const stream of retired) {
-      const members = new Set(stream.childIds)
-      for (const id of prev[stream.key!]?.linked ?? []) {
-        const t = await deps.tasks.findByKey(id)
-        if (t && members.has(t.id)) {
-          await deps.tasks.removeFromStream(stream.id, t.id)
-          members.delete(t.id)
-        }
+    const byId = new Map(tasks.map((t) => [t.id, t]))
+    for (const t of tasks) {
+      if (t.isStream || (t.kind !== 'change' && t.kind !== 'issue') || t.parentIds.length < 2) continue
+      const streams: PortTask[] = []
+      for (const id of t.parentIds) {
+        const p = byId.get(id) ?? (await deps.tasks.get(id))
+        if (p?.isStream) streams.push(p)
       }
-      // Members added by hand or child streams keep it as an ordinary stream.
-      if (!members.size) await deps.tasks.setStream(stream.id, false)
-      if (!members.size || members.size !== stream.childIds.length) changed = true
+      if (streams.length < 2) continue
+      streams.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+      for (const s of streams.slice(1)) await deps.tasks.removeFromStream(s.id, t.id)
+      log(`${membrane}: ${t.key ?? t.id} kept in epic "${streams[0].name}", left ${streams.length - 1} other(s)`)
+      changed = true
     }
-    if (JSON.stringify(next) !== JSON.stringify(prev)) updateFile(membrane, (f) => (f.planLinks = next))
     return changed
   }
 
@@ -884,8 +880,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const s = state(m)
     const { graph, tasks } = await full(m)
     if (events.length) s.log.append(await triageAll(events, graph, tasks, await identityOf(s.scope ?? scopeOf(m))))
-    const linked = await syncPlanStreams(m, graph)
-    if (events.length || linked) emit('forge.updated', { membrane: m })
+    const streams = await syncPlanStreams(m, tasks)
+    if (events.length || streams) emit('forge.updated', { membrane: m })
   }
 
   async function membraneOfNode(nodeId: string, hint?: string): Promise<string> {
@@ -1091,7 +1087,10 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const s = state(membrane)
       const syncs_ = scope.repos.map((r) => syncOf(r)).filter((x): x is RepoSync => Boolean(x))
       const notes = deps.rethinkNotes?.(membrane) ?? {}
-      const streams = (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || !w.archived)
+      const streams = withRelatedCounts(
+        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || !w.archived),
+        graph.nodes
+      )
       const shown = new Set(streams.map((w) => w.id))
       return {
         membrane,
@@ -1099,7 +1098,12 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         until,
         nodes: g.nodes.map((n) => {
           const workstreams = n.workstreams.filter((w) => shown.has(w))
-          const out = workstreams.length === n.workstreams.length ? n : { ...n, workstreams }
+          const related = n.relatedStreams?.filter((w) => shown.has(w))
+          let out = workstreams.length === n.workstreams.length ? n : { ...n, workstreams }
+          if (related && related.length !== n.relatedStreams!.length) {
+            const { relatedStreams: _all, ...rest } = out
+            out = related.length ? { ...rest, relatedStreams: related } : rest
+          }
           return notes[n.id]?.length ? { ...out, rethink: notes[n.id] } : out
         }),
         edges: g.edges,
@@ -1241,14 +1245,18 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
 
     async streams(membrane, opts = {}) {
       scopeOf(membrane)
-      return (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || !w.archived)
+      const { graph } = await full(membrane)
+      return withRelatedCounts(
+        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || !w.archived),
+        graph.nodes
+      )
     },
 
     async epics(membrane) {
       const { graph, tasks } = await full(membrane)
       const byId = new Map(tasks.map((t) => [t.id, t]))
       const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
-      return (await deps.tasks.streamsOf(membrane)).map((w) => ({
+      return withRelatedCounts(await deps.tasks.streamsOf(membrane), graph.nodes).map((w) => ({
         ...w,
         members: (byId.get(w.id)?.childIds ?? [])
           .map((id) => byId.get(id))
@@ -1256,7 +1264,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
           .map((t) => {
             const id = t.key ?? `task:${t.id}`
             return { id, title: nodes.get(id)?.title ?? t.name }
-          })
+          }),
+        related: graph.nodes.filter((n) => n.relatedStreams?.includes(w.id)).map((n) => ({ id: n.id, title: n.title }))
       }))
     },
 

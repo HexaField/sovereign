@@ -676,6 +676,44 @@ describe.each(STORES)('TaskService — work streams and filters (%s)', (_name, m
     expect((await svc.list({ workstream: stream.id })).map((t) => t.id)).not.toContain(pr.id)
   })
 
+  it('a PR or issue has one owning stream: every link path moves it, other tasks may sit in several', async () => {
+    const { stream, sub, pr, issue, plain } = await seed()
+    const other = await svc.createStream({ name: 'Other', membrane: 'coasys', sourceThreadId: 't' })
+    const parents = async (id: string) => (await svc.get(id))!.parentTasks.map((p) => p.id).sort()
+
+    // addToStream (the TaskPort) and link (task_link, POST /api/tasks/link) both move it.
+    await svc.addToStream(other.id, pr.id, 't')
+    expect(await parents(pr.id)).toEqual([other.id])
+    await svc.link(stream.id, issue.id, 't')
+    expect(await parents(issue.id)).toEqual([stream.id])
+    // A non-stream parent is not an owner: it stays.
+    await svc.link(plain.id, pr.id, 't')
+    await svc.addToStream(stream.id, pr.id, 't')
+    expect(await parents(pr.id)).toEqual([plain.id, stream.id].sort())
+
+    // ensureTask / create with parentTaskIds (task_import): the last stream given owns it.
+    const imported = await svc.create({
+      name: 'Imported PR',
+      sourceThreadId: 't',
+      provider: { ...changeProvider, refs: [{ ...changeProvider.refs[0], id: '77' }] },
+      parentTaskIds: [stream.id, plain.id, other.id]
+    })
+    expect(imported.parentTasks.map((p) => p.id).sort()).toEqual([plain.id, other.id].sort())
+    const { task: again } = await svc.ensureTask('github:github.com/org/repo#77', {
+      name: 'Imported PR',
+      sourceThreadId: 't',
+      parentTaskIds: [sub.id]
+    })
+    expect(again.parentTasks.map((p) => p.id).sort()).toEqual([plain.id, sub.id].sort())
+
+    // Task-only tasks and sub-streams keep every stream.
+    await svc.addToStream(stream.id, plain.id, 't')
+    await svc.addToStream(other.id, plain.id, 't')
+    expect(await parents(plain.id)).toEqual([stream.id, other.id].sort())
+    await svc.addToStream(other.id, sub.id, 't')
+    expect(await parents(sub.id)).toEqual([stream.id, other.id].sort())
+  })
+
   it('refuses to add to a task that is not a stream', async () => {
     const { plain, pr } = await seed()
     await expect(svc.addToStream(plain.id, pr.id, 't')).rejects.toThrow(/not a work stream/)

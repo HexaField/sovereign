@@ -7,8 +7,9 @@
 //                    stacked changes chain left → right along their base edges;
 //   future  (right)  issues, plans and planned tasks, in columns by dependency
 //                    depth, then by creation.
-// Y is lanes: one per work stream, then one per repo for items in no stream,
-// then "Other". Within a lane each unit (a node with its branch line, or a
+// Y is lanes: one per work stream (a node's owning one; with "Owned + related",
+// a related one when no lane stream owns it), then one per repo for items in
+// no stream, then "Other". Within a lane each unit (a node with its branch line, or a
 // stack) packs into the first row it fits, so nothing overlaps.
 //
 // Every sort ends on the id, so the same graph always gives the same layout.
@@ -48,6 +49,8 @@ export interface PlacedNode {
   zone: Zone
   /** Future zone only: dependency depth. */
   depth?: number
+  /** In the lane of an epic it is only related to (not owned by): drawn with a related cue. */
+  related?: true
 }
 
 export interface Lane {
@@ -92,6 +95,8 @@ export interface LayoutInput {
   now: number
   /** ms epoch of the loaded window's start; branch lines older than this are clipped. */
   since?: number
+  /** "Owned + related": a node no lane stream owns goes to the lane of one it is related to. */
+  related?: boolean
 }
 
 export function timeToX(t: number, now: number): number {
@@ -144,19 +149,30 @@ export function orderStreams(streams: WorkStream[]): WorkStream[] {
   return out
 }
 
-function laneOf(node: WorkNode, streamRank: Map<string, number>): string {
-  let best: string | undefined
-  let bestRank = Infinity
-  for (const s of node.workstreams) {
-    const r = streamRank.get(s)
-    if (r !== undefined && r < bestRank) {
-      bestRank = r
-      best = s
+function laneOf(node: WorkNode, streamRank: Map<string, number>, related: boolean): string {
+  const first = (ids: string[]): string | undefined => {
+    let best: string | undefined
+    let bestRank = Infinity
+    for (const s of ids) {
+      const r = streamRank.get(s)
+      if (r !== undefined && r < bestRank) {
+        bestRank = r
+        best = s
+      }
     }
+    return best
   }
+  const best = first(node.workstreams) ?? (related ? first(node.relatedStreams ?? []) : undefined)
   if (best) return `stream:${best}`
   if (node.repo) return `repo:${node.repo}`
   return 'other'
+}
+
+/** The node sits in the lane of an epic it is related to but not owned by. */
+const relatedIn = (n: WorkNode, lane: string): boolean => {
+  if (!lane.startsWith('stream:')) return false
+  const id = lane.slice('stream:'.length)
+  return !n.workstreams.includes(id) && (n.relatedStreams ?? []).includes(id)
 }
 
 /** Branch nodes that are the head of a change in the same repo collapse into that change. */
@@ -260,7 +276,7 @@ export function computeLayout(input: LayoutInput): Layout {
   const streams = orderStreams(input.workstreams)
   const streamRank = new Map(streams.map((s, i) => [s.id, i]))
   const laneById = new Map<string, string>()
-  for (const n of live) laneById.set(n.id, laneOf(n, streamRank))
+  for (const n of live) laneById.set(n.id, laneOf(n, streamRank, input.related === true))
   // A stack lives in its root's lane: an open change follows its open base
   // change down the base edges, whatever other streams it belongs to.
   {
@@ -475,7 +491,8 @@ export function computeLayout(input: LayoutInput): Layout {
         h: NODE_H,
         lane: u.lane,
         row,
-        zone: n.zone
+        zone: n.zone,
+        ...(relatedIn(n, u.lane) ? { related: true as const } : {})
       })
     })
     if (u.fork && u.fork.x < u.x) {
@@ -500,7 +517,8 @@ export function computeLayout(input: LayoutInput): Layout {
       lane,
       row: cell.row,
       zone: 'future',
-      depth: cell.depth
+      depth: cell.depth,
+      ...(relatedIn(nodeById.get(id)!, lane) ? { related: true as const } : {})
     })
   }
   branches.sort((a, b) => (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0))

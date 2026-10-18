@@ -252,15 +252,20 @@ export const s47ForgeRethink: Scenario = {
         `refine answers the rethink thread: ${JSON.stringify(refined)}`
       )
       let refinePrompted = false
+      let refineLog = ''
       for (let i = 0; i < 80 && !refinePrompted; i++) {
-        const log = JSON.stringify(await mockLog(mockLlmUrl))
+        refineLog = JSON.stringify(await mockLog(mockLlmUrl))
         refinePrompted =
-          log.includes(`[Forge epics · ${M}]`) &&
-          log.includes('s47-refine: call the sprocket epic drivetrain') &&
-          log.includes(epic.id)
+          refineLog.includes(`[Forge epics · ${M}]`) &&
+          refineLog.includes('s47-refine: call the sprocket epic drivetrain') &&
+          refineLog.includes(epic.id)
         if (!refinePrompted) await sleep(250)
       }
       check(refinePrompted, 'the mock LLM received the refine prompt with the epic list')
+      check(
+        refineLog.includes('A PR or issue is owned by at most one epic') && refineLog.includes('- Owned: 1'),
+        'the refine prompt explains single ownership and lists the epic’s owned item'
+      )
       const renameResult = await client.timed('forge-stream-rename', () => toolResult(mockLlmUrl, RENAME_ID, 30000))
       check(
         Boolean(renameResult?.includes('"renamed": true')),

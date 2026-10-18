@@ -125,9 +125,13 @@ export function toggleFilterValue(f: ForgeFilters, key: ListFilterKey, value: st
   return out as ForgeFilters
 }
 
-/** Drop every filter and the epic selection; the display toggles (dim, epic neighbours) stay. */
+/** Drop every filter and the epic selection; the display toggles (dim, epic neighbours, owned + related) stay. */
 export function clearFilters(f: ForgeFilters): ForgeFilters {
-  return { ...(f.dim ? { dim: true } : {}), ...(f.epicNeighbours === false ? { epicNeighbours: false } : {}) }
+  return {
+    ...(f.dim ? { dim: true } : {}),
+    ...(f.epicNeighbours === false ? { epicNeighbours: false } : {}),
+    ...(f.epicRelated ? { epicRelated: true } : {})
+  }
 }
 
 export interface FilterOption {
@@ -248,17 +252,23 @@ export function stableOptions(
   return out
 }
 
-/** Stream focus: the members of these streams and, with `neighbours`, their direct neighbours. */
+/** Stream focus: the members of these streams (with `related`, the items related to them too) and, with `neighbours`, their direct neighbours. */
 export function streamFocus(
   streamIds: string | string[],
   nodes: WorkNode[],
   edges: WorkEdge[],
-  neighbours = true
+  neighbours = true,
+  related = false
 ): Set<string> {
   const ids = new Set(typeof streamIds === 'string' ? [streamIds] : streamIds)
   const members = new Set(
     nodes
-      .filter((n) => n.workstreams.some((w) => ids.has(w)) || (n.taskId !== undefined && ids.has(n.taskId)))
+      .filter(
+        (n) =>
+          n.workstreams.some((w) => ids.has(w)) ||
+          (n.taskId !== undefined && ids.has(n.taskId)) ||
+          (related && (n.relatedStreams ?? []).some((w) => ids.has(w)))
+      )
       .map((n) => n.id)
   )
   const out = new Set(members)

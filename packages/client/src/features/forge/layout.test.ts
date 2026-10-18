@@ -145,6 +145,26 @@ describe('computeLayout', () => {
     expect(l.nodes.get(g.coreOpen.id)!.lane).toBe(`repo:${CORE}`)
   })
 
+  it('puts a related node in the epic lane only with Owned + related, marked related; the owner lane wins', () => {
+    const g = sampleGraph()
+    const other = { id: 'z-other', name: 'Z other', membrane: 'm', memberCount: 0 }
+    const rel = { ...g.coreOpen, relatedStreams: ['s-stack'] }
+    const ownedRel = { ...g.issues[0], workstreams: ['z-other'], relatedStreams: ['s-stack'] }
+    const nodes = g.nodes.map((n) => (n.id === rel.id ? rel : n.id === ownedRel.id ? ownedRel : n))
+    const input = { ...g, nodes, workstreams: [...g.workstreams, other], now: NOW }
+
+    const owned = computeLayout(input)
+    expect(owned.nodes.get(rel.id)).toMatchObject({ lane: `repo:${CORE}` })
+    expect(owned.nodes.get(rel.id)).not.toHaveProperty('related')
+
+    const withRelated = computeLayout({ ...input, related: true })
+    expect(withRelated.nodes.get(rel.id)).toMatchObject({ lane: 'stream:s-stack', related: true })
+    expect(withRelated.nodes.get(ownedRel.id)).toMatchObject({ lane: 'stream:z-other' })
+    expect(withRelated.nodes.get(ownedRel.id)).not.toHaveProperty('related')
+    // Owned stack members in the same lane carry no related mark.
+    for (const n of g.stack) expect(withRelated.nodes.get(n.id)).not.toHaveProperty('related')
+  })
+
   it('orders lanes: streams, then repos alphabetically, then Other', () => {
     const g = sampleGraph()
     const loose = task('loose')

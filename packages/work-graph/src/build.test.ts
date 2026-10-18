@@ -232,6 +232,41 @@ describe('buildGraph', () => {
     expect(has(g.edges, 'plan:acme/p.md', id(WIDGET, 11), 'plans')).toBe(true)
   })
 
+  it("relates what a plan names to the plan's epic; owning beats related, and a plan with no epic relates nothing", () => {
+    const plan = (pid: string, numbers: number[]): Plan => ({
+      id: pid,
+      project: 'acme',
+      file: `/${pid}`,
+      title: pid,
+      status: 'in_progress',
+      refs: numbers.map((number) => ({ host: 'github.com', repo: WIDGET, number })),
+      hash: 'h',
+      createdAt: '2026-10-01T00:00:00Z',
+      updatedAt: '2026-10-01T00:00:00Z'
+    })
+    const repos = [cacheOf(WIDGET, [change(WIDGET, 1), change(WIDGET, 2)], [issue(WIDGET, 10)])]
+    const epic = task({
+      id: 'task://epic',
+      key: 'plan:acme/p.md',
+      kind: 'plan',
+      isStream: true,
+      childIds: ['task://t2']
+    })
+    const tasks = [
+      epic,
+      task({ id: 'task://t2', key: id(WIDGET, 2), kind: 'change', parentIds: [epic.id] }),
+      task({ id: 'task://loose', key: 'plan:acme/q.md', kind: 'plan' })
+    ]
+    const g = buildGraph(
+      input({ repos, tasks, plans: [plan('plan:acme/p.md', [1, 2, 10, 99]), plan('plan:acme/q.md', [1])] })
+    )
+    const node = (nid: string) => g.nodes.find((n) => n.id === nid)!
+    expect(node(id(WIDGET, 1))).toMatchObject({ workstreams: [], relatedStreams: [epic.id] })
+    expect(node(id(WIDGET, 10))).toMatchObject({ workstreams: [], relatedStreams: [epic.id] })
+    expect(node(id(WIDGET, 2))).toMatchObject({ workstreams: [epic.id] })
+    expect(node(id(WIDGET, 2))).not.toHaveProperty('relatedStreams')
+  })
+
   it('attaches tasks: taskId, status line, work streams; subtask edges between task nodes; related edges with their source', () => {
     const repos = [cacheOf(WIDGET, [change(WIDGET, 1)], [issue(WIDGET, 10)])]
     const tasks = [

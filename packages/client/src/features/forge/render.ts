@@ -8,6 +8,7 @@ import { detailFor, type Detail } from './lod.js'
 import { anchorOf, type Scene } from './scene.js'
 import {
   CI_COLORS,
+  RELATED_CARD,
   REVIEW_COLORS,
   STATE_COLORS,
   edgeStyle,
@@ -184,9 +185,11 @@ function drawNode(
   roundRect(ctx, p.x, p.y, p.w, p.h, 7)
   ctx.fillStyle = palette.raised
   ctx.fill()
-  ctx.setLineDash(n.state === 'draft' || n.kind === 'plan' || n.kind === 'task' ? [4, 3] : [])
+  ctx.setLineDash(
+    p.related ? RELATED_CARD.dash : n.state === 'draft' || n.kind === 'plan' || n.kind === 'task' ? [4, 3] : []
+  )
   ctx.lineWidth = selected ? 2 : 1
-  ctx.strokeStyle = selected ? palette.accent : hover ? palette.text : palette.border
+  ctx.strokeStyle = selected ? palette.accent : hover ? palette.text : p.related ? RELATED_CARD.color : palette.border
   ctx.stroke()
   ctx.setLineDash([])
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clearEpics,
+  epicCounts,
   epicFocus,
   epicSource,
   epicsButtonLabel,
@@ -12,10 +13,11 @@ import {
   selectedEpics,
   setDim,
   setEpicNeighbours,
+  setEpicRelated,
   toggleEpic,
   withSubEpics
 } from './epics-model.js'
-import { applyFilters } from './filters.js'
+import { applyFilters, clearFilters } from './filters.js'
 import { change, edge, issue, NOW, shuffled, stream } from './test-fixtures.js'
 
 const R = 'demo-org/engine'
@@ -89,6 +91,21 @@ describe('selection', () => {
     expect(setDim({}, true)).toEqual({ dim: true })
     expect(setDim({ dim: true, repos: [R] }, false)).toEqual({ repos: [R] })
   })
+
+  it('toggles Owned | Owned + related (default owned), kept by clear filters', () => {
+    expect(setEpicRelated({ workstreams: ['s2'] }, true)).toEqual({ workstreams: ['s2'], epicRelated: true })
+    expect(setEpicRelated({ epicRelated: true }, false)).toEqual({})
+    expect(clearFilters({ epicRelated: true, workstreams: ['s2'], repos: [R] })).toEqual({ epicRelated: true })
+  })
+
+  it('counts owned items, and related ones apart', () => {
+    expect(epicCounts(stream('x', 'X', { memberCount: 6, relatedCount: 12 }))).toEqual({
+      owned: '6',
+      related: '12 rel.'
+    })
+    expect(epicCounts(stream('x', 'X', { memberCount: 6, relatedCount: 0 }))).toEqual({ owned: '6' })
+    expect(epicCounts(stream('x', 'X', { memberCount: 0 }))).toEqual({ owned: '0' })
+  })
 })
 
 describe('epicFocus', () => {
@@ -110,6 +127,25 @@ describe('epicFocus', () => {
     expect([...epicFocus({ workstreams: ['s2', 's10'] }, streams, nodes, edges)!].sort()).toEqual(
       [a.id, b.id, c.id].sort()
     )
+  })
+
+  it('takes the related items in only with Owned + related; neighbours then follow them too', () => {
+    const rel = issue(R, 5, { relatedStreams: ['s10'] })
+    const relNeighbour = issue(R, 6)
+    const all = [...nodes, rel, relNeighbour]
+    const es = [...edges, edge(rel, relNeighbour, 'references')]
+    expect([...epicFocus({ workstreams: ['s10'] }, streams, all, es)!]).toEqual([c.id])
+    expect(
+      [...epicFocus({ workstreams: ['s10'], epicRelated: true, epicNeighbours: false }, streams, all, es)!].sort()
+    ).toEqual([c.id, rel.id].sort())
+    expect([...epicFocus({ workstreams: ['s10'], epicRelated: true }, streams, all, es)!].sort()).toEqual(
+      [c.id, rel.id, relNeighbour.id].sort()
+    )
+    // A sub-epic's related items come with the parent's selection.
+    const subRel = issue(R, 7, { relatedStreams: ['grand'] })
+    expect(
+      epicFocus({ workstreams: ['s2'], epicRelated: true, epicNeighbours: false }, streams, [a, subRel], [])
+    ).toEqual(new Set([a.id, subRel.id]))
   })
 
   it('does not filter on its own: other filters still apply to every node', () => {

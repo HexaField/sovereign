@@ -39,7 +39,7 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
     ),
     tool(
       'forge_stream_add',
-      'Put a node in a work stream (creates its task when missing).',
+      'Set the work stream that owns a node (creates its task when missing). A PR or issue has one owning stream: this moves it out of any other stream it was in.',
       { membrane, nodeId, streamId: z.string().describe('The stream id (its task id).') },
       run('forge_stream_add')
     ),
@@ -110,7 +110,7 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
     ),
     tool(
       'forge_stream_merge',
-      'Move every member and child stream of one work stream into another, then archive the first. Not counted against the run limits.',
+      'Move every member and child stream of one work stream into another (the second becomes their owner), then archive the first. Not counted against the run limits.',
       {
         membrane,
         fromId: z.string().describe('The stream to empty and archive.'),

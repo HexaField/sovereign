@@ -11,6 +11,7 @@ import type { ForgeApi } from './api.js'
 import { useDismiss } from './dismiss.js'
 import {
   clearEpics,
+  epicCounts,
   epicSource,
   epicsButtonLabel,
   LS_EPICS_MODE,
@@ -21,6 +22,7 @@ import {
   selectedEpics,
   setDim,
   setEpicNeighbours,
+  setEpicRelated,
   toggleEpic,
   type EpicsMode
 } from './epics-model.js'
@@ -200,6 +202,29 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
             </button>
           </Show>
         </div>
+        <div class="flex items-center gap-1" role="group" aria-label="What an epic shows">
+          <For each={[false, true]}>
+            {(on) => (
+              <button
+                class={btn}
+                style={{
+                  ...field,
+                  color: (props.filters.epicRelated === true) === on ? 'var(--c-accent)' : 'var(--c-text-muted)'
+                }}
+                aria-pressed={(props.filters.epicRelated === true) === on}
+                title={
+                  on
+                    ? 'Also show what is related to the selected epics (named by their plans), dashed in their lanes'
+                    : 'Show only what the selected epics own'
+                }
+                onClick={() => props.onChange(setEpicRelated(props.filters, on))}
+                data-testid={on ? 'forge-epics-related' : 'forge-epics-owned'}
+              >
+                {on ? 'Owned + related' : 'Owned'}
+              </button>
+            )}
+          </For>
+        </div>
         <div class="flex flex-wrap gap-x-3 gap-y-0.5" style={{ color: 'var(--c-text-muted)' }}>
           {toggleRow(
             'Include neighbours',
@@ -247,8 +272,11 @@ const EpicsPanel: Component<EpicsPanelProps> = (props) => {
                     </span>
                   </Show>
                 </label>
-                <span style={{ color: 'var(--c-text-muted)' }} title="Members">
-                  {s.memberCount}
+                <span title="Owned items, and items related to it (named by its plan)">
+                  {epicCounts(s).owned}
+                  <Show when={epicCounts(s).related}>
+                    <span style={{ color: 'var(--c-text-muted)' }}> · {epicCounts(s).related}</span>
+                  </Show>
                 </span>
                 <button
                   class="rounded px-1 text-[10px] opacity-0 group-hover:opacity-100 hover:bg-[var(--c-bg)] focus:opacity-100"

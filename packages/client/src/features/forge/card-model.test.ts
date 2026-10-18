@@ -108,14 +108,21 @@ describe('card sections', () => {
     expect(shortRef(plan('p.md'))).toBe('Plan p.md')
   })
 
-  it('taskSection: streams, child tasks and addable streams', () => {
-    const t = task('parent', { workstreams: ['s1'] })
+  it('taskSection: the owning epic, related epics, the owner options and child tasks', () => {
+    const t = task('parent', { workstreams: ['s1'], relatedStreams: ['s2'] })
     const child = task('child')
     const nodes = new Map([t, child].map((n) => [n.id, n]))
     const s = taskSection(t, [stream('s1', 'One'), stream('s2', 'Two')], [edge(t, child, 'subtask')], nodes)
-    expect(s.streams.map((x) => x.name)).toEqual(['One'])
+    expect(s.owner?.name).toBe('One')
+    expect(s.related.map((x) => x.name)).toEqual(['Two'])
+    expect(s.options.map((x) => x.id)).toEqual(['s1', 's2'])
     expect(s.children.map((c) => c.id)).toEqual([child.id])
-    expect(s.addable.map((x) => x.id)).toEqual(['s2'])
+    // No owner, no relation; an owner the list does not hold still shows by id.
+    expect(taskSection(child, [], [], nodes)).toMatchObject({ owner: undefined, related: [], options: [] })
+    expect(taskSection(task('x', { workstreams: ['gone'] }), [], [], nodes).owner).toMatchObject({ id: 'gone' })
+    // A plan's own epic is not offered as its owner.
+    const own = taskSection(plan('p.md', { taskId: 's1' }), [stream('s1', 'One'), stream('s2', 'Two')], [], nodes)
+    expect(own.options.map((x) => x.id)).toEqual(['s2'])
   })
 
   it('agentStatusLine', () => {

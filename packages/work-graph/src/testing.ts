@@ -19,23 +19,37 @@ import {
   type PortTask,
   type TaskPort
 } from '@sovereign/core'
-import { createForgeMetaStore, createForgeTaskPort, createInMemoryTaskStore, createTaskService } from '@sovereign/tasks'
+import {
+  createForgeMetaStore,
+  createForgeTaskPort,
+  createInMemoryTaskStore,
+  createTaskService,
+  type TaskService,
+  type TaskStore
+} from '@sovereign/tasks'
 
 export const HOST = 'github.com'
 
 export interface TestTaskPort extends TaskPort {
   /** A PR or issue task no membrane holds, as `task_import` from a thread outside every membrane makes. */
   importTask(key: string, kind: 'change' | 'issue', name: string, threadId?: string): Promise<PortTask>
+  /** The TaskService under the port: writes as task_import, task_link or the tasks API make them. */
+  service: TaskService
+  /** The store under the service: links written as an older build left them, with no rule applied. */
+  store: TaskStore
   dispose(): void
 }
 
 /** The TaskPort the server binds (TaskService + the Forge meta store), kept in memory and `dir`; task.* events go to `bus`. */
 export function createTestTaskPort(dir: string, bus: EventBus = createEventBus(path.join(dir, 'bus'))): TestTaskPort {
-  const service = createTaskService({ store: createInMemoryTaskStore(), bus })
+  const store = createInMemoryTaskStore()
+  const service = createTaskService({ store, bus })
   const meta = createForgeMetaStore({ dir, connect: null })
   const port = createForgeTaskPort({ service, meta })
   return {
     ...port,
+    service,
+    store,
     async importTask(key, kind, name, threadId) {
       const t = await port.ensureTask(key, { name, membrane: 'import', kind })
       await service.update(t.id, { membrane: null, ...(threadId ? { threadId } : {}), sourceThreadId: 'test' })

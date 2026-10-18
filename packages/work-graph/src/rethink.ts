@@ -143,7 +143,7 @@ export function buildRethinkPrompt(input: {
   out.push('## Jobs', '')
   out.push('| Job | When | How |', '|---|---|---|')
   out.push(
-    '| Semantic relationships | Two items are about the same thing and no edge says so; an item belongs in a stream | `forge_relate` with a reason and a confidence (0–1); `forge_stream_add`. Shown dashed until the user keeps or deletes it |',
+    '| Semantic relationships | Two items are about the same thing and no edge says so; an item belongs in a stream | `forge_relate` with a reason and a confidence (0–1); `forge_stream_add` (sets the item’s one owning stream). Shown dashed until the user keeps or deletes it |',
     '| Rebase / update | An owned change is behind its base or in conflict | `forge_dispatch` to the owner thread: merge the base in, verify, push (merge, never force-push) |',
     '| Iterate | Review comments or red CI on an owned change | `forge_dispatch` to the owner thread with the specific comments or failing checks |',
     '| Bug reports | One failure pattern across changes, or a bug found in review | `forge_bug_draft` with the evidence nodes: a draft the user approves. Never open an issue yourself |',
@@ -167,7 +167,7 @@ export function buildRethinkPrompt(input: {
   out.push(`## Tools (pass \`membrane: ${m}\` to each)`, '')
   out.push(
     '- `forge_relate { membrane, from, to, reason, confidence }` — a suggested `related` edge between two node ids.',
-    '- `forge_stream_add { membrane, nodeId, streamId }` — put an item in a work stream.',
+    '- `forge_stream_add { membrane, nodeId, streamId }` — make the stream the item’s owner. A PR or issue has one owning stream, so this moves it out of any other.',
     '- `forge_dispatch { membrane, nodeId, threadId?, prompt }` — send specific work to the item’s owner thread (or the given thread).',
     '- `forge_bug_draft { membrane, repo, title, body, evidence: nodeId[] }` — a bug-report draft for the user to approve.',
     '- `forge_attention { membrane, items: [{ nodeId?, text }] }` — the one “needs your attention” message to the user.',
@@ -195,6 +195,8 @@ export function buildRethinkPrompt(input: {
         o ? `- Owner: thread "${o.label}" (\`${o.threadId}\`)${o.status ? `, ${o.status}` : ''}` : '- Owner: none'
       )
       if (node.workstreams.length) out.push(`- Streams: ${node.workstreams.map((w) => `\`${w}\``).join(', ')}`)
+      if (node.relatedStreams?.length)
+        out.push(`- Related to streams: ${node.relatedStreams.map((w) => `\`${w}\``).join(', ')}`)
       out.push('- Events:')
       for (const e of events) out.push(`  - ${eventLine(e)}`)
       out.push('')
@@ -229,10 +231,12 @@ export function buildEpicsRefinePrompt(input: { membrane: string; prompt: string
     '- `forge_stream_create { membrane, name, parentId? }` — a new epic.',
     '- `forge_stream_rename { membrane, streamId, name }`',
     '- `forge_stream_archive { membrane, streamId, archived }` — archive (hide) or bring back an epic.',
-    '- `forge_stream_add { membrane, nodeId, streamId }` — put an item in an epic.',
+    '- `forge_stream_add { membrane, nodeId, streamId }` — make the epic the item’s owner (a PR or issue moves out of any other epic).',
     '- `forge_stream_remove { membrane, nodeId, streamId }` — take an item out of an epic.',
     '- `forge_stream_merge { membrane, fromId, intoId }` — move every item and sub-epic of one epic into another, then archive the first.',
     '- `forge_stream_parent { membrane, streamId, parentId }` — nest an epic under another (`parentId: null` moves it to the top).',
+    '',
+    'A PR or issue is owned by at most one epic (its member). An epic made from a plan file is also related to every item the plan names; related items are not members, and only the plan file changes them. Owning an item and being related to it are separate: add an item to an epic only when the epic is where its work belongs.',
     '',
     'Do not dispatch work, post attention, draft bug reports or open issues for this request. When done, reply with a short summary of what changed.',
     ''
@@ -245,10 +249,15 @@ export function buildEpicsRefinePrompt(input: { membrane: string; prompt: string
     out.push(`- Source: ${e.plan ? `plan \`${e.plan}\`` : 'hand-made'}`)
     out.push(`- Parent: ${parent ? `${parent.name} (\`${parent.id}\`)` : e.parentId ? `\`${e.parentId}\`` : 'none'}`)
     out.push(`- Archived: ${e.archived ? 'yes' : 'no'}`)
-    out.push(`- Members: ${e.members.length}`)
-    for (const x of e.members.slice(0, REFINE_MEMBERS_PER_EPIC)) out.push(`  - \`${x.id}\` ${oneLine(x.title)}`)
-    if (e.members.length > REFINE_MEMBERS_PER_EPIC)
-      out.push(`  - … and ${e.members.length - REFINE_MEMBERS_PER_EPIC} more`)
+    for (const [label, items] of [
+      ['Owned', e.members],
+      ['Related (named by its plan, not owned)', e.related]
+    ] as const) {
+      if (label !== 'Owned' && !items.length) continue
+      out.push(`- ${label}: ${items.length}`)
+      for (const x of items.slice(0, REFINE_MEMBERS_PER_EPIC)) out.push(`  - \`${x.id}\` ${oneLine(x.title)}`)
+      if (items.length > REFINE_MEMBERS_PER_EPIC) out.push(`  - … and ${items.length - REFINE_MEMBERS_PER_EPIC} more`)
+    }
     out.push('')
   }
   return out.join('\n').trimEnd() + '\n'

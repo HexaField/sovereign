@@ -98,7 +98,8 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
       edges: win().edges,
       workstreams: laneStreams(filters(), win().workstreams),
       now: layoutNow(),
-      since: win().since
+      since: win().since,
+      related: filters().epicRelated === true
     })
   )
   const filtered = createMemo(() =>

@@ -2,7 +2,9 @@
 // the streams' names and parents (hierarchy first, then name, natural sort),
 // never on selection or counts, so it holds still while the user picks.
 // Selected epics live in the view's saved filters (`filters.workstreams`) and
-// focus the canvas on their members (and, by default, their neighbours).
+// focus the canvas on their members (and, by default, their neighbours). An
+// epic owns its members; a plan's epic is also related to what the plan names,
+// which joins the focus with "Owned + related" (`filters.epicRelated`).
 
 import type { ForgeFilters, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
 import { streamFocus, toggleFilterValue } from './filters.js'
@@ -98,7 +100,7 @@ export function epicFocus(
 ): Set<string> | null {
   const selected = selectedEpics(f, streams)
   if (!selected.length) return null
-  return streamFocus(withSubEpics(selected, streams), nodes, edges, f.epicNeighbours !== false)
+  return streamFocus(withSubEpics(selected, streams), nodes, edges, f.epicNeighbours !== false, f.epicRelated === true)
 }
 
 /** The streams the canvas makes lanes of: with epics selected, only those (and their sub-epics). */
@@ -119,6 +121,19 @@ export function clearEpics(f: ForgeFilters): ForgeFilters {
 export function setEpicNeighbours(f: ForgeFilters, on: boolean): ForgeFilters {
   const { epicNeighbours: _drop, ...rest } = f
   return on ? rest : { ...rest, epicNeighbours: false }
+}
+
+/** "Owned | Owned + related": whether the selected epics' related items join the focus and their lanes. */
+export function setEpicRelated(f: ForgeFilters, on: boolean): ForgeFilters {
+  const { epicRelated: _drop, ...rest } = f
+  return on ? { ...rest, epicRelated: true } : rest
+}
+
+/** An epic's count in the panel: owned items, and related ones in muted text ("6" and "12 rel."). */
+export function epicCounts(s: WorkStream): { owned: string; related?: string } {
+  return s.relatedCount
+    ? { owned: String(s.memberCount), related: `${s.relatedCount} rel.` }
+    : { owned: String(s.memberCount) }
 }
 
 export function setDim(f: ForgeFilters, on: boolean): ForgeFilters {

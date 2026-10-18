@@ -289,6 +289,16 @@ export function buildGraph(input: BuildInput): BuiltGraph {
       addEdge({ from: p.id, to: planRefKey(r.host, r.repo, r.number), kind: 'plans', dashed: true, source: 'sync' })
     }
   }
+  // A plan's epic (its task, made a stream) relates what the plan names; it owns none of it.
+  for (const p of input.plans) {
+    const stream = byKey.get(p.id)
+    if (!stream?.isStream) continue
+    for (const r of p.refs) {
+      const n = nodes.get(planRefKey(r.host, r.repo, r.number))
+      if (!n || n.workstreams.includes(stream.id) || n.relatedStreams?.includes(stream.id)) continue
+      n.relatedStreams = [...(n.relatedStreams ?? []), stream.id]
+    }
+  }
 
   // ── Task-only nodes and subtask edges ──────────────────────────────
   const nodeOfTask = new Map<string, string>()

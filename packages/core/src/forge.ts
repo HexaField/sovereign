@@ -163,8 +163,10 @@ export interface WorkNode {
   assignees: string[]
   reviewers: Review[]
   labels: string[]
-  /** Task ids of the work streams the node belongs to. */
+  /** Task ids of the work streams that own the node: at most one for a change or issue. */
   workstreams: string[]
+  /** Streams the node is related to but not owned by: the epics of plans that name it. */
+  relatedStreams?: string[]
   taskId?: string
   branch?: { head: string; base: string; ahead?: number; behind?: number; conflict?: boolean }
   ci?: ChecksState
@@ -219,6 +221,8 @@ export interface WorkStream {
   membrane: string
   parentId?: string
   memberCount: number
+  /** Graph nodes related to the stream (a plan of it names them) without being members; set by the work graph. */
+  relatedCount?: number
   /** Archived (its task is cancelled): left out of the graph unless asked for. */
   archived?: boolean
   /** The plan key ("plan:<project>/<path>") of a stream a plan file made; absent for a hand-made stream. */
@@ -248,6 +252,8 @@ export interface ForgeFilters {
   workstreams?: string[]
   /** false = show only the selected epics' members, not their direct neighbours too (default on). */
   epicNeighbours?: boolean
+  /** true = the selected epics' related items count too ("Owned + related"); default owned only. */
+  epicRelated?: boolean
   agent?: 'any' | 'waiting-ci' | 'waiting-review'
   updatedWithinDays?: number
   text?: string
@@ -354,6 +360,7 @@ export interface TaskPort {
   setName(taskId: string, name: string): Promise<void>
   /** Make a task a work stream, or a plain task again (its links stay). */
   setStream(taskId: string, isStream: boolean): Promise<void>
+  /** A change or issue task has one owning stream: adding it to one removes it from any other. */
   addToStream(streamId: string, taskId: string): Promise<void>
   removeFromStream(streamId: string, taskId: string): Promise<void>
   /** A membrane's saved views, in order. */

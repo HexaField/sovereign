@@ -6,6 +6,7 @@ import express from 'express'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  buildEpicsRefinePrompt,
   buildRethinkPrompt,
   createRethinkRunner,
   projectOfRepo,
@@ -111,6 +112,34 @@ describe('buildRethinkPrompt', () => {
       streams: [{ id: 'stream-1', name: 'Sprockets', membrane: 'acme', memberCount: 2 }]
     })
     expect(prompt).toMatchSnapshot()
+  })
+})
+
+describe('buildEpicsRefinePrompt', () => {
+  it('lists what each epic owns apart from what it is related to', () => {
+    const prompt = buildEpicsRefinePrompt({
+      membrane: 'acme',
+      prompt: 'tidy',
+      epics: [
+        {
+          id: 'e1',
+          name: 'Sprockets',
+          membrane: 'acme',
+          memberCount: 1,
+          relatedCount: 1,
+          plan: 'plan:acme-org/widget/sprockets.md',
+          members: [{ id: nid(50), title: 'Stream teeth' }],
+          related: [{ id: nid(51), title: 'Axle grease' }]
+        },
+        { id: 'e2', name: 'Gears', membrane: 'acme', memberCount: 0, members: [], related: [] }
+      ]
+    })
+    expect(prompt).toContain('A PR or issue is owned by at most one epic')
+    expect(prompt).toContain(
+      `- Owned: 1\n  - \`${nid(50)}\` Stream teeth\n- Related (named by its plan, not owned): 1\n  - \`${nid(51)}\` Axle grease`
+    )
+    // An epic with nothing related lists no related section.
+    expect(prompt).toMatch(/### Gears \(`e2`\)\n- Source: hand-made\n- Parent: none\n- Archived: no\n- Owned: 0\n?$/)
   })
 })
 
@@ -476,7 +505,7 @@ describe('rethink runner', () => {
     expect(msg.text).toContain('[Forge epics · acme]')
     expect(msg.text).toContain('> Merge gears into axles\n> and call it Drivetrain')
     expect(msg.text).toContain(
-      `### Axles (\`${axles.id}\`)\n- Source: hand-made\n- Parent: none\n- Archived: no\n- Members: 1`
+      `### Axles (\`${axles.id}\`)\n- Source: hand-made\n- Parent: none\n- Archived: no\n- Owned: 1`
     )
     expect(msg.text).toContain(`  - \`${nid(52)}\` Axle grease`)
     expect(msg.text).toContain('Do not dispatch work')

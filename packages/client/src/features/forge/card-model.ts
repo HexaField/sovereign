@@ -104,17 +104,20 @@ export function assignBody(c: AssignChoice): AssignBody {
   return body
 }
 
-/** Streams the node sits in, and the child tasks (subtask edges out of it). */
+/** The epic that owns the node, the epics it is only related to, the epics it could move to, and its child tasks. */
 export function taskSection(n: WorkNode, streams: WorkStream[], edges: WorkEdge[], nodesById: Map<string, WorkNode>) {
   const byId = new Map(streams.map((s) => [s.id, s]))
+  const of = (id: string): WorkStream => byId.get(id) ?? { id, name: id, membrane: '', memberCount: 0 }
+  const ownerId = n.workstreams[0]
   return {
-    streams: n.workstreams.map((id) => byId.get(id) ?? { id, name: id, membrane: '', memberCount: 0 }),
+    owner: ownerId ? of(ownerId) : undefined,
+    related: (n.relatedStreams ?? []).map(of),
+    /** Epics the owner select offers (the owner included; a plan's own epic is not its owner). */
+    options: streams.filter((s) => s.id !== n.taskId),
     children: edges
       .filter((e) => e.kind === 'subtask' && e.from === n.id)
       .map((e) => nodesById.get(e.to))
-      .filter((x): x is WorkNode => !!x),
-    /** Streams it could be added to. */
-    addable: streams.filter((s) => !n.workstreams.includes(s.id))
+      .filter((x): x is WorkNode => !!x)
   }
 }
 

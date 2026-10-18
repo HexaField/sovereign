@@ -100,18 +100,13 @@ const NodeCard: Component<NodeCardProps> = (props) => {
       props.onChanged()
     })
 
-  // ── Add to stream ──
-  const [streamPick, setStreamPick] = createSignal('')
-  const addToStream = () =>
+  // ── Owning epic (one; '' clears it) ──
+  const setOwner = (id: string) =>
     run(async () => {
-      if (!streamPick()) return
-      await props.api.addMember(streamPick(), n().id)
-      setStreamPick('')
-      props.onChanged()
-    })
-  const removeFromStream = (id: string) =>
-    run(async () => {
-      await props.api.removeMember(id, n().id)
+      if (id) await props.api.addMember(id, n().id)
+      // The server moves a PR or issue out of its old epic itself; other nodes may sit in several, so drop the rest here.
+      const moved = id && (n().kind === 'change' || n().kind === 'issue')
+      if (!moved) for (const old of n().workstreams) if (old !== id) await props.api.removeMember(old, n().id)
       props.onChanged()
     })
 
@@ -312,38 +307,35 @@ const NodeCard: Component<NodeCardProps> = (props) => {
             )}
           </For>
         </Show>
-        <div class="mt-1 flex flex-wrap items-center gap-1">
-          <For each={task().streams}>
-            {(s) => (
-              <span class="inline-flex items-center gap-1 rounded px-1.5" style={{ background: 'var(--c-bg)' }}>
-                ◆ {s.name}
-                <button
-                  style={muted}
-                  title="Remove from stream"
-                  disabled={busy()}
-                  onClick={() => removeFromStream(s.id)}
-                >
-                  ×
-                </button>
-              </span>
-            )}
-          </For>
-        </div>
-        <Show when={task().addable.length}>
-          <div class="mt-1 flex gap-1">
+        <Show when={task().options.length || task().owner}>
+          <label class="mt-1 flex items-center gap-1" title="The one epic this item belongs to">
+            <span style={muted}>Epic:</span>
             <select
               class="min-w-0 flex-1 rounded border px-1 py-0.5 text-xs"
               style={btnStyle}
-              value={streamPick()}
-              onChange={(e) => setStreamPick(e.currentTarget.value)}
-              data-testid="forge-card-stream-pick"
+              value={task().owner?.id ?? ''}
+              disabled={busy()}
+              onChange={(e) => setOwner(e.currentTarget.value)}
+              data-testid="forge-card-epic"
             >
-              <option value="">Add to stream…</option>
-              <For each={task().addable}>{(s) => <option value={s.id}>{s.name}</option>}</For>
+              <option value="">None</option>
+              <Show when={task().owner && !task().options.some((s) => s.id === task().owner!.id)}>
+                <option value={task().owner!.id}>{task().owner!.name}</option>
+              </Show>
+              <For each={task().options}>{(s) => <option value={s.id}>{s.name}</option>}</For>
             </select>
-            <button class={btn} style={btnStyle} disabled={!streamPick() || busy()} onClick={addToStream}>
-              Add
-            </button>
+          </label>
+        </Show>
+        <Show when={task().related.length}>
+          <div
+            class="mt-1"
+            data-testid="forge-card-related"
+            title="Epics whose plan names this item; they do not own it"
+          >
+            <span style={muted}>Related to: </span>
+            {task()
+              .related.map((s) => s.name)
+              .join(', ')}
           </div>
         </Show>
 
