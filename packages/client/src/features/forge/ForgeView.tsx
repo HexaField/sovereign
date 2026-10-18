@@ -27,6 +27,7 @@ import {
   type Arrangement
 } from './graphs.js'
 import { pickMembrane, type MembraneMeta } from './membrane.js'
+import { parseForgeMode, type ForgeMode } from './kanban-model.js'
 import { useDismiss } from './dismiss.js'
 import { wsStore } from '../../ws/index.js'
 import { setActiveView } from '../nav/store.js'
@@ -35,6 +36,7 @@ import { activeWorkspace } from '../workspace/store.js'
 
 const LS_MEMBRANE = 'sovereign:forge:membrane'
 const LS_ARRANGEMENT = 'sovereign:forge:arrangement:'
+const LS_MODE = 'sovereign:forge:mode'
 
 const readLs = (k: string): string | null => {
   try {
@@ -75,6 +77,12 @@ const ForgeView: Component = () => {
   const [rethinkPhase, setRethinkPhase] = createSignal<RethinkPhase>({ phase: 'idle' })
   const [rethinkRuns, setRethinkRuns] = createSignal<RethinkRuns | null>(null)
   const [reportId, setReportId] = createSignal<string | null>(null)
+  const [mode, setMode] = createSignal<ForgeMode>(parseForgeMode(readLs(LS_MODE)))
+  const toggleMode = (): void => {
+    const next: ForgeMode = mode() === 'graph' ? 'kanban' : 'graph'
+    setMode(next)
+    writeLs(LS_MODE, next)
+  }
 
   const threadMembrane = createMemo(() => storeThreads().find((t) => t.id === threadKey())?.membraneId ?? null)
   const membrane = createMemo(() =>
@@ -357,6 +365,15 @@ const ForgeView: Component = () => {
         >
           Sync now
         </button>
+        <button
+          class={btn}
+          style={btnStyle}
+          onClick={toggleMode}
+          title={mode() === 'graph' ? 'Show the immediate items as a Kanban' : 'Show the work graph'}
+          data-testid="forge-mode"
+        >
+          {mode() === 'graph' ? 'Kanban' : 'Graph'}
+        </button>
         <Show when={phaseLabel(rethinkPhase())}>
           <span class="text-xs" style={{ color: 'var(--c-text-muted)' }} data-testid="forge-rethink-status">
             {phaseLabel(rethinkPhase())}
@@ -427,6 +444,7 @@ const ForgeView: Component = () => {
                       onViewChange={(patch) => commitViews(updateView(views(), id, patch))}
                       onOpenThread={openThread}
                       fill={shownIds().length === 1}
+                      mode={mode()}
                     />
                   )}
                 </Show>

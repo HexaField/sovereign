@@ -9,7 +9,9 @@ import NodeCard, { type ThreadChoice } from './NodeCard.js'
 import EpicsPanel from './EpicsPanel.js'
 import type { ForgeApi } from './api.js'
 import { keyDirection, walkEdge } from './edge-walk.js'
-import { clearEpics, epicFocus, laneStreams } from './epics-model.js'
+import { clearEpics, epicFocus, laneStreams, panelShown, panelVisibility } from './epics-model.js'
+import KanbanBoard from './KanbanBoard.js'
+import { kanbanCards, type ForgeMode } from './kanban-model.js'
 import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
 import { viewFilters } from './graphs.js'
 import { computeLayout, xToTime } from './layout.js'
@@ -42,6 +44,8 @@ export interface ForgePanelProps {
   onOpenThread: (id: string) => void
   /** Fill the remaining height instead of the view's own. */
   fill: boolean
+  /** The work graph canvas, or the Kanban of its immediate items. */
+  mode: ForgeMode
 }
 
 const SEARCH_MIN = 3
@@ -106,17 +110,18 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     applyFilters(nodes(), filters(), { me: win().identity, overlays: props.overlays(), now: Date.now() })
   )
   const focus = createMemo(() => epicFocus(filters(), win().workstreams, nodes(), layout().edges))
-  const visibility = createMemo(() => {
-    const f = filtered()
-    const fs = focus()
-    if (!fs) return { visible: f.visible, dimmed: f.dimmed }
-    if (filters().dim) {
-      const dimmed = new Set(f.dimmed)
-      for (const id of f.visible) if (!fs.has(id)) dimmed.add(id)
-      return { visible: f.visible, dimmed }
-    }
-    return { visible: new Set([...f.visible].filter((id) => fs.has(id))), dimmed: f.dimmed }
-  })
+  const visibility = createMemo(() => panelVisibility(filtered(), focus(), filters().dim))
+  const kanban = createMemo(() =>
+    props.mode === 'kanban'
+      ? kanbanCards({
+          nodesById: nodesById(),
+          edges: win().edges,
+          shown: panelShown(visibility()),
+          overlays: props.overlays(),
+          streams: win().workstreams
+        })
+      : null
+  )
   const scene = createMemo(() => {
     if (!nodes().length) return null
     const v = visibility()
@@ -187,7 +192,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     // filters still gets selected, and the view pans to where it would be.
     const id = layout().alias.get(raw) ?? raw
     setSelected(id)
-    canvas?.focusNode(id)
+    if (props.mode === 'graph') canvas?.focusNode(id)
   }
 
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -201,7 +206,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     if (e.key === 'f' || e.key === 'F') {
       if (e.metaKey || e.ctrlKey || e.altKey) return
       e.preventDefault()
-      canvas?.fit()
+      if (props.mode === 'graph') canvas?.fit()
       return
     }
     if (e.key === 'Escape') {
@@ -289,14 +294,16 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
         >
           ← History
         </button>
-        <button
-          class="rounded border px-2 py-0.5"
-          style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
-          onClick={() => canvas?.fit()}
-          title="Fit (F)"
-        >
-          Fit
-        </button>
+        <Show when={props.mode === 'graph'}>
+          <button
+            class="rounded border px-2 py-0.5"
+            style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
+            onClick={() => canvas?.fit()}
+            title="Fit (F)"
+          >
+            Fit
+          </button>
+        </Show>
       </div>
       <FilterBar
         filters={props.view.filters}
@@ -308,15 +315,24 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
       />
       <div class="flex min-h-0 flex-1">
         <div class="relative min-w-0 flex-1" onPointerDown={() => root.focus({ preventScroll: true })}>
-          <ForgeCanvas
-            scene={scene}
-            overlays={props.overlays}
-            selectedId={selected}
-            highlight={highlight}
-            onSelect={setSelected}
-            onViewport={onViewport}
-            ref={(h) => (canvas = h)}
-          />
+          <Show
+            when={kanban()}
+            fallback={
+              <ForgeCanvas
+                scene={scene}
+                overlays={props.overlays}
+                selectedId={selected}
+                highlight={highlight}
+                onSelect={setSelected}
+                onViewport={onViewport}
+                ref={(h) => (canvas = h)}
+              />
+            }
+          >
+            {(columns) => (
+              <KanbanBoard columns={columns()} overlays={props.overlays} selectedId={selected} onSelect={setSelected} />
+            )}
+          </Show>
           <Show when={!nodes().length && !loading()}>
             <div
               class="pointer-events-none absolute inset-0 flex items-center justify-center text-sm"

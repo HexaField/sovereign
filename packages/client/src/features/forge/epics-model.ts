@@ -103,6 +103,30 @@ export function epicFocus(
   return streamFocus(withSubEpics(selected, streams), nodes, edges, f.epicNeighbours !== false, f.epicRelated === true)
 }
 
+/**
+ * What a panel shows: the filter result narrowed to the epic focus (or, in
+ * dim mode, with the nodes outside the focus faded). The canvas draws
+ * `visible` with `dimmed` faded; the Kanban lists `visible` minus `dimmed`.
+ */
+export function panelVisibility(
+  filtered: { visible: Set<string>; dimmed: Set<string> },
+  focus: Set<string> | null,
+  dim: boolean | undefined
+): { visible: Set<string>; dimmed: Set<string> } {
+  if (!focus) return { visible: filtered.visible, dimmed: filtered.dimmed }
+  if (dim) {
+    const dimmed = new Set(filtered.dimmed)
+    for (const id of filtered.visible) if (!focus.has(id)) dimmed.add(id)
+    return { visible: filtered.visible, dimmed }
+  }
+  return { visible: new Set([...filtered.visible].filter((id) => focus.has(id))), dimmed: filtered.dimmed }
+}
+
+/** The ids a panel shows undimmed. */
+export function panelShown(v: { visible: Set<string>; dimmed: Set<string> }): Set<string> {
+  return v.dimmed.size ? new Set([...v.visible].filter((id) => !v.dimmed.has(id))) : v.visible
+}
+
 /** The streams the canvas makes lanes of: with epics selected, only those (and their sub-epics). */
 export function laneStreams(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
   const selected = selectedEpics(f, streams)
