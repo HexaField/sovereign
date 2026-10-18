@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import type { AgentOverlay, ForgeFilters, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
 import { epicFocus, panelShown, panelVisibility } from './epics-model.js'
 import { applyFilters } from './filters.js'
-import { kanbanCards, kanbanColumn, parseForgeMode, type KanbanColumn } from './kanban-model.js'
+import { KANBAN_COLUMNS, kanbanCards, kanbanColumn, parseForgeMode, type KanbanColumn } from './kanban-model.js'
 import { NOW, change, edge, issue, iso, merged, plan, stream, task } from './test-fixtures.js'
 
 const REPO = 'acme/widgets'
+
+it('orders the columns left → right by progress', () => {
+  expect(KANBAN_COLUMNS.map((c) => c.id)).toEqual(['todo', 'in-progress', 'needs-work', 'in-review', 'ready'])
+})
 
 function board(
   nodes: WorkNode[],

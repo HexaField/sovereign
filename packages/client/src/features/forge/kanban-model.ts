@@ -7,12 +7,13 @@ import type { AgentOverlay, WorkEdge, WorkNode, WorkStream } from '@sovereign/co
 
 export type KanbanColumn = 'ready' | 'needs-work' | 'in-review' | 'in-progress' | 'todo'
 
+/** Left → right in order of progress. */
 export const KANBAN_COLUMNS: { id: KanbanColumn; title: string }[] = [
-  { id: 'ready', title: 'Ready to merge' },
+  { id: 'todo', title: 'To do' },
+  { id: 'in-progress', title: 'In progress' },
   { id: 'needs-work', title: 'Needs work' },
   { id: 'in-review', title: 'In review' },
-  { id: 'in-progress', title: 'In progress' },
-  { id: 'todo', title: 'To do' }
+  { id: 'ready', title: 'Ready to merge' }
 ]
 
 export interface KanbanCard {

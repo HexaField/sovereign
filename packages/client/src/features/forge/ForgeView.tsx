@@ -349,6 +349,15 @@ const ForgeView: Component = () => {
             </div>
           </Show>
         </div>
+        <button
+          class={btn}
+          style={btnStyle}
+          onClick={toggleMode}
+          title={mode() === 'graph' ? 'Show the immediate items as a Kanban' : 'Show the work graph'}
+          data-testid="forge-mode"
+        >
+          {mode() === 'graph' ? 'Kanban' : 'Graph'}
+        </button>
 
         <span class="flex-1" />
         <Show when={notice()}>
@@ -364,15 +373,6 @@ const ForgeView: Component = () => {
           data-testid="forge-sync"
         >
           Sync now
-        </button>
-        <button
-          class={btn}
-          style={btnStyle}
-          onClick={toggleMode}
-          title={mode() === 'graph' ? 'Show the immediate items as a Kanban' : 'Show the work graph'}
-          data-testid="forge-mode"
-        >
-          {mode() === 'graph' ? 'Kanban' : 'Graph'}
         </button>
         <Show when={phaseLabel(rethinkPhase())}>
           <span class="text-xs" style={{ color: 'var(--c-text-muted)' }} data-testid="forge-rethink-status">
