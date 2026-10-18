@@ -101,6 +101,14 @@ export function epicFocus(
   return streamFocus(withSubEpics(selected, streams), nodes, edges, f.epicNeighbours !== false)
 }
 
+/** The streams the canvas makes lanes of: with epics selected, only those (and their sub-epics). */
+export function laneStreams(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
+  const selected = selectedEpics(f, streams)
+  if (!selected.length) return streams
+  const keep = new Set(withSubEpics(selected, streams))
+  return streams.filter((s) => keep.has(s.id))
+}
+
 export const toggleEpic = (f: ForgeFilters, id: string): ForgeFilters => toggleFilterValue(f, 'workstreams', id)
 
 export function clearEpics(f: ForgeFilters): ForgeFilters {

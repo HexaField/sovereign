@@ -9,7 +9,7 @@ import NodeCard, { type ThreadChoice } from './NodeCard.js'
 import EpicsPanel from './EpicsPanel.js'
 import type { ForgeApi } from './api.js'
 import { keyDirection, walkEdge } from './edge-walk.js'
-import { clearEpics, epicFocus } from './epics-model.js'
+import { clearEpics, epicFocus, laneStreams } from './epics-model.js'
 import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
 import { viewFilters } from './graphs.js'
 import { computeLayout, xToTime } from './layout.js'
@@ -91,16 +91,16 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   // ── Derived graph state ──────────────────────────────────────────
   const nodes = createMemo(() => [...win().nodes.values()])
   const nodesById = createMemo(() => win().nodes)
+  const filters = createMemo(() => viewFilters(props.view))
   const layout = createMemo(() =>
     computeLayout({
       nodes: nodes(),
       edges: win().edges,
-      workstreams: win().workstreams,
+      workstreams: laneStreams(filters(), win().workstreams),
       now: layoutNow(),
       since: win().since
     })
   )
-  const filters = createMemo(() => viewFilters(props.view))
   const filtered = createMemo(() =>
     applyFilters(nodes(), filters(), { me: win().identity, overlays: props.overlays(), now: Date.now() })
   )

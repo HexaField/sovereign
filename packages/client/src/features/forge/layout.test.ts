@@ -120,6 +120,22 @@ describe('computeLayout', () => {
     expect(lines[0].x1).toBe(placed[0].x)
   })
 
+  it("keeps a stack in its root's lane, left → right, even when its PRs belong to other streams too", () => {
+    const g = sampleGraph()
+    // The root also sits in an earlier-ranked stream; the root was updated last.
+    const other = { id: 'a-other', name: 'A other', membrane: 'm', memberCount: 1 }
+    const stack = g.stack.map((n, i) =>
+      i === 0
+        ? { ...n, workstreams: ['a-other', ...n.workstreams], updatedAt: new Date(NOW - 60_000).toISOString() }
+        : n
+    )
+    const nodes = g.nodes.map((n) => stack.find((s) => s.id === n.id) ?? n)
+    const l = computeLayout({ ...g, nodes, workstreams: [other, ...g.workstreams], now: NOW })
+    const placed = stack.map((n) => l.nodes.get(n.id)!)
+    expect(new Set(placed.map((p) => p.lane))).toEqual(new Set(['stream:a-other']))
+    for (let i = 1; i < placed.length; i++) expect(placed[i].x - placed[i - 1].x).toBe(COL_W)
+  })
+
   it('keeps a paired cross-repo edge between the two repo lanes', () => {
     const g = sampleGraph()
     const l = computeLayout({ ...g, now: NOW })

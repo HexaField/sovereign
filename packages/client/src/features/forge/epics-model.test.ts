@@ -4,6 +4,7 @@ import {
   epicFocus,
   epicSource,
   epicsButtonLabel,
+  laneStreams,
   orderEpics,
   otherEpicsMode,
   parseEpicsMode,
@@ -113,6 +114,19 @@ describe('epicFocus', () => {
 
   it('does not filter on its own: other filters still apply to every node', () => {
     expect(applyFilters(nodes, { workstreams: ['s10'] }, { now: NOW }).visible.size).toBe(4)
+  })
+})
+
+describe('laneStreams', () => {
+  const parent = stream('p', 'Plan 20')
+  const child = stream('c', 'Plan 20 PR stack', { parentId: 'p' })
+  const other = stream('o', 'Other epic')
+  const all = [other, parent, child]
+  it('makes lanes of every stream with nothing selected', () => {
+    expect(laneStreams({}, all)).toEqual(all)
+  })
+  it('makes lanes of only the selected epics and their sub-epics', () => {
+    expect(laneStreams({ workstreams: ['p'] }, all).map((s) => s.id)).toEqual(['p', 'c'])
   })
 })
 

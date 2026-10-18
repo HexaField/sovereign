@@ -261,6 +261,24 @@ export function computeLayout(input: LayoutInput): Layout {
   const streamRank = new Map(streams.map((s, i) => [s.id, i]))
   const laneById = new Map<string, string>()
   for (const n of live) laneById.set(n.id, laneOf(n, streamRank))
+  // A stack lives in its root's lane: an open change follows its open base
+  // change down the base edges, whatever other streams it belongs to.
+  {
+    const openBase = new Map<string, string>()
+    for (const e of input.edges) {
+      if (e.kind !== 'base') continue
+      const from = alias.get(e.from) ?? e.from
+      const to = alias.get(e.to) ?? e.to
+      if (from !== to && nodeById.get(from)?.zone === 'present' && nodeById.get(to)?.zone === 'present')
+        openBase.set(from, to)
+    }
+    for (const id of openBase.keys()) {
+      let root = id
+      const seen = new Set([id])
+      while (openBase.has(root) && !seen.has(openBase.get(root)!)) seen.add((root = openBase.get(root)!))
+      laneById.set(id, laneById.get(root)!)
+    }
+  }
 
   const units: Unit[] = []
   const forkOf = (n: WorkNode, nodeX: number): { x: number; clipped: boolean } | undefined => {
