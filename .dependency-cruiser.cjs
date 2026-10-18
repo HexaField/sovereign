@@ -26,6 +26,15 @@ module.exports = {
       from: { path: '^packages/core/' },
       to: { path: '^packages/(?!core)/' }
     },
+    // Graphcoder stays separable: it depends on nothing in Sovereign (the
+    // boundary tests in each graphcoder package enforce the same in CI)
+    {
+      name: 'graphcoder-no-sovereign-deps',
+      comment: 'graphcoder-* packages may depend only on each other; Sovereign wires them in through ports.',
+      severity: 'error',
+      from: { path: '^packages/graphcoder-' },
+      to: { path: '^packages/(?!graphcoder-)' }
+    },
     // Layer 2-3 (infrastructure): no upward deps
     {
       name: 'infrastructure-no-upward',

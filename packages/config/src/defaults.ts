@@ -177,5 +177,8 @@ export const defaults: SovereignConfig = {
     pollAllMs: 600_000,
     windowDays: 21,
     rethink: { times: ['08:30', '17:30'], maxJobs: 6, tokenBudget: 200_000 }
+  },
+  graphcoder: {
+    enabled: false
   }
 }

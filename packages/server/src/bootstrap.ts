@@ -43,6 +43,7 @@ import { createTerminalRoutes } from '@sovereign/terminal'
 import { registerTerminalChannel } from '@sovereign/terminal'
 import { createWorktreeManager } from '@sovereign/worktrees'
 import { createCodeIndex, createCodeIndexRouter } from '@sovereign/code-index'
+import { mountGraphcoder } from './graphcoder.js'
 import { createWorktreeRouter } from '@sovereign/worktrees'
 import { registerWorktreesChannel } from '@sovereign/worktrees'
 import { createConfigRouter } from '@sovereign/config'
@@ -304,6 +305,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   })
   app.use(createWorktreeRouter(worktreeManager, authMiddleware))
   registerWorktreesChannel(wsHandler, bus)
+
+  // Graphcoder: code structure over the code index. Behind `graphcoder.enabled`,
+  // read at boot; off, nothing of it is mounted.
+  mountGraphcoder(app, { enabled: cfg.graphcoder.enabled, codeIndex, dataDir, requireAuth: authMiddleware })
 
   // Config router
   app.use('/api/config', createConfigRouter(configStore))

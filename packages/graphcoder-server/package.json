@@ -1,0 +1,36 @@
+{
+  "name": "@sovereign/graphcoder-server",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "Josh Field",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./codegraph": {
+      "types": "./src/codegraph.ts",
+      "development": "./src/codegraph.ts",
+      "default": "./dist/codegraph.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc --noEmit",
+    "test": "vitest run --root ../.. packages/graphcoder-server/"
+  },
+  "dependencies": {
+    "@colbymchenry/codegraph": "1.5.0",
+    "@sovereign/graphcoder-core": "workspace:*",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/supertest": "^7.2.0",
+    "supertest": "^7.2.2"
+  }
+}

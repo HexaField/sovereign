@@ -86,7 +86,8 @@ export interface GitCli {
   pull(cwd: string): Promise<void>
   branches(cwd: string): Promise<string[]>
   checkout(cwd: string, branch: string, create?: boolean): Promise<void>
-  log(cwd: string, limit?: number): Promise<CommitInfo[]>
+  /** Commits reachable from HEAD, newest first. `since`: a ref; only commits after it. `paths`: only commits touching them. */
+  log(cwd: string, limit?: number, opts?: { since?: string; paths?: string[] }): Promise<CommitInfo[]>
   diff(cwd: string, path: string): Promise<string>
   /** Repo root for a path. Returns null when not inside a git repo. */
   repoRoot(cwd: string): Promise<string | null>
@@ -94,9 +95,9 @@ export interface GitCli {
   defaultBranch(cwd: string): Promise<string>
   /** Merge-base (fork point) between HEAD and the given base branch. */
   mergeBase(cwd: string, baseBranch: string): Promise<string | null>
-  /** Branch diff stat — files changed with addition/deletion counts relative to baseBranch.
-   *  When baseBranch omitted, diffs working tree + staged against HEAD. */
-  branchDiffStat(cwd: string, baseBranch?: string): Promise<FileChange[]>
+  /** Branch diff stat — files `head` (default HEAD) changes since its merge base with baseBranch, with
+   *  addition/deletion counts. When baseBranch omitted, diffs working tree + staged against HEAD. */
+  branchDiffStat(cwd: string, baseBranch?: string, head?: string): Promise<FileChange[]>
   /** Unified diff for the full branch or a single file relative to baseBranch.
    *  When baseBranch omitted, returns working tree diff. */
   branchDiff(cwd: string, baseBranch?: string, filePath?: string): Promise<string>
@@ -173,8 +174,11 @@ export function createGitCli(): GitCli {
       await git(cwd, args)
     },
 
-    async log(cwd: string, limit = 20): Promise<CommitInfo[]> {
-      const output = await git(cwd, ['log', `--max-count=${limit}`, '--format=%H%n%h%n%s%n%an%n%aI%n---'])
+    async log(cwd: string, limit = 20, opts: { since?: string; paths?: string[] } = {}): Promise<CommitInfo[]> {
+      const args = ['log', `--max-count=${limit}`, '--format=%H%n%h%n%s%n%an%n%aI%n---']
+      if (opts.since) args.push(`${opts.since}..HEAD`)
+      if (opts.paths?.length) args.push('--', ...opts.paths)
+      const output = await git(cwd, args)
       const commits: CommitInfo[] = []
       const blocks = output.trim().split('\n---\n')
       for (const block of blocks) {
@@ -236,9 +240,9 @@ export function createGitCli(): GitCli {
       }
     },
 
-    async branchDiffStat(cwd: string, baseBranch?: string): Promise<FileChange[]> {
+    async branchDiffStat(cwd: string, baseBranch?: string, head = 'HEAD'): Promise<FileChange[]> {
       // Two git calls: --numstat for line counts, --name-status for status codes
-      const range = baseBranch ? [`${baseBranch}...HEAD`] : []
+      const range = baseBranch ? [`${baseBranch}...${head}`] : []
       const [numstatOut, nameStatusOut] = await Promise.all([
         git(cwd, ['diff', '--numstat', '-M', ...range]),
         git(cwd, ['diff', '--name-status', '-M', ...range])
@@ -273,10 +277,14 @@ export function createGitCli(): GitCli {
         const deletions = parts[1] === '-' ? 0 : parseInt(parts[1], 10)
         // For renames, numstat shows {oldPath => newPath} or just the new path
         let filePath = parts.slice(2).join('\t')
-        // Handle rename notation: {old => new}/rest or old => new
+        // Rename notation: prefix/{old => new}/rest when the paths share a part, else plain old => new.
+        // A side of the braces may be empty (`src/{ => lib}/a.ts`), which would leave a doubled slash.
         const renameMatch = filePath.match(/^(.*)?\{(.*?) => (.*?)\}(.*)$/)
+        const plainRename = renameMatch ? null : filePath.match(/^(.+) => (.+)$/)
         if (renameMatch) {
-          filePath = (renameMatch[1] ?? '') + renameMatch[3] + (renameMatch[4] ?? '')
+          filePath = ((renameMatch[1] ?? '') + renameMatch[3] + (renameMatch[4] ?? '')).replace(/\/\/+/g, '/')
+        } else if (plainRename) {
+          filePath = plainRename[2]
         }
 
         const status = statusMap.get(filePath) ?? 'modified'

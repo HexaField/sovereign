@@ -1,0 +1,29 @@
+{
+  "name": "@sovereign/graphcoder-cli",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "Josh Field",
+  "bin": {
+    "graphcoder": "dist/index.js"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./src/cli.ts",
+      "development": "./src/cli.ts",
+      "default": "./dist/cli.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc --noEmit",
+    "test": "vitest run --root ../.. packages/graphcoder-cli/"
+  },
+  "dependencies": {
+    "@sovereign/graphcoder-server": "workspace:*"
+  },
+  "devDependencies": {
+    "@sovereign/graphcoder-core": "workspace:*"
+  }
+}

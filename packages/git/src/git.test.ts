@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFile } from 'node:child_process'
@@ -173,6 +173,60 @@ describe('Git CLI Wrapper', () => {
     expect(log[0].author).toBe('Test User')
     expect(log[0].date).toBeTruthy()
     expect(log[1].message).toBe('initial commit')
+  })
+
+  it('limits the log to commits after a ref and to commits touching given paths', async () => {
+    const base = (await gitCmd(repoDir, ['rev-parse', 'HEAD'])).trim()
+    await writeFile(join(repoDir, 'a.txt'), 'a')
+    await gitCmd(repoDir, ['add', '.'])
+    await gitCmd(repoDir, ['commit', '-m', 'touch a'])
+    await writeFile(join(repoDir, 'b.txt'), 'b')
+    await gitCmd(repoDir, ['add', '.'])
+    await gitCmd(repoDir, ['commit', '-m', 'touch b'])
+
+    expect((await cli.log(repoDir, 10, { since: base })).map((c) => c.message)).toEqual(['touch b', 'touch a'])
+    expect((await cli.log(repoDir, 10, { paths: ['a.txt'] })).map((c) => c.message)).toEqual(['touch a'])
+    expect(await cli.log(repoDir, 10, { since: 'HEAD' })).toEqual([])
+  })
+
+  it('diff-stats any head against its merge base with a base branch, not only HEAD', async () => {
+    await gitCmd(repoDir, ['checkout', '-b', 'feature'])
+    await writeFile(join(repoDir, 'feature.txt'), 'one\ntwo\n')
+    await gitCmd(repoDir, ['add', '.'])
+    await gitCmd(repoDir, ['commit', '-m', 'feature'])
+    await gitCmd(repoDir, ['checkout', 'main'])
+    // main moves on too; the merge-base form leaves its change out
+    await writeFile(join(repoDir, 'main-only.txt'), 'x')
+    await gitCmd(repoDir, ['add', '.'])
+    await gitCmd(repoDir, ['commit', '-m', 'main moves'])
+
+    expect(await cli.branchDiffStat(repoDir, 'main', 'feature')).toEqual([
+      { path: 'feature.txt', status: 'added', additions: 2, deletions: 0 }
+    ])
+    // HEAD (main) has nothing main lacks
+    expect(await cli.branchDiffStat(repoDir, 'main')).toEqual([])
+  })
+
+  it('reads renames in every numstat notation: shared prefix, empty side, no shared part', async () => {
+    await mkdir(join(repoDir, 'src'), { recursive: true })
+    await writeFile(join(repoDir, 'src', 'one.ts'), 'export const one = 1\n')
+    await writeFile(join(repoDir, 'src', 'two.ts'), 'export const two = 2\n')
+    await writeFile(join(repoDir, 'three.ts'), 'export const three = 3\n')
+    await gitCmd(repoDir, ['add', '.'])
+    await gitCmd(repoDir, ['commit', '-m', 'files'])
+    await gitCmd(repoDir, ['checkout', '-b', 'moves'])
+    await mkdir(join(repoDir, 'src', 'lib'), { recursive: true })
+    await gitCmd(repoDir, ['mv', 'src/one.ts', 'src/uno.ts']) // src/{one.ts => uno.ts}
+    await gitCmd(repoDir, ['mv', 'src/two.ts', 'src/lib/two.ts']) // src/{ => lib}/two.ts
+    await gitCmd(repoDir, ['mv', 'three.ts', 'tres.ts']) // three.ts => tres.ts
+    await gitCmd(repoDir, ['commit', '-m', 'moves'])
+
+    const files = await cli.branchDiffStat(repoDir, 'main', 'moves')
+    expect(files.map((f) => [f.path, f.status, f.oldPath]).sort()).toEqual([
+      ['src/lib/two.ts', 'renamed', 'src/two.ts'],
+      ['src/uno.ts', 'renamed', 'src/one.ts'],
+      ['tres.ts', 'renamed', 'three.ts']
+    ])
   })
 
   it('gets diff for a file', async () => {

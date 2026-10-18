@@ -319,6 +319,13 @@ export interface SovereignConfig {
       tokenBudget: number
     }
   }
+  /**
+   * Graphcoder (packages/graphcoder-*): code structure of every indexed
+   * checkout. Read at boot: the router mounts only when enabled.
+   */
+  graphcoder: {
+    enabled: boolean
+  }
 }
 
 export interface ConfigChange {

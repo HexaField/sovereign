@@ -1,0 +1,14 @@
+{
+  "description": "Integer arithmetic the geometry builds on.",
+  "kind": "domain",
+  "label": "Arithmetic",
+  "members": [
+    {
+      "file": "src/math.ts",
+      "id": "4ae16ad70c22ddc2b32ef528447306582fb5ab2804dd5cf2d933e4b2c6fae4e9",
+      "note": "",
+      "ref": "add"
+    }
+  ],
+  "ordered": false
+}

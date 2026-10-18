@@ -339,6 +339,13 @@ export const schema = {
       },
       additionalProperties: false
     },
+    graphcoder: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' }
+      },
+      additionalProperties: false
+    },
     deviceOverrides: {
       type: 'object',
       additionalProperties: {

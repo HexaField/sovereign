@@ -33,6 +33,13 @@ describe('Config Schema', () => {
       )
     })
 
+    it('accepts the graphcoder flag, off by default, and rejects bad values', () => {
+      expect(defaults.graphcoder).toEqual({ enabled: false })
+      expect(validate({ graphcoder: { enabled: true } }).valid).toBe(true)
+      expect(validate({ graphcoder: { enabled: 'yes' } }).valid).toBe(false)
+      expect(invalidConfigPaths({ graphcoder: { enabled: true, repos: [] } })).toContain('/graphcoder/repos')
+    })
+
     it('accepts config with only some keys (defaults fill rest)', () => {
       const result = validate({ server: { port: 3001, host: 'localhost' } })
       expect(result.valid).toBe(true)

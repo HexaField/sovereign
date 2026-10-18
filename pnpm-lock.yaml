@@ -473,6 +473,40 @@ importers:
         specifier: ^7.2.2
         version: 7.2.2
 
+  packages/graphcoder-cli:
+    dependencies:
+      '@sovereign/graphcoder-server':
+        specifier: workspace:*
+        version: link:../graphcoder-server
+    devDependencies:
+      '@sovereign/graphcoder-core':
+        specifier: workspace:*
+        version: link:../graphcoder-core
+
+  packages/graphcoder-core: {}
+
+  packages/graphcoder-server:
+    dependencies:
+      '@colbymchenry/codegraph':
+        specifier: 1.5.0
+        version: 1.5.0
+      '@sovereign/graphcoder-core':
+        specifier: workspace:*
+        version: link:../graphcoder-core
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
+      '@types/supertest':
+        specifier: ^7.2.0
+        version: 7.2.0
+      supertest:
+        specifier: ^7.2.2
+        version: 7.2.2
+
   packages/issues:
     dependencies:
       '@sovereign/core':
@@ -762,6 +796,12 @@ importers:
       '@sovereign/git':
         specifier: workspace:*
         version: link:../git
+      '@sovereign/graphcoder-core':
+        specifier: workspace:*
+        version: link:../graphcoder-core
+      '@sovereign/graphcoder-server':
+        specifier: workspace:*
+        version: link:../graphcoder-server
       '@sovereign/issues':
         specifier: workspace:*
         version: link:../issues

@@ -30,6 +30,8 @@
     "@sovereign/files": "workspace:*",
     "@sovereign/forges": "workspace:*",
     "@sovereign/git": "workspace:*",
+    "@sovereign/graphcoder-core": "workspace:*",
+    "@sovereign/graphcoder-server": "workspace:*",
     "@sovereign/issues": "workspace:*",
     "@sovereign/meetings": "workspace:*",
     "@sovereign/membranes": "workspace:*",

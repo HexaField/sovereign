@@ -27,6 +27,11 @@ export async function worktreeAdd(
   await git(repoPath, args)
 }
 
+/** Checks `ref` out, detached (no branch), into a new worktree at `worktreePath`. */
+export async function worktreeAddDetached(repoPath: string, worktreePath: string, ref: string): Promise<void> {
+  await git(repoPath, ['worktree', 'add', '--detach', worktreePath, ref])
+}
+
 export async function worktreeRemove(repoPath: string, worktreePath: string): Promise<void> {
   await git(repoPath, ['worktree', 'remove', worktreePath, '--force'])
 }
