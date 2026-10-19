@@ -8,8 +8,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** Built-in tools a child may call. No Agent: children never spawn children. */
-export const SUBAGENT_BUILTIN_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob']
+/** Built-in tools a child may call. No Agent: children never spawn children.
+ *  WebFetch and WebSearch serve research children (deep-research researchers). */
+export const SUBAGENT_BUILTIN_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'WebFetch', 'WebSearch']
+
+/** Built-in tools top-level sessions may not call: delegation goes through `agents_spawn`. */
+export const MAIN_DISALLOWED_TOOLS = ['Agent', 'Task']
 
 /** MCP servers a child connects to, when configured. `sovereign` is the
  *  narrow subagent endpoint (browser + embeddings). */

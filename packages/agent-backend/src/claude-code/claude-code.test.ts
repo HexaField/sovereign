@@ -1724,6 +1724,11 @@ describe('claude-code/system-config-with-overrides wiring', () => {
     expect(options.settingSources).toEqual(['user', 'local'])
   })
 
+  it('blocks the built-in Agent tool in top-level sessions: delegation goes through agents_spawn', async () => {
+    const options = await captureOptions()
+    expect(options.disallowedTools).toEqual(['Agent', 'Task'])
+  })
+
   it('keeps the specific Sovereign overrides intact alongside system config', async () => {
     const options = await captureOptions()
     // The Sovereign-specific overrides documented in the design comment:
@@ -2470,7 +2475,7 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     expect(opts.systemPrompt).toContain(`# Repo context (${join(repo, 'AGENTS.md')})`)
     expect(opts.systemPrompt).toContain('Run pnpm test.')
     expect(opts.systemPrompt).not.toContain('claude_code')
-    expect(opts.tools).toEqual(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob'])
+    expect(opts.tools).toEqual(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'WebFetch', 'WebSearch'])
     expect(opts.settingSources).toEqual(['local'])
     expect(opts.mcpServers.sovereign.url).toBe('http://localhost:5801/api/mcp/subagent')
     expect(opts.mcpServers.code.args).toEqual(['--edit-roots', `/elsewhere${delimiter}${repo}`])

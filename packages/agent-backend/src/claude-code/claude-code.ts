@@ -73,6 +73,7 @@ import {
   MAX_SUBAGENTS_PER_PARENT,
   selectSubagentMcpServers,
   SUBAGENT_BUILTIN_TOOLS,
+  MAIN_DISALLOWED_TOOLS,
   SUBAGENT_TIMEOUT_MS
 } from './subagent-runner.js'
 import { formatSubagentResult } from '@sovereign/core'
@@ -1515,8 +1516,9 @@ export function createClaudeCodeBackend(
       // injects ALL built-in schemas regardless of allowedTools (Workflow,
       // Agent, WebFetch, Task*, Cron*, Monitor, … ~30k tokens). `tools`
       // restricts which schemas get injected; `allowedTools` which can run.
-      // No Agent in the list: subagents never spawn subagents.
-      ...(isSubagent ? { tools: SUBAGENT_BUILTIN_TOOLS } : {}),
+      // No Agent in the list: subagents never spawn subagents. Top-level
+      // sessions lose the built-in Agent too: they delegate via agents_spawn.
+      ...(isSubagent ? { tools: SUBAGENT_BUILTIN_TOOLS } : { disallowedTools: MAIN_DISALLOWED_TOOLS }),
       mcpServers: sessionMcpServers,
       hooks: buildHooks(),
       // Settings sources:
