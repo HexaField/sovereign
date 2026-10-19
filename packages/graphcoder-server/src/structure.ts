@@ -25,8 +25,8 @@ import type { Indexer } from './indexer.js'
 import { createNodeRepoFiles } from './repo-files.js'
 import { readTestFiles } from './test-files.js'
 
-/** Bump when the computation changes what it returns: older cache entries are then recomputed */
-export const STRUCTURE_VERSION = 1
+/** Bump when the computation or the pinned codegraph changes what it returns: older cache entries are then recomputed (2: codegraph 1.6.2) */
+export const STRUCTURE_VERSION = 2
 
 export type CachedStructure =
   | { state: 'ready'; structure: ChangeStructure }

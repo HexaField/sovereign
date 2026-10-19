@@ -20,7 +20,7 @@
     "test": "vitest run --root ../.. packages/code-edit/"
   },
   "dependencies": {
-    "@colbymchenry/codegraph": "1.5.0",
+    "@colbymchenry/codegraph": "1.6.2",
     "@modelcontextprotocol/sdk": "1.30.1",
     "diff": "^8.0.3",
     "zod": "^4.3.5"

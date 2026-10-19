@@ -2,7 +2,7 @@
 //
 // `CodeGraph.open` from codegraph's public API opens the database read-write
 // and migrates an older schema in place (its `readOnly` option is accepted but
-// unused in 1.5.0). Graphcoder only reads, and the index belongs to whoever
+// unused). Graphcoder only reads, and the index belongs to whoever
 // keeps it fresh (Sovereign's code-index, or the user's own `codegraph`), so
 // this opens the SQLite file read-only through codegraph's own adapter and
 // query builder. Both ship in codegraph's per-platform package, not its main

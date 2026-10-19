@@ -24,7 +24,7 @@
     "test": "vitest run --root ../.. packages/graphcoder-server/"
   },
   "dependencies": {
-    "@colbymchenry/codegraph": "1.5.0",
+    "@colbymchenry/codegraph": "1.6.2",
     "@sovereign/graphcoder-core": "workspace:*",
     "express": "^5.2.1",
     "typescript": "^5.9.3"

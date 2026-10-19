@@ -52,6 +52,14 @@ describe('changeReach', () => {
     expect(reachOf([f.id, lone.id])).toEqual({ reach: 0, parts: 2 })
   })
 
+  it('ignores imports: a barrel that re-exports h and k does not bring them together', () => {
+    const barrel = fileNode('src/index.ts')
+    const withBarrel = [...edges, link(barrel, h, 'imports'), link(barrel, k, 'imports')]
+    const all = [...nodes, barrel]
+    // still h – a.ts – g – k, not h – index.ts – k
+    expect(changeReach(all, withBarrel, createEdgeHygiene(all), [h.id, k.id])).toEqual({ reach: 3, parts: 1 })
+  })
+
   it('ignores guessed edges', () => {
     const guess = link(f, g, 'calls', { metadata: { confidence: 0.4, resolvedBy: 'exact-match' } })
     const withGuess = edges.filter((e) => !(e.source === f.id && e.target === g.id)).concat(guess)

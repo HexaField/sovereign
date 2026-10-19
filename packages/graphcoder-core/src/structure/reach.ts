@@ -14,8 +14,10 @@ export interface ChangeReach {
  * The diameter of a set of changed symbols: the longest of the shortest paths between two of them.
  *
  * The graph is undirected, over every node of the snapshot, with two kinds of link: containment (`contains`: a file
- * holds its symbols, a class its methods) and the dependency edges edge hygiene trusts (`calls`, `imports`,
- * `references`, … that are no guess, no test code, no undeclared package). One hop per link. So two functions in one
+ * holds its symbols, a class its methods) and the dependency edges edge hygiene trusts (`calls`, `instantiates`,
+ * `references`, … that are no guess, no test code, no undeclared package), except `imports`: an import statement is
+ * a file-level link whose real dependency is already a call or reference, and a barrel that re-exports a package
+ * would put every pair of its symbols 2 apart. One hop per link. So two functions in one
  * file are 2 apart (through the file), a caller and its callee 1, and code in two packages as far apart as the
  * shortest chain of real dependencies between them.
  *
@@ -39,7 +41,7 @@ export function changeReach(
     adjacency[b].push(a)
   }
   for (const e of edges) if (e.kind === 'contains') join(e)
-  for (const e of hygiene.trusted(edges)) join(e)
+  for (const e of hygiene.trusted(edges)) if (e.kind !== 'imports') join(e)
 
   const targets = [...new Set(changed.map((id) => ids.get(id)).filter((i): i is number => i !== undefined))]
   if (targets.length === 0) return { reach: 0, parts: 0 }

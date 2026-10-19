@@ -800,7 +800,7 @@ describe.skipIf(!hasCodegraph)('with a codegraph index', () => {
       { roots: [tmp] }
     )
     expect(r.report).toContain('signature changed: greet (name: string): string → (name: string, loud = false): string')
-    expect(r.report).toMatch(/callers to check: src\/app\.ts:4/)
+    expect(r.report).toMatch(/callers to check: [^\n]*src\/app\.ts:4/)
     expect(r.report).toMatch(/affected tests: .*src\/greet\.test\.ts/)
   })
 
