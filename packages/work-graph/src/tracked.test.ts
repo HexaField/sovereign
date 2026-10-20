@@ -65,7 +65,7 @@ describe('tracked items (pr-poll parity)', () => {
   const texts = () => sent.map((s) => s.text)
   const last = () => texts()[sent.length - 1]
 
-  it('forge off, no membrane: the first read sets the baseline, every change after it reaches the owner', async () => {
+  it('forge off, no membrane: the first read sets the baseline; changes update the task, and what needs work reaches the owner', async () => {
     forge.put(change(THING, 5, { checks: { state: 'pending' } }))
     const t = await port.importTask(key(THING, 5), 'change', 'PR #5', 'th-1')
 
@@ -96,10 +96,9 @@ describe('tracked items (pr-poll parity)', () => {
     await service.pollTracked()
     forge.put(change(THING, 5, { reviewers: [{ login: 'sam-reviewer', state: 'approved' }] }))
     await service.pollTracked()
+    // CI green and the approval only update the task
     expect(texts().slice(1)).toEqual([
-      '[PR #5] CI checks now passing.',
-      '[PR #5] Changes requested by sam-reviewer. Run `gh pr view 5 -R other-org/thing --comments` to see review comments.',
-      '[PR #5] Approved by sam-reviewer.'
+      '[PR #5] Changes requested by sam-reviewer. Run `gh pr view 5 -R other-org/thing --comments` to see review comments.'
     ])
     expect((await port.get(t.id))!.status).toMatchObject({ review: 'approved' })
 
@@ -112,23 +111,24 @@ describe('tracked items (pr-poll parity)', () => {
     expect(last()).toBe('[PR #5] 2 new comments. Run `gh pr view 5 -R other-org/thing --comments` to review.')
     expect((await port.get(t.id))!.status).toMatchObject({ unresolvedComments: 2 })
 
-    // Merged: completed, told, and no longer read.
+    // Merged: completed, no message, and no longer read.
+    const before = sent.length
     forge.put(change(THING, 5, { state: 'merged', closedAt: '2026-10-03T00:00:00Z' }))
     await service.pollTracked()
-    expect(last()).toBe('[PR #5] Merged.')
+    expect(sent).toHaveLength(before)
     expect(await port.get(t.id)).toMatchObject({ state: 'completed', transientState: 'merged into dev' })
     const reads = forge.calls.filter((c) => c.op === 'getChange').length
     await service.pollTracked()
     expect(forge.calls.filter((c) => c.op === 'getChange')).toHaveLength(reads)
   })
 
-  it('a PR closed unmerged cancels its task and tells the owner', async () => {
+  it('a PR closed unmerged cancels its task without a message', async () => {
     forge.put(change(THING, 6))
     const t = await port.importTask(key(THING, 6), 'change', 'PR #6', 'th-1')
     await service.pollTracked()
     forge.put(change(THING, 6, { state: 'closed', closedAt: '2026-10-03T00:00:00Z' }))
     await service.pollTracked()
-    expect(texts()).toEqual(['[PR #6] Closed without merge.'])
+    expect(sent).toEqual([])
     expect(await port.get(t.id)).toMatchObject({ state: 'cancelled', transientState: 'closed unmerged' })
   })
 
@@ -151,7 +151,7 @@ describe('tracked items (pr-poll parity)', () => {
     await service.pollTracked()
     forge.put(issue(THING, 8, { state: 'closed', closedReason: 'not_planned' }))
     await service.pollTracked()
-    expect(texts()).toEqual(['[Issue #8] Closed (not planned).'])
+    expect(sent).toEqual([])
     expect(await port.get(t.id)).toMatchObject({ state: 'cancelled', status: { state: 'closed:not_planned' } })
   })
 
