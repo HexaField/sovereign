@@ -68,8 +68,10 @@ export function ruleTriage(e: ForgeEvent, ctx: TriageContext): TriageVerdict | u
     case 'commented': {
       const text = Array.isArray(d.text) ? d.text.join('\n') : String(d.text ?? '')
       if (mentioned(text, ctx)) return 'needs-agent'
+      // Bots and our own replies (the identity) wake nobody
       const authors: unknown[] = Array.isArray(d.authors) ? d.authors : []
-      if (authors.length && authors.every(isBot)) return 'info'
+      const quiet = (a: unknown) => isBot(a) || (!!me && typeof a === 'string' && a.toLowerCase() === me)
+      if (authors.length && authors.every(quiet)) return 'info'
       return ctx.owned ? undefined : 'info'
     }
     case 'referenced':

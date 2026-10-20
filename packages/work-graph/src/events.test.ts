@@ -77,6 +77,10 @@ describe('ruleTriage', () => {
     expect(
       ruleTriage(ev('commented', { authors: ['lal-bot', 'jo'], text: ['x'] }), ctx({ owned: true }))
     ).toBeUndefined()
+    // Our own comments (the membrane's identity), alone or with bots, wake nobody
+    expect(
+      ruleTriage(ev('commented', { authors: ['Hex-Agent', 'lal-bot'], text: ['Fixed in abc'] }), ctx({ owned: true }))
+    ).toBe('info')
     // A bot that requests changes still needs the agent
     expect(ruleTriage(ev('reviewed', { state: 'changes_requested', login: 'lal-bot' }), ctx())).toBe('needs-agent')
   })
