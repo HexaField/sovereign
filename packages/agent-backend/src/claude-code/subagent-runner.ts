@@ -23,7 +23,7 @@ export const SUBAGENT_MCP_SERVERS = ['codegraph', 'semble', 'code', 'sovereign']
 export const MAX_SUBAGENTS_PER_PARENT = 4
 
 /** Wall-clock limit for one child. */
-export const SUBAGENT_TIMEOUT_MS = 120 * 60_000
+export const SUBAGENT_TIMEOUT_MS = 240 * 60_000
 
 /**
  * The nearest `AGENTS.md` (else `CLAUDE.md`) at or above `cwd`, stopping at
