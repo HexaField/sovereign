@@ -132,7 +132,8 @@ export const schema = {
           type: 'object',
           properties: {
             backend: { type: 'string' },
-            model: { type: 'string' }
+            model: { type: 'string' },
+            timeoutMinutes: { type: 'number', minimum: 1 }
           },
           additionalProperties: false
         }

@@ -20,7 +20,7 @@ import {
 } from './claude-code/index.js'
 import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.js'
 import { createMetricsAccumulator, type MetricsAccumulator } from './metrics.js'
-import { buildSovereignMcpDeps } from './mcp-deps.js'
+import { buildSovereignMcpDeps, type SubagentDefaults } from './mcp-deps.js'
 import { createEmbeddingsService } from './embeddings-service.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
@@ -289,12 +289,13 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const sessionsRegistry = createSessionsRegistry(dataDir)
   const activeSessions = createActiveSessions({ dataDir })
   const askUserQuestionStore = createAskUserQuestionStore(bus)
-  // Global subagent routing defaults — thread config still takes priority.
-  const subagentDefaults = {
-    backend: configStore.get<string>('agentBackend.subagentDefaults.backend'),
-    model: configStore.get<string>('agentBackend.subagentDefaults.model')
-  }
-  const hasSubagentDefaults = subagentDefaults.backend || subagentDefaults.model
+  // Global subagent defaults — thread config still takes priority. Read from
+  // the config store on every call, so a config change applies to the next spawn.
+  const subagentDefaults = (): SubagentDefaults => ({
+    backend: configStore.get<string>('agentBackend.subagentDefaults.backend') ?? undefined,
+    model: configStore.get<string>('agentBackend.subagentDefaults.model') ?? undefined,
+    timeoutMinutes: configStore.get<number>('agentBackend.subagentDefaults.timeoutMinutes') ?? undefined
+  })
 
   // Embeddings — local vector search over on-machine content. The service
   // initialises lazily (db opens on first tool call, not at boot).
@@ -312,7 +313,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     notificationsModule,
     browserService,
     embeddings: embeddingsService,
-    ...(hasSubagentDefaults ? { subagentDefaults } : {}),
+    subagentDefaults,
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
     ...(input.ci ? { ci: input.ci } : {}),
@@ -390,7 +391,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               memoryFile: input.presenceMemoryFile,
               knowledgeFile: input.presenceKnowledgeFile
             },
-            () => subagentDefaults
+            subagentDefaults
           ),
           metrics
         })
@@ -421,7 +422,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               memoryFile: input.presenceMemoryFile,
               knowledgeFile: input.presenceKnowledgeFile
             },
-            () => subagentDefaults
+            subagentDefaults
           ),
           subagentPromptFile: input.configDir ? `${input.configDir}/SUBAGENT.md` : undefined,
           globalPersonalityFile: globalPersonalityPath,

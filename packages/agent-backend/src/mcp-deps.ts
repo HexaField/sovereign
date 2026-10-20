@@ -28,6 +28,8 @@ import { sessionKeyToThreadKey } from './wiring.js'
 export interface SubagentDefaults {
   backend?: string
   model?: string
+  /** Wall-clock limit per subagent; unset: the backend's default. */
+  timeoutMinutes?: number
 }
 
 export interface SovereignMcpDepsInput {
@@ -46,9 +48,9 @@ export interface SovereignMcpDepsInput {
   /** Presence-thread integration. When set, registers the seven presence_*
    *  MCP tools. Sourced from `@sovereign/presence` in bootstrap. */
   presence?: PresenceMcpDeps
-  /** Global subagent defaults — from config `agentBackend.subagentDefaults`.
-   *  Thread-level config takes priority; these override the model's request. */
-  subagentDefaults?: SubagentDefaults
+  /** Global subagent defaults — config `agentBackend.subagentDefaults`, read at
+   *  each spawn. Thread-level config takes priority; these override the model's request. */
+  subagentDefaults?: () => SubagentDefaults
   /** Embeddings service. When set, registers embeddings_search/index/collections/health
    *  tools in both the Claude Code MCP server and the local-llm backend. */
   embeddings?: EmbeddingsToolDeps
@@ -137,7 +139,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         // Resolve the parent thread's subagent routing config (if any).
         const threadKey = sessionKeyToThreadKey(parentKey)
         const thread = threadKey ? input.threadManager?.get(threadKey) : undefined
-        const defaults = input.subagentDefaults
+        const defaults = input.subagentDefaults?.()
 
         // Priority chain (NON-NEGOTIABLE — thread config is authoritative):
         //   1. Thread-level subagentBackend (highest — per-thread override)
@@ -160,7 +162,8 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
           task: opts.task,
           cwd: opts.cwd,
           label: opts.label,
-          ...(effectiveModel ? { model: { provider: '', model: effectiveModel } } : {})
+          ...(effectiveModel ? { model: { provider: '', model: effectiveModel } } : {}),
+          ...(defaults?.timeoutMinutes ? { timeoutMs: defaults.timeoutMinutes * 60_000 } : {})
         })
         return { sessionKey: childKey }
       },
