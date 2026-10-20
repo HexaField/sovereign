@@ -133,6 +133,8 @@ export function epicFocus(
   nodes: WorkNode[],
   edges: WorkEdge[]
 ): Set<string> | null {
+  // "Not in a tree" lists what no node owns, so no node's focus applies
+  if (f.orphans) return null
   const focused = focusedEpics(f, streams)
   if (!focused.length) return null
   return streamFocus(focused, nodes, edges, f.epicNeighbours !== false, f.epicRelated === true)

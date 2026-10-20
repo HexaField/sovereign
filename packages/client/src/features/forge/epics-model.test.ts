@@ -119,6 +119,10 @@ describe('epicFocus', () => {
     expect(epicFocus({ workstreams: ['gone'] }, streams, nodes, edges)).toBeNull()
   })
 
+  it('is null while "Not in a tree" is on: orphans sit outside every node', () => {
+    expect(epicFocus({ workstreams: ['s2'], orphans: true }, streams, nodes, edges)).toBeNull()
+  })
+
   it('narrows to the members of the selected epics and sub-epics, with neighbours unless turned off', () => {
     expect([...epicFocus({ workstreams: ['s2'] }, streams, nodes, edges)!].sort()).toEqual([a.id, b.id].sort())
     expect([...epicFocus({ workstreams: ['s2'], epicNeighbours: false }, streams, nodes, edges)!]).toEqual([a.id])
