@@ -1,15 +1,23 @@
 // One graph panel: its own window of the work graph, filters, canvas,
-// epics panel and node card.
+// tree panel and node card.
 
 import { batch, createEffect, createMemo, createSignal, on, onCleanup, Show, type Component } from 'solid-js'
 import type { AgentOverlay, ForgeFilters, ForgeView } from '@sovereign/core'
 import ForgeCanvas, { type CanvasHandle } from './ForgeCanvas.js'
 import FilterBar from './FilterBar.js'
 import NodeCard, { type ThreadChoice } from './NodeCard.js'
-import EpicsPanel from './EpicsPanel.js'
+import TreePanel from './TreePanel.js'
 import type { ForgeApi } from './api.js'
 import { keyDirection, walkEdge } from './edge-walk.js'
-import { clearEpics, epicFocus, laneStreams, panelShown, panelVisibility, wantsArchived } from './epics-model.js'
+import {
+  clearEpics,
+  epicFocus,
+  laneFold,
+  laneStreams,
+  panelShown,
+  panelVisibility,
+  wantsArchived
+} from './epics-model.js'
 import KanbanBoard from './KanbanBoard.js'
 import { kanbanCards, type ForgeMode } from './kanban-model.js'
 import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
@@ -97,6 +105,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
       nodes: nodes(),
       edges: win().edges,
       workstreams: laneStreams(filters(), win().workstreams),
+      laneFold: laneFold(filters(), win().workstreams),
       now: layoutNow(),
       since: win().since,
       related: filters().epicRelated === true
@@ -269,14 +278,16 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
           </span>
         </Show>
         <span class="flex-1" />
-        <EpicsPanel
+        <TreePanel
           membrane={props.membrane}
           streams={win().workstreams}
+          nodes={nodes()}
           filters={props.view.filters}
           onChange={setFilters}
           api={props.api}
           onCreate={createStream}
-          onStatusChanged={() => void load(initialRequest(Date.now()))}
+          onChanged={() => void load(initialRequest(Date.now()))}
+          onFocusNode={focusNode}
           onOpenThread={props.onOpenThread}
         />
         <button

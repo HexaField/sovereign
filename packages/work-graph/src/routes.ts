@@ -204,6 +204,18 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
     })
   )
 
+  // Place a stream in the goal tree: under `parentId` (its one parent), or at the top (null) as a goal.
+  router.post(
+    '/api/forge/streams/:id/parent',
+    requireAuth,
+    json,
+    handle((req) => {
+      const parentId = req.body?.parentId
+      if (parentId !== null && !str(parentId)) throw bad('parentId must be a stream id, or null for the top level')
+      return service.setStreamParent(String(req.params.id), parentId, param(req, 'membrane'))
+    })
+  )
+
   router.post(
     '/api/forge/streams/:id/members',
     requireAuth,

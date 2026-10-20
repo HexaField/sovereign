@@ -35,6 +35,7 @@ import { resolveScope, type MembraneScope, type ScopeSource } from './scope.js'
 import { createRepoSync, type RepoSync } from './sync.js'
 import { createStructureHook } from './structure.js'
 import { syncTasks, TERMINAL } from './task-sync.js'
+import { withProgress } from './tree.js'
 import {
   DEFAULT_FORGE_CONFIG,
   type ActiveCiWatch,
@@ -1109,7 +1110,9 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const syncs_ = scope.repos.map((r) => syncOf(r)).filter((x): x is RepoSync => Boolean(x))
       const notes = deps.rethinkNotes?.(membrane) ?? {}
       const streams = withRelatedCounts(
-        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || w.status !== 'archived'),
+        withProgress(await deps.tasks.streamsOf(membrane), graph.nodes, graph.edges).filter(
+          (w) => opts.archived || w.status !== 'archived'
+        ),
         graph.nodes
       )
       const shown = new Set(streams.map((w) => w.id))

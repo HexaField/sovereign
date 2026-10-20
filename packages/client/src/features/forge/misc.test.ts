@@ -239,7 +239,17 @@ describe('api', () => {
     await api.graph('demo', { since: 0, until: null, side: 'initial' }, undefined, { archived: true })
     await api.setStreamStatus('demo', 'task://9f2c', 'paused')
     expect(await api.refineEpics('demo', 'merge the indexer epics')).toMatchObject({ threadId: 'rt-1' })
-    expect(calls).toEqual([
+    await api.setStreamParent('demo', 'task://9f2c', 'task://goal')
+    await api.setStreamParent('demo', 'task://9f2c', null)
+    expect(calls.slice(3)).toEqual([
+      {
+        url: '/api/forge/streams/task%3A%2F%2F9f2c/parent',
+        method: 'POST',
+        body: { membrane: 'demo', parentId: 'task://goal' }
+      },
+      { url: '/api/forge/streams/task%3A%2F%2F9f2c/parent', method: 'POST', body: { membrane: 'demo', parentId: null } }
+    ])
+    expect(calls.slice(0, 3)).toEqual([
       { url: '/api/forge?membrane=demo&since=1970-01-01T00%3A00%3A00.000Z&archived=1', method: 'GET', body: undefined },
       {
         url: '/api/forge/streams/task%3A%2F%2F9f2c/status',

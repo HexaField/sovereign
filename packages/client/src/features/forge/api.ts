@@ -84,6 +84,9 @@ export function createForgeApi(f: Fetch = (...a) => fetch(...a)) {
       json(await send('/api/forge/streams', 'POST', parentId ? { membrane, name, parentId } : { membrane, name })),
     setStreamStatus: async (membrane: string, streamId: string, status: EpicStatus): Promise<WorkStream> =>
       json(await send(`/api/forge/streams/${enc(streamId)}/status`, 'POST', { membrane, status })),
+    /** Place a stream in the goal tree: under `parentId`, or at the top (null) as a goal. */
+    setStreamParent: async (membrane: string, streamId: string, parentId: string | null): Promise<WorkStream> =>
+      json(await send(`/api/forge/streams/${enc(streamId)}/parent`, 'POST', { membrane, parentId })),
     /** Sends the request, with the current epics, to the membrane's forge-rethink thread. */
     refineEpics: async (membrane: string, prompt: string): Promise<{ threadId: string }> =>
       json(await send('/api/forge/epics/refine', 'POST', { membrane, prompt })),

@@ -399,7 +399,7 @@ describe('forge service', () => {
     expect((await service.graph('acme')).nodes.some((n) => n.relatedStreams)).toBe(false)
   })
 
-  it('a change or issue has one owning epic: every add path moves it; task-only items and sub-epics may sit in several', async () => {
+  it('a change or issue has one owning epic and a sub-epic one parent: every add path moves it; task-only items may sit in several', async () => {
     await service.sync('acme')
     const a = await service.createStream('acme', 'Alpha')
     const b = await service.createStream('acme', 'Beta')
@@ -418,10 +418,10 @@ describe('forge service', () => {
     await port.addToStream(a.id, t51.id)
     expect(await owners(nid(WIDGET, 51))).toEqual([a.id])
 
-    // A task-only item and a sub-epic keep every stream they are in.
+    // A sub-epic moves to its new parent (one parent); a task-only item keeps every stream it is in.
     const sub = await service.createStream('acme', 'Sub', a.id)
     await port.addToStream(c.id, sub.id)
-    expect((await port.get(sub.id))!.parentIds.sort()).toEqual([a.id, c.id].sort())
+    expect((await port.get(sub.id))!.parentIds).toEqual([c.id])
     const task = await port.service.create({ name: 'Loose task', membrane: 'acme', sourceThreadId: 't' })
     await port.addToStream(a.id, task.id)
     await port.addToStream(c.id, task.id)

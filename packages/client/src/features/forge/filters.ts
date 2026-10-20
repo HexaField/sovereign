@@ -47,6 +47,13 @@ export function agentMatches(f: ForgeFilters['agent'], o: AgentOverlay | undefin
   return o.waitingOn === 'review'
 }
 
+/** "Not in a tree": an open PR or issue that no (served) work stream owns. */
+export function isOrphan(n: WorkNode): boolean {
+  const open =
+    n.kind === 'change' ? n.state === 'open' || n.state === 'draft' : n.kind === 'issue' && n.state === 'open'
+  return open && n.workstreams.length === 0
+}
+
 export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: FilterContext): boolean {
   if (!one(f.repos, n.repo)) return false
   if (!one(f.states, n.state)) return false
@@ -64,6 +71,7 @@ export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: FilterContext)
     return false
   if (!some(f.labels, n.labels)) return false
   if (!agentMatches(f.agent, ctx.overlays?.get(n.id))) return false
+  if (f.orphans && !isOrphan(n)) return false
   if (f.updatedWithinDays !== undefined && f.updatedWithinDays > 0) {
     const t = Date.parse(n.updatedAt)
     if (!Number.isFinite(t) || t < ctx.now - f.updatedWithinDays * DAY_MS) return false
@@ -101,6 +109,7 @@ export function hasActiveFilters(f: ForgeFilters): boolean {
     !!f.workstreams?.length ||
     !!f.epicStatus?.length ||
     !!f.agent ||
+    !!f.orphans ||
     !!f.updatedWithinDays ||
     !!f.text?.trim()
   )

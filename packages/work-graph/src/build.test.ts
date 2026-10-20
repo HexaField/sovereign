@@ -187,6 +187,8 @@ describe('buildGraph', () => {
       'past'
     ])
     expect([zone(id(WIDGET, 10)), zone(id(WIDGET, 11))]).toEqual(['future', 'past'])
+    expect(g.nodes.find((n) => n.id === id(WIDGET, 11))?.closedReason).toBe('completed')
+    expect(g.nodes.find((n) => n.id === id(WIDGET, 10))).not.toHaveProperty('closedReason')
     expect([zone('plan:acme/a.md'), zone('plan:acme/b.md')]).toEqual(['future', 'past'])
     expect(g.nodes.find((n) => n.id === 'task:t1')).toMatchObject({
       kind: 'task',

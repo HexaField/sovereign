@@ -97,6 +97,8 @@ export interface LayoutInput {
   since?: number
   /** "Owned + related": a node no lane stream owns goes to the lane of one it is related to. */
   related?: boolean
+  /** Stream id → the lane stream it folds into (lanes follow a picked node's children: `laneFold`). */
+  laneFold?: Map<string, string>
 }
 
 export function timeToX(t: number, now: number): number {
@@ -149,11 +151,12 @@ export function orderStreams(streams: WorkStream[]): WorkStream[] {
   return out
 }
 
-function laneOf(node: WorkNode, streamRank: Map<string, number>, related: boolean): string {
+function laneOf(node: WorkNode, streamRank: Map<string, number>, related: boolean, fold?: Map<string, string>): string {
   const first = (ids: string[]): string | undefined => {
     let best: string | undefined
     let bestRank = Infinity
-    for (const s of ids) {
+    for (const raw of ids) {
+      const s = fold?.get(raw) ?? raw
       const r = streamRank.get(s)
       if (r !== undefined && r < bestRank) {
         bestRank = r
@@ -276,7 +279,7 @@ export function computeLayout(input: LayoutInput): Layout {
   const streams = orderStreams(input.workstreams)
   const streamRank = new Map(streams.map((s, i) => [s.id, i]))
   const laneById = new Map<string, string>()
-  for (const n of live) laneById.set(n.id, laneOf(n, streamRank, input.related === true))
+  for (const n of live) laneById.set(n.id, laneOf(n, streamRank, input.related === true, input.laneFold))
   // A stack lives in its root's lane: an open change follows its open base
   // change down the base edges, whatever other streams it belongs to.
   {

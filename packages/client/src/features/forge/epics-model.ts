@@ -1,4 +1,5 @@
-// Epics panel — pure. Epics are work streams. The list order depends only on
+// Epic selection for the Tree panel — pure. Epics are work streams, the nodes of
+// the goal tree (tree-model.ts holds the outline and placement). The list order depends only on
 // the streams' names and parents (hierarchy first, then name, natural sort),
 // never on selection or counts, so it holds still while the user picks.
 // Selected epics live in the view's saved filters (`filters.workstreams`) and
@@ -12,7 +13,6 @@
 import type { EpicStatus, ForgeFilters, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
 import { EPIC_STATUSES } from '@sovereign/core/forge'
 import { streamFocus, toggleFilterValue } from './filters.js'
-import { EPIC_STATUS_LABELS } from './style.js'
 
 export type EpicsMode = 'dropdown' | 'modal'
 export const LS_EPICS_MODE = 'sovereign:forge:epics-mode'
@@ -162,12 +162,44 @@ export function panelShown(v: { visible: Set<string>; dimmed: Set<string> }): Se
   return v.dimmed.size ? new Set([...v.visible].filter((id) => !v.dimmed.has(id))) : v.visible
 }
 
-/** The streams the canvas makes lanes of: with epics selected, those (and their sub-epics); else every shown epic. */
+/**
+ * The streams the canvas makes lanes of: with nothing selected, every shown
+ * epic. With a selection, lanes follow the picked node's children: the top of
+ * each focused branch and each of its children (laneFold folds the rest in).
+ */
 export function laneStreams(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
+  const fold = laneFold(f, streams)
+  if (!fold) return shownEpics(f, streams)
+  const lanes = new Set(fold.values())
+  return streams.filter((s) => lanes.has(s.id))
+}
+
+/**
+ * With a selection: the lane each focused stream folds into. The top of each
+ * focused branch keeps its own lane, each of its children gets one, and every
+ * stream deeper down joins its ancestor's child lane. Undefined with nothing selected.
+ */
+export function laneFold(f: ForgeFilters, streams: WorkStream[]): Map<string, string> | undefined {
   const focused = focusedEpics(f, streams)
-  if (!focused.length) return shownEpics(f, streams)
+  if (!focused.length) return undefined
   const keep = new Set(focused)
-  return streams.filter((s) => keep.has(s.id))
+  const byId = new Map(streams.map((s) => [s.id, s]))
+  const parentIn = (id: string): string | undefined => {
+    const p = byId.get(id)?.parentId
+    return p && keep.has(p) && p !== id ? p : undefined
+  }
+  const out = new Map<string, string>()
+  for (const id of focused) {
+    // Climb while the parent is not the branch top: `lane` ends as the top or one of its children.
+    let lane = id
+    const seen = new Set([id])
+    for (let up = parentIn(lane); up && parentIn(up) && !seen.has(up); up = parentIn(lane)) {
+      seen.add(up)
+      lane = up
+    }
+    out.set(id, lane)
+  }
+  return out
 }
 
 export const toggleEpic = (f: ForgeFilters, id: string): ForgeFilters => toggleFilterValue(f, 'workstreams', id)
@@ -189,28 +221,9 @@ export function setEpicRelated(f: ForgeFilters, on: boolean): ForgeFilters {
   return on ? { ...rest, epicRelated: true } : rest
 }
 
-/** An epic's count in the panel: owned items, and related ones in muted text ("6" and "12 rel."). */
-export function epicCounts(s: WorkStream): { owned: string; related?: string } {
-  return s.relatedCount
-    ? { owned: String(s.memberCount), related: `${s.relatedCount} rel.` }
-    : { owned: String(s.memberCount) }
-}
-
 export function setDim(f: ForgeFilters, on: boolean): ForgeFilters {
   const { dim: _drop, ...rest } = f
   return on ? { ...rest, dim: true } : rest
-}
-
-/** "Epics (12)"; "Epics (2/12)" while two are picked; "Epics: Active, Paused (7)" while statuses select. */
-export function epicsButtonLabel(f: ForgeFilters, streams: WorkStream[]): string {
-  const shown = shownEpics(f, streams).length
-  const picked = pickedEpics(f, streams).length
-  if (picked) return `Epics (${picked}/${shown})`
-  if (f.epicStatus?.length)
-    return `Epics: ${shownStatuses(f)
-      .map((s) => EPIC_STATUS_LABELS[s])
-      .join(', ')} (${shown})`
-  return `Epics (${shown})`
 }
 
 export const toggleEpicStatus = (f: ForgeFilters, s: EpicStatus): ForgeFilters => toggleFilterValue(f, 'epicStatus', s)

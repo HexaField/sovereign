@@ -722,12 +722,50 @@ describe.each(STORES)('TaskService — work streams and filters (%s)', (_name, m
     })
     expect(again.parentTasks.map((p) => p.id).sort()).toEqual([plain.id, sub.id].sort())
 
-    // Task-only tasks and sub-streams keep every stream.
+    // Task-only tasks keep every stream.
     await svc.addToStream(stream.id, plain.id, 't')
     await svc.addToStream(other.id, plain.id, 't')
     expect(await parents(plain.id)).toEqual([stream.id, other.id].sort())
+  })
+
+  it('a stream has one parent stream: adding it under another moves it; cycles are refused', async () => {
+    const { stream, sub, plain } = await seed()
+    const other = await svc.createStream({ name: 'Goal', membrane: 'coasys', sourceThreadId: 't' })
+    const parents = async (id: string) => (await svc.get(id))!.parentTasks.map((p) => p.id).sort()
+
     await svc.addToStream(other.id, sub.id, 't')
-    expect(await parents(sub.id)).toEqual([stream.id, other.id].sort())
+    expect(await parents(sub.id)).toEqual([other.id])
+    await svc.link(stream.id, sub.id, 't')
+    expect(await parents(sub.id)).toEqual([stream.id])
+    expect((await svc.listStreams('coasys')).find((s) => s.id === sub.id)).toMatchObject({ parentId: stream.id })
+
+    // A non-stream parent is not a parent stream: it stays.
+    await svc.link(plain.id, sub.id, 't')
+    await svc.addToStream(other.id, sub.id, 't')
+    expect(await parents(sub.id)).toEqual([plain.id, other.id].sort())
+
+    // createStream with several parents keeps the last one.
+    const multi = await svc.createStream({
+      name: 'Multi',
+      membrane: 'coasys',
+      parentStreamIds: [stream.id, other.id],
+      sourceThreadId: 't'
+    })
+    expect(multi.parentTasks.map((p) => p.id)).toEqual([other.id])
+
+    // Moving a stream under its own descendant is a cycle, and changes nothing.
+    await expect(svc.addToStream(sub.id, other.id, 't')).rejects.toThrow(/Cycle/)
+    expect(await parents(sub.id)).toEqual([plain.id, other.id].sort())
+  })
+
+  it('a task in several streams that becomes a stream keeps only its first parent stream', async () => {
+    const { stream, plain } = await seed()
+    const other = await svc.createStream({ name: 'Other', membrane: 'home', sourceThreadId: 't' })
+    await svc.addToStream(stream.id, plain.id, 't')
+    await svc.addToStream(other.id, plain.id, 't')
+    const first = (await svc.get(plain.id))!.parentTasks[0].id
+    const updated = await svc.update(plain.id, { isStream: true, sourceThreadId: 't' })
+    expect(updated.parentTasks.map((p) => p.id)).toEqual([first])
   })
 
   it('refuses to add to a task that is not a stream', async () => {

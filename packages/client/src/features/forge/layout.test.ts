@@ -136,6 +136,25 @@ describe('computeLayout', () => {
     for (let i = 1; i < placed.length; i++) expect(placed[i].x - placed[i - 1].x).toBe(COL_W)
   })
 
+  it('folds a deeper stream’s items into the lane it maps to (lanes follow a picked node’s children)', () => {
+    const goal = stream('g', 'Goal')
+    const child = stream('c', 'Child', { parentId: 'g' })
+    const a = issue(CORE, 1, { workstreams: ['d'] }) // 'd' sits under the child, so it is no lane of its own
+    const b = issue(CORE, 2, { workstreams: ['g'] })
+    const fold = new Map([
+      ['g', 'g'],
+      ['c', 'c'],
+      ['d', 'c']
+    ])
+    const l = computeLayout({ nodes: [a, b], edges: [], workstreams: [goal, child], now: NOW, laneFold: fold })
+    expect(l.nodes.get(a.id)!.lane).toBe('stream:c')
+    expect(l.nodes.get(b.id)!.lane).toBe('stream:g')
+    expect(l.lanes.map((x) => x.id)).toEqual(['stream:g', 'stream:c'])
+    // Without the fold, the deep stream is no lane: its item falls to its repo.
+    const plain = computeLayout({ nodes: [a, b], edges: [], workstreams: [goal, child], now: NOW })
+    expect(plain.nodes.get(a.id)!.lane).toBe(`repo:${CORE}`)
+  })
+
   it('keeps a paired cross-repo edge between the two repo lanes', () => {
     const g = sampleGraph()
     const l = computeLayout({ ...g, now: NOW })
