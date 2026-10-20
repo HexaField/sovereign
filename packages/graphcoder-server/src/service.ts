@@ -6,11 +6,14 @@ import path from 'node:path'
 import {
   loadAllAnnotations,
   type ChangeStructure,
+  type ConceptMapReport,
   type GitPort,
   type GraphSource,
   type GraphStats
 } from '@sovereign/graphcoder-core'
+import { createConceptStore } from './concepts.js'
 import { createCodegraphIndexer, type Indexer } from './indexer.js'
+import { createSerialQueue } from './queue.js'
 import { createNodeRepoFiles } from './repo-files.js'
 import { createStructureStore, type CachedStructure } from './structure.js'
 
@@ -20,7 +23,7 @@ export interface GraphcoderPorts {
 }
 
 export interface GraphcoderOptions {
-  /** Where the structures of changes are cached: a directory the host owns */
+  /** Graphcoder's cache: a directory the host owns. Structures of changes go to `structure/`, concept maps to `concepts/` */
   cacheDir: string
   /** Builds the index of a temporary checkout; default the pinned codegraph CLI at low priority */
   indexer?: Indexer
@@ -61,6 +64,12 @@ export interface GraphcoderService {
   structureOf(repoPath: string, base: string, head: string): Promise<ChangeStructure>
   /** The structure if it is cached, or whether it is being computed or failed; never computes or fetches */
   cachedStructure(repoPath: string, base: string, head: string): Promise<CachedStructure>
+  /**
+   * The concept map of a listed checkout at `ref` (default its HEAD, read in place): tree, code → concept map,
+   * checks, dependencies. Another commit is read from a temporary worktree and cached. Rejects with
+   * `UnknownRepoError` for an unlisted path, `UnknownRefError` for a ref the checkout lacks.
+   */
+  concepts(repoPath: string, ref?: string): Promise<ConceptMapReport>
 }
 
 export function createGraphcoderService(ports: GraphcoderPorts, options: GraphcoderOptions): GraphcoderService {
@@ -70,10 +79,22 @@ export function createGraphcoderService(ports: GraphcoderPorts, options: Graphco
     if (!repos.includes(wanted)) throw new UnknownRepoError(repoPath)
     return wanted
   }
+  const indexer = options.indexer ?? createCodegraphIndexer()
+  // One checkout and index at a time, whichever store asks
+  const queue = createSerialQueue()
   const structures = createStructureStore({
     git: ports.git,
-    indexer: options.indexer ?? createCodegraphIndexer(),
-    cacheDir: options.cacheDir,
+    indexer,
+    queue,
+    cacheDir: path.join(options.cacheDir, 'structure'),
+    log: options.log
+  })
+  const concepts = createConceptStore({
+    git: ports.git,
+    graph: ports.graph,
+    indexer,
+    queue,
+    cacheDir: path.join(options.cacheDir, 'concepts'),
     log: options.log
   })
 
@@ -93,6 +114,7 @@ export function createGraphcoderService(ports: GraphcoderPorts, options: Graphco
       return { path: repo, ...stats, annotations: annotations.length }
     },
     structureOf: async (repoPath, base, head) => structures.structureOf(await listed(repoPath), base, head),
-    cachedStructure: async (repoPath, base, head) => structures.cachedStructure(await listed(repoPath), base, head)
+    cachedStructure: async (repoPath, base, head) => structures.cachedStructure(await listed(repoPath), base, head),
+    concepts: async (repoPath, ref) => concepts.conceptsOf(await listed(repoPath), ref)
   }
 }

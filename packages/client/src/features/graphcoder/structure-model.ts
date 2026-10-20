@@ -29,7 +29,7 @@ export function reachBadge(s: WorkNodeStructure | undefined): Badge | null {
   ].join(' · ')
   return {
     text: `reach ${s.reach ?? 0}`,
-    title: `${reachText(s.reach ?? 0, s.parts ?? 1)}: the most hops between two changed symbols · ${counts}`,
+    title: `${reachText(s.reach ?? 0, s.parts ?? 1)}: the most hops between two changed symbols · ${counts}${s.concepts ? `\n${s.concepts}` : ''}`,
     tone: 'normal'
   }
 }

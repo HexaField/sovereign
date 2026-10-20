@@ -1,10 +1,13 @@
 // The "Structure" section of a Forge PR card: what the change does to the code.
 // The node carries the state and the numbers; once ready, the full structure
-// (modules, symbols, tests) loads from Graphcoder's cache-only route.
+// (concepts, modules, symbols, tests) loads from Graphcoder's cache-only route.
+// "Concept map" opens the repo's concept tree at the change's head.
 
-import { createResource, For, Match, Show, Switch, type Component } from 'solid-js'
+import { createResource, createSignal, For, Match, Show, Switch, type Component } from 'solid-js'
 import type { WorkNodeStructure } from '@sovereign/core/forge'
 import { createGraphcoderApi, type GraphcoderApi } from './api.js'
+import { ConceptImpact } from './ConceptImpact.js'
+import { ConceptTree } from './ConceptTree.js'
 import { moduleCounts, reachText, symbolGroups, testLabel } from './structure-model.js'
 
 const sectionTitle = 'mb-1 mt-3 text-[10px] font-semibold tracking-wider uppercase'
@@ -31,6 +34,8 @@ export const StructureSection: Component<{ structure: WorkNodeStructure; api?: G
     const d = detail()
     return d?.state === 'ready' ? d.structure : undefined
   }
+  // The concept map loads only once opened: at another commit than the checkout's, the server indexes it first
+  const [mapOpen, setMapOpen] = createSignal(false)
 
   return (
     <div data-testid="graphcoder-structure">
@@ -60,6 +65,8 @@ export const StructureSection: Component<{ structure: WorkNodeStructure; api?: G
               <div title="The most hops between two changed symbols on the code graph">
                 {reachText(s().reach, s().parts)}
               </div>
+
+              <ConceptImpact structure={s()} />
 
               <div class="mt-1" style={muted}>
                 Modules ({s().modules.length})
@@ -128,6 +135,15 @@ export const StructureSection: Component<{ structure: WorkNodeStructure; api?: G
                   </details>
                 </Show>
               </Show>
+
+              <details class="mt-1" onToggle={(e) => setMapOpen(e.currentTarget.open)}>
+                <summary class="cursor-pointer" style={muted} title="The concept tree at this change's head">
+                  Concept map
+                </summary>
+                <Show when={mapOpen()}>
+                  <ConceptTree path={props.structure.path} ref={s().head} api={api()} />
+                </Show>
+              </details>
             </>
           )}
         </Match>

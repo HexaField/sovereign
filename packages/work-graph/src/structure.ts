@@ -37,7 +37,8 @@ function summary(s: ChangeStructure, path: string): WorkNodeStructure {
     parts: s.parts,
     modules: s.modules.length,
     symbols: s.symbols.added.length + s.symbols.removed.length + s.symbols.modified.length,
-    tests: s.tests.length
+    tests: s.tests.length,
+    ...(s.concepts?.summary ? { concepts: s.concepts.summary } : {})
   }
 }
 

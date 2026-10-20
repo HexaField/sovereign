@@ -200,6 +200,8 @@ export interface WorkNodeStructure {
   modules?: number
   symbols?: number
   tests?: number
+  /** Ready, when the repo has a concept tree and the change touches it: one line of shifted and touched concepts */
+  concepts?: string
   /** Failed: why */
   error?: string
 }

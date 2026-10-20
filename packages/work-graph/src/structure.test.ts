@@ -89,6 +89,17 @@ describe('structure hook', () => {
     expect(hook.attach(nodeOf(3))).toEqual(nodeOf(3))
   })
 
+  it('carries the concept line when the change touches a concept tree', async () => {
+    const { calls, structureOf } = controlled()
+    const hook = createStructureHook(structureOf, () => {})
+    hook.request(CHECKOUTS, [cached(1)], () => {})
+    await tick()
+    const summary = 'Shifts Agents › Access (2 changed, 1 new); touches Agents › Identity (code only)'
+    calls[0].settle({ ...structure('sha-1-1'), concepts: { dir: 'mental-models', summary, pages: [] } })
+    await tick()
+    expect(hook.attach(nodeOf(1)).structure).toMatchObject({ state: 'ready', concepts: summary })
+  })
+
   it('asks again when the head moves, and drops the answer for a head that moved on', async () => {
     const { calls, structureOf } = controlled()
     const hook = createStructureHook(structureOf, () => {})

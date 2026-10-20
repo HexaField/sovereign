@@ -8,7 +8,8 @@
 //                 detached worktrees under <dataDir>/graphcoder/checkouts,
 //                 never inside the user's repo.
 //
-// Structures of changes are cached under <dataDir>/graphcoder/structure.
+// Graphcoder caches under <dataDir>/graphcoder: structures of changes in
+// structure/, concept maps of other commits in concepts/.
 // AiPort is not wired: nothing in Graphcoder calls a model yet. Removing
 // packages/graphcoder-* takes this file, its call in bootstrap.ts and the
 // `structureOf` the work graph gets from it.
@@ -213,7 +214,7 @@ export function mountGraphcoder(app: Express, opts: MountGraphcoderOptions): Str
   git.releaseLeftovers().catch((err) => console.error('[graphcoder] leftover checkouts:', (err as Error).message))
   const service = createGraphcoderService(
     { graph: createCodeIndexGraphSource(opts.codeIndex), git },
-    { cacheDir: path.join(dir, 'structure'), log: (msg) => console.log(`[graphcoder] ${msg}`) }
+    { cacheDir: dir, log: (msg) => console.log(`[graphcoder] ${msg}`) }
   )
   app.use(createGraphcoderRouter(service, opts.requireAuth))
   return (repoPath, base, head) => service.structureOf(repoPath, base, head)

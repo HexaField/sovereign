@@ -15,18 +15,22 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   computeChangeStructure,
-  readPackages,
+  conceptDirOf,
   type ChangeStructure,
   type GitPort,
   type StructureSide
 } from '@sovereign/graphcoder-core'
 import { openCodegraphIndex } from './codegraph.js'
 import type { Indexer } from './indexer.js'
+import { createSerialQueue, type SerialQueue } from './queue.js'
 import { createNodeRepoFiles } from './repo-files.js'
-import { readTestFiles } from './test-files.js'
+import { readSide, takeSnapshot } from './side.js'
 
-/** Bump when the computation or the pinned codegraph changes what it returns: older cache entries are then recomputed (2: codegraph 1.6.2) */
-export const STRUCTURE_VERSION = 2
+/**
+ * Bump when the computation or the pinned codegraph changes what it returns: older cache entries are then recomputed
+ * (2: codegraph 1.6.2; 3: concepts)
+ */
+export const STRUCTURE_VERSION = 3
 
 export type CachedStructure =
   | { state: 'ready'; structure: ChangeStructure }
@@ -46,6 +50,8 @@ export interface StructureStoreOptions {
   indexer: Indexer
   /** Where cached structures live; the host's choice */
   cacheDir: string
+  /** Runs one heavy job (checkout + index) at a time; share it with the concept map. Default: its own */
+  queue?: SerialQueue
   log?: (msg: string) => void
 }
 
@@ -55,25 +61,12 @@ interface Key {
 }
 
 /** A side of the change, read from a checkout whose index was just built */
-async function readSide(dir: string): Promise<StructureSide> {
-  const handle = openCodegraphIndex(dir)
-  let snapshot
-  try {
-    snapshot = handle.snapshot()
-  } finally {
-    handle.close()
-  }
-  const files = createNodeRepoFiles(dir)
-  const filePaths = snapshot.nodes.filter((n) => n.kind === 'file').map((n) => n.filePath)
-  const [{ testFiles, testRanges }, packages] = await Promise.all([
-    readTestFiles(files, snapshot.nodes),
-    readPackages(files, filePaths)
-  ])
-  return { snapshot, testFiles, testRanges, packages }
-}
+const readBuiltSide = (dir: string, conceptDir: string) =>
+  readSide(dir, takeSnapshot(openCodegraphIndex(dir)), conceptDir)
 
 export function createStructureStore(opts: StructureStoreOptions): StructureStore {
   const { git, indexer } = opts
+  const queue = opts.queue ?? createSerialQueue()
   const log = opts.log ?? (() => undefined)
   const repoDir = (repo: string) =>
     path.join(opts.cacheDir, createHash('sha256').update(repo).digest('hex').slice(0, 16))
@@ -119,13 +112,14 @@ export function createStructureStore(opts: StructureStoreOptions): StructureStor
       return computeChangeStructure({ base: k.base, head: k.head, files, baseSide: empty, headSide: empty })
     }
     const started = Date.now()
+    const conceptDir = await conceptDirOf(createNodeRepoFiles(repo))
     const checkout = await git.checkout(repo, k.base)
     try {
       await indexer.index(checkout.path)
-      const baseSide = await readSide(checkout.path)
+      const baseSide = await readBuiltSide(checkout.path, conceptDir)
       await checkout.switchTo(k.head)
       await indexer.index(checkout.path)
-      const headSide = await readSide(checkout.path)
+      const headSide = await readBuiltSide(checkout.path, conceptDir)
       const structure = computeChangeStructure({ base: k.base, head: k.head, files, baseSide, headSide })
       log(`structure ${repo} ${k.base.slice(0, 8)}..${k.head.slice(0, 8)}: ${Date.now() - started} ms`)
       return structure
@@ -135,7 +129,6 @@ export function createStructureStore(opts: StructureStoreOptions): StructureStor
   }
 
   // One computation at a time; a request whose refs are already queued joins it
-  let chain: Promise<unknown> = Promise.resolve()
   const queued = new Map<string, Promise<ChangeStructure>>()
   const failed = new Map<string, string>()
   const requestKey = (repo: string, base: string, head: string) => `${repo}\u0000${base}\u0000${head}`
@@ -145,7 +138,7 @@ export function createStructureStore(opts: StructureStoreOptions): StructureStor
     const held = queued.get(rk)
     if (held) return held
     failed.delete(rk)
-    const job = chain.then(async () => {
+    const job = queue.run(async () => {
       try {
         await git.fetch(repo, [base, head])
       } catch (err) {
@@ -160,7 +153,6 @@ export function createStructureStore(opts: StructureStoreOptions): StructureStor
       return structure
     })
     queued.set(rk, job)
-    chain = job.catch(() => undefined)
     job.then(
       () => queued.delete(rk),
       (err: Error) => {

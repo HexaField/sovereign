@@ -26,6 +26,13 @@ describe('reachBadge', () => {
       tone: 'normal'
     })
   })
+
+  it('adds the concept line to the tooltip', () => {
+    const concepts = 'Shifts Agents › Access (1 changed)'
+    expect(reachBadge({ ...key, state: 'ready', reach: 1, parts: 1, concepts })!.title).toMatch(
+      /\nShifts Agents › Access/
+    )
+  })
 })
 
 describe('section text', () => {

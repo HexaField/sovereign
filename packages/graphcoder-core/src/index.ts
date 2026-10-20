@@ -95,3 +95,30 @@ export {
   type StructureSide
 } from './structure/compute.js'
 export { createMemoryFiles } from './memory-files.js'
+
+export {
+  breadcrumb,
+  CONFIG_FILE,
+  conceptDirOf,
+  DEFAULT_CONCEPT_DIR,
+  isAncestor,
+  readConceptTree,
+  symbolNames,
+  type ConceptFlow,
+  type ConceptPage,
+  type ConceptTree,
+  type FlowStep,
+  type PathClaim,
+  type SymbolClaim
+} from './concepts/tree.js'
+export {
+  conceptChecks,
+  conceptDependencies,
+  conceptMapReport,
+  createConceptMap,
+  type Claimant,
+  type ConceptChecks,
+  type ConceptMap,
+  type Placed
+} from './concepts/map.js'
+export { conceptImpact, conceptSummary, type ConceptImpactInput } from './concepts/impact.js'

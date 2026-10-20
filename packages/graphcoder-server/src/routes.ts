@@ -1,4 +1,5 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
+import { UnknownRefError } from './concepts.js'
 import { UnknownRepoError, type GraphcoderService } from './service.js'
 
 /** A ref as a query parameter: present, and never something git would read as an option */
@@ -64,6 +65,20 @@ export function createGraphcoderRouter(
       res.json(await service.cachedStructure(change.path, change.base, change.head))
     } catch (err) {
       if (err instanceof UnknownRepoError) return res.status(404).json({ error: err.message })
+      res.status(500).json({ error: (err as Error).message })
+    }
+  })
+
+  // ?path=[&ref=] — the concept tree at ref (default the checkout's HEAD), mapped onto the code, with its checks
+  router.get('/api/graphcoder/concepts', requireAuth, async (req: Request, res: Response) => {
+    const { path, ref } = req.query
+    if (typeof path !== 'string' || path === '') return res.status(400).json({ error: 'path is required' })
+    if (ref !== undefined && !isRef(ref)) return res.status(400).json({ error: 'ref must be a git ref' })
+    try {
+      res.json(await service.concepts(path, ref))
+    } catch (err) {
+      if (err instanceof UnknownRepoError || err instanceof UnknownRefError)
+        return res.status(404).json({ error: err.message })
       res.status(500).json({ error: (err as Error).message })
     }
   })

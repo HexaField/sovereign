@@ -206,6 +206,12 @@ describe('mountGraphcoder', () => {
         .get('/api/graphcoder/structure/cached')
         .query({ path: repo, base: 'main', head: 'feature' })
       expect(cached.body).toEqual({ state: 'ready', structure })
+      expect(fs.readdirSync(path.join(dataDir, 'graphcoder', 'structure'))).toHaveLength(1)
+
+      const concepts = await request(app).get('/api/graphcoder/concepts').query({ path: repo, ref: 'feature' })
+      expect(concepts.status).toBe(200)
+      expect(concepts.body).toMatchObject({ path: repo, dir: 'mental-models', pages: [], coverage: { files: 1 } })
+      expect(fs.readdirSync(path.join(dataDir, 'graphcoder', 'concepts'))).toHaveLength(1)
       expect(fs.readdirSync(path.join(dataDir, 'graphcoder', 'checkouts'))).toEqual([])
       expect((await worktreeList(repo)).map((w) => w.worktree)).toEqual([repo])
     }

@@ -3,6 +3,9 @@ import type { GraphEdge, GraphNode } from '../graph.js'
 import type { PackageInfo } from '../hygiene.js'
 import { computeChangeStructure, testEdgeFilter, type StructureSide } from './compute.js'
 import { changed, fileNode, link, sym } from './fixtures.js'
+import { createConceptMap } from '../concepts/map.js'
+import { readConceptTree } from '../concepts/tree.js'
+import { createMemoryFiles } from '../memory-files.js'
 
 const pkg: PackageInfo = { name: 'app', deps: [], dir: 'app' }
 
@@ -124,16 +127,46 @@ describe('computeChangeStructure', () => {
     expect(r.tests).toEqual([])
   })
 
-  it('takes P2 module membership through moduleOf', () => {
-    const r = computeChangeStructure({
-      base: 'b',
-      head: 'h',
-      files,
-      baseSide: base,
-      headSide: head,
-      moduleOf: () => ({ module: 'arithmetic', label: 'Arithmetic' })
+  it('has no concepts without a concept tree', () => {
+    expect(s.concepts).toBeUndefined()
+    expect(s.symbols.added[0].concept).toBeUndefined()
+  })
+
+  it('takes modules from the concept map where a side has one, and says what the change does to the tree', async () => {
+    const page = `# Arithmetic\n\nAdds numbers.\n\n<details><summary>Where in the code</summary>\n\n- [math](../app/src/math): \`add\`.\n\n</details>\n`
+    const tree = (await readConceptTree(
+      createMemoryFiles({
+        'concepts/README.md': '# App\n\nThe app.\n',
+        'concepts/math.md': page,
+        'app/src/math/ops.ts': ''
+      }),
+      'concepts'
+    ))!
+    const withMap = (sideOf: StructureSide): StructureSide => ({
+      ...sideOf,
+      concepts: createConceptMap(tree, sideOf.snapshot.nodes)
     })
-    expect(r.modules).toEqual([{ module: 'arithmetic', label: 'Arithmetic', added: 1, removed: 1, modified: 1 }])
+    const r = computeChangeStructure({ base: 'b', head: 'h', files, baseSide: withMap(base), headSide: withMap(head) })
+    expect(r.modules).toEqual([{ module: 'concepts/math.md', label: 'Arithmetic', added: 1, removed: 1, modified: 1 }])
+    expect([...r.symbols.added, ...r.symbols.removed, ...r.symbols.modified].map((x) => x.concept)).toEqual([
+      'math',
+      'math',
+      'math'
+    ])
+    expect(r.concepts).toMatchObject({
+      dir: 'concepts',
+      summary: 'Touches Arithmetic (code only)',
+      pages: [
+        { id: '', symbols: { added: 0, removed: 0, modified: 0 } },
+        {
+          id: 'math',
+          symbols: { added: 1, removed: 1, modified: 1 },
+          files: ['app/src/math/ops.ts'],
+          tests: ['app/src/math/ops.test.ts::adds'],
+          signal: 'stale-page'
+        }
+      ]
+    })
   })
 })
 
