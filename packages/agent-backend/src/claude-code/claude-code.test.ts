@@ -2603,7 +2603,8 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
 
     const failed = events.filter((e) => e.type === 'subagent.failed')
     expect(failed).toHaveLength(1)
-    expect(failed[0].data.error).toMatch(/^timed out/)
+    // The message names the limit the run had, not the default
+    expect(failed[0].data.error).toBe('timed out after 1 min')
     expect(stub.calls.find((o: any) => o.sessionId === childKey).abortController.signal.aborted).toBe(true)
   })
 

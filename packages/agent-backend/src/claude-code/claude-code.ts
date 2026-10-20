@@ -2902,9 +2902,10 @@ export function createClaudeCodeBackend(
       parentSessionKey
     })
     const run: SubagentRun = { startedAt: Date.now() }
+    const timeoutMs = opts.timeoutMs ?? SUBAGENT_TIMEOUT_MS
     run.timer = setTimeout(
-      () => finishRun(childState, `timed out after ${Math.round(SUBAGENT_TIMEOUT_MS / 60_000)} min`),
-      opts.timeoutMs ?? SUBAGENT_TIMEOUT_MS
+      () => finishRun(childState, `timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} min`),
+      timeoutMs
     )
     run.timer.unref?.()
     childState.run = run
