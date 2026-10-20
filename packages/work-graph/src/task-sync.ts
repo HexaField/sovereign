@@ -12,7 +12,8 @@ import type {
   PortTask,
   PortTaskState,
   PortTaskStatus,
-  TaskPort
+  TaskPort,
+  TriagedEvent
 } from './types.js'
 
 export const TERMINAL: PortTaskState[] = ['completed', 'cancelled']
@@ -144,7 +145,7 @@ export function sameStatus(a: PortTaskStatus | undefined, b: PortTaskStatus): bo
   )
 }
 
-/** The owner thread's notification for a Loop 1 event, if any. */
+/** The owner thread's message for a needs-agent Loop 1 event, if any. Info events (merged, closed, approved, CI green) only update the task. */
 export function notificationFor(e: ForgeEvent, node: WorkNode): string | undefined {
   const isChange = node.kind === 'change'
   const tag = `[${isChange ? 'PR' : 'Issue'} #${node.number}]`
@@ -158,19 +159,10 @@ export function notificationFor(e: ForgeEvent, node: WorkNode): string | undefin
       const failed: string[] = Array.isArray(d.failed) ? d.failed : []
       return `${tag} CI check failed${failed.length ? `: ${failed.join(', ')}` : ''}. Run \`gh pr checks ${node.number} -R ${repo}\` for details.`
     }
-    case 'ci_passed':
-      return d.from === 'failing' ? `${tag} CI checks now passing.` : undefined
     case 'reviewed':
-      if (d.state === 'changes_requested')
-        return `${tag} Changes requested by ${d.login}. Run \`${view}\` to see review comments.`
-      if (d.state === 'approved') return `${tag} Approved by ${d.login}.`
-      return undefined
-    case 'merged':
-      return `${tag} Merged.`
-    case 'closed':
-      return isChange
-        ? `${tag} Closed without merge.`
-        : `${tag} Closed (${d.reason === 'not_planned' ? 'not planned' : 'completed'}).`
+      return d.state === 'changes_requested'
+        ? `${tag} Changes requested by ${d.login}. Run \`${view}\` to see review comments.`
+        : `${tag} Review from ${d.login}. Run \`${view}\` to read it.`
     case 'commented': {
       const n = Number(d.count ?? 1)
       return `${tag} ${n} new comment${n > 1 ? 's' : ''}. Run \`${view}\` to review.`
@@ -186,14 +178,15 @@ export interface TaskSyncInput {
   tasks: PortTask[]
   nodes: Map<string, WorkNode>
   edges: WorkEdge[]
-  events: ForgeEvent[]
+  /** Triaged: only `needs-agent` events reach the owner thread. */
+  events: TriagedEvent[]
   item(nodeId: string): CachedChange | CachedIssue | undefined
   now: string
 }
 
 export interface TaskSyncResult {
   updated: number
-  notifications: Array<{ threadId: string; text: string; nodeId: string }>
+  notifications: Array<{ threadId: string; text: string; nodeId: string; type: ForgeEvent['type'] }>
 }
 
 /** Write status, state and transientState onto every task attached to a node. */
@@ -248,9 +241,9 @@ export async function syncTasks(port: TaskPort, input: TaskSyncInput): Promise<T
     if (touched) result.updated++
     if (t.threadId) {
       for (const e of input.events) {
-        if (e.nodeId !== node.id) continue
+        if (e.nodeId !== node.id || e.triage !== 'needs-agent') continue
         const text = notificationFor(e, node)
-        if (text) result.notifications.push({ threadId: t.threadId, text, nodeId: node.id })
+        if (text) result.notifications.push({ threadId: t.threadId, text, nodeId: node.id, type: e.type })
       }
     }
   }

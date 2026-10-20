@@ -64,6 +64,23 @@ describe('ruleTriage', () => {
       expect(ruleTriage(ev(t), ctx())).toBe('info')
   })
 
+  it('a bot comment or comment review on an owned item is info, unless it names us', () => {
+    const bots = { authors: ['coderabbitai[bot]', 'lal-bot'] }
+    expect(ruleTriage(ev('commented', { ...bots, text: ['Summary of changes'] }), ctx({ owned: true }))).toBe('info')
+    expect(ruleTriage(ev('reviewed', { state: 'commented', login: 'data-bot-coasys' }), ctx({ owned: true }))).toBe(
+      'info'
+    )
+    expect(ruleTriage(ev('commented', { ...bots, text: ['@hex-agent rebase please'] }), ctx({ owned: true }))).toBe(
+      'needs-agent'
+    )
+    // One person among the authors leaves it to the model
+    expect(
+      ruleTriage(ev('commented', { authors: ['lal-bot', 'jo'], text: ['x'] }), ctx({ owned: true }))
+    ).toBeUndefined()
+    // A bot that requests changes still needs the agent
+    expect(ruleTriage(ev('reviewed', { state: 'changes_requested', login: 'lal-bot' }), ctx())).toBe('needs-agent')
+  })
+
   it('leaves owned judgement calls to the model', () => {
     expect(ruleTriage(ev('commented', { text: ['looks odd'] }), ctx({ owned: true }))).toBeUndefined()
     expect(ruleTriage(ev('reviewed', { state: 'commented' }), ctx({ owned: true }))).toBeUndefined()

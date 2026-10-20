@@ -100,27 +100,26 @@ describe('notifications (pr-poll parity)', () => {
     type,
     detail
   })
-  it('tells the owner thread about CI, reviews, merges and comments', () => {
+  it('words the needs-agent events: CI red, changes requested, comments, conflicts', () => {
     const n = node()
     expect(notificationFor(e('ci_failed', { failed: ['build'] }), n)).toBe(
       '[PR #1] CI check failed: build. Run `gh pr checks 1 -R acme-labs/widget` for details.'
     )
-    expect(notificationFor(e('ci_passed', { from: 'failing' }), n)).toBe('[PR #1] CI checks now passing.')
-    expect(notificationFor(e('ci_passed', { from: 'pending' }), n)).toBeUndefined()
     expect(notificationFor(e('reviewed', { state: 'changes_requested', login: 'jo' }), n)).toContain(
       'Changes requested by jo'
     )
-    expect(notificationFor(e('merged'), n)).toBe('[PR #1] Merged.')
-    expect(notificationFor(e('closed'), n)).toBe('[PR #1] Closed without merge.')
     expect(notificationFor(e('commented', { count: 2 }), n)).toBe(
       '[PR #1] 2 new comments. Run `gh pr view 1 -R acme-labs/widget --comments` to review.'
+    )
+    expect(notificationFor(e('conflict', { base: 'dev' }), n)).toBe(
+      '[PR #1] Conflicts with dev. Merge the base in and resolve.'
     )
     expect(notificationFor(e('pushed'), n)).toBeUndefined()
   })
 })
 
 describe('syncTasks', () => {
-  it('writes status, state and transientState, emits task events, and notifies the owner thread', async () => {
+  it('writes status, state and transientState, emits task events, and tells the owner thread only what needs it', async () => {
     const events: string[] = []
     const bus = {
       emit: (ev: { type: string }) => events.push(ev.type),
@@ -143,7 +142,10 @@ describe('syncTasks', () => {
       tasks: await port.listByMembrane('acme'),
       nodes: new Map([[merged.id, merged]]),
       edges: [],
-      events: [{ at: '', nodeId: merged.id, type: 'merged', detail: {} }],
+      events: [
+        { at: '', nodeId: merged.id, type: 'merged', detail: {}, triage: 'info', tier: 'rule' },
+        { at: '', nodeId: merged.id, type: 'conflict', detail: { base: 'dev' }, triage: 'needs-agent', tier: 'rule' }
+      ],
       item: () => ({ checks: { state: 'passing' } }) as CachedChange,
       now: '2026-10-16T00:00:00.000Z'
     })
@@ -151,7 +153,15 @@ describe('syncTasks', () => {
     expect(after.state).toBe('completed')
     expect(after.transientState).toBe('merged into dev')
     expect(after.status).toMatchObject({ kind: 'change', state: 'merged', checks: 'passing', review: 'none' })
-    expect(r.notifications).toEqual([{ threadId: 'thread-1', text: '[PR #1] Merged.', nodeId: merged.id }])
+    // The merge is recorded on the task; only the needs-agent event becomes a message
+    expect(r.notifications).toEqual([
+      {
+        threadId: 'thread-1',
+        text: '[PR #1] Conflicts with dev. Merge the base in and resolve.',
+        nodeId: merged.id,
+        type: 'conflict'
+      }
+    ])
     expect(events).toEqual(
       expect.arrayContaining([
         'task.created',

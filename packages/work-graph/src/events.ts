@@ -40,6 +40,9 @@ function mentioned(text: string, ctx: TriageContext): boolean {
   })
 }
 
+/** A bot account: GitHub App bots end in `[bot]`; machine users carry `bot` as a name segment (`lal-bot`). */
+const isBot = (login: unknown) => typeof login === 'string' && /\[bot\]$|(^|[-_])bot([-_]|$)/i.test(login)
+
 const approved = (n?: WorkNode) =>
   Boolean(
     n?.reviewers.some((r) => r.state === 'approved') && !n?.reviewers.some((r) => r.state === 'changes_requested')
@@ -54,7 +57,7 @@ export function ruleTriage(e: ForgeEvent, ctx: TriageContext): TriageVerdict | u
       return ctx.owned ? 'needs-agent' : 'info'
     case 'reviewed':
       if (d.state === 'changes_requested') return 'needs-agent'
-      if (d.state === 'commented' && ctx.owned) return undefined
+      if (d.state === 'commented' && ctx.owned) return isBot(d.login) ? 'info' : undefined
       return 'info'
     case 'conflict':
       return 'needs-agent'
@@ -65,6 +68,8 @@ export function ruleTriage(e: ForgeEvent, ctx: TriageContext): TriageVerdict | u
     case 'commented': {
       const text = Array.isArray(d.text) ? d.text.join('\n') : String(d.text ?? '')
       if (mentioned(text, ctx)) return 'needs-agent'
+      const authors: unknown[] = Array.isArray(d.authors) ? d.authors : []
+      if (authors.length && authors.every(isBot)) return 'info'
       return ctx.owned ? undefined : 'info'
     }
     case 'referenced':
