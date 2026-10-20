@@ -87,11 +87,12 @@ function validateState(state: string): asserts state is TaskState {
 }
 
 /**
- * A PR or issue task belongs to at most one work stream (its owning epic).
- * Task-only tasks, plans and sub-streams may sit in several.
+ * A task with one stream parent at most: a PR or issue task belongs to one
+ * work stream (its owning epic), and a work stream sits under one parent
+ * stream (a tree). Task-only tasks and plans that are not streams may sit in several.
  */
 export function ownedByOneStream(t: Pick<Task, 'isStream' | 'provider'>): boolean {
-  return !t.isStream && (t.provider?.kind === 'change' || t.provider?.kind === 'issue')
+  return t.isStream || t.provider?.kind === 'change' || t.provider?.kind === 'issue'
 }
 
 export function createTaskService(deps: TaskServiceDeps): TaskService {
@@ -254,7 +255,14 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
         providerChanged = true
       }
 
-      const updated = await store.update(taskId, fields as any)
+      let updated = await store.update(taskId, fields as any)
+      // Now one stream parent at most (made a stream, or bound to a PR or issue): keep the first.
+      if (ownedByOneStream(updated) && !ownedByOneStream(existing)) {
+        const streamParents: string[] = []
+        for (const p of updated.parentTasks) if ((await store.get(p.id))?.isStream) streamParents.push(p.id)
+        for (const p of streamParents.slice(1)) await unlinkTasks(p, taskId, opts.sourceThreadId)
+        if (streamParents.length > 1) updated = (await store.get(taskId)) ?? updated
+      }
 
       // Emit specific events for state, thread, transient changes
       if (stateChanged) {

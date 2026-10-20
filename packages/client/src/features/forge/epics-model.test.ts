@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   clearEpics,
-  epicCounts,
   epicFocus,
   epicSource,
-  epicsButtonLabel,
   focusedEpics,
   laneStreams,
   orderEpics,
@@ -27,6 +25,7 @@ import {
 } from './epics-model.js'
 import { applyFilters, clearFilters, hasActiveFilters } from './filters.js'
 import { change, edge, issue, NOW, shuffled, stream } from './test-fixtures.js'
+import { treeButtonLabel } from './tree-model.js'
 
 const R = 'demo-org/engine'
 
@@ -82,8 +81,8 @@ describe('selection', () => {
     f = toggleEpic(f, 'archived-one')
     expect(f).toEqual({ dim: true, workstreams: ['s2', 'archived-one'] })
     expect(selectedEpics(f, streams)).toEqual(['s2'])
-    expect(epicsButtonLabel(f, streams)).toBe('Epics (1/7)')
-    expect(epicsButtonLabel({}, streams)).toBe('Epics (7)')
+    expect(treeButtonLabel(f, streams)).toBe('Tree (1/7)')
+    expect(treeButtonLabel({}, streams)).toBe('Tree (7)')
     expect(clearEpics(f)).toEqual({ dim: true })
     expect(toggleEpic(toggleEpic({}, 's2'), 's2')).toEqual({})
   })
@@ -104,15 +103,6 @@ describe('selection', () => {
     expect(setEpicRelated({ workstreams: ['s2'] }, true)).toEqual({ workstreams: ['s2'], epicRelated: true })
     expect(setEpicRelated({ epicRelated: true }, false)).toEqual({})
     expect(clearFilters({ epicRelated: true, workstreams: ['s2'], repos: [R] })).toEqual({ epicRelated: true })
-  })
-
-  it('counts owned items, and related ones apart', () => {
-    expect(epicCounts(stream('x', 'X', { memberCount: 6, relatedCount: 12 }))).toEqual({
-      owned: '6',
-      related: '12 rel.'
-    })
-    expect(epicCounts(stream('x', 'X', { memberCount: 6, relatedCount: 0 }))).toEqual({ owned: '6' })
-    expect(epicCounts(stream('x', 'X', { memberCount: 0 }))).toEqual({ owned: '0' })
   })
 })
 
@@ -235,9 +225,9 @@ describe('status chips', () => {
     expect(f).toEqual({ epicStatus: ['active', 'paused'] })
     expect(toggleEpicStatus(f, 'active')).toEqual({ epicStatus: ['paused'] })
     expect(toggleEpicStatus({ epicStatus: ['active'] }, 'active')).toEqual({})
-    expect(epicsButtonLabel(f, all)).toBe('Epics: Active, Paused (4)')
-    expect(epicsButtonLabel({ ...f, workstreams: ['act1'] }, all)).toBe('Epics (1/4)')
-    expect(epicsButtonLabel({}, all)).toBe('Epics (5)')
+    expect(treeButtonLabel(f, all)).toBe('Tree: Active, Paused (4)')
+    expect(treeButtonLabel({ ...f, workstreams: ['act1'] }, all)).toBe('Tree (1/4)')
+    expect(treeButtonLabel({}, all)).toBe('Tree (5)')
     expect(clearEpics({ ...f, workstreams: ['act1'], dim: true })).toEqual({ dim: true })
     expect(hasActiveFilters({ epicStatus: ['planned'] })).toBe(true)
     expect(wantsArchived(f)).toBe(false)

@@ -35,6 +35,7 @@ import { resolveScope, type MembraneScope, type ScopeSource } from './scope.js'
 import { createRepoSync, type RepoSync } from './sync.js'
 import { createStructureHook } from './structure.js'
 import { syncTasks, TERMINAL } from './task-sync.js'
+import { withProgress } from './tree.js'
 import {
   DEFAULT_FORGE_CONFIG,
   type ActiveCiWatch,
@@ -576,17 +577,18 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         })
       }
 
-      s.log.append(await triageAll(events, graph, tasks, await identityOf(scope)))
+      const triaged = await triageAll(events, graph, tasks, await identityOf(scope))
+      s.log.append(triaged)
 
       const ts = await syncTasks(deps.tasks, {
         tasks,
         nodes,
         edges: graph.edges,
-        events,
+        events: triaged,
         item: (id) => itemOf(scope, id)?.item,
         now: iso()
       })
-      await notifyAll(ts.notifications)
+      await notifyAll(ts.notifications, nodes)
       s.lastSyncAt = iso()
       s.lastError = s.repoErrors.size ? [...s.repoErrors].map(([r, m]) => `${r}: ${m}`).join('; ') : undefined
       if (mode === 'all') s.lastAllAt = now()
@@ -599,8 +601,25 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     }
   }
 
-  async function notifyAll(list: Array<{ threadId: string; text: string }>) {
+  /** CI results a thread hears from its own `ci_watch` on that change: the forge does not repeat them. */
+  function heardByCiWatch(n: { threadId: string; nodeId: string; type: string }, nodes: Map<string, WorkNode>) {
+    const node = nodes.get(n.nodeId)
+    if (n.type !== 'ci_failed' || !node?.repo) return false
+    return (deps.ciWatch?.list() ?? []).some(
+      (w) =>
+        w.threadKey === n.threadId &&
+        w.repo.toLowerCase() === node.repo!.toLowerCase() &&
+        ((w.target.kind === 'pr' && w.target.number === node.number) ||
+          (w.target.kind === 'branch' && w.target.name === node.branch?.head))
+    )
+  }
+
+  async function notifyAll(
+    list: Array<{ threadId: string; text: string; nodeId: string; type: string }>,
+    nodes: Map<string, WorkNode>
+  ) {
     for (const n of list) {
+      if (heardByCiWatch(n, nodes)) continue
       try {
         await (deps.threads.notify ?? deps.threads.sendToThread)(n.threadId, n.text)
       } catch (err) {
@@ -659,24 +678,26 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const res = await rs.refreshItems(g.refs)
     const c = rs.cache()
     const graph = buildGraph({ repos: [c], plans: [], tasks: g.tasks, related: [] })
+    const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
+    const triaged = await triageAll(res.events, graph, g.tasks, await identityFor(g.ref))
     const ts = await syncTasks(deps.tasks, {
       tasks: g.tasks,
-      nodes: new Map(graph.nodes.map((n) => [n.id, n])),
+      nodes,
       edges: graph.edges,
-      events: res.events,
+      events: triaged,
       item: (id) => {
         const ref = parseRefKey(id, 'change')
         return ref ? (c.changes[ref.id] ?? c.issues[ref.id]) : undefined
       },
       now: iso()
     })
-    await notifyAll(ts.notifications)
+    await notifyAll(ts.notifications, nodes)
     // A membrane's event log and canvas hear about its tracked items too.
     for (const m of new Set(g.tasks.map((t) => t.membrane).filter((m): m is string => Boolean(m)))) {
       if (!deps.scope.getMembrane(m)) continue
       const keys = new Set(g.tasks.filter((t) => t.membrane === m).map((t) => t.key))
-      const mine = res.events.filter((e) => keys.has(e.nodeId))
-      if (mine.length) state(m).log.append(await triageAll(mine, graph, g.tasks, await identityFor(g.ref)))
+      const mine = triaged.filter((e) => keys.has(e.nodeId))
+      if (mine.length) state(m).log.append(mine)
       if (res.changed || mine.length || ts.updated) emit('forge.updated', { membrane: m })
     }
     return res.events.length
@@ -1109,7 +1130,9 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const syncs_ = scope.repos.map((r) => syncOf(r)).filter((x): x is RepoSync => Boolean(x))
       const notes = deps.rethinkNotes?.(membrane) ?? {}
       const streams = withRelatedCounts(
-        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || w.status !== 'archived'),
+        withProgress(await deps.tasks.streamsOf(membrane), graph.nodes, graph.edges).filter(
+          (w) => opts.archived || w.status !== 'archived'
+        ),
         graph.nodes
       )
       const shown = new Set(streams.map((w) => w.id))

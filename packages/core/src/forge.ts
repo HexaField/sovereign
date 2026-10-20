@@ -179,6 +179,8 @@ export interface WorkNode {
   createdAt: string
   updatedAt: string
   closedAt?: string
+  /** A closed issue: completed, or closed as not planned (cancelled). */
+  closedReason?: 'completed' | 'not_planned'
 }
 
 /**
@@ -254,6 +256,34 @@ export interface WorkStream {
   status: EpicStatus
   /** The plan key ("plan:<project>/<path>") of a stream a plan file made; absent for a hand-made stream. */
   plan?: string
+  /** Its leaves over its whole subtree (sub-streams included); set by the work graph's `graph()`. */
+  progress?: StreamProgress
+}
+
+/**
+ * A stream's leaves (member PRs, issues and task-only tasks) over its subtree.
+ * `total` leaves cancelled ones out; `blocked` counts open leaves waiting on another open PR.
+ */
+export interface StreamProgress {
+  done: number
+  total: number
+  blocked: number
+}
+
+/** A goal-tree leaf's state (plan §7.3): merged / closed completed → done, closed unmerged / not planned → cancelled. Plans and branches are no leaves (undefined). */
+export function leafState(
+  n: Pick<WorkNode, 'kind' | 'state' | 'closedReason'>
+): 'done' | 'cancelled' | 'open' | undefined {
+  switch (n.kind) {
+    case 'change':
+      return n.state === 'merged' ? 'done' : n.state === 'closed' ? 'cancelled' : 'open'
+    case 'issue':
+      return n.state === 'open' ? 'open' : n.closedReason === 'not_planned' ? 'cancelled' : 'done'
+    case 'task':
+      return n.state === 'done' ? 'done' : n.state === 'cancelled' ? 'cancelled' : 'open'
+    default:
+      return undefined
+  }
 }
 
 export interface ForgeView {
@@ -286,6 +316,8 @@ export interface ForgeFilters {
   epicNeighbours?: boolean
   /** true = the selected epics' related items count too ("Owned + related"); default owned only. */
   epicRelated?: boolean
+  /** "Not in a tree": only open PRs and issues no work stream owns (client-side, like the epic selection). */
+  orphans?: boolean
   agent?: 'any' | 'waiting-ci' | 'waiting-review'
   updatedWithinDays?: number
   text?: string

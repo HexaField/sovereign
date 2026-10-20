@@ -1,6 +1,6 @@
 // Filter chips for one graph: the most used fields as chips (Repo, State,
-// Assignee, Requested from me, Agent, Updated), the rest behind "More", a
-// text filter. Epics are picked in the epics panel, not here.
+// Assignee, Requested from me, Not in a tree, Agent, Updated), the rest behind
+// "More", a text filter. Tree nodes are picked in the tree panel, not here.
 
 import { createSignal, For, Show, type Component } from 'solid-js'
 import type { ForgeFilters } from '@sovereign/core'
@@ -144,6 +144,15 @@ const FilterBar: Component<FilterBarProps> = (props) => {
         data-testid="forge-filter-mine"
       >
         Requested from me
+      </button>
+      <button
+        class={chip}
+        style={chipStyle(!!props.filters.orphans)}
+        title="Open issues and PRs that no node of the goal tree owns"
+        onClick={() => set({ orphans: !props.filters.orphans })}
+        data-testid="forge-filter-orphans"
+      >
+        Not in a tree
       </button>
       <select
         class={chip}

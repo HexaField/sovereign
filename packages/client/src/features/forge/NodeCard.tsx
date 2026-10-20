@@ -24,6 +24,7 @@ import { cardRethinkItems } from './rethink-model.js'
 import type { ForgeApi } from './api.js'
 import { CI_COLORS, REVIEW_COLORS, STATE_COLORS } from './style.js'
 import { threadChoices } from './membrane.js'
+import { placeOptions } from './tree-model.js'
 
 export interface ThreadChoice {
   id: string
@@ -331,8 +332,11 @@ const NodeCard: Component<NodeCardProps> = (props) => {
           </For>
         </Show>
         <Show when={task().options.length || task().owner}>
-          <label class="mt-1 flex items-center gap-1" title="The one epic this item belongs to">
-            <span style={muted}>Epic:</span>
+          <label
+            class="mt-1 flex items-center gap-1"
+            title="Move to… the one node of the goal tree this item belongs to"
+          >
+            <span style={muted}>In node:</span>
             <select
               class="min-w-0 flex-1 rounded border px-1 py-0.5 text-xs"
               style={btnStyle}
@@ -341,11 +345,14 @@ const NodeCard: Component<NodeCardProps> = (props) => {
               onChange={(e) => setOwner(e.currentTarget.value)}
               data-testid="forge-card-epic"
             >
-              <option value="">None</option>
+              <option value="">{task().epic ? 'Top level (a goal)' : 'None'}</option>
               <Show when={task().owner && !task().options.some((s) => s.id === task().owner!.id)}>
                 <option value={task().owner!.id}>{task().owner!.name}</option>
               </Show>
-              <For each={task().options}>{(s) => <option value={s.id}>{s.name}</option>}</For>
+              {/* A tree node (a plan's stream) moves under another node: never under its own subtree. */}
+              <For each={placeOptions(props.streams, task().epic?.id)}>
+                {(o) => <option value={o.id}>{o.label}</option>}
+              </For>
             </select>
             <Show when={task().owner && props.streams.find((s) => s.id === task().owner!.id)}>
               {(owner) => (

@@ -252,7 +252,7 @@ describe('forge service', () => {
     expect(d.groups[0].nodes[0].node.id).toBe(nid(WIDGET, 50))
   })
 
-  it('a merged change turns its task completed within one sync and notifies the owner thread', async () => {
+  it('a merged change turns its task completed within one sync, without a message to the owner thread', async () => {
     await service.sync('acme')
     await service.assign({ nodeId: nid(WIDGET, 50), threadId: 'owner' })
     sent = []
@@ -269,7 +269,8 @@ describe('forge service', () => {
     const t = (await port.findByKey(nid(WIDGET, 50)))!
     expect(t.state).toBe('completed')
     expect(t.transientState).toBe('merged into dev')
-    expect(sent).toEqual([{ threadId: 'owner', text: '[PR #50] Merged.' }])
+    // Info events land on the task only: no turn for the owner thread
+    expect(sent).toEqual([])
     // The stacked change got base_merged; it is unowned, so info.
     expect(service.events('acme').find((e) => e.type === 'base_merged')).toMatchObject({
       nodeId: nid(WIDGET, 51),
@@ -296,6 +297,23 @@ describe('forge service', () => {
       tier: 'rule'
     })
     expect((await service.status('acme')).triage.rule.needsAgent).toBeGreaterThanOrEqual(1)
+  })
+
+  it("CI red is left to the owner thread's own CI watch on that change", async () => {
+    service = make({
+      ciWatch: {
+        list: () => [{ threadKey: 'owner', repo: WIDGET, target: { kind: 'pr', number: 50 }, createdAt: 1 }]
+      }
+    })
+    await service.sync('acme')
+    await service.assign({ nodeId: nid(WIDGET, 50), threadId: 'owner' })
+    sent = []
+    forge.changes.get(WIDGET)!.find((c) => c.ref.id === '50')!.checks = { state: 'failing' }
+    forge.checkResults.set(`${WIDGET}#50`, { state: 'failing', failed: ['build'] })
+    now += 120_000
+    await service.sync('acme', 'open')
+    expect((await port.findByKey(nid(WIDGET, 50)))!.transientState).toMatch(/^CI red: build/)
+    expect(sent).toEqual([])
   })
 
   it('rethink runs Loop 2 on a non-empty digest only, and moves the cursor', async () => {
@@ -399,7 +417,7 @@ describe('forge service', () => {
     expect((await service.graph('acme')).nodes.some((n) => n.relatedStreams)).toBe(false)
   })
 
-  it('a change or issue has one owning epic: every add path moves it; task-only items and sub-epics may sit in several', async () => {
+  it('a change or issue has one owning epic and a sub-epic one parent: every add path moves it; task-only items may sit in several', async () => {
     await service.sync('acme')
     const a = await service.createStream('acme', 'Alpha')
     const b = await service.createStream('acme', 'Beta')
@@ -418,10 +436,10 @@ describe('forge service', () => {
     await port.addToStream(a.id, t51.id)
     expect(await owners(nid(WIDGET, 51))).toEqual([a.id])
 
-    // A task-only item and a sub-epic keep every stream they are in.
+    // A sub-epic moves to its new parent (one parent); a task-only item keeps every stream it is in.
     const sub = await service.createStream('acme', 'Sub', a.id)
     await port.addToStream(c.id, sub.id)
-    expect((await port.get(sub.id))!.parentIds.sort()).toEqual([a.id, c.id].sort())
+    expect((await port.get(sub.id))!.parentIds).toEqual([c.id])
     const task = await port.service.create({ name: 'Loose task', membrane: 'acme', sourceThreadId: 't' })
     await port.addToStream(a.id, task.id)
     await port.addToStream(c.id, task.id)
@@ -676,14 +694,20 @@ describe('forge service', () => {
     await service.assign({ membrane: 'beta', nodeId: nid(GADGET, 9), threadId: 'beta-owner' })
     sent = []
     now += 120_000
-    forge.put(change(GADGET, 9, { state: 'merged', updatedAt: new Date(now).toISOString() }))
+    forge.changes.get(GADGET)!.find((c) => c.ref.id === '9')!.checks = { state: 'failing' }
+    forge.checkResults.set(`${GADGET}#9`, { state: 'failing', failed: ['build'] })
     now += 60_000
     await service.sync('acme')
     await service.sync('beta')
-    const merged = (m: string) => service.events(m).filter((e) => e.type === 'merged' && e.nodeId === nid(GADGET, 9))
-    expect(merged('acme')).toHaveLength(1)
-    expect(merged('beta')).toHaveLength(1)
-    expect(sent).toEqual([{ threadId: 'beta-owner', text: '[PR #9] Merged.' }])
+    const red = (m: string) => service.events(m).filter((e) => e.type === 'ci_failed' && e.nodeId === nid(GADGET, 9))
+    expect(red('acme')).toHaveLength(1)
+    expect(red('beta')).toHaveLength(1)
+    expect(sent).toEqual([
+      {
+        threadId: 'beta-owner',
+        text: '[PR #9] CI check failed: build. Run `gh pr checks 9 -R acme-labs/gadget` for details.'
+      }
+    ])
   })
 
   it('an assignment made while a sync runs keeps its marker in state.json', async () => {

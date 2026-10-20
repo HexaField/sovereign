@@ -156,7 +156,8 @@ export function buildGraph(input: BuildInput): BuiltGraph {
           workstreams: [],
           createdAt: i.createdAt,
           updatedAt: i.updatedAt,
-          ...(i.closedAt ? { closedAt: i.closedAt } : {})
+          ...(i.closedAt ? { closedAt: i.closedAt } : {}),
+          ...(i.state === 'closed' && i.closedReason ? { closedReason: i.closedReason } : {})
         })
       )
     }
