@@ -34,7 +34,8 @@ export interface Plan {
 
 const URL_RE = /https?:\/\/([a-z0-9.-]+)\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)/gi
 const SHORT_RE = /(?<![\w/.-])([\w.-]+)\/([\w.-]+)#(\d+)\b/g
-const BARE_RE = /(?<![\w/#&])#(\d+)\b/g
+// `#12-documentation-site` is a heading anchor (a table of contents), not item #12
+const BARE_RE = /(?<![\w/#&])#(\d+)(?![\w-])/g
 const REPO_NAME_RE = /(?<![\w/.:-])([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*)(?![\w/-])/g
 const REPO_LINE_RE = /^\s*\**repo\**:?\**\s*`?([\w.-]+\/[\w.-]+)`?/im
 

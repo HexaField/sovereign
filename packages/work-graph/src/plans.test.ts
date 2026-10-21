@@ -54,6 +54,12 @@ describe('plan parsing', () => {
     const text = 'acme-labs/widget\n\n```\nwidget#1 #2\n```\n\nhttps://example.org/page#3'
     expect(planRefs(text, ['acme-labs/widget'])).toEqual([])
   })
+
+  it('ignores heading anchors in links (a table of contents), keeps (#N) in prose', () => {
+    const text =
+      'acme-labs/widget\n\n1. [Pricing](#1-pricing-decisions)\n2. [Site](#12-documentation-site)\n\nFixed in (#40).'
+    expect(planRefs(text, ['acme-labs/widget'])).toEqual([{ host: 'github.com', repo: 'acme-labs/widget', number: 40 }])
+  })
 })
 
 describe('scanPlans', () => {
