@@ -154,11 +154,12 @@ export function toggleFilterValue(f: ForgeFilters, key: ListFilterKey, value: st
   return out as ForgeFilters
 }
 
-/** Drop every filter and the epic selection; the display toggles (dim, paused, epic neighbours, owned + related) stay. */
+/** Drop every filter and the epic selection; the display toggles (dim, paused, empty plans, epic neighbours, owned + related) stay. */
 export function clearFilters(f: ForgeFilters): ForgeFilters {
   return {
     ...(f.dim ? { dim: true } : {}),
     ...(f.showPaused ? { showPaused: true } : {}),
+    ...(f.showEmpty ? { showEmpty: true } : {}),
     ...(f.epicNeighbours === false ? { epicNeighbours: false } : {}),
     ...(f.epicRelated ? { epicRelated: true } : {})
   }

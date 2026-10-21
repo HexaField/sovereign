@@ -325,6 +325,8 @@ export interface ForgeFilters {
   text?: string
   /** Show paused items and paused epics (with the streams and items below a paused epic); default hidden. */
   showPaused?: boolean
+  /** Show plan epics that own no items (none in their subtree, no hand-made node below); default hidden. */
+  showEmpty?: boolean
   /** Dim non-matching nodes instead of hiding them. */
   dim?: boolean
 }

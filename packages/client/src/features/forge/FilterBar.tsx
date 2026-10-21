@@ -228,6 +228,15 @@ const FilterBar: Component<FilterBarProps> = (props) => {
       >
         Paused
       </button>
+      <button
+        class={chip}
+        style={chipStyle(!!props.filters.showEmpty)}
+        title="Show plans that own no work items yet (hidden from the goal tree by default)"
+        onClick={() => set({ showEmpty: !props.filters.showEmpty })}
+        data-testid="forge-filter-empty"
+      >
+        Empty plans
+      </button>
       <Show when={hasActiveFilters(props.filters)}>
         <button
           class={chip}

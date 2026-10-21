@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   canvasMenuTarget,
+  canvasTree,
+  emptyPlans,
+  treeEpics,
   clearEpics,
   epicFocus,
   epicSource,
@@ -85,8 +88,9 @@ describe('selection', () => {
     f = toggleEpic(f, 'archived-one')
     expect(f).toEqual({ dim: true, workstreams: ['s2', 'archived-one'] })
     expect(selectedEpics(f, streams)).toEqual(['s2'])
-    expect(treeButtonLabel(f, streams)).toBe('Tree (1/7)')
-    expect(treeButtonLabel({}, streams)).toBe('Tree (7)')
+    // 'indexer rework' is a plan that owns no items: hidden from the tree
+    expect(treeButtonLabel(f, streams)).toBe('Tree (1/6)')
+    expect(treeButtonLabel({}, streams)).toBe('Tree (6)')
     expect(clearEpics(f)).toEqual({ dim: true })
     expect(toggleEpic(toggleEpic({}, 's2'), 's2')).toEqual({})
   })
@@ -303,6 +307,41 @@ describe('paused', () => {
     })
     expect(canvasMenuTarget(open.id, [], byId)).toEqual({ kind: 'item', node: open })
     expect(canvasMenuTarget(merged(R, 5, 1).id, [], byId)).toBeNull()
+  })
+})
+
+describe('tree shape', () => {
+  const goal = stream('g', 'Identity', { status: 'active' })
+  const plan20 = stream('p20', 'Plan 20', { parentId: 'g', status: 'active', plan: 'plan:x/20.md', memberCount: 4 })
+  const driver = stream('drv', 'Plan 20 driver state', { parentId: 'p20', status: 'planned', plan: 'plan:x/drv.md' })
+  const keyLog = stream('kl', 'Key log', { parentId: 'g', status: 'planned', plan: 'plan:x/kl.md', memberCount: 2 })
+  const ledger = stream('led', 'Ledger', { status: 'planned', plan: 'plan:x/led.md' })
+  const docParent = stream('doc', 'Doc', { status: 'planned', plan: 'plan:x/doc.md' })
+  const byHand = stream('bh', 'By hand', { parentId: 'doc', status: 'planned' })
+  const emptyGoal = stream('eg', 'New goal', { status: 'planned' })
+  const all = [goal, plan20, driver, keyLog, ledger, docParent, byHand, emptyGoal]
+  const ids = (xs: { id: string }[]) => xs.map((x) => x.id).sort()
+
+  it('hides plans that own no items below them; hand-made nodes and plans above them stay', () => {
+    expect([...emptyPlans({}, all)].sort()).toEqual(['drv', 'led'])
+    expect(emptyPlans({ showEmpty: true }, all).size).toBe(0)
+    expect(ids(shownEpics({}, all))).toEqual(['bh', 'doc', 'eg', 'g', 'kl', 'p20'])
+  })
+
+  it('keeps a status-chip node under its goal: ancestors join as faded context, never as roots', () => {
+    const f = { epicStatus: ['planned' as const] }
+    const t = canvasTree(f, all)
+    expect(ids(t.streams)).toEqual(['bh', 'doc', 'eg', 'g', 'kl'])
+    expect([...t.context]).toEqual(['g'])
+    expect(
+      orderEpics(t.streams)
+        .filter((r) => r.depth === 0)
+        .map((r) => r.stream.id)
+    ).toEqual(['doc', 'g', 'eg'])
+    const shown = treeEpics({ showEmpty: true, epicStatus: ['planned'] }, all)
+    expect([...shown.context].sort()).toEqual(['g', 'p20'])
+    // A pick is the root of what the canvas draws: no context above it
+    expect(canvasTree({ workstreams: ['kl'] }, all)).toEqual({ streams: [keyLog], context: new Set() })
   })
 })
 

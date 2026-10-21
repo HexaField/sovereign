@@ -13,7 +13,7 @@ import { EPIC_STATUSES } from '@sovereign/core/forge'
 import { EPIC_STATUS_COLORS, EPIC_STATUS_LABELS } from './style.js'
 import {
   canvasMenuTarget,
-  canvasStreams,
+  canvasTree,
   clearEpics,
   epicFocus,
   focusStream,
@@ -107,11 +107,12 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   const nodes = createMemo(() => [...win().nodes.values()])
   const nodesById = createMemo(() => win().nodes)
   const filters = createMemo(() => viewFilters(props.view))
+  const tree = createMemo(() => canvasTree(filters(), win().workstreams))
   const layout = createMemo(() =>
     computeLayout({
       nodes: nodes(),
       edges: win().edges,
-      workstreams: canvasStreams(filters(), win().workstreams),
+      workstreams: tree().streams,
       now: layoutNow(),
       since: win().since,
       related: filters().epicRelated === true
@@ -141,7 +142,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   const scene = createMemo(() => {
     if (!nodes().length) return null
     const v = visibility()
-    return buildScene(layout(), nodesById(), v.visible, v.dimmed, lod().scale)
+    return buildScene(layout(), nodesById(), v.visible, v.dimmed, lod().scale, tree().context)
   })
   // Option order holds across loads and picks (stableOptions).
   let lastOptions: FilterOptions | undefined

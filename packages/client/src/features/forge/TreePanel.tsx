@@ -28,7 +28,7 @@ import {
   setDim,
   setEpicNeighbours,
   setEpicRelated,
-  shownEpics,
+  treeEpics,
   shownStatuses,
   toggleEpic,
   toggleEpicStatus,
@@ -114,8 +114,9 @@ const TreePanel: Component<TreePanelProps> = (props) => {
     () => setOpen(false)
   )
 
-  const listed = createMemo(() => shownEpics(props.filters, props.streams))
-  const rows = createMemo(() => orderEpics(listed()))
+  // The shown nodes with their ancestors, so a status chip keeps each node under its goal (ancestors faded).
+  const tree = createMemo(() => treeEpics(props.filters, props.streams))
+  const rows = createMemo(() => orderEpics(tree().streams))
   const outline = createMemo(() =>
     treeRows(searchEpics(rows(), query()), props.nodes, { collapsed: collapsed(), openLeaves: openLeaves() })
   )
@@ -301,7 +302,8 @@ const TreePanel: Component<TreePanelProps> = (props) => {
         class="group flex items-center gap-1 py-0.5 pr-2 hover:bg-[var(--c-hover-bg)]"
         style={{
           'padding-left': `${6 + r.depth * 14}px`,
-          outline: dropOn() === s.id ? '1px dashed var(--c-accent)' : undefined
+          outline: dropOn() === s.id ? '1px dashed var(--c-accent)' : undefined,
+          opacity: tree().context.has(s.id) ? 0.5 : undefined
         }}
         {...dragProps({ kind: 'stream', id: s.id })}
         {...dropProps(s.id)}
@@ -562,7 +564,7 @@ const TreePanel: Component<TreePanelProps> = (props) => {
               onChange={(e) => setParent(e.currentTarget.value)}
             >
               <option value="">As a goal</option>
-              <For each={placeOptions(listed())}>{(o) => <option value={o.id}>Inside {o.label}</option>}</For>
+              <For each={placeOptions(tree().streams)}>{(o) => <option value={o.id}>Inside {o.label}</option>}</For>
             </select>
           </Show>
           <button

@@ -25,16 +25,19 @@ export function buildScene(
   nodesById: Map<string, WorkNode>,
   visible: Set<string>,
   dimmed: Set<string>,
-  scale: number
+  scale: number,
+  /** Streams drawn only as context (an ancestor of what the tree shows): their cards fade. */
+  contextStreams: Set<string> = new Set()
 ): Scene {
-  // Goal-tree cards always show, undimmed: the tree is the frame the focus and filters work inside
-  // (a plan card is a plan node the filters or the focus would otherwise hide).
+  // Goal-tree cards always show, undimmed but for context ancestors: the tree is the frame the focus
+  // and filters work inside (a plan card is a plan node the filters or the focus would otherwise hide).
   if (layout.tree.cards.size) {
     visible = new Set(visible)
     dimmed = new Set(dimmed)
-    for (const id of layout.tree.cards.keys()) {
+    for (const [id, s] of layout.tree.cards) {
       visible.add(id)
-      dimmed.delete(id)
+      if (contextStreams.has(s.id)) dimmed.add(id)
+      else dimmed.delete(id)
     }
   }
   const collapsed = collapsePast(layout, nodesById, scale, (id) => visible.has(id))

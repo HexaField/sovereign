@@ -271,13 +271,14 @@ function drawStreamCard(
   p: PlacedNode,
   f: FrameInput,
   detail: Detail,
-  planNode: WorkNode | undefined
+  planNode: WorkNode | undefined,
+  dim: boolean
 ): void {
   const { palette } = f
   const selected = f.selectedId === p.id
   const hover = f.hoverId === p.id
   const color = EPIC_STATUS_COLORS[s.status]?.fg ?? palette.muted
-  ctx.globalAlpha = 1
+  ctx.globalAlpha = dim ? 0.4 : 1
   roundRect(ctx, p.x, p.y, p.w, p.h, 7)
   ctx.fillStyle = palette.raised
   ctx.fill()
@@ -495,7 +496,7 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
     const n = scene.nodesById.get(id)
     const s = p?.stream ? layout.tree.cards.get(id) : undefined
     if (p && s) {
-      drawStreamCard(ctx, s, p, f, detail, n)
+      drawStreamCard(ctx, s, p, f, detail, n, scene.dimmed.has(id))
       stats.nodesDrawn++
       continue
     }

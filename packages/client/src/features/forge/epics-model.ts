@@ -93,12 +93,52 @@ export function pausedStreams(f: ForgeFilters, streams: WorkStream[]): Set<strin
   return new Set(paused.length ? withSubEpics(paused, streams) : [])
 }
 
-/** The epics the panel lists: those with a shown status, outside a hidden paused subtree. */
+/**
+ * Plan streams that structure no work: no member anywhere in their subtree and no hand-made
+ * node below them. A plan earns its place in the tree by owning items; hidden unless `showEmpty`.
+ */
+export function emptyPlans(f: ForgeFilters, streams: WorkStream[]): Set<string> {
+  if (f.showEmpty) return new Set()
+  const out = new Set<string>()
+  for (const s of streams) {
+    if (!s.plan) continue
+    const sub = new Set(withSubEpics([s.id], streams))
+    if (!streams.some((x) => sub.has(x.id) && (x.memberCount > 0 || !x.plan))) out.add(s.id)
+  }
+  return out
+}
+
+/** The epics the panel lists: those with a shown status, outside a hidden paused subtree, not an empty plan. */
 export function shownEpics(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
   const statuses = new Set(shownStatuses(f))
   const paused = pausedStreams(f, streams)
-  return streams.filter((s) => statuses.has(s.status) && !paused.has(s.id))
+  const empty = emptyPlans(f, streams)
+  return streams.filter((s) => statuses.has(s.status) && !paused.has(s.id) && !empty.has(s.id))
 }
+
+/**
+ * `base` with every ancestor, so a node a status chip shows keeps its place under its goal.
+ * `context` holds the ancestors only there for that (drawn faded).
+ */
+export function withAncestors(
+  base: WorkStream[],
+  streams: WorkStream[]
+): { streams: WorkStream[]; context: Set<string> } {
+  const byId = new Map(streams.map((s) => [s.id, s]))
+  const keep = new Set(base.map((s) => s.id))
+  const context = new Set<string>()
+  for (const s of base) {
+    for (let p = s.parentId ? byId.get(s.parentId) : undefined; p && !keep.has(p.id); ) {
+      keep.add(p.id)
+      context.add(p.id)
+      p = p.parentId ? byId.get(p.parentId) : undefined
+    }
+  }
+  return { streams: streams.filter((s) => keep.has(s.id)), context }
+}
+
+/** The goal tree the Tree panel lists: the shown epics with their ancestors as context. */
+export const treeEpics = (f: ForgeFilters, streams: WorkStream[]) => withAncestors(shownEpics(f, streams), streams)
 
 /** The epics picked one by one that the panel lists (an epic of a hidden status, archived or removed drops out). */
 export function pickedEpics(f: ForgeFilters, streams: WorkStream[]): string[] {
@@ -178,18 +218,19 @@ export function panelShown(v: { visible: Set<string>; dimmed: Set<string> }): Se
 }
 
 /**
- * The streams the canvas draws, as lanes and as goal-tree cards: with nothing
- * selected, every shown epic; with a selection, the focused epics (the picks and
- * their whole subtrees), so a picked node is the root of the tree drawn. None
- * while "Not in a tree" is on: orphans belong to no node.
+ * The streams the canvas draws, as lanes and as goal-tree cards: with epics picked, the
+ * picks and their whole subtrees (a picked node is the root of the tree drawn); else the
+ * focused or shown epics with their ancestors as faded context, so a status chip never
+ * turns a node into a root. None while "Not in a tree" is on: orphans belong to no node.
  */
-export function canvasStreams(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
-  if (f.orphans) return []
-  const focused = focusedEpics(f, streams)
-  if (!focused.length) return shownEpics(f, streams)
-  const keep = new Set(focused)
-  return streams.filter((s) => keep.has(s.id))
+export function canvasTree(f: ForgeFilters, streams: WorkStream[]): { streams: WorkStream[]; context: Set<string> } {
+  if (f.orphans) return { streams: [], context: new Set() }
+  const focused = new Set(focusedEpics(f, streams))
+  const base = focused.size ? streams.filter((s) => focused.has(s.id)) : shownEpics(f, streams)
+  return pickedEpics(f, streams).length ? { streams: base, context: new Set() } : withAncestors(base, streams)
 }
+
+export const canvasStreams = (f: ForgeFilters, streams: WorkStream[]): WorkStream[] => canvasTree(f, streams).streams
 
 /** A stream card clicked on the canvas: pick that one node (the Tree panel's selection); a click on the sole pick clears it. */
 export function focusStream(f: ForgeFilters, id: string): ForgeFilters {
