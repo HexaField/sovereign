@@ -27,27 +27,48 @@ describe('plan parsing', () => {
   })
 
   it('links a bare #N only when the file names exactly one repo', () => {
-    expect(planRefs('Fix #4 and #5 in acme-labs/widget.', ['acme-labs/widget'])).toEqual([
-      { host: 'github.com', repo: 'acme-labs/widget', number: 4 },
-      { host: 'github.com', repo: 'acme-labs/widget', number: 5 }
+    expect(planRefs('Fix #104 and #105 in acme-labs/widget.', ['acme-labs/widget'])).toEqual([
+      { host: 'github.com', repo: 'acme-labs/widget', number: 104 },
+      { host: 'github.com', repo: 'acme-labs/widget', number: 105 }
     ])
     // Two repos named: bare numbers are ambiguous.
-    const two = planRefs('acme-labs/widget and acme-labs/gadget; then #4.', ['acme-labs/widget', 'acme-labs/gadget'])
+    const two = planRefs('acme-labs/widget and acme-labs/gadget; then #104.', ['acme-labs/widget', 'acme-labs/gadget'])
     expect(two).toEqual([])
     // An item reference names that item, not the file's repo.
-    expect(planRefs('Covers #50 and acme-labs/gadget#9.', ['acme-labs/widget', 'acme-labs/gadget'])).toEqual([
+    expect(planRefs('Covers #150 and acme-labs/gadget#9.', ['acme-labs/widget', 'acme-labs/gadget'])).toEqual([
       { host: 'github.com', repo: 'acme-labs/gadget', number: 9 }
     ])
     // No repo named at all.
-    expect(planRefs('Then #4.', ['acme-labs/widget'])).toEqual([])
+    expect(planRefs('Then #104.', ['acme-labs/widget'])).toEqual([])
     // A Repo: line decides.
     expect(
-      planRefs('Repo: acme-labs/gadget\n\nalso acme-labs/widget#1, then #9', ['acme-labs/widget', 'acme-labs/gadget'])
+      planRefs('Repo: acme-labs/gadget\n\nalso acme-labs/widget#1, then #109', ['acme-labs/widget', 'acme-labs/gadget'])
     ).toContainEqual({
       host: 'github.com',
       repo: 'acme-labs/gadget',
-      number: 9
+      number: 109
     })
+  })
+
+  it('a bare #N below 100 is a section or list number, not an item', () => {
+    const text = 'acme-labs/widget\n\nLegal name (see #7). Use the numbers from #1. AR-02 #6. Then #1392.'
+    expect(planRefs(text, ['acme-labs/widget'])).toEqual([
+      { host: 'github.com', repo: 'acme-labs/widget', number: 1392 }
+    ])
+    // A qualified reference keeps any number
+    expect(planRefs('acme-labs/widget#7', ['acme-labs/widget'])).toEqual([
+      { host: 'github.com', repo: 'acme-labs/widget', number: 7 }
+    ])
+  })
+
+  it('a repo name right before #N, or a comma list of them, picks that repo: "WE #293, #302", "gadget #120"', () => {
+    const text = 'acme-labs/widget\n\n| WE #293, #302 | billing |\n\ngadget #120 and #1400.'
+    expect(planRefs(text, ['acme-labs/widget', 'coasys/we', 'acme-labs/gadget'])).toEqual([
+      { host: 'github.com', repo: 'coasys/we', number: 293 },
+      { host: 'github.com', repo: 'coasys/we', number: 302 },
+      { host: 'github.com', repo: 'acme-labs/gadget', number: 120 },
+      { host: 'github.com', repo: 'acme-labs/widget', number: 1400 }
+    ])
   })
 
   it('ignores #N inside fenced code and anchors in URLs', () => {
@@ -57,8 +78,10 @@ describe('plan parsing', () => {
 
   it('ignores heading anchors in links (a table of contents), keeps (#N) in prose', () => {
     const text =
-      'acme-labs/widget\n\n1. [Pricing](#1-pricing-decisions)\n2. [Site](#12-documentation-site)\n\nFixed in (#40).'
-    expect(planRefs(text, ['acme-labs/widget'])).toEqual([{ host: 'github.com', repo: 'acme-labs/widget', number: 40 }])
+      'acme-labs/widget\n\n1. [Pricing](#1-pricing-decisions)\n2. [Site](#12-documentation-site)\n\nFixed in (#140).'
+    expect(planRefs(text, ['acme-labs/widget'])).toEqual([
+      { host: 'github.com', repo: 'acme-labs/widget', number: 140 }
+    ])
   })
 })
 

@@ -37,6 +37,10 @@ const SHORT_RE = /(?<![\w/.-])([\w.-]+)\/([\w.-]+)#(\d+)\b/g
 // `#12-documentation-site` is a heading anchor (a table of contents), not item #12
 const BARE_RE = /(?<![\w/#&])#(\d+)(?![\w-])/g
 const REPO_NAME_RE = /(?<![\w/.:-])([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*)(?![\w/-])/g
+// A repo's short name right before bare references: "WE #293, #302", "ad4m #1392"
+const NAMED_RE = /(?<![\w/.-])([A-Za-z][\w.-]*)\s+(#\d+(?:\s*,\s*#\d+)*)(?![\w-])/g
+/** A bare `#N` below this is a section or list number ("see #7", "AR-02 #6"), not an item */
+const MIN_BARE = 100
 const REPO_LINE_RE = /^\s*\**repo\**:?\**\s*`?([\w.-]+\/[\w.-]+)`?/im
 
 export function planStatus(text: string): PlanStatus {
@@ -90,7 +94,15 @@ export function planRefs(text: string, knownRepos: string[] = [], defaultHost = 
     const repo = known.get(`${m[1]}/${m[2]}`.toLowerCase()) ?? `${m[1]}/${m[2]}`
     put({ host: defaultHost, repo, number: Number(m[3]) })
   }
-  const plain = noUrls.replace(SHORT_RE, ' ')
+  const shortName = new Map([...known.values()].map((r) => [r.slice(r.indexOf('/') + 1).toLowerCase(), r]))
+  const unqualified = noUrls.replace(SHORT_RE, ' ')
+  for (const m of unqualified.matchAll(NAMED_RE)) {
+    const repo = shortName.get(m[1].toLowerCase())
+    if (repo) for (const n of m[2].matchAll(/\d+/g)) put({ host: defaultHost, repo, number: Number(n[0]) })
+  }
+  const plain = unqualified.replace(NAMED_RE, (all: string, name: string) =>
+    shortName.has(name.toLowerCase()) ? ' ' : all
+  )
 
   const line = REPO_LINE_RE.exec(body)
   let home: string | undefined = line ? (known.get(line[1].toLowerCase()) ?? line[1]) : undefined
@@ -104,7 +116,8 @@ export function planRefs(text: string, knownRepos: string[] = [], defaultHost = 
     if (named.size === 1) home = [...named][0]
   }
   if (home) {
-    for (const m of plain.matchAll(BARE_RE)) put({ host: defaultHost, repo: home, number: Number(m[1]) })
+    for (const m of plain.matchAll(BARE_RE))
+      if (Number(m[1]) >= MIN_BARE) put({ host: defaultHost, repo: home, number: Number(m[1]) })
   }
   return [...out.values()]
 }

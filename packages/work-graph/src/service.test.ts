@@ -71,7 +71,7 @@ describe('forge service', () => {
     fs.mkdirSync(path.join(widgetDir, 'plans'), { recursive: true })
     fs.writeFileSync(
       path.join(widgetDir, 'plans', 'sprockets.md'),
-      '# Sprocket rework\n\nStatus: in progress\n\nCovers #50 in acme-labs/widget, and acme-labs/gadget#9.\n'
+      '# Sprocket rework\n\nStatus: in progress\n\nCovers acme-labs/widget#50, and acme-labs/gadget#9.\n'
     )
     const membranes = [
       { id: 'acme', workspaceIds: ['acme-org'] },
@@ -416,7 +416,7 @@ describe('forge service', () => {
     expect(g.workstreams[0]).toMatchObject({ memberCount: 2, relatedCount: 1 })
 
     // The plan drops #50 and names issue #7: #50 stays owned, #7 is related only.
-    fs.writeFileSync(planFile, '# Sprocket rework\n\nStatus: in progress\n\nNow only #7 in acme-labs/widget.\n')
+    fs.writeFileSync(planFile, '# Sprocket rework\n\nStatus: in progress\n\nNow only acme-labs/widget#7.\n')
     await service.sync('acme')
     expect(await members()).toEqual([nid(WIDGET, 50), nid(WIDGET, 51)].sort())
     g = await service.graph('acme')
@@ -505,7 +505,7 @@ describe('forge service', () => {
   it('a plan that names no item, or is done, makes no stream; it stays a plan node', async () => {
     const dir = path.join(tmp, 'acme', 'widget', 'plans')
     fs.writeFileSync(path.join(dir, 'idea.md'), '# Loose idea\n\nNothing tracked yet.\n')
-    fs.writeFileSync(path.join(dir, 'shipped.md'), '# Shipped\n\nStatus: done\n\nLanded as #51 in acme-labs/widget.\n')
+    fs.writeFileSync(path.join(dir, 'shipped.md'), '# Shipped\n\nStatus: done\n\nLanded as acme-labs/widget#51.\n')
     await service.sync('acme')
     const g = await service.graph('acme')
     expect(g.workstreams.map((w) => w.name)).toEqual(['Sprocket rework'])
@@ -522,7 +522,7 @@ describe('forge service', () => {
 
   it('a plan stream that stops qualifying with only plan links stops being a stream; a child stream keeps one', async () => {
     const dir = path.join(tmp, 'acme', 'widget', 'plans')
-    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nCovers #51 in acme-labs/widget.\n')
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nCovers acme-labs/widget#51.\n')
     await service.sync('acme')
     const sprockets = (await port.findByKey('plan:acme-org/widget/sprockets.md'))!
     const gears = (await port.findByKey('plan:acme-org/widget/gears.md'))!
@@ -558,7 +558,7 @@ describe('forge service', () => {
     // The plan now names #51 too: an archived stream stays archived and owns nothing.
     fs.writeFileSync(
       path.join(tmp, 'acme', 'widget', 'plans', 'sprockets.md'),
-      '# Sprocket rework\n\nStatus: in progress\n\nCovers #50 and #51 in acme-labs/widget.\n'
+      '# Sprocket rework\n\nStatus: in progress\n\nCovers acme-labs/widget#50 and acme-labs/widget#51.\n'
     )
     await service.sync('acme')
     expect(await port.get(stream.id)).toMatchObject({ state: 'cancelled', isStream: true, childIds: [] })
@@ -577,7 +577,7 @@ describe('forge service', () => {
 
   it("a plan's Status line sets its epic's status once; after that the status is the user's", async () => {
     const dir = path.join(tmp, 'acme', 'widget', 'plans')
-    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nCovers #51 in acme-labs/widget.\n')
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nCovers acme-labs/widget#51.\n')
     await service.sync('acme')
     const status = async () =>
       Object.fromEntries((await service.graph('acme')).workstreams.map((w) => [w.name, w.status]))
@@ -589,7 +589,7 @@ describe('forge service', () => {
     // The user's status holds through plan edits, syncs and an assigned thread.
     await service.setStreamStatus(sprockets.id, 'planned', 'acme')
     await service.setStreamStatus(gears.id, 'paused', 'acme')
-    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nStatus: in progress\n\nCovers #51 in acme-labs/widget.\n')
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nStatus: in progress\n\nCovers acme-labs/widget#51.\n')
     await service.assign({ membrane: 'acme', nodeId: 'plan:acme-org/widget/sprockets.md', threadId: 'thread-1' })
     now += 120_000
     await service.sync('acme')
@@ -597,7 +597,7 @@ describe('forge service', () => {
     expect(await port.get(gears.id)).toMatchObject({ state: 'paused' })
 
     // Done in the plan, with no members: no longer a stream.
-    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nStatus: done\n\nCovers #51 in acme-labs/widget.\n')
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nStatus: done\n\nCovers acme-labs/widget#51.\n')
     now += 120_000
     await service.sync('acme')
     expect(await port.get(gears.id)).toMatchObject({ isStream: false })
