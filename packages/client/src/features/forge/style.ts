@@ -141,11 +141,14 @@ export function edgeStyle(e: WorkEdge, to: WorkNode | undefined): EdgeStyle {
   }
 }
 
-/** A card in the lane of an epic it is only related to (not owned by): a dashed purple border, as a `related` edge. */
+/** A card of an epic it is only related to (not owned by): a dashed purple border, as a `related` edge. */
 export const RELATED_CARD = { color: PURPLE, dash: [4, 3] }
 
 /** A goal-tree connector (child card → parent card): solid teal, apart from every forge edge style. */
 export const TREE_LINK = { color: '#2dd4bf', width: 2 }
+
+/** An item → the card of its stream: the tree's teal, thin and faint, dashed when only related. */
+export const MEMBER_LINK = { color: '#2dd4bf', width: 1, alpha: 0.35, relatedDash: [4, 3] }
 
 export function initials(login: string): string {
   const parts = login.split(/[-_.\s]+/).filter(Boolean)

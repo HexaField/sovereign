@@ -3,7 +3,7 @@
 // Pure apart from the context it draws into; ForgeCanvas decides when.
 
 import type { AgentOverlay, WorkNode, WorkStream } from '@sovereign/core'
-import { LANE_HEAD, NODE_H, type PlacedNode } from './layout.js'
+import { NODE_H, type PlacedNode } from './layout.js'
 import { detailFor, type Detail } from './lod.js'
 import { anchorOf, type Scene } from './scene.js'
 import {
@@ -16,6 +16,7 @@ import {
   initials,
   reviewSummary,
   ringFor,
+  MEMBER_LINK,
   TREE_LINK,
   type Palette
 } from './style.js'
@@ -44,6 +45,7 @@ export interface FrameStats {
   edgesDrawn: number
   bandsDrawn: number
   treeLinksDrawn: number
+  memberLinksDrawn: number
   /** A visible ring pulses: the caller keeps animating. */
   animating: boolean
 }
@@ -336,7 +338,14 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
   const { scene, vp, width, height, dpr, palette } = f
   const { layout } = scene
   const detail = detailFor(vp.scale)
-  const stats: FrameStats = { nodesDrawn: 0, edgesDrawn: 0, bandsDrawn: 0, treeLinksDrawn: 0, animating: false }
+  const stats: FrameStats = {
+    nodesDrawn: 0,
+    edgesDrawn: 0,
+    bandsDrawn: 0,
+    treeLinksDrawn: 0,
+    memberLinksDrawn: 0,
+    animating: false
+  }
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.globalAlpha = 1
@@ -353,17 +362,6 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
   ctx.fillStyle = palette.future
   if (vx1 > layout.futureStart - 40)
     ctx.fillRect(layout.futureStart - 40, view.y, vx1 - layout.futureStart + 40, view.h)
-
-  // Lanes.
-  ctx.lineWidth = 1 / vp.scale
-  for (const lane of layout.lanes) {
-    if (lane.y > vy1 || lane.y + lane.h < view.y) continue
-    ctx.strokeStyle = palette.border
-    ctx.beginPath()
-    ctx.moveTo(view.x, lane.y)
-    ctx.lineTo(vx1, lane.y)
-    ctx.stroke()
-  }
 
   // "Now" divider.
   if (view.x <= 0 && vx1 >= 0) {
@@ -445,6 +443,30 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
   ctx.setLineDash([])
   ctx.globalAlpha = 1
 
+  // Item → its stream's card: the graph the layout positions by, under the tree's own links.
+  ctx.strokeStyle = MEMBER_LINK.color
+  ctx.lineWidth = MEMBER_LINK.width / vp.scale
+  ctx.globalAlpha = MEMBER_LINK.alpha
+  for (const link of layout.tree.members) {
+    const a = layout.nodes.get(link.from)
+    const b = layout.nodes.get(link.to)
+    if (!a || !b || !scene.visible.has(link.from) || scene.collapsed.bandOf.has(link.from)) continue
+    const x1 = a.x + a.w
+    const y1 = a.y + a.h / 2
+    const x2 = b.x
+    const y2 = b.y + b.h / 2
+    if (Math.max(x1, x2) < view.x || Math.min(x1, x2) > vx1 || Math.max(y1, y2) < view.y || Math.min(y1, y2) > vy1)
+      continue
+    ctx.setLineDash(link.related ? MEMBER_LINK.relatedDash.map((d) => d / vp.scale) : [])
+    const dx = Math.max(20, (x2 - x1) / 2)
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.bezierCurveTo(x1 + dx, y1, x2 - dx, y2, x2, y2)
+    ctx.stroke()
+    stats.memberLinksDrawn++
+  }
+  ctx.setLineDash([])
+
   // Goal-tree connectors: child card (left) → parent card (one column right).
   ctx.strokeStyle = TREE_LINK.color
   ctx.lineWidth = TREE_LINK.width / vp.scale
@@ -506,28 +528,10 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
   }
   ctx.globalAlpha = 1
 
-  // Screen-space overlays: lane labels pinned left, zone labels on top.
+  // Screen-space overlays: zone labels on top.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
-  let labelBottom = -Infinity
-  for (const lane of layout.lanes) {
-    const sy = (lane.y + LANE_HEAD / 2) * vp.scale + vp.ty
-    if (sy < -20 || sy > height + 20) continue
-    // Zoomed out, thin lanes would stack their labels on top of each other.
-    if (sy - 9 < labelBottom) continue
-    labelBottom = sy + 11
-    ctx.font = `600 11px ${FONT}`
-    const label = (lane.kind === 'stream' ? '◆ ' : '') + lane.label
-    const w = ctx.measureText(label).width + 12
-    ctx.globalAlpha = 0.92
-    ctx.fillStyle = palette.bg
-    roundRect(ctx, 6, sy - 9, w, 18, 4)
-    ctx.fill()
-    ctx.globalAlpha = 1
-    ctx.fillStyle = lane.kind === 'stream' ? palette.accent : palette.muted
-    ctx.fillText(label, 12, sy)
-  }
   ctx.font = `600 10px ${FONT}`
   ctx.fillStyle = palette.muted
   const nowSx = vp.tx

@@ -63,24 +63,12 @@ function sampleGraph() {
 }
 
 function noOverlaps(layout: Layout): void {
-  const byLane = new Map<string, { x: number; y: number; w: number; h: number; id: string }[]>()
-  for (const p of layout.nodes.values()) {
-    const list = byLane.get(p.lane) ?? []
-    list.push(p)
-    byLane.set(p.lane, list)
-  }
-  for (const b of layout.branches) {
-    const list = byLane.get(b.lane) ?? []
-    // A branch line is a 2-px strip in its row; it must not run under another node.
-    list.push({ id: `line:${b.nodeId}`, x: b.x0, y: b.y - 1, w: b.x1 - b.x0, h: 2 })
-    byLane.set(b.lane, list)
-  }
-  for (const [lane, list] of byLane) {
-    for (let i = 0; i < list.length; i++)
-      for (let j = i + 1; j < list.length; j++) {
-        if (rectsOverlap(list[i], list[j])) throw new Error(`overlap in ${lane}: ${list[i].id} × ${list[j].id}`)
-      }
-  }
+  const rects: { x: number; y: number; w: number; h: number; id: string }[] = [...layout.nodes.values()]
+  // A branch line is a 2-px strip in its row; it must not run under another node.
+  for (const b of layout.branches) rects.push({ id: `line:${b.nodeId}`, x: b.x0, y: b.y - 1, w: b.x1 - b.x0, h: 2 })
+  for (let i = 0; i < rects.length; i++)
+    for (let j = i + 1; j < rects.length; j++)
+      if (rectsOverlap(rects[i], rects[j])) throw new Error(`overlap: ${rects[i].id} × ${rects[j].id}`)
 }
 
 describe('computeLayout', () => {
@@ -114,7 +102,7 @@ describe('computeLayout', () => {
     const l = computeLayout({ ...g, now: NOW })
     const placed = g.stack.map((n) => l.nodes.get(n.id)!)
     expect(new Set(placed.map((p) => p.row)).size).toBe(1)
-    expect(new Set(placed.map((p) => p.lane))).toEqual(new Set(['stream:s-stack']))
+    expect(new Set(placed.map((p) => p.group))).toEqual(new Set(['stream:s-stack']))
     for (let i = 1; i < placed.length; i++) expect(placed[i].x - placed[i - 1].x).toBe(COL_W)
     // Only the stack's root forks off the past; the rest hang off their base.
     const lines = l.branches.filter((b) => g.stack.some((n) => n.id === b.nodeId))
@@ -123,7 +111,7 @@ describe('computeLayout', () => {
     expect(lines[0].x1).toBe(placed[0].x)
   })
 
-  it("keeps a stack in its root's lane, left → right, even when its PRs belong to other streams too", () => {
+  it('keeps a stack with its root, left → right in one row, even when its PRs belong to other streams too', () => {
     const g = sampleGraph()
     // The root also sits in an earlier-ranked stream; the root was updated last.
     const other = { id: 'a-other', name: 'A other', membrane: 'm', memberCount: 1, status: 'active' as const }
@@ -135,29 +123,31 @@ describe('computeLayout', () => {
     const nodes = g.nodes.map((n) => stack.find((s) => s.id === n.id) ?? n)
     const l = computeLayout({ ...g, nodes, workstreams: [other, ...g.workstreams], now: NOW })
     const placed = stack.map((n) => l.nodes.get(n.id)!)
-    expect(new Set(placed.map((p) => p.lane))).toEqual(new Set(['stream:a-other']))
+    expect(new Set(placed.map((p) => p.group))).toEqual(new Set(['stream:a-other']))
+    expect(new Set(placed.map((p) => p.row)).size).toBe(1)
     for (let i = 1; i < placed.length; i++) expect(placed[i].x - placed[i - 1].x).toBe(COL_W)
   })
 
-  it('an item of a stream the canvas does not draw falls to its repo lane', () => {
+  it('an item of a stream the canvas does not draw belongs to its repo, with no link to a card', () => {
     const goal = stream('g', 'Goal')
     const a = issue(CORE, 1, { workstreams: ['d'] })
     const b = issue(CORE, 2, { workstreams: ['g'] })
     const l = computeLayout({ nodes: [a, b], edges: [], workstreams: [goal], now: NOW })
-    expect(l.nodes.get(a.id)!.lane).toBe(`repo:${CORE}`)
-    expect(l.nodes.get(b.id)!.lane).toBe('stream:g')
+    expect(l.nodes.get(a.id)!.group).toBe(`repo:${CORE}`)
+    expect(l.nodes.get(b.id)!.group).toBe('stream:g')
+    expect(l.tree.members).toEqual([{ from: b.id, to: streamCardId('g') }])
   })
 
-  it('keeps a paired cross-repo edge between the two repo lanes', () => {
+  it('keeps a paired cross-repo edge between the two repos', () => {
     const g = sampleGraph()
     const l = computeLayout({ ...g, now: NOW })
     const paired = l.edges.filter((e) => e.kind === 'paired')
     expect(paired).toEqual([expect.objectContaining({ from: g.appOpen.id, to: g.coreOpen.id })])
-    expect(l.nodes.get(g.appOpen.id)!.lane).toBe(`repo:${APP}`)
-    expect(l.nodes.get(g.coreOpen.id)!.lane).toBe(`repo:${CORE}`)
+    expect(l.nodes.get(g.appOpen.id)!.group).toBe(`repo:${APP}`)
+    expect(l.nodes.get(g.coreOpen.id)!.group).toBe(`repo:${CORE}`)
   })
 
-  it('puts a related node in the epic lane only with Owned + related, marked related; the owner lane wins', () => {
+  it('links a related node to the epic only with Owned + related, marked related; the owner wins', () => {
     const g = sampleGraph()
     const other = { id: 'z-other', name: 'Z other', membrane: 'm', memberCount: 0, status: 'active' as const }
     const rel = { ...g.coreOpen, relatedStreams: ['s-stack'] }
@@ -166,44 +156,69 @@ describe('computeLayout', () => {
     const input = { ...g, nodes, workstreams: [...g.workstreams, other], now: NOW }
 
     const owned = computeLayout(input)
-    expect(owned.nodes.get(rel.id)).toMatchObject({ lane: `repo:${CORE}` })
+    expect(owned.nodes.get(rel.id)).toMatchObject({ group: `repo:${CORE}` })
     expect(owned.nodes.get(rel.id)).not.toHaveProperty('related')
+    expect(owned.tree.members.some((m) => m.from === rel.id)).toBe(false)
 
     const withRelated = computeLayout({ ...input, related: true })
-    expect(withRelated.nodes.get(rel.id)).toMatchObject({ lane: 'stream:s-stack', related: true })
-    expect(withRelated.nodes.get(ownedRel.id)).toMatchObject({ lane: 'stream:z-other' })
+    expect(withRelated.nodes.get(rel.id)).toMatchObject({ group: 'stream:s-stack', related: true })
+    expect(withRelated.tree.members).toContainEqual({ from: rel.id, to: streamCardId('s-stack'), related: true })
+    expect(withRelated.nodes.get(ownedRel.id)).toMatchObject({ group: 'stream:z-other' })
     expect(withRelated.nodes.get(ownedRel.id)).not.toHaveProperty('related')
-    // Owned stack members in the same lane carry no related mark.
+    // Owned stack members carry no related mark.
     for (const n of g.stack) expect(withRelated.nodes.get(n.id)).not.toHaveProperty('related')
   })
 
-  it('orders lanes: streams, then repos alphabetically, then Other', () => {
+  it('links each owned item to its stream card; a loose task belongs to Other', () => {
     const g = sampleGraph()
     const loose = task('loose')
     const l = computeLayout({ ...g, nodes: [...g.nodes, loose], now: NOW })
-    expect(l.lanes.map((x) => x.id)).toEqual(['stream:s-stack', `repo:${APP}`, `repo:${CORE}`, 'other'])
-    for (let i = 1; i < l.lanes.length; i++) expect(l.lanes[i].y).toBe(l.lanes[i - 1].y + l.lanes[i - 1].h)
-    expect(l.nodes.get(loose.id)!.lane).toBe('other')
+    expect(l.nodes.get(loose.id)!.group).toBe('other')
+    const owned = [...g.stack, g.plan, ...g.tasks].map((n) => n.id).sort()
+    expect(l.tree.members.map((m) => m.from)).toEqual(owned)
+    for (const m of l.tree.members) expect(m.to).toBe(streamCardId('s-stack'))
   })
 
-  it('puts plans and task-only nodes in their stream lane, columns by dependency depth', () => {
+  it('pulls an item towards what it connects to, across groups', () => {
+    const a = stream('a', 'A')
+    const b = stream('b', 'B')
+    const inA = Array.from({ length: 4 }, (_, i) => issue(CORE, 10 + i, { workstreams: ['a'] }))
+    const inB = Array.from({ length: 4 }, (_, i) => issue(CORE, 20 + i, { workstreams: ['b'] }))
+    // A loose PR that closes one of B's issues.
+    const pr = change(APP, 1)
+    const nodes = [...inA, ...inB, pr]
+    const rowOf = (l: Layout, n: WorkNode) => l.nodes.get(n.id)!.row
+    const gap = (l: Layout) => Math.abs(rowOf(l, pr) - rowOf(l, inB[2]))
+    const linked = computeLayout({ nodes, edges: [edge(pr, inB[2], 'closes')], workstreams: [a, b], now: NOW })
+    const unlinked = computeLayout({ nodes, edges: [], workstreams: [a, b], now: NOW })
+    // The edge brings the PR level with the issue it closes.
+    expect(gap(linked)).toBe(0)
+    expect(gap(unlinked)).toBeGreaterThan(gap(linked))
+    // A card sits level with its items; cards never overlap.
+    const card = (l: Layout, s: string) => l.nodes.get(streamCardId(s))!
+    expect(card(linked, 'a').y).toBeLessThan(card(linked, 'b').y)
+    expect(rectsOverlap(card(linked, 'a'), card(linked, 'b'))).toBe(false)
+    noOverlaps(linked)
+  })
+
+  it('puts plans and task-only nodes with their stream, columns by dependency depth', () => {
     const g = sampleGraph()
     const l = computeLayout({ ...g, now: NOW })
     const p = l.nodes.get(g.plan.id)!
     const [t1, t2] = g.tasks.map((t) => l.nodes.get(t.id)!)
-    expect(p.lane).toBe('stream:s-stack')
-    expect(t1.lane).toBe('stream:s-stack')
+    expect(p.group).toBe('stream:s-stack')
+    expect(t1.group).toBe('stream:s-stack')
     expect([p.depth, t1.depth, t2.depth]).toEqual([0, 1, 2])
     expect(p.x).toBeLessThan(t1.x)
     expect(t1.x).toBeLessThan(t2.x)
-    // The plan's issue follows it even though it lives in another lane.
+    // The plan's issue follows it even though it belongs to its repo.
     const i300 = l.nodes.get(g.issues[0].id)!
     const i301 = l.nodes.get(g.issues[1].id)!
     expect(i300.depth).toBe(1)
     expect(i301.depth).toBe(2)
   })
 
-  it('never overlaps two nodes, or a node and a branch line, within a lane', () => {
+  it('never overlaps two nodes, or a node and a branch line', () => {
     const g = sampleGraph()
     noOverlaps(computeLayout({ ...g, now: NOW }))
     // Dense: 60 merges in one day and 40 open changes with old forks in one repo.
@@ -226,7 +241,7 @@ describe('computeLayout', () => {
       now: NOW
     })
     expect([...b.nodes.entries()].sort()).toEqual([...a.nodes.entries()].sort())
-    expect(b.lanes).toEqual(a.lanes)
+    expect(b.tree).toEqual(a.tree)
     expect(b.branches).toEqual(a.branches)
     expect(b.edges).toEqual(a.edges)
   })
@@ -267,15 +282,14 @@ describe('computeLayout', () => {
     expect(l.edges).toHaveLength(1)
   })
 
-  it('wraps a tall future column into sub-columns', () => {
+  it('wraps a tall future column into sub-columns, oldest first', () => {
     const many = Array.from({ length: 13 }, (_, i) => issue(CORE, 500 + i, { createdAt: iso(30 - i) }))
     const l = computeLayout({ nodes: many, edges: [], workstreams: [], now: NOW })
     const xs = [...new Set(many.map((n) => l.nodes.get(n.id)!.x))].sort((a, b) => a - b)
     expect(xs).toHaveLength(3) // 6 + 6 + 1
-    // Oldest first, down the first column.
-    expect(l.nodes.get(many[0].id)!.row).toBe(0)
-    expect(l.nodes.get(many[1].id)!.row).toBe(1)
+    expect(l.nodes.get(many[0].id)!.x).toBe(xs[0])
     expect(l.nodes.get(many[6].id)!.x).toBe(xs[1])
+    expect(l.nodes.get(many[12].id)!.x).toBe(xs[2])
     noOverlaps(l)
   })
 })
@@ -358,31 +372,37 @@ describe('goal tree on the canvas', () => {
     )
   })
 
-  it('orders lanes depth-first; an inner stream with no items has no lane, an empty leaf stream a compact one', () => {
+  it('links each item to the card of the stream that owns it; the plan card is no item', () => {
     const t = treeGraph()
     const l = computeLayout({ ...t, now: NOW })
-    // Siblings keep the server's order (B before A); a subtree's lanes stay together.
-    expect(l.lanes.map((x) => x.id)).toEqual(['stream:e', 'stream:b', 'stream:a', 'stream:c', `repo:${APP}`, 'other'])
-    const e = l.lanes.find((x) => x.id === 'stream:e')!
-    expect(e.empty).toBe(true)
-    expect(e.h).toBeLessThan(l.lanes.find((x) => x.id === 'stream:a')!.h)
-    // The plan node is a card now, not an item in its parent's lane.
-    expect(l.nodes.get(t.planA.id)!.lane).not.toBe('stream:g')
+    expect(l.tree.members).toEqual(
+      [
+        { from: t.inA.id, to: t.planA.id },
+        { from: t.inB.id, to: streamCardId('b') },
+        { from: t.inC.id, to: streamCardId('c') },
+        { from: t.inC2.id, to: streamCardId('c') }
+      ].sort((p, q) => (p.from < q.from ? -1 : 1))
+    )
+    expect(l.nodes.get(t.planA.id)!.stream).toBe('a')
     noOverlaps(l)
   })
 
-  it("centres a card on its subtree's lanes", () => {
+  it('sits a card level with its items and sub-cards; a parent between its children; cards never overlap', () => {
     const t = treeGraph()
     const l = computeLayout({ ...t, now: NOW })
-    const lane = (id: string) => l.lanes.find((x) => x.id === `stream:${id}`)!
-    const mid = (top: number, bottom: number) => (top + bottom) / 2
-    const cy = (id: string) => cardOf(l, id).y + cardOf(l, id).h / 2
-    expect(cy('c')).toBe(mid(lane('c').y, lane('c').y + lane('c').h))
-    expect(cy('a')).toBe(mid(lane('a').y, lane('c').y + lane('c').h))
-    expect(cy('g')).toBe(mid(lane('b').y, lane('c').y + lane('c').h))
-    expect(cy('b')).toBe(mid(lane('b').y, lane('b').y + lane('b').h))
-    expect(cy('e')).toBe(mid(lane('e').y, lane('e').y + lane('e').h))
-    // Cards never overlap each other.
+    const cy = (p: { y: number; h: number }) => p.y + p.h / 2
+    const card = (id: string) => cardOf(l, id)
+    const item = (n: WorkNode) => l.nodes.get(n.id)!
+    // C owns two items: its card sits between them.
+    const [c1, c2] = [cy(item(t.inC)), cy(item(t.inC2))].sort((p, q) => p - q)
+    expect(cy(card('c'))).toBeGreaterThanOrEqual(c1)
+    expect(cy(card('c'))).toBeLessThanOrEqual(c2)
+    // G sits between its children A and B.
+    const [lo, hi] = [cy(card('a')), cy(card('b'))].sort((p, q) => p - q)
+    expect(cy(card('g'))).toBeGreaterThanOrEqual(lo)
+    expect(cy(card('g'))).toBeLessThanOrEqual(hi)
+    // The empty goal E still gets a card.
+    expect(card('e')).toBeDefined()
     const cards = [...l.nodes.values()].filter((p) => p.stream)
     for (let i = 0; i < cards.length; i++)
       for (let j = i + 1; j < cards.length; j++) expect(rectsOverlap(cards[i], cards[j])).toBe(false)

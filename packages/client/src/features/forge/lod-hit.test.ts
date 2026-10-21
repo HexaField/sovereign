@@ -30,7 +30,7 @@ describe('level of detail', () => {
     expect(collapsePast(l, nodes, COLLAPSE_SCALE).bands).toEqual([])
   })
 
-  it('collapses past nodes into per-lane bands with counts; present and future stay', () => {
+  it('collapses past nodes into per-group bands spanning their rows, with counts; present and future stay', () => {
     const list: WorkNode[] = [
       merged(R, 1, 1.1),
       merged(R, 2, 1.5),
@@ -44,11 +44,17 @@ describe('level of detail', () => {
     const byId = new Map(list.map((n) => [n.id, n]))
     const c = collapsePast(l, byId, 0.1) // 7-day bins
     expect(c.binDays).toBe(7)
-    const engine = c.bands.filter((b) => b.lane === `repo:${R}`)
+    const engine = c.bands.filter((b) => b.group === `repo:${R}`)
     expect(engine.map((b) => b.count)).toEqual([1, 3]) // days 7–14, then 0–7
     expect(engine[1]).toMatchObject({ merged: 2, closed: 1 })
     expect(engine[1].x + engine[1].w).toBeCloseTo(timeToX(NOW, NOW))
-    expect(c.bands.filter((b) => b.lane === `repo:${R2}`).map((b) => b.count)).toEqual([1])
+    expect(c.bands.filter((b) => b.group === `repo:${R2}`).map((b) => b.count)).toEqual([1])
+    // A band covers every member's row.
+    for (const id of engine[1].nodeIds) {
+      const p = l.nodes.get(id)!
+      expect(p.y).toBeGreaterThanOrEqual(engine[1].y)
+      expect(p.y + p.h).toBeLessThanOrEqual(engine[1].y + engine[1].h)
+    }
     expect(c.bandOf.has(list[5].id)).toBe(false)
     expect(c.bandOf.has(list[6].id)).toBe(false)
     expect(c.bandOf.get(list[0].id)).toBe(c.bands.indexOf(engine[1]))

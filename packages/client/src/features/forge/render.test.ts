@@ -118,7 +118,7 @@ describe('goal tree cards', () => {
     expect(s.hit.at(card.x + 5, card.y + 5)).toBe(streamCardId('g'))
   })
 
-  it('draws the synthetic card with its name and progress, and a solid link to its parent', () => {
+  it('draws the synthetic card with its name and progress, a solid link to its parent and a link from its item', () => {
     const scene = buildScene(layout, byId, new Set(byId.keys()), new Set(), 1)
     const card = layout.nodes.get(streamCardId('g'))!
     const rec = recordingContext()
@@ -141,6 +141,9 @@ describe('goal tree cards', () => {
     expect(texts).toContain('3/8')
     expect(texts).toContain('⛔2')
     expect(stats.treeLinksDrawn).toBe(1)
+    // inA → its stream's card (the plan node)
+    expect(layout.tree.members).toEqual([{ from: inA.id, to: p.id }])
+    expect(stats.memberLinksDrawn).toBe(1)
     expect(stats.nodesDrawn).toBe(3)
   })
 })

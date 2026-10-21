@@ -1,8 +1,9 @@
-// Level of detail — pure. Zoomed out, past nodes collapse into per-lane time
-// bands with counts; text shrinks to numbers, then to bare boxes.
+// Level of detail — pure. Zoomed out, past nodes collapse into time bands per
+// group (the stream they belong to, else their repo), each spanning its members'
+// rows, with counts; text shrinks to numbers, then to bare boxes.
 
 import type { WorkNode } from '@sovereign/core'
-import { DAY_MS, LANE_HEAD, LANE_PAD, PX_PER_DAY, timeToX, type Layout } from './layout.js'
+import { DAY_MS, NODE_H, PX_PER_DAY, timeToX, type Layout } from './layout.js'
 
 export type Detail = 'dot' | 'compact' | 'full'
 
@@ -21,7 +22,8 @@ export function detailFor(scale: number): Detail {
 }
 
 export interface Band {
-  lane: string
+  /** The members' group (`PlacedNode.group`). */
+  group: string
   x: number
   y: number
   w: number
@@ -59,7 +61,6 @@ export function collapsePast(
   if (scale >= COLLAPSE_SCALE) return EMPTY
   const binDays = binDaysFor(scale)
   const bin = binDays * DAY_MS
-  const lanes = new Map(layout.lanes.map((l) => [l.id, l]))
   const byKey = new Map<string, Band>()
   const ids = [...layout.nodes.keys()].sort()
   for (const id of ids) {
@@ -69,18 +70,17 @@ export function collapsePast(
     if (!n) continue
     const t = Date.parse(n.closedAt ?? n.updatedAt)
     const i = Math.max(0, Math.floor((layout.now - (Number.isFinite(t) ? t : layout.now)) / bin))
-    const key = `${p.lane}\u0000${i}`
+    const key = `${p.group}\u0000${i}`
     let band = byKey.get(key)
     if (!band) {
-      const lane = lanes.get(p.lane)!
       const x0 = timeToX(layout.now - (i + 1) * bin, layout.now)
       const x1 = timeToX(layout.now - i * bin, layout.now)
       band = {
-        lane: p.lane,
+        group: p.group,
         x: x0,
-        y: lane.y + LANE_HEAD,
+        y: p.y,
         w: x1 - x0,
-        h: Math.max(lane.h - LANE_HEAD - LANE_PAD, 8),
+        h: NODE_H,
         count: 0,
         merged: 0,
         closed: 0,
@@ -88,12 +88,16 @@ export function collapsePast(
       }
       byKey.set(key, band)
     }
+    // The band spans its members' rows.
+    const bottom = Math.max(band.y + band.h, p.y + NODE_H)
+    band.y = Math.min(band.y, p.y)
+    band.h = bottom - band.y
     band.count++
     if (n.state === 'merged' || n.state === 'done') band.merged++
     else band.closed++
     band.nodeIds.push(id)
   }
-  const bands = [...byKey.values()].sort((a, b) => (a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : a.x - b.x))
+  const bands = [...byKey.values()].sort((a, b) => (a.group < b.group ? -1 : a.group > b.group ? 1 : a.x - b.x))
   const bandOf = new Map<string, number>()
   bands.forEach((b, i) => {
     for (const id of b.nodeIds) bandOf.set(id, i)
