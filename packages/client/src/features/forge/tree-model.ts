@@ -105,6 +105,22 @@ export function treeRows(
   return out
 }
 
+/** What a node's card shows: the stream, its path, its sub-nodes by name and its own leaves; null when not served. */
+export function streamCard(
+  streams: WorkStream[],
+  id: string,
+  nodes: WorkNode[]
+): { stream: WorkStream; path: string[]; children: WorkStream[]; leaves: WorkNode[] } | null {
+  const stream = streams.find((s) => s.id === id)
+  if (!stream) return null
+  return {
+    stream,
+    path: streamPath(streams, id),
+    children: orderEpics(streams.filter((s) => s.parentId === id)).map((r) => r.stream),
+    leaves: leavesOf(id, nodes)
+  }
+}
+
 /** "1/6" (done of total leaves over the subtree); "" with no leaves. */
 export function progressLabel(p: StreamProgress | undefined): string {
   return p && p.total ? `${p.done}/${p.total}` : ''

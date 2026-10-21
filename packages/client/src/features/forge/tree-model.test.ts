@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { canvasStreams, orderEpics } from './epics-model.js'
 import { applyFilters, hasActiveFilters, isOrphan } from './filters.js'
 import { change, issue, merged, NOW, plan, stream, task } from './test-fixtures.js'
-import { canPlace, leavesOf, placeOptions, progressLabel, streamPath, treeButtonLabel, treeRows } from './tree-model.js'
+import {
+  canPlace,
+  leavesOf,
+  placeOptions,
+  progressLabel,
+  streamCard,
+  streamPath,
+  treeButtonLabel,
+  treeRows
+} from './tree-model.js'
 
 const R = 'demo-org/engine'
 
@@ -134,5 +143,23 @@ describe('orphans ("Not in a tree")', () => {
     const r = applyFilters(nodes, { orphans: true }, { now: NOW })
     expect([...r.visible].sort()).toEqual([change(R, 1).id, change(R, 2).id, issue(R, 4).id].sort())
     expect(hasActiveFilters({ orphans: true })).toBe(true)
+  })
+})
+
+describe('streamCard', () => {
+  it('shows a node with its path, its sub-nodes by name and its own open-first leaves', () => {
+    const goal = stream('g', 'Beta')
+    const b = stream('b', 'Zeta', { parentId: 'g' })
+    const a = stream('a', 'Alpha', { parentId: 'g' })
+    const deep = stream('d', 'Deep', { parentId: 'a' })
+    const open = change('demo/x', 1, { workstreams: ['g'] })
+    const done = merged('demo/x', 2, 1, { workstreams: ['g'] })
+    const elsewhere = change('demo/x', 3, { workstreams: ['a'] })
+    const c = streamCard([goal, b, a, deep], 'g', [done, open, elsewhere])!
+    expect(c.path).toEqual(['Beta'])
+    expect(c.children.map((s) => s.id)).toEqual(['a', 'b'])
+    expect(c.leaves.map((n) => n.id)).toEqual([open.id, done.id])
+    expect(streamCard([goal, b, a, deep], 'd', [])!.path).toEqual(['Beta', 'Alpha', 'Deep'])
+    expect(streamCard([goal], 'gone', [])).toBeNull()
   })
 })

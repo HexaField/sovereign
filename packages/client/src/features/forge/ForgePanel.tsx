@@ -26,7 +26,8 @@ import KanbanBoard from './KanbanBoard.js'
 import { kanbanCards, type ForgeMode } from './kanban-model.js'
 import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
 import { viewFilters } from './graphs.js'
-import { computeLayout, streamOfCard, xToTime } from './layout.js'
+import { computeLayout, streamCardId, streamOfCard, xToTime } from './layout.js'
+import StreamCard from './StreamCard.js'
 import { binDaysFor, COLLAPSE_SCALE } from './lod.js'
 import { buildScene } from './scene.js'
 import { visibleWorld, type Viewport } from './viewport.js'
@@ -202,13 +203,25 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
 
   const setFilters = (f: ForgeFilters): void => props.onViewChange({ filters: f })
 
-  // A canvas click. A hand-made stream's card has no node card: it picks that node in the
-  // Tree panel, so the canvas shows its subtree with it as the root (a second click unpicks).
-  const selectOnCanvas = (id: string | null): void => {
-    const stream = id ? streamOfCard(id) : null
-    if (!stream) return void setSelected(id)
+  // A canvas click selects: a work item opens its node card, a goal-tree card (a plan's too) its stream card.
+  const selectOnCanvas = (id: string | null): void => void setSelected(id)
+  // A plan card's stream card offers "Plan details": the plan's node card, until the selection changes.
+  const [planDetails, setPlanDetails] = createSignal(false)
+  createEffect(on(selected, () => setPlanDetails(false)))
+  const selectedStream = createMemo(() => {
+    const id = selected()
+    if (!id || planDetails()) return null
+    return streamOfCard(id) ?? layout().tree.cards.get(id)?.id ?? null
+  })
+  /** The canvas card of a stream: its plan node, or its synthetic card. */
+  const cardIdOf = (streamId: string): string => {
+    for (const [id, s] of layout().tree.cards) if (s.id === streamId) return id
+    return streamCardId(streamId)
+  }
+  // The stream card's "Focus the graph": pick that node in the Tree panel, so the canvas shows its subtree with it as the root.
+  const focusGraphOn = (streamId: string): void => {
     setSelected(null)
-    setFilters(focusStream(props.view.filters, stream))
+    setFilters(focusStream(props.view.filters, streamId))
   }
 
   // ── Right-click status menu: an epic's status, or pause / resume an item ──
@@ -454,8 +467,27 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
               </div>
             )}
           </Show>
+          <Show when={selectedStream()} keyed>
+            {(streamId) => (
+              <div class="absolute top-2 right-2 bottom-2 z-10 flex flex-col">
+                <StreamCard
+                  streamId={streamId}
+                  streams={win().workstreams}
+                  nodes={nodes()}
+                  membrane={props.membrane}
+                  api={props.api}
+                  onOpen={(id, kind) => focusNode(kind === 'stream' ? cardIdOf(id) : id)}
+                  onPlanDetails={nodesById().has(selected() ?? '') ? () => setPlanDetails(true) : undefined}
+                  onFocusGraph={focusGraphOn}
+                  focused={filters().workstreams?.length === 1 && filters().workstreams![0] === streamId}
+                  onClose={() => setSelected(null)}
+                  onChanged={() => void load(initialRequest(Date.now()))}
+                />
+              </div>
+            )}
+          </Show>
           {/* Keyed on the id, not the node: a refetch replaces the node object and must not reset the card. */}
-          <Show when={selected()} keyed>
+          <Show when={!selectedStream() && selected()} keyed>
             {(id) => (
               <Show when={nodesById().get(id)}>
                 {(node) => (
