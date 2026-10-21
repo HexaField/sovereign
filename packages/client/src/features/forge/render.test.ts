@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import type { WorkNode } from '@sovereign/core'
-import { computeLayout } from './layout.js'
+import { computeLayout, streamCardId } from './layout.js'
 import { drawFrame } from './render.js'
 import { buildScene } from './scene.js'
 import { DEFAULT_PALETTE, edgeStyle } from './style.js'
-import { NOW, change, edge, issue, merged } from './test-fixtures.js'
+import { NOW, change, edge, issue, merged, plan, stream } from './test-fixtures.js'
 
 /** A 2D context that records calls instead of painting. */
 function recordingContext() {
@@ -97,5 +97,50 @@ describe('drawFrame', () => {
     const { stats } = frame(nodes, { tx: 200, ty: 20, scale: 0.1 })
     expect(stats.bandsDrawn).toBe(1)
     expect(stats.nodesDrawn).toBe(2)
+  })
+})
+
+describe('goal tree cards', () => {
+  const p = plan('plans/auth.md')
+  const inA = issue(R, 10, { workstreams: ['a'] })
+  const goal = stream('g', 'Closed beta', { status: 'active', progress: { done: 3, total: 8, blocked: 2 } })
+  const auth = stream('a', 'Auth', { parentId: 'g', plan: p.id })
+  const nodes = [p, inA]
+  const layout = computeLayout({ nodes, edges: [], workstreams: [goal, auth], now: NOW })
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+
+  it('the scene always shows tree cards, undimmed, even when filters or the focus hide the plan node', () => {
+    const s = buildScene(layout, byId, new Set([inA.id]), new Set([p.id]), 1)
+    expect(s.visible.has(streamCardId('g'))).toBe(true)
+    expect(s.visible.has(p.id)).toBe(true)
+    expect(s.dimmed.has(p.id)).toBe(false)
+    const card = layout.nodes.get(streamCardId('g'))!
+    expect(s.hit.at(card.x + 5, card.y + 5)).toBe(streamCardId('g'))
+  })
+
+  it('draws the synthetic card with its name and progress, and a solid link to its parent', () => {
+    const scene = buildScene(layout, byId, new Set(byId.keys()), new Set(), 1)
+    const card = layout.nodes.get(streamCardId('g'))!
+    const rec = recordingContext()
+    // Centre the view on the tree.
+    const vp = { tx: 600 - card.x, ty: 300 - card.y, scale: 1 }
+    const stats = drawFrame(rec.ctx, {
+      scene,
+      vp,
+      width: 1200,
+      height: 600,
+      dpr: 1,
+      palette: DEFAULT_PALETTE,
+      overlays: new Map(),
+      selectedId: null,
+      hoverId: null,
+      time: 0
+    })
+    const texts = rec.calls.filter((c) => c.name === 'fillText').map((c) => String(c.args[0]))
+    expect(texts).toContain('Closed beta')
+    expect(texts).toContain('3/8')
+    expect(texts).toContain('⛔2')
+    expect(stats.treeLinksDrawn).toBe(1)
+    expect(stats.nodesDrawn).toBe(3)
   })
 })

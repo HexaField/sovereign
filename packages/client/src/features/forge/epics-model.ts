@@ -165,43 +165,23 @@ export function panelShown(v: { visible: Set<string>; dimmed: Set<string> }): Se
 }
 
 /**
- * The streams the canvas makes lanes of: with nothing selected, every shown
- * epic. With a selection, lanes follow the picked node's children: the top of
- * each focused branch and each of its children (laneFold folds the rest in).
+ * The streams the canvas draws, as lanes and as goal-tree cards: with nothing
+ * selected, every shown epic; with a selection, the focused epics (the picks and
+ * their whole subtrees), so a picked node is the root of the tree drawn. None
+ * while "Not in a tree" is on: orphans belong to no node.
  */
-export function laneStreams(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
-  const fold = laneFold(f, streams)
-  if (!fold) return shownEpics(f, streams)
-  const lanes = new Set(fold.values())
-  return streams.filter((s) => lanes.has(s.id))
+export function canvasStreams(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
+  if (f.orphans) return []
+  const focused = focusedEpics(f, streams)
+  if (!focused.length) return shownEpics(f, streams)
+  const keep = new Set(focused)
+  return streams.filter((s) => keep.has(s.id))
 }
 
-/**
- * With a selection: the lane each focused stream folds into. The top of each
- * focused branch keeps its own lane, each of its children gets one, and every
- * stream deeper down joins its ancestor's child lane. Undefined with nothing selected.
- */
-export function laneFold(f: ForgeFilters, streams: WorkStream[]): Map<string, string> | undefined {
-  const focused = focusedEpics(f, streams)
-  if (!focused.length) return undefined
-  const keep = new Set(focused)
-  const byId = new Map(streams.map((s) => [s.id, s]))
-  const parentIn = (id: string): string | undefined => {
-    const p = byId.get(id)?.parentId
-    return p && keep.has(p) && p !== id ? p : undefined
-  }
-  const out = new Map<string, string>()
-  for (const id of focused) {
-    // Climb while the parent is not the branch top: `lane` ends as the top or one of its children.
-    let lane = id
-    const seen = new Set([id])
-    for (let up = parentIn(lane); up && parentIn(up) && !seen.has(up); up = parentIn(lane)) {
-      seen.add(up)
-      lane = up
-    }
-    out.set(id, lane)
-  }
-  return out
+/** A stream card clicked on the canvas: pick that one node (the Tree panel's selection); a click on the sole pick clears it. */
+export function focusStream(f: ForgeFilters, id: string): ForgeFilters {
+  const { workstreams, ...rest } = f
+  return workstreams?.length === 1 && workstreams[0] === id ? rest : { ...rest, workstreams: [id] }
 }
 
 export const toggleEpic = (f: ForgeFilters, id: string): ForgeFilters => toggleFilterValue(f, 'workstreams', id)

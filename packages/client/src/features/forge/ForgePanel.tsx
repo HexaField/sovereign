@@ -10,10 +10,10 @@ import TreePanel from './TreePanel.js'
 import type { ForgeApi } from './api.js'
 import { keyDirection, walkEdge } from './edge-walk.js'
 import {
+  canvasStreams,
   clearEpics,
   epicFocus,
-  laneFold,
-  laneStreams,
+  focusStream,
   panelShown,
   panelVisibility,
   wantsArchived
@@ -22,7 +22,7 @@ import KanbanBoard from './KanbanBoard.js'
 import { kanbanCards, type ForgeMode } from './kanban-model.js'
 import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
 import { viewFilters } from './graphs.js'
-import { computeLayout, xToTime } from './layout.js'
+import { computeLayout, streamOfCard, xToTime } from './layout.js'
 import { binDaysFor, COLLAPSE_SCALE } from './lod.js'
 import { buildScene } from './scene.js'
 import { visibleWorld, type Viewport } from './viewport.js'
@@ -104,8 +104,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     computeLayout({
       nodes: nodes(),
       edges: win().edges,
-      workstreams: laneStreams(filters(), win().workstreams),
-      laneFold: laneFold(filters(), win().workstreams),
+      workstreams: canvasStreams(filters(), win().workstreams),
       now: layoutNow(),
       since: win().since,
       related: filters().epicRelated === true
@@ -191,6 +190,15 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   onCleanup(() => clearTimeout(searchTimer))
 
   const setFilters = (f: ForgeFilters): void => props.onViewChange({ filters: f })
+
+  // A canvas click. A hand-made stream's card has no node card: it picks that node in the
+  // Tree panel, so the canvas shows its subtree with it as the root (a second click unpicks).
+  const selectOnCanvas = (id: string | null): void => {
+    const stream = id ? streamOfCard(id) : null
+    if (!stream) return void setSelected(id)
+    setSelected(null)
+    setFilters(focusStream(props.view.filters, stream))
+  }
 
   const focusNode = (raw: string): void => {
     // A branch drawn as its change focuses the change. A node hidden by the
@@ -329,7 +337,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
                 overlays={props.overlays}
                 selectedId={selected}
                 highlight={highlight}
-                onSelect={setSelected}
+                onSelect={selectOnCanvas}
                 onViewport={onViewport}
                 ref={(h) => (canvas = h)}
               />

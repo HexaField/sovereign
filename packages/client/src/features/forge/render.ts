@@ -2,12 +2,13 @@
 // lanes, branch lines, edges, bands and nodes inside the viewport only.
 // Pure apart from the context it draws into; ForgeCanvas decides when.
 
-import type { AgentOverlay, WorkNode } from '@sovereign/core'
+import type { AgentOverlay, WorkNode, WorkStream } from '@sovereign/core'
 import { LANE_HEAD, NODE_H, type PlacedNode } from './layout.js'
 import { detailFor, type Detail } from './lod.js'
 import { anchorOf, type Scene } from './scene.js'
 import {
   CI_COLORS,
+  EPIC_STATUS_COLORS,
   RELATED_CARD,
   REVIEW_COLORS,
   STATE_COLORS,
@@ -15,8 +16,10 @@ import {
   initials,
   reviewSummary,
   ringFor,
+  TREE_LINK,
   type Palette
 } from './style.js'
+import { progressLabel } from './tree-model.js'
 import { visibleWorld, type Viewport } from './viewport.js'
 
 export interface FrameInput {
@@ -40,6 +43,7 @@ export interface FrameStats {
   nodesDrawn: number
   edgesDrawn: number
   bandsDrawn: number
+  treeLinksDrawn: number
   /** A visible ring pulses: the caller keeps animating. */
   animating: boolean
 }
@@ -253,11 +257,83 @@ function drawNode(
   return !!ring?.pulse
 }
 
+/**
+ * A goal-tree card: the stream's name, status stripe and border, and (at full
+ * detail) its progress over the subtree as a bar, done/total and the blocked
+ * count, as the Tree panel shows them. A plan's stream gets the plan icon
+ * (drawn on its plan node when that is loaded); a hand-made one a diamond.
+ */
+function drawStreamCard(
+  ctx: CanvasRenderingContext2D,
+  s: WorkStream,
+  p: PlacedNode,
+  f: FrameInput,
+  detail: Detail,
+  planNode: WorkNode | undefined
+): void {
+  const { palette } = f
+  const selected = f.selectedId === p.id
+  const hover = f.hoverId === p.id
+  const color = EPIC_STATUS_COLORS[s.status]?.fg ?? palette.muted
+  ctx.globalAlpha = 1
+  roundRect(ctx, p.x, p.y, p.w, p.h, 7)
+  ctx.fillStyle = palette.raised
+  ctx.fill()
+  ctx.setLineDash([])
+  ctx.lineWidth = selected ? 2.5 : 1.5
+  ctx.strokeStyle = selected ? palette.accent : hover ? palette.text : TREE_LINK.color
+  ctx.stroke()
+  ctx.fillStyle = color
+  roundRect(ctx, p.x, p.y, 4, p.h, 2)
+  ctx.fill()
+  if (detail === 'dot') return
+
+  if (planNode || s.plan) kindIcon(ctx, 'plan', p.x + 10, p.y + 8, color)
+  else {
+    ctx.beginPath()
+    ctx.moveTo(p.x + 16, p.y + 8)
+    ctx.lineTo(p.x + 22, p.y + 14)
+    ctx.lineTo(p.x + 16, p.y + 20)
+    ctx.lineTo(p.x + 10, p.y + 14)
+    ctx.closePath()
+    ctx.fillStyle = color
+    ctx.fill()
+  }
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'left'
+  ctx.font = `600 12px ${FONT}`
+  ctx.fillStyle = palette.text
+  ctx.fillText(fitText(ctx, s.name, p.w - 36), p.x + 28, p.y + 14)
+  if (detail !== 'full') return
+
+  const prog = s.progress
+  const barX = p.x + 12
+  const barY = p.y + p.h - 15
+  const barW = 70
+  roundRect(ctx, barX, barY, barW, 5, 2.5)
+  ctx.fillStyle = palette.border
+  ctx.fill()
+  if (prog && prog.total && prog.done) {
+    roundRect(ctx, barX, barY, Math.max(5, (barW * prog.done) / prog.total), 5, 2.5)
+    ctx.fillStyle = '#22c55e'
+    ctx.fill()
+  }
+  ctx.font = `11px ${FONT}`
+  ctx.fillStyle = palette.muted
+  const label = progressLabel(prog) || 'no leaves'
+  const labelX = barX + barW + 8
+  ctx.fillText(label, labelX, barY + 2.5)
+  if (prog?.blocked) {
+    ctx.fillStyle = '#f59e0b'
+    ctx.fillText(`⛔${prog.blocked}`, labelX + ctx.measureText(label).width + 8, barY + 2.5)
+  }
+}
+
 export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameStats {
   const { scene, vp, width, height, dpr, palette } = f
   const { layout } = scene
   const detail = detailFor(vp.scale)
-  const stats: FrameStats = { nodesDrawn: 0, edgesDrawn: 0, bandsDrawn: 0, animating: false }
+  const stats: FrameStats = { nodesDrawn: 0, edgesDrawn: 0, bandsDrawn: 0, treeLinksDrawn: 0, animating: false }
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.globalAlpha = 1
@@ -366,6 +442,29 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
   ctx.setLineDash([])
   ctx.globalAlpha = 1
 
+  // Goal-tree connectors: child card (left) → parent card (one column right).
+  ctx.strokeStyle = TREE_LINK.color
+  ctx.lineWidth = TREE_LINK.width / vp.scale
+  ctx.globalAlpha = 0.85
+  for (const link of layout.tree.links) {
+    const a = layout.nodes.get(link.from)
+    const b = layout.nodes.get(link.to)
+    if (!a || !b) continue
+    const x1 = a.x + a.w
+    const y1 = a.y + a.h / 2
+    const x2 = b.x
+    const y2 = b.y + b.h / 2
+    if (Math.max(x1, x2) < view.x || Math.min(x1, x2) > vx1 || Math.max(y1, y2) < view.y || Math.min(y1, y2) > vy1)
+      continue
+    const dx = Math.max(20, (x2 - x1) / 2)
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.bezierCurveTo(x1 + dx, y1, x2 - dx, y2, x2, y2)
+    ctx.stroke()
+    stats.treeLinksDrawn++
+  }
+  ctx.globalAlpha = 1
+
   // Bands (zoomed out past).
   scene.collapsed.bands.forEach((band) => {
     if (band.x + band.w < view.x || band.x > vx1 || band.y + band.h < view.y || band.y > vy1) return
@@ -392,6 +491,12 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
   for (const id of scene.hit.inRect(view.x, view.y, view.w, view.h)) {
     const p = layout.nodes.get(id)
     const n = scene.nodesById.get(id)
+    const s = p?.stream ? layout.tree.cards.get(id) : undefined
+    if (p && s) {
+      drawStreamCard(ctx, s, p, f, detail, n)
+      stats.nodesDrawn++
+      continue
+    }
     if (!p || !n) continue
     if (drawNode(ctx, n, p, f, detail, scene.dimmed.has(id))) stats.animating = true
     stats.nodesDrawn++

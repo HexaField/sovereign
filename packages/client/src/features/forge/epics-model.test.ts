@@ -4,7 +4,8 @@ import {
   epicFocus,
   epicSource,
   focusedEpics,
-  laneStreams,
+  canvasStreams,
+  focusStream,
   orderEpics,
   otherEpicsMode,
   panelShown,
@@ -155,16 +156,30 @@ describe('epicFocus', () => {
   })
 })
 
-describe('laneStreams', () => {
+describe('canvasStreams', () => {
   const parent = stream('p', 'Plan 20')
   const child = stream('c', 'Plan 20 PR stack', { parentId: 'p' })
+  const grandchild = stream('d', 'Revocation', { parentId: 'c' })
   const other = stream('o', 'Other epic')
-  const all = [other, parent, child]
-  it('makes lanes of every stream with nothing selected', () => {
-    expect(laneStreams({}, all)).toEqual(all)
+  const all = [other, parent, child, grandchild]
+  it('draws every stream with nothing selected', () => {
+    expect(canvasStreams({}, all)).toEqual(all)
   })
-  it('makes lanes of only the selected epics and their sub-epics', () => {
-    expect(laneStreams({ workstreams: ['p'] }, all).map((s) => s.id)).toEqual(['p', 'c'])
+  it('draws only the selected epics and their whole subtrees (the picked node becomes a root)', () => {
+    expect(canvasStreams({ workstreams: ['p'] }, all).map((s) => s.id)).toEqual(['p', 'c', 'd'])
+    expect(canvasStreams({ workstreams: ['c'] }, all).map((s) => s.id)).toEqual(['c', 'd'])
+  })
+  it('draws no tree while "Not in a tree" is on', () => {
+    expect(canvasStreams({ orphans: true }, all)).toEqual([])
+    expect(canvasStreams({ orphans: true, workstreams: ['p'] }, all)).toEqual([])
+  })
+})
+
+describe('focusStream (a stream card clicked on the canvas)', () => {
+  it('picks that one node, and a second click on the sole pick clears it', () => {
+    const f = focusStream({ epicStatus: ['active'], workstreams: ['x', 'y'], text: 'q' }, 'a')
+    expect(f).toEqual({ epicStatus: ['active'], workstreams: ['a'], text: 'q' })
+    expect(focusStream(f, 'a')).toEqual({ epicStatus: ['active'], text: 'q' })
   })
 })
 
@@ -209,7 +224,7 @@ describe('status chips', () => {
     const f = { epicStatus: ['active' as const], epicNeighbours: false }
     const focus = epicFocus(f, all, nodes, [])
     expect(focus).toEqual(new Set([inIdentity.id, inIndexer.id]))
-    expect(ids(laneStreams(f, all))).toEqual(['act1', 'act2'])
+    expect(ids(canvasStreams(f, all))).toEqual(['act1', 'act2'])
     // The Kanban lists panelShown(panelVisibility(…)), the same sets the canvas draws.
     const filtered = applyFilters(nodes, f, { now: NOW })
     expect(panelShown(panelVisibility(filtered, focus, false))).toEqual(new Set([inIdentity.id, inIndexer.id]))
@@ -220,7 +235,7 @@ describe('status chips', () => {
     expect(epicFocus({ ...f, workstreams: ['act2'] }, all, nodes, [])).toEqual(new Set([inIndexer.id]))
     // No status, no pick: no focus; lanes for every non-archived epic.
     expect(epicFocus({}, all, nodes, [])).toBeNull()
-    expect(ids(laneStreams({}, all))).toEqual(['act1', 'act-sub', 'act2', 'pl', 'pa'])
+    expect(ids(canvasStreams({}, all))).toEqual(['act1', 'act-sub', 'act2', 'pl', 'pa'])
   })
 
   it('toggles chips, clears them with the picks, labels the button and asks for archived epics', () => {

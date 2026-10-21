@@ -2,9 +2,9 @@
 // top, nodes below, and each node's leaves are the PRs, issues and task-only
 // tasks it owns. The Tree panel lists streams as epics-model orders them; a
 // node's leaves stay collapsed until it opens them. Picking a node focuses the
-// canvas and Kanban on its subtree (focusedEpics), and the lanes follow the
-// picked node's children: one lane for the node's own items, one per child
-// with that child's whole subtree folded in (laneFold).
+// canvas and Kanban on its subtree (focusedEpics); the canvas then draws that
+// subtree as the goal tree, the picked node its right-most root (canvasStreams,
+// layout.ts).
 
 import type { ForgeFilters, StreamProgress, WorkNode, WorkStream } from '@sovereign/core'
 import { leafState } from '@sovereign/core/forge'

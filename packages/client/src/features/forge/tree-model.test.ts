@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { laneFold, laneStreams, orderEpics } from './epics-model.js'
+import { canvasStreams, orderEpics } from './epics-model.js'
 import { applyFilters, hasActiveFilters, isOrphan } from './filters.js'
 import { change, issue, merged, NOW, plan, stream, task } from './test-fixtures.js'
 import { canPlace, leavesOf, placeOptions, progressLabel, streamPath, treeButtonLabel, treeRows } from './tree-model.js'
@@ -108,23 +108,13 @@ describe('labels', () => {
   })
 })
 
-describe('lanes follow the picked node’s children', () => {
-  it('a picked goal makes one lane of itself and one per child; deeper streams fold into their child', () => {
-    const f = { workstreams: ['g'] }
-    expect(laneStreams(f, all).map((s) => s.id)).toEqual(['g', 'a', 'e'])
-    expect(laneFold(f, all)).toEqual(
-      new Map([
-        ['g', 'g'],
-        ['a', 'a'],
-        ['r', 'a'],
-        ['e', 'e']
-      ])
-    )
+describe('the canvas draws the picked node’s subtree', () => {
+  it('a picked goal draws itself and every stream below it, as one tree', () => {
+    expect(canvasStreams({ workstreams: ['g'] }, all).map((s) => s.id)).toEqual(['g', 'a', 'r', 'e'])
   })
 
-  it('with nothing selected every shown stream is its own lane and nothing folds', () => {
-    expect(laneStreams({}, all)).toEqual(all)
-    expect(laneFold({}, all)).toBeUndefined()
+  it('with nothing selected every shown stream is drawn', () => {
+    expect(canvasStreams({}, all)).toEqual(all)
   })
 })
 

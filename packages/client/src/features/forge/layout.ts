@@ -6,11 +6,19 @@
 //                    activity (stale at the divider, fresh towards the future);
 //                    stacked changes chain left → right along their base edges;
 //   future  (right)  issues, plans and planned tasks, in columns by dependency
-//                    depth, then by creation.
-// Y is lanes: one per work stream (a node's owning one; with "Owned + related",
-// a related one when no lane stream owns it), then one per repo for items in
-// no stream, then "Other". Within a lane each unit (a node with its branch line, or a
-// stack) packs into the first row it fits, so nothing overlaps.
+//                    depth, then by creation;
+//   tree    (far right) the goal tree: one card per work stream, a column per
+//                    tree depth, roots furthest right, so the tree breaks down
+//                    right → left from the goals towards the work near now.
+//                    A plan's stream uses the plan node as its card; a
+//                    hand-made stream gets a synthetic card (`epic:<id>`).
+// Y is lanes: one per work stream that owns items (a node's owning one; with
+// "Owned + related", a related one when no lane stream owns it) in tree order,
+// so a subtree's lanes stay together, plus a compact lane for a leaf stream
+// with no items; then one per repo for items in no stream, then "Other". A
+// stream card sits at the vertical centre of its subtree's lanes. Within a lane
+// each unit (a node with its branch line, or a stack) packs into the first row
+// it fits, so nothing overlaps.
 //
 // Every sort ends on the id, so the same graph always gives the same layout.
 
@@ -51,6 +59,8 @@ export interface PlacedNode {
   depth?: number
   /** In the lane of an epic it is only related to (not owned by): drawn with a related cue. */
   related?: true
+  /** A goal-tree card: the id of the work stream it stands for (`depth` is then its tree depth, 0 = a root). */
+  stream?: string
 }
 
 export interface Lane {
@@ -60,6 +70,14 @@ export interface Lane {
   y: number
   h: number
   rows: number
+  /** A leaf stream with no items: one card tall, there only to hold its card. */
+  empty?: true
+}
+
+/** A goal-tree connector: child card → parent card. */
+export interface TreeLink {
+  from: string
+  to: string
 }
 
 /** A branch drawn as a horizontal line from its fork point to its change. */
@@ -85,11 +103,14 @@ export interface Layout {
   futureStart: number
   bounds: { minX: number; maxX: number; minY: number; maxY: number }
   now: number
+  /** The goal tree: card id → the stream it stands for, and the child → parent connectors. */
+  tree: { cards: Map<string, WorkStream>; links: TreeLink[] }
 }
 
 export interface LayoutInput {
   nodes: WorkNode[]
   edges: WorkEdge[]
+  /** The streams the canvas draws as lanes and tree cards; one whose parent is not listed is a root. */
   workstreams: WorkStream[]
   /** ms epoch the "now" divider stands for. */
   now: number
@@ -97,9 +118,14 @@ export interface LayoutInput {
   since?: number
   /** "Owned + related": a node no lane stream owns goes to the lane of one it is related to. */
   related?: boolean
-  /** Stream id → the lane stream it folds into (lanes follow a picked node's children: `laneFold`). */
-  laneFold?: Map<string, string>
 }
+
+const CARD_PREFIX = 'epic:'
+/** The id of a hand-made stream's synthetic tree card. */
+export const streamCardId = (streamId: string): string => CARD_PREFIX + streamId
+/** The stream a synthetic tree card stands for; null for any other id (a plan card is its plan node). */
+export const streamOfCard = (id: string): string | null =>
+  id.startsWith(CARD_PREFIX) ? id.slice(CARD_PREFIX.length) : null
 
 export function timeToX(t: number, now: number): number {
   return ((t - now) / DAY_MS) * PX_PER_DAY
@@ -127,36 +153,57 @@ export function activityColumn(updatedAt: number, now: number): number {
 
 /** Streams in tree order: parents before children, siblings as the server lists them. */
 export function orderStreams(streams: WorkStream[]): WorkStream[] {
+  return streamTree(streams).order
+}
+
+export interface StreamTree {
+  /** Depth-first, parents before children, siblings in input order. */
+  order: WorkStream[]
+  /** 0 for a root. */
+  depth: Map<string, number>
+  /** Child → parent, within the list; a parent outside it or a cycle makes a root. */
+  parent: Map<string, string>
+  /** Parent → children, in order. */
+  children: Map<string, string[]>
+}
+
+/** The tree the listed streams form among themselves. */
+export function streamTree(streams: WorkStream[]): StreamTree {
   const ids = new Set(streams.map((s) => s.id))
-  const children = new Map<string, WorkStream[]>()
+  const kids = new Map<string, WorkStream[]>()
   const roots: WorkStream[] = []
   for (const s of streams) {
     if (s.parentId && ids.has(s.parentId) && s.parentId !== s.id) {
-      const list = children.get(s.parentId) ?? []
+      const list = kids.get(s.parentId) ?? []
       list.push(s)
-      children.set(s.parentId, list)
+      kids.set(s.parentId, list)
     } else roots.push(s)
   }
-  const out: WorkStream[] = []
-  const seen = new Set<string>()
-  const walk = (s: WorkStream): void => {
-    if (seen.has(s.id)) return
-    seen.add(s.id)
-    out.push(s)
-    for (const c of children.get(s.id) ?? []) walk(c)
+  const order: WorkStream[] = []
+  const depth = new Map<string, number>()
+  const parent = new Map<string, string>()
+  const children = new Map<string, string[]>()
+  const walk = (s: WorkStream, d: number, from?: string): void => {
+    if (depth.has(s.id)) return
+    depth.set(s.id, d)
+    if (from) {
+      parent.set(s.id, from)
+      children.set(from, [...(children.get(from) ?? []), s.id])
+    }
+    order.push(s)
+    for (const c of kids.get(s.id) ?? []) walk(c, d + 1, s.id)
   }
-  for (const r of roots) walk(r)
-  // A parent cycle leaves streams unreached; keep them, in input order.
-  for (const s of streams) walk(s)
-  return out
+  for (const r of roots) walk(r, 0)
+  // A parent cycle leaves streams unreached; the first of each becomes a root.
+  for (const s of streams) walk(s, 0)
+  return { order, depth, parent, children }
 }
 
-function laneOf(node: WorkNode, streamRank: Map<string, number>, related: boolean, fold?: Map<string, string>): string {
+function laneOf(node: WorkNode, streamRank: Map<string, number>, related: boolean): string {
   const first = (ids: string[]): string | undefined => {
     let best: string | undefined
     let bestRank = Infinity
-    for (const raw of ids) {
-      const s = fold?.get(raw) ?? raw
+    for (const s of ids) {
       const r = streamRank.get(s)
       if (r !== undefined && r < bestRank) {
         bestRank = r
@@ -273,13 +320,24 @@ export function computeLayout(input: LayoutInput): Layout {
   const clipX = input.since !== undefined ? timeToX(input.since, now) : -Infinity
   const nodes = [...input.nodes].sort(byId)
   const alias = branchAliases(nodes)
-  const live = nodes.filter((n) => !alias.has(n.id))
-  const nodeById = new Map(live.map((n) => [n.id, n]))
+  const nodeById = new Map(nodes.filter((n) => !alias.has(n.id)).map((n) => [n.id, n]))
 
-  const streams = orderStreams(input.workstreams)
+  const tree = streamTree(input.workstreams)
+  const streams = tree.order
+  // Tree cards: a plan's stream takes its plan node (when loaded), any other stream a synthetic card.
+  const cardOf = new Map<string, string>()
+  const cards = new Map<string, WorkStream>()
+  for (const s of streams) {
+    const id = s.plan && nodeById.has(s.plan) && !cards.has(s.plan) ? s.plan : streamCardId(s.id)
+    cardOf.set(s.id, id)
+    cards.set(id, s)
+  }
+  // Everything else lives on the timeline.
+  const live = [...nodeById.values()].filter((n) => !cards.has(n.id))
+
   const streamRank = new Map(streams.map((s, i) => [s.id, i]))
   const laneById = new Map<string, string>()
-  for (const n of live) laneById.set(n.id, laneOf(n, streamRank, input.related === true, input.laneFold))
+  for (const n of live) laneById.set(n.id, laneOf(n, streamRank, input.related === true))
   // A stack lives in its root's lane: an open change follows its open base
   // change down the base edges, whatever other streams it belongs to.
   {
@@ -462,9 +520,13 @@ export function computeLayout(input: LayoutInput): Layout {
 
   // ── Lanes, top to bottom. ──────────────────────────────────────────
   const laneIds = new Set<string>(laneById.values())
-  const ordered: { id: string; label: string; kind: Lane['kind'] }[] = []
-  for (const s of streams)
-    if (laneIds.has(`stream:${s.id}`)) ordered.push({ id: `stream:${s.id}`, label: s.name, kind: 'stream' })
+  const ordered: { id: string; label: string; kind: Lane['kind']; empty?: true }[] = []
+  for (const s of streams) {
+    const id = `stream:${s.id}`
+    if (laneIds.has(id)) ordered.push({ id, label: s.name, kind: 'stream' })
+    // A leaf stream with no items keeps a compact lane, so its card has a place.
+    else if (!tree.children.has(s.id)) ordered.push({ id, label: s.name, kind: 'stream', empty: true })
+  }
   for (const id of [...laneIds].filter((l) => l.startsWith('repo:')).sort())
     ordered.push({ id, label: id.slice(5), kind: 'repo' })
   if (laneIds.has('other')) ordered.push({ id: 'other', label: 'Other', kind: 'other' })
@@ -473,8 +535,8 @@ export function computeLayout(input: LayoutInput): Layout {
   const laneTop = new Map<string, number>()
   let y = 0
   for (const l of ordered) {
-    const rows = Math.max(rowsByLane.get(l.id)?.length ?? 0, futureRows.get(l.id) ?? 0, 1)
-    const h = LANE_HEAD + rows * ROW_H + LANE_PAD
+    const rows = l.empty ? 0 : Math.max(rowsByLane.get(l.id)?.length ?? 0, futureRows.get(l.id) ?? 0, 1)
+    const h = l.empty ? ROW_H : LANE_HEAD + rows * ROW_H + LANE_PAD
     lanes.push({ ...l, y, h, rows })
     laneTop.set(l.id, y)
     y += h
@@ -526,6 +588,54 @@ export function computeLayout(input: LayoutInput): Layout {
   }
   branches.sort((a, b) => (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0))
 
+  // ── Goal tree: a column per depth right of the future zone, roots furthest right. ──
+  const links: TreeLink[] = []
+  if (streams.length) {
+    let futureEnd = -Infinity
+    for (const cell of futureCells.values()) futureEnd = Math.max(futureEnd, cell.x + NODE_W)
+    const treeStart = Number.isFinite(futureEnd) ? futureEnd + ZONE_GAP : futureStart
+    const maxDepth = Math.max(...tree.depth.values())
+    const laneAt = new Map(lanes.map((l) => [l.id, l]))
+    // A stream's subtree spans its own lane (if any) and its descendants' lanes: contiguous, in tree order.
+    const spans = new Map<string, { top: number; bottom: number; lane: string }>()
+    const spanOf = (id: string): { top: number; bottom: number; lane: string } => {
+      const known = spans.get(id)
+      if (known) return known
+      const own = laneAt.get(`stream:${id}`)
+      let top = own ? own.y : Infinity
+      let bottom = own ? own.y + own.h : -Infinity
+      let lane = own?.id
+      for (const c of tree.children.get(id) ?? []) {
+        const cs = spanOf(c)
+        top = Math.min(top, cs.top)
+        bottom = Math.max(bottom, cs.bottom)
+        lane ??= cs.lane
+      }
+      const span = { top, bottom, lane: lane! }
+      spans.set(id, span)
+      return span
+    }
+    for (const s of streams) {
+      const id = cardOf.get(s.id)!
+      const d = tree.depth.get(s.id)!
+      const span = spanOf(s.id)
+      placed.set(id, {
+        id,
+        x: treeStart + (maxDepth - d) * COL_W,
+        y: (span.top + span.bottom) / 2 - NODE_H / 2,
+        w: NODE_W,
+        h: NODE_H,
+        lane: span.lane,
+        row: 0,
+        zone: 'future',
+        depth: d,
+        stream: s.id
+      })
+      const parent = tree.parent.get(s.id)
+      if (parent) links.push({ from: id, to: cardOf.get(parent)! })
+    }
+  }
+
   // ── Edges through aliases, both ends placed. ───────────────────────
   const seen = new Set<string>()
   const edges: WorkEdge[] = []
@@ -555,7 +665,8 @@ export function computeLayout(input: LayoutInput): Layout {
     presentStart,
     futureStart,
     bounds: { minX, maxX, minY: 0, maxY: y },
-    now
+    now,
+    tree: { cards, links }
   }
 }
 

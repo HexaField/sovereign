@@ -9,6 +9,9 @@ import {
   futureDepths,
   orderStreams,
   rectsOverlap,
+  streamCardId,
+  streamOfCard,
+  streamTree,
   timeToX,
   type Layout
 } from './layout.js'
@@ -136,23 +139,13 @@ describe('computeLayout', () => {
     for (let i = 1; i < placed.length; i++) expect(placed[i].x - placed[i - 1].x).toBe(COL_W)
   })
 
-  it('folds a deeper stream’s items into the lane it maps to (lanes follow a picked node’s children)', () => {
+  it('an item of a stream the canvas does not draw falls to its repo lane', () => {
     const goal = stream('g', 'Goal')
-    const child = stream('c', 'Child', { parentId: 'g' })
-    const a = issue(CORE, 1, { workstreams: ['d'] }) // 'd' sits under the child, so it is no lane of its own
+    const a = issue(CORE, 1, { workstreams: ['d'] })
     const b = issue(CORE, 2, { workstreams: ['g'] })
-    const fold = new Map([
-      ['g', 'g'],
-      ['c', 'c'],
-      ['d', 'c']
-    ])
-    const l = computeLayout({ nodes: [a, b], edges: [], workstreams: [goal, child], now: NOW, laneFold: fold })
-    expect(l.nodes.get(a.id)!.lane).toBe('stream:c')
+    const l = computeLayout({ nodes: [a, b], edges: [], workstreams: [goal], now: NOW })
+    expect(l.nodes.get(a.id)!.lane).toBe(`repo:${CORE}`)
     expect(l.nodes.get(b.id)!.lane).toBe('stream:g')
-    expect(l.lanes.map((x) => x.id)).toEqual(['stream:g', 'stream:c'])
-    // Without the fold, the deep stream is no lane: its item falls to its repo.
-    const plain = computeLayout({ nodes: [a, b], edges: [], workstreams: [goal, child], now: NOW })
-    expect(plain.nodes.get(a.id)!.lane).toBe(`repo:${CORE}`)
   })
 
   it('keeps a paired cross-repo edge between the two repo lanes', () => {
@@ -287,7 +280,155 @@ describe('computeLayout', () => {
   })
 })
 
+/**
+ * A goal tree: goal G (hand-made) → A (a plan's stream, plan node loaded) and
+ * B (hand-made, owns a PR); A → C (hand-made, owns an issue); A owns an issue.
+ * Plus an empty hand-made goal E and a loose plan.
+ */
+function treeGraph() {
+  const planA = plan('plans/auth.md', { workstreams: ['g'] }) // a plan node sits in its stream's parent
+  const loosePlan = plan('plans/loose.md')
+  const g = stream('g', 'Closed beta', { status: 'active', progress: { done: 1, total: 4, blocked: 1 } })
+  const a = stream('a', 'Auth', { parentId: 'g', plan: planA.id, status: 'active' })
+  const b = stream('b', 'Delivery', { parentId: 'g' })
+  const c = stream('c', 'Revocation', { parentId: 'a' })
+  const e = stream('e', 'Someday')
+  const inA = issue(CORE, 10, { workstreams: ['a'] })
+  const inB = change(CORE, 11, { workstreams: ['b'] })
+  const inC = issue(CORE, 12, { workstreams: ['c'] })
+  const inC2 = task('logout', { workstreams: ['c'] })
+  const loose = change(APP, 5)
+  const nodes = [planA, loosePlan, inA, inB, inC, inC2, loose]
+  const edges = [edge(planA, inA, 'plans')]
+  return { nodes, edges, workstreams: [e, b, g, c, a], planA, loosePlan, g, a, b, c, e, inA, inB, inC, inC2, loose }
+}
+
+describe('goal tree on the canvas', () => {
+  const cardOf = (l: Layout, streamId: string) =>
+    [...l.nodes.values()].find((p) => p.stream === streamId) ?? expect.unreachable(`no card for ${streamId}`)
+
+  it('puts every root on the far right, one column nearer now per level down', () => {
+    const t = treeGraph()
+    const l = computeLayout({ ...t, now: NOW })
+    const x = (id: string) => cardOf(l, id).x
+    expect(x('g')).toBe(x('e')) // all goals line up
+    expect(x('g') - x('a')).toBe(COL_W)
+    expect(x('a')).toBe(x('b'))
+    expect(x('a') - x('c')).toBe(COL_W)
+    expect(cardOf(l, 'c').depth).toBe(2)
+    // The deepest column sits right of every leaf on the timeline.
+    for (const p of l.nodes.values()) if (!p.stream) expect(p.x + p.w).toBeLessThan(x('c'))
+    expect(cardOf(l, 'g').zone).toBe('future')
+  })
+
+  it("uses a plan stream's plan node as its card; a hand-made stream gets a synthetic card", () => {
+    const t = treeGraph()
+    const l = computeLayout({ ...t, now: NOW })
+    expect(cardOf(l, 'a').id).toBe(t.planA.id)
+    expect(l.nodes.has(streamCardId('a'))).toBe(false)
+    expect(cardOf(l, 'b').id).toBe(streamCardId('b'))
+    expect(streamOfCard(streamCardId('b'))).toBe('b')
+    expect(streamOfCard(t.planA.id)).toBeNull()
+    expect(l.tree.cards.get(streamCardId('b'))!.name).toBe('Delivery')
+    expect(l.tree.cards.get(t.planA.id)!.id).toBe('a')
+    // The loose plan keeps its place in the future zone, no card.
+    const lp = l.nodes.get(t.loosePlan.id)!
+    expect(lp.stream).toBeUndefined()
+    expect(lp.x).toBeLessThan(cardOf(l, 'c').x)
+    // The plan's own edges still reach its card.
+    expect(l.edges).toContainEqual(expect.objectContaining({ from: t.planA.id, to: t.inA.id }))
+  })
+
+  it('falls back to a synthetic card when the plan node is not loaded', () => {
+    const t = treeGraph()
+    const l = computeLayout({ ...t, nodes: t.nodes.filter((n) => n.id !== t.planA.id), now: NOW })
+    expect(cardOf(l, 'a').id).toBe(streamCardId('a'))
+  })
+
+  it('links each child card to its parent card', () => {
+    const t = treeGraph()
+    const l = computeLayout({ ...t, now: NOW })
+    const sorted = (xs: { from: string; to: string }[]) => [...xs].sort((p, q) => p.from.localeCompare(q.from))
+    expect(sorted(l.tree.links)).toEqual(
+      sorted([
+        { from: t.planA.id, to: streamCardId('g') },
+        { from: streamCardId('b'), to: streamCardId('g') },
+        { from: streamCardId('c'), to: t.planA.id }
+      ])
+    )
+  })
+
+  it('orders lanes depth-first; an inner stream with no items has no lane, an empty leaf stream a compact one', () => {
+    const t = treeGraph()
+    const l = computeLayout({ ...t, now: NOW })
+    // Siblings keep the server's order (B before A); a subtree's lanes stay together.
+    expect(l.lanes.map((x) => x.id)).toEqual(['stream:e', 'stream:b', 'stream:a', 'stream:c', `repo:${APP}`, 'other'])
+    const e = l.lanes.find((x) => x.id === 'stream:e')!
+    expect(e.empty).toBe(true)
+    expect(e.h).toBeLessThan(l.lanes.find((x) => x.id === 'stream:a')!.h)
+    // The plan node is a card now, not an item in its parent's lane.
+    expect(l.nodes.get(t.planA.id)!.lane).not.toBe('stream:g')
+    noOverlaps(l)
+  })
+
+  it("centres a card on its subtree's lanes", () => {
+    const t = treeGraph()
+    const l = computeLayout({ ...t, now: NOW })
+    const lane = (id: string) => l.lanes.find((x) => x.id === `stream:${id}`)!
+    const mid = (top: number, bottom: number) => (top + bottom) / 2
+    const cy = (id: string) => cardOf(l, id).y + cardOf(l, id).h / 2
+    expect(cy('c')).toBe(mid(lane('c').y, lane('c').y + lane('c').h))
+    expect(cy('a')).toBe(mid(lane('a').y, lane('c').y + lane('c').h))
+    expect(cy('g')).toBe(mid(lane('b').y, lane('c').y + lane('c').h))
+    expect(cy('b')).toBe(mid(lane('b').y, lane('b').y + lane('b').h))
+    expect(cy('e')).toBe(mid(lane('e').y, lane('e').y + lane('e').h))
+    // Cards never overlap each other.
+    const cards = [...l.nodes.values()].filter((p) => p.stream)
+    for (let i = 0; i < cards.length; i++)
+      for (let j = i + 1; j < cards.length; j++) expect(rectsOverlap(cards[i], cards[j])).toBe(false)
+  })
+
+  it('a focused subtree draws the picked node as the right-most root', () => {
+    const t = treeGraph()
+    // The panel passes the focus (the picked node and its sub-streams) as the canvas streams.
+    const l = computeLayout({ ...t, workstreams: [t.c, t.a], now: NOW })
+    expect([...l.tree.cards.values()].map((s) => s.id).sort()).toEqual(['a', 'c'])
+    expect(cardOf(l, 'a').depth).toBe(0)
+    expect(cardOf(l, 'a').x - cardOf(l, 'c').x).toBe(COL_W)
+    expect(l.tree.links).toEqual([{ from: streamCardId('c'), to: t.planA.id }])
+  })
+
+  it('draws no tree without streams', () => {
+    const t = treeGraph()
+    const l = computeLayout({ ...t, workstreams: [], now: NOW })
+    expect(l.tree.cards.size).toBe(0)
+    expect([...l.nodes.values()].some((p) => p.stream)).toBe(false)
+    expect(l.nodes.has(t.planA.id)).toBe(true)
+  })
+
+  it('places the same tree the same way whatever the input order', () => {
+    const t = treeGraph()
+    const a = computeLayout({ ...t, now: NOW })
+    const b = computeLayout({ ...t, nodes: shuffled(t.nodes), now: NOW })
+    expect([...b.nodes.entries()].sort()).toEqual([...a.nodes.entries()].sort())
+  })
+})
+
 describe('helpers', () => {
+  it('streamTree gives depths and cuts a parent cycle', () => {
+    const t = streamTree([
+      stream('b', 'B', { parentId: 'a' }),
+      stream('a', 'A'),
+      stream('x', 'X', { parentId: 'y' }),
+      stream('y', 'Y', { parentId: 'x' })
+    ])
+    expect(t.order.map((s) => s.id)).toEqual(['a', 'b', 'x', 'y'])
+    expect(Object.fromEntries(t.depth)).toEqual({ a: 0, b: 1, x: 0, y: 1 })
+    expect(t.parent.get('b')).toBe('a')
+    expect(t.parent.has('x')).toBe(false)
+    expect(t.children.get('a')).toEqual(['b'])
+  })
+
   it('activityColumn: stale changes sit next to "now", fresh ones towards the future', () => {
     expect(activityColumn(NOW - 40 * 86_400_000, NOW)).toBe(0)
     expect(activityColumn(NOW - 10 * 86_400_000, NOW)).toBe(1)

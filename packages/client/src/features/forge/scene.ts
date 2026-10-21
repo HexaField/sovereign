@@ -27,6 +27,16 @@ export function buildScene(
   dimmed: Set<string>,
   scale: number
 ): Scene {
+  // Goal-tree cards always show, undimmed: the tree is the frame the focus and filters work inside
+  // (a plan card is a plan node the filters or the focus would otherwise hide).
+  if (layout.tree.cards.size) {
+    visible = new Set(visible)
+    dimmed = new Set(dimmed)
+    for (const id of layout.tree.cards.keys()) {
+      visible.add(id)
+      dimmed.delete(id)
+    }
+  }
   const collapsed = collapsePast(layout, nodesById, scale, (id) => visible.has(id))
   const rects: HitRect[] = []
   // Bands under nodes: a node hit wins over its band.
