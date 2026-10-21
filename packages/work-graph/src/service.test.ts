@@ -542,6 +542,21 @@ describe('forge service', () => {
     expect(g.workstreams.map((w) => w.id).sort()).toEqual([sprockets.id, sub.id, handMade.id].sort())
   })
 
+  it('a plan stream placed in the goal tree stays a node when its plan stops naming items', async () => {
+    const dir = path.join(tmp, 'acme', 'widget', 'plans')
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nCovers acme-labs/widget#51.\n')
+    await service.sync('acme')
+    const gears = (await port.findByKey('plan:acme-org/widget/gears.md'))!
+    const goal = await service.createStream('acme', 'Goal: ship')
+    await service.setStreamParent(gears.id, goal.id, 'acme')
+
+    fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nNo items any more.\n')
+    await service.sync('acme')
+    expect(await port.get(gears.id)).toMatchObject({ isStream: true })
+    const g = await service.graph('acme')
+    expect(g.workstreams.find((w) => w.id === gears.id)).toMatchObject({ parentId: goal.id })
+  })
+
   it('archived hides a stream from the graph (unless asked for), and a plan sync never brings it back', async () => {
     const planId = 'plan:acme-org/widget/sprockets.md'
     await service.sync('acme')

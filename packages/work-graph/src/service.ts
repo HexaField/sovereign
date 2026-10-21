@@ -735,9 +735,12 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       if (t.state !== initial) await deps.tasks.setState(t.id, initial)
       changed = true
     }
+    // A plan stream stays a node while it has child streams or sits under a stream in the goal tree
+    const streamIds = new Set(tasks.filter((t) => t.isStream).map((t) => t.id))
     for (const t of tasks) {
       if (!t.isStream || t.kind !== 'plan' || !t.key || qualifying.has(t.key)) continue
       if (epicStatusOf(t.state) === 'archived' || t.childIds.length) continue
+      if (t.parentIds.some((p) => streamIds.has(p))) continue
       await deps.tasks.setStream(t.id, false)
       changed = true
     }
