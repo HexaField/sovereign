@@ -163,7 +163,21 @@ describe('forge service', () => {
     }
     expect((await service.search('acme', 'ancient')).nodes.map((n) => n.id)).toEqual([nid(WIDGET, 30)])
     const older = await service.graph('acme', { since: daysAgo(90), until: daysAgo(21) })
-    expect(older.nodes.map((n) => n.id)).toEqual([nid(WIDGET, 30)])
+    // The window's items, plus the plan node that frames its stream
+    expect(older.nodes.filter((n) => n.kind !== 'plan').map((n) => n.id)).toEqual([nid(WIDGET, 30)])
+  })
+
+  it('serves the plan node behind every shown stream, whatever the view filters (it frames the tree)', async () => {
+    await service.sync('acme')
+    await service.putViews('acme', [
+      { id: 'mine', membrane: 'acme', title: 'Mine', repos: [], filters: { repos: [WIDGET], zones: ['present'] } }
+    ])
+    const g = await service.graph('acme', { view: 'mine' })
+    const plan = 'plan:acme-org/widget/sprockets.md'
+    expect(g.workstreams.some((w) => w.plan === plan)).toBe(true)
+    expect(g.nodes.map((n) => n.id)).toContain(plan)
+    // Items still follow the view: the gadget change is filtered out
+    expect(g.nodes.map((n) => n.id)).not.toContain(nid(GADGET, 9))
   })
 
   it('asks the injected structureOf for every open change of a checked-out repo once per head, and carries the answer', async () => {

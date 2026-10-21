@@ -1136,11 +1136,15 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         graph.nodes
       )
       const shown = new Set(streams.map((w) => w.id))
+      // A shown stream's plan node frames the goal tree, so it is served whatever the view filters
+      const served = new Set(g.nodes.map((n) => n.id))
+      const plans = new Set(streams.map((w) => w.plan).filter((p): p is string => !!p))
+      const frames = graph.nodes.filter((n) => plans.has(n.id) && !served.has(n.id))
       return {
         membrane,
         since,
         until,
-        nodes: g.nodes.map((n) => {
+        nodes: [...g.nodes, ...frames].map((n) => {
           const workstreams = n.workstreams.filter((w) => shown.has(w))
           const related = n.relatedStreams?.filter((w) => shown.has(w))
           let out = workstreams.length === n.workstreams.length ? n : { ...n, workstreams }
