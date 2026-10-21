@@ -73,6 +73,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   const [lod, setLod] = createSignal<{ key: number; scale: number }>({ key: 0, scale: 1 })
   let canvas: CanvasHandle | undefined
   let root!: HTMLDivElement
+  let area!: HTMLDivElement
   let searchInput: HTMLInputElement | undefined
   let lastFocusTime = Date.now()
   const inflight = new Set<string>()
@@ -358,6 +359,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
       />
       <div class="flex min-h-0 flex-1">
         <div
+          ref={area}
           class="relative min-w-0 flex-1"
           onPointerDown={() => {
             setMenu(null)
@@ -402,6 +404,8 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
                 style={{
                   left: `${menu()!.x}px`,
                   top: `${menu()!.y}px`,
+                  // Open toward the room there is: left of the pointer near the right edge, above it near the bottom
+                  transform: `translate(${menu()!.x > area.clientWidth - 280 ? '-100%' : '0'}, ${menu()!.y > area.clientHeight - 180 ? '-100%' : '0'})`,
                   background: 'var(--c-bg-raised)',
                   'border-color': 'var(--c-border)',
                   color: 'var(--c-text)'
