@@ -219,6 +219,15 @@ const FilterBar: Component<FilterBarProps> = (props) => {
       >
         Dim instead
       </button>
+      <button
+        class={chip}
+        style={chipStyle(!!props.filters.showPaused)}
+        title="Show paused items and goals (hidden by default)"
+        onClick={() => set({ showPaused: !props.filters.showPaused })}
+        data-testid="forge-filter-paused"
+      >
+        Paused
+      </button>
       <Show when={hasActiveFilters(props.filters)}>
         <button
           class={chip}

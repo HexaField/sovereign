@@ -235,7 +235,9 @@ function drawNode(
   if (detail === 'full') {
     ctx.font = `11px ${FONT}`
     ctx.fillStyle = palette.muted
-    const sub = [n.repo?.split('/').pop(), n.branch?.head, n.status].filter(Boolean).join(' · ')
+    const sub = [n.paused ? 'Paused' : '', n.repo?.split('/').pop(), n.branch?.head, n.status]
+      .filter(Boolean)
+      .join(' · ')
     // Assignee initials, bottom right.
     let ax = right
     for (const a of n.assignees.slice(0, 3)) {

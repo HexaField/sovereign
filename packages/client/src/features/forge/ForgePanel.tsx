@@ -1,21 +1,25 @@
 // One graph panel: its own window of the work graph, filters, canvas,
 // tree panel and node card.
 
-import { batch, createEffect, createMemo, createSignal, on, onCleanup, Show, type Component } from 'solid-js'
-import type { AgentOverlay, ForgeFilters, ForgeView } from '@sovereign/core'
+import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, Show, type Component } from 'solid-js'
+import type { AgentOverlay, EpicStatus, ForgeFilters, ForgeView } from '@sovereign/core'
 import ForgeCanvas, { type CanvasHandle } from './ForgeCanvas.js'
 import FilterBar from './FilterBar.js'
 import NodeCard, { type ThreadChoice } from './NodeCard.js'
 import TreePanel from './TreePanel.js'
 import type { ForgeApi } from './api.js'
 import { keyDirection, walkEdge } from './edge-walk.js'
+import { EPIC_STATUSES } from '@sovereign/core/forge'
+import { EPIC_STATUS_COLORS, EPIC_STATUS_LABELS } from './style.js'
 import {
+  canvasMenuTarget,
   canvasStreams,
   clearEpics,
   epicFocus,
   focusStream,
   panelShown,
   panelVisibility,
+  pausedStreams,
   wantsArchived
 } from './epics-model.js'
 import KanbanBoard from './KanbanBoard.js'
@@ -65,6 +69,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
   const [error, setError] = createSignal<string | null>(null)
   const [selected, setSelected] = createSignal<string | null>(null)
   const [searching, setSearching] = createSignal(false)
+  const [menu, setMenu] = createSignal<{ id: string; x: number; y: number } | null>(null)
   const [lod, setLod] = createSignal<{ key: number; scale: number }>({ key: 0, scale: 1 })
   let canvas: CanvasHandle | undefined
   let root!: HTMLDivElement
@@ -111,7 +116,12 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     })
   )
   const filtered = createMemo(() =>
-    applyFilters(nodes(), filters(), { me: win().identity, overlays: props.overlays(), now: Date.now() })
+    applyFilters(nodes(), filters(), {
+      me: win().identity,
+      overlays: props.overlays(),
+      now: Date.now(),
+      pausedStreams: pausedStreams(filters(), win().workstreams)
+    })
   )
   const focus = createMemo(() => epicFocus(filters(), win().workstreams, nodes(), layout().edges))
   const visibility = createMemo(() => panelVisibility(filtered(), focus(), filters().dim))
@@ -200,6 +210,24 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     setFilters(focusStream(props.view.filters, stream))
   }
 
+  // ── Right-click status menu: an epic's status, or pause / resume an item ──
+  const menuTarget = createMemo(() => {
+    const m = menu()
+    return m ? canvasMenuTarget(m.id, win().workstreams, nodesById()) : null
+  })
+  const menuAction = async (fn: () => Promise<unknown>): Promise<void> => {
+    setMenu(null)
+    try {
+      await fn()
+      await load(initialRequest(Date.now()))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  const setStreamStatus = (id: string, status: EpicStatus) =>
+    menuAction(() => props.api.setStreamStatus(props.membrane, id, status))
+  const setPaused = (id: string, paused: boolean) => menuAction(() => props.api.setPaused(props.membrane, id, paused))
+
   const focusNode = (raw: string): void => {
     // A branch drawn as its change focuses the change. A node hidden by the
     // filters still gets selected, and the view pans to where it would be.
@@ -223,7 +251,8 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
       return
     }
     if (e.key === 'Escape') {
-      if (selected()) setSelected(null)
+      if (menu()) setMenu(null)
+      else if (selected()) setSelected(null)
       else if (filters().workstreams?.length || filters().epicStatus?.length) setFilters(clearEpics(props.view.filters))
       else if (filters().text) setFilters({ ...props.view.filters, text: undefined })
       return
@@ -328,7 +357,13 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
         hasIdentity={!!win().identity}
       />
       <div class="flex min-h-0 flex-1">
-        <div class="relative min-w-0 flex-1" onPointerDown={() => root.focus({ preventScroll: true })}>
+        <div
+          class="relative min-w-0 flex-1"
+          onPointerDown={() => {
+            setMenu(null)
+            root.focus({ preventScroll: true })
+          }}
+        >
           <Show
             when={kanban()}
             fallback={
@@ -338,6 +373,7 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
                 selectedId={selected}
                 highlight={highlight}
                 onSelect={selectOnCanvas}
+                onMenu={(id, x, y) => setMenu({ id, x, y })}
                 onViewport={onViewport}
                 ref={(h) => (canvas = h)}
               />
@@ -358,6 +394,61 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
                   ? 'First sync running…'
                   : 'Nothing in this window.'}
             </div>
+          </Show>
+          <Show when={menu() && menuTarget()}>
+            {(t) => (
+              <div
+                class="absolute z-20 min-w-[160px] rounded border py-1 text-xs shadow-xl"
+                style={{
+                  left: `${menu()!.x}px`,
+                  top: `${menu()!.y}px`,
+                  background: 'var(--c-bg-raised)',
+                  'border-color': 'var(--c-border)',
+                  color: 'var(--c-text)'
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+                data-testid="forge-canvas-menu"
+              >
+                <div class="max-w-[260px] truncate px-3 pb-1 font-semibold" style={{ color: 'var(--c-text-muted)' }}>
+                  {(() => {
+                    const v = t()
+                    return v.kind === 'stream' ? v.stream.name : v.node.title
+                  })()}
+                </div>
+                {(() => {
+                  const v = t()
+                  if (v.kind === 'item')
+                    return (
+                      <button
+                        class="block w-full px-3 py-1 text-left hover:bg-[var(--c-hover-bg)]"
+                        onClick={() => void setPaused(v.node.id, !v.node.paused)}
+                        data-testid="forge-menu-pause"
+                      >
+                        {v.node.paused ? 'Resume' : 'Pause (hide by default)'}
+                      </button>
+                    )
+                  const s = v.stream
+                  return (
+                    <For each={EPIC_STATUSES}>
+                      {(status) => (
+                        <button
+                          class="flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-[var(--c-hover-bg)]"
+                          onClick={() => (status === s.status ? setMenu(null) : void setStreamStatus(s.id, status))}
+                          data-testid={`forge-menu-status-${status}`}
+                        >
+                          <span class="h-2 w-2 rounded-full" style={{ background: EPIC_STATUS_COLORS[status].fg }} />
+                          {EPIC_STATUS_LABELS[status]}
+                          <Show when={status === s.status}>
+                            <span class="ml-auto">✓</span>
+                          </Show>
+                        </button>
+                      )}
+                    </For>
+                  )
+                })()}
+              </div>
+            )}
           </Show>
           {/* Keyed on the id, not the node: a refetch replaces the node object and must not reset the card. */}
           <Show when={selected()} keyed>

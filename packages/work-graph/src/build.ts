@@ -97,6 +97,7 @@ export function buildGraph(input: BuildInput): BuiltGraph {
       ...n,
       taskId: t.id,
       workstreams: streamsOf(t),
+      ...(t.state === 'paused' ? { paused: true } : {}),
       ...(t.transientState ? { status: t.transientState } : {})
     }
   }
@@ -329,6 +330,7 @@ export function buildGraph(input: BuildInput): BuiltGraph {
       labels: [],
       workstreams: streamsOf(t),
       taskId: t.id,
+      ...(t.state === 'paused' ? { paused: true } : {}),
       ...(t.transientState ? { status: t.transientState } : {}),
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,

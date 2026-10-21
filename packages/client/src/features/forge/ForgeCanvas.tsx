@@ -22,6 +22,8 @@ export interface ForgeCanvasProps {
   selectedId: () => string | null
   highlight: () => Set<string> | undefined
   onSelect: (id: string | null) => void
+  /** A right-click on a node or tree card, at canvas (CSS pixel) coordinates. */
+  onMenu?: (id: string, x: number, y: number) => void
   /** Every viewport change (pan, zoom, resize), in CSS pixels. */
   onViewport?: (vp: Viewport, width: number, height: number) => void
   ref?: (h: CanvasHandle) => void
@@ -251,6 +253,13 @@ const ForgeCanvas: Component<ForgeCanvasProps> = (props) => {
     }
     props.onSelect(id)
   }
+  const onContextMenu = (e: MouseEvent): void => {
+    const p = local(e)
+    const id = hitAt(p.x, p.y)
+    if (!id || bandIndexOf(id) !== null || !props.onMenu) return
+    e.preventDefault()
+    props.onMenu(id, p.x, p.y)
+  }
   const onWheel = (e: WheelEvent): void => {
     e.preventDefault()
     const p = local(e)
@@ -277,6 +286,7 @@ const ForgeCanvas: Component<ForgeCanvasProps> = (props) => {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => (drag = null)}
+        onContextMenu={onContextMenu}
         onPointerLeave={() => {
           if (hover) {
             hover = null

@@ -204,6 +204,19 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
     })
   )
 
+  // Pause a PR, issue or task (hidden by default), or resume it.
+  router.post(
+    '/api/forge/paused',
+    requireAuth,
+    json,
+    handle((req) => {
+      const nodeId = str(req.body?.nodeId)
+      if (!nodeId) throw bad('nodeId is required')
+      if (typeof req.body?.paused !== 'boolean') throw bad('paused must be true or false')
+      return service.setPaused(requireMembrane(req), nodeId, req.body.paused)
+    })
+  )
+
   // Place a stream in the goal tree: under `parentId` (its one parent), or at the top (null) as a goal.
   router.post(
     '/api/forge/streams/:id/parent',

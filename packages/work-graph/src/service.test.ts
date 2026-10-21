@@ -590,6 +590,33 @@ describe('forge service', () => {
     })
   })
 
+  it('pauses an item: its task is made when missing, sync leaves it paused, resume brings it back', async () => {
+    await service.sync('acme')
+    const issue7 = nid(WIDGET, 7)
+    expect(await service.setPaused('acme', issue7, true)).toMatchObject({ id: issue7, paused: true })
+    const task = (await port.findByKey(issue7))!
+    expect(task.state).toBe('paused')
+
+    // An update on the forge does not move a paused item on.
+    forge.put(issue(WIDGET, 7, { updatedAt: daysAgo(0), title: 'Renamed' }))
+    now += 120_000
+    await service.sync('acme')
+    expect((await port.get(task.id))!.state).toBe('paused')
+    expect((await service.graph('acme')).nodes.find((n) => n.id === issue7)).toMatchObject({ paused: true })
+
+    const resumed = await service.setPaused('acme', issue7, false)
+    expect(resumed).not.toHaveProperty('paused')
+    expect((await port.get(task.id))!.state).toBe('pending')
+
+    // Merged work (even with no task yet) and plans have nothing to pause.
+    forge.put(change(WIDGET, 51, { state: 'merged', updatedAt: daysAgo(0), closedAt: daysAgo(0) }))
+    now += 120_000
+    await service.sync('acme', 'all')
+    await expect(service.setPaused('acme', nid(WIDGET, 51), true)).rejects.toThrow(/nothing to pause/)
+    expect(await port.findByKey(nid(WIDGET, 51))).toBeUndefined()
+    await expect(service.setPaused('acme', 'plan:acme-org/widget/sprockets.md', true)).rejects.toThrow(/epic/)
+  })
+
   it("a plan's Status line sets its epic's status once; after that the status is the user's", async () => {
     const dir = path.join(tmp, 'acme', 'widget', 'plans')
     fs.writeFileSync(path.join(dir, 'gears.md'), '# Gears\n\nCovers acme-labs/widget#51.\n')

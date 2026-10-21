@@ -12,7 +12,8 @@
 
 import type { EpicStatus, ForgeFilters, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
 import { EPIC_STATUSES } from '@sovereign/core/forge'
-import { streamFocus, toggleFilterValue } from './filters.js'
+import { pausable, streamFocus, toggleFilterValue } from './filters.js'
+import { streamOfCard } from './layout.js'
 
 export type EpicsMode = 'dropdown' | 'modal'
 export const LS_EPICS_MODE = 'sovereign:forge:epics-mode'
@@ -75,16 +76,28 @@ export function searchEpics(rows: EpicRow[], q: string): EpicRow[] {
   return rows.filter((r) => keep.has(r.stream.id))
 }
 
-/** The statuses the panel lists: the chosen ones, else every status but archived. */
+/** The statuses the panel lists: the chosen ones, else every status but archived (and paused, unless shown). */
 export function shownStatuses(f: ForgeFilters): EpicStatus[] {
   const chosen = EPIC_STATUSES.filter((s) => f.epicStatus?.includes(s))
-  return chosen.length ? chosen : EPIC_STATUSES.filter((s) => s !== 'archived')
+  return chosen.length ? chosen : EPIC_STATUSES.filter((s) => s !== 'archived' && (s !== 'paused' || f.showPaused))
 }
 
-/** The epics the panel lists: those with a shown status. */
+/** Whether paused epics show: the Paused toggle, or the Paused status chip. */
+export const pausedShown = (f: ForgeFilters): boolean =>
+  f.showPaused === true || f.epicStatus?.includes('paused') === true
+
+/** The streams hidden as paused: each paused epic with its whole subtree; none while paused epics show. */
+export function pausedStreams(f: ForgeFilters, streams: WorkStream[]): Set<string> {
+  if (pausedShown(f)) return new Set()
+  const paused = streams.filter((s) => s.status === 'paused').map((s) => s.id)
+  return new Set(paused.length ? withSubEpics(paused, streams) : [])
+}
+
+/** The epics the panel lists: those with a shown status, outside a hidden paused subtree. */
 export function shownEpics(f: ForgeFilters, streams: WorkStream[]): WorkStream[] {
   const statuses = new Set(shownStatuses(f))
-  return streams.filter((s) => statuses.has(s.status))
+  const paused = pausedStreams(f, streams)
+  return streams.filter((s) => statuses.has(s.status) && !paused.has(s.id))
 }
 
 /** The epics picked one by one that the panel lists (an epic of a hidden status, archived or removed drops out). */
@@ -182,6 +195,21 @@ export function canvasStreams(f: ForgeFilters, streams: WorkStream[]): WorkStrea
 export function focusStream(f: ForgeFilters, id: string): ForgeFilters {
   const { workstreams, ...rest } = f
   return workstreams?.length === 1 && workstreams[0] === id ? rest : { ...rest, workstreams: [id] }
+}
+
+export type CanvasMenuTarget = { kind: 'stream'; stream: WorkStream } | { kind: 'item'; node: WorkNode }
+
+/** What a right-click on the canvas edits: a tree card's or plan card's stream (its status), or a pausable item; null for anything else. */
+export function canvasMenuTarget(
+  id: string,
+  streams: WorkStream[],
+  nodesById: Map<string, WorkNode>
+): CanvasMenuTarget | null {
+  const streamId = streamOfCard(id) ?? streams.find((s) => s.plan === id)?.id
+  const stream = streamId ? streams.find((s) => s.id === streamId) : undefined
+  if (stream) return { kind: 'stream', stream }
+  const node = nodesById.get(id)
+  return node && pausable(node) ? { kind: 'item', node } : null
 }
 
 export const toggleEpic = (f: ForgeFilters, id: string): ForgeFilters => toggleFilterValue(f, 'workstreams', id)

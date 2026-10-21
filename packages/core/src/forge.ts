@@ -168,6 +168,8 @@ export interface WorkNode {
   /** Streams the node is related to but not owned by: the epics of plans that name it. */
   relatedStreams?: string[]
   taskId?: string
+  /** Its task is paused: the user set it aside. Hidden unless `filters.showPaused`. */
+  paused?: boolean
   branch?: { head: string; base: string; ahead?: number; behind?: number; conflict?: boolean }
   ci?: ChecksState
   /** The live one-line status (task transientState). */
@@ -321,6 +323,8 @@ export interface ForgeFilters {
   agent?: 'any' | 'waiting-ci' | 'waiting-review'
   updatedWithinDays?: number
   text?: string
+  /** Show paused items and paused epics (with the streams and items below a paused epic); default hidden. */
+  showPaused?: boolean
   /** Dim non-matching nodes instead of hiding them. */
   dim?: boolean
 }

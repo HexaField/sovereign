@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  canvasMenuTarget,
   clearEpics,
   epicFocus,
   epicSource,
@@ -11,6 +12,7 @@ import {
   panelShown,
   panelVisibility,
   parseEpicsMode,
+  pausedStreams,
   pickedEpics,
   searchEpics,
   selectedEpics,
@@ -24,8 +26,9 @@ import {
   wantsArchived,
   withSubEpics
 } from './epics-model.js'
-import { applyFilters, clearFilters, hasActiveFilters } from './filters.js'
-import { change, edge, issue, NOW, shuffled, stream } from './test-fixtures.js'
+import { applyFilters, clearFilters, hasActiveFilters, pausable } from './filters.js'
+import { streamCardId } from './layout.js'
+import { change, edge, issue, merged, NOW, shuffled, stream, task } from './test-fixtures.js'
 import { treeButtonLabel } from './tree-model.js'
 
 const R = 'demo-org/engine'
@@ -193,9 +196,11 @@ describe('status chips', () => {
   const all = [act1, actSub, act2, planned, paused, gone]
   const ids = (xs: { id: string }[]) => xs.map((x) => x.id)
 
-  it('lists every status but archived with none chosen, else the chosen ones', () => {
-    expect(shownStatuses({})).toEqual(['active', 'planned', 'paused'])
-    expect(ids(shownEpics({}, all))).toEqual(['act1', 'act-sub', 'act2', 'pl', 'pa'])
+  it('lists active and planned with none chosen (paused too while shown), else the chosen ones', () => {
+    expect(shownStatuses({})).toEqual(['active', 'planned'])
+    expect(ids(shownEpics({}, all))).toEqual(['act1', 'act2', 'pl'])
+    expect(shownStatuses({ showPaused: true })).toEqual(['active', 'planned', 'paused'])
+    expect(ids(shownEpics({ showPaused: true }, all))).toEqual(['act1', 'act-sub', 'act2', 'pl', 'pa'])
     expect(ids(shownEpics({ epicStatus: ['archived'] }, all))).toEqual(['ar'])
     expect(ids(shownEpics({ epicStatus: ['paused', 'active'] }, all))).toEqual(['act1', 'act-sub', 'act2', 'pa'])
   })
@@ -207,7 +212,8 @@ describe('status chips', () => {
     expect(pickedEpics({ epicStatus: ['active'], workstreams: ['act2'] }, all)).toEqual(['act2'])
     // A pick of a status not shown drops out; with no pick left, the status selects.
     expect(selectedEpics({ epicStatus: ['active'], workstreams: ['pa'] }, all)).toEqual(['act1', 'act2'])
-    expect(selectedEpics({ workstreams: ['ar', 'pa'] }, all)).toEqual(['pa'])
+    expect(selectedEpics({ workstreams: ['ar', 'pa'] }, all)).toEqual([])
+    expect(selectedEpics({ workstreams: ['ar', 'pa'], showPaused: true }, all)).toEqual(['pa'])
     // Sub-epics join only when their status is shown.
     expect(focusedEpics({ epicStatus: ['active'] }, all)).toEqual(['act1', 'act2'])
     expect(focusedEpics({ epicStatus: ['active', 'paused'], workstreams: ['act1'] }, all).sort()).toEqual(
@@ -233,9 +239,9 @@ describe('status chips', () => {
     expect(panelShown(dimmed)).toEqual(new Set([inIdentity.id, inIndexer.id]))
     // Picking one active epic narrows it to that epic.
     expect(epicFocus({ ...f, workstreams: ['act2'] }, all, nodes, [])).toEqual(new Set([inIndexer.id]))
-    // No status, no pick: no focus; lanes for every non-archived epic.
+    // No status, no pick: no focus; lanes for every active and planned epic.
     expect(epicFocus({}, all, nodes, [])).toBeNull()
-    expect(ids(canvasStreams({}, all))).toEqual(['act1', 'act-sub', 'act2', 'pl', 'pa'])
+    expect(ids(canvasStreams({}, all))).toEqual(['act1', 'act2', 'pl'])
   })
 
   it('toggles chips, clears them with the picks, labels the button and asks for archived epics', () => {
@@ -246,11 +252,57 @@ describe('status chips', () => {
     expect(toggleEpicStatus({ epicStatus: ['active'] }, 'active')).toEqual({})
     expect(treeButtonLabel(f, all)).toBe('Tree: Active, Paused (4)')
     expect(treeButtonLabel({ ...f, workstreams: ['act1'] }, all)).toBe('Tree (1/4)')
-    expect(treeButtonLabel({}, all)).toBe('Tree (5)')
+    expect(treeButtonLabel({}, all)).toBe('Tree (3)')
     expect(clearEpics({ ...f, workstreams: ['act1'], dim: true })).toEqual({ dim: true })
     expect(hasActiveFilters({ epicStatus: ['planned'] })).toBe(true)
     expect(wantsArchived(f)).toBe(false)
     expect(wantsArchived({ epicStatus: ['archived'] })).toBe(true)
+  })
+})
+
+describe('paused', () => {
+  const goal = stream('g', 'Goal', { status: 'paused' })
+  const child = stream('c', 'Under the goal', { parentId: 'g', status: 'active' })
+  const grandchild = stream('gc', 'Deeper', { parentId: 'c', status: 'planned' })
+  const other = stream('o', 'Other', { status: 'active' })
+  const all = [goal, child, grandchild, other]
+
+  it('hides a paused epic with its whole subtree, unless paused work shows', () => {
+    expect([...pausedStreams({}, all)].sort()).toEqual(['c', 'g', 'gc'])
+    expect(shownEpics({}, all).map((s) => s.id)).toEqual(['o'])
+    expect(pausedStreams({ showPaused: true }, all).size).toBe(0)
+    expect(pausedStreams({ epicStatus: ['paused'] }, all).size).toBe(0)
+    expect(shownEpics({ showPaused: true }, all).map((s) => s.id)).toEqual(['g', 'c', 'gc', 'o'])
+  })
+
+  it('hides a paused item, and an item only paused streams own; the Paused toggle shows them', () => {
+    const pausedItem = change(R, 1, { paused: true })
+    const underGoal = issue(R, 2, { workstreams: ['gc'] })
+    const alsoElsewhere = task('t1', { workstreams: ['gc', 'o'] })
+    const loose = issue(R, 3)
+    const nodes = [pausedItem, underGoal, alsoElsewhere, loose]
+    const ctx = { now: NOW, pausedStreams: pausedStreams({}, all) }
+    expect(applyFilters(nodes, {}, ctx).visible).toEqual(new Set([alsoElsewhere.id, loose.id]))
+    // Hidden, not dimmed
+    expect(applyFilters(nodes, { dim: true }, ctx).visible.has(pausedItem.id)).toBe(false)
+    expect(applyFilters(nodes, { showPaused: true }, ctx).visible.size).toBe(4)
+    expect(clearFilters({ showPaused: true, repos: [R] })).toEqual({ showPaused: true })
+  })
+
+  it('pauses only open items; a right-click edits a tree or plan card’s epic, or a pausable item', () => {
+    expect(pausable(change(R, 1))).toBe(true)
+    expect(pausable(merged(R, 2, 1))).toBe(false)
+    expect(pausable(change(R, 3, { state: 'merged', paused: true }))).toBe(true)
+    const planStream = stream('ps', 'Plan', { plan: 'plan:demo/x.md' })
+    const open = change(R, 4)
+    const byId = new Map([open, merged(R, 5, 1)].map((n) => [n.id, n]))
+    expect(canvasMenuTarget(streamCardId('o'), [other, planStream], byId)).toEqual({ kind: 'stream', stream: other })
+    expect(canvasMenuTarget('plan:demo/x.md', [other, planStream], byId)).toEqual({
+      kind: 'stream',
+      stream: planStream
+    })
+    expect(canvasMenuTarget(open.id, [], byId)).toEqual({ kind: 'item', node: open })
+    expect(canvasMenuTarget(merged(R, 5, 1).id, [], byId)).toBeNull()
   })
 })
 

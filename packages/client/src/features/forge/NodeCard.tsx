@@ -22,7 +22,8 @@ import { StructureSection } from '../graphcoder/StructureSection.js'
 import { EpicStatusSelect } from './EpicStatusSelect.js'
 import { cardRethinkItems } from './rethink-model.js'
 import type { ForgeApi } from './api.js'
-import { CI_COLORS, REVIEW_COLORS, STATE_COLORS } from './style.js'
+import { CI_COLORS, EPIC_STATUS_COLORS, REVIEW_COLORS, STATE_COLORS } from './style.js'
+import { pausable } from './filters.js'
 import { threadChoices } from './membrane.js'
 import { placeOptions } from './tree-model.js'
 
@@ -120,6 +121,12 @@ const NodeCard: Component<NodeCardProps> = (props) => {
       props.onChanged()
     })
 
+  const togglePaused = () =>
+    run(async () => {
+      await props.api.setPaused(props.membrane, n().id, !n().paused)
+      props.onChanged()
+    })
+
   const edgeAction = (e: WorkEdge, accept: boolean) =>
     run(async () => {
       if (accept) await props.api.acceptEdge(e)
@@ -143,11 +150,27 @@ const NodeCard: Component<NodeCardProps> = (props) => {
             <Show when={n().repo}> · {n().repo}</Show>
             <Show when={n().number !== undefined}> #{n().number}</Show> ·{' '}
             <span data-testid="forge-card-state">{n().state}</span>
+            <Show when={n().paused}>
+              {' · '}
+              <span style={{ color: EPIC_STATUS_COLORS.paused.fg }}>paused</span>
+            </Show>
           </div>
           <div class="text-sm leading-snug font-semibold" data-testid="forge-card-title">
             {n().title}
           </div>
         </div>
+        <Show when={pausable(n())}>
+          <button
+            class="shrink-0 rounded border px-1.5 py-0.5 text-[11px] disabled:opacity-40"
+            style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
+            onClick={togglePaused}
+            disabled={busy()}
+            title={n().paused ? 'Resume: show it again by default' : 'Pause: set it aside, hidden by default'}
+            data-testid="forge-card-pause"
+          >
+            {n().paused ? 'Resume' : 'Pause'}
+          </button>
+        </Show>
         <button class="shrink-0 px-1 text-lg leading-none" style={muted} onClick={props.onClose} title="Close (Esc)">
           ×
         </button>

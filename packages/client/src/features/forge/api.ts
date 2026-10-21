@@ -84,6 +84,9 @@ export function createForgeApi(f: Fetch = (...a) => fetch(...a)) {
       json(await send('/api/forge/streams', 'POST', parentId ? { membrane, name, parentId } : { membrane, name })),
     setStreamStatus: async (membrane: string, streamId: string, status: EpicStatus): Promise<WorkStream> =>
       json(await send(`/api/forge/streams/${enc(streamId)}/status`, 'POST', { membrane, status })),
+    /** Pause a PR, issue or task, or resume it. */
+    setPaused: async (membrane: string, nodeId: string, paused: boolean): Promise<WorkNode> =>
+      json(await send('/api/forge/paused', 'POST', { membrane, nodeId, paused })),
     /** Place a stream in the goal tree: under `parentId`, or at the top (null) as a goal. */
     setStreamParent: async (membrane: string, streamId: string, parentId: string | null): Promise<WorkStream> =>
       json(await send(`/api/forge/streams/${enc(streamId)}/parent`, 'POST', { membrane, parentId })),

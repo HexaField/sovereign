@@ -4,6 +4,7 @@
 // epics-model.ts), so their members' neighbours can show too.
 
 import type { AgentOverlay, ForgeFilters, WorkEdge, WorkNode } from '@sovereign/core'
+import { leafState } from '@sovereign/core/forge'
 import { DAY_MS } from './layout.js'
 
 export interface FilterContext {
@@ -11,6 +12,8 @@ export interface FilterContext {
   me?: string
   overlays?: Map<string, AgentOverlay>
   now: number
+  /** Streams hidden as paused (`pausedStreams`): an item they alone own hides with them. */
+  pausedStreams?: Set<string>
 }
 
 export interface FilterResult {
@@ -54,6 +57,19 @@ export function isOrphan(n: WorkNode): boolean {
   return open && n.workstreams.length === 0
 }
 
+/** Whether the user can pause the node, or resume it: an open PR, issue or task, or one already paused. */
+export function pausable(n: WorkNode): boolean {
+  return n.paused === true || leafState(n) === 'open'
+}
+
+/** Set aside, so hidden unless `showPaused`: a paused item, or one owned only by paused streams. */
+export function isPausedOut(n: WorkNode, f: ForgeFilters, ctx: FilterContext): boolean {
+  if (f.showPaused) return false
+  if (n.paused) return true
+  const hidden = ctx.pausedStreams
+  return !!hidden?.size && n.workstreams.length > 0 && n.workstreams.every((id) => hidden.has(id))
+}
+
 export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: FilterContext): boolean {
   if (!one(f.repos, n.repo)) return false
   if (!one(f.states, n.state)) return false
@@ -85,10 +101,12 @@ export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: FilterContext)
 }
 
 export function applyFilters(nodes: WorkNode[], f: ForgeFilters, ctx: FilterContext): FilterResult {
+  // Paused work is hidden, not dimmed: the user set it aside
+  const live = nodes.filter((n) => !isPausedOut(n, f, ctx))
   const matched = new Set<string>()
-  for (const n of nodes) if (matchesFilters(n, f, ctx)) matched.add(n.id)
+  for (const n of live) if (matchesFilters(n, f, ctx)) matched.add(n.id)
   if (f.dim) {
-    const visible = new Set(nodes.map((n) => n.id))
+    const visible = new Set(live.map((n) => n.id))
     const dimmed = new Set([...visible].filter((id) => !matched.has(id)))
     return { visible, dimmed, matched }
   }
@@ -136,10 +154,11 @@ export function toggleFilterValue(f: ForgeFilters, key: ListFilterKey, value: st
   return out as ForgeFilters
 }
 
-/** Drop every filter and the epic selection; the display toggles (dim, epic neighbours, owned + related) stay. */
+/** Drop every filter and the epic selection; the display toggles (dim, paused, epic neighbours, owned + related) stay. */
 export function clearFilters(f: ForgeFilters): ForgeFilters {
   return {
     ...(f.dim ? { dim: true } : {}),
+    ...(f.showPaused ? { showPaused: true } : {}),
     ...(f.epicNeighbours === false ? { epicNeighbours: false } : {}),
     ...(f.epicRelated ? { epicRelated: true } : {})
   }

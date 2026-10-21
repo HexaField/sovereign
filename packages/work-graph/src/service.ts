@@ -10,6 +10,7 @@ import {
   defaultWorkPrompt,
   EPIC_STATUSES,
   epicStatusOf,
+  leafState,
   parseRefKey,
   stateOfEpicStatus,
   type EpicStatus,
@@ -187,6 +188,8 @@ export interface ForgeService {
   createStream(membrane: string, name: string, parentId?: string): Promise<WorkStream>
   addMember(streamId: string, nodeId: string, membrane?: string): Promise<{ taskId: string }>
   removeMember(streamId: string, nodeId: string, membrane?: string): Promise<boolean>
+  /** Pause a PR, issue or task (its task's state; made when missing), or resume it. Sync leaves a paused item paused until it merges or closes. */
+  setPaused(membrane: string, nodeId: string, paused: boolean): Promise<WorkNode>
   /** The membrane's work streams; archived ones only with `archived`. */
   streams(membrane: string, opts?: { archived?: boolean }): Promise<WorkStream[]>
   /** Every work stream of the membrane, archived ones included, with its members (not its child streams). */
@@ -1295,6 +1298,18 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       await deps.tasks.removeFromStream(streamId, node.taskId)
       emit('forge.updated', { membrane })
       return true
+    },
+
+    async setPaused(membrane, nodeId, paused) {
+      const { node } = await nodeIn(membrane, nodeId)
+      if (node.kind === 'plan') throw new ForgeError('a plan is an epic: set its status instead', 400)
+      if (paused && leafState(node) !== 'open') throw new ForgeError(`${nodeId} is not open: nothing to pause`, 400)
+      const task = await taskFor(membrane, node)
+      // Resumed: pending, or in progress with an owner; the next sync moves it on from there.
+      const state = paused ? 'paused' : task.threadId ? 'in_progress' : 'pending'
+      if (task.state !== state && (paused || task.state === 'paused')) await deps.tasks.setState(task.id, state)
+      emit('forge.updated', { membrane })
+      return (await nodeIn(membrane, nodeId)).node
     },
 
     async streams(membrane, opts = {}) {
