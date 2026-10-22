@@ -209,7 +209,6 @@ describe('rethink runner', () => {
   let now: number
   let threads: Map<string, { label: string; membrane: string; busy: boolean }>
   let sent: Array<{ threadId: string; text: string }>
-  let posted: string[]
   let drafts: Array<{ title: string; body: string; orgId: string | null; projectId: string | null }>
   let listeners: Map<string, Set<(s: string) => void>>
   let usage: RethinkUsage | undefined
@@ -244,7 +243,6 @@ describe('rethink runner', () => {
           return () => set.delete(cb)
         }
       },
-      presence: { post: async (text) => void posted.push(text) },
       drafts: {
         create: (d) => {
           drafts.push(d)
@@ -265,7 +263,6 @@ describe('rethink runner', () => {
     now = NOW
     threads = new Map([['owner-1', { label: 'Sprocket worker', membrane: 'acme', busy: false }]])
     sent = []
-    posted = []
     drafts = []
     listeners = new Map()
     usage = undefined
@@ -448,19 +445,17 @@ describe('rethink runner', () => {
         items: [{ nodeId: nid(50), text: 'Merge decision needed' }, { text: 'Two drafts to approve' }]
       })
     ).toEqual({
-      posted: true,
+      recorded: true,
       items: 2
     })
-    expect(posted).toHaveLength(1)
-    expect(posted[0]).toContain('**Forge · acme — needs your attention**')
-    expect(posted[0]).toContain(
-      `[${WIDGET}#50](https://github.com/${WIDGET}/pull/50) Stream teeth: Merge decision needed`
+    // No message goes anywhere: the item is noted on its card (and listed in the run report).
+    expect(sent.some((s) => /needs your attention/i.test(s.text))).toBe(false)
+    expect(runner.notes('acme')[nid(50)]).toContainEqual(
+      expect.objectContaining({ kind: 'attention', text: 'Needs your attention: Merge decision needed' })
     )
-    expect(posted[0]).toContain('- Two drafts to approve')
     expect(await call('forge_attention', { items: [{ text: 'again' }] })).toMatchObject({
       refused: expect.stringMatching(/one forge_attention/)
     })
-    expect(posted).toHaveLength(1)
 
     const callsBefore = forge.calls.length
     expect(
@@ -636,7 +631,7 @@ describe('rethink runner', () => {
     })
   })
 
-  it('parallel tool calls in one turn still respect the job limit and the one attention post', async () => {
+  it('parallel tool calls in one turn still respect the job limit and the one attention list', async () => {
     await service.rethink('acme')
     const rt = runner.threadOf('acme')!
     const call = (name: Parameters<RethinkRunner['tool']>[1], args: Record<string, unknown>) =>
@@ -649,8 +644,7 @@ describe('rethink runner', () => {
     expect(sent.filter((s) => s.threadId === 'owner-1')).toHaveLength(2)
 
     const posts = await Promise.all([1, 2].map((i) => call('forge_attention', { items: [{ text: `item ${i}` }] })))
-    expect(posts.filter((r) => r.posted)).toHaveLength(1)
-    expect(posted).toHaveLength(1)
+    expect(posts.filter((r) => r.recorded)).toHaveLength(1)
   })
 
   it('forge_dispatch to a given thread only reaches a thread of the membrane or an owner of its items', async () => {

@@ -68,7 +68,7 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
     ),
     tool(
       'forge_attention',
-      'Post ONE "needs your attention" message to the user (the presence thread) with every item of this run. A second call in the same run is refused.',
+      'Record ONE list of what the user must decide or do, with every item of this run: each is noted on its card and listed in the run report (no message is sent). A second call in the same run is refused.',
       {
         membrane,
         items: z

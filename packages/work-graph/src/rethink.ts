@@ -148,7 +148,7 @@ export function buildRethinkPrompt(input: {
     '| Rebase / update | An owned change is behind its base or in conflict | `forge_dispatch` to the owner thread: merge the base in, verify, push (merge, never force-push) |',
     '| Iterate | Review comments or red CI on an owned change | `forge_dispatch` to the owner thread with the specific comments or failing checks |',
     '| Bug reports | One failure pattern across changes, or a bug found in review | `forge_bug_draft` with the evidence nodes: a draft the user approves. Never open an issue yourself |',
-    '| Tell the user | Review requested from them, merge decisions, approved and waiting, stale items they own, blocked agents, drafts to approve | ONE `forge_attention` call holding every item |',
+    '| Flag for the user | Review requested from them, merge decisions, approved and waiting, stale items they own, blocked agents, drafts to approve | ONE `forge_attention` call holding every item (recorded on the cards and in the run report; no message is sent) |',
     '| Tidy | Tasks whose items ended, empty streams, duplicates | `forge_note` on the card, or an attention item when the user must act |',
     ''
   )
@@ -171,7 +171,7 @@ export function buildRethinkPrompt(input: {
     '- `forge_stream_add { membrane, nodeId, streamId }` — make the stream the item’s owner. A PR or issue has one owning stream, so this moves it out of any other.',
     '- `forge_dispatch { membrane, nodeId, threadId?, prompt }` — send specific work to the item’s owner thread (or the given thread).',
     '- `forge_bug_draft { membrane, repo, title, body, evidence: nodeId[] }` — a bug-report draft for the user to approve.',
-    '- `forge_attention { membrane, items: [{ nodeId?, text }] }` — the one “needs your attention” message to the user.',
+    '- `forge_attention { membrane, items: [{ nodeId?, text }] }` — what the user must decide or do: noted on each item’s card and listed in the run report.',
     '- `forge_note { membrane, nodeId, text }` — a one-line note on the item’s card.',
     ''
   )
@@ -414,8 +414,6 @@ export interface RethinkRunnerDeps {
     /** Agent status changes of the thread ('working' | 'thinking' | 'idle' …). Returns the unsubscribe. */
     onStatus(threadId: string, cb: (status: string) => void): () => void
   }
-  /** The presence (gateway) thread. */
-  presence: { post(text: string): Promise<void> }
   drafts: {
     create(d: { title: string; body: string; labels: string[]; orgId: string | null; projectId: string | null }): {
       id: string
@@ -604,11 +602,11 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
     return map
   }
 
-  /** Dispatches and the attention post still being sent, so parallel calls in one turn respect the limits. */
-  const flights = new WeakMap<RethinkRun, { dispatches: number; attention: boolean }>()
+  /** Dispatches still being sent, so parallel calls in one turn respect the job limit. */
+  const flights = new WeakMap<RethinkRun, { dispatches: number }>()
   const inFlight = (run: RethinkRun) => {
     let f = flights.get(run)
-    if (!f) flights.set(run, (f = { dispatches: 0, attention: false }))
+    if (!f) flights.set(run, (f = { dispatches: 0 }))
     return f
   }
 
@@ -783,9 +781,8 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
         }
       }
       case 'forge_attention': {
-        const f = inFlight(run)
-        if (f.attention || run.actions.some((a) => a.kind === 'attention'))
-          return refuse(m, run, name, 'one forge_attention per run, and this run already posted it')
+        if (run.actions.some((a) => a.kind === 'attention'))
+          return refuse(m, run, name, 'one forge_attention per run, and this run already recorded it')
         const raw = Array.isArray(args.items) ? args.items : []
         const items = raw
           .map((i) => i as { nodeId?: unknown; text?: unknown })
@@ -795,30 +792,19 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
             text: String(i.text).trim()
           }))
         if (!items.length) throw new ForgeError('items must hold at least one { text }', 400)
-        f.attention = true
-        try {
-          const lines: string[] = []
-          for (const i of items) {
-            const n = i.nodeId ? await deps.service().node(m, i.nodeId) : undefined
-            lines.push(`- ${n ? `${n.url ? `[${refOf(n)}](${n.url})` : refOf(n)} ${n.title}: ` : ''}${i.text}`)
-          }
-          await deps.presence.post(`**Forge · ${m} — needs your attention** (rethink ${run.id})\n\n${lines.join('\n')}`)
-        } catch (err) {
-          f.attention = false
-          throw err
-        }
+        // No message: the items live on their cards and in the run report
         record(m, run, { kind: 'attention', at, items })
         for (const i of items) {
           if (i.nodeId)
             addNote(m, i.nodeId, {
               at,
               kind: 'attention',
-              text: `Told the user: ${clip(oneLine(i.text), 200)}`,
+              text: `Needs your attention: ${clip(oneLine(i.text), 200)}`,
               runId: run.id
             })
         }
         emit('forge.updated', { membrane: m })
-        return { posted: true, items: items.length }
+        return { recorded: true, items: items.length }
       }
       case 'forge_stream_create': {
         const name_ = str(args, 'name')

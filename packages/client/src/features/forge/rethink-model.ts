@@ -109,7 +109,7 @@ const TAGS: Record<RethinkNote['kind'], string> = {
   note: 'Note',
   dispatch: 'Job',
   draft: 'Draft',
-  attention: 'Told you'
+  attention: 'Needs you'
 }
 
 /** The card's "Rethink notes": the node's notes (newest first), then its rethink edges. */

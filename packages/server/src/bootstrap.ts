@@ -1000,13 +1000,6 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         return () => chatModule.chatEvents.off('chat.status', h)
       }
     },
-    presence: {
-      post: async (text) => {
-        const gatewayId = presenceModule.gatewayThreadId()
-        if (!gatewayId) throw new Error('no presence thread to post to')
-        await chatModule.handleSend(gatewayId, text, undefined, { synthRole: 'system' })
-      }
-    },
     drafts: {
       create: (d) => {
         const draft = draftStore.create(d)
