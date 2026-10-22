@@ -394,6 +394,12 @@ describe('windowGraph / applyView / searchGraph', () => {
       id(WIDGET, 3)
     ])
     expect(applyView(g, { ...v, filters: { dim: true, authors: ['nobody'] } }).nodes).toHaveLength(g.nodes.length)
+    // The Type filter: only the kinds named
+    const kinds = (k: Array<'change' | 'branch'>) =>
+      new Set(applyView(g, { ...v, repos: [], filters: { kinds: k } }).nodes.map((n) => n.kind))
+    expect(new Set(g.nodes.map((n) => n.kind))).toEqual(new Set(['change', 'branch']))
+    expect(kinds(['change'])).toEqual(new Set(['change']))
+    expect(kinds(['change', 'branch'])).toEqual(new Set(['change', 'branch']))
     // Selected epics narrow on the client (with their neighbours), never in the served window.
     expect(applyView(g, { ...v, repos: [], filters: { workstreams: ['no-such-stream'] } }).nodes).toHaveLength(
       g.nodes.length

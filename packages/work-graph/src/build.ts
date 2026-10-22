@@ -400,6 +400,7 @@ const lower = (xs: string[] | undefined) => (xs?.length ? new Set(xs.map((x) => 
 export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: { me?: string; now?: number } = {}): boolean {
   const repos = lower(f.repos)
   if (repos && !(n.repo && repos.has(n.repo.toLowerCase()))) return false
+  if (f.kinds?.length && !f.kinds.includes(n.kind)) return false
   if (f.states?.length && !f.states.includes(n.state)) return false
   if (f.zones?.length && !f.zones.includes(n.zone)) return false
   const authors = lower(f.authors)

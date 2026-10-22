@@ -52,6 +52,9 @@ describe('matchesFilters', () => {
     expect(ids({ repos: [R, R2] })).toEqual([1, 2, 3, 4])
     expect(ids({ repos: [R], authors: ['alex'] })).toEqual([1, 3])
     expect(ids({ states: ['merged'] })).toEqual([3])
+    expect(ids({ kinds: ['issue'] })).toEqual([4])
+    expect(ids({ kinds: ['change'] })).toEqual([1, 2, 3])
+    expect(ids({ kinds: ['change'], states: ['merged'] })).toEqual([3])
     expect(ids({ zones: ['future'] })).toEqual([4])
     expect(ids({ labels: ['perf'] })).toEqual([1, 4])
     expect(ids({ assignees: ['hexbot'] })).toEqual([1])
@@ -140,6 +143,12 @@ describe('filter editing', () => {
     expect(o).not.toHaveProperty('workstreams')
     expect(o.zones.map((z) => z.value)).toEqual(['past', 'present', 'future'])
     expect(o.labels[0]).toEqual({ value: 'perf', label: 'perf', count: 2 })
+    // The Type menu: PRs first, then issues, with plural labels
+    expect(o.kinds).toEqual([
+      { value: 'change', label: 'PRs', count: 3 },
+      { value: 'issue', label: 'Issues', count: 1 }
+    ])
+    expect(hasActiveFilters({ kinds: ['issue'] })).toBe(true)
   })
 })
 
@@ -167,8 +176,8 @@ describe('stableOptions', () => {
     expect(next.authors[2].count).toBe(0)
   })
 
-  it('splits the chips: Repo, State, Assignee shown; Zone, Author, Reviewer, Label behind More', () => {
-    expect(PRIMARY_MENUS.map((m) => m.label)).toEqual(['Repo', 'State', 'Assignee'])
+  it('splits the chips: Repo, Type, State, Assignee shown; Zone, Author, Reviewer, Label behind More', () => {
+    expect(PRIMARY_MENUS.map((m) => m.label)).toEqual(['Repo', 'Type', 'State', 'Assignee'])
     expect(MORE_MENUS.map((m) => m.label)).toEqual(['Zone', 'Author', 'Reviewer', 'Label'])
     expect(moreActiveCount({ repos: [R], labels: ['ui', 'perf'], zones: ['past'] })).toBe(3)
     expect(moreActiveCount({ repos: [R] })).toBe(0)

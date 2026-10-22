@@ -300,6 +300,8 @@ export interface ForgeView {
 
 export interface ForgeFilters {
   repos?: string[]
+  /** Node kinds to show: PRs (`change`), issues, plans, tasks, branches. */
+  kinds?: WorkNodeKind[]
   states?: WorkNodeState[]
   zones?: Zone[]
   authors?: string[]

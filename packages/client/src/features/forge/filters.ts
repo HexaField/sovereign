@@ -72,6 +72,7 @@ export function isPausedOut(n: WorkNode, f: ForgeFilters, ctx: FilterContext): b
 
 export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: FilterContext): boolean {
   if (!one(f.repos, n.repo)) return false
+  if (!one(f.kinds, n.kind)) return false
   if (!one(f.states, n.state)) return false
   if (!one(f.zones, n.zone)) return false
   if (!one(f.authors, n.author)) return false
@@ -117,6 +118,7 @@ export function applyFilters(nodes: WorkNode[], f: ForgeFilters, ctx: FilterCont
 export function hasActiveFilters(f: ForgeFilters): boolean {
   return (
     !!f.repos?.length ||
+    !!f.kinds?.length ||
     !!f.states?.length ||
     !!f.zones?.length ||
     !!f.authors?.length ||
@@ -135,6 +137,7 @@ export function hasActiveFilters(f: ForgeFilters): boolean {
 
 export type ListFilterKey =
   | 'repos'
+  | 'kinds'
   | 'states'
   | 'zones'
   | 'authors'
@@ -173,6 +176,7 @@ export interface FilterOption {
 
 export interface FilterOptions {
   repos: FilterOption[]
+  kinds: FilterOption[]
   states: FilterOption[]
   zones: FilterOption[]
   authors: FilterOption[]
@@ -183,11 +187,22 @@ export interface FilterOptions {
 
 export type OptionKey = keyof FilterOptions
 
+/** The Type menu: a node kind's plural label, in menu order. */
+export const KIND_LABELS: Record<WorkNode['kind'], string> = {
+  change: 'PRs',
+  issue: 'Issues',
+  plan: 'Plans',
+  task: 'Tasks',
+  branch: 'Branches'
+}
+const KIND_ORDER = Object.keys(KIND_LABELS) as WorkNode['kind'][]
+
 /** The values present in the loaded graph, with counts, most common first. */
 export function filterOptions(nodes: WorkNode[]): FilterOptions {
   const tally = () => new Map<string, number>()
   const t = {
     repos: tally(),
+    kinds: tally(),
     states: tally(),
     zones: tally(),
     authors: tally(),
@@ -200,6 +215,7 @@ export function filterOptions(nodes: WorkNode[]): FilterOptions {
   }
   for (const n of nodes) {
     add(t.repos, n.repo)
+    add(t.kinds, n.kind)
     add(t.states, n.state)
     add(t.zones, n.zone)
     add(t.authors, n.author)
@@ -213,6 +229,12 @@ export function filterOptions(nodes: WorkNode[]): FilterOptions {
       .sort((a, b) => b.count - a.count || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
   return {
     repos: list(t.repos),
+    // PRs and issues first, as the menu reads
+    kinds: KIND_ORDER.filter((k) => t.kinds.has(k)).map((k) => ({
+      value: k,
+      label: KIND_LABELS[k],
+      count: t.kinds.get(k)!
+    })),
     states: list(t.states),
     zones: ['past', 'present', 'future']
       .filter((z) => t.zones.has(z))
@@ -224,7 +246,7 @@ export function filterOptions(nodes: WorkNode[]): FilterOptions {
   }
 }
 
-const OPTION_KEYS: OptionKey[] = ['repos', 'states', 'zones', 'authors', 'assignees', 'reviewers', 'labels']
+const OPTION_KEYS: OptionKey[] = ['repos', 'kinds', 'states', 'zones', 'authors', 'assignees', 'reviewers', 'labels']
 
 export interface FilterMenu {
   key: OptionKey
@@ -234,6 +256,7 @@ export interface FilterMenu {
 /** The chips always shown; the rest wait behind "More". */
 export const PRIMARY_MENUS: FilterMenu[] = [
   { key: 'repos', label: 'Repo' },
+  { key: 'kinds', label: 'Type' },
   { key: 'states', label: 'State' },
   { key: 'assignees', label: 'Assignee' }
 ]
