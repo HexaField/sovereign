@@ -36,3 +36,45 @@ describe('agents.spawn', () => {
     expect((spawnSubagent.mock.calls[0] as any[])[1]).not.toHaveProperty('timeoutMs')
   })
 })
+
+describe('sessions.send', () => {
+  // A thread's session key is its bare id: the chat module and the UI use that key.
+  function sendSetup(registry: Record<string, string> = {}) {
+    const sendMessage = vi.fn(async () => {})
+    const deps = buildSovereignMcpDeps({
+      routing: {
+        forSession: () => ({ sendMessage }),
+        registry: {
+          getByThread: (id: string) => (registry[id] ? { sessionKey: registry[id] } : undefined),
+          getBySession: () => undefined
+        }
+      }
+    } as any)
+    return { deps, sendMessage }
+  }
+  const T = '657e7ee2-e551-40bc-93fd-b7dbb55dad5b'
+
+  it('sends to the bare thread id for a thread with no session yet (not a hidden legacy key)', async () => {
+    const { deps, sendMessage } = sendSetup()
+    await deps.sessions!.send(T, 'hi')
+    expect(sendMessage).toHaveBeenCalledWith(T, 'hi')
+  })
+
+  it('treats the legacy agent:main:thread: form as the same thread', async () => {
+    const { deps, sendMessage } = sendSetup()
+    await deps.sessions!.send(`agent:main:thread:${T}`, 'hi')
+    expect(sendMessage).toHaveBeenCalledWith(T, 'hi')
+  })
+
+  it('ignores a stale registry record that still names the legacy key', async () => {
+    const { deps, sendMessage } = sendSetup({ [T]: `agent:main:thread:${T}` })
+    await deps.sessions!.send(T, 'hi')
+    expect(sendMessage).toHaveBeenCalledWith(T, 'hi')
+  })
+
+  it('uses the registry binding when the thread has one', async () => {
+    const { deps, sendMessage } = sendSetup({ [T]: 'local-llm:abc' })
+    await deps.sessions!.send(`agent:main:thread:${T}`, 'hi')
+    expect(sendMessage).toHaveBeenCalledWith('local-llm:abc', 'hi')
+  })
+})

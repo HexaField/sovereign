@@ -20,6 +20,7 @@ import type { MeetingsService } from '@sovereign/meetings'
 import type { Notifications } from '@sovereign/notifications'
 import type { BrowserService } from '@sovereign/browser'
 import type { AgentBackend, AgentBackendKind, EventBus } from '@sovereign/core'
+import { unwrapThreadId } from '@sovereign/core'
 import type { ThreadManager } from '@sovereign/threads'
 import { sessionKeyToThreadKey } from './wiring.js'
 
@@ -75,21 +76,18 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
   } = input
 
   /** Resolve a user-facing session/thread key to the canonical session key
-   *  used by the owning backend. The registry stores the authoritative
-   *  mapping; when a bare thread UUID matches a registry entry, its
-   *  `record.sessionKey` is returned. When no registry entry exists, fall
-   *  back to the legacy `agent:main:thread:` prefix convention so existing
-   *  Claude Code sessions still work. */
+   *  used by the owning backend. A thread's session key is its bare id, the
+   *  key the chat module and the UI use, so the legacy `agent:main:thread:`
+   *  form is unwrapped too. The registry wins when it binds the thread to
+   *  another key (local-llm). The old fallback re-added the legacy prefix,
+   *  which started a second, hidden session for a thread with no session yet. */
   function resolveSessionKey(sessionKey: string): string {
     if (sessionKey === 'main') return 'agent:main:main'
-    if (sessionKey.startsWith('agent:')) return sessionKey
-
-    // Bare UUID — check registry first (local-llm sessions use the bare key)
-    const record = routing.registry.getByThread(sessionKey) ?? routing.registry.getBySession(sessionKey)
-    if (record) return record.sessionKey
-
-    // No registry entry — assume Claude Code convention
-    return `agent:main:thread:${sessionKey}`
+    if (sessionKey.startsWith('agent:') && !sessionKey.startsWith('agent:main:thread:')) return sessionKey
+    const id = unwrapThreadId(sessionKey)
+    const record = routing.registry.getByThread(id) ?? routing.registry.getBySession(id)
+    // A record can still name the legacy form: it resolves to the same bare key
+    return record ? unwrapThreadId(record.sessionKey) : id
   }
 
   return {

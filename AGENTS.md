@@ -400,6 +400,12 @@ After a Sovereign rebuild, old Claude CLI subprocesses survive as orphans (repar
 
 **Betas removed:** The `context-1m-2025-08-07` beta was previously passed for sessions with context windows > 200 k, but Sovereign uses Claude.ai OAuth exclusively, which does not support custom betas. The CLI ignored it and logged a warning on every session start. betas is now always empty.
 
+## One session per thread: MCP `sessions_*` resolve to the bare thread id
+
+A thread's session key is its bare id: the chat module and the UI use it. `resolveSessionKey` in `agent-backend/src/mcp-deps.ts` (behind `sessions_send` / `sessions_history`) maps a bare id, a legacy `agent:main:thread:<id>` key, or a registry record naming either form to that bare id. Only a registry record naming a different key (local-llm) wins. Before this, a bare id with no registry record fell back to the legacy prefixed key. For a new thread the backend then started a second session the UI never shows. A later send by the bare id reached the visible session, and two agents worked the same task. Tests: `mcp-deps.test.ts` (`sessions.send`).
+
+`GET /api/threads/:key/session-info` reports the backend's default model (`listAvailableModels().defaultModel`, from `agentBackend.claudeCode.defaultModel`) when the thread has no session yet. The old `model: null` left the settings panel showing the first family in its catalog (Fable). The context window needs no setting: a Claude session uses the model's native window (`contextWindowFor`: 1M for Opus 5.5).
+
 ## POST /api/threads model field (7314d20)
 
 `POST /api/threads` previously ignored the `model` field in the request body. Any thread created with an explicit model (e.g. `model: "qwen3.8-27b"`) silently fell through to `DEFAULT_MODEL_FALLBACK` ("claude-opus-4-6"), making LiteLLM routing untestable via the REST API.

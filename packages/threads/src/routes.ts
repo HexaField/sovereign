@@ -556,10 +556,19 @@ export function createThreadRoutes(
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
       const backend = backendForSession(sessionKey)
       const meta = backend ? await backend.getSessionMeta(sessionKey) : null
+      // No session yet: report the model the first message starts on (the backend default),
+      // not null, which left the settings panel showing the first family in its list.
+      const fallback = meta?.model
+        ? null
+        : await backend?.listAvailableModels().then(
+            (m) => m.defaultModel,
+            () => null
+          )
+      const slash = fallback ? fallback.indexOf('/') : -1
 
       res.json({
-        model: meta?.model ?? null,
-        modelProvider: meta?.modelProvider ?? null,
+        model: meta?.model ?? (fallback ? fallback.slice(slash + 1) : null),
+        modelProvider: meta?.modelProvider ?? (fallback && slash > 0 ? fallback.slice(0, slash) : null),
         contextTokens: meta?.contextTokens ?? null,
         totalTokens: meta?.totalTokens ?? 0,
         inputTokens: meta?.inputTokens ?? 0,

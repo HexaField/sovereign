@@ -155,8 +155,18 @@ describe('Thread Routes — Model Switching', () => {
       expect(res.body.totalTokens).toBe(100)
     })
 
-    it('returns null model fields when no session meta is available', async () => {
+    it('reports the backend default model before the thread has a session', async () => {
       const thread = tm.create({ label: 'no-sessions-test' })
+      ;(backend as any).__setAvailableModels({ models: [], defaultModel: 'anthropic/claude-opus-5-5' })
+      const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.id)}/session-info`)
+      expect(res.status).toBe(200)
+      expect(res.body.model).toBe('claude-opus-5-5')
+      expect(res.body.modelProvider).toBe('anthropic')
+    })
+
+    it('returns null model fields when there is no session and no backend default', async () => {
+      const thread = tm.create({ label: 'no-default-test' })
+      ;(backend as any).__setAvailableModels({ models: [], defaultModel: null })
       const res = await request(app).get(`/api/threads/${encodeURIComponent(thread.id)}/session-info`)
       expect(res.status).toBe(200)
       expect(res.body.model).toBeNull()
