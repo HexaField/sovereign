@@ -345,8 +345,61 @@ describe('usageSinceFromFile', () => {
       outputTokens: 45,
       cacheRead: 220,
       cacheWrite: 20,
-      calls: 2
+      calls: 2,
+      // m0's context (1008) is larger than m1's (135): a drop adds nothing; m2 adds 163 − 135.
+      added: 28
     })
     expect(usageSinceFromFile(join(dir, 'missing.jsonl'), 0).calls).toBe(0)
+  })
+
+  const call = (ts: string, id: string, usage: Record<string, number>) =>
+    JSON.stringify({ type: 'assistant', timestamp: ts, message: { id, role: 'assistant', content: [], usage } })
+
+  it('counts what the calls add to the context, not a cold cache rewriting what was there', () => {
+    const file = join(dir, 's.jsonl')
+    writeFileSync(
+      file,
+      [
+        // Before the run: a 235,802-token context, served from the cache.
+        call('2026-10-26T09:00:00.000Z', 'm0', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 500,
+          cache_read_input_tokens: 235_000,
+          output_tokens: 300
+        }),
+        // Hours later the cache is cold: the first call writes the whole prompt again.
+        call('2026-10-26T21:30:07.000Z', 'm1', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 236_000,
+          cache_read_input_tokens: 0,
+          output_tokens: 700
+        }),
+        call('2026-10-26T21:30:18.000Z', 'm2', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 1000,
+          cache_read_input_tokens: 236_002,
+          output_tokens: 400
+        })
+      ].join('\n') + '\n'
+    )
+    const u = usageSinceFromFile(file, Date.parse('2026-10-26T21:30:00.000Z'))
+    expect(u.cacheWrite).toBe(237_000)
+    // m1: 236,702 − 235,802 = 900; m2: 237,404 − 236,702 = 702.
+    expect(u.added).toBe(1602)
+  })
+
+  it('counts a first call in full when nothing came before it, and growth after a compaction', () => {
+    const file = join(dir, 's.jsonl')
+    writeFileSync(
+      file,
+      [
+        call('2026-10-26T21:30:01.000Z', 'm1', { input_tokens: 1000, output_tokens: 100 }),
+        // A compaction shrinks the context: nothing added.
+        call('2026-10-26T21:31:00.000Z', 'm2', { input_tokens: 300, output_tokens: 50 }),
+        call('2026-10-26T21:31:10.000Z', 'm3', { input_tokens: 500, output_tokens: 20 })
+      ].join('\n') + '\n'
+    )
+    // m1: 1100 − 0; m2: below 1100; m3: 520 − 350.
+    expect(usageSinceFromFile(file, 0).added).toBe(1270)
   })
 })

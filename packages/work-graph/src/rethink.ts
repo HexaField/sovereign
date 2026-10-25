@@ -10,10 +10,12 @@
 // in the rethink thread outside a run (the user chatting with it) opens a
 // `chat` run, so every action lands in a report and counts against limits.
 //
-// Token budget: the fresh tokens of the run's turn (input + cache writes +
-// output, read from the backend's session transcript since the run started;
-// cache reads are reported but not counted). forge_dispatch checks it before
-// every job and refuses once it is spent.
+// Token budget: the tokens the run's API calls added to the thread's context
+// (each call's prompt + output growth over the call before it, read from the
+// backend's session transcript since the run started). The cache state does
+// not count: a cold cache that writes the owner thread's existing context
+// again adds nothing. forge_dispatch checks it before every job and refuses
+// once it is spent.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -40,7 +42,7 @@ export interface RethinkLimits {
 }
 
 export interface RethinkUsage {
-  /** Fresh tokens: input + cache writes + output. What the budget counts. */
+  /** Tokens the run added to the context (prompt and output growth). What the budget counts. */
   tokens: number
   input: number
   output: number
@@ -156,7 +158,7 @@ export function buildRethinkPrompt(input: {
   out.push('## Limits', '')
   out.push(
     `- At most ${limits.maxJobs} \`forge_dispatch\` call${limits.maxJobs === 1 ? '' : 's'} this run; more are refused.`,
-    `- Token budget: ${limits.tokenBudget.toLocaleString('en-US')} fresh tokens for this run. Once it is spent, dispatches are refused: stop and summarise.`,
+    `- Token budget: ${limits.tokenBudget.toLocaleString('en-US')} tokens added to the context in this run. Once it is spent, dispatches are refused: stop and summarise.`,
     '- No new threads, except for an item in a work stream with no owner thread (`forge_dispatch` without `threadId` starts one). Anything else without an owner goes into `forge_attention`.',
     '- One `forge_attention` call per run.',
     '- During this run, do not edit code, push, comment on the forge or open issues.',
@@ -328,7 +330,7 @@ export function renderRunReport(run: RethinkRun): string {
   if (run.usage) {
     const u = run.usage
     out.push(
-      `${fmt(u.tokens)} fresh tokens (input ${fmt(u.input)}, cache writes ${fmt(u.cacheWrite)}, output ${fmt(u.output)}); cache reads ${fmt(u.cacheRead)}.`
+      `${fmt(u.tokens)} tokens added to the context (input ${fmt(u.input)}, cache writes ${fmt(u.cacheWrite)}, output ${fmt(u.output)}); cache reads ${fmt(u.cacheRead)}.`
     )
   } else out.push('Not reported by the backend.')
   return out.join('\n') + '\n'
@@ -529,7 +531,7 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
     if (usage) {
       run.usage = usage
       if (usage.tokens > run.limits.tokenBudget && !run.limitsHit.some((l) => l.startsWith('token budget'))) {
-        run.limitsHit.push(`token budget: ${fmt(usage.tokens)} of ${fmt(run.limits.tokenBudget)} fresh tokens`)
+        run.limitsHit.push(`token budget: ${fmt(usage.tokens)} of ${fmt(run.limits.tokenBudget)} tokens added`)
       }
     }
     writeRun(run)
@@ -685,7 +687,7 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
             m,
             run,
             name,
-            `token budget: ${fmt(usage.tokens)} of ${fmt(c.tokenBudget)} fresh tokens spent; no more dispatches this run`,
+            `token budget: ${fmt(usage.tokens)} of ${fmt(c.tokenBudget)} tokens added; no more dispatches this run`,
             true
           )
         }

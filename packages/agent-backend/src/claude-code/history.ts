@@ -276,12 +276,17 @@ export function computeUsageFromFile(filePath: string): {
 
 /** Usage of the API calls a session made at or after `sinceMs`, read from its
  *  JSONL. Claude Code writes one line per content block of an assistant
- *  message, each carrying the same usage, so calls count once per message id. */
+ *  message, each carrying the same usage, so calls count once per message id.
+ *
+ *  `added` counts the tokens these calls added to the context: each call's
+ *  growth over the call before it (prompt + output, cached or not), never
+ *  less than zero. A cold cache that writes the existing context again adds
+ *  nothing; a compaction that shrinks it adds nothing either. */
 export function usageSinceFromFile(
   filePath: string,
   sinceMs: number
-): { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; calls: number } {
-  const out = { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, calls: 0 }
+): { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; calls: number; added: number } {
+  const out = { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, calls: 0, added: 0 }
   let content: string
   try {
     content = fs.readFileSync(filePath, 'utf-8')
@@ -289,23 +294,31 @@ export function usageSinceFromFile(
     return out
   }
   const seen = new Set<string>()
+  let context = 0
   for (const line of content.split('\n')) {
     if (!line.trim()) continue
     try {
       const entry = JSON.parse(line)
       const usage = entry?.message?.usage
       if (!usage) continue
-      const t = Date.parse(entry.timestamp ?? '')
-      if (!Number.isFinite(t) || t < sinceMs) continue
       const id = entry.message.id ?? entry.requestId ?? entry.uuid
       if (id) {
         if (seen.has(id)) continue
         seen.add(id)
       }
-      out.inputTokens += usage.input_tokens ?? 0
-      out.outputTokens += usage.output_tokens ?? 0
-      out.cacheRead += usage.cache_read_input_tokens ?? 0
-      out.cacheWrite += usage.cache_creation_input_tokens ?? 0
+      const input = usage.input_tokens ?? 0
+      const output = usage.output_tokens ?? 0
+      const cacheRead = usage.cache_read_input_tokens ?? 0
+      const cacheWrite = usage.cache_creation_input_tokens ?? 0
+      const previous = context
+      context = input + cacheRead + cacheWrite + output
+      const t = Date.parse(entry.timestamp ?? '')
+      if (!Number.isFinite(t) || t < sinceMs) continue
+      out.inputTokens += input
+      out.outputTokens += output
+      out.cacheRead += cacheRead
+      out.cacheWrite += cacheWrite
+      out.added += Math.max(0, context - previous)
       out.calls++
     } catch {
       /* malformed line */

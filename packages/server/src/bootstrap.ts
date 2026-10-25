@@ -1019,7 +1019,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       if (!file) return undefined
       const u = usageSinceFromFile(file, sinceMs)
       return {
-        tokens: u.inputTokens + u.cacheWrite + u.outputTokens,
+        tokens: u.added,
         input: u.inputTokens,
         output: u.outputTokens,
         cacheWrite: u.cacheWrite,

@@ -188,7 +188,9 @@ describe('renderRunReport', () => {
     expect(md).toContain(`- ${nid(50)} → ${nid(51)} (0.8): same gear train`)
     expect(md).toContain('### Dispatched jobs (1 of 1)')
     expect(md).toContain('- Hit: job limit: 1 dispatch per run')
-    expect(md).toContain('1,500 fresh tokens (input 1,000, cache writes 200, output 300); cache reads 9,000.')
+    expect(md).toContain(
+      '1,500 tokens added to the context (input 1,000, cache writes 200, output 300); cache reads 9,000.'
+    )
     expect(md).not.toContain('Bug-report drafts')
   })
 
@@ -621,9 +623,9 @@ describe('rethink runner', () => {
     expect(run.actions).toMatchObject({ dispatch: 2, refused: 3 })
     const md = runner.report('acme', run.id)!
     expect(md).toContain('### Dispatched jobs (2 of 2)')
-    expect(md).toContain('- Hit: token budget: 12,000 of 10,000 fresh tokens spent; no more dispatches this run')
+    expect(md).toContain('- Hit: token budget: 12,000 of 10,000 tokens added; no more dispatches this run')
     expect(md).toContain('- Hit: job limit: 2 dispatches per run')
-    expect(md).toContain('100 fresh tokens')
+    expect(md).toContain('100 tokens added to the context')
     const n50 = (await service.graph('acme')).nodes.find((n) => n.id === nid(50))!
     expect(n50.rethink?.[0]).toMatchObject({
       kind: 'dispatch',
