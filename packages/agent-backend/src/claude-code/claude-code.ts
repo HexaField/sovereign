@@ -1822,7 +1822,11 @@ export function createClaudeCodeBackend(
     // A due auto-recycle runs here, while the session is known to be idle,
     // rather than after the last turn's result: by then a queued message, a
     // cron or a finished background task may have started the next turn.
-    if (state.recycleDue && state.agentStatus === 'idle' && !recycleDone.has(sessionKey)) {
+    if (
+      (state.recycleDue || coldRecycleWanted(state)) &&
+      state.agentStatus === 'idle' &&
+      !recycleDone.has(sessionKey)
+    ) {
       recycleSession(sessionKey, { metricsMethod: 'auto-recycle' }).catch((err) =>
         console.warn('[context-recycle] auto-recycle error:', err)
       )
@@ -2484,6 +2488,35 @@ export function createClaudeCodeBackend(
   // Called after each normal turn completion. Compares the session's
   // current context fill against the configured threshold and triggers
   // a recycle when the fill exceeds it.
+
+  /** The prompt cache's lifetime: past it, the next call writes the whole prompt again. */
+  const PROMPT_CACHE_TTL_MS = 60 * 60_000
+
+  /** A session idle past the cache TTL rewrites its whole prompt on the next call anyway,
+   *  so a prune before that call costs no extra cache write: the gate's cold threshold applies. */
+  function coldRecycleWanted(state: ClaudeSessionState): boolean {
+    const cfg = getConfig().contextManagement?.recycle
+    if (cfg?.enabled === false || state.parentSessionKey || !state.sessionFile) return false
+    let idleMs: number
+    try {
+      idleMs = Date.now() - fs.statSync(state.sessionFile).mtimeMs
+    } catch {
+      return false
+    }
+    if (idleMs < PROMPT_CACHE_TTL_MS) return false
+    const latest = latestUsageFromFile(state.sessionFile)
+    return recycleWanted({
+      filled: latest.inputTokens + latest.cacheRead + latest.cacheWrite,
+      maxTokens: state.contextWindow ?? contextWindowFor(state.model),
+      thresholdPercent: cfg?.thresholdPercent ?? 45,
+      floor: state.recycleFloor,
+      regrowPercent: cfg?.regrowPercent ?? 10,
+      exhausted: state.recycleExhausted,
+      idleMs,
+      cacheTtlMs: PROMPT_CACHE_TTL_MS,
+      coldThresholdPercent: cfg?.coldThresholdPercent ?? 20
+    })
+  }
 
   async function maybeAutoRecycle(state: ClaudeSessionState): Promise<void> {
     const recycleCfg = getConfig().contextManagement?.recycle

@@ -255,7 +255,8 @@ export const schema = {
             prescription: { type: 'string' },
             skipDuringSubagents: { type: 'boolean' },
             regrowPercent: { type: 'number', minimum: 0, maximum: 100 },
-            minReclaimPercent: { type: 'number', minimum: 0, maximum: 100 }
+            minReclaimPercent: { type: 'number', minimum: 0, maximum: 100 },
+            coldThresholdPercent: { type: 'number', minimum: 0, maximum: 100 }
           },
           additionalProperties: false
         },

@@ -241,6 +241,8 @@ export interface SovereignConfig {
       regrowPercent: number
       /** A recycle that frees less than this % of the context stops auto-recycle until a compaction. */
       minReclaimPercent: number
+      /** The threshold after an idle gap past the prompt-cache TTL, when the next call rewrites the whole prompt anyway. */
+      coldThresholdPercent: number
     }
     /** Layer 3: between-session JSONL cleanup via cron. */
     cleanup: {

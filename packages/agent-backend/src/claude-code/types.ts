@@ -86,6 +86,7 @@ export interface ClaudeCodeConfig {
       skipDuringSubagents?: boolean
       regrowPercent?: number
       minReclaimPercent?: number
+      coldThresholdPercent?: number
     }
     cleanup?: {
       enabled?: boolean

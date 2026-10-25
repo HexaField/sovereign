@@ -158,6 +158,8 @@ describe('MetricsAccumulator', () => {
     expect(line).toContain('[metrics] tool ')
     expect(line).toContain('tool=Grep')
     expect(line).toContain('dur=15ms')
+    // A time on every line, so a weekly review can pick its window from the log.
+    expect(line).toMatch(/ at=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
   })
 
   it('tags subagent tool calls in log lines', () => {
@@ -184,6 +186,7 @@ describe('MetricsAccumulator', () => {
     expect(line).toContain('pre=90000')
     expect(line).toContain('post=35000')
     expect(line).toContain('reclaimed=55000')
+    expect(line).toMatch(/ at=\d{4}-\d{2}-\d{2}T[\d:.]+Z$/)
   })
 
   it('ring buffer wraps at capacity and preserves order', () => {
@@ -292,6 +295,7 @@ describe('MetricsAccumulator', () => {
     expect(stratLine).toContain('removed=5')
     expect(stratLine).toContain('replaced=2')
     expect(stratLine).toContain('dur=12ms')
+    expect(stratLine).toMatch(/ at=\d{4}-\d{2}-\d{2}T[\d:.]+Z$/)
   })
 
   it('returns a copy of byStrategy in globalTotals (no mutation leaks)', () => {
