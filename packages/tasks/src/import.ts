@@ -11,7 +11,7 @@
 // After the import the work graph polls the item (CI, reviews, merge) and
 // notifies the owner thread; the importer reads only what names the task.
 
-import type { ForgeRef } from '@sovereign/core'
+import type { ForgeRef, TrustedAuthors } from '@sovereign/core'
 import { parseRefKey, refKey } from '@sovereign/core'
 import type { TaskService } from './service.js'
 import type { ChangeProvider, IssueProvider, Task } from './types.js'
@@ -85,6 +85,13 @@ export interface TaskImporterDeps {
   taskService: TaskService
   sendToThread: (threadId: string, text: string) => Promise<void>
   exec: Exec
+  /**
+   * forge.trustedAuthors for a membrane (null: the item has none):
+   * `trustedAuthorsOf` over the live config. A PR or issue whose author it
+   * does not hold is refused before anything is stored. Unset or undefined:
+   * no check.
+   */
+  trustedAuthors?: (membrane: string | null) => TrustedAuthors | undefined
 }
 
 export interface ImportOpts extends ImportInput {
@@ -107,6 +114,20 @@ export interface TaskImporter {
 
 export function createTaskImporter(deps: TaskImporterDeps): TaskImporter {
   const { taskService, sendToThread, exec } = deps
+
+  /**
+   * Refuse an item whose author the membrane's allow list does not hold. The
+   * issues endpoint answers for PRs too, so this needs no kind; it runs
+   * before any other read, so an untrusted title never lands in a task.
+   */
+  async function checkAuthor(ref: ForgeRef, membrane: string | null): Promise<void> {
+    const list = deps.trustedAuthors?.(membrane)
+    if (!list) return
+    const { stdout } = await exec('gh', ['api', `repos/${ref.repo}/issues/${ref.id}`, '--jq', '.user.login'])
+    const login = stdout.trim()
+    if (!list.has(login))
+      throw new Error(`${ref.repo}#${ref.id} by ${login || 'unknown'}: author not in forge.trustedAuthors`)
+  }
 
   /** PR or issue? Asks GitHub. */
   async function resolveKind(ref: ForgeRef): Promise<'change' | 'issue'> {
@@ -249,6 +270,8 @@ export function createTaskImporter(deps: TaskImporterDeps): TaskImporter {
       // An item already tracked under either kind needs no GitHub call.
       const asChange = refKey({ ...target.ref, kind: 'change' })
       const asIssue = refKey({ ...target.ref, kind: 'issue' })
+      const known = (await taskService.findByProviderKey(asChange)) ?? (await taskService.findByProviderKey(asIssue))
+      await checkAuthor(target.ref, opts.membrane ?? known?.membrane ?? null)
       let kind = target.kind
       if (!kind) {
         if (await taskService.findByProviderKey(asChange)) kind = 'change'

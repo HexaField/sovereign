@@ -37,13 +37,18 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v !== '' ? v : undefined
 }
 
+/** An import or poll the membrane's forge.trustedAuthors refuses. */
+const UNTRUSTED = /author not in forge\.trustedAuthors/
+
 function fail(res: Response, err: unknown): void {
   const msg = (err as Error).message ?? String(err)
-  const status = /not found/i.test(msg)
-    ? 404
-    : /already exists|cycle|needs|invalid|unrecognised|not a /i.test(msg)
-      ? 400
-      : 500
+  const status = UNTRUSTED.test(msg)
+    ? 403
+    : /not found/i.test(msg)
+      ? 404
+      : /already exists|cycle|needs|invalid|unrecognised|not a /i.test(msg)
+        ? 400
+        : 500
   res.status(status).json({ error: msg })
 }
 
@@ -182,7 +187,9 @@ export function createTaskRoutes(deps: TaskRouteDeps): Router {
     } catch (err) {
       const msg = (err as Error).message
       res
-        .status(/needs exactly one|Not a|Only|must be|numeric|needs project/.test(msg) ? 400 : 500)
+        .status(
+          UNTRUSTED.test(msg) ? 403 : /needs exactly one|Not a|Only|must be|numeric|needs project/.test(msg) ? 400 : 500
+        )
         .json({ error: msg })
     }
   })

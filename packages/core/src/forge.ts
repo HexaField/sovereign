@@ -528,3 +528,35 @@ export function parseRefKey(key: string, kind: ForgeRef['kind']): ForgeRef | und
   if (!m) return undefined
   return { forge: m[1] as ForgeKind, host: m[2], repo: m[3], kind, id: m[5] }
 }
+
+// ── Trusted authors ───────────────────────────────────────────────────
+
+/** A membrane's allow list of forge logins (config `forge.trustedAuthors`). */
+export interface TrustedAuthors {
+  /** The membrane's own list, or the `"*"` list every other membrane takes. */
+  source: 'membrane' | '*'
+  logins: string[]
+  /** Case-insensitive. */
+  has(login: string): boolean
+}
+
+/**
+ * The allow list a membrane follows: its own list, else `"*"`, else none
+ * (undefined: every author passes). A null membrane (an item no membrane
+ * holds) takes `"*"`. An empty list trusts nobody.
+ */
+export function trustedAuthorsOf(
+  map: Record<string, string[]> | undefined,
+  membrane: string | null | undefined
+): TrustedAuthors | undefined {
+  const listOf = (key: string) => (map && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined)
+  const own = membrane && membrane !== '*' ? listOf(membrane) : undefined
+  const logins = own ?? listOf('*')
+  if (!logins) return undefined
+  const set = new Set(logins.map((l) => l.toLowerCase()))
+  return {
+    source: own ? 'membrane' : '*',
+    logins: [...logins],
+    has: (login) => Boolean(login) && set.has(login.toLowerCase())
+  }
+}

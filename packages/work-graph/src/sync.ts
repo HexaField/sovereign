@@ -11,8 +11,9 @@
 // Branch compare runs only for open changes, cached by head + base sha.
 // Retries and rate-limit waits come from the adapter.
 
-import { refKey, type Change, type Forge, type ForgeIssue, type ForgeRef } from '@sovereign/core'
+import { parseRefKey, refKey, type Change, type Forge, type ForgeIssue, type ForgeRef } from '@sovereign/core'
 import { parsePaired } from './build.js'
+import { admitsEvent } from './trust.js'
 import type { RepoCacheStore } from './cache.js'
 import { diffChange, diffIssue } from './diff.js'
 import type { CachedChange, CachedIssue, ForgeEvent, RepoCache } from './types.js'
@@ -25,6 +26,13 @@ export interface RepoSyncDeps {
   staleDays?: number
   /** Node ids whose comments are read each refresh (owned items). */
   watched?: () => Set<string>
+  /**
+   * forge.trustedAuthors, asked once per job: whether `login` may put an item
+   * (or a comment or review on item `nodeId`) into the Forge. An item it
+   * refuses is never stored (and leaves the cache), and refused actors' text
+   * never reaches an event. Unset: everyone passes.
+   */
+  trust?: () => (login: string, nodeId: string) => boolean
   now?: () => number
   log?: (msg: string) => void
 }
@@ -51,6 +59,8 @@ export interface RepoSync {
   backfillDone(): boolean
   /** Persist the cache after an outside edit (an assignee Forge wrote). */
   save(): void
+  /** The author of an item `trusted` refused since this process started (by node id). */
+  refused(nodeId: string): string | undefined
 }
 
 const OVERLAP_MS = 60_000
@@ -65,6 +75,46 @@ export function createRepoSync(
   const cache = deps.store.load(target.forge, target.host, target.repo)
   let chain: Promise<unknown> = Promise.resolve()
   const iso = (t: number) => new Date(t).toISOString()
+  let trusted: (login: string, nodeId: string) => boolean = () => true
+  const refused = new Map<string, string>()
+
+  /** Drop an item `trusted` refuses: out of the cache, remembered by node id. True when it was cached. */
+  function refuse(kind: 'changes' | 'issues', item: Change | ForgeIssue | CachedChange | CachedIssue): boolean {
+    const id = refKey(item.ref)
+    refused.set(id, item.author)
+    const was = Boolean(cache[kind][item.ref.id])
+    delete cache[kind][item.ref.id]
+    cache.stale = cache.stale.filter((s) => s !== id)
+    return was
+  }
+
+  /** Items cached before the allow list (or before a login left it) leave the cache. */
+  function prune(): boolean {
+    let changed = false
+    for (const c of Object.values(cache.changes))
+      if (!trusted(c.author, refKey(c.ref))) changed = refuse('changes', c) || changed
+    for (const i of Object.values(cache.issues))
+      if (!trusted(i.author, refKey(i.ref))) changed = refuse('issues', i) || changed
+    return changed
+  }
+
+  /** Events whose item, commenters, reviewer or referencing item `trusted` refuses are dropped. */
+  function admitted(events: ForgeEvent[]): ForgeEvent[] {
+    const authorOf = (id: string) => {
+      const ref = parseRefKey(id, 'change')
+      return (ref && (cache.changes[ref.id]?.author ?? cache.issues[ref.id]?.author)) ?? refused.get(id)
+    }
+    return events.filter((e) => admitsEvent(e, (login) => trusted(login, e.nodeId), authorOf))
+  }
+
+  /** A sync job under the allow list: stale entries pruned first (every job saves the cache), its events admitted. */
+  async function trustedJob(job: () => Promise<SyncResult>): Promise<SyncResult> {
+    trusted = deps.trust?.() ?? (() => true)
+    const pruned = prune()
+    const r = await job()
+    const events = admitted(r.events)
+    return { events, changed: r.changed || pruned }
+  }
 
   /** Run one job at a time per repo. */
   function serial<T>(job: () => Promise<T>): Promise<T> {
@@ -99,6 +149,11 @@ export function createRepoSync(
     for (const c of changes) {
       if (seenC.has(c.ref.id)) continue
       seenC.add(c.ref.id)
+      if (!trusted(c.author, refKey(c.ref))) {
+        changed = refuse('changes', c) || changed
+        continue
+      }
+      refused.delete(refKey(c.ref))
       const prev = cache.changes[c.ref.id]
       if (quiet && prev && prev.updatedAt >= c.updatedAt) continue
       const next = ingestChange(c)
@@ -125,6 +180,11 @@ export function createRepoSync(
     for (const i of issues) {
       if (seenI.has(i.ref.id)) continue
       seenI.add(i.ref.id)
+      if (!trusted(i.author, refKey(i.ref))) {
+        changed = refuse('issues', i) || changed
+        continue
+      }
+      refused.delete(refKey(i.ref))
       const prev = cache.issues[i.ref.id]
       if (quiet && prev && prev.updatedAt >= i.updatedAt) continue
       const next = ingestIssue(i)
@@ -201,8 +261,10 @@ export function createRepoSync(
         const prev = item.commentCount
         if (prev !== comments.length) changed = true
         item.commentCount = comments.length
-        if (prev !== undefined && comments.length > prev) {
-          const fresh = comments.slice(prev)
+        // Comments by logins the allow list refuses count, but their text never enters an event
+        const fresh =
+          prev !== undefined && comments.length > prev ? comments.slice(prev).filter((c) => trusted(c.author, id)) : []
+        if (fresh.length) {
           events.push({
             at,
             nodeId: id,
@@ -387,10 +449,16 @@ export function createRepoSync(
     key: `${target.forge}:${target.host}/${target.repo}`,
     repo: target.repo,
     cache: () => cache,
-    syncOpen: () => serial(() => refresh('open')),
-    syncAll: () => serial(() => refresh('all')),
-    refreshItems: (refs) => serial(() => refreshItems(refs)),
-    backfillStep: () => serial(backfillStep),
+    syncOpen: () => serial(() => trustedJob(() => refresh('open'))),
+    syncAll: () => serial(() => trustedJob(() => refresh('all'))),
+    refreshItems: (refs) => serial(() => trustedJob(() => refreshItems(refs))),
+    backfillStep: () =>
+      serial(() => {
+        trusted = deps.trust?.() ?? (() => true)
+        prune()
+        return backfillStep()
+      }),
+    refused: (nodeId) => refused.get(nodeId),
     backfillDone: () => cache.backfill.changes.done && cache.backfill.issues.done,
     save: () => deps.store.save(cache)
   }

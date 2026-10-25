@@ -1,5 +1,6 @@
 // task_import: parsing refKeys, URLs and plans, and importing them idempotently.
 
+import { trustedAuthorsOf } from '@sovereign/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTaskImporter, parseImportTarget } from './import.js'
 import { createTaskService, type TaskService } from './service.js'
@@ -147,6 +148,65 @@ describe('task importer', () => {
     expect(sent[0].text).toContain('gh issue view 7 -R org/repo')
     const again = await imp.import({ url: 'https://github.com/org/repo/issues/7', sourceThreadId: 't' })
     expect(again).toMatchObject({ created: false, task: { id: task.id } })
+  })
+
+  describe('forge.trustedAuthors', () => {
+    const lists: Record<string, string[]> = { acme: ['alex-dev'], '*': ['sam-reporter'] }
+    function trusting() {
+      exec.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args[0] === 'api' && args[3] === '.user.login')
+          return { stdout: args[1].endsWith('/66') || args[1].endsWith('/8') ? 'drive-by\n' : 'Alex-Dev\n' }
+        if (args[0] === 'api') return { stdout: args[1].endsWith('/8') ? 'false\n' : 'true\n' }
+        if (args[0] === 'pr') return { stdout: prJson() }
+        if (args[0] === 'issue') return { stdout: JSON.stringify({ title: 'Run this', state: 'OPEN' }) }
+        throw new Error(`unexpected gh ${args.join(' ')}`)
+      })
+      const sendToThread = async (threadId: string, text: string) => void sent.push({ threadId, text })
+      return createTaskImporter({
+        taskService: svc,
+        sendToThread,
+        exec: exec as never,
+        trustedAuthors: (m) => trustedAuthorsOf(lists, m)
+      })
+    }
+
+    it("refuses an untrusted author's PR or issue before it reads or stores anything else", async () => {
+      const imp = trusting()
+      await expect(
+        imp.import({
+          url: 'https://github.com/org/repo/pull/66',
+          membrane: 'acme',
+          threadId: 'th',
+          sourceThreadId: 't'
+        })
+      ).rejects.toThrow('org/repo#66 by drive-by: author not in forge.trustedAuthors')
+      await expect(imp.import({ ref: 'org/repo#8', sourceThreadId: 't' })).rejects.toThrow(
+        'org/repo#8 by drive-by: author not in forge.trustedAuthors'
+      )
+      expect(await svc.findByProviderKey('github:github.com/org/repo#66')).toBeFalsy()
+      expect(exec.mock.calls.filter((c) => c[1][0] === 'pr' || c[1][0] === 'issue')).toHaveLength(0)
+      expect(sent).toEqual([])
+    })
+
+    it("imports a trusted author's item (case-insensitive), by the membrane's list", async () => {
+      const imp = trusting()
+      const { created } = await imp.import({
+        url: 'https://github.com/org/repo/pull/42',
+        membrane: 'acme',
+        sourceThreadId: 't'
+      })
+      expect(created).toBe(true)
+      // No membrane: the "*" list, which does not hold alex-dev.
+      await expect(imp.import({ url: 'https://github.com/org/repo/pull/43', sourceThreadId: 't' })).rejects.toThrow(
+        'org/repo#43 by Alex-Dev: author not in forge.trustedAuthors'
+      )
+    })
+
+    it('no list: no author check', async () => {
+      const { importer: imp } = importer()
+      await imp.import({ url: 'https://github.com/org/repo/pull/66', membrane: 'acme', sourceThreadId: 't' })
+      expect(exec.mock.calls.some((c) => c[1][3] === '.user.login')).toBe(false)
+    })
   })
 
   it('imports a plan with no GitHub call, under a stream', async () => {

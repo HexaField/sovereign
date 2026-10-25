@@ -312,6 +312,10 @@ export const schema = {
           type: 'object',
           additionalProperties: { type: 'array', items: { type: 'string', minLength: 1 } }
         },
+        trustedAuthors: {
+          type: 'object',
+          additionalProperties: { type: 'array', items: { type: 'string', minLength: 1 } }
+        },
         mentions: { type: 'array', items: { type: 'string', minLength: 1 } },
         pollOpenMs: { type: 'number', minimum: 10000 },
         pollAllMs: { type: 'number', minimum: 30000 },

@@ -13,6 +13,7 @@ import {
   leafState,
   parseRefKey,
   stateOfEpicStatus,
+  trustedAuthorsOf,
   type EpicStatus,
   type EventBus,
   type Forge,
@@ -35,6 +36,7 @@ import { isPlanPath, planMakesStream, scanPlans, type Plan } from './plans.js'
 import { resolveScope, type MembraneScope, type ScopeSource } from './scope.js'
 import { createRepoSync, type RepoSync } from './sync.js'
 import { createStructureHook } from './structure.js'
+import { admitsEvent, trustedCache, trusts, untrustedMessage, type Trusts } from './trust.js'
 import { syncTasks, TERMINAL } from './task-sync.js'
 import { withProgress } from './tree.js'
 import {
@@ -137,6 +139,8 @@ export interface ForgeStatus {
   lastError?: string
   identity?: string
   repos: RepoStatus[]
+  /** forge.trustedAuthors for this membrane: its own list or the "*" one; null = no list, every author's items enter. */
+  allowList: { source: 'membrane' | '*'; logins: string[] } | null
   plans: number
   backfill: { done: boolean; pages: number; items: number }
   triage: ReturnType<EventLog['coverage']>
@@ -251,6 +255,7 @@ export function resolveConfig(c: Partial<ForgeConfig> | undefined): ForgeConfig 
     identities: { ...d.identities, ...c?.identities },
     rethink: { ...d.rethink, ...c?.rethink },
     repos: { ...d.repos, ...c?.repos },
+    trustedAuthors: c?.trustedAuthors ?? d.trustedAuthors,
     planDirs: c?.planDirs ?? d.planDirs,
     mentions: c?.mentions ?? d.mentions
   }
@@ -284,6 +289,11 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
   let watchedIds = new Set<string>()
 
   const cfg = () => resolveConfig(deps.config())
+  /** A membrane's allow list (forge.trustedAuthors): its own, else "*", else none. Null: an item no membrane holds. */
+  const allowListOf = (membrane: string | null) => trustedAuthorsOf(cfg().trustedAuthors, membrane)
+  const trustsIn = (membrane: string | null): Trusts => trusts(allowListOf(membrane))
+  /** Node id → the membranes (null: none) of the tasks that track it; set by each tracked poll. */
+  const trackedMembranes = new Map<string, Set<string | null>>()
 
   function state(membrane: string): MembraneState {
     let s = states.get(membrane)
@@ -340,6 +350,13 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         store: tracked ? trackedStore : store,
         windowDays: cfg().windowDays,
         watched: () => watchedIds,
+        // A shared repo stores what any membrane that reads it trusts; each membrane's graph and log narrow that to its own list
+        trust: () => {
+          if (tracked)
+            return (login, nodeId) => [...(trackedMembranes.get(nodeId) ?? [null])].some((m) => trustsIn(m)(login))
+          const lists = readersOf(r).map(trustsIn)
+          return (login) => lists.some((ok) => ok(login))
+        },
         now,
         log
       }
@@ -351,6 +368,21 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
 
   const sameRepo = (a: Pick<ForgeRef, 'forge' | 'host' | 'repo'>, b: Pick<ForgeRef, 'forge' | 'host' | 'repo'>) =>
     a.forge === b.forge && a.host === b.host && a.repo.toLowerCase() === b.repo.toLowerCase()
+
+  /** The membranes whose sync reads a repo (none found: the "*" list alone). */
+  function readersOf(r: Pick<ForgeRef, 'forge' | 'host' | 'repo'>): Array<string | null> {
+    const out = membranes().filter((m) => (state(m).scope ?? scopeOf(m)).repos.some((x) => sameRepo(x, r)))
+    return out.length ? out : [null]
+  }
+
+  /** A membrane's view of a cache: only the items its allow list trusts. */
+  const trustedFor = (membrane: string) => (c: RepoCache) => trustedCache(c, trustsIn(membrane))
+
+  /** Events the membrane's allow list admits (item author, commenters, reviewer, referencing item). */
+  function trustedEvents(membrane: string, scope: MembraneScope, events: ForgeEvent[]): ForgeEvent[] {
+    const ok = trustsIn(membrane)
+    return events.filter((e) => admitsEvent(e, ok, (id) => itemOf(scope, id)?.item.author))
+  }
 
   /** The forge ref of a PR or issue task. */
   function refOfTask(t: PortTask): ForgeRef | undefined {
@@ -433,7 +465,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const s = state(membrane)
     if (!s.plansScanned) rescanPlans(membrane, scope)
     const [tasks, related] = await Promise.all([deps.tasks.listByMembrane(membrane), deps.tasks.listRelated(membrane)])
-    const repos = [...caches(scope), ...trackedCaches(scope, tasks)]
+    // The one place a membrane's graph reads the caches: only its trusted authors' items
+    const repos = [...caches(scope), ...trackedCaches(scope, tasks)].map(trustedFor(membrane))
     return { graph: buildGraph({ repos, plans: s.plans, tasks, related }), tasks }
   }
 
@@ -565,7 +598,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         }
       }
       // Fire and forget: the hook queues the requests and keeps their errors to itself
-      const changesOf = (r: ForgeRepo) => Object.values(syncOf(r)?.cache().changes ?? {})
+      const ok = trustsIn(membrane)
+      const changesOf = (r: ForgeRepo) => Object.values(syncOf(r)?.cache().changes ?? {}).filter((c) => ok(c.author))
       if (structures)
         for (const r of scope.repos)
           structures.request(r.checkouts, changesOf(r), () => emit('forge.updated', { membrane }))
@@ -592,7 +626,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         })
       }
 
-      const triaged = await triageAll(events, graph, tasks, await identityOf(scope))
+      const triaged = await triageAll(trustedEvents(membrane, scope, events), graph, tasks, await identityOf(scope))
       s.log.append(triaged)
 
       const ts = await syncTasks(deps.tasks, {
@@ -667,6 +701,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const ref = refOfTask(t)
       if (!ref || (only ? t.id !== only : TERMINAL.includes(t.state))) continue
       if (!only && coveredBySync(t, ref, synced)) continue
+      // Its task's membrane decides whose allow list the item must pass
+      trackedMembranes.set(t.key!, new Set([t.membrane ?? null]))
       const k = repoKey(ref)
       const g = groups.get(k) ?? { ref, refs: [], tasks: [] }
       g.refs.push(ref)
@@ -724,8 +760,15 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const ref = refOfTask(t)
     if (!ref) throw new ForgeError(`task ${taskId} has no PR or issue`, 400)
     const synced = new Set(cfg().enabled ? membranes() : [])
-    if (coveredBySync(t, ref, synced)) await sync(t.membrane!, 'open')
+    const covered = coveredBySync(t, ref, synced)
+    if (covered) await sync(t.membrane!, 'open')
     else await pollTracked(taskId)
+    // An item its allow list refuses never entered the cache: say so rather than poll nothing
+    const rs = covered ? syncs.get(repoKey(ref)) : trackedSyncs.get(repoKey(ref))
+    const cached = rs && (rs.cache().changes[ref.id] ?? rs.cache().issues[ref.id])
+    const author = cached?.author ?? rs?.refused(t.key!)
+    if (author !== undefined && !trustsIn(t.membrane ?? null)(author))
+      throw new ForgeError(untrustedMessage(ref.repo, ref.id, author), 403)
   }
 
   /**
@@ -1496,9 +1539,10 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const scope = scopeOf(membrane)
       const s = state(membrane)
       if (!s.plansScanned) rescanPlans(membrane, scope)
+      const list = allowListOf(membrane)
       const repos: RepoStatus[] = scope.repos.map((r) => {
         const rs = syncOf(r)
-        const c = rs?.cache()
+        const c = rs && trustedFor(membrane)(rs.cache())
         const err = s.repoErrors.get(r.repo)
         return {
           repo: r.repo,
@@ -1523,6 +1567,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         ...(s.lastError ? { lastError: s.lastError } : {}),
         ...(identity ? { identity } : {}),
         repos,
+        allowList: list ? { source: list.source, logins: list.logins } : null,
         plans: s.plans.length,
         backfill: {
           done: repos.every((r) => r.backfill.changes.done && r.backfill.issues.done),

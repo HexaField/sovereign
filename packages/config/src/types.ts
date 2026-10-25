@@ -287,6 +287,12 @@ export interface SovereignConfig {
     planDirs: string[]
     /** Extra repos per membrane id ("owner/name" or "host/owner/name"). */
     repos: Record<string, string[]>
+    /**
+     * Forge logins whose PRs and issues enter the Forge, per membrane id; `"*"`
+     * serves every membrane without its own list. Case-insensitive. No list
+     * for a membrane: every author passes.
+     */
+    trustedAuthors: Record<string, string[]>
     /** Words besides "@<identity>" that make a comment needs-agent. */
     mentions: string[]
     /** Open-items refresh interval. */

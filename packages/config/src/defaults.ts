@@ -172,6 +172,7 @@ export const defaults: SovereignConfig = {
     identities: {},
     planDirs: ['plans', 'docs/plans', '.specs'],
     repos: {},
+    trustedAuthors: {},
     mentions: [],
     pollOpenMs: 120_000,
     pollAllMs: 600_000,

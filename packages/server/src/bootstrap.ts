@@ -14,7 +14,7 @@ import type express from 'express'
 import type http from 'node:http'
 import type https from 'node:https'
 import type { WebSocketServer } from 'ws'
-import type { EventBus } from '@sovereign/core'
+import { trustedAuthorsOf, type EventBus } from '@sovereign/core'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
 import { createSummaryService, createSummaryRoutes } from '@sovereign/summary'
@@ -892,7 +892,10 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         origin: { modality: 'text' as const }
       })
     },
-    exec: (cmd, args) => execFileAsync(cmd, args, { maxBuffer: 16 * 1024 * 1024 })
+    exec: (cmd, args) => execFileAsync(cmd, args, { maxBuffer: 16 * 1024 * 1024 }),
+    // Read live, so a PATCH /api/config applies to the next import
+    trustedAuthors: (membrane) =>
+      trustedAuthorsOf(configStore.get<SovereignConfig['forge']>('forge')?.trustedAuthors, membrane)
   })
   taskMcpDeps.importItem = async (opts) => {
     const result = await taskImporter.import({

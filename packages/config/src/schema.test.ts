@@ -17,9 +17,13 @@ describe('Config Schema', () => {
         identities: { github: 'hex-agent' },
         repos: { acme: ['acme-labs/widget', 'git.example.org/acme-labs/gadget'] },
         githubApiUrl: 'http://mock-github:8910',
-        githubToken: 'test-token'
+        githubToken: 'test-token',
+        trustedAuthors: { acme: ['alex-dev', 'sam-reporter'], '*': ['alex-dev'] }
       }
+      expect(defaults.forge.trustedAuthors).toEqual({})
       expect(validate({ forge }).valid).toBe(true)
+      expect(validate({ forge: { ...forge, trustedAuthors: { acme: [''] } } }).valid).toBe(false)
+      expect(validate({ forge: { ...forge, trustedAuthors: { acme: 'alex-dev' } } }).valid).toBe(false)
       expect(validate({ forge: { ...forge, rethink: { ...forge.rethink, times: ['25:00'] } } }).valid).toBe(false)
       expect(validate({ forge: { ...forge, pollOpenMs: 10 } }).valid).toBe(false)
       expect(validate({ forge: { ...forge, identities: { gitlab: 'x' } } }).valid).toBe(false)
