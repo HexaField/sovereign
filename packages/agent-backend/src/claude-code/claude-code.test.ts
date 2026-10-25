@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
@@ -1231,6 +1231,49 @@ describe('claude-code/auto-recycle waits for the next message', () => {
     expect(statuses).not.toContain('idle')
     // The next message runs in a fresh query on the pruned transcript.
     expect(sdk.queries).toHaveLength(2)
+  })
+
+  it('recycles below the threshold when the session was idle past the prompt-cache TTL', async () => {
+    // 30 % of a 1M window: under the 55 % threshold, over the cold threshold.
+    const run = async (idleMinutes: number) => {
+      const sdk = fullContextSdk()
+      const compactions: any[] = []
+      const metrics = {
+        recordToolCall: vi.fn(),
+        recordContextSnapshot: vi.fn(),
+        recordCompaction: vi.fn((c: any) => compactions.push(c)),
+        recordContextStrategy: vi.fn(),
+        recordRecycle: vi.fn()
+      }
+      const key = `cold-${idleMinutes}`
+      const backend = createClaudeCodeBackend(
+        { dataDir, cwd, agentDir: join(dataDir, 'agent'), contextManagement: { recycle: { enabled: true } } },
+        { sdkQuery: sdk.factory, metrics: metrics as any }
+      )
+      await backend.createSession('t', { threadKey: key, model: { provider: 'anthropic', model: 'claude-opus-5-5' } })
+      const file = backend.getSessionFilePath!(key)!
+      mkdirSync(dirname(file), { recursive: true })
+      const usage = {
+        input_tokens: 300_000,
+        output_tokens: 10,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0
+      }
+      writeFileSync(
+        file,
+        JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [], usage } }) + '\n'
+      )
+      await backend.sendMessage(key, 'first')
+      sdk.endTurn()
+      await new Promise((r) => setTimeout(r, 50))
+      const then = new Date(Date.now() - idleMinutes * 60_000)
+      utimesSync(file, then, then)
+      await backend.sendMessage(key, 'second')
+      await new Promise((r) => setTimeout(r, 20))
+      return compactions
+    }
+    expect(await run(61)).toEqual([expect.objectContaining({ method: 'auto-recycle' })])
+    expect(await run(10)).toHaveLength(0)
   })
 
   it('never recycles a session that a background task has made busy again', async () => {

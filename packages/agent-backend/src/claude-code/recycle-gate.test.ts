@@ -20,6 +20,17 @@ describe('recycleWanted', () => {
     expect(recycleWanted({ ...base, filled: 900_000, floor: 630_000, exhausted: true })).toBe(false)
   })
 
+  it('uses the cold threshold once the session was idle past the prompt-cache TTL', () => {
+    const cold = { ...base, coldThresholdPercent: 20, cacheTtlMs: 3_600_000 }
+    // 30 % full: under 55 %, over 20 %.
+    expect(recycleWanted({ ...cold, filled: 300_000, idleMs: 59 * 60_000 })).toBe(false)
+    expect(recycleWanted({ ...cold, filled: 300_000, idleMs: 61 * 60_000 })).toBe(true)
+    expect(recycleWanted({ ...cold, filled: 150_000, idleMs: 61 * 60_000 })).toBe(false)
+    // The floor and the exhausted flag still hold on a cold cache.
+    expect(recycleWanted({ ...cold, filled: 300_000, idleMs: 61 * 60_000, floor: 250_000 })).toBe(false)
+    expect(recycleWanted({ ...cold, filled: 300_000, idleMs: 61 * 60_000, exhausted: true })).toBe(false)
+  })
+
   it('ignores an unknown fill or window', () => {
     expect(recycleWanted({ ...base, filled: 0 })).toBe(false)
     expect(recycleWanted({ ...base, maxTokens: 0, filled: 10 })).toBe(false)
