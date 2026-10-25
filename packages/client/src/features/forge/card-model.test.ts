@@ -26,6 +26,16 @@ describe('linkedGroups', () => {
     edge(pr, iss, 'related', { source: 'rethink', reason: 'same subsystem', confidence: 0.8 })
   ]
 
+  it('depends-on reads "Depends on" from the dependent and "Needed by" from what it needs', () => {
+    const dep = [edge(iss, pr, 'depends-on'), edge(pr, 'task://s1', 'depends-on')]
+    expect(linkedGroups(iss.id, dep, nodes).map((x) => x.label)).toEqual(['Depends on'])
+    const g = linkedGroups(pr.id, dep, nodes)
+    expect(g.map((x) => [x.label, x.items.map((i) => i.id)])).toEqual([
+      ['Depends on', ['task://s1']],
+      ['Needed by', [iss.id]]
+    ])
+  })
+
   it('groups by kind and direction in a fixed order', () => {
     const g = linkedGroups(pr.id, edges, nodes)
     expect(g.map((x) => x.label)).toEqual([

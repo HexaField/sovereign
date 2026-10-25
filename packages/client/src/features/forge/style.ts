@@ -112,6 +112,8 @@ export interface EdgeStyle {
   color: string
   dash: number[]
   width: number
+  /** An arrowhead at `to`. */
+  arrow?: boolean
 }
 
 const GREY = '#8b93a1'
@@ -119,7 +121,8 @@ const PURPLE = '#a855f7'
 
 /**
  * Solid for base, merged-into and paired; dashed grey for references, plans,
- * subtasks and `closes` on an open issue; dashed purple for `related`.
+ * subtasks and `closes` on an open issue; dashed purple for `related`; a solid
+ * red arrow for `depends-on`, from the dependent to what it needs.
  */
 export function edgeStyle(e: WorkEdge, to: WorkNode | undefined): EdgeStyle {
   switch (e.kind) {
@@ -131,6 +134,8 @@ export function edgeStyle(e: WorkEdge, to: WorkNode | undefined): EdgeStyle {
       return { color: '#f59e0b', dash: [], width: 2 }
     case 'related':
       return { color: PURPLE, dash: [6, 5], width: 1.5 }
+    case 'depends-on':
+      return { color: '#f87171', dash: [], width: 2, arrow: true }
     case 'closes':
       return to && to.state !== 'open' ? { color: GREY, dash: [], width: 1 } : { color: GREY, dash: [5, 4], width: 1 }
     case 'references':
@@ -171,7 +176,8 @@ export const EDGE_LABELS: Record<WorkEdge['kind'], string> = {
   paired: 'Paired with',
   plans: 'Plans',
   subtask: 'Subtask',
-  related: 'Related (rethink)'
+  related: 'Related (rethink)',
+  'depends-on': 'Depends on'
 }
 
 /** Reverse-direction labels, for the card's "linked nodes" list. */
@@ -183,5 +189,6 @@ export const EDGE_LABELS_IN: Record<WorkEdge['kind'], string> = {
   paired: 'Paired with',
   plans: 'Planned in',
   subtask: 'Parent',
-  related: 'Related (rethink)'
+  related: 'Related (rethink)',
+  'depends-on': 'Needed by'
 }

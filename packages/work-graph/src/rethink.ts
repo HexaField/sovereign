@@ -73,6 +73,8 @@ export type RethinkAction =
   | { kind: 'note'; at: string; nodeId: string; text: string }
   /** forge_supersede: the PR `by` took over the planned task `nodeId`. */
   | { kind: 'supersede'; at: string; nodeId: string; by: string; reason: string }
+  /** forge_depend: `from` depends on `to` (or, `removed`, no longer does). */
+  | { kind: 'depend'; at: string; from: string; to: string; reason: string; removed: boolean }
   /** A change to the epics (work streams) through a forge_stream_* tool other than forge_stream_add. */
   | { kind: 'epic'; at: string; tool: ForgeToolName; text: string }
   | { kind: 'refused'; at: string; tool: ForgeToolName; reason: string }
@@ -156,6 +158,7 @@ export function buildRethinkPrompt(input: {
     '| Bug reports | One failure pattern across changes, or a bug found in review | `forge_bug_draft` with the evidence nodes: a draft the user approves. Never open an issue yourself |',
     '| Flag for the user | Review requested from them, merge decisions, approved and waiting, stale items they own, blocked agents, drafts to approve | ONE `forge_attention` call holding every item (recorded on the cards and in the run report; no message is sent) |',
     '| Planned → begun | A PR started work that a planned task or an open issue describes | Planned task: `forge_supersede`. Issue the PR does not close: `forge_relate` (reason: the PR does the issue’s work); once that PR merged, an attention item to close the issue. Check each new or changed PR in the digest against the planned tasks below and against open issues (`gh issue list --repo <repo> --search <terms>`) |',
+    '| Dependencies | An item must wait for another (a stacked PR outside its base chain, a plan’s “Needs”, one stream before the next) and no depends-on edge says so, or one no longer holds | `forge_depend` (`remove: true` for one that no longer holds) |',
     '| Tidy | Tasks whose items ended, empty streams | `forge_note` on the card, or an attention item when the user must act |',
     ''
   )
@@ -181,6 +184,7 @@ export function buildRethinkPrompt(input: {
     '- `forge_attention { membrane, items: [{ nodeId?, text }] }` — what the user must decide or do: noted on each item’s card and listed in the run report.',
     '- `forge_note { membrane, nodeId, text }` — a one-line note on the item’s card.',
     '- `forge_supersede { membrane, nodeId, by, reason }` — a PR (`by`) does a planned task’s work: the task is cancelled (“Opened as <PR>”) and the PR joins its stream when it has none. Only for planned tasks, never for issues.',
+    '- `forge_depend { membrane, from, to, reason, remove? }` — `from` must wait for `to` (node or stream ids). It counts at once and blocks `from` while `to` is open; `remove: true` deletes it.',
     ''
   )
 
@@ -326,6 +330,12 @@ export function renderRunReport(run: RethinkRun): string {
     ],
     ['Notes', of('note').map((a) => `- ${a.nodeId}: ${oneLine(a.text)}`)],
     ['Superseded', of('supersede').map((a) => `- ${a.nodeId} → ${a.by}: ${oneLine(a.reason)}`)],
+    [
+      'Dependencies',
+      of('depend').map(
+        (a) => `- ${a.from} ${a.removed ? 'no longer depends' : 'depends'} on ${a.to}: ${oneLine(a.reason)}`
+      )
+    ],
     ['Epic changes', of('epic').map((a) => `- ${a.tool}: ${oneLine(a.text)}`)],
     ['Refused', of('refused').map((a) => `- ${a.tool}: ${a.reason}`)]
   ]
@@ -362,6 +372,7 @@ function summaryOf(run: RethinkRun, file: string): RethinkRunSummary {
     attention: 0,
     note: 0,
     supersede: 0,
+    depend: 0,
     epic: 0,
     refused: 0
   }
@@ -428,6 +439,8 @@ export interface RethinkRunnerDeps {
     | 'setStreamParent'
     | 'mergeStreams'
     | 'supersede'
+    | 'depend'
+    | 'deleteEdge'
   >
   threads: {
     /** A live (not archived) thread of the membrane with this label. */
@@ -894,6 +907,20 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
         record(m, run, { kind: 'supersede', at, nodeId, by, reason })
         addNote(m, by, { at, kind: 'note', text: `Replaces planned task "${task.title}": ${reason}`, runId: run.id })
         return { superseded: true, ...res }
+      }
+      case 'forge_depend': {
+        const from = str(args, 'from')
+        const to = str(args, 'to')
+        const reason = clip(str(args, 'reason'), 500)
+        if (args.remove === true) {
+          if (!(await svc.deleteEdge(from, to, 'depends-on', m)))
+            throw new ForgeError(`${from} does not depend on ${to}`, 404)
+          record(m, run, { kind: 'depend', at, from, to, reason, removed: true })
+          return { removed: true }
+        }
+        const edge = await svc.depend(m, { from, to, reason, source: 'rethink' })
+        record(m, run, { kind: 'depend', at, from, to, reason, removed: false })
+        return { depends: true, edge }
       }
       case 'forge_note': {
         const nodeId = str(args, 'nodeId')

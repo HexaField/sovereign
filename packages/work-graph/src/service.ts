@@ -176,6 +176,11 @@ export interface ForgeService {
     membrane: string,
     edge: { from: string; to: string; reason: string; confidence: number; source: 'rethink' }
   ): Promise<RelatedEdgeRecord>
+  /** `from` cannot finish before `to` (nodes or work streams of the membrane): a `depends-on` edge, accepted at once. An edge already there is returned. */
+  depend(
+    membrane: string,
+    edge: { from: string; to: string; reason?: string; source: 'user' | 'rethink' }
+  ): Promise<RelatedEdgeRecord>
   digest(membrane: string, since?: string): Promise<ForgeDigest>
   events(membrane: string, opts?: { since?: string }): TriagedEvent[]
   assign(input: AssignInput): Promise<{ taskId: string; threadId: string | null; forgeError?: string }>
@@ -1153,6 +1158,12 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const served = new Set(g.nodes.map((n) => n.id))
       const plans = new Set(streams.map((w) => w.plan).filter((p): p is string => !!p))
       const frames = graph.nodes.filter((n) => plans.has(n.id) && !served.has(n.id))
+      // A depends-on edge with a stream end joins the served edges while both ends show
+      for (const n of frames) served.add(n.id)
+      const showsEnd = (id: string) => served.has(id) || shown.has(id)
+      const streamEnds = graph.edges.filter(
+        (e) => e.kind === 'depends-on' && (shown.has(e.from) || shown.has(e.to)) && showsEnd(e.from) && showsEnd(e.to)
+      )
       return {
         membrane,
         since,
@@ -1168,7 +1179,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
           if (structures) out = structures.attach(out)
           return notes[n.id]?.length ? { ...out, rethink: notes[n.id] } : out
         }),
-        edges: g.edges,
+        edges: [...g.edges, ...streamEnds],
         workstreams: streams,
         ...(cfg().enabled
           ? { syncing: s.syncing || syncs_.some((x) => !x.cache().windowSyncedAt || !x.backfillDone()) }
@@ -1219,6 +1230,44 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       const rec = await deps.tasks.addRelated(membrane, { ...edge, kind: 'related' })
       emit('forge.updated', { membrane })
       return rec
+    },
+
+    async depend(membrane, edge) {
+      if (edge.from === edge.to) throw new ForgeError('an item cannot depend on itself', 400)
+      const [{ graph }, streams, related] = await Promise.all([
+        full(membrane),
+        deps.tasks.streamsOf(membrane),
+        deps.tasks.listRelated(membrane)
+      ])
+      for (const id of [edge.from, edge.to]) {
+        if (!graph.nodes.some((n) => n.id === id) && !streams.some((s) => s.id === id))
+          throw new ForgeError(`neither a node nor a work stream of ${membrane}: ${id}`, 400)
+      }
+      const needs = related.filter((r) => r.kind === 'depends-on')
+      const existing = needs.find((r) => r.from === edge.from && r.to === edge.to)
+      if (existing) return existing
+      // A cycle: what `to` already waits on reaches `from`
+      const seen = new Set([edge.to])
+      const queue = [edge.to]
+      while (queue.length) {
+        const at = queue.shift()!
+        for (const r of needs) {
+          if (r.from !== at || seen.has(r.to)) continue
+          if (r.to === edge.from) throw new ForgeError(`${edge.to} already depends on ${edge.from}`, 400)
+          seen.add(r.to)
+          queue.push(r.to)
+        }
+      }
+      const rec = await deps.tasks.addRelated(membrane, {
+        from: edge.from,
+        to: edge.to,
+        kind: 'depends-on',
+        ...(edge.reason ? { reason: edge.reason } : {}),
+        source: edge.source
+      })
+      await deps.tasks.acceptRelated(membrane, edge.from, edge.to, 'depends-on')
+      emit('forge.updated', { membrane })
+      return { ...rec, accepted: true }
     },
 
     async assign(input) {

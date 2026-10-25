@@ -282,8 +282,19 @@ const NodeCard: Component<NodeCardProps> = (props) => {
                       >
                         {item.node
                           ? `${shortRef(item.node)} ${item.node.number !== undefined ? item.node.title : ''}`
-                          : item.id}
+                          : (props.streams.find((s) => s.id === item.id)?.name ?? item.id)}
                       </button>
+                      <Show when={item.edge.kind === 'depends-on'}>
+                        <button
+                          class={btn}
+                          style={btnStyle}
+                          disabled={busy()}
+                          title="Delete this dependency"
+                          onClick={() => edgeAction(item.edge, false)}
+                        >
+                          ✕
+                        </button>
+                      </Show>
                       <Show when={item.edge.kind === 'related' && item.edge.source === 'rethink'}>
                         <button
                           class={btn}

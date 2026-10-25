@@ -73,6 +73,13 @@ function mergeEdges(a: WorkEdge[], b: WorkEdge[]): WorkEdge[] {
   return [...m.values()]
 }
 
+/** Edges whose ends are still loaded: a node, or (a depends-on end) a work stream. An initial fetch re-serves the stream ones. */
+function edgesAmong(state: WindowState, nodes: Map<string, WorkNode>): WorkEdge[] {
+  const streams = new Set(state.workstreams.map((w) => w.id))
+  const has = (id: string) => nodes.has(id) || streams.has(id)
+  return state.edges.filter((e) => has(e.from) && has(e.to))
+}
+
 function newer(a: WorkNode, b: WorkNode): WorkNode {
   return Date.parse(b.updatedAt) >= Date.parse(a.updatedAt) ? b : a
 }
@@ -150,7 +157,7 @@ export function unpinAll(state: WindowState): WindowState {
     const n = nodes.get(id)
     if (n && n.zone === 'past' && !inSlice(state, pastTime(n))) nodes.delete(id)
   }
-  return { ...state, nodes, pinned: new Set(), edges: state.edges.filter((e) => nodes.has(e.from) && nodes.has(e.to)) }
+  return { ...state, nodes, pinned: new Set(), edges: edgesAmong(state, nodes) }
 }
 
 function inSlice(state: WindowState, t: number): boolean {
@@ -221,7 +228,7 @@ export function trimToCap(state: WindowState, cap: number, focus: number): Windo
     until,
     emptyOlder: since === state.since ? state.emptyOlder : 0,
     exhausted: state.exhausted && since === state.since,
-    edges: state.edges.filter((e) => nodes.has(e.from) && nodes.has(e.to))
+    edges: edgesAmong(state, nodes)
   }
 }
 

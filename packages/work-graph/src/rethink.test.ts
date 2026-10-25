@@ -136,6 +136,10 @@ describe('buildRethinkPrompt', () => {
     })
     expect(prompt).not.toContain('## Planned tasks')
     expect(prompt).toContain('`forge_supersede { membrane, nodeId, by, reason }`')
+    expect(prompt).toContain(
+      '| Dependencies | An item must wait for another (a stacked PR outside its base chain, a plan’s “Needs”, one stream before the next) and no depends-on edge says so, or one no longer holds | `forge_depend` (`remove: true` for one that no longer holds) |'
+    )
+    expect(prompt).toContain('`forge_depend { membrane, from, to, reason, remove? }`')
   })
 })
 
@@ -444,6 +448,32 @@ describe('rethink runner', () => {
       `### Superseded\n\n- task:${task.id} → ${nid(51)}: Gear ratio is that slice`
     )
     expect(runner.runs('acme')[0].actions).toMatchObject({ supersede: 1 })
+  })
+
+  it('forge_depend: adds and removes a depends-on edge, and lists it under Dependencies', async () => {
+    const stream = await service.createStream('acme', 'Gears')
+    const { runId } = (await service.rethink('acme')) as { runId: string }
+    const rt = runner.threadOf('acme')!
+    const dep = { membrane: 'acme', from: nid(51), to: stream.id, reason: 'needs the gears first' }
+    expect(await runner.tool(rt, 'forge_depend', dep)).toMatchObject({ depends: true })
+    expect((await port.listRelated('acme')).filter((e) => e.kind === 'depends-on')).toEqual([
+      expect.objectContaining({ from: nid(51), to: stream.id, source: 'rethink', accepted: true })
+    ])
+    await expect(runner.tool(rt, 'forge_depend', { ...dep, from: stream.id, to: nid(51) })).rejects.toMatchObject({
+      status: 400
+    })
+    expect(await runner.tool(rt, 'forge_depend', { ...dep, reason: 'Gears shipped', remove: true })).toEqual({
+      removed: true
+    })
+    expect((await port.listRelated('acme')).some((e) => e.kind === 'depends-on')).toBe(false)
+    await expect(runner.tool(rt, 'forge_depend', { ...dep, remove: true })).rejects.toMatchObject({ status: 404 })
+
+    status(rt, 'working')
+    status(rt, 'idle')
+    expect(runner.report('acme', runId)).toContain(
+      `### Dependencies\n\n- ${nid(51)} depends on ${stream.id}: needs the gears first\n- ${nid(51)} no longer depends on ${stream.id}: Gears shipped`
+    )
+    expect(runner.runs('acme')[0].actions).toMatchObject({ depend: 2 })
   })
 
   it('a thread busy at the start goes idle once before the run turn', async () => {

@@ -250,7 +250,15 @@ export function branchAliases(nodes: WorkNode[]): Map<string, string> {
 }
 
 /** Edge kinds that order the future zone: from comes before (left of) to. */
-const DEPTH_KINDS = new Set<WorkEdge['kind']>(['plans', 'subtask', 'references', 'closes', 'related', 'base'])
+const DEPTH_KINDS = new Set<WorkEdge['kind']>([
+  'plans',
+  'subtask',
+  'references',
+  'closes',
+  'related',
+  'base',
+  'depends-on'
+])
 
 /** Longest-path depth over future nodes; nodes in a cycle keep the depth reached before it. */
 export function futureDepths(nodes: WorkNode[], edges: WorkEdge[]): Map<string, number> {
@@ -261,13 +269,15 @@ export function futureDepths(nodes: WorkNode[], edges: WorkEdge[]): Map<string, 
   const seenPair = new Set<string>()
   for (const e of [...edges].sort(edgeOrder)) {
     if (!DEPTH_KINDS.has(e.kind) || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue
-    const pair = `${e.from}\u0000${e.to}`
+    // A dependent goes after what it needs, so its column follows the need's.
+    const [first, then] = e.kind === 'depends-on' ? [e.to, e.from] : [e.from, e.to]
+    const pair = `${first}\u0000${then}`
     if (seenPair.has(pair)) continue
     seenPair.add(pair)
-    const list = out.get(e.from) ?? []
-    list.push(e.to)
-    out.set(e.from, list)
-    indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1)
+    const list = out.get(first) ?? []
+    list.push(then)
+    out.set(first, list)
+    indeg.set(then, (indeg.get(then) ?? 0) + 1)
   }
   const depth = new Map<string, number>()
   for (const id of ids) depth.set(id, 0)
@@ -668,12 +678,13 @@ export function computeLayout(input: LayoutInput): Layout {
     members.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0))
   }
 
-  // ── Edges through aliases, both ends placed. ───────────────────────
+  // ── Edges through aliases, both ends placed; a stream end (depends-on) is its tree card. ──
   const seen = new Set<string>()
   const edges: WorkEdge[] = []
+  const end = (id: string) => cardOf.get(id) ?? resolve(id)
   for (const e of [...input.edges].sort(edgeOrder)) {
-    const from = resolve(e.from)
-    const to = resolve(e.to)
+    const from = end(e.from)
+    const to = end(e.to)
     if (from === to || !placed.has(from) || !placed.has(to)) continue
     const key = `${from}\u0000${to}\u0000${e.kind}`
     if (seen.has(key)) continue

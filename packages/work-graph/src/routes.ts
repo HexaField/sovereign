@@ -14,7 +14,8 @@ const EDGE_KINDS: WorkEdgeKind[] = [
   'paired',
   'plans',
   'subtask',
-  'related'
+  'related',
+  'depends-on'
 ]
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v : undefined)
@@ -250,6 +251,21 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
       if (!(await service.removeMember(String(req.params.id), nodeId, param(req, 'membrane'))))
         throw new ForgeError('not a member of this stream', 404)
       return { removed: true }
+    })
+  )
+
+  router.post(
+    '/api/forge/edges',
+    requireAuth,
+    json,
+    handle(async (req) => {
+      const membrane = requireMembrane(req)
+      if (req.body?.kind !== 'depends-on') throw bad("kind must be 'depends-on'")
+      const from = str(req.body?.from)
+      const to = str(req.body?.to)
+      if (!from || !to) throw bad('from and to are required')
+      const reason = str(req.body?.reason)
+      return service.depend(membrane, { from, to, ...(reason ? { reason } : {}), source: 'user' })
     })
   )
 

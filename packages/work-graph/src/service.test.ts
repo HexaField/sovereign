@@ -498,6 +498,56 @@ describe('forge service', () => {
     expect(await port.get(t3.id)).toMatchObject({ state: 'pending' })
   })
 
+  it('depend: a depends-on edge between nodes or streams counts at once; refuses self, unknown ends and cycles', async () => {
+    await service.sync('acme')
+    const first = await service.createStream('acme', 'Slice 1')
+    const next = await service.createStream('acme', 'Slice 2')
+    busEvents = []
+    const dep = { from: nid(WIDGET, 7), to: nid(WIDGET, 50) }
+    expect(await service.depend('acme', { ...dep, reason: 'needs the teeth', source: 'user' })).toMatchObject({
+      ...dep,
+      kind: 'depends-on',
+      accepted: true,
+      reason: 'needs the teeth'
+    })
+    expect(busEvents.map((e) => e.type)).toContain('forge.updated')
+    // Idempotent: the edge already there is returned
+    expect(await service.depend('acme', { ...dep, reason: 'again', source: 'rethink' })).toMatchObject({
+      reason: 'needs the teeth'
+    })
+    expect((await port.listRelated('acme')).filter((e) => e.kind === 'depends-on')).toHaveLength(1)
+    const served = async () => (await service.graph('acme')).edges.filter((e) => e.kind === 'depends-on')
+    expect(await served()).toEqual([
+      expect.objectContaining({ ...dep, dashed: false, source: 'user', reason: 'needs the teeth' })
+    ])
+
+    // Stream ends: served while both streams show
+    await service.depend('acme', { from: next.id, to: first.id, reason: 'one after the other', source: 'rethink' })
+    await service.depend('acme', { from: first.id, to: nid(WIDGET, 51), reason: 'x', source: 'user' })
+    expect((await served()).map((e) => `${e.from} → ${e.to}`)).toEqual(
+      expect.arrayContaining([`${next.id} → ${first.id}`, `${first.id} → ${nid(WIDGET, 51)}`])
+    )
+
+    // Refused: itself, an end the membrane does not hold, a cycle
+    const refused = (from: string, to: string) =>
+      expect(service.depend('acme', { from, to, reason: 'x', source: 'user' })).rejects.toMatchObject({ status: 400 })
+    await refused(nid(WIDGET, 7), nid(WIDGET, 7))
+    await refused(nid(WIDGET, 7), nid(WIDGET, 999))
+    await refused('task://nope', nid(WIDGET, 7))
+    await refused(nid(WIDGET, 50), nid(WIDGET, 7))
+    await refused(nid(WIDGET, 51), next.id) // 51 ← first ← next
+
+    // It counts in blocked: #7 waits on the open #50
+    await service.addMember(next.id, nid(WIDGET, 7), 'acme')
+    const progress = async () => (await service.graph('acme')).workstreams.find((w) => w.id === next.id)!.progress
+    expect(await progress()).toMatchObject({ total: 1, blocked: 1 })
+
+    expect(await service.deleteEdge(dep.from, dep.to, 'depends-on', 'acme')).toBe(true)
+    expect((await served()).some((e) => e.from === dep.from)).toBe(false)
+    // Slice 2 still depends on Slice 1, but Slice 1 holds no open leaf: nothing left to wait for
+    expect(await progress()).toMatchObject({ total: 1, blocked: 0 })
+  })
+
   it('migrates plan-added members to related, and keeps one owner per item (the first epic by name)', async () => {
     const planId = 'plan:acme-org/widget/sprockets.md'
     await service.sync('acme')
@@ -1020,6 +1070,30 @@ describe('forge service', () => {
         (await request(a).delete(`/api/forge/edges/${enc(nid(WIDGET, 50))}/${enc(nid(WIDGET, 7))}/related`)).status
       ).toBe(404)
       expect((await request(a).delete(`/api/forge/edges/a/b/bogus`)).status).toBe(400)
+    })
+
+    it('depends-on edges: POST creates one (user source), DELETE removes it with encoded ids', async () => {
+      const a = app()
+      await request(a).post('/api/forge/sync?membrane=acme')
+      const st = await request(a).post('/api/forge/streams').send({ membrane: 'acme', name: 'Identity' })
+      expect(st.body.id).toMatch(/^task:\/\//)
+      const node = 'github:github.com/acme-labs/widget#7'
+      const post = (body: object) => request(a).post('/api/forge/edges').send(body)
+      const created = await post({ membrane: 'acme', from: node, to: st.body.id, kind: 'depends-on', reason: 'first' })
+      expect(created.status).toBe(200)
+      expect(created.body).toMatchObject({ from: node, to: st.body.id, kind: 'depends-on', source: 'user' })
+      expect((await post({ membrane: 'acme', from: node, to: st.body.id, kind: 'related' })).status).toBe(400)
+      expect((await post({ membrane: 'acme', from: node, to: st.body.id })).status).toBe(400)
+      expect((await post({ from: node, to: st.body.id, kind: 'depends-on' })).status).toBe(400)
+      expect((await post({ membrane: 'acme', from: node, to: node, kind: 'depends-on' })).status).toBe(400)
+      const g = await request(a).get('/api/forge?membrane=acme')
+      expect(g.body.edges).toContainEqual(expect.objectContaining({ from: node, to: st.body.id, kind: 'depends-on' }))
+
+      const enc = encodeURIComponent
+      const del = () => request(a).delete(`/api/forge/edges/${enc(node)}/${enc(st.body.id)}/depends-on?membrane=acme`)
+      expect((await del()).status).toBe(200)
+      expect((await del()).status).toBe(404)
+      expect((await port.listRelated('acme')).some((e) => e.kind === 'depends-on')).toBe(false)
     })
   })
 })

@@ -100,6 +100,36 @@ describe('drawFrame', () => {
   })
 })
 
+describe('depends-on edges', () => {
+  it('end in an arrowhead at what the dependent needs; related edges do not', () => {
+    const a = issue(R, 1)
+    const b = issue(R, 2)
+    const draw = (kind: 'depends-on' | 'related') => {
+      const nodes = [a, b]
+      const layout = computeLayout({ nodes, edges: [edge(a, b, kind)], workstreams: [], now: NOW })
+      const byId = new Map(nodes.map((n) => [n.id, n]))
+      const scene = buildScene(layout, byId, new Set(byId.keys()), new Set(), 1)
+      const rec = recordingContext()
+      const p = layout.nodes.get(a.id)!
+      const stats = drawFrame(rec.ctx, {
+        scene,
+        vp: { tx: 600 - p.x, ty: 300 - p.y, scale: 1 },
+        width: 1200,
+        height: 600,
+        dpr: 1,
+        palette: DEFAULT_PALETTE,
+        overlays: new Map(),
+        selectedId: null,
+        hoverId: null,
+        time: 0
+      })
+      expect(stats.edgesDrawn).toBe(1)
+      return rec.calls.filter((c) => c.name === 'closePath').length
+    }
+    expect(draw('depends-on')).toBe(draw('related') + 1)
+  })
+})
+
 describe('goal tree cards', () => {
   const p = plan('plans/auth.md')
   const inA = issue(R, 10, { workstreams: ['a'] })

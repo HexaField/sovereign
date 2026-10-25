@@ -25,7 +25,8 @@ const GROUP_ORDER: WorkEdge['kind'][] = [
   'plans',
   'subtask',
   'references',
-  'related'
+  'related',
+  'depends-on'
 ]
 
 /** Linked nodes, grouped by edge kind and direction, in a fixed order. Self-loops skipped. */

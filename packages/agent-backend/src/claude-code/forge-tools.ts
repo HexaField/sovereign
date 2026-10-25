@@ -96,6 +96,18 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
       run('forge_supersede')
     ),
     tool(
+      'forge_depend',
+      'Say that one item must wait for another: `from` depends on `to` (any PR, issue, task or work stream). It counts at once and blocks `from` while `to` is open. `remove: true` deletes it.',
+      {
+        membrane,
+        from: z.string().describe('The node or stream id that waits.'),
+        to: z.string().describe('The node or stream id it needs.'),
+        reason: z.string().describe('One sentence: why `from` needs `to`.'),
+        remove: z.boolean().optional().describe('Delete the dependency instead.')
+      },
+      run('forge_depend')
+    ),
+    tool(
       'forge_stream_create',
       'Create a work stream (an epic), optionally under a parent stream. Not counted against the run limits.',
       { membrane, name: z.string(), parentId: z.string().optional().describe('The parent stream id.') },

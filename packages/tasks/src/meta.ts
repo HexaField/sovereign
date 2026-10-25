@@ -52,7 +52,8 @@ const EDGE_KINDS: readonly WorkEdgeKind[] = [
   'paired',
   'plans',
   'subtask',
-  'related'
+  'related',
+  'depends-on'
 ]
 
 export function emptyForgeMeta(): ForgeMeta {

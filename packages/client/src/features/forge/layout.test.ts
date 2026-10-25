@@ -468,6 +468,32 @@ describe('helpers', () => {
     expect(s.map((x) => x.id)).toEqual(['c', 'a', 'b', 'x', 'y'])
   })
 
+  it('futureDepths puts what an item needs before the item (left of it)', () => {
+    const a = issue(CORE, 1)
+    const b = issue(CORE, 2)
+    // a depends on b: b comes first.
+    expect(futureDepths([a, b], [edge(a, b, 'depends-on')])).toEqual(
+      new Map([
+        [b.id, 0],
+        [a.id, 1]
+      ])
+    )
+  })
+
+  it('a depends-on edge with a stream end joins the stream’s tree card', () => {
+    const t = treeGraph()
+    const edges = [...t.edges, edge('b', 'a', 'depends-on'), edge(t.loose, 'e', 'depends-on')]
+    const l = computeLayout({ ...t, edges, now: NOW })
+    const deps = l.edges.filter((e) => e.kind === 'depends-on').map((e) => [e.from, e.to])
+    expect(deps).toEqual(
+      expect.arrayContaining([
+        [streamCardId('b'), t.planA.id],
+        [t.loose.id, streamCardId('e')]
+      ])
+    )
+    expect(deps).toHaveLength(2)
+  })
+
   it('futureDepths terminates on a cycle', () => {
     const a = issue(CORE, 1)
     const b = issue(CORE, 2)

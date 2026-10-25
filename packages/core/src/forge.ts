@@ -220,7 +220,17 @@ export interface RethinkNote {
   runId?: string
 }
 
-export type WorkEdgeKind = 'base' | 'merged-into' | 'closes' | 'references' | 'paired' | 'plans' | 'subtask' | 'related'
+/** `depends-on`: `from` cannot finish before `to` (any node or work-stream id at either end). */
+export type WorkEdgeKind =
+  | 'base'
+  | 'merged-into'
+  | 'closes'
+  | 'references'
+  | 'paired'
+  | 'plans'
+  | 'subtask'
+  | 'related'
+  | 'depends-on'
 
 /** Who made an edge: Loop 1 sync, Loop 2 rethink, or the user (by hand, or accepting a rethink edge). */
 export type WorkEdgeSource = 'sync' | 'rethink' | 'user'
@@ -264,7 +274,7 @@ export interface WorkStream {
 
 /**
  * A stream's leaves (member PRs, issues and task-only tasks) over its subtree.
- * `total` leaves cancelled ones out; `blocked` counts open leaves waiting on another open PR.
+ * `total` leaves cancelled ones out; `blocked` counts open leaves waiting on another open PR or on an unfinished `depends-on` target.
  */
 export interface StreamProgress {
   done: number
@@ -496,6 +506,7 @@ export const FORGE_TOOLS = [
   'forge_attention',
   'forge_note',
   'forge_supersede',
+  'forge_depend',
   'forge_stream_create',
   'forge_stream_rename',
   'forge_stream_status',

@@ -347,22 +347,25 @@ export function buildGraph(input: BuildInput): BuiltGraph {
     }
   }
 
-  // ── Related (Loop 2, or the user) ──────────────────────────────────
+  // ── Related and depends-on (Loop 2, or the user) ───────────────────
+  // A depends-on edge counts at once: solid, and kept when an end is a work stream.
   for (const r of input.related) {
     addEdge({
       from: r.from,
       to: r.to,
       kind: r.kind,
-      dashed: true,
-      source: r.accepted ? 'user' : r.source,
+      dashed: r.kind !== 'depends-on',
+      source: r.accepted && r.kind !== 'depends-on' ? 'user' : r.source,
       ...(r.reason ? { reason: r.reason } : {}),
       ...(r.confidence !== undefined ? { confidence: r.confidence } : {})
     })
   }
 
+  const streams = new Set(input.tasks.filter((t) => t.isStream).map((t) => t.id))
+  const end = (id: string, kind: WorkEdge['kind']) => nodes.has(id) || (kind === 'depends-on' && streams.has(id))
   return {
     nodes: [...nodes.values()],
-    edges: [...edges.values()].filter((e) => nodes.has(e.from) && nodes.has(e.to))
+    edges: [...edges.values()].filter((e) => end(e.from, e.kind) && end(e.to, e.kind))
   }
 }
 

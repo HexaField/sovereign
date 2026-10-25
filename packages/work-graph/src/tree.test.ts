@@ -1,6 +1,6 @@
 import type { WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
 import { describe, expect, it } from 'vitest'
-import { leafState, streamProgress, withProgress } from './tree.js'
+import { blockedLeaves, leafState, streamProgress, withProgress } from './tree.js'
 
 const R = 'acme-labs/widget'
 const id = (n: number) => `github:github.com/${R}#${n}`
@@ -130,6 +130,61 @@ describe('streamProgress', () => {
     const p = streamProgress(streams, nodes, [])
     expect(p.get('a')).toEqual({ done: 1, total: 2, blocked: 0 })
     expect(p.get('b')).toEqual({ done: 1, total: 2, blocked: 0 })
+  })
+
+  describe('depends-on', () => {
+    it('node → node: an open target blocks the dependent; a merged or cancelled one does not', () => {
+      const streams = [stream('goal')]
+      const nodes = [
+        pr(1, 'open', ['goal']), // waits on #2 (open)
+        pr(2, 'open'),
+        pr(3, 'open', ['goal']), // waits on #4 (merged)
+        pr(4, 'merged'),
+        iss(5, 'open', ['goal']), // waits on #6 (closed, not planned)
+        iss(6, 'closed', [], { closedReason: 'not_planned' }),
+        node({ id: 'task:t', kind: 'task', state: 'planned', workstreams: ['goal'] }) // waits on task:u (planned)
+      ]
+      const nodes2 = [...nodes, node({ id: 'task:u', kind: 'task', state: 'planned' })]
+      const edges = [
+        edge(id(1), id(2), 'depends-on'),
+        edge(id(3), id(4), 'depends-on'),
+        edge(id(5), id(6), 'depends-on'),
+        edge('task:t', 'task:u', 'depends-on')
+      ]
+      expect([...blockedLeaves(nodes2, edges, streams)].sort()).toEqual([id(1), 'task:t'].sort())
+      expect(streamProgress(streams, nodes2, edges).get('goal')).toEqual({ done: 0, total: 4, blocked: 2 })
+    })
+
+    it('node → stream: blocked while a leaf of the stream’s subtree is open', () => {
+      const streams = [stream('a'), stream('b'), stream('b2', 'b')]
+      const open = [pr(1, 'open', ['a']), pr(2, 'merged', ['b']), iss(3, 'open', ['b2'])]
+      const edges = [edge(id(1), 'b', 'depends-on')]
+      expect(blockedLeaves(open, edges, streams)).toEqual(new Set([id(1)]))
+      expect(streamProgress(streams, open, edges).get('a')).toEqual({ done: 0, total: 1, blocked: 1 })
+      const done = [pr(1, 'open', ['a']), pr(2, 'merged', ['b']), iss(3, 'closed', ['b2'])]
+      expect(blockedLeaves(done, edges, streams).size).toBe(0)
+    })
+
+    it('stream → stream: every open leaf of the dependent stream waits until the needed stream’s leaves are done', () => {
+      const streams = [stream('first'), stream('next'), stream('next-sub', 'next')]
+      const before = [
+        pr(1, 'open', ['first']),
+        pr(2, 'open', ['next']),
+        iss(3, 'open', ['next-sub']),
+        pr(4, 'merged', ['next'])
+      ]
+      const edges = [edge('next', 'first', 'depends-on')]
+      expect(blockedLeaves(before, edges, streams)).toEqual(new Set([id(2), id(3)]))
+      expect(streamProgress(streams, before, edges).get('next')).toEqual({ done: 1, total: 3, blocked: 2 })
+      const after = [pr(1, 'merged', ['first']), ...before.slice(1)]
+      expect(blockedLeaves(after, edges, streams).size).toBe(0)
+    })
+
+    it('an archived stream target does not block', () => {
+      const streams = [stream('a'), stream('old', undefined, { status: 'archived' })]
+      const nodes = [pr(1, 'open', ['a']), pr(2, 'open', ['old'])]
+      expect(blockedLeaves(nodes, [edge(id(1), 'old', 'depends-on')], streams).size).toBe(0)
+    })
   })
 
   it('withProgress sets each stream’s progress', () => {

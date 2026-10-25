@@ -59,5 +59,8 @@ describe('forge rethink MCP tools', () => {
     expect(JSON.parse(res.content[0].text)).toEqual({ ok: true })
     const refused = await run('forge_dispatch', { membrane: 'acme', nodeId: 'a', prompt: 'rebase' })
     expect(JSON.parse(refused.content[0].text)).toEqual({ refused: 'job limit: 6 dispatches per run' })
+    const dep = { membrane: 'acme', from: 'a', to: 'task://s', reason: 'needs it', remove: true }
+    await run('forge_depend', dep)
+    expect(f.call).toHaveBeenCalledWith(RETHINK, 'forge_depend', dep)
   })
 })

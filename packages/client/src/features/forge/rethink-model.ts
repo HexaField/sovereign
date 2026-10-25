@@ -20,10 +20,11 @@ export interface RethinkRunSummary {
   startedAt: string
   endedAt?: string
   events: number
-  /** `epic`: changes to the epics (forge_stream_* tools); `supersede`: forge_supersede. Absent in reports from before those tools. */
+  /** `epic`: changes to the epics (forge_stream_* tools); `supersede`: forge_supersede; `depend`: forge_depend. Absent in reports from before those tools. */
   actions: Record<'relate' | 'stream' | 'dispatch' | 'draft' | 'attention' | 'note' | 'refused', number> & {
     epic?: number
     supersede?: number
+    depend?: number
   }
   limitsHit: number
   tokens?: number
@@ -64,7 +65,17 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 export function actionCount(run: RethinkRunSummary): number {
   const a = run.actions
-  return a.relate + a.stream + a.dispatch + a.draft + a.attention + a.note + (a.epic ?? 0) + (a.supersede ?? 0)
+  return (
+    a.relate +
+    a.stream +
+    a.dispatch +
+    a.draft +
+    a.attention +
+    a.note +
+    (a.epic ?? 0) +
+    (a.supersede ?? 0) +
+    (a.depend ?? 0)
+  )
 }
 
 export function phaseLabel(p: RethinkPhase): string | null {

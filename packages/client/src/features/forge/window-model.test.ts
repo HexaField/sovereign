@@ -116,6 +116,17 @@ describe('window model', () => {
     expect(s4.edges).toHaveLength(0)
   })
 
+  it('keeps a depends-on edge with a stream end through refetches, trims and unpinning', () => {
+    const s = loaded()
+    const dep = edge(change(R, 3), 'task://s1', 'depends-on')
+    const streams = [{ id: 'task://s1', name: 'S1', membrane: 'demo', memberCount: 0, status: 'active' as const }]
+    const g = graph([change(R, 3), issue(R, 4)], { edges: [dep], workstreams: streams })
+    const s2 = applyWindow(applyWindow(s, g, initialRequest(NOW)), g, initialRequest(NOW))
+    expect(s2.edges).toEqual([dep])
+    expect(unpinAll(s2).edges).toEqual([dep])
+    expect(trimToCap(s2, 2, NOW).edges).toEqual([dep])
+  })
+
   it('trims past nodes farthest from the focus first, never present or future', () => {
     let s = loaded()
     s = applyWindow(s, graph([merged(R, 20, 25), merged(R, 21, 35)]), widenRequest(s)!)

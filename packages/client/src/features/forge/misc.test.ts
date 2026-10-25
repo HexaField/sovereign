@@ -66,6 +66,18 @@ describe('agent ring', () => {
 })
 
 describe('edge style', () => {
+  it('depends-on: a solid arrow, apart from related and base', () => {
+    const dep = edgeStyle(edge('a', 'b', 'depends-on'), undefined)
+    const rel = edgeStyle(edge('a', 'b', 'related'), undefined)
+    const base = edgeStyle(edge('a', 'b', 'base'), undefined)
+    expect(dep.dash).toEqual([])
+    expect(dep.arrow).toBe(true)
+    expect(dep.color).not.toBe(rel.color)
+    expect(dep.color).not.toBe(base.color)
+    expect(rel.arrow).toBeFalsy()
+    expect(base.arrow).toBeFalsy()
+  })
+
   it('solid for base / merged-into / paired, dashed grey for future-facing, dashed purple for related', () => {
     const e = (kind: Parameters<typeof edge>[2]) => edge('a', 'b', kind)
     expect(edgeStyle(e('base'), undefined).dash).toEqual([])

@@ -3,8 +3,9 @@
 // progress counts the leaves of its whole subtree: done of total (cancelled
 // ones left out), and the open ones blocked behind another open PR (the Kanban
 // rule: a PR whose base is another open PR; an issue whose open closing PRs are
-// all blocked). A PR that closes a leaf issue of the same subtree rides on that
-// issue instead of counting twice. Archived sub-streams leave their parent's count.
+// all blocked) or behind an unfinished `depends-on` target. A PR that closes a
+// leaf issue of the same subtree rides on that issue instead of counting twice.
+// Archived sub-streams leave their parent's count.
 
 import { leafState, type StreamProgress, type WorkEdge, type WorkNode, type WorkStream } from '@sovereign/core'
 
@@ -13,13 +14,39 @@ export { leafState }
 const isOpenChange = (n: WorkNode | undefined): n is WorkNode =>
   !!n && n.kind === 'change' && (n.state === 'open' || n.state === 'draft')
 
-/** Open leaves waiting on another open PR. */
-export function blockedLeaves(nodes: WorkNode[], edges: WorkEdge[]): Set<string> {
+/**
+ * Open leaves waiting on another open PR, or on an unfinished `depends-on` target:
+ * a node that is neither done nor cancelled, or a stream (not archived) with an open
+ * leaf in its subtree. A dependency from a stream holds every open leaf of its subtree.
+ */
+export function blockedLeaves(nodes: WorkNode[], edges: WorkEdge[], streams: WorkStream[]): Set<string> {
   const byId = new Map(nodes.map((n) => [n.id, n]))
   const blocked = new Set<string>()
   for (const e of edges) {
     if (e.kind === 'base' && e.from !== e.to && isOpenChange(byId.get(e.from)) && isOpenChange(byId.get(e.to)))
       blocked.add(e.from)
+  }
+  const needs = edges.filter((e) => e.kind === 'depends-on' && e.from !== e.to)
+  if (needs.length) {
+    const trees = subtrees(streams)
+    const status = new Map(streams.map((s) => [s.id, s.status]))
+    const leavesOf = (sid: string) => {
+      const tree = trees.get(sid)
+      return tree ? nodes.filter((n) => leafState(n) !== undefined && n.workstreams.some((w) => tree.has(w))) : []
+    }
+    const unfinished = (id: string): boolean => {
+      const n = byId.get(id)
+      if (n) {
+        const s = leafState(n)
+        return s ? s === 'open' : !['done', 'cancelled', 'merged', 'closed'].includes(n.state)
+      }
+      return status.has(id) && status.get(id) !== 'archived' && leavesOf(id).some((l) => leafState(l) === 'open')
+    }
+    for (const e of needs) {
+      if (!unfinished(e.to)) continue
+      const from = byId.get(e.from)
+      for (const l of from ? [from] : leavesOf(e.from)) if (leafState(l) === 'open') blocked.add(l.id)
+    }
   }
   const closers = new Map<string, string[]>() // open issue → its open closing PRs
   for (const e of edges) {
@@ -61,7 +88,7 @@ export function streamProgress(
   edges: WorkEdge[]
 ): Map<string, StreamProgress> {
   const leaves = nodes.filter((n) => n.workstreams.length && leafState(n) !== undefined)
-  const blocked = blockedLeaves(nodes, edges)
+  const blocked = blockedLeaves(nodes, edges, streams)
   const closes = new Map<string, string[]>() // change → issues it closes
   for (const e of edges) if (e.kind === 'closes') closes.set(e.from, [...(closes.get(e.from) ?? []), e.to])
 

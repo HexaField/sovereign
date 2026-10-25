@@ -428,16 +428,28 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
     const y1 = forward || backward ? a.y + a.h / 2 : b.y > a.y ? a.y + a.h : a.y
     const x2 = forward ? b.x : backward ? b.x + b.w : b.x + b.w / 2
     const y2 = forward || backward ? b.y + b.h / 2 : b.y > a.y ? b.y : b.y + b.h
+    const side = forward || backward
+    const dx = side ? Math.max(30, Math.abs(x2 - x1) / 2) * (forward ? 1 : -1) : 0
+    const dy = side ? 0 : Math.max(20, Math.abs(y2 - y1) / 2) * (y2 > y1 ? 1 : -1)
+    // The curve's last control point, which also aims the arrowhead.
+    const cx = x2 - dx
+    const cy = y2 - dy
     ctx.beginPath()
     ctx.moveTo(x1, y1)
-    if (forward || backward) {
-      const dx = Math.max(30, Math.abs(x2 - x1) / 2) * (forward ? 1 : -1)
-      ctx.bezierCurveTo(x1 + dx, y1, x2 - dx, y2, x2, y2)
-    } else {
-      const dy = Math.max(20, Math.abs(y2 - y1) / 2) * (y2 > y1 ? 1 : -1)
-      ctx.bezierCurveTo(x1, y1 + dy, x2, y2 - dy, x2, y2)
-    }
+    ctx.bezierCurveTo(x1 + dx, y1 + dy, cx, cy, x2, y2)
     ctx.stroke()
+    if (s.arrow) {
+      const len = 9 / vp.scale
+      const a = Math.atan2(y2 - cy, x2 - cx)
+      ctx.setLineDash([])
+      ctx.fillStyle = s.color
+      ctx.beginPath()
+      ctx.moveTo(x2, y2)
+      ctx.lineTo(x2 - len * Math.cos(a - 0.45), y2 - len * Math.sin(a - 0.45))
+      ctx.lineTo(x2 - len * Math.cos(a + 0.45), y2 - len * Math.sin(a + 0.45))
+      ctx.closePath()
+      ctx.fill()
+    }
     stats.edgesDrawn++
   }
   ctx.setLineDash([])
