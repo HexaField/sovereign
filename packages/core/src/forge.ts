@@ -495,6 +495,7 @@ export const FORGE_TOOLS = [
   'forge_bug_draft',
   'forge_attention',
   'forge_note',
+  'forge_supersede',
   'forge_stream_create',
   'forge_stream_rename',
   'forge_stream_status',

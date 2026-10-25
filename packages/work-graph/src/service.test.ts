@@ -460,6 +460,44 @@ describe('forge service', () => {
     expect(await owners(`task:${task.id}`)).toEqual(expect.arrayContaining([a.id, c.id]))
   })
 
+  it('supersede: a PR retires a planned task ("Opened as"), and takes its stream only when it has none', async () => {
+    await service.sync('acme')
+    const s = await service.createStream('acme', 'Slice 2')
+    const other = await service.createStream('acme', 'Other')
+    const planned = async (name: string) => {
+      const t = await port.service.create({ name, membrane: 'acme', sourceThreadId: 't' })
+      await port.addToStream(s.id, t.id)
+      return t
+    }
+    const owners = async (id: string) => (await service.graph('acme')).nodes.find((n) => n.id === id)!.workstreams
+
+    // #50 is in no stream: it joins the task's.
+    const t1 = await planned('PR 2.1 · widget · teeth')
+    expect(await service.supersede('acme', `task:${t1.id}`, nid(WIDGET, 50), 'same work')).toEqual({
+      taskId: t1.id,
+      streamId: s.id
+    })
+    expect(await port.get(t1.id)).toMatchObject({ state: 'cancelled', transientState: `Opened as ${WIDGET}#50` })
+    expect(await owners(nid(WIDGET, 50))).toEqual([s.id])
+
+    // #51 already has a stream: it stays there.
+    await service.addMember(other.id, nid(WIDGET, 51), 'acme')
+    const t2 = await planned('PR 2.2 · widget · ratio')
+    expect(await service.supersede('acme', `task:${t2.id}`, nid(WIDGET, 51), 'same work')).toEqual({ taskId: t2.id })
+    expect(await owners(nid(WIDGET, 51))).toEqual([other.id])
+
+    // Refused: a node that is not a task, a task no longer planned, a `by` that is not a PR.
+    const t3 = await planned('PR 2.3')
+    await expect(service.supersede('acme', nid(WIDGET, 7), nid(WIDGET, 50), 'x')).rejects.toMatchObject({ status: 400 })
+    await expect(service.supersede('acme', `task:${t1.id}`, nid(WIDGET, 50), 'x')).rejects.toMatchObject({
+      status: 400
+    })
+    await expect(service.supersede('acme', `task:${t3.id}`, nid(WIDGET, 7), 'x')).rejects.toMatchObject({
+      status: 400
+    })
+    expect(await port.get(t3.id)).toMatchObject({ state: 'pending' })
+  })
+
   it('migrates plan-added members to related, and keeps one owner per item (the first epic by name)', async () => {
     const planId = 'plan:acme-org/widget/sprockets.md'
     await service.sync('acme')

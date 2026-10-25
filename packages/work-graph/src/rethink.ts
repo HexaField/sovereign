@@ -71,6 +71,8 @@ export type RethinkAction =
   | { kind: 'draft'; at: string; draftId: string; repo: string; title: string; evidence: string[] }
   | { kind: 'attention'; at: string; items: Array<{ nodeId?: string; text: string }> }
   | { kind: 'note'; at: string; nodeId: string; text: string }
+  /** forge_supersede: the PR `by` took over the planned task `nodeId`. */
+  | { kind: 'supersede'; at: string; nodeId: string; by: string; reason: string }
   /** A change to the epics (work streams) through a forge_stream_* tool other than forge_stream_add. */
   | { kind: 'epic'; at: string; tool: ForgeToolName; text: string }
   | { kind: 'refused'; at: string; tool: ForgeToolName; reason: string }
@@ -132,8 +134,10 @@ export function buildRethinkPrompt(input: {
   limits: RethinkLimits
   owners: Map<string, RethinkOwner>
   streams: WorkStream[]
+  /** The membrane's planned tasks, to check new PRs against. */
+  planned: WorkNode[]
 }): string {
-  const { membrane, runId, digest, limits, owners, streams } = input
+  const { membrane, runId, digest, limits, owners, streams, planned } = input
   const nodeCount = digest.groups.reduce((a, g) => a + g.nodes.length, 0)
   const m = JSON.stringify(membrane)
   const out: string[] = []
@@ -151,7 +155,8 @@ export function buildRethinkPrompt(input: {
     '| Iterate | Review comments or red CI on an owned change | `forge_dispatch` to the owner thread with the specific comments or failing checks |',
     '| Bug reports | One failure pattern across changes, or a bug found in review | `forge_bug_draft` with the evidence nodes: a draft the user approves. Never open an issue yourself |',
     '| Flag for the user | Review requested from them, merge decisions, approved and waiting, stale items they own, blocked agents, drafts to approve | ONE `forge_attention` call holding every item (recorded on the cards and in the run report; no message is sent) |',
-    '| Tidy | Tasks whose items ended, empty streams, duplicates | `forge_note` on the card, or an attention item when the user must act |',
+    '| Planned → begun | A PR started work that a planned task or an open issue describes | Planned task: `forge_supersede`. Issue the PR does not close: `forge_relate` (reason: the PR does the issue’s work); once that PR merged, an attention item to close the issue. Check each new or changed PR in the digest against the planned tasks below and against open issues (`gh issue list --repo <repo> --search <terms>`) |',
+    '| Tidy | Tasks whose items ended, empty streams | `forge_note` on the card, or an attention item when the user must act |',
     ''
   )
 
@@ -175,6 +180,7 @@ export function buildRethinkPrompt(input: {
     '- `forge_bug_draft { membrane, repo, title, body, evidence: nodeId[] }` — a bug-report draft for the user to approve.',
     '- `forge_attention { membrane, items: [{ nodeId?, text }] }` — what the user must decide or do: noted on each item’s card and listed in the run report.',
     '- `forge_note { membrane, nodeId, text }` — a one-line note on the item’s card.',
+    '- `forge_supersede { membrane, nodeId, by, reason }` — a PR (`by`) does a planned task’s work: the task is cancelled (“Opened as <PR>”) and the PR joins its stream when it has none. Only for planned tasks, never for issues.',
     ''
   )
 
@@ -182,6 +188,16 @@ export function buildRethinkPrompt(input: {
     out.push('## Work streams', '')
     for (const s of streams)
       out.push(`- \`${s.id}\` ${s.name} (${s.memberCount} item${s.memberCount === 1 ? '' : 's'})`)
+    out.push('')
+  }
+
+  if (planned.length) {
+    const streamName = new Map(streams.map((s) => [s.id, s.name]))
+    out.push('## Planned tasks', '')
+    for (const t of planned) {
+      const s = t.workstreams[0] && streamName.get(t.workstreams[0])
+      out.push(`- \`${t.id}\` ${oneLine(t.title)}${s ? ` (stream: ${s})` : ''}`)
+    }
     out.push('')
   }
 
@@ -309,6 +325,7 @@ export function renderRunReport(run: RethinkRun): string {
       of('attention').flatMap((a) => a.items.map((i) => `- ${i.nodeId ? `${i.nodeId}: ` : ''}${oneLine(i.text)}`))
     ],
     ['Notes', of('note').map((a) => `- ${a.nodeId}: ${oneLine(a.text)}`)],
+    ['Superseded', of('supersede').map((a) => `- ${a.nodeId} → ${a.by}: ${oneLine(a.reason)}`)],
     ['Epic changes', of('epic').map((a) => `- ${a.tool}: ${oneLine(a.text)}`)],
     ['Refused', of('refused').map((a) => `- ${a.tool}: ${a.reason}`)]
   ]
@@ -337,7 +354,17 @@ export function renderRunReport(run: RethinkRun): string {
 }
 
 function summaryOf(run: RethinkRun, file: string): RethinkRunSummary {
-  const actions = { relate: 0, stream: 0, dispatch: 0, draft: 0, attention: 0, note: 0, epic: 0, refused: 0 }
+  const actions = {
+    relate: 0,
+    stream: 0,
+    dispatch: 0,
+    draft: 0,
+    attention: 0,
+    note: 0,
+    supersede: 0,
+    epic: 0,
+    refused: 0
+  }
   for (const a of run.actions) actions[a.kind]++
   return {
     id: run.id,
@@ -400,6 +427,7 @@ export interface RethinkRunnerDeps {
     | 'setStreamStatus'
     | 'setStreamParent'
     | 'mergeStreams'
+    | 'supersede'
   >
   threads: {
     /** A live (not archived) thread of the membrane with this label. */
@@ -857,6 +885,16 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
         record(m, run, { kind: 'epic', at, tool: name, text: `${streamId} under ${parentId ?? 'the top level'}` })
         return { moved: true, stream: s }
       }
+      case 'forge_supersede': {
+        const nodeId = str(args, 'nodeId')
+        const by = str(args, 'by')
+        const reason = clip(str(args, 'reason'), 500)
+        const task = await nodeOrThrow(m, nodeId)
+        const res = await svc.supersede(m, nodeId, by, reason)
+        record(m, run, { kind: 'supersede', at, nodeId, by, reason })
+        addNote(m, by, { at, kind: 'note', text: `Replaces planned task "${task.title}": ${reason}`, runId: run.id })
+        return { superseded: true, ...res }
+      }
       case 'forge_note': {
         const nodeId = str(args, 'nodeId')
         const text = clip(str(args, 'text'), 500)
@@ -886,7 +924,8 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
             digest,
             limits: run.limits,
             owners,
-            streams: graph.workstreams
+            streams: graph.workstreams,
+            planned: graph.nodes.filter((n) => n.kind === 'task' && n.state === 'planned')
           })
         )
       } catch (err) {

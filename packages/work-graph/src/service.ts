@@ -190,6 +190,13 @@ export interface ForgeService {
   removeMember(streamId: string, nodeId: string, membrane?: string): Promise<boolean>
   /** Pause a PR, issue or task (its task's state; made when missing), or resume it. Sync leaves a paused item paused until it merges or closes. */
   setPaused(membrane: string, nodeId: string, paused: boolean): Promise<WorkNode>
+  /** A PR now does a planned task's work: cancel the task ("Opened as <PR>"); the PR joins its stream when it has none. */
+  supersede(
+    membrane: string,
+    nodeId: string,
+    byId: string,
+    reason: string
+  ): Promise<{ taskId: string; streamId?: string }>
   /** The membrane's work streams; archived ones only with `archived`. */
   streams(membrane: string, opts?: { archived?: boolean }): Promise<WorkStream[]>
   /** Every work stream of the membrane, archived ones included, with its members (not its child streams). */
@@ -1310,6 +1317,25 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       if (task.state !== state && (paused || task.state === 'paused')) await deps.tasks.setState(task.id, state)
       emit('forge.updated', { membrane })
       return (await nodeIn(membrane, nodeId)).node
+    },
+
+    async supersede(membrane, nodeId, byId, reason) {
+      const { node } = await nodeIn(membrane, nodeId)
+      if (node.kind !== 'task' || node.state !== 'planned' || !node.taskId)
+        throw new ForgeError(`${nodeId} is not a planned task`, 400)
+      const { node: by } = await nodeIn(membrane, byId)
+      if (by.kind !== 'change') throw new ForgeError(`${byId} is not a PR`, 400)
+      if (!reason.trim()) throw new ForgeError('reason is required', 400)
+      await deps.tasks.setState(node.taskId, 'cancelled')
+      await deps.tasks.setTransientState(
+        node.taskId,
+        `Opened as ${by.number !== undefined ? `${by.repo}#${by.number}` : by.id}`
+      )
+      // A PR has one owning stream: take the task's only when the PR has none yet.
+      const streamId = by.workstreams.length ? undefined : node.workstreams[0]
+      if (streamId) await api.addMember(streamId, byId, membrane)
+      emit('forge.updated', { membrane })
+      return { taskId: node.taskId, ...(streamId ? { streamId } : {}) }
     },
 
     async streams(membrane, opts = {}) {

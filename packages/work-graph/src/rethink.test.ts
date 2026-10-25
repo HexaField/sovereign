@@ -109,9 +109,33 @@ describe('buildRethinkPrompt', () => {
       digest,
       limits: { maxJobs: 6, tokenBudget: 200_000 },
       owners: new Map([[nid(50), { threadId: 'owner-1', label: 'Sprocket worker', status: 'idle' }]]),
-      streams: [{ id: 'stream-1', name: 'Sprockets', membrane: 'acme', memberCount: 2, status: 'active' }]
+      streams: [{ id: 'stream-1', name: 'Sprockets', membrane: 'acme', memberCount: 2, status: 'active' }],
+      planned: [
+        node(0, {
+          id: 'task:t1',
+          kind: 'task',
+          state: 'planned',
+          title: 'PR 2.1 · widget · teeth',
+          workstreams: ['stream-1']
+        }),
+        node(0, { id: 'task:t2', kind: 'task', state: 'planned', title: 'Loose task' })
+      ]
     })
     expect(prompt).toMatchSnapshot()
+  })
+
+  it('leaves out the planned tasks section when there are none', () => {
+    const prompt = buildRethinkPrompt({
+      membrane: 'acme',
+      runId: 'r',
+      digest: { membrane: 'acme', cursor: '', count: 0, groups: [] },
+      limits: { maxJobs: 1, tokenBudget: 1 },
+      owners: new Map(),
+      streams: [],
+      planned: []
+    })
+    expect(prompt).not.toContain('## Planned tasks')
+    expect(prompt).toContain('`forge_supersede { membrane, nodeId, by, reason }`')
   })
 })
 
@@ -381,6 +405,45 @@ describe('rethink runner', () => {
     expect(runner.threadOf('acme')).toBe('acme-main')
     expect(sent[sent.length - 1].threadId).toBe('acme-main')
     expect(runner.membraneOfThread(old)).toBeUndefined()
+  })
+
+  it('forge_supersede: retires a planned task, notes the PR card and lists it in the report', async () => {
+    const stream = await service.createStream('acme', 'Gears')
+    const task = await port.service.create({ name: 'PR 2.1 · widget · ratio', membrane: 'acme', sourceThreadId: 't' })
+    await port.addToStream(stream.id, task.id)
+    const { runId } = (await service.rethink('acme')) as { runId: string }
+    const rt = runner.threadOf('acme')!
+    // The prompt lists the planned task with its stream.
+    expect(sent[sent.length - 1].text).toContain(
+      `## Planned tasks\n\n- \`task:${task.id}\` PR 2.1 · widget · ratio (stream: Gears)`
+    )
+
+    expect(
+      await runner.tool(rt, 'forge_supersede', {
+        membrane: 'acme',
+        nodeId: `task:${task.id}`,
+        by: nid(51),
+        reason: 'Gear ratio is that slice'
+      })
+    ).toEqual({ superseded: true, taskId: task.id, streamId: stream.id })
+    expect(await port.get(task.id)).toMatchObject({ state: 'cancelled', transientState: `Opened as ${WIDGET}#51` })
+    expect(runner.notes('acme')[nid(51)]).toContainEqual(
+      expect.objectContaining({
+        kind: 'note',
+        text: 'Replaces planned task "PR 2.1 · widget · ratio": Gear ratio is that slice'
+      })
+    )
+    // Not planned any more: refused.
+    await expect(
+      runner.tool(rt, 'forge_supersede', { membrane: 'acme', nodeId: `task:${task.id}`, by: nid(51), reason: 'x' })
+    ).rejects.toMatchObject({ status: 400 })
+
+    status(rt, 'working')
+    status(rt, 'idle')
+    expect(runner.report('acme', runId)).toContain(
+      `### Superseded\n\n- task:${task.id} → ${nid(51)}: Gear ratio is that slice`
+    )
+    expect(runner.runs('acme')[0].actions).toMatchObject({ supersede: 1 })
   })
 
   it('a thread busy at the start goes idle once before the run turn', async () => {

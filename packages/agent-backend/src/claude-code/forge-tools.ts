@@ -85,6 +85,17 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
       run('forge_note')
     ),
     tool(
+      'forge_supersede',
+      "Retire a planned task that a PR now does: the task is cancelled with 'Opened as <PR>', and the PR takes its place in the task's work stream when it has none. Only for planned tasks, never for issues.",
+      {
+        membrane,
+        nodeId: z.string().describe('The planned task\'s node id ("task:…").'),
+        by: z.string().describe("The PR's node id."),
+        reason: z.string().describe('One sentence: why the PR does the task.')
+      },
+      run('forge_supersede')
+    ),
+    tool(
       'forge_stream_create',
       'Create a work stream (an epic), optionally under a parent stream. Not counted against the run limits.',
       { membrane, name: z.string(), parentId: z.string().optional().describe('The parent stream id.') },
