@@ -50,7 +50,7 @@ function saveFilters(f: TimelineFilters): void {
 const Chip: Component<{ on: boolean; label: string; color?: string; onClick: () => void }> = (p) => (
   <button
     type="button"
-    class="rounded-full border px-2 py-0.5 text-[11px] transition-colors"
+    class="shrink-0 rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap transition-colors"
     style={{
       'border-color': p.on ? (p.color ?? 'var(--c-accent)') : 'var(--c-border)',
       background: p.on ? 'var(--c-hover-bg)' : 'transparent',
@@ -149,7 +149,8 @@ export const TimelinePanel: Component = () => {
             </span>
           </Show>
         </div>
-        <div class="mt-2 flex flex-wrap gap-1">
+        {/* One scrollable line on every screen size */}
+        <div class="scrollbar-none mt-2 flex gap-1 overflow-x-auto">
           <For each={[...TIMELINE_KINDS]}>
             {(k: TimelineKind) => (
               <Chip
@@ -160,7 +161,7 @@ export const TimelinePanel: Component = () => {
               />
             )}
           </For>
-          <span class="mx-1 self-center text-[10px]" style={{ color: 'var(--c-border-strong)' }}>
+          <span class="mx-1 shrink-0 self-center text-[10px]" style={{ color: 'var(--c-border-strong)' }}>
             |
           </span>
           <For each={[...ORIGIN_GROUPS]}>

@@ -59,14 +59,19 @@ const TimelinePanel = lazy(() => import('../timeline/TimelinePanel'))
 export function DashboardView() {
   return (
     <div class="flex h-full" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
-      {/* Thread list — main column */}
-      <div class="flex-[3] overflow-hidden border-r" style={{ 'border-color': 'var(--c-border)' }}>
-        <ThreadList />
-      </div>
+      {/* Thread list and timeline: side by side on a landscape screen, stacked on a portrait one */}
+      <div class="flex min-w-0 flex-[6] portrait:flex-col">
+        <div class="min-h-0 min-w-0 flex-1 overflow-hidden border-r" style={{ 'border-color': 'var(--c-border)' }}>
+          <ThreadList />
+        </div>
 
-      {/* Timeline — what happened inside Sovereign, newest first */}
-      <div class="min-w-0 flex-[3] overflow-hidden border-r" style={{ 'border-color': 'var(--c-border)' }}>
-        <TimelinePanel />
+        {/* Timeline — what happened inside Sovereign, newest first */}
+        <div
+          class="min-h-0 min-w-0 flex-1 overflow-hidden border-r portrait:border-t"
+          style={{ 'border-color': 'var(--c-border)' }}
+        >
+          <TimelinePanel />
+        </div>
       </div>
 
       {/* System cards — sidebar */}
