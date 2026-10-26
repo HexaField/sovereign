@@ -291,6 +291,17 @@ export function futureDepths(nodes: WorkNode[], edges: WorkEdge[]): Map<string, 
       if (d === 0) queue.push(to)
     }
   }
+  // A need always sits left of its dependent, even where other edges close a cycle around them
+  // (depends-on edges alone have none; the pass bound covers a bad input).
+  const needs = edges.filter((e) => e.kind === 'depends-on' && ids.has(e.from) && ids.has(e.to) && e.from !== e.to)
+  for (let pass = 0, moved = true; moved && pass <= ids.size; pass++) {
+    moved = false
+    for (const e of needs) {
+      if (depth.get(e.from)! > depth.get(e.to)!) continue
+      depth.set(e.from, depth.get(e.to)! + 1)
+      moved = true
+    }
+  }
   return depth
 }
 
@@ -471,14 +482,41 @@ export function computeLayout(input: LayoutInput): Layout {
     }
     chains.push({ ids, parent })
   }
+  // An open change sits right of every open change it depends on.
+  const needsOf = new Map<string, string[]>()
+  for (const e of input.edges) {
+    if (e.kind !== 'depends-on') continue
+    const from = resolve(e.from)
+    const to = resolve(e.to)
+    if (from !== to && presentIds.has(from) && presentIds.has(to))
+      (needsOf.get(from) ?? needsOf.set(from, []).get(from)!).push(to)
+  }
   const colOf = new Map<string, number>()
-  // Parents are placed before the chains that branch off them (queue order).
+  const startOf = new Map<number, number>()
+  const activityCol = chains.map((c) => activityColumn(Math.max(...c.ids.map(activityOf)), now) - (c.ids.length - 1))
+  // Parents are placed before the chains that branch off them (queue order); a need can come later
+  // in that order, so repeat until no chain moves. Starts only grow, and the pass bound stops a cycle.
+  for (let pass = 0; pass <= chains.length; pass++) {
+    let moved = false
+    chains.forEach((chain, ci) => {
+      let minCol = chain.parent !== undefined ? (colOf.get(chain.parent) ?? 0) + 1 : 0
+      chain.ids.forEach((id, i) => {
+        for (const need of needsOf.get(id) ?? []) {
+          const c = colOf.get(need)
+          if (c !== undefined) minCol = Math.max(minCol, c + 1 - i)
+        }
+      })
+      const startCol = Math.max(minCol, activityCol[ci], startOf.get(ci) ?? 0)
+      if (startOf.get(ci) === startCol) return
+      moved = true
+      startOf.set(ci, startCol)
+      chain.ids.forEach((id, i) => colOf.set(id, startCol + i))
+    })
+    if (!moved) break
+  }
   let presentCols = PRESENT_MIN_COLS
-  for (const chain of chains) {
-    const minCol = chain.parent !== undefined ? (colOf.get(chain.parent) ?? 0) + 1 : 0
-    const lastActivity = Math.max(...chain.ids.map(activityOf))
-    const startCol = Math.max(minCol, activityColumn(lastActivity, now) - (chain.ids.length - 1))
-    chain.ids.forEach((id, i) => colOf.set(id, startCol + i))
+  for (const [ci, chain] of chains.entries()) {
+    const startCol = startOf.get(ci)!
     presentCols = Math.max(presentCols, startCol + chain.ids.length)
     const x = NOW_GAP + startCol * COL_W
     const first = nodeById.get(chain.ids[0])!
@@ -642,6 +680,32 @@ export function computeLayout(input: LayoutInput): Layout {
       const d = tree.depth.get(s.id)!
       ;(byColumn.get(d) ?? byColumn.set(d, []).get(d)!).push(s)
     }
+    // Inside a tree column, a stream sits a sub-column right of each sibling stream it depends on.
+    const sub = new Map<string, number>()
+    const siblingNeeds = input.edges.filter(
+      (e) =>
+        e.kind === 'depends-on' &&
+        e.from !== e.to &&
+        tree.depth.has(e.from) &&
+        tree.depth.get(e.from) === tree.depth.get(e.to)
+    )
+    for (let pass = 0, moved = true; moved && pass <= streams.length; pass++) {
+      moved = false
+      for (const e of siblingNeeds) {
+        const want = (sub.get(e.to) ?? 0) + 1
+        if ((sub.get(e.from) ?? 0) < want) {
+          sub.set(e.from, want)
+          moved = true
+        }
+      }
+    }
+    // Columns run from the deepest (left) to the roots (right), each as wide as its sub-columns.
+    const colX = new Map<number, number>()
+    for (let d = maxDepth, x = treeStart; d >= 0; d--) {
+      colX.set(d, x)
+      const list = byColumn.get(d) ?? []
+      x += (1 + Math.max(0, ...list.map((s) => sub.get(s.id) ?? 0))) * COL_W
+    }
     for (const [d, list] of byColumn) {
       let floor = -Infinity
       list.sort((a, b) => want.get(a.id)! - want.get(b.id)! || streamRank.get(a.id)! - streamRank.get(b.id)!)
@@ -651,7 +715,7 @@ export function computeLayout(input: LayoutInput): Layout {
         floor = y + NODE_H + CARD_GAP
         placed.set(id, {
           id,
-          x: treeStart + (maxDepth - d) * COL_W,
+          x: colX.get(d)! + (sub.get(s.id) ?? 0) * COL_W,
           y,
           w: NODE_W,
           h: NODE_H,

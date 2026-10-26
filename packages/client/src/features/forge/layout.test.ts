@@ -494,6 +494,36 @@ describe('helpers', () => {
     expect(deps).toHaveLength(2)
   })
 
+  it('puts an open change right of the open change it depends on, even with the same activity', () => {
+    const need = change(CORE, 20, { updatedAt: iso(0) })
+    const dependent = change(APP, 21, { updatedAt: iso(0) })
+    const after = change(APP, 22, { updatedAt: iso(0) })
+    const edges = [edge(dependent, need, 'depends-on'), edge(after, dependent, 'depends-on')]
+    const l = computeLayout({ nodes: [need, dependent, after], edges, workstreams: [], now: NOW })
+    const x = (n: WorkNode) => l.nodes.get(n.id)!.x
+    expect(x(dependent)).toBeGreaterThan(x(need))
+    expect(x(after)).toBeGreaterThan(x(dependent))
+  })
+
+  it('puts a sibling stream card right of the sibling it depends on, inside their column', () => {
+    const t = treeGraph()
+    // Delivery (b) waits for Auth (a); both sit under the goal g.
+    const l = computeLayout({ ...t, edges: [...t.edges, edge(t.b.id, t.a.id, 'depends-on')], now: NOW })
+    const card = (id: string) => [...l.nodes.values()].find((p) => p.stream === id)!
+    expect(card('b').x).toBeGreaterThan(card('a').x)
+    expect(card('g').x).toBeGreaterThan(card('b').x)
+    expect(card('a').x).toBeGreaterThan(card('c').x)
+    noOverlaps(l)
+  })
+
+  it('futureDepths keeps a need left of its dependent even when other edges close a cycle', () => {
+    const a = issue(CORE, 1)
+    const b = issue(CORE, 2)
+    // a depends on b, but a also references b (which alone would put a first).
+    const d = futureDepths([a, b], [edge(a, b, 'depends-on'), edge(a, b, 'references')])
+    expect(d.get(a.id)!).toBeGreaterThan(d.get(b.id)!)
+  })
+
   it('futureDepths terminates on a cycle', () => {
     const a = issue(CORE, 1)
     const b = issue(CORE, 2)
