@@ -20,6 +20,37 @@ import type {
 
 export const TRIAGE_THRESHOLD = 0.7
 
+/**
+ * One admitted event as the `forge.events` bus event carries it (the timeline
+ * reads it): the item's ref, title and url beside the event, and the detail
+ * without comment text, which never leaves the forge's own log.
+ */
+export interface ForgeEventLine {
+  at: string
+  nodeId: string
+  type: TriagedEvent['type']
+  triage: TriageVerdict
+  kind?: WorkNode['kind']
+  ref?: string
+  title?: string
+  url?: string
+  detail: Record<string, unknown>
+}
+
+export function forgeEventLine(e: TriagedEvent, node?: WorkNode): ForgeEventLine {
+  const { text: _text, ...detail } = e.detail
+  return {
+    at: e.at,
+    nodeId: e.nodeId,
+    type: e.type,
+    triage: e.triage,
+    detail,
+    ...(node ? { kind: node.kind, title: node.title } : {}),
+    ...(node?.repo && node.number !== undefined ? { ref: `${node.repo}#${node.number}` } : {}),
+    ...(node?.url ? { url: node.url } : {})
+  }
+}
+
 export interface TriageContext {
   node?: WorkNode
   /** The node's task has an owner thread. */

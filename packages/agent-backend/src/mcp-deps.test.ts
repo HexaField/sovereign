@@ -72,6 +72,27 @@ describe('sessions.send', () => {
     expect(sendMessage).toHaveBeenCalledWith(T, 'hi')
   })
 
+  it("tells the bus, so the session's next turn reads as started by another thread", async () => {
+    const sendMessage = vi.fn(async () => {})
+    const emitted: Array<{ type: string; payload: unknown }> = []
+    const deps = buildSovereignMcpDeps({
+      bus: { emit: (e: { type: string; payload: unknown }) => void emitted.push(e) },
+      routing: {
+        forSession: () => ({ sendMessage }),
+        registry: { getByThread: () => undefined, getBySession: () => undefined }
+      }
+    } as any)
+    await deps.sessions!.send(T, 'Please review the gear PR')
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: 'chat.message.injected',
+        payload: { sessionKey: T, via: 'agent', preview: 'Please review the gear PR' }
+      })
+    ])
+    // Emitted before the send, so a busy status the send causes finds it.
+    expect(sendMessage).toHaveBeenCalledWith(T, 'Please review the gear PR')
+  })
+
   it('uses the registry binding when the thread has one', async () => {
     const { deps, sendMessage } = sendSetup({ [T]: 'local-llm:abc' })
     await deps.sessions!.send(`agent:main:thread:${T}`, 'hi')

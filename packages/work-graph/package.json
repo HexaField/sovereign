@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@sovereign/tasks": "workspace:*",
+    "@sovereign/timeline": "workspace:*",
     "@types/express": "^5.0.6",
     "@types/supertest": "^7.2.0",
     "supertest": "^7.2.2"

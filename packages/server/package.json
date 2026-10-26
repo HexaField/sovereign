@@ -50,6 +50,7 @@
     "@sovereign/terminal": "workspace:*",
     "@sovereign/thread-presence": "workspace:*",
     "@sovereign/threads": "workspace:*",
+    "@sovereign/timeline": "workspace:*",
     "@sovereign/voice": "workspace:*",
     "@sovereign/work-graph": "workspace:*",
     "@sovereign/worktrees": "workspace:*",

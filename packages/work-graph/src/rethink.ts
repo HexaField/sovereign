@@ -587,7 +587,16 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
     }
     writeRun(run)
     log(`${m} ${run.id}: ${status}, ${run.actions.length} action(s)`)
-    emit('forge.rethink', { membrane: m, runId: run.id, status })
+    emit('forge.rethink', {
+      membrane: m,
+      runId: run.id,
+      status,
+      trigger: run.trigger,
+      threadId: run.threadId,
+      events: run.digest.events,
+      actions: run.actions.filter((x) => x.kind !== 'refused').length,
+      ...(error ? { error } : {})
+    })
   }
 
   function open(m: string, threadId: string, trigger: RethinkTrigger, digest: ForgeDigest): RethinkRun {
@@ -642,7 +651,14 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
     })
     active.set(m, a)
     writeRun(run)
-    emit('forge.rethink', { membrane: m, runId: id, status: 'running' })
+    emit('forge.rethink', {
+      membrane: m,
+      runId: id,
+      status: 'running',
+      trigger,
+      threadId,
+      events: run.digest.events
+    })
     return run
   }
 
@@ -915,6 +931,15 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
         const task = await nodeOrThrow(m, nodeId)
         const res = await svc.supersede(m, nodeId, by, reason)
         record(m, run, { kind: 'supersede', at, nodeId, by, reason })
+        emit('forge.rethink.action', {
+          membrane: m,
+          runId: run.id,
+          action: 'supersede',
+          nodeId,
+          by,
+          title: task.title,
+          reason
+        })
         addNote(m, by, { at, kind: 'note', text: `Replaces planned task "${task.title}": ${reason}`, runId: run.id })
         return { superseded: true, ...res }
       }
@@ -926,10 +951,20 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
           if (!(await svc.deleteEdge(from, to, 'depends-on', m)))
             throw new ForgeError(`${from} does not depend on ${to}`, 404)
           record(m, run, { kind: 'depend', at, from, to, reason, removed: true })
+          emit('forge.rethink.action', {
+            membrane: m,
+            runId: run.id,
+            action: 'depend',
+            from,
+            to,
+            reason,
+            removed: true
+          })
           return { removed: true }
         }
         const edge = await svc.depend(m, { from, to, reason, source: 'rethink' })
         record(m, run, { kind: 'depend', at, from, to, reason, removed: false })
+        emit('forge.rethink.action', { membrane: m, runId: run.id, action: 'depend', from, to, reason, removed: false })
         return { depends: true, edge }
       }
       case 'forge_note': {

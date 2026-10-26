@@ -1218,6 +1218,8 @@ describe('claude-code/auto-recycle waits for the next message', () => {
 
     const statuses: string[] = []
     backend.on('chat.status', (d: any) => statuses.push(d.status))
+    const recycled: any[] = []
+    backend.on('session.recycled', (d: any) => recycled.push(d))
     const started = Date.now()
     await backend.sendMessage('r', 'second')
     // The idle session's input is closed, not interrupted: interrupt() would
@@ -1226,6 +1228,10 @@ describe('claude-code/auto-recycle waits for the next message', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(sdk.queries[0].interrupt).not.toHaveBeenCalled()
     expect(compactions).toEqual([expect.objectContaining({ method: 'auto-recycle' })])
+    // One line for the timeline (the chat layer names the thread).
+    expect(recycled).toEqual([
+      expect.objectContaining({ sessionKey: 'r', method: 'auto-recycle', preTokens: expect.any(Number) })
+    ])
     // No idle while the message is being sent: the chat layer would take it
     // as the end of that message's turn and release its queue gate early.
     expect(statuses).not.toContain('idle')
@@ -2636,6 +2642,8 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     const failed = events.filter((e) => e.type === 'subagent.failed')
     expect(failed).toHaveLength(1)
     expect(failed[0].data.error).toBe('stopped by the parent')
+    // The timeline tells a stop from a failure, and names the run.
+    expect(failed[0].data).toMatchObject({ ended: 'stopped', label: 'slow', durationMs: expect.any(Number) })
     expect(child.abortController.signal.aborted).toBe(true)
   })
 
@@ -2648,6 +2656,7 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     expect(failed).toHaveLength(1)
     // The message names the limit the run had, not the default
     expect(failed[0].data.error).toBe('timed out after 1 min')
+    expect(failed[0].data.ended).toBe('timed-out')
     expect(stub.calls.find((o: any) => o.sessionId === childKey).abortController.signal.aborted).toBe(true)
   })
 

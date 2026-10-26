@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import type { EventBus } from '@sovereign/core'
 import { toCheckStates, type CheckState } from '@sovereign/forges'
 
 // The fold of check runs + statuses is shared with the forge adapter's checks().
@@ -58,6 +59,31 @@ export interface CiWatchServiceDeps {
   notify(threadKey: string, text: string): Promise<void>
   github?: GithubGet
   now?: () => number
+  /** Told `ci.watch.ended` once a watch's message is delivered (the timeline's line). */
+  bus?: Pick<EventBus, 'emit'>
+}
+
+/** How a watch ended, as `ci.watch.ended` carries it. */
+export interface CiWatchEnded {
+  threadId: string
+  repo: string
+  /** `owner/name#7`, `owner/name:branch` or `owner/name:sha7`. */
+  target: string
+  result: 'passed' | 'failed' | 'no-checks' | 'timed-out' | 'error'
+  sha?: string
+  failed?: string[]
+  message?: string
+  url: string
+}
+
+function targetUrl(w: Pick<CiWatch, 'repo' | 'target'>): string {
+  const t = w.target
+  const base = `https://github.com/${w.repo}`
+  return t.kind === 'pr'
+    ? `${base}/pull/${t.number}`
+    : t.kind === 'branch'
+      ? `${base}/tree/${t.name}`
+      : `${base}/commit/${t.sha}`
 }
 
 export interface CiWatchOpts {
@@ -252,13 +278,26 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
 
   /** Deliver the one message and end the watch. A failed delivery keeps the
    *  watch, so a later poll tries again. */
-  async function finish(w: CiWatch, text: string) {
+  async function finish(
+    w: CiWatch,
+    text: string,
+    outcome: Pick<CiWatchEnded, 'result' | 'sha' | 'failed' | 'message'>
+  ) {
     if (!watches.has(w.id)) return // unwatched while this poll ran
     await deps.notify(w.threadKey, text)
     watches.delete(w.id)
     runtime.delete(w.id)
     save()
+    const payload: CiWatchEnded = {
+      threadId: w.threadKey,
+      repo: w.repo,
+      target: targetText(w),
+      ...outcome,
+      url: targetUrl(w)
+    }
+    deps.bus?.emit({ type: 'ci.watch.ended', timestamp: new Date(now()).toISOString(), source: 'ci-watch', payload })
   }
+  const failedOf = (snap: CiSnapshot) => snap.checks.filter((c) => c.state === 'failure').map((c) => c.name)
 
   async function poll(w: CiWatch): Promise<void> {
     const rt = runtime.get(w.id)
@@ -279,18 +318,29 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
         snap.checks.length > 0 && snap.missing.length === 0 && snap.checks.every((c) => c.state !== 'pending')
 
       // Red: report on the poll that first sees a failed check.
-      if (failed) return await finish(w, formatNotification(w, snap, t, 'failed'))
+      if (failed)
+        return await finish(w, formatNotification(w, snap, t, 'failed'), {
+          result: 'failed',
+          sha: snap.sha,
+          failed: failedOf(snap)
+        })
       if (allDone) {
         // Green: confirmed by the next poll, because checks register gradually.
         if (rt.finishedSince === undefined) rt.finishedSince = t
-        if (t - rt.finishedSince >= CI_POLL.settleMs) return await finish(w, formatNotification(w, snap, t, 'done'))
+        if (t - rt.finishedSince >= CI_POLL.settleMs)
+          return await finish(w, formatNotification(w, snap, t, 'done'), {
+            result: failedOf(snap).length ? 'failed' : 'passed',
+            sha: snap.sha,
+            failed: failedOf(snap)
+          })
         return
       }
       rt.finishedSince = undefined
       if (snap.checks.length === 0 && t - w.createdAt >= CI_POLL.noChecksTimeoutMs) {
         return await finish(
           w,
-          `[Cron: CI ${targetText(w)} @ ${new Date(t).toISOString()}] No CI checks appeared on ${targetText(w)} (${snap.sha.slice(0, 9)}) within ${CI_POLL.noChecksTimeoutMs / 60_000} minutes${w.checks?.length ? ` matching ${w.checks.join(', ')}` : ''}. Stopped watching.`
+          `[Cron: CI ${targetText(w)} @ ${new Date(t).toISOString()}] No CI checks appeared on ${targetText(w)} (${snap.sha.slice(0, 9)}) within ${CI_POLL.noChecksTimeoutMs / 60_000} minutes${w.checks?.length ? ` matching ${w.checks.join(', ')}` : ''}. Stopped watching.`,
+          { result: 'no-checks', sha: snap.sha, message: `no checks within ${CI_POLL.noChecksTimeoutMs / 60_000} min` }
         )
       }
       if (t >= w.expiresAt) {
@@ -301,7 +351,8 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
         ]
         return await finish(
           w,
-          `[Cron: CI ${targetText(w)} @ ${new Date(t).toISOString()}] Stopped watching ${targetText(w)}: timed out — ${waiting.join('; ')}.`
+          `[Cron: CI ${targetText(w)} @ ${new Date(t).toISOString()}] Stopped watching ${targetText(w)}: timed out — ${waiting.join('; ')}.`,
+          { result: 'timed-out', sha: snap.sha, message: `timed out — ${waiting.join('; ')}` }
         )
       }
     } catch (err) {
@@ -314,7 +365,8 @@ export function createCiWatchService(deps: CiWatchServiceDeps): CiWatchService {
         try {
           return await finish(
             w,
-            `[Cron: CI ${targetText(w)} @ ${new Date(t).toISOString()}] Stopped watching ${targetText(w)}: ${rt.errors} polls in a row failed (last error: ${message}).`
+            `[Cron: CI ${targetText(w)} @ ${new Date(t).toISOString()}] Stopped watching ${targetText(w)}: ${rt.errors} polls in a row failed (last error: ${message}).`,
+            { result: 'error', message: `${rt.errors} polls failed: ${message}` }
           )
         } catch (deliveryErr) {
           console.warn(TAG, `could not notify thread ${w.threadKey}:`, (deliveryErr as Error).message)

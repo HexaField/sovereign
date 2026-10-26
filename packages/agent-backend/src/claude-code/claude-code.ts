@@ -697,7 +697,7 @@ export function createClaudeCodeBackend(
   })
 
   /** End an agents_spawn run once: one parent message, result or failure. */
-  function finishRun(state: ClaudeSessionState, failure?: string): void {
+  function finishRun(state: ClaudeSessionState, failure?: string, ended?: 'stopped' | 'timed-out'): void {
     const run = state.run
     const parentKey = state.parentSessionKey
     if (!run || run.done || !parentKey) return
@@ -713,15 +713,17 @@ export function createClaudeCodeBackend(
     const childKey = state.sessionKey
     // An error result fails the run even after some text; the text goes along.
     const error = failure ?? run.error ?? (run.lastText ? undefined : 'ended without a result')
+    const durationMs = Date.now() - run.startedAt
     const parentMessage = formatSubagentResult({
       label: state.label ?? childKey,
       sessionKey: childKey,
-      durationMs: Date.now() - run.startedAt,
+      durationMs,
       result: run.lastText,
       error
     })
-    if (error) emitter.emit('subagent.failed', { parentKey, childKey, error, parentMessage })
-    else emitter.emit('subagent.completed', { parentKey, childKey, result: run.lastText ?? '', parentMessage })
+    const about = { parentKey, childKey, durationMs, ...(state.label ? { label: state.label } : {}) }
+    if (error) emitter.emit('subagent.failed', { ...about, error, parentMessage, ...(ended ? { ended } : {}) })
+    else emitter.emit('subagent.completed', { ...about, result: run.lastText ?? '', parentMessage })
   }
   emitter.on('subagent.spawned', (data) => {
     if (!data.parentKey) return
@@ -2830,6 +2832,13 @@ export function createClaudeCodeBackend(
       })
     }
 
+    emitter.emit('session.recycled', {
+      sessionKey,
+      preTokens,
+      postTokens,
+      reclaimedBytes: result.reclaimedBytes,
+      method: opts?.metricsMethod ?? 'recycle'
+    })
     if (announce) emitter.emit('chat.status', { sessionKey, status: 'idle' })
     if (!announce) {
       console.log(
@@ -2937,7 +2946,7 @@ export function createClaudeCodeBackend(
     const run: SubagentRun = { startedAt: Date.now() }
     const timeoutMs = opts.timeoutMs ?? SUBAGENT_TIMEOUT_MS
     run.timer = setTimeout(
-      () => finishRun(childState, `timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} min`),
+      () => finishRun(childState, `timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} min`, 'timed-out'),
       timeoutMs
     )
     run.timer.unref?.()
@@ -2964,7 +2973,7 @@ export function createClaudeCodeBackend(
   async function stopSubagent(childKey: string): Promise<void> {
     const state = internal.sessions.get(childKey)
     if (!state?.run) throw new Error(`agents_stop: ${childKey} is not an agents_spawn subagent`)
-    finishRun(state, 'stopped by the parent')
+    finishRun(state, 'stopped by the parent', 'stopped')
   }
 
   function getSessionFilePath(sessionKey: string): string | null {

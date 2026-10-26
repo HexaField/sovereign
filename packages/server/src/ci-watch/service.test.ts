@@ -154,6 +154,49 @@ describe('ci-watch', () => {
     expect(svc.list()).toHaveLength(0)
   })
 
+  it('tells the bus how each watch ended (the timeline reads it), once delivered', async () => {
+    const ended: Array<Record<string, unknown>> = []
+    const bus = {
+      emit: (e: { type: string; payload: unknown }) =>
+        void (e.type === 'ci.watch.ended' && ended.push(e.payload as Record<string, unknown>))
+    }
+    const svc = createCiWatchService({
+      dataDir,
+      github: gh.get,
+      now: () => clock,
+      notify: async () => {},
+      bus: bus as any
+    })
+    gh.prHead.set(7, 'red')
+    gh.runs.set('red', [{ name: 'lint', status: 'in_progress' }])
+    gh.runs.set('sha-of-main', [{ name: 'build', status: 'in_progress' }])
+    await svc.watch({ threadKey: 't1', repo: 'o/r', target: { kind: 'pr', number: 7 } })
+    await svc.watch({ threadKey: 't2', repo: 'o/r', target: { kind: 'branch', name: 'main' } })
+    gh.runs.set('red', [{ name: 'lint', status: 'completed', conclusion: 'failure' }])
+    gh.runs.set('sha-of-main', [{ name: 'build', status: 'completed', conclusion: 'success' }])
+    await advance(svc, 30_000)
+    expect(ended).toEqual([
+      {
+        threadId: 't1',
+        repo: 'o/r',
+        target: 'o/r#7',
+        result: 'failed',
+        sha: 'red',
+        failed: ['lint'],
+        url: 'https://github.com/o/r/pull/7'
+      },
+      {
+        threadId: 't2',
+        repo: 'o/r',
+        target: 'o/r:main',
+        result: 'passed',
+        sha: 'sha-of-main',
+        failed: [],
+        url: 'https://github.com/o/r/tree/main'
+      }
+    ])
+  })
+
   it('reports red within one poll and green within two, measured from the change on GitHub', async () => {
     gh.prHead.set(7, 'red')
     gh.prHead.set(8, 'green')

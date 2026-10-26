@@ -480,7 +480,9 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   // the service falls back to direct routing — preserves test/CI defaults.
   // `opts.kind` (e.g. 'cron') flows through so the chat module can emit a
   // role-correct synthetic chat.turn (system for cron, user otherwise).
-  let chatInjector: ((threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) | undefined
+  let chatInjector:
+    | ((threadId: string, text: string, opts?: { kind?: 'cron' | 'subagent' }) => Promise<void>)
+    | undefined
   const pendingParentMessages: Array<[string, string]> = []
   cronService = createCronService({
     routing: routingBackend,
@@ -494,7 +496,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   // Expose the setter so bootstrap can plug in the chat module after it's
   // constructed without restructuring the existing return shape.
   ;(cronService as any).setInjectChatMessage = (
-    fn: ((threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) | undefined
+    fn: ((threadId: string, text: string, opts?: { kind?: 'cron' | 'subagent' }) => Promise<void>) | undefined
   ): void => {
     chatInjector = fn
     for (const [parentKey, text] of pendingParentMessages.splice(0)) deliverToParent(parentKey, text)
@@ -513,7 +515,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
       pendingParentMessages.push([parentKey, text])
       return
     }
-    chatInjector(parentKey, text, { kind: 'cron' }).catch((err) =>
+    chatInjector(parentKey, text, { kind: 'subagent' }).catch((err) =>
       console.warn(`[wiring] subagent result delivery failed for ${parentKey}:`, err)
     )
   }

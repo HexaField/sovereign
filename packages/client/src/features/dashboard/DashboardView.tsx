@@ -54,6 +54,7 @@ const ThreadList = lazy(() => import('./ThreadList'))
 const DeviceCard = lazy(() => import('./DeviceCard'))
 const TailscaleCard = lazy(() => import('./TailscaleCard'))
 const WeatherCard = lazy(() => import('./WeatherCard'))
+const TimelinePanel = lazy(() => import('../timeline/TimelinePanel'))
 
 export function DashboardView() {
   return (
@@ -61,6 +62,11 @@ export function DashboardView() {
       {/* Thread list — main column */}
       <div class="flex-[3] overflow-hidden border-r" style={{ 'border-color': 'var(--c-border)' }}>
         <ThreadList />
+      </div>
+
+      {/* Timeline — what happened inside Sovereign, newest first */}
+      <div class="min-w-0 flex-[3] overflow-hidden border-r" style={{ 'border-color': 'var(--c-border)' }}>
+        <TimelinePanel />
       </div>
 
       {/* System cards — sidebar */}

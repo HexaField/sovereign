@@ -31,6 +31,11 @@
       "types": "./src/forge.ts",
       "development": "./src/forge.ts",
       "default": "./dist/forge.js"
+    },
+    "./timeline": {
+      "types": "./src/timeline.ts",
+      "development": "./src/timeline.ts",
+      "default": "./dist/timeline.js"
     }
   },
   "publishConfig": {
@@ -39,7 +44,8 @@
       "./fold-system-events": "./dist/fold-system-events.js",
       "./ask-user-question": "./dist/ask-user-question.js",
       "./subagent-result": "./dist/subagent-result.js",
-      "./forge": "./dist/forge.js"
+      "./forge": "./dist/forge.js",
+      "./timeline": "./dist/timeline.js"
     },
     "main": "dist/index.js",
     "types": "dist/index.d.ts"

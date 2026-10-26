@@ -30,7 +30,7 @@ import type { StructureOf } from '@sovereign/graphcoder-core/contract'
 import type { HostForges } from '@sovereign/orgs'
 import { applyView, buildGraph, searchGraph, windowGraph, type BuiltGraph } from './build.js'
 import { createRepoCacheStore, readJson, writeJsonAtomic } from './cache.js'
-import { buildDigest, createEventLog, safeSegment, triage, type EventLog } from './events.js'
+import { buildDigest, createEventLog, forgeEventLine, safeSegment, triage, type EventLog } from './events.js'
 import { buildOverlay, currentBranch, resolveCheckouts, type OverlayResult } from './overlay.js'
 import { isPlanPath, planMakesStream, scanPlans, type Plan } from './plans.js'
 import { resolveScope, type MembraneScope, type ScopeSource } from './scope.js'
@@ -543,6 +543,27 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     deps.bus.emit({ type, timestamp: iso(), source: 'forge', payload })
   }
 
+  /**
+   * Log a membrane's admitted, triaged events and tell the bus
+   * (`forge.events`, read by the timeline): only what passed the trust
+   * filter reaches here, and comment text stays in the log.
+   */
+  function logEvents(
+    membrane: string,
+    via: 'sync' | 'tracked' | 'plans',
+    events: TriagedEvent[],
+    nodes: Map<string, WorkNode>
+  ) {
+    if (!events.length) return
+    state(membrane).log.append(events)
+    emit('forge.events', {
+      membrane,
+      via,
+      count: events.length,
+      events: events.map((e) => forgeEventLine(e, nodes.get(e.nodeId)))
+    })
+  }
+
   /** One sync per membrane at a time; a request during one runs after it. */
   const syncChains = new Map<string, Promise<unknown>>()
   function sync(membrane: string, mode: 'open' | 'all' = 'open'): Promise<{ events: number; changed: boolean }> {
@@ -627,7 +648,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       }
 
       const triaged = await triageAll(trustedEvents(membrane, scope, events), graph, tasks, await identityOf(scope))
-      s.log.append(triaged)
+      logEvents(membrane, 'sync', triaged, nodes)
 
       const ts = await syncTasks(deps.tasks, {
         tasks,
@@ -748,7 +769,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       if (!deps.scope.getMembrane(m)) continue
       const keys = new Set(g.tasks.filter((t) => t.membrane === m).map((t) => t.key))
       const mine = triaged.filter((e) => keys.has(e.nodeId))
-      if (mine.length) state(m).log.append(mine)
+      logEvents(m, 'tracked', mine, nodes)
       if (res.changed || mine.length || ts.updated) emit('forge.updated', { membrane: m })
     }
     return res.events.length
@@ -982,7 +1003,10 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
   async function plansChanged(m: string, events: ForgeEvent[]) {
     const s = state(m)
     const { graph, tasks } = await full(m)
-    if (events.length) s.log.append(await triageAll(events, graph, tasks, await identityOf(s.scope ?? scopeOf(m))))
+    if (events.length) {
+      const triaged = await triageAll(events, graph, tasks, await identityOf(s.scope ?? scopeOf(m)))
+      logEvents(m, 'plans', triaged, new Map(graph.nodes.map((n) => [n.id, n])))
+    }
     const streams = await syncPlanStreams(m, tasks)
     if (events.length || streams) emit('forge.updated', { membrane: m })
   }

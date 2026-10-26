@@ -112,6 +112,14 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
       },
       async send(sessionKey, text) {
         const key = resolveSessionKey(sessionKey)
+        // This bypasses the chat queue: say who sent it, so the turn it starts reads as
+        // started by another thread (the chat module holds it until the session goes busy).
+        bus?.emit({
+          type: 'chat.message.injected',
+          timestamp: new Date().toISOString(),
+          source: 'agent-backend',
+          payload: { sessionKey: key, via: 'agent', preview: text.slice(0, 200) }
+        })
         await routing.forSession(key).sendMessage(key, text)
       },
       async history(sessionKey, limit) {

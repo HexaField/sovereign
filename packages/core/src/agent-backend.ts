@@ -146,6 +146,15 @@ export interface AgentBackendEvents {
     errorType?: string
     backendKind?: AgentBackendKind
   }
+  /** A session was recycled: its transcript pruned, to resume on the next message. */
+  'session.recycled': {
+    sessionKey: string
+    preTokens: number
+    postTokens: number
+    reclaimedBytes: number
+    method: 'recycle' | 'auto-recycle'
+    backendKind?: AgentBackendKind
+  }
   /** A subagent was spawned by a parent session */
   'subagent.spawned': {
     parentKey: string
@@ -159,6 +168,9 @@ export interface AgentBackendEvents {
     parentKey: string
     childKey: string
     result: string
+    label?: string
+    /** agents_spawn runs: how long the run took. */
+    durationMs?: number
     tokenUsage?: TokenUsage
     backendKind?: AgentBackendKind
     /** Set for agents_spawn runs: the message to deliver into the parent thread. */
@@ -169,6 +181,10 @@ export interface AgentBackendEvents {
     parentKey: string
     childKey: string
     error: string
+    label?: string
+    durationMs?: number
+    /** The run was cut off rather than failing: `agents_stop`, or its timeout. */
+    ended?: 'stopped' | 'timed-out'
     backendKind?: AgentBackendKind
     /** Set for agents_spawn runs: the message to deliver into the parent thread. */
     parentMessage?: string

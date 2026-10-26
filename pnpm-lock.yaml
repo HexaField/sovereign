@@ -862,6 +862,9 @@ importers:
       '@sovereign/threads':
         specifier: workspace:*
         version: link:../threads
+      '@sovereign/timeline':
+        specifier: workspace:*
+        version: link:../timeline
       '@sovereign/voice':
         specifier: workspace:*
         version: link:../voice
@@ -1095,6 +1098,28 @@ importers:
         specifier: ^7.2.2
         version: 7.2.2
 
+  packages/timeline:
+    dependencies:
+      '@sovereign/core':
+        specifier: workspace:*
+        version: link:../core
+      '@sovereign/primitives':
+        specifier: workspace:*
+        version: link:../primitives
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
+      '@types/supertest':
+        specifier: ^7.2.0
+        version: 7.2.0
+      supertest:
+        specifier: ^7.2.2
+        version: 7.2.2
+
   packages/voice:
     dependencies:
       '@sovereign/core':
@@ -1144,6 +1169,9 @@ importers:
       '@sovereign/tasks':
         specifier: workspace:*
         version: link:../tasks
+      '@sovereign/timeline':
+        specifier: workspace:*
+        version: link:../timeline
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6

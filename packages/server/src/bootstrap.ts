@@ -120,6 +120,7 @@ import {
   type ForgeService,
   type ScopeSource
 } from '@sovereign/work-graph'
+import { createTimelineRouter, createTimelineService, registerTimelineChannel } from '@sovereign/timeline'
 import { createAd4mService } from '@sovereign/ad4m'
 import {
   createPresenceModule,
@@ -375,6 +376,13 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     })
   }
   const threadManager = createThreadManager(bus, dataDir)
+
+  // Timeline: one line per thing that happened (forge, CI, turns, subagents,
+  // scheduler), from the bus. Started this early so boot-time turns (resume) land too.
+  const timeline = createTimelineService({ bus, dataDir, labelOf: (id) => threadManager.get(id)?.label })
+  app.use(createTimelineRouter(timeline, authMiddleware))
+  registerTimelineChannel(wsHandler, timeline)
+  timeline.start()
   // First-boot seed (config-driven via `cfg.seed`). The runtime makes NO
   // standing assumptions about which threads or membranes exist — this just
   // gives a fresh install one usable thread + its membrane. Both pieces are
@@ -876,7 +884,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     chatModule.injectExternalTurn(threadId, content)
   }
   chatHandleHolder.sendToThread = async (threadId, text, origin) => {
-    await chatModule.handleSend(threadId, text, undefined, { origin })
+    await chatModule.handleSend(threadId, text, undefined, { origin, via: 'agent' })
   }
 
   // Late-bind importItem and sendPrompt onto taskMcpDeps. These require
@@ -910,12 +918,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     if (!task) throw new Error(`Task not found: ${taskId}`)
     if (!task.threadId) throw new Error(`Task ${taskId} has no assigned thread — assign one first.`)
     await chatModule.handleSend(task.threadId, prompt, undefined, {
-      origin: { modality: 'text' as const }
+      origin: { modality: 'text' as const },
+      via: 'agent'
     })
   }
 
   const ciWatch = createCiWatchService({
     dataDir,
+    bus,
     notify: async (threadKey, text) => {
       if (!threadManager.get(threadKey)) {
         console.warn(`[ci-watch] thread ${threadKey} no longer exists — dropping its CI notification`)
@@ -993,7 +1003,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       busy: (id) => (liveThread(id)?.agentStatus ?? 'idle') !== 'idle',
       // Like a cron fire: queued, never interrupting, shown as a system card.
       send: async (id, text) => {
-        await chatModule.handleSend(id, text, undefined, { synthRole: 'system' })
+        await chatModule.handleSend(id, text, undefined, { synthRole: 'system', via: 'rethink' })
       },
       onStatus: (id, cb) => {
         const h = (d: { threadId?: string; status?: string }) => {
@@ -1338,7 +1348,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       .filter(Boolean)
       .join('\n')
     void chatModule.handleSend(internalId, errorText, undefined, {
-      origin: { modality: 'text' as const }
+      origin: { modality: 'text' as const },
+      via: 'system'
     })
   })
 
@@ -1616,11 +1627,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   // Without this, the user-message portion of a cron fire only surfaced in
   // the open thread after a manual refresh.
   const setInjectChatMessage = (cronService as any).setInjectChatMessage as
-    | ((fn?: (threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) => void)
+    | ((fn?: (threadId: string, text: string, opts?: { kind?: 'cron' | 'subagent' }) => Promise<void>) => void)
     | undefined
   if (typeof setInjectChatMessage === 'function') {
     setInjectChatMessage((threadId, text, opts) =>
-      chatModule.handleSend(threadId, text, undefined, { synthRole: opts?.kind === 'cron' ? 'system' : 'user' })
+      chatModule.handleSend(threadId, text, undefined, {
+        synthRole: opts?.kind ? 'system' : 'user',
+        ...(opts?.kind ? { via: opts.kind } : {})
+      })
     )
   }
 
@@ -1785,6 +1799,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     shutdown() {
       // Forge first: it writes tasks. Then the task + Forge meta snapshots
       // (the outbox is already on disk).
+      timeline.stop()
       forgeService.stop()
       forgePersistence.dispose()
       ciWatch.dispose()

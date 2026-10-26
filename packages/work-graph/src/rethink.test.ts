@@ -403,6 +403,11 @@ describe('rethink runner', () => {
     expect(
       events.filter((e) => e.type === 'forge.rethink').map((e) => (e.payload as { status: string }).status)
     ).toEqual(['running', 'done'])
+    // What the timeline needs to say who started it and what it did.
+    expect(events.filter((e) => e.type === 'forge.rethink').map((e) => e.payload)).toEqual([
+      { membrane: 'acme', runId: res.runId, status: 'running', trigger: 'manual', threadId: rt, events: 1 },
+      { membrane: 'acme', runId: res.runId, status: 'done', trigger: 'manual', threadId: rt, events: 1, actions: 0 }
+    ])
 
     // Empty digest: no run.
     expect(await service.rethink('acme')).toEqual({ ran: false, count: 0 })
@@ -450,6 +455,17 @@ describe('rethink runner', () => {
       })
     ).toEqual({ superseded: true, taskId: task.id, streamId: stream.id })
     expect(await port.get(task.id)).toMatchObject({ state: 'cancelled', transientState: `Opened as ${WIDGET}#51` })
+    expect(events.filter((e) => e.type === 'forge.rethink.action').map((e) => e.payload)).toEqual([
+      {
+        membrane: 'acme',
+        runId,
+        action: 'supersede',
+        nodeId: `task:${task.id}`,
+        by: nid(51),
+        title: 'PR 2.1 · widget · ratio',
+        reason: 'Gear ratio is that slice'
+      }
+    ])
     expect(runner.notes('acme')[nid(51)]).toContainEqual(
       expect.objectContaining({
         kind: 'note',
@@ -486,6 +502,28 @@ describe('rethink runner', () => {
     })
     expect((await port.listRelated('acme')).some((e) => e.kind === 'depends-on')).toBe(false)
     await expect(runner.tool(rt, 'forge_depend', { ...dep, remove: true })).rejects.toMatchObject({ status: 404 })
+    expect(
+      events.filter((e) => e.type === 'forge.rethink.action').map((e) => e.payload as Record<string, unknown>)
+    ).toEqual([
+      {
+        membrane: 'acme',
+        runId,
+        action: 'depend',
+        from: nid(51),
+        to: stream.id,
+        reason: 'needs the gears first',
+        removed: false
+      },
+      {
+        membrane: 'acme',
+        runId,
+        action: 'depend',
+        from: nid(51),
+        to: stream.id,
+        reason: 'Gears shipped',
+        removed: true
+      }
+    ])
 
     status(rt, 'working')
     status(rt, 'idle')
