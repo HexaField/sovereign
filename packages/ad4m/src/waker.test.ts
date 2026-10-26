@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { parseLiteralTarget, resolveParents, startWaker } from './waker.js'
+import { parseLiteralTarget, startWaker } from './waker.js'
 import type { EventBus } from '@sovereign/core'
 
 // ── parseLiteralTarget ────────────────────────────────────────────────────────
@@ -48,47 +48,7 @@ describe('parseLiteralTarget', () => {
   })
 })
 
-// ── resolveParents (SPARQL result-shape regression) ───────────────────────────
-//
-// The waker resolves a mention's parent channel with a SPARQL query, then feeds
-// the parent through the wake as `channelAddress`. presence_reply_ad4m needs that
-// channel to post the reply — an empty channel silently no-ops the write-back.
-// AD4M's querySparql returns a FLAT array of rows; a prior version read the W3C
-// `results.bindings` shape, so every parent lookup came back empty and no ad4m
-// reply ever landed. These pin the accepted shapes.
-
-function clientWithSparql(result: unknown) {
-  return { perspective: { querySparql: vi.fn().mockResolvedValue(result) } } as any
-}
-
-describe('resolveParents — querySparql result shapes', () => {
-  it('parses the flat-array shape AD4M actually returns', async () => {
-    // [{ source: "<iri>" }] — the exact shape observed from the live executor.
-    const client = clientWithSparql([{ source: 'a4sv://channel' }])
-    expect(await resolveParents(client, 'uuid-1', 'a4sv://channel/msg/1')).toEqual(['a4sv://channel'])
-  })
-
-  it('returns every parent when a message has more than one', async () => {
-    const client = clientWithSparql([{ source: 'chan://a' }, { source: 'chan://b' }])
-    expect(await resolveParents(client, 'uuid-1', 'msg://1')).toEqual(['chan://a', 'chan://b'])
-  })
-
-  it('still accepts the W3C results.bindings {value} shape', async () => {
-    const client = clientWithSparql({ results: { bindings: [{ source: { value: 'chan://w3c' } }] } })
-    expect(await resolveParents(client, 'uuid-1', 'msg://1')).toEqual(['chan://w3c'])
-  })
-
-  it('returns [] for an empty result (message has no parent)', async () => {
-    expect(await resolveParents(clientWithSparql([]), 'uuid-1', 'msg://1')).toEqual([])
-  })
-
-  it('returns [] when querySparql throws', async () => {
-    const client = { perspective: { querySparql: vi.fn().mockRejectedValue(new Error('boom')) } } as any
-    expect(await resolveParents(client, 'uuid-1', 'msg://1')).toEqual([])
-  })
-})
-
-// ── buildMentionQuery (via waker integration) ─────────────────────────────────
+// ── startWaker (identity and the watch list) ─────────────────────────────────
 
 function makeMockBus(): EventBus {
   return {
@@ -112,19 +72,13 @@ function makeMockClientManager(did: string, profileLinks: Array<{ predicate: str
   const mockClient = {
     agent: {
       me: vi.fn().mockResolvedValue(agent),
-      status: vi.fn(),
-      addAgentStatusChangedListener: vi.fn(),
-      addUpdatedListener: vi.fn(),
-      addAppChangedListener: vi.fn()
+      status: vi.fn()
     },
     perspective: {
       all: vi.fn().mockResolvedValue([]),
       queryLinks: vi.fn().mockResolvedValue([])
     },
-    runtime: {
-      addMessageCallback: vi.fn(),
-      addNotificationTriggeredCallback: vi.fn()
-    }
+    on: vi.fn(() => () => {})
   }
   return {
     getClient: vi.fn().mockReturnValue(mockClient),

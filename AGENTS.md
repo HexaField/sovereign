@@ -6,7 +6,7 @@ Read [PRINCIPLES.md](./PRINCIPLES.md) before making any architectural or impleme
 
 ## Setup — ad4m submodule
 
-The `@coasys/ad4m` SDK lives in a git submodule at `vendor/coasys/ad4m` (pinned to `coasys/ad4m` `dev`); `pnpm-workspace.yaml` resolves `@coasys/ad4m` from its `core/`. Check it out **before** `pnpm install`, or workspace resolution fails on the missing package.
+The `@coasys/ad4m` SDK lives in a git submodule at `vendor/coasys/ad4m` (pinned to the `coasys/ad4m` commit the AD4M executor runs, currently the `staging` release 0.13.1-staging.4; SDK and executor move together, since the RPC and event API change between releases); `pnpm-workspace.yaml` resolves `@coasys/ad4m` from its `core/`. Check it out **before** `pnpm install`, or workspace resolution fails on the missing package.
 
 ```bash
 git clone --recurse-submodules <repo>          # fresh clone
@@ -14,7 +14,11 @@ git submodule update --init --recursive        # existing clone
 pnpm install && pnpm run build                  # build:vendor compiles core first
 ```
 
-To move the pin: `cd vendor/coasys/ad4m && git fetch && git checkout <commit>`, then commit the updated gitlink in the superproject.
+To move the pin: `cd vendor/coasys/ad4m && git fetch && git checkout <commit>`, then commit the updated gitlink in the superproject. Then rebuild the SDK's JavaScript too, not only its types: `cd vendor/coasys/ad4m/core && pnpm install --ignore-workspace && npx tsc; npx rollup -c rollup.config.js` (`tsc` reports type errors in the SDK's own sources but still emits). `build:vendor` emits declarations only, so without this the server runs the old `lib/index.js` against the new types.
+
+**SDK API changes to know (0.13.1-staging):** events go through one `client.on(<event>, handler)` (`agent-status-changed`, `agent-updated`, `apps-changed`, `notification-triggered`, …; there is no direct-message event); `PerspectiveProxy.addSubjectClass` is gone, use `addSdna(name, '', 'subject_class', shaclJson)`. Packages that declare their own narrow interface over the SDK (`tasks/src/ad4m-perspective.ts`) type-check against that interface, not the SDK, so a removed method only fails at run time: run `ad4m.integration.test.ts` against a live executor after moving the pin.
+
+**The mention waker** (`packages/ad4m/src/waker.ts`) runs the SDK's `WakerSubscriptionManager` with one subscription per watched perspective (every neighbourhood, plus `POST /api/ad4m/watch/perspectives`): a model query over the built-in `ad4m://TextContent` (`mentionSubscription`, the executor's `get_mention_waker_config` built locally because the server talks RPC, not MCP). The manager matches the agent name and DID as whole words, skips the agent's own links, resolves parents and ancestors through `ad4m://Container`, takes what a new subscription opens on as history, and persists a mention only once delivered (`ad4m-watched.json`, keyed `mention-<uuid>`; older uuid keys are migrated on load). Each mention emits `ad4m.perspective.mention` and `ad4m.thread.message` (item, parents, ancestors, body), which the server injects into the presence-internal thread.
 
 ### A new git worktree of this repo
 

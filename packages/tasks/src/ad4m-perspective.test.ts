@@ -66,8 +66,8 @@ function fakeProxy(uuid: string, name: string, isUp: () => boolean = () => true)
     async subjectClasses() {
       return [...classes.keys()]
     },
-    async addSubjectClass(className: string, json: string) {
-      classes.set(className, json)
+    async addSdna(className: string, _code: string, _type: string, json?: string) {
+      classes.set(className, json ?? '')
     }
   }
 }

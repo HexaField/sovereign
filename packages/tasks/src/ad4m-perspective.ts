@@ -38,7 +38,7 @@ interface ProxyLike {
   get(q: LinkQuery): Promise<Array<{ data: LinkTriple; [k: string]: unknown }>>
   linkMutations(m: { additions: LinkTriple[]; removals: unknown[] }): Promise<unknown>
   subjectClasses(): Promise<string[]>
-  addSubjectClass(name: string, shaclJson: string): Promise<unknown>
+  addSdna(name: string, sdnaCode: string, sdnaType: 'subject_class', shaclJson?: string): Promise<unknown>
 }
 
 interface CachedState {
@@ -140,7 +140,7 @@ export function createForgePerspective(opts: ForgePerspectiveOptions): ForgePers
       for (const [className, shape] of Object.entries(FORGE_SHACL_CLASSES)) {
         if (existing.includes(className)) continue
         try {
-          await proxy.addSubjectClass(className, JSON.stringify(shape))
+          await proxy.addSdna(className, '', 'subject_class', JSON.stringify(shape))
           log.log(TAG, `registered subject class ${className}`)
         } catch (err) {
           log.warn(TAG, `failed to register ${className}: ${(err as Error)?.message}`)

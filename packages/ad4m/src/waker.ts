@@ -1,8 +1,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { QuerySubscriptionProxy, LinkQuery } from '@coasys/ad4m'
+import { QuerySubscriptionProxy, WakerSubscriptionManager } from '@coasys/ad4m'
+import type { MentionMessage, WakerSubscription } from '@coasys/ad4m'
 import type { EventBus } from '@sovereign/core'
 import type { Ad4mClientManager, Ad4mTypedClient } from './client.js'
+
+// The mention waker: one SDK WakerSubscriptionManager per executor connection
+// (whole-word matching, own writes skipped, parents and ancestors through the
+// built-in Container, delivery persisted only once it reached the bus), fed one
+// TextContent subscription per watched perspective. Sovereign adds what is its
+// own: which perspectives to watch, the agent's name, and the bus events the
+// server turns into a presence-internal message.
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -21,33 +29,33 @@ export interface WatcherController {
   getWatched(): WatchEntry[]
 }
 
+interface AgentIdentity {
+  did: string
+  /** Names people use to address the agent. */
+  names: string[]
+}
+
 // ── Literal target parser ──────────────────────────────────────────────────────
 
 /**
  * Decode an AD4M literal: target to its plain string value.
- * Canonical formats produced by current executors:
  *   literal:string:URL_ENCODED_VALUE  → decodeURIComponent(value)
  *   literal:json:URL_ENCODED_JSON     → decodeURIComponent → JSON.parse → .data
  */
 export function parseLiteralTarget(target: string): string | null {
   let rest: string | null = null
   let isJson = false
-
   if (target.startsWith('literal:json:')) {
     rest = target.slice('literal:json:'.length)
     isJson = true
   } else if (target.startsWith('literal:string:')) {
     rest = target.slice('literal:string:'.length)
   }
-
   if (rest === null) return null
-
   try {
     const decoded = decodeURIComponent(rest)
     if (!isJson) return decoded.trim()
-    const obj = JSON.parse(decoded)
-    // AD4M expression JSON: { author, timestamp, data, proof }
-    const data = obj?.data
+    const data = JSON.parse(decoded)?.data
     if (typeof data === 'string') return data.trim()
     if (typeof data === 'object' && data !== null) return JSON.stringify(data)
     return null
@@ -56,145 +64,57 @@ export function parseLiteralTarget(target: string): string | null {
   }
 }
 
-// ── Agent identity ─────────────────────────────────────────────────────────────
-
-interface AgentIdentity {
-  did: string
-  /** Profile names from flux://profile links (username, given_name, family_name). */
-  names: string[]
-}
-
-/**
- * Fetch the agent's DID and, optionally, profile names from their public perspective.
- *
- * Pass skipNames=true when a configuredAgentName is available — the profile
- * name loop is skipped entirely, which avoids any risk of unparsed literal:json:
- * expression blobs leaking into the mention SPARQL query as bogus CONTAINS terms
- * (the same bug present in the executor's get_mention_waker_config tool).
- *
- * Profile links when resolved: source = "flux://profile",
- * predicates = sioc://has_username | sioc://has_given_name | sioc://has_family_name.
- */
-async function resolveAgentIdentity(client: Ad4mTypedClient, skipNames = false): Promise<AgentIdentity | null> {
+/** The agent's DID, and the profile names on its public perspective unless a configured name replaces them. */
+async function resolveAgentIdentity(client: Ad4mTypedClient, configuredName?: string): Promise<AgentIdentity | null> {
   try {
-    const agent = await client.agent.me()
-    const did = (agent as any).did as string | undefined
+    const agent = (await client.agent.me()) as any
+    const did = agent?.did as string | undefined
     if (!did) return null
-
-    if (skipNames) return { did, names: [] }
-
-    const names: string[] = []
-    const PROFILE_SOURCE = 'flux://profile'
+    if (configuredName) return { did, names: [configuredName] }
     const NAME_PREDICATES = new Set(['sioc://has_username', 'sioc://has_given_name', 'sioc://has_family_name'])
-
-    for (const link of (agent as any).perspective?.links ?? []) {
-      if (link?.data?.source !== PROFILE_SOURCE) continue
-      if (!NAME_PREDICATES.has(link?.data?.predicate ?? '')) continue
-
-      const raw: string = link?.data?.target ?? ''
-      const parsed = parseLiteralTarget(raw)
-      if (parsed && parsed.length > 1 && !names.includes(parsed)) {
-        names.push(parsed)
-      }
+    const names: string[] = []
+    for (const link of agent.perspective?.links ?? []) {
+      if (link?.data?.source !== 'flux://profile' || !NAME_PREDICATES.has(link?.data?.predicate ?? '')) continue
+      const name = parseLiteralTarget(link?.data?.target ?? '')
+      if (name && name.length > 1 && !names.includes(name)) names.push(name)
     }
-
     return { did, names }
   } catch {
     return null
   }
 }
 
-// ── Mention SPARQL query ───────────────────────────────────────────────────────
+// ── The subscription ───────────────────────────────────────────────────────────
+
+const TEXT_CONTENT = 'ad4m://TextContent'
+/** Newest mentions the query returns (the executor's MENTION_WINDOW). */
+const MENTION_WINDOW = 50
 
 /**
- * Build a SPARQL query that fires only when a message's body target contains
- * the agent's name(s) or DID as a substring.
- *
- * Uses <ad4m://fn/parse_literal> — a built-in AD4M executor function that
- * decodes literal: targets (URL-encoded strings, signed JSON) before CONTAINS
- * matching, ensuring we match against actual message content rather than raw URIs.
- *
- * Mirrors the logic in the AD4M executor's get_mention_waker_config MCP tool
- * (rust-executor/src/mcp/tools/subscriptions.rs).
+ * The mention subscription for one perspective: the executor's
+ * `get_mention_waker_config` (rust-executor/src/mcp/tools/subscriptions.rs,
+ * `build_mention_query`), built here because Sovereign talks to the executor
+ * over RPC, not MCP. A model query over the built-in TextContent: any record
+ * whose text, in a link another agent wrote, contains a name or the DID. The
+ * SDK manager then keeps only whole-word matches of `terms`.
  */
-function buildMentionQuery(identity: AgentIdentity): string {
-  const terms = [...new Set([...identity.names.map((n) => n.toLowerCase()), identity.did.toLowerCase()])]
-
-  const conditions = terms.map((t) => `CONTAINS(LCASE(STR(<ad4m://fn/parse_literal>(?target))), "${t}")`).join(' || ')
-
-  // Exclude AD4M proof/ontology metadata (ad4m://ontology/proofKey, .../signature,
-  // …): every authored link carries a proof whose target is the author DID, so a
-  // DID search term otherwise matches all of that metadata — waking on the agent's
-  // own links instead of real @mentions in message bodies.
-  return `
-    SELECT ?source ?predicate ?target WHERE {
-      ?source ?predicate ?target .
-      FILTER(isIRI(?source) && isIRI(?predicate))
-      FILTER(!STRSTARTS(STR(?predicate), "ad4m://ontology/"))
-      FILTER(${conditions})
-    }
-  `
-}
-
-// ── Parent resolution ──────────────────────────────────────────────────────────
-
-/**
- * Given a message node address, find its parent channels/conversations
- * by querying for things that have it as a child via ad4m://has_child.
- */
-export async function resolveParents(client: Ad4mTypedClient, uuid: string, msgAddr: string): Promise<string[]> {
-  try {
-    const query = `SELECT ?source WHERE { ?source <ad4m://has_child> <${msgAddr}> . }`
-    const result = (await (client.perspective as any).querySparql(uuid, query)) as any
-    // AD4M's querySparql returns a FLAT array of rows — `[{ source: "<iri>" }]` —
-    // with the SELECT variable as a direct key. (The mention query above relies on
-    // the same shape.) Accept the W3C `results.bindings` `{ value }` shape too, so
-    // this survives an executor that switches to standard SPARQL-JSON.
-    const rows: any[] = Array.isArray(result) ? result : (result?.results?.bindings ?? [])
-    return rows.map((r: any) => (r?.source?.value ?? r?.source) as string).filter(Boolean)
-  } catch {
-    return []
+export function mentionSubscription(perspective: string, identity: AgentIdentity): WakerSubscription {
+  const terms = [...new Set([...identity.names, identity.did].filter(Boolean))]
+  const query = {
+    where: { OR: terms.map((term) => ({ text: { contains: term, author: { not: identity.did } } })) },
+    order: { timestamp: 'DESC' },
+    limit: MENTION_WINDOW,
+    properties: ['text']
   }
-}
-
-// ── Body resolution ────────────────────────────────────────────────────────────
-
-/**
- * Resolve the body text of a message node.
- * Queries all links FROM the message address and returns the first literal string found.
- */
-async function resolveChildBody(client: Ad4mTypedClient, uuid: string, msgAddr: string): Promise<string | null> {
-  try {
-    const links = await client.perspective.queryLinks(uuid, new LinkQuery({ source: msgAddr }))
-    for (const link of links ?? []) {
-      const body = parseLiteralTarget(link?.data?.target ?? '')
-      if (body) return body
-    }
-  } catch {
-    // Body may not have synced yet — not a hard failure
+  return {
+    id: `mention-${perspective}`,
+    type: 'mention',
+    perspective,
+    channel: '',
+    query: JSON.stringify(query),
+    className: TEXT_CONTENT,
+    terms
   }
-  return null
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-function emitBusEvent(bus: EventBus, type: string, payload: unknown) {
-  bus.emit({ type, source: 'ad4m', timestamp: new Date().toISOString(), payload })
-}
-
-function emitThreadMessage(
-  bus: EventBus,
-  threadKey: string,
-  threadLabel: string,
-  text: string,
-  context?: {
-    perspectiveUuid: string
-    channelAddress?: string
-    messageAddress: string
-    body?: string
-  }
-) {
-  emitBusEvent(bus, 'ad4m.thread.message', { threadKey, threadLabel, text, context })
 }
 
 // ── Persistence ────────────────────────────────────────────────────────────────
@@ -206,285 +126,157 @@ interface PersistedWatch {
 }
 interface PersistedFile {
   watched: PersistedWatch[]
-  /** Per-perspective seen message source addresses — survives restarts to avoid re-firing. */
+  /** Delivered mention addresses per subscription id (`mention-<uuid>`); older files key them by uuid. */
   seenMessages: Record<string, string[]>
 }
 
-function loadPersisted(watchedFile: string): PersistedFile {
+function loadPersisted(file: string): PersistedFile {
   try {
-    const raw = fs.readFileSync(watchedFile, 'utf-8')
-    const data = JSON.parse(raw) as PersistedFile
-    return {
-      watched: data.watched ?? [],
-      seenMessages: data.seenMessages ?? {}
+    const data = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<PersistedFile>
+    const seen: Record<string, string[]> = {}
+    for (const [key, ids] of Object.entries(data.seenMessages ?? {})) {
+      const id = key.startsWith('mention-') ? key : `mention-${key}`
+      seen[id] = [...new Set([...(seen[id] ?? []), ...ids])]
     }
+    return { watched: data.watched ?? [], seenMessages: seen }
   } catch {
     return { watched: [], seenMessages: {} }
   }
 }
 
-function savePersisted(watchedFile: string, watched: PersistedWatch[], seenMessages: Record<string, string[]>): void {
+function savePersisted(file: string, data: PersistedFile): void {
   try {
-    fs.mkdirSync(path.dirname(watchedFile), { recursive: true })
-    fs.writeFileSync(watchedFile, JSON.stringify({ watched, seenMessages }, null, 2))
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify(data, null, 2))
   } catch (e) {
     console.warn('[ad4m] waker: failed to persist state:', e)
   }
 }
 
+// ── Bus ────────────────────────────────────────────────────────────────────────
+
+function emitBusEvent(bus: EventBus, type: string, payload: unknown) {
+  bus.emit({ type, source: 'ad4m', timestamp: new Date().toISOString(), payload })
+}
+
+/** The text of `address` in a TextContent result (`{ instances: [{ id, text }] }`). */
+function textOf(result: any, address: string): string | undefined {
+  const row = (result?.instances ?? []).find((r: any) => r?.id === address)
+  const text = Array.isArray(row?.text) ? row.text.join(' ') : row?.text
+  return typeof text === 'string' && text ? text : undefined
+}
+
+function mentionText(m: MentionMessage, body: string | undefined): string {
+  const lines = [`[AD4M] You were mentioned${body ? `: "${body}"` : ''}`, `Item: ${m.address}`]
+  lines.push(`Parents: ${m.parents.length ? m.parents.join(', ') : '(unknown)'}`)
+  if (m.ancestors?.length) lines.push(`Ancestors: ${m.ancestors.join(', ')}`)
+  return lines.join('\n')
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
+
+const logger = {
+  info: (m: string) => console.log(`[ad4m] ${m}`),
+  warn: (m: string) => console.warn(`[ad4m] ${m}`),
+  error: (m: string) => console.error(`[ad4m] ${m}`),
+  debug: () => {}
+}
 
 export function startWaker(
   clientManager: Ad4mClientManager,
   bus: EventBus,
-  /** Path to JSON file for persisting watches and seen-message state. */
+  /** Path to JSON file for persisting watches and delivered mentions. */
   watchedFile?: string,
-  /**
-   * Display name of the AI agent (e.g. "Hex"). When set, this is used as the
-   * primary mention search term instead of (or in addition to) names from the
-   * AD4M profile — because people invoke the AI by this name, not the human's.
-   */
-  configuredAgentName?: string
+  /** The AI agent's name (e.g. "Hex"): people address it by this, not by the human's profile names. */
+  configuredAgentName?: string,
+  /** Tests: a stand-in for the SDK's live query, and the debounce. */
+  opts: { QuerySubscriptionProxy?: unknown; debounceMs?: number } = {}
 ): WatcherController {
-  // User-configured watches (persisted across restarts)
   const userWatches = new Map<string, WatchEntry>()
-  // Auto-discovered watches (from perspective.all() on each connect)
   const autoWatches = new Map<string, WatchEntry>()
-  // UUIDs subscribed in the current client session — reset when client changes
-  const subscribedInSession = new Set<string>()
-  // Live SPARQL subscription proxies — keyed by perspective UUID
-  const proxies = new Map<string, InstanceType<typeof QuerySubscriptionProxy>>()
-  // Per-perspective seen message SOURCE addresses (message node, not body link)
-  const seenMessages = new Map<string, Set<string>>()
-  // Debounce timers per perspective (2 s)
-  const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  // Perspectives baselined this process. Baseline (seed-without-emit) happens
-  // ONCE per perspective — so a reconnect that re-subscribes does NOT re-baseline
-  // and swallow mentions that arrived meanwhile.
-  const baselinedUuids = new Set<string>()
-  let lastClient: Ad4mTypedClient | null = null
-  let agentIdentity: AgentIdentity | null = null
+  const persisted: PersistedFile = watchedFile ? loadPersisted(watchedFile) : { watched: [], seenMessages: {} }
+  for (const e of persisted.watched) userWatches.set(e.uuid, { ...e, autoDiscovered: false })
+  let seen = persisted.seenMessages
 
-  // Load persisted state
-  let persistedSeenMessages: Record<string, string[]> = {}
-  if (watchedFile) {
-    const persisted = loadPersisted(watchedFile)
-    for (const e of persisted.watched) {
-      userWatches.set(e.uuid, {
-        uuid: e.uuid,
-        threadKey: e.threadKey,
-        label: e.label,
-        autoDiscovered: false
-      })
-    }
-    persistedSeenMessages = persisted.seenMessages
-  }
+  let manager: WakerSubscriptionManager | null = null
+  let lastClient: Ad4mTypedClient | null = null
+  let identity: AgentIdentity | null = null
 
   function persistState() {
     if (!watchedFile) return
-    const watchArr = [...userWatches.values()].map((e) => ({
-      uuid: e.uuid,
-      threadKey: e.threadKey,
-      label: e.label
-    }))
-    const seenObj: Record<string, string[]> = {}
-    for (const [uuid, set] of seenMessages) {
-      seenObj[uuid] = [...set]
-    }
-    savePersisted(watchedFile, watchArr, seenObj)
+    savePersisted(watchedFile, {
+      watched: [...userWatches.values()].map(({ uuid, threadKey, label }) => ({ uuid, threadKey, label })),
+      seenMessages: seen
+    })
   }
 
-  function disposeProxy(uuid: string) {
-    const proxy = proxies.get(uuid)
-    if (proxy) {
-      try {
-        proxy.dispose()
-      } catch {
-        /* ignore */
-      }
-      proxies.delete(uuid)
-    }
-    const timer = debounceTimers.get(uuid)
-    if (timer) {
-      clearTimeout(timer)
-      debounceTimers.delete(uuid)
-    }
+  function entryOf(uuid: string): WatchEntry | undefined {
+    return userWatches.get(uuid) ?? autoWatches.get(uuid)
   }
 
-  /**
-   * Process a mention-query result from the live push subscription.
-   * Deduplicates by message SOURCE address, debounces (2 s), resolves
-   * body + parents, and emits the wake.
-   *
-   * Baselines ONCE per perspective per process: the first observation with no
-   * persisted state seeds the seen-set without emitting (avoids a flood on first
-   * start). Reconnects re-run this but never re-baseline — so a mention that
-   * arrives across a WS reconnect is emitted, not swallowed.
-   */
-  async function processMentionResult(client: Ad4mTypedClient, uuid: string, result: unknown) {
-    if (!Array.isArray(result)) return
-    const entry = userWatches.get(uuid) ?? autoWatches.get(uuid)
-    if (!entry) return
-
-    // Seen-set is kept across reconnects (not reset on re-subscribe).
-    const seen = seenMessages.get(uuid) ?? new Set<string>(persistedSeenMessages[uuid] ?? [])
-    seenMessages.set(uuid, seen)
-
-    if (!baselinedUuids.has(uuid)) {
-      baselinedUuids.add(uuid)
-      const noPriorState = !persistedSeenMessages[uuid] || persistedSeenMessages[uuid].length === 0
-      if (noPriorState) {
-        // First-ever observation with no persisted state → seed without emitting.
-        let count = 0
-        for (const item of result) {
-          const source: string = (item as any)?.source ?? ''
-          if (source && !seen.has(source)) {
-            seen.add(source)
-            count++
-          }
-        }
-        console.log(`[ad4m] waker: baseline seeded for ${uuid} (${count} existing mentions)`)
+  function managerFor(client: Ad4mTypedClient): WakerSubscriptionManager {
+    return new WakerSubscriptionManager({
+      perspectiveClient: client.perspective,
+      QuerySubscriptionProxy: opts.QuerySubscriptionProxy ?? QuerySubscriptionProxy,
+      logger,
+      debounceMs: opts.debounceMs ?? 2000,
+      previousSeenMessages: seen,
+      onPersist: (_subs, delivered) => {
+        seen = { ...seen, ...delivered }
         persistState()
-        return
-      }
-      // Had persisted state (restart) → fall through and emit anything new.
-    }
-
-    const newMsgAddrs: string[] = []
-    for (const item of result) {
-      const source: string = (item as any)?.source ?? ''
-      if (source && !seen.has(source)) {
-        newMsgAddrs.push(source)
-        seen.add(source) // mark immediately to prevent duplicates across rapid results
-      }
-    }
-    if (newMsgAddrs.length === 0) return
-    console.log(`[ad4m] waker: ${newMsgAddrs.length} new mention(s) for ${uuid.slice(0, 8)} — emitting`)
-
-    // Debounce: coalesce rapid mentions into a single wake (2 s window)
-    const existing = debounceTimers.get(uuid)
-    if (existing) clearTimeout(existing)
-    debounceTimers.set(
-      uuid,
-      setTimeout(async () => {
-        debounceTimers.delete(uuid)
-        for (const msgAddr of newMsgAddrs) {
-          const body = await resolveChildBody(client, uuid, msgAddr)
-          const parents = await resolveParents(client, uuid, msgAddr)
-
-          const parentPart =
-            parents.length > 0 ? ` (in ${parents.map((p) => p.split('/').pop() ?? p.slice(0, 12)).join(', ')})` : ''
-
-          const authorShort = msgAddr.split('/').pop() ?? msgAddr.slice(0, 12)
-          const text = body
-            ? `[AD4M] @${authorShort} mentioned you${parentPart}: "${body}"`
-            : `[AD4M] @${authorShort} mentioned you${parentPart}`
-
-          emitBusEvent(bus, 'ad4m.perspective.mention', { uuid, msgAddr, parents, body })
-          emitThreadMessage(bus, entry.threadKey, entry.label, text, {
-            perspectiveUuid: uuid,
-            channelAddress: parents[0],
-            messageAddress: msgAddr,
-            body: body ?? undefined
+      },
+      onWake: (sub, result, mentions) => {
+        const entry = entryOf(sub.perspective)
+        if (!entry || !mentions?.length) return true
+        for (const m of mentions) {
+          const body = textOf(result, m.address)
+          emitBusEvent(bus, 'ad4m.perspective.mention', { uuid: sub.perspective, ...m, body })
+          emitBusEvent(bus, 'ad4m.thread.message', {
+            threadKey: entry.threadKey,
+            threadLabel: entry.label,
+            text: mentionText(m, body),
+            context: {
+              perspectiveUuid: sub.perspective,
+              channelAddress: m.parents[0],
+              messageAddress: m.address,
+              body
+            }
           })
         }
-        persistState()
-      }, 2000)
-    )
-  }
-
-  /**
-   * Subscribe to @mention events for a perspective using a SPARQL live query.
-   *
-   * Only fires when a new message body contains the agent's DID or profile name(s)
-   * as a substring. Deduplicates by message SOURCE address; persists seen
-   * addresses so reconnects/restarts don't re-fire old mentions.
-   *
-   * The SDK's QuerySubscriptionProxy re-registers the server-side subscription
-   * automatically on WebSocket reconnect (PR #899), so no polling safety-net
-   * is needed.
-   */
-  function subscribeToMentions(client: Ad4mTypedClient, uuid: string, identity: AgentIdentity) {
-    if (subscribedInSession.has(uuid)) return
-    subscribedInSession.add(uuid)
-
-    const query = buildMentionQuery(identity)
-    const proxy = new QuerySubscriptionProxy(uuid, query, client.perspective)
-    ;(proxy as any).isSPARQL = true
-    ;(proxy as any).initialized?.catch?.(() => {})
-
-    proxy
-      .subscribe()
-      .then(() => (proxy as any).initialized)
-      .catch((err: unknown) => {
-        const msg = (err as Error)?.message ?? String(err)
-        console.warn(`[ad4m] waker: mention subscription failed for ${uuid}:`, msg)
-        subscribedInSession.delete(uuid)
-        proxies.delete(uuid)
-      })
-
-    if (!seenMessages.has(uuid)) {
-      const seed = new Set<string>(persistedSeenMessages[uuid] ?? [])
-      seenMessages.set(uuid, seed)
-      if (seed.size > 0) console.log(`[ad4m] waker: seeded ${seed.size} seen message(s) for ${uuid}`)
-    }
-
-    proxy.onResult((result: unknown) => {
-      void processMentionResult(client, uuid, result)
+        return true
+      }
     })
-
-    proxies.set(uuid, proxy)
-    console.log(
-      `[ad4m] waker: mention subscription active for ${uuid}` + ` (terms: [${identity.names.join(', ')}] + DID)`
-    )
   }
 
-  // Called on every connect/reconnect. Resolves agent identity, re-subscribes all watches,
-  // and auto-discovers neighbourhood perspectives.
+  function subscribe(uuid: string) {
+    if (!manager || !identity) return
+    manager.subscribe(mentionSubscription(uuid, identity)).catch((e) => logger.warn(`waker: ${e?.message ?? e}`))
+  }
+
+  // On every connect: a new client gets a new manager; then subscribe every watch
+  // and every joined neighbourhood.
   async function onConnected() {
     const client = clientManager.getClient()
     if (!client) return
-
-    // Detect client instance change (after setToken) — reset subscription tracking
-    if (client !== lastClient) {
-      subscribedInSession.clear()
-      for (const [uuid] of proxies) disposeProxy(uuid)
+    if (client !== lastClient || !manager) {
+      manager?.disposeAll()
       lastClient = client
-      agentIdentity = null // re-resolve identity with new client
+      identity = null
+      manager = managerFor(client)
     }
-
-    // Resolve agent identity — required to build the mention query
-    if (!agentIdentity) {
-      // Skip profile name extraction when configuredAgentName is set — avoids
-      // any risk of unparsed literal:json: blobs entering the SPARQL query.
-      agentIdentity = await resolveAgentIdentity(client, !!configuredAgentName)
-      if (!agentIdentity) {
-        console.warn('[ad4m] waker: could not resolve agent identity — subscriptions skipped')
+    if (!identity) {
+      identity = await resolveAgentIdentity(client, configuredAgentName)
+      if (!identity) {
+        logger.warn('waker: could not resolve the agent — no subscriptions')
         return
       }
-      if (configuredAgentName) {
-        agentIdentity = { did: agentIdentity.did, names: [configuredAgentName] }
-      }
-      console.log(
-        `[ad4m] waker: agent identity resolved — DID ...${agentIdentity.did.slice(-12)},` +
-          ` names: [${agentIdentity.names.join(', ') || 'none'}]`
-      )
+      logger.info(`waker: agent ...${identity.did.slice(-12)}, names [${identity.names.join(', ') || 'none'}]`)
     }
-
-    const identity = agentIdentity
-
-    // Re-subscribe all user-configured watches
-    for (const entry of userWatches.values()) {
-      subscribeToMentions(client, entry.uuid, identity)
-    }
-
-    // Auto-discover: mention-watch all joined neighbourhood perspectives
+    const active = new Set(manager.getActive().map((s) => s.perspective))
+    for (const uuid of userWatches.keys()) if (!active.has(uuid)) subscribe(uuid)
     try {
-      const perspectives = await client.perspective.all()
-      for (const p of perspectives) {
-        if (!p.sharedUrl) continue
-        if (userWatches.has(p.uuid)) continue // user config takes precedence
-
+      for (const p of await client.perspective.all()) {
+        if (!p.sharedUrl || userWatches.has(p.uuid)) continue
         if (!autoWatches.has(p.uuid)) {
           autoWatches.set(p.uuid, {
             uuid: p.uuid,
@@ -493,93 +285,53 @@ export function startWaker(
             autoDiscovered: true
           })
         }
-        subscribeToMentions(client, p.uuid, identity)
+        if (!active.has(p.uuid)) subscribe(p.uuid)
       }
     } catch (e) {
-      console.warn('[ad4m] waker: auto-discover failed:', (e as Error)?.message)
+      logger.warn(`waker: auto-discover failed: ${(e as Error)?.message}`)
     }
   }
 
-  // ── Static subscriptions (agent status, DMs, notifications) ──────────────────
+  // ── Static subscriptions (agent status and profile, apps, notifications) ──────────
+  // The executor has no direct-message event since one `on()` replaced the
+  // per-event listeners (ad4m #1193), so there is no `ad4m.dm.received` any more.
   function wireStaticListeners(client: Ad4mTypedClient) {
-    client.agent.addAgentStatusChangedListener((agentStatus) => {
-      emitBusEvent(bus, 'ad4m.agent.status_changed', { agent: agentStatus })
-    })
-
-    client.agent.addUpdatedListener((agent) => {
-      emitBusEvent(bus, 'ad4m.agent.updated', { agent })
-    })
-
-    client.agent.addAppChangedListener(() => {
-      emitBusEvent(bus, 'ad4m.apps.changed', {})
-    })
-
-    // SDK callback types declare `null` return; cast to avoid void/null mismatch
-    client.runtime.addMessageCallback(((msg: unknown) => {
-      const senderDid = (msg as Record<string, unknown>)?.['author'] ?? 'unknown'
-      emitBusEvent(bus, 'ad4m.dm.received', { message: msg, senderDid })
-    }) as any)
-
-    client.runtime.addNotificationTriggeredCallback(((notification: unknown) => {
+    client.on('agent-status-changed', (agent) => emitBusEvent(bus, 'ad4m.agent.status_changed', { agent }))
+    client.on('agent-updated', (agent) => emitBusEvent(bus, 'ad4m.agent.updated', { agent }))
+    client.on('apps-changed', () => emitBusEvent(bus, 'ad4m.apps.changed', {}))
+    client.on('notification-triggered', (notification) =>
       emitBusEvent(bus, 'ad4m.notification.triggered', { notification })
-    }) as any)
+    )
   }
 
-  // Wire static listeners on the current client
   const initialClient = clientManager.getClient()
-  if (initialClient) {
-    wireStaticListeners(initialClient)
-    lastClient = initialClient
-  }
-
-  // Hook reconnect — also fires static listener re-wiring on new client instances
+  if (initialClient) wireStaticListeners(initialClient)
   clientManager.onConnected(() => {
     const client = clientManager.getClient()
     if (!client) return
-    if (client !== lastClient) {
-      wireStaticListeners(client)
-    }
-    onConnected().catch((e) => console.warn('[ad4m] waker: onConnected error:', e))
+    if (client !== lastClient) wireStaticListeners(client)
+    onConnected().catch((e) => logger.warn(`waker: onConnected error: ${e}`))
   })
-
-  // Kick off initial auto-discover (client may already be connected)
   onConnected().catch(() => {
-    /* will retry on next onConnected */
+    /* retried on the next connect */
   })
 
-  // ── WatcherController ─────────────────────────────────────────────────────────
   return {
     watchPerspective(uuid, threadKey, label) {
-      const entry: WatchEntry = {
-        uuid,
-        threadKey,
-        label: label ?? `AD4M: ${threadKey}`,
-        autoDiscovered: false
-      }
-      userWatches.set(uuid, entry)
+      userWatches.set(uuid, { uuid, threadKey, label: label ?? `AD4M: ${threadKey}`, autoDiscovered: false })
       autoWatches.delete(uuid)
       persistState()
-
-      const client = clientManager.getClient()
-      if (client && agentIdentity) {
-        // Force re-subscribe: dispose existing proxy and clear session tracking
-        disposeProxy(uuid)
-        subscribedInSession.delete(uuid)
-        subscribeToMentions(client, uuid, agentIdentity)
-      }
-      console.log(`[ad4m] waker: watching perspective ${uuid} → thread "${threadKey}"`)
+      subscribe(uuid)
+      logger.info(`waker: watching perspective ${uuid} → thread "${threadKey}"`)
     },
-
     unwatchPerspective(uuid) {
       userWatches.delete(uuid)
       autoWatches.delete(uuid)
-      disposeProxy(uuid)
-      subscribedInSession.delete(uuid)
-      seenMessages.delete(uuid)
+      manager?.dispose(`mention-${uuid}`)
+      delete seen[`mention-${uuid}`]
       persistState()
-      console.log(`[ad4m] waker: unwatched perspective ${uuid}`)
+      logger.info(`waker: unwatched perspective ${uuid}`)
     },
-
     getWatched() {
       return [...userWatches.values(), ...autoWatches.values()]
     }
