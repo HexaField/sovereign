@@ -279,6 +279,9 @@ export function buildGraph(input: BuildInput): BuiltGraph {
 
   // ── Plans ──────────────────────────────────────────────────────────
   for (const p of input.plans) {
+    // The file's Status line decides, unless the user cancelled the plan's task (a superseded plan).
+    const cancelled = byKey.get(p.id)?.state === 'cancelled'
+    const closed = cancelled || p.status === 'done'
     nodes.set(
       p.id,
       withTask({
@@ -286,15 +289,21 @@ export function buildGraph(input: BuildInput): BuiltGraph {
         forge: 'local',
         kind: 'plan',
         title: p.title,
-        state: p.status === 'done' ? 'done' : p.status === 'in_progress' ? 'in_progress' : 'planned',
-        zone: p.status === 'done' ? 'past' : 'future',
+        state: cancelled
+          ? 'cancelled'
+          : p.status === 'done'
+            ? 'done'
+            : p.status === 'in_progress'
+              ? 'in_progress'
+              : 'planned',
+        zone: closed ? 'past' : 'future',
         assignees: [],
         reviewers: [],
         labels: [],
         workstreams: [],
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
-        ...(p.status === 'done' ? { closedAt: p.updatedAt } : {})
+        ...(closed ? { closedAt: cancelled ? byKey.get(p.id)!.updatedAt : p.updatedAt } : {})
       })
     )
     for (const r of p.refs) {
