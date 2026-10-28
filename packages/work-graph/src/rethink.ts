@@ -19,12 +19,21 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { trustedAuthorsOf } from '@sovereign/core'
-import type { EpicStatus, EventBus, ForgeToolName, RethinkNote, WorkNode, WorkStream } from '@sovereign/core'
+import { leafState, trustedAuthorsOf, WORK_CATEGORIES } from '@sovereign/core'
+import type {
+  EpicStatus,
+  EventBus,
+  ForgeToolName,
+  RethinkNote,
+  WorkCategory,
+  WorkNode,
+  WorkStream
+} from '@sovereign/core'
 import { discoverRepos } from '@sovereign/forges'
 import type { HostForges } from '@sovereign/orgs'
 import type { ScopeSource } from './scope.js'
 import { writeJsonAtomic, readJson } from './cache.js'
+import { isWorkCategory } from './category.js'
 import { clip, detailParts, nodeCardLines } from './classifier.js'
 import { safeSegment } from './events.js'
 import { ForgeError, type Epic, type ForgeService } from './service.js'
@@ -33,6 +42,8 @@ import type { ForgeDigest, RethinkTrigger, TriagedEvent } from './types.js'
 export const RETHINK_THREAD_LABEL = 'forge-rethink'
 
 const NOTES_PER_NODE = 20
+/** Uncategorised open items outside the digest listed per run prompt; the rest wait for the next run. */
+export const UNCATEGORISED_PER_RUN = 30
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -76,6 +87,8 @@ export type RethinkAction =
   | { kind: 'supersede'; at: string; nodeId: string; by: string; reason: string }
   /** forge_depend: `from` depends on `to` (or, `removed`, no longer does). */
   | { kind: 'depend'; at: string; from: string; to: string; reason: string; removed: boolean }
+  /** forge_categorize: rethink's category for a node the rules left open. */
+  | { kind: 'categorize'; at: string; nodeId: string; category: WorkCategory; reason: string }
   /** A change to the epics (work streams) through a forge_stream_* tool other than forge_stream_add. */
   | { kind: 'epic'; at: string; tool: ForgeToolName; text: string }
   | { kind: 'refused'; at: string; tool: ForgeToolName; reason: string }
@@ -139,10 +152,12 @@ export function buildRethinkPrompt(input: {
   streams: WorkStream[]
   /** The membrane's planned tasks, to check new PRs against. */
   planned: WorkNode[]
+  /** Open items outside the digest with no category, to categorise (at most UNCATEGORISED_PER_RUN shown). */
+  uncategorised?: WorkNode[]
   /** The membrane's trusted authors; undefined when it has no allow list. */
   trusted?: string[]
 }): string {
-  const { membrane, runId, digest, limits, owners, streams, planned, trusted } = input
+  const { membrane, runId, digest, limits, owners, streams, planned, trusted, uncategorised = [] } = input
   // A search by text alone can surface an untrusted author's issue: search per trusted author.
   const issueSearch = trusted
     ? '`gh issue list --repo <repo> --author <login> --search <terms>`, once per trusted author'
@@ -168,6 +183,7 @@ export function buildRethinkPrompt(input: {
       issueSearch +
       ') |',
     '| Dependencies | An item must wait for another (a stacked PR outside its base chain, a plan’s “Needs”, one stream before the next) and no depends-on edge says so, or one no longer holds | `forge_depend` (`remove: true` for one that no longer holds) |',
+    '| Categorise | An item shown as “Category: uncategorised” (in the digest or under Uncategorised items) | `forge_categorize` with one of: feature = new or improved user-facing capability; bug = a fix for a defect; design = plans, specs, architecture, docs, RFCs, proposals; future = tech debt and enabling work (refactors, infrastructure, internal libraries, plumbing, migrations, dependency upgrades, CI and test infrastructure, perf groundwork, cleanups) — “future” never means “later” |',
     '| Tidy | Tasks whose items ended, empty streams | `forge_note` on the card, or an attention item when the user must act |',
     ''
   )
@@ -195,6 +211,7 @@ export function buildRethinkPrompt(input: {
     '- `forge_note { membrane, nodeId, text }` — a one-line note on the item’s card.',
     '- `forge_supersede { membrane, nodeId, by, reason }` — a PR (`by`) does a planned task’s work: the task is cancelled (“Opened as <PR>”) and the PR joins its stream when it has none. Only for planned tasks, never for issues.',
     '- `forge_depend { membrane, from, to, reason, remove? }` — `from` must wait for `to` (node or stream ids). It counts at once and blocks `from` while `to` is open; `remove: true` deletes it.',
+    '- `forge_categorize { membrane, nodeId, category, reason }` — `feature`, `bug`, `design` or `future` (tech debt and enabling work, not “later”) for an uncategorised item. Refused when the user or the rules (labels, title prefix) already decide it.',
     ''
   )
 
@@ -230,12 +247,31 @@ export function buildRethinkPrompt(input: {
       if (node.workstreams.length) out.push(`- Streams: ${node.workstreams.map((w) => `\`${w}\``).join(', ')}`)
       if (node.relatedStreams?.length)
         out.push(`- Related to streams: ${node.relatedStreams.map((w) => `\`${w}\``).join(', ')}`)
+      out.push(`- Category: ${categoryLine(node)}`)
       out.push('- Events:')
       for (const e of events) out.push(`  - ${eventLine(e)}`)
       out.push('')
     }
   }
+
+  const inDigest = new Set(digest.groups.flatMap((g) => g.nodes.map((x) => x.node.id)))
+  const rest = uncategorised.filter((n) => !n.category && !inDigest.has(n.id))
+  if (rest.length) {
+    out.push('## Uncategorised items', '')
+    out.push('Category: uncategorised. Give each one with `forge_categorize`.', '')
+    for (const n of rest.slice(0, UNCATEGORISED_PER_RUN))
+      out.push(
+        `- \`${n.id}\` ${n.kind} ${refOf(n)} — ${oneLine(n.title)}${n.labels.length ? ` [${n.labels.join(', ')}]` : ''}`
+      )
+    if (rest.length > UNCATEGORISED_PER_RUN) out.push(`- … and ${rest.length - UNCATEGORISED_PER_RUN} more (next run)`)
+    out.push('')
+  }
   return out.join('\n').trimEnd() + '\n'
+}
+
+function categoryLine(n: WorkNode): string {
+  if (!n.category) return 'uncategorised'
+  return `${n.category} (${n.categorySource === 'user' ? 'the user' : n.categorySource === 'rule' ? 'rules' : 'rethink'})`
 }
 
 // ── Report ─────────────────────────────────────────────────────────────
@@ -346,6 +382,7 @@ export function renderRunReport(run: RethinkRun): string {
         (a) => `- ${a.from} ${a.removed ? 'no longer depends' : 'depends'} on ${a.to}: ${oneLine(a.reason)}`
       )
     ],
+    ['Categories', of('categorize').map((a) => `- ${a.nodeId}: ${a.category} — ${oneLine(a.reason)}`)],
     ['Epic changes', of('epic').map((a) => `- ${a.tool}: ${oneLine(a.text)}`)],
     ['Refused', of('refused').map((a) => `- ${a.tool}: ${a.reason}`)]
   ]
@@ -383,6 +420,7 @@ function summaryOf(run: RethinkRun, file: string): RethinkRunSummary {
     note: 0,
     supersede: 0,
     depend: 0,
+    categorize: 0,
     epic: 0,
     refused: 0
   }
@@ -451,6 +489,7 @@ export interface RethinkRunnerDeps {
     | 'supersede'
     | 'depend'
     | 'deleteEdge'
+    | 'setCategory'
   >
   threads: {
     /** A live (not archived) thread of the membrane with this label. */
@@ -967,6 +1006,22 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
         emit('forge.rethink.action', { membrane: m, runId: run.id, action: 'depend', from, to, reason, removed: false })
         return { depends: true, edge }
       }
+      case 'forge_categorize': {
+        const nodeId = str(args, 'nodeId')
+        const category = args.category
+        if (!isWorkCategory(category))
+          throw new ForgeError(`category must be one of ${WORK_CATEGORIES.join(', ')}`, 400)
+        const reason = clip(str(args, 'reason'), 500)
+        const node = await nodeOrThrow(m, nodeId)
+        // user > rule > rethink: never write under a category the user or the rules decide.
+        if (node.categorySource === 'user')
+          return refuse(m, run, name, `${nodeId} is ${node.category} by the user's choice; rethink never overrides it`)
+        if (node.categorySource === 'rule')
+          return refuse(m, run, name, `${nodeId} is ${node.category} by the rules (its labels or title); leave it`)
+        await svc.setCategory(m, nodeId, category, 'rethink', reason)
+        record(m, run, { kind: 'categorize', at, nodeId, category, reason })
+        return { categorized: true, category }
+      }
       case 'forge_note': {
         const nodeId = str(args, 'nodeId')
         const text = clip(str(args, 'text'), 500)
@@ -998,6 +1053,7 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
             owners,
             streams: graph.workstreams,
             planned: graph.nodes.filter((n) => n.kind === 'task' && n.state === 'planned'),
+            uncategorised: graph.nodes.filter((n) => !n.category && (n.kind === 'branch' || leafState(n) === 'open')),
             trusted: trustedAuthorsOf(svc.config().trustedAuthors, m)?.logins
           })
         )

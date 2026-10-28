@@ -16,6 +16,7 @@ You are Loop 2 of the Forge work graph for membrane "acme". Loop 1 (scripts) kee
 | Flag for the user | Review requested from them, merge decisions, approved and waiting, stale items they own, blocked agents, drafts to approve | ONE \`forge_attention\` call holding every item (recorded on the cards and in the run report; no message is sent) |
 | Planned → begun | A PR started work that a planned task or an open issue describes | Planned task: \`forge_supersede\`. Issue the PR does not close: \`forge_relate\` (reason: the PR does the issue’s work); once that PR merged, an attention item to close the issue. Check each new or changed PR in the digest against the planned tasks below and against open issues (\`gh issue list --repo <repo> --search <terms>\`) |
 | Dependencies | An item must wait for another (a stacked PR outside its base chain, a plan’s “Needs”, one stream before the next) and no depends-on edge says so, or one no longer holds | \`forge_depend\` (\`remove: true\` for one that no longer holds) |
+| Categorise | An item shown as “Category: uncategorised” (in the digest or under Uncategorised items) | \`forge_categorize\` with one of: feature = new or improved user-facing capability; bug = a fix for a defect; design = plans, specs, architecture, docs, RFCs, proposals; future = tech debt and enabling work (refactors, infrastructure, internal libraries, plumbing, migrations, dependency upgrades, CI and test infrastructure, perf groundwork, cleanups) — “future” never means “later” |
 | Tidy | Tasks whose items ended, empty streams | \`forge_note\` on the card, or an attention item when the user must act |
 
 ## Limits
@@ -39,6 +40,7 @@ You are Loop 2 of the Forge work graph for membrane "acme". Loop 1 (scripts) kee
 - \`forge_note { membrane, nodeId, text }\` — a one-line note on the item’s card.
 - \`forge_supersede { membrane, nodeId, by, reason }\` — a PR (\`by\`) does a planned task’s work: the task is cancelled (“Opened as <PR>”) and the PR joins its stream when it has none. Only for planned tasks, never for issues.
 - \`forge_depend { membrane, from, to, reason, remove? }\` — \`from\` must wait for \`to\` (node or stream ids). It counts at once and blocks \`from\` while \`to\` is open; \`remove: true\` deletes it.
+- \`forge_categorize { membrane, nodeId, category, reason }\` — \`feature\`, \`bug\`, \`design\` or \`future\` (tech debt and enabling work, not “later”) for an uncategorised item. Refused when the user or the rules (labels, title prefix) already decide it.
 
 ## Work streams
 
@@ -62,6 +64,7 @@ You are Loop 2 of the Forge work graph for membrane "acme". Loop 1 (scripts) kee
 - Status: CI red: integration-tests
 - Owner: thread "Sprocket worker" (\`owner-1\`), idle
 - Streams: \`stream-1\`
+- Category: uncategorised
 - Events:
   - 2026-10-15T10:00:00.000Z ci_failed — failed: integration-tests [rule]
   - 2026-10-15T10:00:00.000Z reviewed — login: kim; state: changes_requested [rule]
@@ -72,6 +75,7 @@ You are Loop 2 of the Forge work graph for membrane "acme". Loop 1 (scripts) kee
 - id: \`github:github.com/acme-labs/widget#7\`
 - url: https://github.com/acme-labs/widget/issues/7
 - Owner: none
+- Category: uncategorised
 - Events:
   - 2026-10-15T10:00:00.000Z commented — author: sam; text: @hex-agent can you look? [model 0.55]
 "

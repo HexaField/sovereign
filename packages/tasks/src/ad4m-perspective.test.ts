@@ -120,7 +120,13 @@ describe('forge perspective (AD4M adapter)', () => {
     const [g1, g2] = await Promise.all([fp.connect(), fp.connect()])
     expect(g1.id).toBe(g2.id)
     expect(fake.perspectives.map((p) => p.name)).toEqual(['sovereign-forge'])
-    expect([...fake.perspectives[0].classes.keys()].sort()).toEqual(['ForgeView', 'RelatedEdge', 'Task', 'WorkStream'])
+    expect([...fake.perspectives[0].classes.keys()].sort()).toEqual([
+      'ForgeView',
+      'NodeCategory',
+      'RelatedEdge',
+      'Task',
+      'WorkStream'
+    ])
     expect(JSON.parse(fake.perspectives[0].classes.get('Task')!)).toEqual(FORGE_SHACL_CLASSES.Task)
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'forge-perspective.json'), 'utf-8'))).toEqual({
       perspectiveName: 'sovereign-forge',

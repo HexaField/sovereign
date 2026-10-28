@@ -1,7 +1,8 @@
 // Node card model — pure. What the card shows, and the assign request it sends.
 
-import type { AgentOverlay, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
-import { EDGE_LABELS, EDGE_LABELS_IN } from './style.js'
+import { WORK_CATEGORIES } from '@sovereign/core/forge'
+import type { AgentOverlay, WorkCategory, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
+import { CATEGORY_COLORS, CATEGORY_LABELS, EDGE_LABELS, EDGE_LABELS_IN } from './style.js'
 
 export interface LinkedItem {
   id: string
@@ -68,6 +69,37 @@ export function shortRef(n: WorkNode): string {
 
 export function kindLabel(n: WorkNode): string {
   return { change: 'Pull request', issue: 'Issue', branch: 'Branch', plan: 'Plan', task: 'Task' }[n.kind]
+}
+
+export interface CategoryBadge {
+  category: WorkCategory
+  label: string
+  /** Tooltip: the long name and who decided it. */
+  title: string
+  fg: string
+  bg: string
+}
+
+const SOURCE_LABELS = { user: 'set by you', rule: 'from its labels or title', rethink: 'from rethink' } as const
+
+/** The category badge of a node; null when it has none (the cards show nothing). */
+export function categoryBadge(n: Pick<WorkNode, 'category' | 'categorySource'>): CategoryBadge | null {
+  if (!n.category) return null
+  const { fg, bg } = CATEGORY_COLORS[n.category]
+  const { short, long } = CATEGORY_LABELS[n.category]
+  const by = n.categorySource ? ` · ${SOURCE_LABELS[n.categorySource]}` : ''
+  return { category: n.category, label: short, title: `Category: ${long}${by}`, fg, bg }
+}
+
+/** The detail panel's category select: the four categories, and "clear" while the user's choice holds. */
+export function categoryChoices(n: Pick<WorkNode, 'category' | 'categorySource'>) {
+  return {
+    value: n.category ?? '',
+    options: WORK_CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABELS[c].long })),
+    /** Only the user's own choice clears; the rules and rethink are not overrides. */
+    canClear: n.categorySource === 'user',
+    source: n.categorySource ? SOURCE_LABELS[n.categorySource] : 'uncategorised'
+  }
 }
 
 /** The "New thread" label prefilled from the node. */

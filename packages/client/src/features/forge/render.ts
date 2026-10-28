@@ -3,6 +3,7 @@
 // Pure apart from the context it draws into; ForgeCanvas decides when.
 
 import type { AgentOverlay, WorkNode, WorkStream } from '@sovereign/core'
+import { categoryBadge } from './card-model.js'
 import { NODE_H, type PlacedNode } from './layout.js'
 import { detailFor, type Detail } from './lod.js'
 import { anchorOf, type Scene } from './scene.js'
@@ -211,7 +212,7 @@ function drawNode(
   ctx.textBaseline = 'middle'
   ctx.font = `600 12px ${FONT}`
   const right = p.x + p.w - 8
-  // Badges from the right: CI dot, review state.
+  // Badges from the right: CI dot, review state, category.
   let badgeX = right
   const ci = n.ci ? CI_COLORS[n.ci] : null
   if (ci) {
@@ -229,6 +230,17 @@ function drawNode(
       review === 'approved' ? '✓' : review === 'changes_requested' ? '±' : review === 'requested' ? '◌' : '…'
     ctx.fillText(glyph, badgeX - 8, p.y + 14)
     badgeX -= 14
+  }
+  const category = categoryBadge(n)
+  if (category) {
+    ctx.font = `600 9px ${FONT}`
+    const w = ctx.measureText(category.label).width + 8
+    roundRect(ctx, badgeX - w, p.y + 8, w, 12, 3)
+    ctx.fillStyle = category.bg
+    ctx.fill()
+    ctx.fillStyle = category.fg
+    ctx.fillText(category.label, badgeX - w + 4, p.y + 14)
+    badgeX -= w + 6
   }
   ctx.font = `600 12px ${FONT}`
   ctx.fillStyle = palette.text

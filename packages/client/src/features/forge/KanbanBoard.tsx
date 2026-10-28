@@ -4,6 +4,7 @@
 import { For, Show, type Component } from 'solid-js'
 import type { AgentOverlay } from '@sovereign/core'
 import { ReachBadge } from '../graphcoder/ReachBadge.js'
+import { categoryBadge } from './card-model.js'
 import { KANBAN_COLUMNS, type KanbanCard, type KanbanColumn } from './kanban-model.js'
 import { CI_COLORS, REVIEW_COLORS, reviewSummary, ringFor } from './style.js'
 
@@ -29,6 +30,7 @@ const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: bool
   const ring = () => ringFor(props.overlay)
   const review = () => reviewSummary(n())
   const ci = () => (n().ci ? CI_COLORS[n().ci!] : null)
+  const category = () => categoryBadge(n())
   return (
     <button
       class="w-full rounded border p-2 text-left text-xs hover:bg-[var(--c-hover-bg)]"
@@ -50,6 +52,18 @@ const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: bool
         <span class="min-w-0 flex-1">
           <span style={{ color: 'var(--c-text-muted)' }}>#{n().number}</span> {n().title}
         </span>
+        <Show when={category()}>
+          {(c) => (
+            <span
+              class="shrink-0 rounded px-1 text-[10px] leading-4"
+              style={{ color: c().fg, background: c().bg }}
+              title={c().title}
+              data-testid="forge-category-badge"
+            >
+              {c().label}
+            </span>
+          )}
+        </Show>
       </div>
       <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5" style={{ color: 'var(--c-text-muted)' }}>
         <span>{n().repo}</span>

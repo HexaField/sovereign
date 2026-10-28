@@ -100,6 +100,28 @@ describe('drawFrame', () => {
   })
 })
 
+describe('category badge', () => {
+  it('draws the category on a categorised card, in its colour, and nothing on an uncategorised one', () => {
+    const nodes = [
+      merged(R, 1, 1),
+      change(R, 2, {
+        createdAt: new Date(NOW - 0.5 * 86_400_000).toISOString(),
+        category: 'bug',
+        categorySource: 'rule'
+      }),
+      issue(R, 3)
+    ]
+    const { calls, stats } = frame(nodes)
+    expect(stats.nodesDrawn).toBe(3)
+    const texts = calls.filter((c) => c.name === 'fillText').map((c) => String(c.args[0]))
+    expect(texts.filter((t) => t === 'bug')).toHaveLength(1)
+    expect(calls.filter((c) => c.name === 'set:fillStyle').map((c) => c.args[0])).toContain('#f87171')
+    const plain = frame([nodes[0], { ...nodes[1], category: undefined, categorySource: undefined }, nodes[2]])
+    const badges = ['bug', 'feature', 'design', 'future', '?']
+    expect(plain.calls.some((c) => c.name === 'fillText' && badges.includes(String(c.args[0])))).toBe(false)
+  })
+})
+
 describe('depends-on edges', () => {
   it('end in an arrowhead at what the dependent needs; related edges do not', () => {
     const a = issue(R, 1)

@@ -14,6 +14,7 @@ import {
   parseRefKey,
   stateOfEpicStatus,
   trustedAuthorsOf,
+  WORK_CATEGORIES,
   type EpicStatus,
   type EventBus,
   type Forge,
@@ -21,6 +22,7 @@ import {
   type ForgeRef,
   type ForgeView,
   type RethinkNote,
+  type WorkCategory,
   type WorkEdgeKind,
   type WorkNode,
   type WorkStream
@@ -30,6 +32,7 @@ import type { StructureOf } from '@sovereign/graphcoder-core/contract'
 import type { HostForges } from '@sovereign/orgs'
 import { applyView, buildGraph, searchGraph, windowGraph, type BuiltGraph } from './build.js'
 import { createRepoCacheStore, readJson, writeJsonAtomic } from './cache.js'
+import { isWorkCategory } from './category.js'
 import { buildDigest, createEventLog, forgeEventLine, safeSegment, triage, type EventLog } from './events.js'
 import { buildOverlay, currentBranch, resolveCheckouts, type OverlayResult } from './overlay.js'
 import { isPlanPath, planMakesStream, scanPlans, type Plan } from './plans.js'
@@ -206,6 +209,17 @@ export interface ForgeService {
     byId: string,
     reason: string
   ): Promise<{ taskId: string; streamId?: string }>
+  /**
+   * Set (or, with null, clear) the user's or rethink's category of a node. Precedence user > rule > rethink:
+   * rethink is refused (409) on a node the user or the rules already categorise. Answers the node.
+   */
+  setCategory(
+    membrane: string,
+    nodeId: string,
+    category: WorkCategory | null,
+    source: 'user' | 'rethink',
+    reason?: string
+  ): Promise<WorkNode>
   /** The membrane's work streams; archived ones only with `archived`. */
   streams(membrane: string, opts?: { archived?: boolean }): Promise<WorkStream[]>
   /** Every work stream of the membrane, archived ones included, with its members (not its child streams). */
@@ -464,10 +478,14 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
   ): Promise<{ graph: BuiltGraph; tasks: PortTask[] }> {
     const s = state(membrane)
     if (!s.plansScanned) rescanPlans(membrane, scope)
-    const [tasks, related] = await Promise.all([deps.tasks.listByMembrane(membrane), deps.tasks.listRelated(membrane)])
+    const [tasks, related, categories] = await Promise.all([
+      deps.tasks.listByMembrane(membrane),
+      deps.tasks.listRelated(membrane),
+      deps.tasks.listCategories(membrane)
+    ])
     // The one place a membrane's graph reads the caches: only its trusted authors' items
     const repos = [...caches(scope), ...trackedCaches(scope, tasks)].map(trustedFor(membrane))
-    return { graph: buildGraph({ repos, plans: s.plans, tasks, related }), tasks }
+    return { graph: buildGraph({ repos, plans: s.plans, tasks, related, categories }), tasks }
   }
 
   /** Rescan plans; plan_changed events for files whose text changed (after the first scan). */
@@ -1452,6 +1470,26 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       if (streamId) await api.addMember(streamId, byId, membrane)
       emit('forge.updated', { membrane })
       return { taskId: node.taskId, ...(streamId ? { streamId } : {}) }
+    },
+
+    async setCategory(membrane, nodeId, category, source, reason) {
+      if (category !== null && !isWorkCategory(category))
+        throw new ForgeError(`category must be one of ${WORK_CATEGORIES.join(', ')}, or null`, 400)
+      const { node } = await nodeIn(membrane, nodeId)
+      if (source === 'rethink') {
+        if (category === null) throw new ForgeError('rethink sets a category; only the user clears one', 400)
+        // user > rule > rethink: a rethink category would never show over these.
+        if (node.categorySource === 'user')
+          throw new ForgeError(`${nodeId} is ${node.category} by the user's choice; rethink never overrides it`, 409)
+        if (node.categorySource === 'rule')
+          throw new ForgeError(
+            `${nodeId} is ${node.category} by the rules (its labels or title); nothing to decide`,
+            409
+          )
+      }
+      await deps.tasks.setCategory(membrane, nodeId, source, category, reason?.trim() || undefined)
+      emit('forge.updated', { membrane })
+      return (await nodeIn(membrane, nodeId)).node
     },
 
     async streams(membrane, opts = {}) {

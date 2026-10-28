@@ -195,6 +195,31 @@ describe.each(IMPLS)('TaskPort contract: $name', ({ make }) => {
     dispose()
   })
 
+  it('keeps one category per node and source per membrane, cleared by null, across a restart', async () => {
+    const { port, reopen, dispose } = await make()
+    const node = 'github:github.com/acme/widget#7'
+    expect(await port.setCategory('acme', node, 'rethink', 'future', 'moves the parser to a library')).toMatchObject({
+      nodeId: node,
+      category: 'future',
+      source: 'rethink',
+      reason: 'moves the parser to a library'
+    })
+    await port.setCategory('acme', node, 'rethink', 'bug')
+    await port.setCategory('acme', node, 'user', 'feature')
+    await port.setCategory('beta', node, 'user', 'design')
+    const after = reopen ? await reopen() : port
+    const of = async (m: string) =>
+      (await after.listCategories(m)).map((c) => [c.source, c.category]).sort((a, b) => a[0].localeCompare(b[0]))
+    expect(await of('acme')).toEqual([
+      ['rethink', 'bug'],
+      ['user', 'feature']
+    ])
+    expect(await of('beta')).toEqual([['user', 'design']])
+    expect(await after.setCategory('acme', node, 'user', null)).toBeNull()
+    expect(await of('acme')).toEqual([['rethink', 'bug']])
+    dispose()
+  })
+
   it('keeps tasks across a restart (persistent implementations)', async () => {
     const { port, reopen, dispose } = await make()
     if (!reopen) return dispose()

@@ -183,6 +183,28 @@ export interface WorkNode {
   closedAt?: string
   /** A closed issue: completed, or closed as not planned (cancelled). */
   closedReason?: 'completed' | 'not_planned'
+  /** Its category: the user's, else the rules', else rethink's. Absent: uncategorised. */
+  category?: WorkCategory
+  categorySource?: WorkCategorySource
+}
+
+/**
+ * feature = new or improved user-facing capability; bug = a fix for a defect; design = plans, specs,
+ * architecture, docs, RFCs, proposals; future = tech debt and enabling work (refactors, infrastructure,
+ * internal libraries, migrations, dependency upgrades, CI and test infrastructure), not "later".
+ */
+export type WorkCategory = 'feature' | 'future' | 'design' | 'bug'
+export const WORK_CATEGORIES: readonly WorkCategory[] = ['feature', 'bug', 'design', 'future']
+/** Who decided a node's category. Precedence: user > rule > rethink. */
+export type WorkCategorySource = 'rule' | 'rethink' | 'user'
+
+/** A stored category choice (rule categories are derived, never stored). */
+export interface NodeCategoryRecord {
+  nodeId: string
+  category: WorkCategory
+  source: 'rethink' | 'user'
+  reason?: string
+  at: string
 }
 
 /**
@@ -312,6 +334,8 @@ export interface ForgeFilters {
   repos?: string[]
   /** Node kinds to show: PRs (`change`), issues, plans, tasks, branches. */
   kinds?: WorkNodeKind[]
+  /** Categories to show; an uncategorised node passes no category filter. */
+  categories?: WorkCategory[]
   states?: WorkNodeState[]
   zones?: Zone[]
   authors?: string[]
@@ -478,6 +502,16 @@ export interface TaskPort {
   /** false when no such edge exists. */
   acceptRelated(membrane: string, from: string, to: string, kind: WorkEdgeKind): Promise<boolean>
   deleteRelated(membrane: string, from: string, to: string, kind: WorkEdgeKind): Promise<boolean>
+  /** The membrane's stored categories, one per (node, source). */
+  listCategories(membrane: string): Promise<NodeCategoryRecord[]>
+  /** Set one source's category of a node; `category: null` clears it. */
+  setCategory(
+    membrane: string,
+    nodeId: string,
+    source: NodeCategoryRecord['source'],
+    category: WorkCategory | null,
+    reason?: string
+  ): Promise<NodeCategoryRecord | null>
 }
 
 /** What a thread assigned to a node is asked to do, unless the user writes the prompt. */
@@ -507,6 +541,7 @@ export const FORGE_TOOLS = [
   'forge_note',
   'forge_supersede',
   'forge_depend',
+  'forge_categorize',
   'forge_stream_create',
   'forge_stream_rename',
   'forge_stream_status',

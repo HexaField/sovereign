@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { defaultWorkPrompt, type AgentOverlay, type WorkNode } from '@sovereign/core/forge'
-import { agentStatusLine, assignBody, defaultThreadLabel, linkedGroups, shortRef, taskSection } from './card-model.js'
+import {
+  agentStatusLine,
+  assignBody,
+  categoryBadge,
+  categoryChoices,
+  defaultThreadLabel,
+  linkedGroups,
+  shortRef,
+  taskSection
+} from './card-model.js'
+import { CATEGORY_COLORS } from './style.js'
 import { cardRethinkItems } from './rethink-model.js'
 import { change, edge, issue, plan, stream, task } from './test-fixtures.js'
 
@@ -109,6 +119,44 @@ describe('assign', () => {
 
   it('refuses a new thread without a label', () => {
     expect(() => assignBody({ nodeId: pr.id, threadId: null, newLabel: ' ' })).toThrow(/label/)
+  })
+})
+
+describe('category badge and select', () => {
+  it('shows nothing for an uncategorised node, else a coloured badge naming who decided', () => {
+    expect(categoryBadge(change(R, 1))).toBeNull()
+    expect(categoryBadge(change(R, 1, { category: 'bug', categorySource: 'rule' }))).toEqual({
+      category: 'bug',
+      label: 'bug',
+      title: 'Category: bug · from its labels or title',
+      ...CATEGORY_COLORS.bug
+    })
+    expect(categoryBadge(issue(R, 2, { category: 'future', categorySource: 'rethink' }))!.title).toBe(
+      'Category: future (tech debt / enabling work) · from rethink'
+    )
+    expect(categoryBadge(issue(R, 2, { category: 'design', categorySource: 'user' }))!.title).toContain('set by you')
+  })
+
+  it('uses four distinct colours: bug red, feature blue, design purple, future grey', () => {
+    expect(new Set(Object.values(CATEGORY_COLORS).map((c) => c.fg)).size).toBe(4)
+    expect(CATEGORY_COLORS.bug.fg).toBe('#f87171')
+    expect(CATEGORY_COLORS.future.fg).toBe('#9ca3af')
+  })
+
+  it('offers the four categories, and clear only for the user’s own choice', () => {
+    const none = categoryChoices(change(R, 1))
+    expect(none).toMatchObject({ value: '', canClear: false, source: 'uncategorised' })
+    expect(none.options.map((o) => o.value)).toEqual(['feature', 'bug', 'design', 'future'])
+    expect(none.options[3].label).toBe('future (tech debt / enabling work)')
+    expect(categoryChoices(change(R, 1, { category: 'bug', categorySource: 'rule' }))).toMatchObject({
+      value: 'bug',
+      canClear: false
+    })
+    expect(categoryChoices(change(R, 1, { category: 'design', categorySource: 'user' }))).toMatchObject({
+      value: 'design',
+      canClear: true,
+      source: 'set by you'
+    })
   })
 })
 

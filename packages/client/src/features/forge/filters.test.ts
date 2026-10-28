@@ -150,6 +150,34 @@ describe('filter editing', () => {
     ])
     expect(hasActiveFilters({ kinds: ['issue'] })).toBe(true)
   })
+
+  it('filters by category: values OR together, an uncategorised node never matches', () => {
+    const nodes = [
+      { ...a, category: 'feature' as const, categorySource: 'rule' as const },
+      { ...b, category: 'bug' as const, categorySource: 'user' as const },
+      c,
+      { ...d, category: 'future' as const, categorySource: 'rethink' as const }
+    ]
+    const ids = (categories: Array<'feature' | 'bug' | 'design' | 'future'>) =>
+      nodes.filter((n) => matchesFilters(n, { categories }, ctx)).map((n) => n.number)
+    expect(ids(['bug'])).toEqual([2])
+    expect(ids(['feature', 'future'])).toEqual([1, 4])
+    expect(ids(['design'])).toEqual([])
+    expect(nodes.filter((n) => matchesFilters(n, {}, ctx))).toHaveLength(4)
+    expect(hasActiveFilters({ categories: ['bug'] })).toBe(true)
+    expect(toggleFilterValue(toggleFilterValue({}, 'categories', 'bug'), 'categories', 'bug')).toEqual({})
+    expect(clearFilters({ categories: ['bug'], dim: true })).toEqual({ dim: true })
+    // The chip group: all four, always, in one order, with counts.
+    expect(filterOptions(nodes).categories).toEqual([
+      { value: 'feature', label: 'feature', count: 1 },
+      { value: 'bug', label: 'bug', count: 1 },
+      { value: 'design', label: 'design', count: 0 },
+      { value: 'future', label: 'future', count: 1 }
+    ])
+    expect(stableOptions(undefined, filterOptions([]), { categories: ['bug'] }).categories.map((o) => o.value)).toEqual(
+      ['feature', 'bug', 'design', 'future']
+    )
+  })
 })
 
 describe('stableOptions', () => {

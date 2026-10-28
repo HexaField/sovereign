@@ -160,6 +160,47 @@ describe('buildRethinkPrompt', () => {
     )
     expect(prompt).toContain('`forge_depend { membrane, from, to, reason, remove? }`')
   })
+
+  it('asks for a category on each uncategorised item, digest or not, and says what "future" means', () => {
+    const digest: ForgeDigest = {
+      membrane: 'acme',
+      cursor: '',
+      count: 1,
+      groups: [
+        {
+          stream: null,
+          nodes: [
+            { node: node(50), events: [ev(50, 'ci_failed')] },
+            { node: node(51, { category: 'bug', categorySource: 'rule' }), events: [ev(51, 'ci_failed')] }
+          ]
+        }
+      ]
+    }
+    const many = Array.from({ length: 33 }, (_, i) => node(100 + i, { labels: i === 0 ? ['later'] : [] }))
+    const prompt = buildRethinkPrompt({
+      membrane: 'acme',
+      runId: 'r',
+      digest,
+      limits: { maxJobs: 1, tokenBudget: 1 },
+      owners: new Map(),
+      streams: [],
+      planned: [],
+      // In the digest, categorised, or uncategorised and not yet in the digest.
+      uncategorised: [node(50), node(52, { category: 'design', categorySource: 'user' }), ...many]
+    })
+    expect(prompt).toContain('- Category: uncategorised\n')
+    expect(prompt).toContain('- Category: bug (rules)\n')
+    expect(prompt).toContain('`forge_categorize { membrane, nodeId, category, reason }`')
+    expect(prompt).toContain('future = tech debt and enabling work')
+    expect(prompt).toContain('“future” never means “later”')
+    const section = prompt.slice(prompt.indexOf('## Uncategorised items'))
+    expect(section).toContain(`- \`${nid(100)}\` change ${WIDGET}#100 — Change 100 [later]`)
+    expect(section).not.toContain(nid(50))
+    expect(section).not.toContain(nid(52))
+    expect(section).toContain(`\`${nid(129)}\``)
+    expect(section).not.toContain(`\`${nid(130)}\``)
+    expect(section).toContain('- … and 3 more (next run)')
+  })
 })
 
 describe('buildEpicsRefinePrompt', () => {
@@ -531,6 +572,33 @@ describe('rethink runner', () => {
       `### Dependencies\n\n- ${nid(51)} depends on ${stream.id}: needs the gears first\n- ${nid(51)} no longer depends on ${stream.id}: Gears shipped`
     )
     expect(runner.runs('acme')[0].actions).toMatchObject({ depend: 2 })
+  })
+
+  it('forge_categorize: fills an uncategorised node, refuses one the user chose, and lists it under Categories', async () => {
+    const { runId } = (await service.rethink('acme')) as { runId: string }
+    const rt = runner.threadOf('acme')!
+    expect(sent[sent.length - 1].text).toContain('- Category: uncategorised')
+    const cat = { membrane: 'acme', nodeId: nid(51), category: 'future', reason: 'moves the gear maths into a library' }
+    expect(await runner.tool(rt, 'forge_categorize', cat)).toEqual({ categorized: true, category: 'future' })
+    expect(await port.listCategories('acme')).toEqual([
+      expect.objectContaining({ nodeId: nid(51), category: 'future', source: 'rethink' })
+    ])
+    expect(await service.node('acme', nid(51))).toMatchObject({ category: 'future', categorySource: 'rethink' })
+    await expect(runner.tool(rt, 'forge_categorize', { ...cat, category: 'later' })).rejects.toMatchObject({
+      status: 400
+    })
+
+    await service.setCategory('acme', nid(52), 'design', 'user')
+    const refused = await runner.tool(rt, 'forge_categorize', { ...cat, nodeId: nid(52), category: 'bug' })
+    expect(refused).toEqual({ refused: `${nid(52)} is design by the user's choice; rethink never overrides it` })
+    expect(await service.node('acme', nid(52))).toMatchObject({ category: 'design', categorySource: 'user' })
+
+    status(rt, 'working')
+    status(rt, 'idle')
+    const report = runner.report('acme', runId)!
+    expect(report).toContain(`### Categories\n\n- ${nid(51)}: future — moves the gear maths into a library`)
+    expect(report).toContain(`- forge_categorize: ${nid(52)} is design by the user's choice`)
+    expect(runner.runs('acme')[0].actions).toMatchObject({ categorize: 1, refused: 1 })
   })
 
   it('a thread busy at the start goes idle once before the run turn', async () => {

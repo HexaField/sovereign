@@ -4,8 +4,9 @@
 // epics-model.ts), so their members' neighbours can show too.
 
 import type { AgentOverlay, ForgeFilters, WorkEdge, WorkNode } from '@sovereign/core'
-import { leafState } from '@sovereign/core/forge'
+import { leafState, WORK_CATEGORIES } from '@sovereign/core/forge'
 import { DAY_MS } from './layout.js'
+import { CATEGORY_LABELS } from './style.js'
 
 export interface FilterContext {
   /** The membrane's forge login, for "requested from me". */
@@ -73,6 +74,8 @@ export function isPausedOut(n: WorkNode, f: ForgeFilters, ctx: FilterContext): b
 export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: FilterContext): boolean {
   if (!one(f.repos, n.repo)) return false
   if (!one(f.kinds, n.kind)) return false
+  // An uncategorised node passes no category filter.
+  if (!one(f.categories, n.category)) return false
   if (!one(f.states, n.state)) return false
   if (!one(f.zones, n.zone)) return false
   if (!one(f.authors, n.author)) return false
@@ -119,6 +122,7 @@ export function hasActiveFilters(f: ForgeFilters): boolean {
   return (
     !!f.repos?.length ||
     !!f.kinds?.length ||
+    !!f.categories?.length ||
     !!f.states?.length ||
     !!f.zones?.length ||
     !!f.authors?.length ||
@@ -138,6 +142,7 @@ export function hasActiveFilters(f: ForgeFilters): boolean {
 export type ListFilterKey =
   | 'repos'
   | 'kinds'
+  | 'categories'
   | 'states'
   | 'zones'
   | 'authors'
@@ -177,6 +182,8 @@ export interface FilterOption {
 export interface FilterOptions {
   repos: FilterOption[]
   kinds: FilterOption[]
+  /** All four categories, always, in WORK_CATEGORIES order (the chip group next to Type). */
+  categories: FilterOption[]
   states: FilterOption[]
   zones: FilterOption[]
   authors: FilterOption[]
@@ -203,6 +210,7 @@ export function filterOptions(nodes: WorkNode[]): FilterOptions {
   const t = {
     repos: tally(),
     kinds: tally(),
+    categories: tally(),
     states: tally(),
     zones: tally(),
     authors: tally(),
@@ -216,6 +224,7 @@ export function filterOptions(nodes: WorkNode[]): FilterOptions {
   for (const n of nodes) {
     add(t.repos, n.repo)
     add(t.kinds, n.kind)
+    add(t.categories, n.category)
     add(t.states, n.state)
     add(t.zones, n.zone)
     add(t.authors, n.author)
@@ -235,6 +244,11 @@ export function filterOptions(nodes: WorkNode[]): FilterOptions {
       label: KIND_LABELS[k],
       count: t.kinds.get(k)!
     })),
+    categories: WORK_CATEGORIES.map((c) => ({
+      value: c,
+      label: CATEGORY_LABELS[c].short,
+      count: t.categories.get(c) ?? 0
+    })),
     states: list(t.states),
     zones: ['past', 'present', 'future']
       .filter((z) => t.zones.has(z))
@@ -246,7 +260,17 @@ export function filterOptions(nodes: WorkNode[]): FilterOptions {
   }
 }
 
-const OPTION_KEYS: OptionKey[] = ['repos', 'kinds', 'states', 'zones', 'authors', 'assignees', 'reviewers', 'labels']
+const OPTION_KEYS: OptionKey[] = [
+  'repos',
+  'kinds',
+  'categories',
+  'states',
+  'zones',
+  'authors',
+  'assignees',
+  'reviewers',
+  'labels'
+]
 
 export interface FilterMenu {
   key: OptionKey

@@ -1,10 +1,18 @@
-// Forge meta store — saved Forge views and the `related` edges agents add
-// between work-graph nodes. Same resilience as the task store (durable.ts):
-// memory for reads, AD4M for writes, outbox while AD4M is down, snapshot for
-// restarts. Files: <dir>/meta-outbox.jsonl, <dir>/meta-snapshot.json.
+// Forge meta store — saved Forge views, the `related` edges agents add
+// between work-graph nodes, and node categories set by rethink or the user.
+// Same resilience as the task store (durable.ts): memory for reads, AD4M for
+// writes, outbox while AD4M is down, snapshot for restarts. Files:
+// <dir>/meta-outbox.jsonl, <dir>/meta-snapshot.json.
 
 import { randomUUID } from 'node:crypto'
-import type { ForgeFilters, ForgeView, WorkEdgeKind, WorkEdgeSource } from '@sovereign/core'
+import {
+  WORK_CATEGORIES,
+  type ForgeFilters,
+  type ForgeView,
+  type WorkCategory,
+  type WorkEdgeKind,
+  type WorkEdgeSource
+} from '@sovereign/core'
 import type { DurableBackend, DurableStatus } from './durable.js'
 import { createDurable } from './durable.js'
 import type { LinkGraph, LinkPattern, LinkTriple } from './link-graph.js'
@@ -32,9 +40,23 @@ export interface RelatedEdge {
 /** A view as stored: its place in the membrane's list beside the view itself. */
 export type StoredView = ForgeView & { position?: number }
 
+/** One source's category of a node: `forge-category://<membrane>/<source>/<node id>` (parts URI-encoded). */
+export interface StoredCategory {
+  id: string
+  membrane: string
+  nodeId: string
+  category: WorkCategory
+  source: CategorySource
+  reason: string
+  createdAt: string
+}
+
+export type CategorySource = 'rethink' | 'user'
+
 export interface ForgeMeta {
   views: Map<string, StoredView>
   edges: Map<string, RelatedEdge>
+  categories: Map<string, StoredCategory>
 }
 
 export type ForgeMetaOp =
@@ -42,8 +64,17 @@ export type ForgeMetaOp =
   | { type: 'view.delete'; id: string }
   | { type: 'edge.put'; edge: RelatedEdge }
   | { type: 'edge.delete'; id: string }
+  | { type: 'category.put'; category: StoredCategory }
+  | { type: 'category.delete'; id: string }
 
 const EDGE_SOURCES: readonly RelatedEdgeSource[] = ['sync', 'rethink', 'user']
+const CATEGORY_SOURCES: readonly CategorySource[] = ['rethink', 'user']
+const CATEGORY_PREFIX = 'forge-category://'
+
+export function categoryId(membrane: string, source: CategorySource, nodeId: string): string {
+  return `${CATEGORY_PREFIX}${encodeURIComponent(membrane)}/${source}/${encodeURIComponent(nodeId)}`
+}
+
 const EDGE_KINDS: readonly WorkEdgeKind[] = [
   'base',
   'merged-into',
@@ -57,7 +88,7 @@ const EDGE_KINDS: readonly WorkEdgeKind[] = [
 ]
 
 export function emptyForgeMeta(): ForgeMeta {
-  return { views: new Map(), edges: new Map() }
+  return { views: new Map(), edges: new Map(), categories: new Map() }
 }
 
 function cloneView<V extends ForgeView>(v: V): V {
@@ -77,6 +108,12 @@ export function applyMetaOp(m: ForgeMeta, op: ForgeMetaOp): void {
       return
     case 'edge.delete':
       m.edges.delete(op.id)
+      return
+    case 'category.put':
+      m.categories.set(op.category.id, { ...op.category })
+      return
+    case 'category.delete':
+      m.categories.delete(op.id)
       return
   }
 }
@@ -111,6 +148,21 @@ function reviveEdge(raw: any): RelatedEdge | undefined {
   }
 }
 
+function reviveCategory(raw: any): StoredCategory | undefined {
+  if (!raw || typeof raw.id !== 'string' || typeof raw.nodeId !== 'string' || typeof raw.membrane !== 'string')
+    return undefined
+  if (!WORK_CATEGORIES.includes(raw.category) || !CATEGORY_SOURCES.includes(raw.source)) return undefined
+  return {
+    id: raw.id,
+    membrane: raw.membrane,
+    nodeId: raw.nodeId,
+    category: raw.category,
+    source: raw.source,
+    reason: String(raw.reason ?? ''),
+    createdAt: String(raw.createdAt ?? new Date(0).toISOString())
+  }
+}
+
 function clampConfidence(n: number): number {
   if (!Number.isFinite(n)) return 0
   return Math.min(1, Math.max(0, n))
@@ -128,8 +180,13 @@ export function reviveMetaOp(raw: unknown): ForgeMetaOp | undefined {
       const edge = reviveEdge(op.edge)
       return edge ? { type: 'edge.put', edge } : undefined
     }
+    case 'category.put': {
+      const category = reviveCategory(op.category)
+      return category ? { type: 'category.put', category } : undefined
+    }
     case 'view.delete':
     case 'edge.delete':
+    case 'category.delete':
       return typeof op.id === 'string' ? { type: op.type, id: op.id } : undefined
     default:
       return undefined
@@ -170,8 +227,22 @@ export function metaOpMutations(op: ForgeMetaOp): { add: LinkTriple[]; removeMat
       if (e.membrane) add.push({ source: e.id, predicate: P.membrane, target: toLiteral(e.membrane) })
       return { add, removeMatching: [{ source: e.id }] }
     }
+    case 'category.put': {
+      const c = op.category
+      const add: LinkTriple[] = [
+        { source: c.id, predicate: RDF_TYPE, target: T.NodeCategory },
+        { source: c.id, predicate: P.membrane, target: toLiteral(c.membrane) },
+        { source: c.id, predicate: P.node, target: toLiteral(c.nodeId) },
+        { source: c.id, predicate: P.category, target: toLiteral(c.category) },
+        { source: c.id, predicate: P.source, target: toLiteral(c.source) },
+        { source: c.id, predicate: P.reason, target: toLiteral(c.reason) },
+        { source: c.id, predicate: P.createdAt, target: toLiteral(c.createdAt) }
+      ]
+      return { add, removeMatching: [{ source: c.id }] }
+    }
     case 'view.delete':
     case 'edge.delete':
+    case 'category.delete':
       return { add: [], removeMatching: [{ source: op.id }] }
   }
 }
@@ -180,10 +251,12 @@ export function forgeMetaFromLinks(links: LinkTriple[]): ForgeMeta {
   const m = emptyForgeMeta()
   const views = new Map<string, Record<string, any>>()
   const edges = new Map<string, Record<string, any>>()
+  const categories = new Map<string, Record<string, any>>()
   for (const l of links) {
     if (l.predicate !== RDF_TYPE) continue
     if (l.target === T.ForgeView) views.set(l.source, { id: l.source, repos: [] })
     else if (l.target === T.RelatedEdge) edges.set(l.source, { id: l.source })
+    else if (l.target === T.NodeCategory) categories.set(l.source, { id: l.source })
   }
   for (const l of links) {
     const v = views.get(l.source)
@@ -215,6 +288,17 @@ export function forgeMetaFromLinks(links: LinkTriple[]): ForgeMeta {
       else if (l.predicate === P.source) e.source = value
       else if (l.predicate === P.membrane) e.membrane = value
       else if (l.predicate === P.createdAt) e.createdAt = value
+      continue
+    }
+    const c = categories.get(l.source)
+    if (c) {
+      const value = fromLiteral(l.target)
+      if (l.predicate === P.membrane) c.membrane = value
+      else if (l.predicate === P.node) c.nodeId = value
+      else if (l.predicate === P.category) c.category = value
+      else if (l.predicate === P.source) c.source = value
+      else if (l.predicate === P.reason) c.reason = value
+      else if (l.predicate === P.createdAt) c.createdAt = value
     }
   }
   for (const raw of views.values()) {
@@ -224,6 +308,10 @@ export function forgeMetaFromLinks(links: LinkTriple[]): ForgeMeta {
   for (const raw of edges.values()) {
     const e = reviveEdge(raw)
     if (e) m.edges.set(e.id, e)
+  }
+  for (const raw of categories.values()) {
+    const c = reviveCategory(raw)
+    if (c) m.categories.set(c.id, c)
   }
   return m
 }
@@ -274,6 +362,15 @@ export interface ForgeMetaStore {
   /** Mark an edge accepted by the user; false when there is no such edge. */
   acceptEdge(id: string): boolean
   deleteEdge(id: string): boolean
+  listCategories(membrane?: string): StoredCategory[]
+  /** Set one source's category of a node (replacing that source's previous one); null clears it. */
+  setCategory(input: {
+    membrane: string
+    nodeId: string
+    source: CategorySource
+    category: WorkCategory | null
+    reason?: string
+  }): StoredCategory | null
   status(): DurableStatus
   settled(): Promise<void>
   sync(): Promise<void>
@@ -304,7 +401,11 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
     onReconnect: opts.onReconnect,
     empty: emptyForgeMeta,
     apply: applyMetaOp,
-    serialize: (m) => ({ views: [...m.views.values()], edges: [...m.edges.values()] }),
+    serialize: (m) => ({
+      views: [...m.views.values()],
+      edges: [...m.edges.values()],
+      categories: [...m.categories.values()]
+    }),
     deserialize: (raw: any) => {
       const m = emptyForgeMeta()
       for (const v of raw?.views ?? []) {
@@ -315,14 +416,19 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
         const edge = reviveEdge(e)
         if (edge) m.edges.set(edge.id, edge)
       }
+      for (const c of raw?.categories ?? []) {
+        const category = reviveCategory(c)
+        if (category) m.categories.set(category.id, category)
+      }
       return m
     },
     reviveOp: reviveMetaOp,
     seedOps: (m) => [
       ...[...m.views.values()].map((view): ForgeMetaOp => ({ type: 'view.put', view })),
-      ...[...m.edges.values()].map((edge): ForgeMetaOp => ({ type: 'edge.put', edge }))
+      ...[...m.edges.values()].map((edge): ForgeMetaOp => ({ type: 'edge.put', edge })),
+      ...[...m.categories.values()].map((category): ForgeMetaOp => ({ type: 'category.put', category }))
     ],
-    isEmpty: (m) => m.views.size === 0 && m.edges.size === 0,
+    isEmpty: (m) => m.views.size === 0 && m.edges.size === 0 && m.categories.size === 0,
     retryMs: opts.retryMs,
     callTimeoutMs: opts.callTimeoutMs,
     snapshotDelayMs: opts.snapshotDelayMs,
@@ -405,6 +511,32 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
       if (!state().edges.has(id)) return false
       durable.write({ type: 'edge.delete', id })
       return true
+    },
+    listCategories(membrane) {
+      return [...state().categories.values()]
+        .filter((c) => membrane === undefined || c.membrane === membrane)
+        .map((c) => ({ ...c }))
+    },
+    setCategory(input) {
+      if (!input.membrane || !input.nodeId) throw new Error('A category needs a membrane and a node')
+      if (!CATEGORY_SOURCES.includes(input.source)) throw new Error(`Unknown category source: ${input.source}`)
+      const id = categoryId(input.membrane, input.source, input.nodeId)
+      if (input.category === null) {
+        if (state().categories.has(id)) durable.write({ type: 'category.delete', id })
+        return null
+      }
+      if (!WORK_CATEGORIES.includes(input.category)) throw new Error(`Unknown category: ${input.category}`)
+      const category: StoredCategory = {
+        id,
+        membrane: input.membrane,
+        nodeId: input.nodeId,
+        category: input.category,
+        source: input.source,
+        reason: input.reason ?? '',
+        createdAt: new Date().toISOString()
+      }
+      durable.write({ type: 'category.put', category })
+      return { ...category }
     },
     status: durable.status,
     settled: durable.settled,

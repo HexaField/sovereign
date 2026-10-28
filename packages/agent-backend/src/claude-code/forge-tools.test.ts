@@ -62,5 +62,18 @@ describe('forge rethink MCP tools', () => {
     const dep = { membrane: 'acme', from: 'a', to: 'task://s', reason: 'needs it', remove: true }
     await run('forge_depend', dep)
     expect(f.call).toHaveBeenCalledWith(RETHINK, 'forge_depend', dep)
+    const cat = { membrane: 'acme', nodeId: 'a', category: 'future', reason: 'moves the parser into a library' }
+    await run('forge_categorize', cat)
+    expect(f.call).toHaveBeenCalledWith(RETHINK, 'forge_categorize', cat)
+  })
+
+  it('forge_categorize takes only the four categories and says what "future" means', () => {
+    const t = tools(deps(RETHINK, forge())) as any
+    const def = t.forge_categorize
+    expect(def.description).toContain('tech debt and enabling work')
+    expect(def.description).toContain('never "later"')
+    const schema = def.inputSchema
+    expect(schema.safeParse({ membrane: 'acme', nodeId: 'a', category: 'bug', reason: 'r' }).success).toBe(true)
+    expect(schema.safeParse({ membrane: 'acme', nodeId: 'a', category: 'later', reason: 'r' }).success).toBe(false)
   })
 })

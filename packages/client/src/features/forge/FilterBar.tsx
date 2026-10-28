@@ -1,9 +1,9 @@
-// Filter chips for one graph: the most used fields as chips (Repo, State,
-// Assignee, Requested from me, Not in a tree, Agent, Updated), the rest behind
-// "More", a text filter. Tree nodes are picked in the tree panel, not here.
+// Filter chips for one graph: the most used fields as chips (Repo, Type, the
+// category chip group, State, Assignee, Requested from me, Not in a tree,
+// Agent, Updated), the rest behind "More", a text filter. Tree nodes are picked in the tree panel, not here.
 
 import { createSignal, For, Show, type Component } from 'solid-js'
-import type { ForgeFilters } from '@sovereign/core'
+import type { ForgeFilters, WorkCategory } from '@sovereign/core'
 import {
   clearFilters,
   hasActiveFilters,
@@ -16,6 +16,7 @@ import {
   type OptionKey
 } from './filters.js'
 import { useDismiss } from './dismiss.js'
+import { CATEGORY_COLORS, CATEGORY_LABELS } from './style.js'
 
 export interface FilterBarProps {
   filters: ForgeFilters
@@ -84,6 +85,40 @@ const FilterBar: Component<FilterBarProps> = (props) => {
     </Show>
   )
 
+  // One toggle per category, in its colour, beside the Type menu.
+  const CategoryChips: Component = () => (
+    <div
+      class="inline-flex items-center gap-0.5"
+      role="group"
+      aria-label="Category"
+      data-testid="forge-filter-categories"
+    >
+      <For each={props.options.categories}>
+        {(o) => {
+          const c = o.value as WorkCategory
+          const on = () => active('categories').includes(c)
+          return (
+            <button
+              class={chip}
+              style={{
+                'border-color': on() ? CATEGORY_COLORS[c].fg : 'var(--c-border)',
+                color: CATEGORY_COLORS[c].fg,
+                background: on() ? CATEGORY_COLORS[c].bg : 'var(--c-bg)'
+              }}
+              aria-pressed={on()}
+              title={`Category: ${CATEGORY_LABELS[c].long} (${o.count} loaded)`}
+              onClick={() => props.onChange(toggleFilterValue(props.filters, 'categories', c))}
+              data-testid="forge-filter-category"
+              data-category={c}
+            >
+              {o.label}
+            </button>
+          )
+        }}
+      </For>
+    </div>
+  )
+
   return (
     <div class="flex flex-wrap items-center gap-1 px-2 py-1" data-testid="forge-filters">
       <input
@@ -109,30 +144,35 @@ const FilterBar: Component<FilterBarProps> = (props) => {
       </Show>
       <For each={PRIMARY_MENUS}>
         {(m) => (
-          <div class="relative">
-            <button
-              class={chip}
-              style={chipStyle(active(m.key).length > 0)}
-              onClick={(e) => toggleOpen(m.key, e)}
-              data-testid={`forge-filter-${m.key}`}
-            >
-              {m.label}
-              <Show when={active(m.key).length}>
-                <span>
-                  :{' '}
-                  {active(m.key)
-                    .map((v) => labelOf(m.key, v))
-                    .join(', ')}
-                </span>
+          <>
+            <div class="relative">
+              <button
+                class={chip}
+                style={chipStyle(active(m.key).length > 0)}
+                onClick={(e) => toggleOpen(m.key, e)}
+                data-testid={`forge-filter-${m.key}`}
+              >
+                {m.label}
+                <Show when={active(m.key).length}>
+                  <span>
+                    :{' '}
+                    {active(m.key)
+                      .map((v) => labelOf(m.key, v))
+                      .join(', ')}
+                  </span>
+                </Show>
+                <span style={{ color: 'var(--c-text-muted)' }}>▾</span>
+              </button>
+              <Show when={open() === m.key}>
+                <div class={menuBox} style={menuStyle} data-testid={`forge-filter-menu-${m.key}`}>
+                  <Options m={m} />
+                </div>
               </Show>
-              <span style={{ color: 'var(--c-text-muted)' }}>▾</span>
-            </button>
-            <Show when={open() === m.key}>
-              <div class={menuBox} style={menuStyle} data-testid={`forge-filter-menu-${m.key}`}>
-                <Options m={m} />
-              </div>
+            </div>
+            <Show when={m.key === 'kinds'}>
+              <CategoryChips />
             </Show>
-          </div>
+          </>
         )}
       </For>
       <button

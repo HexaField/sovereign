@@ -1,6 +1,15 @@
 // Forge HTTP client. Every call takes a fetch, so tests pass their own.
 
-import type { AgentOverlay, EpicStatus, ForgeGraph, ForgeView, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
+import type {
+  AgentOverlay,
+  EpicStatus,
+  ForgeGraph,
+  ForgeView,
+  WorkCategory,
+  WorkEdge,
+  WorkNode,
+  WorkStream
+} from '@sovereign/core'
 import type { AssignBody } from './card-model.js'
 import type { RethinkRuns, RethinkStart } from './rethink-model.js'
 import { windowQuery, type WindowRequest } from './window-model.js'
@@ -87,6 +96,9 @@ export function createForgeApi(f: Fetch = (...a) => fetch(...a)) {
     /** Pause a PR, issue or task, or resume it. */
     setPaused: async (membrane: string, nodeId: string, paused: boolean): Promise<WorkNode> =>
       json(await send('/api/forge/paused', 'POST', { membrane, nodeId, paused })),
+    /** The user's category of a node; null clears it, so the rules or rethink decide again. */
+    setCategory: async (membrane: string, nodeId: string, category: WorkCategory | null): Promise<WorkNode> =>
+      json(await send(`/api/forge/nodes/${enc(nodeId)}/category`, 'PUT', { membrane, category })),
     /** Place a stream in the goal tree: under `parentId`, or at the top (null) as a goal. */
     setStreamParent: async (membrane: string, streamId: string, parentId: string | null): Promise<WorkStream> =>
       json(await send(`/api/forge/streams/${enc(streamId)}/parent`, 'POST', { membrane, parentId })),

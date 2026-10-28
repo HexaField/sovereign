@@ -1,12 +1,14 @@
 // Forge TaskPort — the work graph's view of the task graph (the TaskPort
 // contract in @sovereign/core). Task writes go through TaskService, so each
-// one emits the task.* bus events the presence TaskDigest reads; views and
-// suggested edges live in the Forge meta store. Both persist in the
-// `sovereign-forge` perspective (with outbox and snapshot while AD4M is down).
+// one emits the task.* bus events the presence TaskDigest reads; views,
+// suggested edges and node categories live in the Forge meta store. Both
+// persist in the `sovereign-forge` perspective (with outbox and snapshot while
+// AD4M is down).
 
 import type {
   ChangeState,
   ForgeView,
+  NodeCategoryRecord,
   PortTask,
   PortTaskStatus,
   RelatedEdgeRecord,
@@ -16,7 +18,7 @@ import type {
   WorkStream
 } from '@sovereign/core'
 import { epicStatusOf, parseRefKey } from '@sovereign/core'
-import type { ForgeMetaStore, RelatedEdge } from './meta.js'
+import type { ForgeMetaStore, RelatedEdge, StoredCategory } from './meta.js'
 import type { TaskService } from './service.js'
 import type { Task, TaskProvider } from './types.js'
 import { parsePlanKey, planKey, providerKey } from './types.js'
@@ -153,6 +155,16 @@ function toRecord(e: RelatedEdge): RelatedEdgeRecord {
     source: e.source,
     accepted: e.accepted,
     createdAt: e.createdAt
+  }
+}
+
+function toCategoryRecord(c: StoredCategory): NodeCategoryRecord {
+  return {
+    nodeId: c.nodeId,
+    category: c.category,
+    source: c.source,
+    ...(c.reason ? { reason: c.reason } : {}),
+    at: c.createdAt
   }
 }
 
@@ -324,6 +336,15 @@ export function createForgeTaskPort(deps: ForgeTaskPortDeps): TaskPort {
     async deleteRelated(membrane, from, to, kind) {
       const e = edgeIn(membrane, from, to, kind)
       return e ? meta.deleteEdge(e.id) : false
+    },
+
+    async listCategories(membrane) {
+      return meta.listCategories(membrane).map(toCategoryRecord)
+    },
+
+    async setCategory(membrane, nodeId, source, category, reason) {
+      const c = meta.setCategory({ membrane, nodeId, source, category, ...(reason ? { reason } : {}) })
+      return c ? toCategoryRecord(c) : null
     }
   }
 }

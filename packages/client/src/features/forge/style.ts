@@ -6,6 +6,7 @@ import type {
   ChecksState,
   EpicStatus,
   ReviewState,
+  WorkCategory,
   WorkEdge,
   WorkNode,
   WorkNodeState
@@ -58,6 +59,22 @@ export const EPIC_STATUS_LABELS: Record<EpicStatus, string> = {
   planned: 'Planned',
   paused: 'Paused',
   archived: 'Archived'
+}
+
+/** A node's category badge: bug red, feature blue, design purple, future grey; text colours legible on dark and light. */
+export const CATEGORY_COLORS: Record<WorkCategory, { fg: string; bg: string }> = {
+  bug: { fg: '#f87171', bg: 'rgba(239,68,68,0.18)' },
+  feature: { fg: '#60a5fa', bg: 'rgba(59,130,246,0.18)' },
+  design: { fg: '#c084fc', bg: 'rgba(168,85,247,0.18)' },
+  future: { fg: '#9ca3af', bg: 'rgba(156,163,175,0.18)' }
+}
+
+/** The badge text, and the longer name a tooltip, legend or select shows. */
+export const CATEGORY_LABELS: Record<WorkCategory, { short: string; long: string }> = {
+  feature: { short: 'feature', long: 'feature' },
+  bug: { short: 'bug', long: 'bug' },
+  design: { short: 'design', long: 'design' },
+  future: { short: 'future', long: 'future (tech debt / enabling work)' }
 }
 
 export const CI_COLORS: Record<ChecksState, string | null> = {

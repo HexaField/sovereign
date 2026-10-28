@@ -4,7 +4,7 @@
 // the run report and on the node's card.
 
 import { tool } from '@anthropic-ai/claude-agent-sdk'
-import { EPIC_STATUSES, type ForgeToolName } from '@sovereign/core'
+import { EPIC_STATUSES, WORK_CATEGORIES, type ForgeToolName } from '@sovereign/core'
 import { z } from 'zod'
 
 /** Late-bound by the server once the forge service exists. */
@@ -106,6 +106,17 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
         remove: z.boolean().optional().describe('Delete the dependency instead.')
       },
       run('forge_depend')
+    ),
+    tool(
+      'forge_categorize',
+      'Give an uncategorised node its category: `feature` = new or improved user-facing capability; `bug` = a fix for a defect; `design` = plans, specs, architecture, docs, RFCs, proposals; `future` = tech debt and enabling work (refactors, infrastructure, internal libraries, plumbing, migrations, dependency upgrades, CI and test infrastructure, perf groundwork, cleanups) — "future" means enabling work, never "later". Refused when the user or the rules (labels, title prefix) already categorise the node.',
+      {
+        membrane,
+        nodeId,
+        category: z.enum(WORK_CATEGORIES as [string, ...string[]]),
+        reason: z.string().describe('One sentence: why this category.')
+      },
+      run('forge_categorize')
     ),
     tool(
       'forge_stream_create',

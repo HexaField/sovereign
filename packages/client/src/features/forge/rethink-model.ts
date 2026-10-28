@@ -20,11 +20,12 @@ export interface RethinkRunSummary {
   startedAt: string
   endedAt?: string
   events: number
-  /** `epic`: changes to the epics (forge_stream_* tools); `supersede`: forge_supersede; `depend`: forge_depend. Absent in reports from before those tools. */
+  /** `epic`: changes to the epics (forge_stream_* tools); `supersede`: forge_supersede; `depend`: forge_depend; `categorize`: forge_categorize. Absent in reports from before those tools. */
   actions: Record<'relate' | 'stream' | 'dispatch' | 'draft' | 'attention' | 'note' | 'refused', number> & {
     epic?: number
     supersede?: number
     depend?: number
+    categorize?: number
   }
   limitsHit: number
   tokens?: number
@@ -74,7 +75,8 @@ export function actionCount(run: RethinkRunSummary): number {
     a.note +
     (a.epic ?? 0) +
     (a.supersede ?? 0) +
-    (a.depend ?? 0)
+    (a.depend ?? 0) +
+    (a.categorize ?? 0)
   )
 }
 

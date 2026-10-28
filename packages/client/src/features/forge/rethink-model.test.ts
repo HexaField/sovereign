@@ -53,6 +53,7 @@ describe('rethink status', () => {
     expect(actionCount(run({ actions: { ...run().actions, epic: 3 } }))).toBe(8)
     expect(actionCount(run({ actions: { ...run().actions, supersede: 2 } }))).toBe(7)
     expect(actionCount(run({ actions: { ...run().actions, depend: 4 } }))).toBe(9)
+    expect(actionCount(run({ actions: { ...run().actions, categorize: 6 } }))).toBe(11)
     expect(phaseLabel(done)).toBe('Rethink done: 5 actions, 1 limit hit')
     expect(phaseLabel({ phase: 'done', run: run({ status: 'timed-out', limitsHit: 0 }) })).toBe(
       'Rethink timed out: 5 actions'

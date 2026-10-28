@@ -406,6 +406,49 @@ describe('windowGraph / applyView / searchGraph', () => {
     )
   })
 
+  it('categorises nodes from the rules and the stored choices, and filters by category', () => {
+    const items = () => [
+      cacheOf(WIDGET, [
+        change(WIDGET, 4, { title: 'fix: teeth slip' }),
+        change(WIDGET, 5, { title: 'Faster gears' }),
+        change(WIDGET, 6, { title: 'Sprocket notes' }),
+        change(WIDGET, 7, { title: 'feat: gears', labels: ['tech-debt'] })
+      ])
+    ]
+    const cats = buildGraph(input({ repos: items() }))
+    const withStored = buildGraph({
+      ...input({ repos: items() }),
+      categories: [
+        { nodeId: id(WIDGET, 5), source: 'rethink', category: 'feature', at: '2026-10-01T00:00:00Z' },
+        { nodeId: id(WIDGET, 4), source: 'rethink', category: 'feature', at: '2026-10-01T00:00:00Z' }
+      ]
+    })
+    const of = (gr: typeof g, n: number) => {
+      const x = gr.nodes.find((y) => y.id === id(WIDGET, n))!
+      return [x.category, x.categorySource]
+    }
+    expect([4, 5, 6, 7].map((n) => of(cats, n))).toEqual([
+      ['bug', 'rule'],
+      [undefined, undefined],
+      [undefined, undefined],
+      ['future', 'rule']
+    ])
+    // A rethink category fills only what the rules leave open.
+    expect([4, 5].map((n) => of(withStored, n))).toEqual([
+      ['bug', 'rule'],
+      ['feature', 'rethink']
+    ])
+    const v = { id: 'v', membrane: 'acme', title: 'cats', repos: [], filters: {} }
+    const shown = (categories: Array<'bug' | 'feature' | 'future'>) =>
+      applyView(withStored, { ...v, filters: { categories } })
+        .nodes.filter((n) => n.kind === 'change')
+        .map((n) => n.number)
+    expect(shown(['bug'])).toEqual([4])
+    expect(shown(['feature', 'future']).sort()).toEqual([5, 7])
+    // No category chosen: every node, uncategorised ones too.
+    expect(applyView(withStored, v).nodes).toHaveLength(withStored.nodes.length)
+  })
+
   it('searches title, number, branch and author across the full history', () => {
     expect(searchGraph(g, 'sprocket').nodes.map((n) => n.id)).toEqual([id(WIDGET, 1)])
     expect(searchGraph(g, '#9').nodes.map((n) => n.id)).toEqual([id(GADGET, 9)])

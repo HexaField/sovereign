@@ -1,12 +1,13 @@
 // Forge ontology — the `sovereign-forge` AD4M perspective.
 //
-// One namespace (`forge://`), four SHACL subject classes, registered when the
+// One namespace (`forge://`), five SHACL subject classes, registered when the
 // perspective is first opened (ad4m-perspective.ts):
 //
 //   Task         task://<uuid>        rdf://type forge://Task
 //   WorkStream   (a Task)             rdf://type forge://WorkStream, in addition
 //   RelatedEdge  forge-edge://<uuid>  rdf://type forge://RelatedEdge
 //   ForgeView    forge-view://<uuid>  rdf://type forge://ForgeView
+//   NodeCategory forge-category://<membrane>/<source>/<node id>  rdf://type forge://NodeCategory
 //
 // Subtasks are one link per pair, parent → child: `forge://subtask`.
 // Scalar values are AD4M string literals; provider and filters are JSON text
@@ -22,7 +23,8 @@ export const T = {
   Task: 'forge://Task',
   WorkStream: 'forge://WorkStream',
   RelatedEdge: 'forge://RelatedEdge',
-  ForgeView: 'forge://ForgeView'
+  ForgeView: 'forge://ForgeView',
+  NodeCategory: 'forge://NodeCategory'
 } as const
 
 export const P = {
@@ -52,7 +54,10 @@ export const P = {
   repo: 'forge://repo',
   filters: 'forge://filters',
   height: 'forge://height',
-  position: 'forge://position'
+  position: 'forge://position',
+  // NodeCategory (also membrane, source, reason, createdAt)
+  node: 'forge://node',
+  category: 'forge://category'
 } as const
 
 /** Single-valued string literal property. */
@@ -130,6 +135,17 @@ export const FORGE_SHACL_CLASSES: Record<string, object> = {
       scalar('filters', P.filters),
       scalar('height', P.height),
       scalar('position', P.position)
+    ]
+  },
+  NodeCategory: {
+    ...typed(T.NodeCategory),
+    properties: [
+      scalar('membrane', P.membrane, true),
+      scalar('node', P.node, true),
+      scalar('category', P.category, true),
+      scalar('source', P.source, true),
+      scalar('reason', P.reason),
+      scalar('created', P.createdAt, true)
     ]
   }
 }

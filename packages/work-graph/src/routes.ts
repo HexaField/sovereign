@@ -1,7 +1,8 @@
 // Forge REST routes.
 
 import express, { Router, type Request, type Response } from 'express'
-import { EPIC_STATUSES, type EpicStatus, type ForgeView, type WorkEdgeKind } from '@sovereign/core'
+import { EPIC_STATUSES, WORK_CATEGORIES, type EpicStatus, type ForgeView, type WorkEdgeKind } from '@sovereign/core'
+import { isWorkCategory } from './category.js'
 import { ForgeError, type ForgeService } from './service.js'
 
 export type Auth = (req: Request, res: Response, next: () => void) => void
@@ -215,6 +216,19 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
       if (!nodeId) throw bad('nodeId is required')
       if (typeof req.body?.paused !== 'boolean') throw bad('paused must be true or false')
       return service.setPaused(requireMembrane(req), nodeId, req.body.paused)
+    })
+  )
+
+  // The user's category of a node (a node id is URL-encoded); null clears it, so the rules or rethink decide again.
+  router.put(
+    '/api/forge/nodes/:id/category',
+    requireAuth,
+    json,
+    handle((req) => {
+      const category = req.body?.category
+      if (category !== null && !isWorkCategory(category))
+        throw bad(`category must be one of ${WORK_CATEGORIES.join(', ')}, or null`)
+      return service.setCategory(requireMembrane(req), String(req.params.id), category, 'user')
     })
   )
 

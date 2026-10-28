@@ -63,6 +63,8 @@ export type {
   RelatedEdge,
   RelatedEdgeSource,
   StoredView,
+  StoredCategory,
+  CategorySource,
   SaveViewInput,
   AddEdgeInput
 } from './meta.js'

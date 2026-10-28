@@ -276,6 +276,17 @@ describe('api', () => {
     ])
   })
 
+  it('category: PUT the user choice, null clears it', async () => {
+    const { calls, api } = recorder({})
+    await api.setCategory('demo', 'github:github.com/demo-org/engine#1', 'future')
+    await api.setCategory('demo', 'github:github.com/demo-org/engine#1', null)
+    const url = '/api/forge/nodes/github%3Agithub.com%2Fdemo-org%2Fengine%231/category'
+    expect(calls).toEqual([
+      { url, method: 'PUT', body: { membrane: 'demo', category: 'future' } },
+      { url, method: 'PUT', body: { membrane: 'demo', category: null } }
+    ])
+  })
+
   it('sync and rethink accept an empty 202', async () => {
     const { calls, api } = recorder(null, 202)
     await api.sync('demo')

@@ -6,11 +6,13 @@ import {
   type ForgeFilters,
   type ForgeRef,
   type ForgeView,
+  type NodeCategoryRecord,
   type WorkEdge,
   type WorkNode,
   type WorkNodeState,
   type Zone
 } from '@sovereign/core'
+import { applyCategories } from './category.js'
 import type { Plan } from './plans.js'
 import type { CachedChange, CachedIssue, PortTask, RelatedEdgeRecord, RepoCache } from './types.js'
 
@@ -19,6 +21,8 @@ export interface BuildInput {
   plans: Plan[]
   tasks: PortTask[]
   related: RelatedEdgeRecord[]
+  /** Stored categories (rethink's, the user's); the rules fill in the rest. */
+  categories?: NodeCategoryRecord[]
 }
 
 export interface BuiltGraph {
@@ -363,8 +367,10 @@ export function buildGraph(input: BuildInput): BuiltGraph {
 
   const streams = new Set(input.tasks.filter((t) => t.isStream).map((t) => t.id))
   const end = (id: string, kind: WorkEdge['kind']) => nodes.has(id) || (kind === 'depends-on' && streams.has(id))
+  const out = [...nodes.values()]
+  applyCategories(out, input.categories ?? [])
   return {
-    nodes: [...nodes.values()],
+    nodes: out,
     edges: [...edges.values()].filter((e) => end(e.from, e.kind) && end(e.to, e.kind))
   }
 }
@@ -404,6 +410,7 @@ export function matchesFilters(n: WorkNode, f: ForgeFilters, ctx: { me?: string;
   const repos = lower(f.repos)
   if (repos && !(n.repo && repos.has(n.repo.toLowerCase()))) return false
   if (f.kinds?.length && !f.kinds.includes(n.kind)) return false
+  if (f.categories?.length && !(n.category && f.categories.includes(n.category))) return false
   if (f.states?.length && !f.states.includes(n.state)) return false
   if (f.zones?.length && !f.zones.includes(n.zone)) return false
   const authors = lower(f.authors)

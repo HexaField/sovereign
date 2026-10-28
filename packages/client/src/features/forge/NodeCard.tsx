@@ -5,6 +5,7 @@ import {
   defaultWorkPrompt,
   type AgentOverlay,
   type EpicStatus,
+  type WorkCategory,
   type WorkEdge,
   type WorkNode,
   type WorkStream
@@ -12,6 +13,8 @@ import {
 import {
   agentStatusLine,
   assignBody,
+  categoryBadge,
+  categoryChoices,
   defaultThreadLabel,
   kindLabel,
   linkedGroups,
@@ -121,6 +124,15 @@ const NodeCard: Component<NodeCardProps> = (props) => {
       props.onChanged()
     })
 
+  // ── Category (the user's choice beats the rules and rethink; null clears it) ──
+  const category = createMemo(() => categoryChoices(n()))
+  const badge = createMemo(() => categoryBadge(n()))
+  const setCategory = (c: WorkCategory | null) =>
+    run(async () => {
+      await props.api.setCategory(props.membrane, n().id, c)
+      props.onChanged()
+    })
+
   const togglePaused = () =>
     run(async () => {
       await props.api.setPaused(props.membrane, n().id, !n().paused)
@@ -150,6 +162,21 @@ const NodeCard: Component<NodeCardProps> = (props) => {
             <Show when={n().repo}> · {n().repo}</Show>
             <Show when={n().number !== undefined}> #{n().number}</Show> ·{' '}
             <span data-testid="forge-card-state">{n().state}</span>
+            <Show when={badge()}>
+              {(c) => (
+                <>
+                  {' '}
+                  <span
+                    class="rounded px-1 text-[10px]"
+                    style={{ color: c().fg, background: c().bg }}
+                    title={c().title}
+                    data-testid="forge-card-category-badge"
+                  >
+                    {c().label}
+                  </span>
+                </>
+              )}
+            </Show>
             <Show when={n().paused}>
               {' · '}
               <span style={{ color: EPIC_STATUS_COLORS.paused.fg }}>paused</span>
@@ -191,6 +218,35 @@ const NodeCard: Component<NodeCardProps> = (props) => {
         </Show>
 
         <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+          <dt style={muted}>Category</dt>
+          <dd class="flex flex-wrap items-center gap-1.5">
+            <select
+              class="rounded border px-1 py-0.5 text-xs"
+              style={btnStyle}
+              value={category().value}
+              disabled={busy()}
+              onChange={(e) => e.currentTarget.value && setCategory(e.currentTarget.value as WorkCategory)}
+              data-testid="forge-card-category"
+            >
+              <Show when={!category().value}>
+                <option value="">Uncategorised</option>
+              </Show>
+              <For each={category().options}>{(o) => <option value={o.value}>{o.label}</option>}</For>
+            </select>
+            <span style={muted}>{category().source}</span>
+            <Show when={category().canClear}>
+              <button
+                class={btn}
+                style={btnStyle}
+                disabled={busy()}
+                onClick={() => setCategory(null)}
+                title="Clear your choice: the rules or rethink decide again"
+                data-testid="forge-card-category-clear"
+              >
+                Clear
+              </button>
+            </Show>
+          </dd>
           <Show when={n().branch}>
             {(b) => (
               <>
