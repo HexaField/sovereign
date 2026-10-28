@@ -17,6 +17,7 @@ import {
   initials,
   reviewSummary,
   ringFor,
+  CHANGES_REQUESTED_RING,
   MEMBER_LINK,
   TREE_LINK,
   type Palette
@@ -174,16 +175,25 @@ function drawNode(
   const selected = f.selectedId === p.id
   const hover = f.hoverId === p.id
   const stateColor = STATE_COLORS[n.state] ?? palette.muted
-  const ring = ringFor(f.overlays.get(p.id))
+  const ring = ringFor(n, f.overlays.get(p.id))
   ctx.globalAlpha = dim ? 0.22 : 1
 
-  if (ring) {
+  if (ring?.color) {
     const pulse = ring.pulse ? 0.5 + 0.5 * Math.sin(f.time / 260) : 1
     ctx.save()
     ctx.strokeStyle = ring.color
     ctx.globalAlpha = (dim ? 0.22 : 1) * (ring.pulse ? 0.35 + 0.65 * pulse : 1)
     ctx.lineWidth = ring.pulse ? 2 + 2 * pulse : 2.5
     ctx.setLineDash([])
+    roundRect(ctx, p.x - 4, p.y - 4, p.w + 8, p.h + 8, 10)
+    ctx.stroke()
+    ctx.restore()
+  }
+  if (ring?.changesRequested) {
+    ctx.save()
+    ctx.strokeStyle = CHANGES_REQUESTED_RING.color
+    ctx.lineWidth = 2.5
+    ctx.setLineDash(CHANGES_REQUESTED_RING.dash)
     roundRect(ctx, p.x - 4, p.y - 4, p.w + 8, p.h + 8, 10)
     ctx.stroke()
     ctx.restore()

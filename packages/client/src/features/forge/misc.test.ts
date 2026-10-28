@@ -5,7 +5,7 @@ import { keyDirection, walkEdge } from './edge-walk.js'
 import { addView, moveView, newViewId, removeView, seedView, shownViews, updateView, viewFilters } from './graphs.js'
 import { computeLayout } from './layout.js'
 import { pickMembrane, threadChoices } from './membrane.js'
-import { RING_COLORS, edgeStyle, initials, reviewSummary, ringFor } from './style.js'
+import { RING_COLORS, edgeStyle, initials, reviewSummary, ringFor, ringLabel } from './style.js'
 import { MAX_SCALE, MIN_SCALE, fitRect, pan, screenToWorld, wheelFactor, worldToScreen, zoomAt } from './viewport.js'
 import { NOW, change, edge, issue } from './test-fixtures.js'
 
@@ -44,24 +44,46 @@ describe('viewport', () => {
   })
 })
 
-describe('agent ring', () => {
+describe('card ring', () => {
   const o = (x: Partial<AgentOverlay>): AgentOverlay => ({ nodeId: 'n', subagents: [], ...x })
   const t = (status: 'working' | 'thinking' | 'idle') => ({ id: 't', label: 'T', status })
-  it('green working, amber CI, blue review, grey idle, pulse with subagents', () => {
-    expect(ringFor(undefined)).toBeNull()
-    expect(ringFor(o({}))).toBeNull()
-    expect(ringFor(o({ thread: t('working') }))).toEqual({ kind: 'working', color: RING_COLORS.working, pulse: false })
-    expect(ringFor(o({ thread: t('thinking'), waitingOn: 'ci' }))!.kind).toBe('working')
-    expect(ringFor(o({ thread: t('idle'), waitingOn: 'ci' }))!.kind).toBe('waiting-ci')
-    expect(ringFor(o({ thread: t('idle'), ciWatch: { state: 'waiting', since: 0 } }))!.kind).toBe('waiting-ci')
-    expect(ringFor(o({ thread: t('idle'), waitingOn: 'review' }))!.color).toBe(RING_COLORS['waiting-review'])
-    expect(ringFor(o({ thread: t('idle') }))!.kind).toBe('idle')
-    expect(ringFor(o({ thread: t('idle'), subagents: [{ key: 'k', label: 'l', startedAt: 0 }] }))!.pulse).toBe(true)
-    expect(ringFor(o({ subagents: [{ key: 'k', label: 'l', startedAt: 0 }] }))).toEqual({
-      kind: 'working',
-      color: RING_COLORS.working,
-      pulse: true
+  const sub = [{ key: 'k', label: 'l', startedAt: 0 }]
+  const pr = change(R, 1)
+  const approved = change(R, 2, { reviewers: [{ login: 'a', state: 'approved' }] })
+  const changes = change(R, 3, { reviewers: [{ login: 'a', state: 'changes_requested' }] })
+  const kind = (...a: Parameters<typeof ringFor>) => ringFor(...a)?.kind
+
+  it('blue pulsing for agents, red failed CI, amber running CI, grey draft, green reviewed; none otherwise', () => {
+    expect(ringFor(pr, undefined)).toBeNull()
+    expect(ringFor(pr, o({ thread: t('idle') }))).toBeNull()
+    expect(ringFor(pr, o({ thread: t('working') }))).toEqual({
+      kind: 'agent',
+      color: RING_COLORS.agent,
+      pulse: true,
+      changesRequested: false
     })
+    expect(kind(pr, o({ subagents: sub }))).toBe('agent')
+    expect(kind(change(R, 4, { ci: 'failing' }), undefined)).toBe('ci-failed')
+    expect(kind(change(R, 5, { ci: 'pending' }), undefined)).toBe('ci-running')
+    expect(kind(change(R, 6, { state: 'draft' }), undefined)).toBe('draft')
+    expect(kind(approved, undefined)).toBe('reviewed')
+  })
+
+  it('takes the first that holds: agents, failed CI, running CI, draft, reviewed', () => {
+    const all = change(R, 7, { ci: 'failing', state: 'draft', reviewers: [{ login: 'a', state: 'approved' }] })
+    expect(kind(all, o({ thread: t('thinking') }))).toBe('agent')
+    expect(kind(all, undefined)).toBe('ci-failed')
+    expect(kind({ ...all, ci: 'pending' }, undefined)).toBe('ci-running')
+    expect(kind({ ...all, ci: 'passing' }, undefined)).toBe('draft')
+  })
+
+  it('marks changes requested over any colour, or alone', () => {
+    expect(ringFor(changes, undefined)).toEqual({ kind: null, color: null, pulse: false, changesRequested: true })
+    expect(ringFor({ ...changes, ci: 'failing' }, undefined)).toMatchObject({
+      kind: 'ci-failed',
+      changesRequested: true
+    })
+    expect(ringLabel(ringFor({ ...changes, ci: 'pending' }, undefined)!)).toBe('CI running · changes requested')
   })
 })
 

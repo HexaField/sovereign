@@ -6,7 +6,7 @@ import type { AgentOverlay } from '@sovereign/core'
 import { ReachBadge } from '../graphcoder/ReachBadge.js'
 import { categoryBadge } from './card-model.js'
 import { KANBAN_COLUMNS, type KanbanCard, type KanbanColumn } from './kanban-model.js'
-import { CI_COLORS, REVIEW_COLORS, reviewSummary, ringFor } from './style.js'
+import { CHANGES_REQUESTED_RING, CI_COLORS, REVIEW_COLORS, reviewSummary, ringFor, ringLabel } from './style.js'
 
 export interface KanbanBoardProps {
   columns: Map<KanbanColumn, KanbanCard[]>
@@ -27,7 +27,7 @@ const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: bool
   props
 ) => {
   const n = () => props.card.node
-  const ring = () => ringFor(props.overlay)
+  const ring = () => ringFor(props.card.node, props.overlay)
   const review = () => reviewSummary(n())
   const ci = () => (n().ci ? CI_COLORS[n().ci!] : null)
   const category = () => categoryBadge(n())
@@ -38,10 +38,12 @@ const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: bool
         'border-color': props.selected ? 'var(--c-accent)' : 'var(--c-border)',
         background: 'var(--c-bg-raised, var(--c-bg))',
         color: 'var(--c-text)',
-        'box-shadow': ring() ? `inset 3px 0 0 ${ring()!.color}` : undefined
+        'box-shadow': ring()?.color ? `inset 3px 0 0 ${ring()!.color}` : undefined,
+        outline: ring()?.changesRequested ? `2px dotted ${CHANGES_REQUESTED_RING.color}` : undefined,
+        'outline-offset': '1px'
       }}
       onClick={() => props.onSelect()}
-      title={ring() ? `Agent: ${ring()!.kind}` : undefined}
+      title={ring() ? ringLabel(ring()!) : undefined}
       data-testid="forge-kanban-card"
       data-node={n().id}
     >

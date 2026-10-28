@@ -93,36 +93,62 @@ export const REVIEW_COLORS: Record<ReviewState, string> = {
 }
 
 export const RING_COLORS = {
-  working: '#22c55e',
-  'waiting-ci': '#f59e0b',
-  'waiting-review': '#3b82f6',
-  idle: '#9ca3af'
+  agent: '#3b82f6',
+  'ci-failed': '#ef4444',
+  'ci-running': '#f59e0b',
+  draft: '#9ca3af',
+  reviewed: '#22c55e'
 } as const
+
+/** The dotted ring drawn over any other when a reviewer requested changes. */
+export const CHANGES_REQUESTED_RING = { color: '#ef4444', dash: [3, 3] }
 
 export type RingKind = keyof typeof RING_COLORS
 
 export interface Ring {
-  kind: RingKind
-  color: string
-  /** Subagents are running: the ring pulses. */
+  /** The ring's colour, or null when only the changes-requested ring shows. */
+  kind: RingKind | null
+  color: string | null
+  /** Agents work on it: the ring pulses. */
   pulse: boolean
+  changesRequested: boolean
 }
 
 /**
- * The agent ring: green while the owner thread works, amber while it waits on
- * CI, blue on review, grey when assigned and idle. Subagents make it pulse
- * (and, with no owner thread, count as working).
+ * A card's outer ring, first match wins: blue and pulsing while agents work on
+ * it (its thread works or subagents run), red when CI failed, amber while CI
+ * runs, grey for a draft, green once reviewed (approved). A red dotted ring
+ * goes over any of them when a reviewer requested changes.
  */
-export function ringFor(o: AgentOverlay | undefined): Ring | null {
-  if (!o) return null
-  const pulse = o.subagents.length > 0
-  let kind: RingKind | null = null
-  if (o.thread && (o.thread.status === 'working' || o.thread.status === 'thinking')) kind = 'working'
-  else if (o.waitingOn === 'ci' || o.ciWatch?.state === 'waiting') kind = 'waiting-ci'
-  else if (o.waitingOn === 'review') kind = 'waiting-review'
-  else if (o.thread) kind = 'idle'
-  else if (pulse) kind = 'working'
-  return kind ? { kind, color: RING_COLORS[kind], pulse } : null
+export function ringFor(n: WorkNode, o: AgentOverlay | undefined): Ring | null {
+  const agent = !!o && (o.thread?.status === 'working' || o.thread?.status === 'thinking' || o.subagents.length > 0)
+  const review = reviewSummary(n)
+  const kind: RingKind | null = agent
+    ? 'agent'
+    : n.ci === 'failing'
+      ? 'ci-failed'
+      : n.ci === 'pending'
+        ? 'ci-running'
+        : n.state === 'draft'
+          ? 'draft'
+          : review === 'approved'
+            ? 'reviewed'
+            : null
+  const changesRequested = review === 'changes_requested'
+  if (!kind && !changesRequested) return null
+  return { kind, color: kind ? RING_COLORS[kind] : null, pulse: agent, changesRequested }
+}
+
+/** What a ring says, for a tooltip. */
+export function ringLabel(r: Ring): string {
+  const base = {
+    agent: 'agents working on it',
+    'ci-failed': 'CI failed',
+    'ci-running': 'CI running',
+    draft: 'draft',
+    reviewed: 'reviewed'
+  }
+  return [r.kind && base[r.kind], r.changesRequested && 'changes requested'].filter(Boolean).join(' · ')
 }
 
 export interface EdgeStyle {
