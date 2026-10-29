@@ -8,7 +8,7 @@ import type { Ad4mClientManager, Ad4mTypedClient } from './client.js'
 // The mention waker: one SDK WakerSubscriptionManager per executor connection
 // (whole-word matching, own writes skipped, parents and ancestors through the
 // built-in Container, delivery persisted only once it reached the bus), fed one
-// TextContent subscription per watched perspective. Sovereign adds what is its
+// mention subscription (a TextContent and a Mentioning model query) per watched perspective. Sovereign adds what is its
 // own: which perspectives to watch, the agent's name, and the bus events the
 // server turns into a presence-internal message.
 
@@ -87,38 +87,46 @@ async function resolveAgentIdentity(client: Ad4mTypedClient, configuredName?: st
 // ── The subscription ───────────────────────────────────────────────────────────
 
 const TEXT_CONTENT = 'ad4m://TextContent'
+const MENTIONING = 'ad4m://Mentioning'
 /** Newest mentions the query returns (the executor's MENTION_WINDOW). */
 const MENTION_WINDOW = 50
 
 /**
  * The mention subscription for one perspective: the executor's
  * `get_mention_waker_config` (rust-executor/src/mcp/tools/subscriptions.rs,
- * `build_mention_query` and `mention_terms`), built here because Sovereign
- * talks to the executor over RPC, not MCP. One model query over the built-in
- * TextContent `{ text, mentions? }`: a record whose `mentions` relation links
- * the DID (WE's `we://mention` chip, or any predicate a class aliases to
- * `mentions`), or whose `text` contains a name or the DID, each through a link
- * another agent wrote; newest first, at most `MENTION_WINDOW`. The rows carry
- * their mention and text links (`__links`), so the SDK manager can tell the two
- * paths apart, keep only whole-word text matches of `terms`, and hand back the
- * mentioning link's author. The SDK refuses a mention subscription without
- * `className`, `terms` and `did`.
+ * `build_mention_query`, `build_mentioning_query` and `mention_terms`), built
+ * here because Sovereign talks to the executor over RPC, not MCP. Two model
+ * queries over built-in abstract classes, which the SDK manager opens under one
+ * id (one wake per record, the first query to report it wins):
+ * - `query` over TextContent `{ text }`: a record whose `text` contains a name
+ *   or the DID, through a text link another agent wrote (`links: ["text"]`);
+ * - `mentionQuery` over Mentioning `{ mentions }`: a record whose `mentions`
+ *   relation links the DID (WE's `we://mention` chip, or any predicate a class
+ *   aliases to `mentions`, text or not), through a link another agent wrote
+ *   (`links: ["mentions"]`).
+ * Both newest first, at most `MENTION_WINDOW`. The rows carry their links
+ * (`__links`), so the manager can keep only whole-word text matches of `terms`
+ * and hand back the mentioning link's author. The SDK refuses a mention
+ * subscription without `className`, `terms`, `did`, `mentionClass` and
+ * `mentionQuery`.
  */
 export function mentionSubscription(perspective: string, identity: AgentIdentity): WakerSubscription {
   const did = identity.did
   const terms = [...new Set([...identity.names, did].filter(Boolean))]
   const notMe = { not: did }
   const query = {
-    where: {
-      OR: [
-        { mentions: { eq: did, author: notMe } },
-        ...terms.map((term) => ({ text: { contains: term, author: notMe } }))
-      ]
-    },
+    where: { OR: terms.map((term) => ({ text: { contains: term, author: notMe } })) },
     order: { timestamp: 'DESC' },
     limit: MENTION_WINDOW,
     properties: ['text'],
-    links: ['mentions', 'text']
+    links: ['text']
+  }
+  const mentionQuery = {
+    where: { mentions: { eq: did, author: notMe } },
+    order: { timestamp: 'DESC' },
+    limit: MENTION_WINDOW,
+    properties: ['mentions'],
+    links: ['mentions']
   }
   return {
     id: `mention-${perspective}`,
@@ -128,7 +136,9 @@ export function mentionSubscription(perspective: string, identity: AgentIdentity
     query: JSON.stringify(query),
     className: TEXT_CONTENT,
     terms,
-    did
+    did,
+    mentionClass: MENTIONING,
+    mentionQuery: JSON.stringify(mentionQuery)
   }
 }
 
@@ -185,7 +195,10 @@ function mentionText(m: MentionMessage, body: string | undefined): string {
   const lines = [`[AD4M] You were mentioned${body ? `: "${body}"` : ''}`, `Item: ${m.address}`]
   if (m.author) lines.push(`By: ${m.author}${m.verified ? ' (signature verified)' : ' (signature NOT verified)'}`)
   if (m.timestamp) lines.push(`At: ${m.timestamp}`)
-  if (m.via) lines.push(`Matched by: ${m.via === 'mentions' ? 'a mention link' : 'your name or DID in the text'}`)
+  if (m.via)
+    lines.push(
+      `Matched by: ${m.via === 'mentions' ? 'a mention link' : 'your name or DID in the text; a mention link may also exist'}`
+    )
   lines.push(`Parents: ${m.parents.length ? m.parents.join(', ') : '(unknown)'}`)
   if (m.ancestors?.length) lines.push(`Ancestors: ${m.ancestors.join(', ')}`)
   return lines.join('\n')

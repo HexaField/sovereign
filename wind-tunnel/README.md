@@ -151,10 +151,10 @@ Two executors would each need the shared-store languages of ad4m's `tests/js/uti
 
 Alex registers WE-shaped classes over MCP (`add_model`) and writes records through them (`instance_create`), under the channel:
 
-- `TextBlock` — WE's text block: `text` (`we://text`), `source` (`we://text_source`), `mentions` (`we://mention`), conforming to TextContent by name;
-- `Note` — another app: `content` aliased to `text`, `cc` aliased to `mentions`;
+- `TextBlock` — WE's text block: `text` (`we://text`), `source` (`we://text_source`), `mentions` (`we://mention`), conforming to TextContent and Mentioning by name;
+- `Note` — another app: `content` aliased to TextContent's `text`, `cc` to Mentioning's `mentions`;
 - `Chat` — text only, no mention relation;
-- `Post` — a post root with `mentions` and no text;
+- `Post` — a post root with `mentions` and no text (Mentioning only);
 - `CollectionBlock` — a composed record's root (`kind`, `mentions`), no text; a post comment is one of kind `reply`.
 
 `TextBlock`, `Post` and `CollectionBlock` also carry `responses` (`we://response`, many), as WE's `WeNode` does: a reply is never a child, it hangs off what it answers. A reply is written as WE's transcribe module writes it: the reply `TextBlock` first (no parent), then `instance_add_to_collection` adds it to the answered record's `responses`, then one more adds each `we://mention` to the reply.
@@ -174,10 +174,10 @@ A wake case passes when the mock LLM log shows a presence turn whose message say
 | 9 | Chat "Hex are you around?" | wake |
 | 10 | TextBlock naming Hex and linking Hex | wake, once |
 | 11 | Restart the Sovereign container: a new mention wakes, none of the earlier ones is delivered again | wake |
-| 12 | **Known gap:** Post with only a mention link to Hex, its text in a child TextBlock | none (today) |
+| 12 | Post with only a mention link to Hex, its text in a child TextBlock (Mentioning, ad4m #1587) | wake, once, by Alex |
 | R1 | Feed reply: a TextBlock "@Hexo yes, see the log" in a feed line's `responses`, then a mention link to Hex (the chip label runs into the next word, so only the link can wake). The case line prints the wake's `Parents:` (a reply is not a `has_child` child, so `(unknown)` is expected today; not asserted) | wake, once, by Alex |
 | R2 | Feed reply "thanks Hex, merged" in a feed line's `responses`, no link | wake, once, by Alex |
-| R3 | **Known gap:** post comment: a CollectionBlock of kind `reply` in a post's `responses`, its text in a child TextBlock that does not name Hex, only a mention link on the root | none (today) |
+| R3 | Post comment: a CollectionBlock of kind `reply` in a post's `responses`, its text in a child TextBlock that does not name Hex, only a mention link on the root (Mentioning, ad4m #1587). The case line prints `Parents:` as R1 does | wake, once, by Alex |
 
 s10 prints one line per case (latency, deliveries, author). It restarts the Sovereign container, so keep it out of a run with s9.
 
