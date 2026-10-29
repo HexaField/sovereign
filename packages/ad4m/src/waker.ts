@@ -93,18 +93,32 @@ const MENTION_WINDOW = 50
 /**
  * The mention subscription for one perspective: the executor's
  * `get_mention_waker_config` (rust-executor/src/mcp/tools/subscriptions.rs,
- * `build_mention_query`), built here because Sovereign talks to the executor
- * over RPC, not MCP. A model query over the built-in TextContent: any record
- * whose text, in a link another agent wrote, contains a name or the DID. The
- * SDK manager then keeps only whole-word matches of `terms`.
+ * `build_mention_query` and `mention_terms`), built here because Sovereign
+ * talks to the executor over RPC, not MCP. One model query over the built-in
+ * TextContent `{ text, mentions? }`: a record whose `mentions` relation links
+ * the DID (WE's `we://mention` chip, or any predicate a class aliases to
+ * `mentions`), or whose `text` contains a name or the DID, each through a link
+ * another agent wrote; newest first, at most `MENTION_WINDOW`. The rows carry
+ * their mention and text links (`__links`), so the SDK manager can tell the two
+ * paths apart, keep only whole-word text matches of `terms`, and hand back the
+ * mentioning link's author. The SDK refuses a mention subscription without
+ * `className`, `terms` and `did`.
  */
 export function mentionSubscription(perspective: string, identity: AgentIdentity): WakerSubscription {
-  const terms = [...new Set([...identity.names, identity.did].filter(Boolean))]
+  const did = identity.did
+  const terms = [...new Set([...identity.names, did].filter(Boolean))]
+  const notMe = { not: did }
   const query = {
-    where: { OR: terms.map((term) => ({ text: { contains: term, author: { not: identity.did } } })) },
+    where: {
+      OR: [
+        { mentions: { eq: did, author: notMe } },
+        ...terms.map((term) => ({ text: { contains: term, author: notMe } }))
+      ]
+    },
     order: { timestamp: 'DESC' },
     limit: MENTION_WINDOW,
-    properties: ['text']
+    properties: ['text'],
+    links: ['mentions', 'text']
   }
   return {
     id: `mention-${perspective}`,
@@ -113,7 +127,8 @@ export function mentionSubscription(perspective: string, identity: AgentIdentity
     channel: '',
     query: JSON.stringify(query),
     className: TEXT_CONTENT,
-    terms
+    terms,
+    did
   }
 }
 
@@ -168,6 +183,8 @@ function textOf(result: any, address: string): string | undefined {
 
 function mentionText(m: MentionMessage, body: string | undefined): string {
   const lines = [`[AD4M] You were mentioned${body ? `: "${body}"` : ''}`, `Item: ${m.address}`]
+  if (m.author) lines.push(`By: ${m.author}${m.verified ? ' (signature verified)' : ' (signature NOT verified)'}`)
+  if (m.timestamp) lines.push(`At: ${m.timestamp}`)
   lines.push(`Parents: ${m.parents.length ? m.parents.join(', ') : '(unknown)'}`)
   if (m.ancestors?.length) lines.push(`Ancestors: ${m.ancestors.join(', ')}`)
   return lines.join('\n')
