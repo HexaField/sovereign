@@ -185,6 +185,7 @@ function mentionText(m: MentionMessage, body: string | undefined): string {
   const lines = [`[AD4M] You were mentioned${body ? `: "${body}"` : ''}`, `Item: ${m.address}`]
   if (m.author) lines.push(`By: ${m.author}${m.verified ? ' (signature verified)' : ' (signature NOT verified)'}`)
   if (m.timestamp) lines.push(`At: ${m.timestamp}`)
+  if (m.via) lines.push(`Matched by: ${m.via === 'mentions' ? 'a mention link' : 'your name or DID in the text'}`)
   lines.push(`Parents: ${m.parents.length ? m.parents.join(', ') : '(unknown)'}`)
   if (m.ancestors?.length) lines.push(`Ancestors: ${m.ancestors.join(', ')}`)
   return lines.join('\n')
