@@ -65,7 +65,7 @@ import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
 import { createVoiceLlmClients } from './voice-llm.js'
-import type { TaskMcpDeps, CiWatchMcpDeps, ForgeMcpDeps } from '@sovereign/agent-backend'
+import type { TaskMcpDeps, CiWatchMcpDeps, DecisionMcpDeps, ForgeMcpDeps } from '@sovereign/agent-backend'
 import { usageSinceFromFile } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
@@ -682,6 +682,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   const ciMcpDeps: CiWatchMcpDeps = {}
   // Forge rethink tools: bound once the forge service exists.
   const forgeMcpDeps: ForgeMcpDeps = {}
+  // decision_open / decision_close: bound once the forge service exists.
+  const decisionMcpDeps: DecisionMcpDeps = {}
 
   const taskMcpDeps: TaskMcpDeps = {
     create: (opts) =>
@@ -727,6 +729,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     tasks: taskMcpDeps,
     ci: ciMcpDeps,
     forge: forgeMcpDeps,
+    decisions: decisionMcpDeps,
     presencePersonalityFile,
     presenceMemoryFile,
     presenceKnowledgeFile
@@ -1101,6 +1104,14 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
   registerForgeChannel(wsHandler, bus)
   forgeMcpDeps.membraneOf = (threadId) => forgeRethink.membraneOfThread(threadId)
   forgeMcpDeps.call = (threadId, name, args) => forgeRethink.tool(threadId, name, args)
+  // A decision's membrane defaults to the calling thread's; its resolution reaches its thread
+  // through the forge service's sendToThread (chatModule.handleSend, as task_send_prompt).
+  decisionMcpDeps.open = async (input) => {
+    const membrane = input.membrane ?? membraneOfThread(input.createdBy)
+    if (!membrane) throw new Error('This thread has no membrane: pass `membrane` (a membrane id) to decision_open.')
+    return forgeService.decisions.open(membrane, input)
+  }
+  decisionMcpDeps.close = (id, resolution) => forgeService.decisions.close(id, resolution)
   const stopRethinkSchedule = startRethinkSchedule({ scheduler, bus, service: () => forgeService })
   void Promise.all([taskStore.settled(), forgePersistence.meta.settled()])
     .then(() => forgeService.start())

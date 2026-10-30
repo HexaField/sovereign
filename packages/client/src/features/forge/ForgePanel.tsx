@@ -23,7 +23,7 @@ import {
   wantsArchived
 } from './epics-model.js'
 import KanbanBoard from './KanbanBoard.js'
-import { kanbanCards, type ForgeMode } from './kanban-model.js'
+import { kanbanCards, type PanelMode } from './kanban-model.js'
 import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
 import { viewFilters } from './graphs.js'
 import { computeLayout, streamCardId, streamOfCard, xToTime } from './layout.js'
@@ -58,7 +58,9 @@ export interface ForgePanelProps {
   /** Fill the remaining height instead of the view's own. */
   fill: boolean
   /** The work graph canvas, or the Kanban of its immediate items. */
-  mode: ForgeMode
+  mode: PanelMode
+  /** Select this node once it is loaded (a decision's source link); `seq` repeats a request for the same id. */
+  focusRequest?: () => { id: string; seq: number } | null
 }
 
 const SEARCH_MIN = 3
@@ -250,6 +252,21 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
     setSelected(id)
     if (props.mode === 'graph') canvas?.focusNode(id)
   }
+
+  // A node asked for from outside (the Decisions view): selected as soon as the window holds it.
+  const [pendingFocus, setPendingFocus] = createSignal<string | null>(null)
+  createEffect(
+    on(
+      () => props.focusRequest?.(),
+      (r) => r && setPendingFocus(r.id)
+    )
+  )
+  createEffect(() => {
+    const id = pendingFocus()
+    if (!id || !nodesById().has(id)) return
+    setPendingFocus(null)
+    focusNode(id)
+  })
 
   const onKeyDown = (e: KeyboardEvent): void => {
     const t = e.target as HTMLElement

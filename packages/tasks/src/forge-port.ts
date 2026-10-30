@@ -1,7 +1,7 @@
 // Forge TaskPort — the work graph's view of the task graph (the TaskPort
 // contract in @sovereign/core). Task writes go through TaskService, so each
 // one emits the task.* bus events the presence TaskDigest reads; views,
-// suggested edges and node categories live in the Forge meta store. Both
+// suggested edges, node categories and decisions live in the Forge meta store. Both
 // persist in the `sovereign-forge` perspective (with outbox and snapshot while
 // AD4M is down).
 
@@ -345,6 +345,18 @@ export function createForgeTaskPort(deps: ForgeTaskPortDeps): TaskPort {
     async setCategory(membrane, nodeId, source, category, reason) {
       const c = meta.setCategory({ membrane, nodeId, source, category, ...(reason ? { reason } : {}) })
       return c ? toCategoryRecord(c) : null
+    },
+
+    async listDecisions(membrane) {
+      return meta.listDecisions(membrane)
+    },
+
+    async getDecision(id) {
+      return meta.getDecision(id) ?? undefined
+    },
+
+    async putDecision(decision) {
+      return meta.putDecision(decision)
     }
   }
 }

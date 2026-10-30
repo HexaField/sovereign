@@ -130,6 +130,10 @@ function card(
   }
 }
 
-export type ForgeMode = 'graph' | 'kanban'
+/** What the Forge shows: the graph panels' canvases, their Kanbans, or the membrane's decisions. */
+export type ForgeMode = 'graph' | 'kanban' | 'decisions'
+/** What one graph panel draws. */
+export type PanelMode = Exclude<ForgeMode, 'decisions'>
 
-export const parseForgeMode = (v: string | null | undefined): ForgeMode => (v === 'kanban' ? 'kanban' : 'graph')
+export const parseForgeMode = (v: string | null | undefined): ForgeMode =>
+  v === 'kanban' || v === 'decisions' ? v : 'graph'

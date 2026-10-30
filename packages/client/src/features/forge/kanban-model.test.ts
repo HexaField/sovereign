@@ -210,6 +210,7 @@ describe('parseForgeMode', () => {
   it('defaults to the graph', () => {
     expect(parseForgeMode('kanban')).toBe('kanban')
     expect(parseForgeMode('graph')).toBe('graph')
+    expect(parseForgeMode('decisions')).toBe('decisions')
     expect(parseForgeMode(null)).toBe('graph')
     expect(parseForgeMode('other')).toBe('graph')
   })

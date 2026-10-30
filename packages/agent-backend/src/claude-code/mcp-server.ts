@@ -5,6 +5,7 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
+import { decisionTools, type DecisionMcpDeps } from './decision-tools.js'
 import { forgeTools, type ForgeMcpDeps } from './forge-tools.js'
 
 /** @sovereign/tasks TASK_STATES (this package does not depend on it). `paused` = set aside: an epic's paused status. */
@@ -115,6 +116,8 @@ export interface SovereignToolDeps {
   ci?: CiWatchMcpDeps
   /** Forge rethink runner. When bound, registers the forge_* tools in forge-rethink threads only. */
   forge?: ForgeMcpDeps
+  /** Forge decisions. When bound, registers decision_open / decision_close in every thread. */
+  decisions?: DecisionMcpDeps
 }
 
 /** Subset of the server's CI watcher the MCP layer needs. Methods are bound
@@ -974,6 +977,8 @@ export function createSovereignMcpServer(
   // ── Forge rethink (only in a membrane's forge-rethink thread) ─────────
   const caller = deps.currentSessionKey?.()
   tools.push(...forgeTools(deps.forge, caller ? bareThreadKey(caller) : undefined))
+  // ── Decisions (every thread) ──────────────────────────────────────────
+  tools.push(...decisionTools(deps.decisions, caller ? bareThreadKey(caller) : undefined))
 
   const filteredTools = opts?.include ? tools.filter((t) => opts.include!.includes(t.name)) : tools
 

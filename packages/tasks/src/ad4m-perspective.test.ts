@@ -121,6 +121,7 @@ describe('forge perspective (AD4M adapter)', () => {
     expect(g1.id).toBe(g2.id)
     expect(fake.perspectives.map((p) => p.name)).toEqual(['sovereign-forge'])
     expect([...fake.perspectives[0].classes.keys()].sort()).toEqual([
+      'Decision',
       'ForgeView',
       'NodeCategory',
       'RelatedEdge',

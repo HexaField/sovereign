@@ -10,6 +10,7 @@ import type {
   CiWatchMcpDeps,
   SovereignToolDeps
 } from './claude-code/mcp-server.js'
+import type { DecisionMcpDeps } from './claude-code/decision-tools.js'
 import type { ForgeMcpDeps } from './claude-code/forge-tools.js'
 import type { RoutingBackend } from './factory.js'
 import type { CronService } from '@sovereign/scheduler'
@@ -60,6 +61,8 @@ export interface SovereignMcpDepsInput {
   ci?: CiWatchMcpDeps
   /** Forge rethink tools (forge_*), registered in forge-rethink threads only. */
   forge?: ForgeMcpDeps
+  /** decision_open / decision_close, in every thread once bound. */
+  decisions?: DecisionMcpDeps
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -278,6 +281,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     ...(input.embeddings ? { embeddings: input.embeddings } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
     ...(input.ci ? { ci: input.ci } : {}),
-    ...(input.forge ? { forge: input.forge } : {})
+    ...(input.forge ? { forge: input.forge } : {}),
+    ...(input.decisions ? { decisions: input.decisions } : {})
   }
 }

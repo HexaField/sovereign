@@ -3,8 +3,10 @@
 // window; overlays and live updates are shared per membrane.
 
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, type Component } from 'solid-js'
-import type { AgentOverlay, ForgeView as ForgeViewDef } from '@sovereign/core'
+import type { AgentOverlay, Decision, ForgeView as ForgeViewDef } from '@sovereign/core'
 import ForgePanel from './ForgePanel.js'
+import DecisionsView from './DecisionsView.js'
+import { openCount } from './decisions-model.js'
 import RethinkReport from './RethinkReport.js'
 import {
   phaseAfterRuns,
@@ -78,10 +80,20 @@ const ForgeView: Component = () => {
   const [rethinkRuns, setRethinkRuns] = createSignal<RethinkRuns | null>(null)
   const [reportId, setReportId] = createSignal<string | null>(null)
   const [mode, setMode] = createSignal<ForgeMode>(parseForgeMode(readLs(LS_MODE)))
-  const toggleMode = (): void => {
-    const next: ForgeMode = mode() === 'graph' ? 'kanban' : 'graph'
+  const pickMode = (next: ForgeMode): void => {
     setMode(next)
     writeLs(LS_MODE, next)
+  }
+  // Decisions: loaded for the membrane whatever the mode, so the button shows the open count.
+  const [decisions, setDecisions] = createSignal<Decision[]>([])
+  const [decisionsLoading, setDecisionsLoading] = createSignal(false)
+  const [decisionsError, setDecisionsError] = createSignal<string | null>(null)
+  const openDecisions = createMemo(() => openCount(decisions()))
+  // A decision's source link to a node: back to the graph, the node selected in the first panel.
+  const [focusRequest, setFocusRequest] = createSignal<{ id: string; seq: number } | null>(null)
+  const selectNode = (id: string): void => {
+    pickMode('graph')
+    setFocusRequest({ id, seq: (focusRequest()?.seq ?? 0) + 1 })
   }
 
   const threadMembrane = createMemo(() => storeThreads().find((t) => t.id === threadKey())?.membraneId ?? null)
@@ -135,6 +147,29 @@ const ForgeView: Component = () => {
       } catch {
         if (membrane() === m) setViews([seedView(m)])
       }
+    })
+  )
+
+  const loadDecisions = async (): Promise<void> => {
+    const m = membrane()
+    if (!m) return
+    setDecisionsLoading(true)
+    try {
+      const list = await api.decisions(m)
+      if (membrane() !== m) return
+      setDecisions(list)
+      setDecisionsError(null)
+    } catch (e) {
+      if (membrane() === m) setDecisionsError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDecisionsLoading(false)
+    }
+  }
+  // On a membrane change and on every forge.updated (decisions emit it too).
+  createEffect(
+    on([membrane, refresh], ([m]) => {
+      if (!m) return setDecisions([])
+      void loadDecisions()
     })
   )
 
@@ -349,15 +384,38 @@ const ForgeView: Component = () => {
             </div>
           </Show>
         </div>
-        <button
-          class={btn}
-          style={btnStyle}
-          onClick={toggleMode}
-          title={mode() === 'graph' ? 'Show the immediate items as a Kanban' : 'Show the work graph'}
-          data-testid="forge-mode"
-        >
-          {mode() === 'graph' ? 'Kanban' : 'Graph'}
-        </button>
+        <div class="flex" role="tablist" data-testid="forge-mode">
+          <For
+            each={[
+              { mode: 'graph' as const, label: (): string => 'Graph', title: 'Show the work graph' },
+              { mode: 'kanban' as const, label: (): string => 'Kanban', title: 'Show the immediate items as a Kanban' },
+              {
+                mode: 'decisions' as const,
+                label: (): string => `Decisions (${openDecisions()} open)`,
+                title: 'Questions agents left for you; resolve several at once'
+              }
+            ]}
+          >
+            {(m, i) => (
+              <button
+                class={`border px-2 py-0.5 text-xs transition-colors hover:bg-[var(--c-hover-bg)] ${i() === 0 ? 'rounded-l' : ''} ${i() === 2 ? 'rounded-r' : ''} ${i() > 0 ? '-ml-px' : ''}`}
+                style={{
+                  ...btnStyle,
+                  ...(mode() === m.mode
+                    ? { color: 'var(--c-accent)', 'border-color': 'var(--c-accent)', 'z-index': 1 }
+                    : {})
+                }}
+                role="tab"
+                aria-selected={mode() === m.mode}
+                onClick={() => pickMode(m.mode)}
+                title={m.title}
+                data-testid={`forge-mode-${m.mode}`}
+              >
+                {m.label()}
+              </button>
+            )}
+          </For>
+        </div>
 
         <span class="flex-1" />
         <Show when={notice()}>
@@ -429,28 +487,46 @@ const ForgeView: Component = () => {
         }
       >
         {(m) => (
-          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <For each={shownIds()}>
-              {(id) => (
-                <Show when={viewById(id)}>
-                  {(v) => (
-                    <ForgePanel
-                      membrane={m()}
-                      view={v()}
-                      api={api}
-                      overlays={overlays}
-                      refresh={refresh}
-                      threads={threadsForPicker}
-                      onViewChange={(patch) => commitViews(updateView(views(), id, patch))}
-                      onOpenThread={openThread}
-                      fill={shownIds().length === 1}
-                      mode={mode()}
-                    />
-                  )}
-                </Show>
-              )}
-            </For>
-          </div>
+          <Show
+            when={mode() !== 'decisions'}
+            fallback={
+              <DecisionsView
+                membrane={m()}
+                api={api}
+                decisions={decisions()}
+                loading={decisionsLoading()}
+                error={decisionsError()}
+                reload={loadDecisions}
+                threads={threadsForPicker}
+                onOpenThread={openThread}
+                onSelectNode={selectNode}
+              />
+            }
+          >
+            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <For each={shownIds()}>
+                {(id, i) => (
+                  <Show when={viewById(id)}>
+                    {(v) => (
+                      <ForgePanel
+                        membrane={m()}
+                        view={v()}
+                        api={api}
+                        overlays={overlays}
+                        refresh={refresh}
+                        threads={threadsForPicker}
+                        onViewChange={(patch) => commitViews(updateView(views(), id, patch))}
+                        onOpenThread={openThread}
+                        fill={shownIds().length === 1}
+                        mode={mode() === 'kanban' ? 'kanban' : 'graph'}
+                        focusRequest={() => (i() === 0 ? focusRequest() : null)}
+                      />
+                    )}
+                  </Show>
+                )}
+              </For>
+            </div>
+          </Show>
         )}
       </Show>
     </div>

@@ -309,6 +309,29 @@ describe('api', () => {
     ])
   })
 
+  it('decisions: list, edit, group and resolve through the decision routes', async () => {
+    const { calls, api } = recorder({ decisions: [], resolved: [], deliveries: [] })
+    const id = 'forge-decision://demo/1'
+    await api.decisions('demo')
+    await api.updateDecision('demo', id, { group: null, threadId: 'thread-a' })
+    await api.groupDecisions('demo', [id], { group: 'Launch' })
+    await api.resolveDecisions({ membrane: 'demo', items: [{ id, resolution: 'Yes' }] })
+    expect(calls).toEqual([
+      { url: '/api/forge/decisions?membrane=demo&status=all', method: 'GET', body: undefined },
+      {
+        url: '/api/forge/decisions/forge-decision%3A%2F%2Fdemo%2F1',
+        method: 'PATCH',
+        body: { membrane: 'demo', group: null, threadId: 'thread-a' }
+      },
+      { url: '/api/forge/decisions/group', method: 'POST', body: { membrane: 'demo', ids: [id], group: 'Launch' } },
+      {
+        url: '/api/forge/decisions/resolve',
+        method: 'POST',
+        body: { membrane: 'demo', items: [{ id, resolution: 'Yes' }] }
+      }
+    ])
+  })
+
   it('sync and rethink accept an empty 202', async () => {
     const { calls, api } = recorder(null, 202)
     await api.sync('demo')

@@ -68,6 +68,8 @@ export interface AgentBackendWiringInput {
   ci?: import('./claude-code/mcp-server.js').CiWatchMcpDeps
   /** Forge rethink runner. Its methods are bound later; the forge_* tools appear in forge-rethink threads. */
   forge?: import('./claude-code/forge-tools.js').ForgeMcpDeps
+  /** Forge decisions. Bound later; decision_open / decision_close appear in every thread from then on. */
+  decisions?: import('./claude-code/decision-tools.js').DecisionMcpDeps
   /** Path to PRESENCE.md — appended to the session prompt for the presence
    *  thread only. */
   presencePersonalityFile?: string
@@ -317,7 +319,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
     ...(input.ci ? { ci: input.ci } : {}),
-    ...(input.forge ? { forge: input.forge } : {})
+    ...(input.forge ? { forge: input.forge } : {}),
+    ...(input.decisions ? { decisions: input.decisions } : {})
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 

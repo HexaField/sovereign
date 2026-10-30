@@ -33,6 +33,7 @@ import type { HostForges } from '@sovereign/orgs'
 import { applyView, buildGraph, searchGraph, windowGraph, type BuiltGraph } from './build.js'
 import { createRepoCacheStore, readJson, writeJsonAtomic } from './cache.js'
 import { isWorkCategory } from './category.js'
+import { createDecisionService, type DecisionService } from './decisions.js'
 import { buildDigest, createEventLog, forgeEventLine, safeSegment, triage, type EventLog } from './events.js'
 import { buildOverlay, currentBranch, resolveCheckouts, type OverlayResult } from './overlay.js'
 import { isPlanPath, planMakesStream, scanPlans, type Plan } from './plans.js'
@@ -82,7 +83,7 @@ export interface ForgeServiceDeps {
   bus: EventBus
   threads: {
     createThread(membrane: string, label: string): Promise<string>
-    /** A prompt from the user (assign). */
+    /** A prompt from the user (assign, resolved decisions). */
     sendToThread(threadId: string, text: string): Promise<void>
     /** A status notification (CI red, review, merge); default: sendToThread. */
     notify?(threadId: string, text: string): Promise<void>
@@ -234,6 +235,8 @@ export interface ForgeService {
   acceptEdge(from: string, to: string, kind: WorkEdgeKind, membrane?: string): Promise<boolean>
   deleteEdge(from: string, to: string, kind: WorkEdgeKind, membrane?: string): Promise<boolean>
   status(membrane: string): Promise<ForgeStatus>
+  /** Open decisions for the user, per membrane; resolving sends one message per receiving thread (`threads.sendToThread`). */
+  readonly decisions: DecisionService
 }
 
 interface MembraneState {
@@ -1143,7 +1146,15 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     return deps.tasks.ensureTask(node.id, init)
   }
 
+  const decisions = createDecisionService({
+    tasks: deps.tasks,
+    send: (threadId, text) => deps.threads.sendToThread(threadId, text),
+    changed: (membrane) => emit('forge.updated', { membrane }),
+    now
+  })
+
   const api: ForgeService = {
+    decisions,
     start() {
       if (started) return
       started = true

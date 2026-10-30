@@ -1,6 +1,7 @@
 export * from './build.js'
 export * from './category.js'
 export * from './cache.js'
+export * from './decisions.js'
 export * from './classifier.js'
 export * from './diff.js'
 export * from './events.js'

@@ -53,6 +53,8 @@ export {
   type TaskMcpDeps,
   type CiWatchMcpDeps,
   type ForgeMcpDeps,
+  type DecisionMcpDeps,
+  type DecisionOpenInput,
   usageSinceFromFile,
   type PersonalityCompiler,
   type PersonalityCompilerOptions,
