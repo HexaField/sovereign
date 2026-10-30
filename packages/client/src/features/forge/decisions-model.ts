@@ -248,6 +248,11 @@ export function pickOption(d: Draft | undefined, option: string): Draft {
   return d?.choice === option ? { note } : { choice: option, note }
 }
 
+/** The open decisions with an answer, in list order: what one "Resolve and send" sends. */
+export function answeredDecisions(list: Decision[], drafts: Record<string, Draft>): Decision[] {
+  return list.filter((d) => d.status === 'open' && draftResolution(drafts[d.id]))
+}
+
 /**
  * The body of POST /api/forge/decisions/resolve for the picked decisions, in the order shown.
  * Every picked open decision needs a resolution; `missing` lists the ones without.

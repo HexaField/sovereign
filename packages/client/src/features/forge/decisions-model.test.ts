@@ -14,6 +14,7 @@ import {
   resolvePayload,
   draftResolution,
   pickOption,
+  answeredDecisions,
   sortDecisions,
   sourceTarget,
   toggleSection,
@@ -161,6 +162,17 @@ describe('decisions model', () => {
     expect(draftResolution({ choice: 'Postgres', note: ' but keep SQLite for tests ' })).toBe(
       'Postgres\nbut keep SQLite for tests'
     )
+  })
+
+  it('lists the open decisions that have an answer, in list order, whatever is selected or shown', () => {
+    // LIST[3] is already resolved; LIST[0]'s answer is blank.
+    const answered = answeredDecisions(LIST, {
+      [LIST[2].id]: { choice: 'yes', note: '' },
+      [LIST[3].id]: { note: 'late' },
+      [LIST[0].id]: { note: '  ' },
+      [LIST[1].id]: { note: 'because' }
+    })
+    expect(answered.map((d) => d.id)).toEqual([LIST[1].id, LIST[2].id])
   })
 
   it('picks an option, keeps the note, and unpicks on a second click', () => {

@@ -23,6 +23,7 @@ import {
   resolvePayload,
   draftResolution,
   pickOption,
+  answeredDecisions,
   type Draft,
   sortDecisions,
   SOURCE_KIND_LABELS,
@@ -139,11 +140,10 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
   }
   const [selected, setSelected] = createSignal<Set<string>>(new Set())
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
-  const [bulk, setBulk] = createSignal<'group' | 'thread' | 'resolve' | null>(null)
+  const [bulk, setBulk] = createSignal<'group' | 'thread' | null>(null)
   const [groupName, setGroupName] = createSignal('')
   const [threadPick, setThreadPick] = createSignal('')
   const [drafts, setDrafts] = createSignal<Record<string, Draft>>({})
-  const [quick, setQuick] = createSignal<string | null>(null)
   const [editing, setEditing] = createSignal<string | null>(null)
   const [notice, setNotice] = createSignal<string | null>(null)
   const [busy, setBusy] = createSignal(false)
@@ -205,26 +205,18 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
       setBulk(null)
       return `Assigned ${ids.length} to ${threadPick() ? threadLabel(threadPick(), name) : 'no thread'}.`
     })
-  const resolve = async (list: Decision[], drafted: Record<string, Draft>) => {
-    const { body, missing } = resolvePayload(props.membrane, list, drafted)
-    if (missing.length) {
-      setNotice(`Write a resolution for: ${missing.map((d) => d.question).join('; ')}`)
-      return false
-    }
-    if (!body.items.length) return false
-    return run(async () => {
+  /** Every open decision with an answer, filtered out or not, goes in one call: one message per thread. */
+  const answered = createMemo(() => answeredDecisions(props.decisions, drafts()))
+  const resolveAnswered = () => {
+    const { body } = resolvePayload(props.membrane, answered(), drafts())
+    if (!body.items.length) return
+    void run(async () => {
       const res = await props.api.resolveDecisions(body)
       const done = new Set(res.resolved.map((d) => d.id))
       setSelected(new Set([...selected()].filter((id) => !done.has(id))))
       setDrafts(Object.fromEntries(Object.entries(drafts()).filter(([id]) => !done.has(id))))
       return deliverySummary(res, name)
     })
-  }
-  const resolvePicked = async () => {
-    if (await resolve(picked(), drafts())) setBulk(null)
-  }
-  const resolveOne = async (d: Decision) => {
-    if (await resolve([d], drafts())) setQuick(null)
   }
   const setNote = (id: string, note: string) => setDrafts({ ...drafts(), [id]: { ...drafts()[id], note } })
   const pick = (id: string, option: string) => setDrafts({ ...drafts(), [id]: pickOption(drafts()[id], option) })
@@ -298,11 +290,6 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
             >
               {d().question}
             </span>
-            <Show when={d().status === 'open'}>
-              <button class={btn} style={btnStyle} onClick={() => setQuick(quick() === d().id ? null : d().id)}>
-                Resolve
-              </button>
-            </Show>
             <button
               class={btn}
               style={btnStyle}
@@ -316,17 +303,7 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
               Edit
             </button>
           </div>
-          <OptionChips
-            d={d()}
-            onPick={
-              d().status === 'open'
-                ? (o) => {
-                    setQuick(d().id)
-                    pick(d().id, o)
-                  }
-                : undefined
-            }
-          />
+          <OptionChips d={d()} onPick={d().status === 'open' ? (o) => pick(d().id, o) : undefined} />
           <Show when={d().resolution}>
             <div class="mt-1 text-xs" style={{ color: 'var(--c-accent)' }}>
               → {d().resolution}
@@ -370,25 +347,19 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
               innerHTML={renderMarkdown(d().context!)}
             />
           </Show>
-          <Show when={quick() === d().id}>
-            <div class="mt-2 flex gap-1">
-              <textarea
-                class="min-h-[2rem] flex-1 rounded border px-1.5 py-0.5 text-xs"
-                style={inputStyle}
-                rows={2}
-                placeholder={notePlaceholder(d())}
-                value={drafts()[d().id]?.note ?? ''}
-                onInput={(e) => setNote(d().id, e.currentTarget.value)}
-              />
-              <button
-                class={btn}
-                style={btnStyle}
-                disabled={busy() || !draftResolution(drafts()[d().id])}
-                onClick={() => void resolveOne(d())}
-              >
-                {d().threadId ? 'Resolve and send' : 'Resolve'}
-              </button>
-            </div>
+          <Show when={d().status === 'open'}>
+            <textarea
+              class="mt-1 w-full rounded border px-1.5 py-0.5 text-xs"
+              style={{
+                ...inputStyle,
+                'border-color': draftResolution(drafts()[d().id]) ? 'var(--c-accent)' : inputStyle['border-color']
+              }}
+              rows={1}
+              placeholder={notePlaceholder(d())}
+              value={drafts()[d().id]?.note ?? ''}
+              onInput={(e) => setNote(d().id, e.currentTarget.value)}
+              data-testid="decision-answer"
+            />
           </Show>
           <Show when={editing() === d().id}>
             <div class="mt-2 flex flex-wrap items-center gap-1 text-xs">
@@ -500,6 +471,35 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
         </Show>
       </div>
 
+      {/* Resolve: every answered decision in one call, one message per thread. */}
+      <Show when={props.decisions.some((d) => d.status === 'open')}>
+        <div
+          class="flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-xs"
+          style={{ 'border-color': 'var(--c-border)', background: 'var(--c-bg-raised)' }}
+          data-testid="decisions-resolve-bar"
+        >
+          <button
+            class={btn}
+            style={btnStyle}
+            disabled={busy() || !answered().length}
+            onClick={resolveAnswered}
+            data-testid="decisions-resolve-send"
+          >
+            Resolve {answered().length} and send
+          </button>
+          <span style={muted}>
+            {answered().length
+              ? `${answered().length} answered: pick an option and/or write an answer on each, then send them all at once.`
+              : 'Pick an option and/or write an answer on each decision, then send them all at once.'}
+          </span>
+          <Show when={answered().length}>
+            <button class="hover:underline" style={muted} onClick={() => setDrafts({})}>
+              Clear answers
+            </button>
+          </Show>
+        </div>
+      </Show>
+
       {/* Bulk actions */}
       <Show when={picked().length}>
         <div
@@ -513,15 +513,6 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
           </button>
           <button class={btn} style={btnStyle} onClick={() => setBulk(bulk() === 'thread' ? null : 'thread')}>
             Assign thread…
-          </button>
-          <button
-            class={btn}
-            style={btnStyle}
-            disabled={!picked().some((d) => d.status === 'open')}
-            onClick={() => setBulk(bulk() === 'resolve' ? null : 'resolve')}
-            data-testid="decisions-resolve-open"
-          >
-            Resolve…
           </button>
           <button class="hover:underline" style={muted} onClick={() => setSelected(new Set<string>())}>
             Clear selection
@@ -568,49 +559,6 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
           <button class="hover:underline" style={muted} onClick={() => setNotice(null)}>
             ✕
           </button>
-        </div>
-      </Show>
-
-      {/* One panel: a resolution per selected open decision, sent in one call. */}
-      <Show when={bulk() === 'resolve'}>
-        <div
-          class="max-h-[50%] overflow-y-auto border-b px-3 py-2"
-          style={{ 'border-color': 'var(--c-border)', background: 'var(--c-bg-raised)' }}
-          data-testid="decisions-resolve-panel"
-        >
-          <For each={picked().filter((d) => d.status === 'open')}>
-            {(d) => (
-              <div class="mb-2">
-                <div class="text-sm">{d.question}</div>
-                <div class="text-[11px]" style={muted}>
-                  → {d.threadId ? threadLabel(d.threadId, name) : 'no thread: nothing is sent'}
-                </div>
-                <OptionChips d={d} onPick={(o) => pick(d.id, o)} />
-                <textarea
-                  class="mt-1 w-full rounded border px-1.5 py-0.5 text-xs"
-                  style={inputStyle}
-                  rows={2}
-                  placeholder={notePlaceholder(d)}
-                  value={drafts()[d.id]?.note ?? ''}
-                  onInput={(e) => setNote(d.id, e.currentTarget.value)}
-                />
-              </div>
-            )}
-          </For>
-          <div class="flex items-center gap-2">
-            <button
-              class={btn}
-              style={btnStyle}
-              disabled={busy()}
-              onClick={() => void resolvePicked()}
-              data-testid="decisions-resolve-send"
-            >
-              Resolve {picked().filter((d) => d.status === 'open').length} and send
-            </button>
-            <button class="text-xs hover:underline" style={muted} onClick={() => setBulk(null)}>
-              Cancel
-            </button>
-          </div>
         </div>
       </Show>
 
