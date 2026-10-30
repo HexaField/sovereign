@@ -346,8 +346,8 @@ describe('usageSinceFromFile', () => {
       cacheRead: 220,
       cacheWrite: 20,
       calls: 2,
-      // m0's context (1008) is larger than m1's (135): a drop adds nothing; m2 adds 163 − 135.
-      added: 28
+      // m0 is before the run and never the baseline. m1, the run's first call: its output, 5; m2: 163 − 135.
+      added: 33
     })
     expect(usageSinceFromFile(join(dir, 'missing.jsonl'), 0).calls).toBe(0)
   })
@@ -384,11 +384,35 @@ describe('usageSinceFromFile', () => {
     )
     const u = usageSinceFromFile(file, Date.parse('2026-10-26T21:30:00.000Z'))
     expect(u.cacheWrite).toBe(237_000)
-    // m1: 236,702 − 235,802 = 900; m2: 237,404 − 236,702 = 702.
-    expect(u.added).toBe(1602)
+    // m1, the run's first call: its output, 700; m2: 237,404 − 236,702 = 702.
+    expect(u.added).toBe(1402)
   })
 
-  it('counts a first call in full when nothing came before it, and growth after a compaction', () => {
+  it("counts only the first call's output when the file holds nothing before the run (a recycled or fresh session)", () => {
+    const file = join(dir, 's.jsonl')
+    writeFileSync(
+      file,
+      [
+        // After a recycle the file starts here: the run's first call carries the whole 456k context.
+        call('2026-10-30T06:30:20.000Z', 'm1', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 450_530,
+          cache_read_input_tokens: 0,
+          output_tokens: 5826
+        }),
+        call('2026-10-30T06:30:40.000Z', 'm2', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 1000,
+          cache_read_input_tokens: 456_356,
+          output_tokens: 600
+        })
+      ].join('\n') + '\n'
+    )
+    // m1: its output, 5,826; m2: 457,958 − 456,358 = 1,600.
+    expect(usageSinceFromFile(file, Date.parse('2026-10-30T06:30:00.000Z')).added).toBe(7426)
+  })
+
+  it('adds nothing for a compaction inside the run, then counts growth again', () => {
     const file = join(dir, 's.jsonl')
     writeFileSync(
       file,
@@ -399,7 +423,7 @@ describe('usageSinceFromFile', () => {
         call('2026-10-26T21:31:10.000Z', 'm3', { input_tokens: 500, output_tokens: 20 })
       ].join('\n') + '\n'
     )
-    // m1: 1100 − 0; m2: below 1100; m3: 520 − 350.
-    expect(usageSinceFromFile(file, 0).added).toBe(1270)
+    // m1: its output, 100; m2: below 1100; m3: 520 − 350.
+    expect(usageSinceFromFile(file, 0).added).toBe(270)
   })
 })
