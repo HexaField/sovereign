@@ -21,6 +21,9 @@ import {
   knownGroups,
   parseDecisionFilters,
   resolvePayload,
+  draftResolution,
+  pickOption,
+  type Draft,
   sortDecisions,
   SOURCE_KIND_LABELS,
   sourceTarget,
@@ -139,7 +142,7 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
   const [bulk, setBulk] = createSignal<'group' | 'thread' | 'resolve' | null>(null)
   const [groupName, setGroupName] = createSignal('')
   const [threadPick, setThreadPick] = createSignal('')
-  const [drafts, setDrafts] = createSignal<Record<string, string>>({})
+  const [drafts, setDrafts] = createSignal<Record<string, Draft>>({})
   const [quick, setQuick] = createSignal<string | null>(null)
   const [editing, setEditing] = createSignal<string | null>(null)
   const [notice, setNotice] = createSignal<string | null>(null)
@@ -202,7 +205,7 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
       setBulk(null)
       return `Assigned ${ids.length} to ${threadPick() ? threadLabel(threadPick(), name) : 'no thread'}.`
     })
-  const resolve = async (list: Decision[], drafted: Record<string, string>) => {
+  const resolve = async (list: Decision[], drafted: Record<string, Draft>) => {
     const { body, missing } = resolvePayload(props.membrane, list, drafted)
     if (missing.length) {
       setNotice(`Write a resolution for: ${missing.map((d) => d.question).join('; ')}`)
@@ -223,7 +226,15 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
   const resolveOne = async (d: Decision) => {
     if (await resolve([d], drafts())) setQuick(null)
   }
-  const setDraft = (id: string, v: string) => setDrafts({ ...drafts(), [id]: v })
+  const setNote = (id: string, note: string) => setDrafts({ ...drafts(), [id]: { ...drafts()[id], note } })
+  const pick = (id: string, option: string) => setDrafts({ ...drafts(), [id]: pickOption(drafts()[id], option) })
+  /** The answer box: free text, or the context added to a picked option. */
+  const notePlaceholder = (d: Decision): string =>
+    drafts()[d.id]?.choice
+      ? 'Add context (optional)'
+      : d.options?.length
+        ? 'Pick an option above, or write an answer'
+        : 'Resolution'
 
   const openSource = (d: Decision) => {
     const t = sourceTarget(d.source)
@@ -240,10 +251,10 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
           {(o) => (
             <button
               class={chip}
-              style={chipStyle(drafts()[p.d.id] === o)}
+              style={chipStyle(drafts()[p.d.id]?.choice === o)}
               disabled={!p.onPick}
               onClick={() => p.onPick?.(o)}
-              title={p.onPick ? 'Use this answer' : undefined}
+              title={p.onPick ? 'Pick this answer (click again to unpick); add context below' : undefined}
               data-testid="decision-option"
             >
               {o}
@@ -311,7 +322,7 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
               d().status === 'open'
                 ? (o) => {
                     setQuick(d().id)
-                    setDraft(d().id, o)
+                    pick(d().id, o)
                   }
                 : undefined
             }
@@ -365,14 +376,14 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
                 class="min-h-[2rem] flex-1 rounded border px-1.5 py-0.5 text-xs"
                 style={inputStyle}
                 rows={2}
-                placeholder="Resolution"
-                value={drafts()[d().id] ?? ''}
-                onInput={(e) => setDraft(d().id, e.currentTarget.value)}
+                placeholder={notePlaceholder(d())}
+                value={drafts()[d().id]?.note ?? ''}
+                onInput={(e) => setNote(d().id, e.currentTarget.value)}
               />
               <button
                 class={btn}
                 style={btnStyle}
-                disabled={busy() || !(drafts()[d().id] ?? '').trim()}
+                disabled={busy() || !draftResolution(drafts()[d().id])}
                 onClick={() => void resolveOne(d())}
               >
                 {d().threadId ? 'Resolve and send' : 'Resolve'}
@@ -574,14 +585,14 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
                 <div class="text-[11px]" style={muted}>
                   → {d.threadId ? threadLabel(d.threadId, name) : 'no thread: nothing is sent'}
                 </div>
-                <OptionChips d={d} onPick={(o) => setDraft(d.id, o)} />
+                <OptionChips d={d} onPick={(o) => pick(d.id, o)} />
                 <textarea
                   class="mt-1 w-full rounded border px-1.5 py-0.5 text-xs"
                   style={inputStyle}
                   rows={2}
-                  placeholder="Resolution"
-                  value={drafts()[d.id] ?? ''}
-                  onInput={(e) => setDraft(d.id, e.currentTarget.value)}
+                  placeholder={notePlaceholder(d)}
+                  value={drafts()[d.id]?.note ?? ''}
+                  onInput={(e) => setNote(d.id, e.currentTarget.value)}
                 />
               </div>
             )}

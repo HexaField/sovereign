@@ -12,6 +12,8 @@ import {
   openCount,
   parseDecisionFilters,
   resolvePayload,
+  draftResolution,
+  pickOption,
   sortDecisions,
   sourceTarget,
   toggleSection,
@@ -138,9 +140,9 @@ describe('decisions model', () => {
   it('builds the resolve payload in order, skipping resolved ones and naming those without a resolution', () => {
     const picked = [LIST[2], LIST[0], LIST[3], LIST[1]]
     const { body, missing } = resolvePayload('demo', picked, {
-      [LIST[2].id]: '  SQLite  ',
-      [LIST[0].id]: 'Postgres',
-      [LIST[1].id]: '   '
+      [LIST[2].id]: { note: '  SQLite  ' },
+      [LIST[0].id]: { choice: 'Postgres', note: '' },
+      [LIST[1].id]: { note: '   ' }
     })
     expect(body).toEqual({
       membrane: 'demo',
@@ -150,6 +152,22 @@ describe('decisions model', () => {
       ]
     })
     expect(missing.map((x) => x.id)).toEqual([LIST[1].id])
+  })
+
+  it('answers with the picked option, the written note, or the option followed by the note', () => {
+    expect(draftResolution(undefined)).toBe('')
+    expect(draftResolution({ note: ' only words ' })).toBe('only words')
+    expect(draftResolution({ choice: 'Postgres', note: '' })).toBe('Postgres')
+    expect(draftResolution({ choice: 'Postgres', note: ' but keep SQLite for tests ' })).toBe(
+      'Postgres\nbut keep SQLite for tests'
+    )
+  })
+
+  it('picks an option, keeps the note, and unpicks on a second click', () => {
+    const d = pickOption({ note: 'why' }, 'a')
+    expect(d).toEqual({ choice: 'a', note: 'why' })
+    expect(pickOption(d, 'b')).toEqual({ choice: 'b', note: 'why' })
+    expect(pickOption(d, 'a')).toEqual({ note: 'why' })
   })
 
   it('sums up what went to which thread', () => {

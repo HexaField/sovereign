@@ -230,6 +230,24 @@ export function toggleSection(selected: Set<string>, ids: string[]): Set<string>
 
 export const openCount = (list: Decision[]): number => list.filter((d) => d.status === 'open').length
 
+/** An answer being written: an option picked from the chips, and/or a free-text note. */
+export interface Draft {
+  choice?: string
+  note: string
+}
+
+/** The resolution a draft sends: the option, the note, or the option with the note on the next line. */
+export function draftResolution(d: Draft | undefined): string {
+  const note = d?.note.trim() ?? ''
+  return [d?.choice, note].filter(Boolean).join('\n')
+}
+
+/** Pick an option (the note stays); picking the picked one again unpicks it. */
+export function pickOption(d: Draft | undefined, option: string): Draft {
+  const note = d?.note ?? ''
+  return d?.choice === option ? { note } : { choice: option, note }
+}
+
 /**
  * The body of POST /api/forge/decisions/resolve for the picked decisions, in the order shown.
  * Every picked open decision needs a resolution; `missing` lists the ones without.
@@ -237,10 +255,10 @@ export const openCount = (list: Decision[]): number => list.filter((d) => d.stat
 export function resolvePayload(
   membrane: string,
   picked: Decision[],
-  drafts: Record<string, string>
+  drafts: Record<string, Draft>
 ): { body: { membrane: string; items: Array<{ id: string; resolution: string }> }; missing: Decision[] } {
   const open = picked.filter((d) => d.status === 'open')
-  const items = open.map((d) => ({ id: d.id, resolution: (drafts[d.id] ?? '').trim() }))
+  const items = open.map((d) => ({ id: d.id, resolution: draftResolution(drafts[d.id]) }))
   return {
     body: { membrane, items: items.filter((i) => i.resolution) },
     missing: open.filter((_d, i) => !items[i].resolution)
