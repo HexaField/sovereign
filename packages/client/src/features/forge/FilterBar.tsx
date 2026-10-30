@@ -2,7 +2,7 @@
 // category chip group, State, Assignee, Requested from me, Not in a tree,
 // Agent, Updated), the rest behind "More", a text filter. Tree nodes are picked in the tree panel, not here.
 
-import { createSignal, For, Show, type Component } from 'solid-js'
+import { createSignal, For, Show, type Component, type JSX } from 'solid-js'
 import type { ForgeFilters, WorkCategory } from '@sovereign/core'
 import {
   clearFilters,
@@ -28,6 +28,8 @@ export interface FilterBarProps {
   /** Shown beside the search box while a history search runs. */
   searching?: boolean
   hasIdentity: boolean
+  /** 'sheet': the phone Filters sheet — every control laid out in sections, options as 40 px chips, no popovers. */
+  layout?: 'bar' | 'sheet'
 }
 
 type Open = OptionKey | 'more' | null
@@ -118,6 +120,8 @@ const FilterBar: Component<FilterBarProps> = (props) => {
       </For>
     </div>
   )
+
+  if (props.layout === 'sheet') return <FilterSheet {...props} set={set} active={active} chipStyle={chipStyle} />
 
   return (
     <div class="flex flex-wrap items-center gap-1 px-2 py-1" data-testid="forge-filters">
@@ -286,6 +290,213 @@ const FilterBar: Component<FilterBarProps> = (props) => {
         >
           Clear
         </button>
+      </Show>
+    </div>
+  )
+}
+
+const sheetChip = 'inline-flex min-h-10 items-center gap-1.5 rounded-full border px-3 text-sm transition-colors'
+const sheetField = 'h-10 w-full rounded border px-2 text-sm'
+const fieldStyle = { 'border-color': 'var(--c-border)', background: 'var(--c-bg)', color: 'var(--c-text)' }
+
+/** The phone layout of the same controls: same filters, same handlers, nothing behind a popover. */
+const FilterSheet: Component<
+  FilterBarProps & {
+    set: (patch: Partial<ForgeFilters>) => void
+    active: (key: OptionKey) => string[]
+    chipStyle: (on: boolean) => Record<string, string>
+  }
+> = (props) => {
+  const [more, setMore] = createSignal(moreActiveCount(props.filters) > 0)
+  const Section: Component<{ title: string; children: JSX.Element }> = (p) => (
+    <div class="px-4 py-2">
+      <div class="mb-1.5 text-[11px] font-semibold tracking-wider uppercase" style={{ color: 'var(--c-text-muted)' }}>
+        {p.title}
+      </div>
+      {p.children}
+    </div>
+  )
+  const Toggle: Component<{ on: boolean; label: string; onClick: () => void; testid: string; disabled?: boolean }> = (
+    p
+  ) => (
+    <button
+      class={`${sheetChip} disabled:opacity-40`}
+      style={props.chipStyle(p.on)}
+      aria-pressed={p.on}
+      disabled={p.disabled}
+      onClick={() => p.onClick()}
+      data-testid={p.testid}
+    >
+      {p.label}
+    </button>
+  )
+  const MenuSection: Component<{ m: FilterMenu }> = (p) => (
+    <Section title={p.m.label}>
+      <div class="flex flex-wrap gap-1.5" data-testid={`forge-filter-menu-${p.m.key}`}>
+        <Show
+          when={props.options[p.m.key].length}
+          fallback={
+            <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              Nothing loaded
+            </span>
+          }
+        >
+          <For each={props.options[p.m.key]}>
+            {(o) => {
+              const on = () => props.active(p.m.key).includes(o.value)
+              const tone = p.m.key === 'categories' ? CATEGORY_COLORS[o.value as WorkCategory] : null
+              return (
+                <button
+                  class={sheetChip}
+                  style={
+                    tone
+                      ? {
+                          'border-color': on() ? tone.fg : 'var(--c-border)',
+                          color: tone.fg,
+                          background: on() ? tone.bg : 'var(--c-bg)'
+                        }
+                      : props.chipStyle(on())
+                  }
+                  aria-pressed={on()}
+                  onClick={() => props.onChange(toggleFilterValue(props.filters, p.m.key, o.value))}
+                  data-testid={`forge-filter-option-${p.m.key}`}
+                >
+                  <span class="max-w-[14rem] truncate">{o.label}</span>
+                  <span class="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                    {o.count}
+                  </span>
+                </button>
+              )
+            }}
+          </For>
+        </Show>
+      </div>
+    </Section>
+  )
+
+  return (
+    <div class="pb-4" data-testid="forge-filters">
+      <div class="px-4 pt-3 pb-1">
+        <input
+          ref={(el) => props.searchRef?.(el)}
+          type="search"
+          placeholder="Filter by text…"
+          class={sheetField}
+          style={fieldStyle}
+          value={props.filters.text ?? ''}
+          onInput={(e) => props.set({ text: e.currentTarget.value })}
+          data-testid="forge-filter-text"
+        />
+        <Show when={props.searching}>
+          <div class="mt-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+            searching history…
+          </div>
+        </Show>
+      </div>
+      <For each={PRIMARY_MENUS}>
+        {(m) => (
+          <>
+            <MenuSection m={m} />
+            <Show when={m.key === 'kinds'}>
+              <MenuSection m={{ key: 'categories', label: 'Category' }} />
+            </Show>
+          </>
+        )}
+      </For>
+      <Section title="Show">
+        <div class="flex flex-wrap gap-1.5">
+          <Toggle
+            on={!!props.filters.requestedFromMe}
+            label="Requested from me"
+            disabled={!props.hasIdentity}
+            onClick={() => props.set({ requestedFromMe: !props.filters.requestedFromMe })}
+            testid="forge-filter-mine"
+          />
+          <Toggle
+            on={!!props.filters.orphans}
+            label="Not in a tree"
+            onClick={() => props.set({ orphans: !props.filters.orphans })}
+            testid="forge-filter-orphans"
+          />
+          <Toggle
+            on={!!props.filters.showPaused}
+            label="Paused"
+            onClick={() => props.set({ showPaused: !props.filters.showPaused })}
+            testid="forge-filter-paused"
+          />
+          <Toggle
+            on={!!props.filters.showEmpty}
+            label="Empty plans"
+            onClick={() => props.set({ showEmpty: !props.filters.showEmpty })}
+            testid="forge-filter-empty"
+          />
+          <Toggle
+            on={!!props.filters.dim}
+            label="Dim instead of hide"
+            onClick={() => props.set({ dim: !props.filters.dim })}
+            testid="forge-filter-dim"
+          />
+        </div>
+      </Section>
+      <Section title="Agent">
+        <select
+          class={sheetField}
+          style={fieldStyle}
+          value={props.filters.agent ?? ''}
+          onChange={(e) => props.set({ agent: (e.currentTarget.value || undefined) as ForgeFilters['agent'] })}
+          data-testid="forge-filter-agent"
+        >
+          <option value="">Any state</option>
+          <option value="any">Has agent</option>
+          <option value="waiting-ci">Waiting on CI</option>
+          <option value="waiting-review">Waiting on review</option>
+        </select>
+      </Section>
+      <Section title="Updated">
+        <select
+          class={sheetField}
+          style={fieldStyle}
+          value={String(props.filters.updatedWithinDays ?? '')}
+          onChange={(e) =>
+            props.set({ updatedWithinDays: e.currentTarget.value ? Number(e.currentTarget.value) : undefined })
+          }
+          data-testid="forge-filter-updated"
+        >
+          <option value="">Any time</option>
+          <option value="1">Today</option>
+          <option value="7">Within 7 days</option>
+          <option value="30">Within 30 days</option>
+        </select>
+      </Section>
+      <div class="px-4 py-2">
+        <button
+          class="flex min-h-10 w-full items-center gap-2 rounded border px-3 text-left text-sm"
+          style={props.chipStyle(moreActiveCount(props.filters) > 0)}
+          aria-expanded={more()}
+          onClick={() => setMore(!more())}
+          data-testid="forge-filter-more"
+        >
+          <span class="flex-1">
+            More: zone, author, reviewer, label
+            <Show when={moreActiveCount(props.filters)}> ({moreActiveCount(props.filters)})</Show>
+          </span>
+          <span>{more() ? '▴' : '▾'}</span>
+        </button>
+      </div>
+      <Show when={more()}>
+        <For each={MORE_MENUS}>{(m) => <MenuSection m={m} />}</For>
+      </Show>
+      <Show when={hasActiveFilters(props.filters)}>
+        <div class="px-4 pt-2">
+          <button
+            class="min-h-10 w-full rounded border px-3 text-sm"
+            style={props.chipStyle(false)}
+            onClick={() => props.onChange(clearFilters(props.filters))}
+            data-testid="forge-filter-clear"
+          >
+            Clear filters
+          </button>
+        </div>
       </Show>
     </div>
   )

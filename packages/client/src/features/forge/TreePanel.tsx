@@ -15,6 +15,7 @@ import type { EpicStatus, ForgeFilters, WorkNode, WorkStream } from '@sovereign/
 import { EPIC_STATUSES, leafState } from '@sovereign/core/forge'
 import type { ForgeApi } from './api.js'
 import { useDismiss } from './dismiss.js'
+import { isNarrowWidth } from './mobile.js'
 import {
   clearEpics,
   epicSource,
@@ -53,6 +54,11 @@ export interface TreePanelProps {
   /** A leaf was clicked: select it (its node card opens). */
   onFocusNode: (id: string) => void
   onOpenThread: (id: string) => void
+  /**
+   * Phone layout: someone else opens the tree (the ⋯ menu), so no toggle
+   * button is drawn, and it opens full screen.
+   */
+  controlled?: { open: () => boolean; setOpen: (open: boolean) => void }
 }
 
 type RefineState =
@@ -93,7 +99,9 @@ const LEAF_GLYPH: Record<string, string> = { change: '⇄', issue: '◎', task: 
 const LEAF_TONE = { open: 'var(--c-text)', done: '#22c55e', cancelled: 'var(--c-text-muted)' } as const
 
 const TreePanel: Component<TreePanelProps> = (props) => {
-  const [open, setOpen] = createSignal(false)
+  const [ownOpen, setOwnOpen] = createSignal(false)
+  const open = (): boolean => (props.controlled ? props.controlled.open() : ownOpen())
+  const setOpen = (v: boolean): void => (props.controlled ? props.controlled.setOpen(v) : void setOwnOpen(v))
   const [mode, setMode] = createSignal<EpicsMode>(readMode())
   const [query, setQuery] = createSignal('')
   const [name, setName] = createSignal('')
@@ -417,9 +425,24 @@ const TreePanel: Component<TreePanelProps> = (props) => {
   const body = (): JSX.Element => (
     <>
       <div class="flex items-center gap-2 border-b px-3 py-1.5" style={{ 'border-color': 'var(--c-border)' }}>
-        <span class="flex-1 text-xs font-semibold">Goal tree ({rows().length})</span>
+        <span class="flex-1 text-xs font-semibold" classList={{ 'text-sm': !!props.controlled }}>
+          Goal tree ({rows().length})
+        </span>
+        <Show when={props.controlled}>
+          <button
+            class="flex h-11 w-11 items-center justify-center text-lg"
+            style={muted}
+            title="Close"
+            aria-label="Close"
+            onClick={() => setOpen(false)}
+            data-testid="forge-tree-close"
+          >
+            ✕
+          </button>
+        </Show>
         <button
           class={btn}
+          classList={{ hidden: !!props.controlled }}
           style={field}
           title={mode() === 'dropdown' ? 'Open in a window' : 'Show as a dropdown'}
           onClick={switchMode}
@@ -427,7 +450,13 @@ const TreePanel: Component<TreePanelProps> = (props) => {
         >
           {mode() === 'dropdown' ? '⤢ Window' : '⤡ Dropdown'}
         </button>
-        <button class={btn} style={field} title="Close (Esc)" onClick={() => setOpen(false)}>
+        <button
+          class={btn}
+          classList={{ hidden: !!props.controlled }}
+          style={field}
+          title="Close (Esc)"
+          onClick={() => setOpen(false)}
+        >
           ✕
         </button>
       </div>
@@ -435,7 +464,10 @@ const TreePanel: Component<TreePanelProps> = (props) => {
       <div class="flex flex-col gap-1 border-b px-3 py-1.5" style={{ 'border-color': 'var(--c-border)' }}>
         <div class="flex items-center gap-1">
           <input
-            ref={(el) => queueMicrotask(() => el.focus({ preventScroll: true }))}
+            // Not on a phone: focusing would pop the keyboard over the tree.
+            ref={(el) => {
+              if (!isNarrowWidth(window.innerWidth)) queueMicrotask(() => el.focus({ preventScroll: true }))
+            }}
             type="search"
             class="min-w-0 flex-1 rounded border px-1.5 py-0.5"
             style={field}
@@ -619,6 +651,27 @@ const TreePanel: Component<TreePanelProps> = (props) => {
       </div>
     </>
   )
+
+  if (props.controlled)
+    return (
+      <Show when={open()}>
+        <Portal>
+          <div
+            ref={boxEl}
+            class="fixed inset-0 z-[120] flex flex-col text-xs"
+            style={{
+              background: 'var(--c-bg-raised)',
+              color: 'var(--c-text)',
+              'padding-top': 'env(safe-area-inset-top)',
+              'padding-bottom': 'env(safe-area-inset-bottom)'
+            }}
+            data-testid="forge-tree-modal"
+          >
+            {body()}
+          </div>
+        </Portal>
+      </Show>
+    )
 
   return (
     <div class="relative">

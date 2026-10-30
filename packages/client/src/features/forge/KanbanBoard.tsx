@@ -95,18 +95,25 @@ const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: bool
 }
 
 const KanbanBoard: Component<KanbanBoardProps> = (props) => (
-  <div class="flex h-full min-h-0 gap-2 overflow-x-auto p-2" data-testid="forge-kanban">
+  // Phone (max-sm): each column nearly the screen's width, snapping, the next one peeking in.
+  <div
+    class="flex h-full min-h-0 gap-2 overflow-x-auto p-2 max-sm:snap-x max-sm:snap-mandatory max-sm:gap-1.5 max-sm:p-1.5"
+    data-testid="forge-kanban"
+  >
     <For each={KANBAN_COLUMNS}>
       {(col) => {
         const cards = () => props.columns.get(col.id) ?? []
         return (
           <div
-            class="flex min-h-0 w-64 shrink-0 flex-col rounded border"
+            class="flex min-h-0 w-64 shrink-0 flex-col rounded border max-sm:w-[calc(100vw-2.5rem)] max-sm:snap-center"
             style={{ 'border-color': 'var(--c-border)' }}
             data-testid="forge-kanban-column"
             data-column={col.id}
           >
-            <div class="flex items-center gap-2 px-2 py-1 text-xs font-semibold" style={{ color: 'var(--c-text)' }}>
+            <div
+              class="flex items-center gap-2 px-2 py-1 text-xs font-semibold max-sm:py-2 max-sm:text-sm"
+              style={{ color: 'var(--c-text)' }}
+            >
               {col.title}
               <span class="font-normal" style={{ color: 'var(--c-text-muted)' }}>
                 {cards().length}

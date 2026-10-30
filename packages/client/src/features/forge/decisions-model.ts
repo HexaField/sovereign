@@ -88,6 +88,21 @@ export function parseDecisionFilters(raw: string | null | undefined): DecisionFi
   }
 }
 
+/**
+ * The phone Filters button's badge in the Decisions view: a status other than
+ * open, each picked group, thread and source kind, and the search text.
+ * Sort and group-by order the list without hiding anything, so they do not count.
+ */
+export function activeDecisionFilterCount(f: DecisionFilters): number {
+  return (
+    (f.status !== DEFAULT_DECISION_FILTERS.status ? 1 : 0) +
+    f.groups.length +
+    f.threads.length +
+    f.sourceKinds.length +
+    (f.q.trim() ? 1 : 0)
+  )
+}
+
 export type ThreadName = (threadId: string) => string | undefined
 
 export const threadLabel = (id: string | undefined, name: ThreadName): string => (id ? (name(id) ?? id) : 'No thread')

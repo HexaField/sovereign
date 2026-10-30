@@ -3,13 +3,16 @@
 // assign a thread, or resolve together — each receiving thread then gets one
 // message with all of its resolutions. Logic lives in decisions-model.ts.
 
-import { createMemo, createSignal, For, Show, type Component } from 'solid-js'
+import { createMemo, createSignal, For, onCleanup, Show, type Component, type JSX } from 'solid-js'
 import type { Decision } from '@sovereign/core'
 import type { ForgeApi } from './api.js'
 import type { ThreadChoice } from './NodeCard.js'
 import { useDismiss } from './dismiss.js'
+import MobileSheet from './MobileSheet.js'
+import type { DecisionControls } from './mobile.js'
 import { renderMarkdown } from '../../lib/markdown.js'
 import {
+  activeDecisionFilterCount,
   ageLabel,
   DECISION_GROUP_BYS,
   DECISION_SORTS,
@@ -50,6 +53,10 @@ export interface DecisionsViewProps {
   onOpenThread: (id: string) => void
   /** Show a work-graph node (a plan's or a PR's): the graph opens with it selected. */
   onSelectNode: (id: string) => void
+  /** Phone layout: the filter row moves into a sheet behind the top bar's Filters button. */
+  narrow?: boolean
+  /** Phone layout: hands the top bar the filter count and the sheet. */
+  onMobileControls?: (c: DecisionControls | null) => void
 }
 
 const btn = 'rounded border px-2 py-0.5 text-xs transition-colors disabled:opacity-40 hover:bg-[var(--c-hover-bg)]'
@@ -127,8 +134,64 @@ const ChipMenu: Component<{
   )
 }
 
+const sheetChip = 'inline-flex min-h-10 items-center gap-1.5 rounded-full border px-3 text-sm transition-colors'
+
+const SheetSection: Component<{ title: string; children: JSX.Element }> = (p) => (
+  <div class="px-4 py-2">
+    <div class="mb-1.5 text-[11px] font-semibold tracking-wider uppercase" style={muted}>
+      {p.title}
+    </div>
+    <div class="flex flex-wrap gap-1.5">{p.children}</div>
+  </div>
+)
+
+/** The phone sheet's version of a ChipMenu: every option shown as a 40 px chip. */
+const SheetPicks: Component<{
+  title: string
+  options: Option[]
+  picked: string[]
+  onToggle: (v: string) => void
+  testid: string
+}> = (p) => (
+  <SheetSection title={p.title}>
+    <Show
+      when={p.options.length}
+      fallback={
+        <span class="text-xs" style={muted}>
+          None
+        </span>
+      }
+    >
+      <For each={p.options}>
+        {(o) => (
+          <button
+            class={sheetChip}
+            style={chipStyle(p.picked.includes(o.value))}
+            aria-pressed={p.picked.includes(o.value)}
+            onClick={() => p.onToggle(o.value)}
+            data-testid={p.testid}
+          >
+            <span class="max-w-[14rem] truncate">{o.label}</span>
+            <span class="text-xs" style={muted}>
+              {o.count}
+            </span>
+          </button>
+        )}
+      </For>
+    </Show>
+  </SheetSection>
+)
+
 const DecisionsView: Component<DecisionsViewProps> = (props) => {
   const [filters, setFiltersSignal] = createSignal<DecisionFilters>(readFilters())
+  const [filtersOpen, setFiltersOpen] = createSignal(false)
+  if (props.onMobileControls) {
+    props.onMobileControls({
+      filterCount: () => activeDecisionFilterCount(filters()),
+      openFilters: () => setFiltersOpen(true)
+    })
+    onCleanup(() => props.onMobileControls?.(null))
+  }
   const setFilters = (patch: Partial<DecisionFilters>): void => {
     const next = { ...filters(), ...patch }
     setFiltersSignal(next)
@@ -396,90 +459,189 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
         <For each={groups()}>{(g) => <option value={g} />}</For>
       </datalist>
 
-      {/* Filters */}
-      <div
-        class="flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5"
-        style={{ 'border-color': 'var(--c-border)' }}
-      >
-        <For each={['open', 'resolved', 'all'] as const}>
-          {(s) => (
-            <button
-              class={chip}
-              style={chipStyle(filters().status === s)}
-              onClick={() => setFilters({ status: s })}
-              data-testid={`decisions-status-${s}`}
+      <Show when={props.narrow && filtersOpen()}>
+        <MobileSheet
+          title="Decision filters"
+          tall
+          onClose={() => setFiltersOpen(false)}
+          testid="decisions-filters-sheet"
+        >
+          <div class="pb-4">
+            <SheetSection title="Status">
+              <For each={['open', 'resolved', 'all'] as const}>
+                {(s) => (
+                  <button
+                    class={sheetChip}
+                    style={chipStyle(filters().status === s)}
+                    aria-pressed={filters().status === s}
+                    onClick={() => setFilters({ status: s })}
+                    data-testid={`decisions-status-${s}`}
+                  >
+                    {s === 'open' ? 'Open' : s === 'resolved' ? 'Resolved' : 'All'}
+                  </button>
+                )}
+              </For>
+            </SheetSection>
+            <SheetSection title="Search">
+              <input
+                class="h-10 w-full rounded border px-2 text-sm"
+                style={inputStyle}
+                placeholder="Search decisions"
+                value={filters().q}
+                onInput={(e) => setFilters({ q: e.currentTarget.value })}
+                data-testid="decisions-search"
+              />
+            </SheetSection>
+            <SheetPicks
+              title="Group"
+              options={options().groups}
+              picked={filters().groups}
+              onToggle={(v) => setFilters({ groups: toggleIn(filters().groups, v) })}
+              testid="decisions-filter-group"
+            />
+            <SheetPicks
+              title="Thread"
+              options={options().threads}
+              picked={filters().threads}
+              onToggle={(v) => setFilters({ threads: toggleIn(filters().threads, v) })}
+              testid="decisions-filter-thread"
+            />
+            <SheetPicks
+              title="Source"
+              options={options().sourceKinds}
+              picked={filters().sourceKinds}
+              onToggle={(v) => setFilters({ sourceKinds: toggleIn(filters().sourceKinds, v as never) })}
+              testid="decisions-filter-source"
+            />
+            <SheetSection title="Sort">
+              <select
+                class="h-10 w-full rounded border px-2 text-sm"
+                style={inputStyle}
+                value={filters().sort}
+                onChange={(e) => setFilters({ sort: e.currentTarget.value as DecisionFilters['sort'] })}
+              >
+                <For each={DECISION_SORTS}>{(s) => <option value={s.value}>{s.label}</option>}</For>
+              </select>
+            </SheetSection>
+            <SheetSection title="Group by">
+              <select
+                class="h-10 w-full rounded border px-2 text-sm"
+                style={inputStyle}
+                value={filters().groupBy}
+                onChange={(e) => setFilters({ groupBy: e.currentTarget.value as DecisionFilters['groupBy'] })}
+              >
+                <For each={DECISION_GROUP_BYS}>{(g) => <option value={g.value}>{g.label}</option>}</For>
+              </select>
+            </SheetSection>
+            <Show
+              when={filters().groups.length || filters().threads.length || filters().sourceKinds.length || filters().q}
             >
-              {s === 'open' ? 'Open' : s === 'resolved' ? 'Resolved' : 'All'}
-            </button>
-          )}
-        </For>
-        <ChipMenu
-          label="Group"
-          options={options().groups}
-          picked={filters().groups}
-          onToggle={(v) => setFilters({ groups: toggleIn(filters().groups, v) })}
-          testid="decisions-filter-group"
-        />
-        <ChipMenu
-          label="Thread"
-          options={options().threads}
-          picked={filters().threads}
-          onToggle={(v) => setFilters({ threads: toggleIn(filters().threads, v) })}
-          testid="decisions-filter-thread"
-        />
-        <ChipMenu
-          label="Source"
-          options={options().sourceKinds}
-          picked={filters().sourceKinds}
-          onToggle={(v) => setFilters({ sourceKinds: toggleIn(filters().sourceKinds, v as never) })}
-          testid="decisions-filter-source"
-        />
-        <input
-          class="min-w-[8rem] flex-1 rounded border px-1.5 py-0.5 text-xs"
-          style={inputStyle}
-          placeholder="Search decisions"
-          value={filters().q}
-          onInput={(e) => setFilters({ q: e.currentTarget.value })}
-          data-testid="decisions-search"
-        />
-        <select
-          class="rounded border px-1.5 py-0.5 text-xs"
-          style={inputStyle}
-          value={filters().sort}
-          onChange={(e) => setFilters({ sort: e.currentTarget.value as DecisionFilters['sort'] })}
-          title="Sort"
+              <div class="px-4 pt-2">
+                <button
+                  class="min-h-10 w-full rounded border px-3 text-sm"
+                  style={chipStyle(false)}
+                  onClick={() => setFilters({ groups: [], threads: [], sourceKinds: [], q: '' })}
+                >
+                  Clear filters
+                </button>
+              </div>
+            </Show>
+          </div>
+        </MobileSheet>
+      </Show>
+
+      {/* Filters (a phone has them in the sheet above) */}
+      <Show when={!props.narrow}>
+        <div
+          class="flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5"
+          style={{ 'border-color': 'var(--c-border)' }}
         >
-          <For each={DECISION_SORTS}>{(s) => <option value={s.value}>Sort: {s.label}</option>}</For>
-        </select>
-        <select
-          class="rounded border px-1.5 py-0.5 text-xs"
-          style={inputStyle}
-          value={filters().groupBy}
-          onChange={(e) => setFilters({ groupBy: e.currentTarget.value as DecisionFilters['groupBy'] })}
-          title="Group by"
-        >
-          <For each={DECISION_GROUP_BYS}>{(g) => <option value={g.value}>{g.label}</option>}</For>
-        </select>
-        <Show when={filters().groups.length || filters().threads.length || filters().sourceKinds.length || filters().q}>
-          <button
-            class="text-[11px] hover:underline"
-            style={muted}
-            onClick={() => setFilters({ groups: [], threads: [], sourceKinds: [], q: '' })}
+          <For each={['open', 'resolved', 'all'] as const}>
+            {(s) => (
+              <button
+                class={chip}
+                style={chipStyle(filters().status === s)}
+                onClick={() => setFilters({ status: s })}
+                data-testid={`decisions-status-${s}`}
+              >
+                {s === 'open' ? 'Open' : s === 'resolved' ? 'Resolved' : 'All'}
+              </button>
+            )}
+          </For>
+          <ChipMenu
+            label="Group"
+            options={options().groups}
+            picked={filters().groups}
+            onToggle={(v) => setFilters({ groups: toggleIn(filters().groups, v) })}
+            testid="decisions-filter-group"
+          />
+          <ChipMenu
+            label="Thread"
+            options={options().threads}
+            picked={filters().threads}
+            onToggle={(v) => setFilters({ threads: toggleIn(filters().threads, v) })}
+            testid="decisions-filter-thread"
+          />
+          <ChipMenu
+            label="Source"
+            options={options().sourceKinds}
+            picked={filters().sourceKinds}
+            onToggle={(v) => setFilters({ sourceKinds: toggleIn(filters().sourceKinds, v as never) })}
+            testid="decisions-filter-source"
+          />
+          <input
+            class="min-w-[8rem] flex-1 rounded border px-1.5 py-0.5 text-xs"
+            style={inputStyle}
+            placeholder="Search decisions"
+            value={filters().q}
+            onInput={(e) => setFilters({ q: e.currentTarget.value })}
+            data-testid="decisions-search"
+          />
+          <select
+            class="rounded border px-1.5 py-0.5 text-xs"
+            style={inputStyle}
+            value={filters().sort}
+            onChange={(e) => setFilters({ sort: e.currentTarget.value as DecisionFilters['sort'] })}
+            title="Sort"
           >
-            Clear
-          </button>
-        </Show>
-      </div>
+            <For each={DECISION_SORTS}>{(s) => <option value={s.value}>Sort: {s.label}</option>}</For>
+          </select>
+          <select
+            class="rounded border px-1.5 py-0.5 text-xs"
+            style={inputStyle}
+            value={filters().groupBy}
+            onChange={(e) => setFilters({ groupBy: e.currentTarget.value as DecisionFilters['groupBy'] })}
+            title="Group by"
+          >
+            <For each={DECISION_GROUP_BYS}>{(g) => <option value={g.value}>{g.label}</option>}</For>
+          </select>
+          <Show
+            when={filters().groups.length || filters().threads.length || filters().sourceKinds.length || filters().q}
+          >
+            <button
+              class="text-[11px] hover:underline"
+              style={muted}
+              onClick={() => setFilters({ groups: [], threads: [], sourceKinds: [], q: '' })}
+            >
+              Clear
+            </button>
+          </Show>
+        </div>
+      </Show>
 
       {/* Resolve: every answered decision in one call, one message per thread. */}
       <Show when={props.decisions.some((d) => d.status === 'open')}>
         <div
-          class="flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-xs"
-          style={{ 'border-color': 'var(--c-border)', background: 'var(--c-bg-raised)' }}
+          class="flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-xs max-sm:order-last max-sm:flex-nowrap max-sm:border-t max-sm:border-b-0 max-sm:px-2"
+          style={{
+            'border-color': 'var(--c-border)',
+            background: 'var(--c-bg-raised)',
+            'padding-bottom': props.narrow ? 'max(0.375rem, env(safe-area-inset-bottom))' : undefined
+          }}
           data-testid="decisions-resolve-bar"
         >
           <button
-            class={btn}
+            class={`${btn} max-sm:min-h-10 max-sm:flex-1 max-sm:text-sm`}
             style={btnStyle}
             disabled={busy() || !answered().length}
             onClick={resolveAnswered}
@@ -487,13 +649,13 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
           >
             Resolve {answered().length} and send
           </button>
-          <span style={muted}>
+          <span class="max-sm:hidden" style={muted}>
             {answered().length
               ? `${answered().length} answered: pick an option and/or write an answer on each, then send them all at once.`
               : 'Pick an option and/or write an answer on each decision, then send them all at once.'}
           </span>
           <Show when={answered().length}>
-            <button class="hover:underline" style={muted} onClick={() => setDrafts({})}>
+            <button class="hover:underline max-sm:min-h-10 max-sm:px-2" style={muted} onClick={() => setDrafts({})}>
               Clear answers
             </button>
           </Show>

@@ -36,6 +36,28 @@ export function wheelFactor(deltaY: number, deltaMode = 0): number {
   return Math.exp(-Math.max(-300, Math.min(300, px)) * 0.0015)
 }
 
+export interface Point {
+  x: number
+  y: number
+}
+
+export const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+export const distance = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.y - b.y)
+
+/**
+ * One step of a two-finger pinch: zoom by the ratio of the finger distances
+ * about the old midpoint, then pan by how far the midpoint moved. The world
+ * point under the fingers' midpoint stays under it (until the scale clamps).
+ */
+export function pinchViewport(vp: Viewport, prev: [Point, Point], next: [Point, Point]): Viewport {
+  const d0 = distance(prev[0], prev[1])
+  const d1 = distance(next[0], next[1])
+  const m0 = midpoint(prev[0], prev[1])
+  const m1 = midpoint(next[0], next[1])
+  const factor = d0 > 0 && d1 > 0 ? d1 / d0 : 1
+  return pan(zoomAt(vp, m0.x, m0.y, factor), m1.x - m0.x, m1.y - m0.y)
+}
+
 export function visibleWorld(
   vp: Viewport,
   width: number,

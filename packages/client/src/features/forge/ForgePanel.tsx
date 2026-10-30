@@ -6,7 +6,7 @@ import type { AgentOverlay, EpicStatus, ForgeFilters, ForgeView } from '@soverei
 import ForgeCanvas, { type CanvasHandle } from './ForgeCanvas.js'
 import FilterBar from './FilterBar.js'
 import NodeCard, { type ThreadChoice } from './NodeCard.js'
-import TreePanel from './TreePanel.js'
+import TreePanel, { type TreePanelProps } from './TreePanel.js'
 import type { ForgeApi } from './api.js'
 import { keyDirection, walkEdge } from './edge-walk.js'
 import { EPIC_STATUSES } from '@sovereign/core/forge'
@@ -24,10 +24,13 @@ import {
 } from './epics-model.js'
 import KanbanBoard from './KanbanBoard.js'
 import { kanbanCards, type PanelMode } from './kanban-model.js'
-import { applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
+import { activeFilterCount, applyFilters, filterOptions, stableOptions, type FilterOptions } from './filters.js'
 import { viewFilters } from './graphs.js'
 import { computeLayout, streamCardId, streamOfCard, xToTime } from './layout.js'
 import StreamCard from './StreamCard.js'
+import MobileSheet from './MobileSheet.js'
+import { panelStatusParts, type PanelControls } from './mobile.js'
+import { treeButtonLabel } from './tree-model.js'
 import { binDaysFor, COLLAPSE_SCALE } from './lod.js'
 import { buildScene } from './scene.js'
 import { visibleWorld, type Viewport } from './viewport.js'
@@ -61,6 +64,10 @@ export interface ForgePanelProps {
   mode: PanelMode
   /** Select this node once it is loaded (a decision's source link); `seq` repeats a request for the same id. */
   focusRequest?: () => { id: string; seq: number } | null
+  /** The phone layout: no header or filter row (the top bar's Filters and ⋯ take them), cards as bottom sheets. */
+  narrow?: boolean
+  /** Phone layout: hands the top bar this panel's filter count, sheet, tree and ⋯ items. */
+  onMobileControls?: (c: PanelControls | null) => void
 }
 
 const SEARCH_MIN = 3
@@ -310,6 +317,57 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
 
   const sinceLabel = createMemo(() => new Date(win().since).toLocaleDateString())
 
+  // ── Phone layout: the top bar's Filters sheet, Tree and ⋯ items ───────
+  const [filtersOpen, setFiltersOpen] = createSignal(false)
+  const [treeOpen, setTreeOpen] = createSignal(false)
+  if (props.onMobileControls) {
+    props.onMobileControls({
+      filterCount: () => activeFilterCount(props.view.filters),
+      openFilters: () => setFiltersOpen(true),
+      status: () =>
+        panelStatusParts({
+          visible: visibility().visible.size,
+          total: win().nodes.size,
+          since: sinceLabel(),
+          syncing: win().syncing,
+          syncOff: win().syncOff,
+          lastSyncAt: win().lastSyncAt,
+          loading: loading()
+        }),
+      error: error,
+      treeLabel: () => treeButtonLabel(props.view.filters, win().workstreams),
+      openTree: () => setTreeOpen(true),
+      history,
+      historyDisabled: () => !!win().exhausted,
+      fit: () => canvas?.fit(),
+      canFit: () => props.mode === 'graph'
+    })
+    onCleanup(() => props.onMobileControls?.(null))
+  }
+  /** The goal tree: a header button on desktop, opened from ⋯ (full screen) on a phone. */
+  const Tree: Component<{ controlled?: TreePanelProps['controlled'] }> = (p) => (
+    <TreePanel
+      membrane={props.membrane}
+      streams={win().workstreams}
+      nodes={nodes()}
+      filters={props.view.filters}
+      onChange={setFilters}
+      api={props.api}
+      onCreate={createStream}
+      onChanged={() => void load(initialRequest(Date.now()))}
+      onFocusNode={focusNode}
+      onOpenThread={props.onOpenThread}
+      controlled={p.controlled}
+    />
+  )
+  /** Where a node or stream card opens: a side panel on desktop, a bottom sheet on a phone. */
+  const cardBox = (): string =>
+    props.narrow
+      ? 'absolute inset-x-0 top-[18%] bottom-0 z-20 flex flex-col overflow-hidden rounded-t-xl border-t shadow-xl'
+      : 'absolute top-2 right-2 bottom-2 z-10 flex flex-col'
+  const cardBoxStyle = () =>
+    props.narrow ? { background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' } : undefined
+
   return (
     <div
       ref={root}
@@ -321,73 +379,84 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
       data-testid="forge-panel"
       data-view={props.view.id}
     >
-      <div class="flex items-center gap-2 px-2 pt-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
-        <span class="font-semibold" style={{ color: 'var(--c-text-heading, var(--c-text))' }}>
-          {props.view.title}
-        </span>
-        <span data-testid="forge-count">
-          {visibility().visible.size} / {win().nodes.size} nodes
-        </span>
-        <span>· history from {sinceLabel()}</span>
-        <Show when={win().syncing}>
-          <span style={{ color: 'var(--c-warning, #f59e0b)' }}>· first sync running…</span>
-        </Show>
-        <Show when={win().syncOff}>
-          <span data-testid="forge-sync-off">· GitHub sync off (forge.enabled)</span>
-        </Show>
-        <Show when={win().lastSyncAt}>
-          <span>· synced {new Date(win().lastSyncAt!).toLocaleTimeString()}</span>
-        </Show>
-        <Show when={loading()}>
-          <span data-testid="forge-loading">· loading…</span>
-        </Show>
-        <Show when={error()}>
-          <span style={{ color: 'var(--c-error, #ef4444)' }} data-testid="forge-error">
-            · {error()}
+      <Show
+        when={!props.narrow}
+        fallback={
+          <>
+            <Tree controlled={{ open: treeOpen, setOpen: setTreeOpen }} />
+            <Show when={filtersOpen()}>
+              <MobileSheet title="Filters" tall onClose={() => setFiltersOpen(false)} testid="forge-filters-sheet">
+                <FilterBar
+                  layout="sheet"
+                  filters={props.view.filters}
+                  options={options()}
+                  onChange={setFilters}
+                  searchRef={(el) => (searchInput = el)}
+                  searching={searching()}
+                  hasIdentity={!!win().identity}
+                />
+              </MobileSheet>
+            </Show>
+          </>
+        }
+      >
+        <div class="flex items-center gap-2 px-2 pt-1 text-xs" style={{ color: 'var(--c-text-muted)' }}>
+          <span class="font-semibold" style={{ color: 'var(--c-text-heading, var(--c-text))' }}>
+            {props.view.title}
           </span>
-        </Show>
-        <span class="flex-1" />
-        <TreePanel
-          membrane={props.membrane}
-          streams={win().workstreams}
-          nodes={nodes()}
-          filters={props.view.filters}
-          onChange={setFilters}
-          api={props.api}
-          onCreate={createStream}
-          onChanged={() => void load(initialRequest(Date.now()))}
-          onFocusNode={focusNode}
-          onOpenThread={props.onOpenThread}
-        />
-        <button
-          class="rounded border px-2 py-0.5 disabled:opacity-40"
-          style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
-          onClick={history}
-          disabled={win().exhausted}
-          title="Load three more weeks of history"
-          data-testid="forge-history"
-        >
-          ← History
-        </button>
-        <Show when={props.mode === 'graph'}>
+          <span data-testid="forge-count">
+            {visibility().visible.size} / {win().nodes.size} nodes
+          </span>
+          <span>· history from {sinceLabel()}</span>
+          <Show when={win().syncing}>
+            <span style={{ color: 'var(--c-warning, #f59e0b)' }}>· first sync running…</span>
+          </Show>
+          <Show when={win().syncOff}>
+            <span data-testid="forge-sync-off">· GitHub sync off (forge.enabled)</span>
+          </Show>
+          <Show when={win().lastSyncAt}>
+            <span>· synced {new Date(win().lastSyncAt!).toLocaleTimeString()}</span>
+          </Show>
+          <Show when={loading()}>
+            <span data-testid="forge-loading">· loading…</span>
+          </Show>
+          <Show when={error()}>
+            <span style={{ color: 'var(--c-error, #ef4444)' }} data-testid="forge-error">
+              · {error()}
+            </span>
+          </Show>
+          <span class="flex-1" />
+          <Tree />
           <button
-            class="rounded border px-2 py-0.5"
+            class="rounded border px-2 py-0.5 disabled:opacity-40"
             style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
-            onClick={() => canvas?.fit()}
-            title="Fit (F)"
+            onClick={history}
+            disabled={win().exhausted}
+            title="Load three more weeks of history"
+            data-testid="forge-history"
           >
-            Fit
+            ← History
           </button>
-        </Show>
-      </div>
-      <FilterBar
-        filters={props.view.filters}
-        options={options()}
-        onChange={setFilters}
-        searchRef={(el) => (searchInput = el)}
-        searching={searching()}
-        hasIdentity={!!win().identity}
-      />
+          <Show when={props.mode === 'graph'}>
+            <button
+              class="rounded border px-2 py-0.5"
+              style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
+              onClick={() => canvas?.fit()}
+              title="Fit (F)"
+            >
+              Fit
+            </button>
+          </Show>
+        </div>
+        <FilterBar
+          filters={props.view.filters}
+          options={options()}
+          onChange={setFilters}
+          searchRef={(el) => (searchInput = el)}
+          searching={searching()}
+          hasIdentity={!!win().identity}
+        />
+      </Show>
       <div class="flex min-h-0 flex-1">
         <div
           ref={area}
@@ -487,8 +556,9 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
           </Show>
           <Show when={selectedStream()} keyed>
             {(streamId) => (
-              <div class="absolute top-2 right-2 bottom-2 z-10 flex flex-col">
+              <div class={cardBox()} style={cardBoxStyle()} data-testid="forge-card-box">
                 <StreamCard
+                  sheet={props.narrow}
                   streamId={streamId}
                   streams={win().workstreams}
                   nodes={nodes()}
@@ -509,8 +579,9 @@ const ForgePanel: Component<ForgePanelProps> = (props) => {
             {(id) => (
               <Show when={nodesById().get(id)}>
                 {(node) => (
-                  <div class="absolute top-2 right-2 bottom-2 z-10 flex flex-col">
+                  <div class={cardBox()} style={cardBoxStyle()} data-testid="forge-card-box">
                     <NodeCard
+                      sheet={props.narrow}
                       node={node()}
                       nodesById={nodesById()}
                       edges={win().edges}

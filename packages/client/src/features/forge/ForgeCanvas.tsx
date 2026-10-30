@@ -1,4 +1,5 @@
-// The Forge canvas: a 2D <canvas> with wheel zoom and drag pan. Redraws only
+// The Forge canvas: a 2D <canvas> with wheel zoom, drag pan and (touch)
+// pinch zoom and double-tap zoom. Redraws only
 // when an input changes (one rAF per change), keeps animating only while a
 // visible agent ring pulses, and draws at the device pixel ratio.
 
@@ -8,6 +9,16 @@ import { drawFrame } from './render.js'
 import { bandIndexOf, type Scene } from './scene.js'
 import { DEFAULT_PALETTE, type Palette } from './style.js'
 import { currentTheme } from '../theme/store.js'
+import {
+  DOUBLE_TAP_ZOOM,
+  gestureDown,
+  gestureMove,
+  gestureUp,
+  idleGesture,
+  isDoubleTap,
+  type Gesture,
+  type Tap
+} from './gesture.js'
 import { centerOn, fitRect, openingView, pan, screenToWorld, wheelFactor, zoomAt, type Viewport } from './viewport.js'
 
 export interface CanvasHandle {
@@ -108,6 +119,10 @@ const ForgeCanvas: Component<ForgeCanvasProps> = (props) => {
     })
     canvas.dataset.nodesDrawn = String(stats.nodesDrawn)
     canvas.dataset.bandsDrawn = String(stats.bandsDrawn)
+    // The viewport, for browser tests of pan and pinch.
+    canvas.dataset.scale = vp.scale.toFixed(4)
+    canvas.dataset.tx = vp.tx.toFixed(1)
+    canvas.dataset.ty = vp.ty.toFixed(1)
     if (stats.animating) schedule()
   }
 
@@ -199,7 +214,9 @@ const ForgeCanvas: Component<ForgeCanvasProps> = (props) => {
   })
 
   // ── Input ─────────────────────────────────────────────────────────
-  let drag: { x: number; y: number; moved: boolean; id: number } | null = null
+  // Every active pointer (gesture.ts): one pans, two pinch-zoom.
+  let gesture: Gesture = idleGesture()
+  let lastTap: Tap | null = null
   const local = (e: { clientX: number; clientY: number }) => {
     const r = canvas.getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
@@ -214,18 +231,16 @@ const ForgeCanvas: Component<ForgeCanvasProps> = (props) => {
   const onPointerDown = (e: PointerEvent): void => {
     if (e.button !== 0) return
     canvas.setPointerCapture(e.pointerId)
-    drag = { x: e.clientX, y: e.clientY, moved: false, id: e.pointerId }
+    gesture = gestureDown(gesture, e.pointerId, local(e))
   }
   const onPointerMove = (e: PointerEvent): void => {
-    if (drag && drag.id === e.pointerId) {
-      const dx = e.clientX - drag.x
-      const dy = e.clientY - drag.y
-      if (!drag.moved && Math.hypot(dx, dy) < 4) return
-      drag.moved = true
-      drag.x = e.clientX
-      drag.y = e.clientY
-      canvas.style.cursor = 'grabbing'
-      setVp(pan(vp, dx, dy))
+    if (gesture.pointers.some((x) => x.id === e.pointerId)) {
+      const next = gestureMove(gesture, vp, e.pointerId, local(e))
+      gesture = next.gesture
+      if (next.vp !== vp) {
+        canvas.style.cursor = 'grabbing'
+        setVp(next.vp)
+      }
       return
     }
     if (e.pointerType !== 'mouse') return
@@ -238,12 +253,23 @@ const ForgeCanvas: Component<ForgeCanvasProps> = (props) => {
     }
   }
   const onPointerUp = (e: PointerEvent): void => {
-    if (!drag || drag.id !== e.pointerId) return
-    const moved = drag.moved
-    drag = null
+    const up = gestureUp(gesture, e.pointerId)
+    if (up.gesture === gesture) return
+    gesture = up.gesture
+    if (gesture.pointers.length) return
     canvas.style.cursor = hover ? 'pointer' : 'grab'
-    if (moved) return
+    if (!up.tap) return
     const p = local(e)
+    // Touch: a second tap close by zooms in about it (mouse clicks stay as they were).
+    if (e.pointerType !== 'mouse') {
+      const tap = { at: e.timeStamp, p }
+      if (isDoubleTap(lastTap, tap)) {
+        lastTap = null
+        setVp(zoomAt(vp, p.x, p.y, DOUBLE_TAP_ZOOM))
+        return
+      }
+      lastTap = tap
+    }
     const id = hitAt(p.x, p.y)
     const band = id ? bandIndexOf(id) : null
     if (band !== null) {
@@ -252,6 +278,9 @@ const ForgeCanvas: Component<ForgeCanvasProps> = (props) => {
       return
     }
     props.onSelect(id)
+  }
+  const onPointerCancel = (e: PointerEvent): void => {
+    gesture = gestureUp(gesture, e.pointerId).gesture
   }
   const onContextMenu = (e: MouseEvent): void => {
     const p = local(e)
@@ -285,7 +314,7 @@ const ForgeCanvas: Component<ForgeCanvasProps> = (props) => {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => (drag = null)}
+        onPointerCancel={onPointerCancel}
         onContextMenu={onContextMenu}
         onPointerLeave={() => {
           if (hover) {
