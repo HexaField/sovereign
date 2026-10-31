@@ -1,12 +1,14 @@
 // Agent overlay — live, never stored. Who works on each node and what it
 // waits on: the task's owner thread (the one source of ownership) and its
-// presence, subagents mapped cwd → branch → change, and CI watches.
+// presence, subagents mapped cwd → branch → change, and PR watches.
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { AgentOverlay, WorkNode } from '@sovereign/core'
+import type { AgentOverlay, PrWatchEvent, WorkNode } from '@sovereign/core'
 import { primaryRepo } from '@sovereign/forges'
-import type { ActiveCiWatch, ActiveSubagent, PortTask, ThreadPresence } from './types.js'
+import type { ActivePrWatch, ActiveSubagent, PortTask, ThreadPresence } from './types.js'
+
+const EVENT_ORDER: PrWatchEvent[] = ['ci', 'comments', 'reviews', 'state']
 
 const execFileAsync = promisify(execFile)
 
@@ -25,7 +27,7 @@ export interface OverlayInput {
   tasks: PortTask[]
   presence(threadId: string): ThreadPresence | undefined
   subagents: ActiveSubagent[]
-  ciWatches: ActiveCiWatch[]
+  prWatches: ActivePrWatch[]
   /** Resolved checkout of each subagent cwd: its repo ("owner/name") and branch. */
   checkouts: Map<string, { repo?: string; branch?: string }>
 }
@@ -35,16 +37,16 @@ export interface OverlayResult {
   /** Subagents no change matched (listed rather than guessed). */
   unmatched: Array<{ key: string; label: string; parentThreadId: string; cwd?: string; branch?: string }>
   /** Changes an agent picked up that no thread owns yet: auto-link them to this thread. */
-  claims: Array<{ nodeId: string; threadId: string; by: 'subagent' | 'ci-watch' }>
+  claims: Array<{ nodeId: string; threadId: string; by: 'subagent' | 'pr-watch' }>
 }
 
 /** What a node waits on: CI pending → ci; review requested with CI green → review; owner idle on a question → user. */
 export function waitingOn(
   node: WorkNode,
-  ov: Pick<AgentOverlay, 'thread' | 'ciWatch'>,
+  ov: Pick<AgentOverlay, 'thread' | 'prWatch'>,
   openQuestion: boolean
 ): AgentOverlay['waitingOn'] {
-  if (node.ci === 'pending' || ov.ciWatch?.state === 'waiting') return 'ci'
+  if (node.ci === 'pending' || ov.prWatch?.ciWaiting) return 'ci'
   const reviewWanted = node.reviewers.some((r) => r.state === 'requested')
   if (reviewWanted && (node.ci === 'passing' || node.ci === 'none' || node.ci === undefined)) return 'review'
   if (ov.thread?.status === 'idle' && openQuestion) return 'user'
@@ -86,7 +88,7 @@ export function buildOverlay(input: OverlayInput): OverlayResult {
 
   const owned = new Set(input.tasks.filter((t) => t.threadId && t.key).map((t) => t.key!))
   const claims: OverlayResult['claims'] = []
-  const claim = (nodeId: string, threadId: string, by: 'subagent' | 'ci-watch') => {
+  const claim = (nodeId: string, threadId: string, by: 'subagent' | 'pr-watch') => {
     if (!owned.has(nodeId) && !claims.some((c) => c.nodeId === nodeId)) claims.push({ nodeId, threadId, by })
   }
   const unmatched: OverlayResult['unmatched'] = []
@@ -107,7 +109,7 @@ export function buildOverlay(input: OverlayInput): OverlayResult {
     claim(node.id, s.parentThreadId, 'subagent')
   }
 
-  for (const w of input.ciWatches) {
+  for (const w of input.prWatches) {
     let node: WorkNode | undefined
     const target = w.target
     if (target.kind === 'pr') {
@@ -118,9 +120,15 @@ export function buildOverlay(input: OverlayInput): OverlayResult {
       node = changeByBranch.get(`${w.repo.toLowerCase()}\u0000${target.name}`)
     }
     if (!node) continue
-    claim(node.id, w.threadKey, 'ci-watch')
+    claim(node.id, w.threadKey, 'pr-watch')
     const o = slot(node.id)
-    if (!o.ciWatch || w.createdAt < o.ciWatch.since) o.ciWatch = { state: 'waiting', since: w.createdAt }
+    const prev = o.prWatch
+    const events = new Set([...(prev?.events ?? []), ...w.events])
+    o.prWatch = {
+      since: Math.min(prev?.since ?? w.createdAt, w.createdAt),
+      events: EVENT_ORDER.filter((e) => events.has(e)),
+      ciWaiting: Boolean(prev?.ciWaiting) || w.ciWaiting
+    }
   }
 
   const overlays: AgentOverlay[] = []

@@ -164,10 +164,18 @@ export function agentStatusLine(o: AgentOverlay | undefined): AgentLine {
   if (!o || (!o.thread && o.subagents.length === 0)) return { label: 'No agent', tone: 'none' }
   if (o.thread && o.thread.status !== 'idle')
     return { label: o.thread.status === 'thinking' ? 'Thinking' : 'Working', tone: 'working' }
-  if (o.waitingOn === 'ci' || o.ciWatch?.state === 'waiting') return { label: 'Waiting for CI', tone: 'waiting' }
+  if (o.waitingOn === 'ci' || o.prWatch?.ciWaiting) return { label: 'Waiting for CI', tone: 'waiting' }
   if (o.waitingOn === 'review') return { label: 'Waiting for review', tone: 'waiting' }
   if (o.waitingOn === 'user') return { label: 'Waiting for you', tone: 'waiting' }
+  const watching = prWatchLabel(o)
+  if (watching) return { label: watching, tone: 'waiting' }
   if (o.subagents.length)
     return { label: `${o.subagents.length} subagent${o.subagents.length > 1 ? 's' : ''} running`, tone: 'working' }
   return { label: 'Idle', tone: 'idle' }
+}
+
+/** "Watching comments, reviews" when a PR watch follows more than CI; undefined otherwise. */
+export function prWatchLabel(o: AgentOverlay | undefined): string | undefined {
+  const rest = (o?.prWatch?.events ?? []).filter((e) => e !== 'ci')
+  return rest.length ? `Watching ${rest.join(', ')}` : undefined
 }

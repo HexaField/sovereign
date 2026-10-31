@@ -45,7 +45,7 @@ import { syncTasks, TERMINAL } from './task-sync.js'
 import { withProgress } from './tree.js'
 import {
   DEFAULT_FORGE_CONFIG,
-  type ActiveCiWatch,
+  type ActivePrWatch,
   type ActiveSubagent,
   type CachedChange,
   type CachedIssue,
@@ -90,7 +90,7 @@ export interface ForgeServiceDeps {
     presence(threadId: string): ThreadPresence | undefined
   }
   subagents?: { list(): Promise<ActiveSubagent[]> }
-  ciWatch?: { list(): ActiveCiWatch[] }
+  prWatch?: { list(): ActivePrWatch[] }
   classifier?: ForgeClassifier
   /** Loop 2. Gets the digest; the run is skipped when it is empty. */
   runRethink?: (
@@ -692,13 +692,14 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     }
   }
 
-  /** CI results a thread hears from its own `ci_watch` on that change: the forge does not repeat them. */
-  function heardByCiWatch(n: { threadId: string; nodeId: string; type: string }, nodes: Map<string, WorkNode>) {
+  /** CI results a thread hears from its own `pr_watch` (with `ci`) on that change: the forge does not repeat them. */
+  function heardByPrWatch(n: { threadId: string; nodeId: string; type: string }, nodes: Map<string, WorkNode>) {
     const node = nodes.get(n.nodeId)
     if (n.type !== 'ci_failed' || !node?.repo) return false
-    return (deps.ciWatch?.list() ?? []).some(
+    return (deps.prWatch?.list() ?? []).some(
       (w) =>
         w.threadKey === n.threadId &&
+        w.events.includes('ci') &&
         w.repo.toLowerCase() === node.repo!.toLowerCase() &&
         ((w.target.kind === 'pr' && w.target.number === node.number) ||
           (w.target.kind === 'branch' && w.target.name === node.branch?.head))
@@ -710,7 +711,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     nodes: Map<string, WorkNode>
   ) {
     for (const n of list) {
-      if (heardByCiWatch(n, nodes)) continue
+      if (heardByPrWatch(n, nodes)) continue
       try {
         await (deps.threads.notify ?? deps.threads.sendToThread)(n.threadId, n.text)
       } catch (err) {
@@ -966,7 +967,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
       tasks,
       presence: (id) => deps.threads.presence(id),
       subagents,
-      ciWatches: deps.ciWatch?.list() ?? [],
+      prWatches: deps.prWatch?.list() ?? [],
       checkouts
     })
   }
@@ -994,7 +995,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     }
   }
 
-  /** Auto-link: a change a subagent or CI watch works on, with no owner, goes to that thread. */
+  /** Auto-link: a change a subagent or PR watch works on, with no owner, goes to that thread. */
   async function applyClaims(membrane: string, claims: OverlayResult['claims']): Promise<boolean> {
     let any = false
     for (const c of claims) {

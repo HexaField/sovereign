@@ -7,7 +7,7 @@ import type {
   PresenceMcpDeps,
   EmbeddingsToolDeps,
   TaskMcpDeps,
-  CiWatchMcpDeps,
+  PrWatchMcpDeps,
   SovereignToolDeps
 } from './claude-code/mcp-server.js'
 import type { DecisionMcpDeps } from './claude-code/decision-tools.js'
@@ -58,7 +58,8 @@ export interface SovereignMcpDepsInput {
   embeddings?: EmbeddingsToolDeps
   /** Task service. When set, registers the eight task_* MCP tools. */
   tasks?: TaskMcpDeps
-  ci?: CiWatchMcpDeps
+  /** PR watcher (pr_watch / pr_watch_list / pr_unwatch), bound later. */
+  prWatch?: PrWatchMcpDeps
   /** Forge rethink tools (forge_*), registered in forge-rethink threads only. */
   forge?: ForgeMcpDeps
   /** decision_open / decision_close, in every thread once bound. */
@@ -280,7 +281,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.embeddings ? { embeddings: input.embeddings } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
-    ...(input.ci ? { ci: input.ci } : {}),
+    ...(input.prWatch ? { prWatch: input.prWatch } : {}),
     ...(input.forge ? { forge: input.forge } : {}),
     ...(input.decisions ? { decisions: input.decisions } : {})
   }

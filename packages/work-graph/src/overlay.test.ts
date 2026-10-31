@@ -45,7 +45,11 @@ const task = (id: string, key: string | null, threadId: string | null): PortTask
 describe('waitingOn', () => {
   it('ci while CI runs or a watch waits; review when requested with CI green; josh when the idle owner asked', () => {
     expect(waitingOn(node(1, { ci: 'pending' }), {}, false)).toBe('ci')
-    expect(waitingOn(node(1), { ciWatch: { state: 'waiting', since: 1 } }, false)).toBe('ci')
+    expect(waitingOn(node(1), { prWatch: { since: 1, events: ['ci'], ciWaiting: true } }, false)).toBe('ci')
+    // A watch that only follows comments (or whose CI already reported) waits on nothing.
+    expect(
+      waitingOn(node(1), { prWatch: { since: 1, events: ['ci', 'comments'], ciWaiting: false } }, false)
+    ).toBeNull()
     expect(waitingOn(node(1, { reviewers: [{ login: 'jo', state: 'requested' }] }), {}, false)).toBe('review')
     expect(
       waitingOn(node(1, { ci: 'failing', reviewers: [{ login: 'jo', state: 'requested' }] }), {}, false)
@@ -56,7 +60,7 @@ describe('waitingOn', () => {
 })
 
 describe('buildOverlay', () => {
-  it('maps the owner thread, subagents by repo + branch, and CI watches; lists unmatched subagents', () => {
+  it('maps the owner thread, subagents by repo + branch, and PR watches; lists unmatched subagents', () => {
     const nodes = [
       node(1),
       node(2, { ci: 'pending' }),
@@ -71,9 +75,31 @@ describe('buildOverlay', () => {
         { key: 'sub-2', label: 'lost', parentThreadId: 'thread-a', cwd: '/w/b', startedAt: 6 },
         { key: 'sub-3', label: 'no cwd', parentThreadId: 'thread-a', startedAt: 7 }
       ],
-      ciWatches: [
-        { threadKey: 'thread-a', repo: 'acme-labs/widget', target: { kind: 'pr', number: 1 }, createdAt: 100 },
-        { threadKey: 'thread-a', repo: 'acme-labs/widget', target: { kind: 'branch', name: 'feat/2' }, createdAt: 200 }
+      prWatches: [
+        {
+          threadKey: 'thread-a',
+          repo: 'acme-labs/widget',
+          target: { kind: 'pr', number: 1 },
+          createdAt: 100,
+          events: ['comments', 'reviews'],
+          ciWaiting: false
+        },
+        {
+          threadKey: 'thread-b',
+          repo: 'acme-labs/widget',
+          target: { kind: 'pr', number: 1 },
+          createdAt: 50,
+          events: ['ci'],
+          ciWaiting: true
+        },
+        {
+          threadKey: 'thread-a',
+          repo: 'acme-labs/widget',
+          target: { kind: 'branch', name: 'feat/2' },
+          createdAt: 200,
+          events: ['ci'],
+          ciWaiting: true
+        }
       ],
       checkouts: new Map([
         ['/w/a', { repo: 'acme-labs/widget', branch: 'feat/2' }],
@@ -85,7 +111,8 @@ describe('buildOverlay', () => {
       nodeId: nodes[0].id,
       thread: { id: 'thread-a', label: 'Widget work', status: 'working' },
       subagents: [],
-      ciWatch: { state: 'waiting', since: 100 },
+      // Two watches on #1, merged: the oldest start, every event, CI still awaited by one.
+      prWatch: { since: 50, events: ['ci', 'comments', 'reviews'], ciWaiting: true },
       waitingOn: 'ci'
     })
     // feat/2 is the head of the open #2 and the merged #3: the open one wins.

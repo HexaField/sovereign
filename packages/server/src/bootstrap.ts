@@ -65,7 +65,7 @@ import { wireAgentBackend } from '@sovereign/agent-backend'
 import { createPersonalityCompiler } from '@sovereign/agent-backend'
 import { resumeActiveSessions } from '@sovereign/agent-backend'
 import { createVoiceLlmClients } from './voice-llm.js'
-import type { TaskMcpDeps, CiWatchMcpDeps, DecisionMcpDeps, ForgeMcpDeps } from '@sovereign/agent-backend'
+import type { TaskMcpDeps, PrWatchMcpDeps, DecisionMcpDeps, ForgeMcpDeps } from '@sovereign/agent-backend'
 import { usageSinceFromFile } from '@sovereign/agent-backend'
 import { createThreadManager } from '@sovereign/threads'
 import { createChatModule } from '@sovereign/chat'
@@ -105,7 +105,7 @@ import {
 } from '@sovereign/thread-presence'
 import { createBrowserService, BrowserUnavailableError } from '@sovereign/browser'
 import { createExportRoutes } from './routes/export-pdf.js'
-import { createCiWatchService } from './ci-watch/service.js'
+import { createPrWatchService, ciOnly } from './pr-watch/service.js'
 import { createHazardService } from './hazards/service.js'
 import { createForgeRegistry } from '@sovereign/forges'
 import {
@@ -677,9 +677,9 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     persistFile: path.join(dataDir, 'presence', 'task-digest.json')
   })
 
-  // CI watcher: methods are bound once the chat layer exists (it delivers the
+  // PR watcher: methods are bound once the chat layer exists (it delivers the
   // notifications); the MCP tools appear from then on.
-  const ciMcpDeps: CiWatchMcpDeps = {}
+  const prWatchMcpDeps: PrWatchMcpDeps = {}
   // Forge rethink tools: bound once the forge service exists.
   const forgeMcpDeps: ForgeMcpDeps = {}
   // decision_open / decision_close: bound once the forge service exists.
@@ -727,7 +727,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     browserService,
     presence: presenceMcpDeps,
     tasks: taskMcpDeps,
-    ci: ciMcpDeps,
+    prWatch: prWatchMcpDeps,
     forge: forgeMcpDeps,
     decisions: decisionMcpDeps,
     presencePersonalityFile,
@@ -926,22 +926,29 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
     })
   }
 
-  const ciWatch = createCiWatchService({
+  const prWatch = createPrWatchService({
     dataDir,
     bus,
     notify: async (threadKey, text) => {
       if (!threadManager.get(threadKey)) {
-        console.warn(`[ci-watch] thread ${threadKey} no longer exists — dropping its CI notification`)
+        console.warn(`[pr-watch] thread ${threadKey} no longer exists — dropping its PR watch notification`)
         return
       }
       // Same path as a cron fire: queued, never interrupting, shown as a system card.
       await chatModule.handleSend(threadKey, text, undefined, { synthRole: 'system' })
-    }
+    },
+    // The thread's membrane decides whose text a message may carry; read live,
+    // so a PATCH /api/config applies to the next poll.
+    trustedAuthors: (threadKey) =>
+      trustedAuthorsOf(
+        configStore.get<SovereignConfig['forge']>('forge')?.trustedAuthors,
+        membraneOfThread(threadKey) ?? null
+      )
   })
-  ciMcpDeps.watch = (opts) => ciWatch.watch(opts)
-  ciMcpDeps.list = (threadKey) => ciWatch.list(threadKey)
-  ciMcpDeps.unwatch = (id) => ciWatch.unwatch(id)
-  ciWatch.start()
+  prWatchMcpDeps.watch = (opts) => prWatch.watch(opts)
+  prWatchMcpDeps.list = (threadKey) => prWatch.list(threadKey)
+  prWatchMcpDeps.unwatch = (id) => prWatch.unwatch(id)
+  prWatch.start()
 
   // Hazard monitor: VicEmergency + CFA for the configured property. Alerts go to
   // the presence thread the same way CI results do, only past the bar in rules.ts.
@@ -1059,7 +1066,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       sendToThread: async (threadId, text) => {
         await chatModule.handleSend(threadId, text, undefined, { origin: { modality: 'text' as const } })
       },
-      // Like CI watch: queued, never interrupting, shown as a system card.
+      // Like PR watch: queued, never interrupting, shown as a system card.
       notify: async (threadId, text) => {
         if (!threadManager.get(threadId)) return
         await chatModule.handleSend(threadId, text, undefined, { synthRole: 'system' })
@@ -1092,9 +1099,17 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         return out
       }
     },
-    ciWatch: {
+    prWatch: {
       list: () =>
-        ciWatch.list().map((w) => ({ threadKey: w.threadKey, repo: w.repo, target: w.target, createdAt: w.createdAt }))
+        prWatch.list().map((w) => ({
+          threadKey: w.threadKey,
+          repo: w.repo,
+          target: w.target,
+          createdAt: w.createdAt,
+          events: w.events,
+          // CI-only watches wait on CI until they end; longer ones until CI reports for the head.
+          ciWaiting: w.events.includes('ci') && (ciOnly(w) || !w.ciDone)
+        }))
     },
     ...(graphcoderStructureOf ? { structureOf: graphcoderStructureOf } : {})
   })
@@ -1813,7 +1828,7 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
       timeline.stop()
       forgeService.stop()
       forgePersistence.dispose()
-      ciWatch.dispose()
+      prWatch.dispose()
       stopRethinkSchedule()
       forgeRethink.stop()
       hazards.stop()

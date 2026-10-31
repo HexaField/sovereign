@@ -202,5 +202,14 @@ describe('card sections', () => {
     expect(agentStatusLine(o({ subagents: [{ key: 'k', label: 'fix', startedAt: 0 }] })).label).toBe(
       '1 subagent running'
     )
+    // A PR watch: waiting on CI first, then what else it follows.
+    const idle = { thread: { id: 't', label: 'T', status: 'idle' as const } }
+    expect(
+      agentStatusLine(o({ ...idle, prWatch: { since: 0, events: ['ci', 'comments'], ciWaiting: true } })).label
+    ).toBe('Waiting for CI')
+    expect(
+      agentStatusLine(o({ ...idle, prWatch: { since: 0, events: ['ci', 'comments', 'reviews'], ciWaiting: false } }))
+    ).toEqual({ label: 'Watching comments, reviews', tone: 'waiting' })
+    expect(agentStatusLine(o({ ...idle, prWatch: { since: 0, events: ['ci'], ciWaiting: false } })).label).toBe('Idle')
   })
 })

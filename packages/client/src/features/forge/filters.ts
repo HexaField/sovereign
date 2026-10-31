@@ -47,7 +47,7 @@ export function agentMatches(f: ForgeFilters['agent'], o: AgentOverlay | undefin
   if (!f) return true
   if (!o) return false
   if (f === 'any') return !!o.thread || o.subagents.length > 0
-  if (f === 'waiting-ci') return o.waitingOn === 'ci' || o.ciWatch?.state === 'waiting'
+  if (f === 'waiting-ci') return o.waitingOn === 'ci' || Boolean(o.prWatch?.ciWaiting)
   return o.waitingOn === 'review'
 }
 

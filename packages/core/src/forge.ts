@@ -268,11 +268,16 @@ export interface WorkEdge {
   confidence?: number
 }
 
+/** What a `pr_watch` follows: CI results, comments, reviews, PR state. */
+export type PrWatchEvent = 'ci' | 'comments' | 'reviews' | 'state'
+
 export interface AgentOverlay {
   nodeId: string
   thread?: { id: string; label: string; status: 'working' | 'thinking' | 'idle' }
   subagents: { key: string; label: string; startedAt: number }[]
-  ciWatch?: { state: 'waiting' | 'passed' | 'failed'; since: number }
+  /** PR watches (`pr_watch`) threads hold on this node, merged: since the oldest,
+   *  every event they follow, and whether one still waits on CI. */
+  prWatch?: { since: number; events: PrWatchEvent[]; ciWaiting: boolean }
   /** user = the owner thread is idle on a question to the user. */
   waitingOn?: 'ci' | 'review' | 'user' | null
 }

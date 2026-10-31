@@ -509,10 +509,11 @@ const NodeCard: Component<NodeCardProps> = (props) => {
               )}
             </For>
           </Show>
-          <Show when={props.overlay?.ciWatch}>
-            {(c) => (
-              <div style={muted}>
-                CI watch: {c().state} since {new Date(c().since).toLocaleTimeString()}
+          <Show when={props.overlay?.prWatch}>
+            {(w) => (
+              <div style={muted} data-testid="forge-pr-watch">
+                PR watch: {w().events.join(', ')}
+                {w().ciWaiting ? ' (waiting for CI)' : ''} since {new Date(w().since).toLocaleTimeString()}
               </div>
             )}
           </Show>

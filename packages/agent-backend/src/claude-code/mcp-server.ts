@@ -112,21 +112,77 @@ export interface SovereignToolDeps {
   embeddings?: EmbeddingsToolDeps
   /** Task service. When set, registers the eight task_* MCP tools. */
   tasks?: TaskMcpDeps
-  /** CI watcher. When `watch` is bound, registers ci_watch / ci_watch_list / ci_unwatch. */
-  ci?: CiWatchMcpDeps
+  /** PR watcher. When `watch` is bound, registers pr_watch / pr_watch_list / pr_unwatch. */
+  prWatch?: PrWatchMcpDeps
   /** Forge rethink runner. When bound, registers the forge_* tools in forge-rethink threads only. */
   forge?: ForgeMcpDeps
   /** Forge decisions. When bound, registers decision_open / decision_close in every thread. */
   decisions?: DecisionMcpDeps
 }
 
-/** Subset of the server's CI watcher the MCP layer needs. Methods are bound
+/** What a PR watch can tell a thread about. */
+export const PR_WATCH_EVENTS = ['ci', 'comments', 'reviews', 'state'] as const
+export type PrWatchEvent = (typeof PR_WATCH_EVENTS)[number]
+
+/** A ci-only watch times out after at most 2 days; one that follows anything else after 14. */
+export const PR_WATCH_CI_MAX_MINUTES = 2880
+export const PR_WATCH_MAX_MINUTES = 14 * 24 * 60
+
+export const PR_WATCH_DESCRIPTION = [
+  'Watch a GitHub PR (or the CI of a branch or commit) and get told what happens to it. Sovereign polls GitHub itself (no model turns; conditional requests, so a quiet PR costs nothing) and delivers messages into the calling thread through the chat queue, never interrupting a turn.',
+  'After pushing a PR, call pr_watch with events ["ci","comments","reviews"] and end your turn; do not schedule crons for reviews. Do not poll or schedule crons for CI either.',
+  'events (default ["ci"]):',
+  '- ci: ONE message within a poll (10 s) of the checks going red (the first failed check) or green (every check passed, confirmed by the next poll). Works for GitHub Actions and commit-status CI such as CircleCI. A watch with only ci then ends. In a watch that also follows comments, reviews or state, CI is reported once per head commit: with follow (default), a push re-arms it for the new head.',
+  '- comments: new issue comments and inline review comments on the PR.',
+  '- reviews: newly submitted reviews, with their state (APPROVED, CHANGES_REQUESTED, COMMENTED) and body.',
+  '- state: the PR merged, closed, reopened, or turned draft or ready. A merge or close always ends a watch that follows comments, reviews or state, with a last message.',
+  'comments, reviews and state need a pr; a branch or sha watch takes ci only.',
+  'Batching: comments, reviews and state changes are collected into ONE message, sent once nothing new arrived for 60 s, or 5 minutes after the first (so a burst of inline comments arrives together). Each entry gives the kind, author, time, file:line for inline comments, the body (cut to about 1,500 characters) and a link. CI messages stay separate.',
+  "Trust: only authors on the thread's membrane's forge.trustedAuthors list get their text into a message (no list configured: everyone). For anyone else the entry reads only \"<kind> by <login> (untrusted), not read\"; an untrusted PR author's title is left out too.",
+  "Own login: comments and inline comments by the watcher's own GitHub login (the gh account) are ignored: they are the agents' own replies, and waking on them would loop. Reviews submitted from that login ARE delivered (the user reviews from it), with their new inline comments; an empty COMMENTED review that only wraps a reply is skipped.",
+  `Lifetime: a ci-only watch ends with its CI message (timeout default 720, max ${PR_WATCH_CI_MAX_MINUTES} minutes). A watch with comments, reviews or state lives until the PR merges or closes, it times out (default 7 days, max 14 days = ${PR_WATCH_MAX_MINUTES} minutes), or pr_unwatch.`
+].join('\n')
+
+const prWatchSchema = {
+  repo: z.string().describe('GitHub repo slug, e.g. "coasys/ad4m".'),
+  pr: z.number().int().positive().optional().describe('PR number. Give exactly one of pr, branch, sha.'),
+  branch: z.string().optional().describe('Branch name (ci only).'),
+  sha: z.string().optional().describe('Commit SHA (ci only).'),
+  events: z
+    .array(z.enum(PR_WATCH_EVENTS))
+    .min(1)
+    .optional()
+    .describe('What to be told about: ci, comments, reviews, state. Default ["ci"].'),
+  checks: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Only these checks count (case-insensitive substring of the check name, e.g. "integration-tests-js"). Waits until each one has appeared and finished.'
+    ),
+  follow: z
+    .boolean()
+    .optional()
+    .describe('For a PR or branch: move to the new head commit after a push. Default true.'),
+  timeoutMinutes: z
+    .number()
+    .int()
+    .min(5)
+    .max(PR_WATCH_MAX_MINUTES)
+    .optional()
+    .describe(
+      `Give up after this long. ci only: default 720, max ${PR_WATCH_CI_MAX_MINUTES}. With comments, reviews or state: default 10080 (7 days), max ${PR_WATCH_MAX_MINUTES}.`
+    ),
+  label: z.string().optional().describe('Shown in the notification.')
+}
+
+/** Subset of the server's PR watcher the MCP layer needs. Methods are bound
  *  after the chat layer exists, so the object is shared and filled late. */
-export interface CiWatchMcpDeps {
+export interface PrWatchMcpDeps {
   watch?(opts: {
     threadKey: string
     repo: string
     target: { kind: 'pr'; number: number } | { kind: 'branch'; name: string } | { kind: 'sha'; sha: string }
+    events?: PrWatchEvent[]
     follow?: boolean
     checks?: string[]
     label?: string
@@ -909,67 +965,48 @@ export function createSovereignMcpServer(
     }
   }
 
-  // ── CI watch ──────────────────────────────────────────────────────────
-  const ci = deps.ci
-  if (ci?.watch && ci.list && ci.unwatch) {
-    const { watch, list, unwatch } = ci as Required<CiWatchMcpDeps>
+  // ── PR watch ──────────────────────────────────────────────────────────
+  const prWatch = deps.prWatch
+  if (prWatch?.watch && prWatch.list && prWatch.unwatch) {
+    const { watch, list, unwatch } = prWatch as Required<PrWatchMcpDeps>
     tools.push(
-      tool(
-        'ci_watch',
-        'Watch the GitHub CI checks of a PR, branch or commit. Sovereign polls GitHub itself (no model turns) and sends ONE message into the calling thread within a poll (10 s) of the run going red (the first failed check) or green (every check passed, confirmed by the next poll). End your turn after calling it; do not poll or schedule crons for CI. Works for GitHub Actions and commit-status CI such as CircleCI.',
-        {
-          repo: z.string().describe('GitHub repo slug, e.g. "coasys/ad4m".'),
-          pr: z.number().int().positive().optional().describe('PR number. Give exactly one of pr, branch, sha.'),
-          branch: z.string().optional().describe('Branch name.'),
-          sha: z.string().optional().describe('Commit SHA.'),
-          checks: z
-            .array(z.string())
-            .optional()
-            .describe(
-              'Only these checks count (case-insensitive substring of the check name, e.g. "integration-tests-js"). Waits until each one has appeared and finished.'
-            ),
-          follow: z
-            .boolean()
-            .optional()
-            .describe('For a PR or branch: move to the new head commit after a push. Default true.'),
-          timeoutMinutes: z
-            .number()
-            .int()
-            .min(5)
-            .max(2880)
-            .optional()
-            .describe('Give up after this long. Default 720.'),
-          label: z.string().optional().describe('Shown in the notification.')
-        },
-        async (args) => {
-          const given = [args.pr !== undefined, !!args.branch, !!args.sha].filter(Boolean).length
-          if (given !== 1) throw new Error('ci_watch: give exactly one of pr, branch, sha')
-          const target =
-            args.pr !== undefined
-              ? ({ kind: 'pr', number: args.pr } as const)
-              : args.branch
-                ? ({ kind: 'branch', name: args.branch } as const)
-                : ({ kind: 'sha', sha: args.sha! } as const)
-          const result = await watch({
-            threadKey: getCallingThreadKey(deps),
-            repo: args.repo,
-            target,
-            follow: args.follow,
-            checks: args.checks,
-            label: args.label,
-            timeoutMinutes: args.timeoutMinutes
-          })
-          return okJson(result)
+      tool('pr_watch', PR_WATCH_DESCRIPTION, prWatchSchema, async (args) => {
+        const given = [args.pr !== undefined, !!args.branch, !!args.sha].filter(Boolean).length
+        if (given !== 1) throw new Error('pr_watch: give exactly one of pr, branch, sha')
+        const events = [...new Set(args.events?.length ? args.events : (['ci'] as PrWatchEvent[]))]
+        const long = events.some((e) => e !== 'ci')
+        if (long && args.pr === undefined) {
+          throw new Error('pr_watch: comments, reviews and state need a pr target (a branch or sha has none)')
         }
-      ),
+        if (!long && args.timeoutMinutes !== undefined && args.timeoutMinutes > PR_WATCH_CI_MAX_MINUTES) {
+          throw new Error(`pr_watch: a ci-only watch times out after at most ${PR_WATCH_CI_MAX_MINUTES} minutes`)
+        }
+        const target =
+          args.pr !== undefined
+            ? ({ kind: 'pr', number: args.pr } as const)
+            : args.branch
+              ? ({ kind: 'branch', name: args.branch } as const)
+              : ({ kind: 'sha', sha: args.sha! } as const)
+        const result = await watch({
+          threadKey: getCallingThreadKey(deps),
+          repo: args.repo,
+          target,
+          events,
+          follow: args.follow,
+          checks: args.checks,
+          label: args.label,
+          timeoutMinutes: args.timeoutMinutes
+        })
+        return okJson(result)
+      }),
       tool(
-        'ci_watch_list',
-        'List active CI watches. Defaults to the calling thread; pass all=true for every thread.',
+        'pr_watch_list',
+        'List active PR watches with their events. Defaults to the calling thread; pass all=true for every thread.',
         { all: z.boolean().optional() },
         async (args) => okJson({ watches: list(args.all ? undefined : getCallingThreadKey(deps)) })
       ),
-      tool('ci_unwatch', 'Stop a CI watch by id.', { id: z.string() }, async (args) =>
-        unwatch(args.id) ? okText(`Stopped CI watch ${args.id}.`) : okText(`No CI watch ${args.id}.`)
+      tool('pr_unwatch', 'Stop a PR watch by id.', { id: z.string() }, async (args) =>
+        unwatch(args.id) ? okText(`Stopped PR watch ${args.id}.`) : okText(`No PR watch ${args.id}.`)
       )
     )
   }

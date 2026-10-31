@@ -64,8 +64,8 @@ export interface AgentBackendWiringInput {
   presence?: import('./claude-code/mcp-server.js').PresenceMcpDeps
   /** Task service. When set, the eight task_* MCP tools are registered. */
   tasks?: import('./claude-code/mcp-server.js').TaskMcpDeps
-  /** CI watcher. Its methods are bound later; when set, the ci_* MCP tools are registered. */
-  ci?: import('./claude-code/mcp-server.js').CiWatchMcpDeps
+  /** PR watcher. Its methods are bound later; when set, the pr_watch* MCP tools are registered. */
+  prWatch?: import('./claude-code/mcp-server.js').PrWatchMcpDeps
   /** Forge rethink runner. Its methods are bound later; the forge_* tools appear in forge-rethink threads. */
   forge?: import('./claude-code/forge-tools.js').ForgeMcpDeps
   /** Forge decisions. Bound later; decision_open / decision_close appear in every thread from then on. */
@@ -318,7 +318,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     subagentDefaults,
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
-    ...(input.ci ? { ci: input.ci } : {}),
+    ...(input.prWatch ? { prWatch: input.prWatch } : {}),
     ...(input.forge ? { forge: input.forge } : {}),
     ...(input.decisions ? { decisions: input.decisions } : {})
   })

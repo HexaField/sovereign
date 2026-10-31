@@ -240,6 +240,28 @@ function threadOf(p: P, ctx: MapContext) {
   return { label: label ?? threadId.slice(0, 8), fields: { threadId, threadLabel: label } }
 }
 
+function prWatch(p: P, at: string, ctx: MapContext): TimelineDraft[] {
+  const target = str(p.target) ?? str(p.repo)
+  if (!target) return []
+  const result = str(p.result)
+  const base = { at, kind: 'github' as const, ...threadOf(p, ctx).fields, origin: 'system' as const, url: str(p.url) }
+  if (result === 'failed')
+    return [
+      finish({ ...base, action: 'ci.failed', title: `CI failed on ${target}`, detail: strs(p.failed).join(', ') })
+    ]
+  if (result === 'passed') return [finish({ ...base, action: 'ci.passed', title: `CI passed on ${target}` })]
+  if (result === 'merged' || result === 'closed')
+    return [finish({ ...base, action: 'watch.stopped', title: `Stopped watching ${target}: ${result}` })]
+  // A CI-only watch (no `events`: CI-only too) or a CI part with no checks stops
+  // watching CI; a watch that also followed comments, reviews or state stops watching the PR.
+  const ciOnly = strs(p.events).every((e) => e === 'ci')
+  if (result === 'no-checks' || ciOnly)
+    return [
+      finish({ ...base, action: 'ci.stopped', title: `Stopped watching CI on ${target}`, detail: str(p.message) })
+    ]
+  return [finish({ ...base, action: 'watch.stopped', title: `Stopped watching ${target}`, detail: str(p.message) })]
+}
+
 const MAPPERS: Record<string, Mapper> = {
   'chat.turn.started': (p, at, ctx) => {
     const t = threadOf(p, ctx)
@@ -385,20 +407,9 @@ const MAPPERS: Record<string, Mapper> = {
       })
     ]
   },
-  'ci.watch.ended': (p, at, ctx) => {
-    const target = str(p.target) ?? str(p.repo)
-    if (!target) return []
-    const result = str(p.result)
-    const base = { at, kind: 'github' as const, ...threadOf(p, ctx).fields, origin: 'system' as const, url: str(p.url) }
-    if (result === 'failed')
-      return [
-        finish({ ...base, action: 'ci.failed', title: `CI failed on ${target}`, detail: strs(p.failed).join(', ') })
-      ]
-    if (result === 'passed') return [finish({ ...base, action: 'ci.passed', title: `CI passed on ${target}` })]
-    return [
-      finish({ ...base, action: 'ci.stopped', title: `Stopped watching CI on ${target}`, detail: str(p.message) })
-    ]
-  },
+  // A PR watch's CI result (pr.watch.ci, the watch lives on) or its end.
+  'pr.watch.ci': (p, at, ctx) => prWatch(p, at, ctx),
+  'pr.watch.ended': (p, at, ctx) => prWatch(p, at, ctx),
   'forge.events': (p, at) => forgeEvents(p, at),
   'forge.rethink': (p, at, ctx) => rethink(p, at, ctx),
   'forge.rethink.action': (p, at) => rethinkAction(p, at)

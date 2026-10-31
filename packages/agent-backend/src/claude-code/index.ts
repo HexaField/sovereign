@@ -8,7 +8,7 @@ export {
   type SovereignToolDeps,
   type EmbeddingsToolDeps,
   type TaskMcpDeps,
-  type CiWatchMcpDeps
+  type PrWatchMcpDeps
 } from './mcp-server.js'
 export { forgeTools, type ForgeMcpDeps } from './forge-tools.js'
 export { decisionTools, DECISION_TOOLS, type DecisionMcpDeps, type DecisionOpenInput } from './decision-tools.js'

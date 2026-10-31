@@ -1,5 +1,5 @@
 // GitHub checks — check runs (Actions, Apps) and commit statuses (CircleCI
-// and other status-only CI) folded into one state per check name. CI watch
+// and other status-only CI) folded into one state per check name. PR watch
 // and the forge adapter's checks() share this fold, so both agree on what
 // "failed" means.
 

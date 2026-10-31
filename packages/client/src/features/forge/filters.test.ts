@@ -83,7 +83,13 @@ describe('matchesFilters', () => {
 
   it('agent filter reads the overlay', () => {
     const working: AgentOverlay = { nodeId: a.id, thread: { id: 't', label: 'T', status: 'working' }, subagents: [] }
-    const ci: AgentOverlay = { nodeId: a.id, subagents: [], ciWatch: { state: 'waiting', since: 0 } }
+    const ci: AgentOverlay = { nodeId: a.id, subagents: [], prWatch: { since: 0, events: ['ci'], ciWaiting: true } }
+    const comments: AgentOverlay = {
+      nodeId: a.id,
+      subagents: [],
+      prWatch: { since: 0, events: ['ci', 'comments'], ciWaiting: false }
+    }
+    expect(agentMatches('waiting-ci', comments)).toBe(false)
     const review: AgentOverlay = { nodeId: a.id, subagents: [], waitingOn: 'review' }
     expect(agentMatches('any', working)).toBe(true)
     expect(agentMatches('any', { nodeId: a.id, subagents: [] })).toBe(false)

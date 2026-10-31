@@ -51,7 +51,7 @@ export {
   type ClaudeCodeBackend,
   type SovereignToolDeps,
   type TaskMcpDeps,
-  type CiWatchMcpDeps,
+  type PrWatchMcpDeps,
   type ForgeMcpDeps,
   type DecisionMcpDeps,
   type DecisionOpenInput,
