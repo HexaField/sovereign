@@ -129,7 +129,7 @@ SHACL subject classes, registered when the perspective is first opened (`ad4m-pe
 | `NodeCategory` | `forge-category://<membrane>/<source>/<node id>` (encoded) | membrane, node, category, source (`rethink` \| `user`), reason, createdAt |
 | `Decision` | `forge-decision://<membrane>/<uuid>` (membrane encoded) | membrane, question, context, options (JSON), origin (the source, JSON), group, threadId, decisionStatus (`open` \| `resolved`), resolution, resolved, createdBy, createdAt |
 
-Subtasks are one `forge://subtask` link per pair, parent → child. Values are AD4M string literals. The perspective is found by the uuid cached in `<dataDir>/tasks/forge-perspective.json`, else by name, else created.
+Subtasks are one `forge://subtask` link per pair, parent → child. Values are AD4M string literals. The perspective is found by the uuid cached in `<dataDir>/tasks/forge-perspective.json`, else by name, else created. A cached uuid that the executor does not list is treated as not loaded yet for `missGraceMs` (2 minutes): `connect()` throws and the durable stores retry. Right after a restart the executor lists perspectives it has not loaded yet as missing, and creating one then orphaned the real store (2026-10-31, after a power cut).
 
 ### Resilience (`durable.ts`)
 

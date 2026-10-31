@@ -148,6 +148,43 @@ describe('forge perspective (AD4M adapter)', () => {
     expect(fake.perspectives).toHaveLength(1)
   })
 
+  it('waits for a cached perspective the executor has not loaded yet, and never creates a second one', async () => {
+    const fake = fakeManager()
+    const dir = tempDir()
+    fs.writeFileSync(
+      path.join(dir, 'forge-perspective.json'),
+      JSON.stringify({ perspectiveName: 'sovereign-forge', perspectiveUuid: 'uuid-old' })
+    )
+    const fp = createForgePerspective({ ad4m: fake.manager, dataDir: dir, log: quietLog() })
+    // Right after a restart the executor lists nothing yet.
+    await expect(fp.connect()).rejects.toThrow(/not loaded yet/)
+    expect(fake.perspectives).toHaveLength(0)
+    // It finishes loading: the cached perspective comes back.
+    fake.perspectives.push(fakeProxy('uuid-old', 'sovereign-forge'))
+    expect((await fp.connect()).id).toBe('uuid-old')
+    expect(fake.perspectives).toHaveLength(1)
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'forge-perspective.json'), 'utf-8')).perspectiveUuid).toBe(
+      'uuid-old'
+    )
+  })
+
+  it('creates a new perspective once a cached one stays missing past the grace period', async () => {
+    const fake = fakeManager()
+    const dir = tempDir()
+    fs.writeFileSync(
+      path.join(dir, 'forge-perspective.json'),
+      JSON.stringify({ perspectiveName: 'sovereign-forge', perspectiveUuid: 'uuid-gone' })
+    )
+    const g = await createForgePerspective({
+      ad4m: fake.manager,
+      dataDir: dir,
+      log: quietLog(),
+      missGraceMs: 0
+    }).connect()
+    expect(g.id).toBe('uuid-1')
+    expect(fake.perspectives).toHaveLength(1)
+  })
+
   it('throws while AD4M is not connected', async () => {
     const fake = fakeManager()
     fake.setConnected(false)
