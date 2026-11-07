@@ -84,9 +84,9 @@ import { createContextFilter } from './context-filter.js'
 import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
-import { parseCozempicOutput } from './cozempic-parser.js'
-import { recycleWanted, recycleExhausted } from './recycle-gate.js'
-import { trimJsonlToLastCompaction } from './jsonl-trim.js'
+import { parseCozempicOutput, parseCozempicTokens } from './cozempic-parser.js'
+import { recycleWanted } from './recycle-gate.js'
+import { stubSupersededInstructions, trimJsonlToLastCompaction } from './jsonl-trim.js'
 import {
   archiveJsonlBeforeRecycle,
   archiveRawToolOutput,
@@ -387,7 +387,6 @@ interface PersistedClaudeSessionState {
   run?: { startedAt: number; done?: boolean }
   lastRecycleAt?: number
   recycleFloor?: number
-  recycleExhausted?: boolean
   liveSubagents: string[]
   streamLastLength: number
   thinkingAccum: string
@@ -536,7 +535,6 @@ export function createClaudeCodeBackend(
       run: state.run && { startedAt: state.run.startedAt, done: state.run.done },
       lastRecycleAt: state.lastRecycleAt,
       recycleFloor: state.recycleFloor,
-      recycleExhausted: state.recycleExhausted,
       liveSubagents: [...state.liveSubagents],
       streamLastLength: state.streamLastLength,
       thinkingAccum: state.thinkingAccum,
@@ -563,7 +561,6 @@ export function createClaudeCodeBackend(
         parentSessionKey: value.parentSessionKey,
         lastRecycleAt: value.lastRecycleAt,
         recycleFloor: value.recycleFloor,
-        recycleExhausted: value.recycleExhausted,
         // Recycle count resets on restart — it gates dedup within a process.
         recycleCount: 0,
         compactionCount: value.compactionCount ?? 0,
@@ -1199,7 +1196,6 @@ export function createClaudeCodeBackend(
       state.compactionCount = (state.compactionCount ?? 0) + 1
       // A compaction summarised the session: the recycle gate starts afresh.
       state.recycleFloor = undefined
-      state.recycleExhausted = false
       persistState(state)
       emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: false })
       // MCP rehydration: compact tears down the SDK's deferred-tool catalog
@@ -2491,7 +2487,6 @@ export function createClaudeCodeBackend(
       thresholdPercent: cfg?.thresholdPercent ?? 45,
       floor: state.recycleFloor,
       regrowPercent: cfg?.regrowPercent ?? 10,
-      exhausted: state.recycleExhausted,
       idleMs,
       cacheTtlMs: PROMPT_CACHE_TTL_MS,
       coldThresholdPercent: cfg?.coldThresholdPercent ?? 20
@@ -2556,8 +2551,7 @@ export function createClaudeCodeBackend(
         maxTokens,
         thresholdPercent: threshold,
         floor: state.recycleFloor,
-        regrowPercent: recycleCfg?.regrowPercent ?? 10,
-        exhausted: state.recycleExhausted
+        regrowPercent: recycleCfg?.regrowPercent ?? 10
       })
     )
       return
@@ -2706,7 +2700,15 @@ export function createClaudeCodeBackend(
     //     working JSONL that the SDK reads for context.
     archiveJsonlBeforeRecycle(dataDir, state.backendSessionId, state.sessionFile)
 
-    // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
+    // 5. Prune the JSONL. First keep only the newest copy of each injected
+    //    instructions file (CLAUDE.md), then cozempic, falling back to native.
+    let stubbedChars = 0
+    try {
+      stubbedChars = stubSupersededInstructions(state.sessionFile)
+    } catch (e) {
+      console.warn('[context-recycle] instructions stub failed:', e)
+    }
+    let cozTokens: { before: number; after: number } | undefined
     let method: 'cozempic' | 'native' = 'native'
     const rx = recycleCfg?.prescription ?? 'standard'
 
@@ -2718,6 +2720,7 @@ export function createClaudeCodeBackend(
         encoding: 'utf-8'
       })
       method = 'cozempic'
+      cozTokens = parseCozempicTokens(cozStdout)
 
       // Record context strategy metrics from cozempic output
       if (deps.metrics && cozStdout) {
@@ -2760,25 +2763,25 @@ export function createClaudeCodeBackend(
       console.warn('[context-recycle] compact-boundary trim failed:', e)
     }
 
-    // 6. Measure post-recycle size.
-    //    Usage entries in the JSONL still record pre-prune API values (pruning
-    //    truncates tool_result content, not usage fields). Estimate post-prune
-    //    tokens proportionally from the byte reduction.
+    // 6. Estimate the post-recycle prompt. The JSONL's usage entries still
+    //    hold pre-prune values. Cozempic reports tokens before and after: much
+    //    of what it strips from the file (envelopes, metadata) is never sent,
+    //    so the byte ratio understates the token cut. Stubbed instructions
+    //    count at ~4 characters a token; without cozempic, fall back to bytes.
     const postBytes = fs.existsSync(state.sessionFile) ? fs.statSync(state.sessionFile).size : 0
-    const postTokens = preBytes > 0 ? Math.round(preTokens * (postBytes / preBytes)) : 0
+    const afterStub = Math.max(0, preTokens - Math.round(stubbedChars / 4))
+    const postTokens =
+      cozTokens && cozTokens.before > 0
+        ? Math.round(afterStub * (cozTokens.after / cozTokens.before))
+        : preBytes > 0
+          ? Math.round(preTokens * (postBytes / preBytes))
+          : 0
 
     // 7. Reset filter dedup state and stamp the recycle time.
     state.contextFilter?.reset()
     state.lastRecycleAt = Date.now()
     state.recycleDue = false
     state.recycleFloor = postTokens
-    state.recycleExhausted = recycleExhausted(preTokens, postTokens, recycleCfg?.minReclaimPercent ?? 5)
-    if (state.recycleExhausted) {
-      console.log(
-        `[context-recycle] ${sessionKey}: recycle freed ${preTokens - postTokens} of ${preTokens} tokens — ` +
-          `pruning cannot shrink it; auto-recycle off until the next compaction`
-      )
-    }
     state.recycleCount = (state.recycleCount ?? 0) + 1
     state.lastUsage = undefined
 

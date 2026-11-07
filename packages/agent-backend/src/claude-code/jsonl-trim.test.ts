@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { trimJsonlToLastCompaction } from './jsonl-trim.js'
+import { stubSupersededInstructions, trimJsonlToLastCompaction } from './jsonl-trim.js'
 
 // Helpers to build realistic JSONL lines.
 function entry(uuid: string, type: string, subtype?: string, parent?: string): string {
@@ -159,5 +159,96 @@ describe('trimJsonlToLastCompaction', () => {
     // Second trim reclaims nothing (file already minimal).
     expect(reclaimedSecond).toBe(0)
     expect(afterFirst).toBe(afterSecond)
+  })
+})
+
+describe('stubSupersededInstructions', () => {
+  let dir: string
+  let file: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'jsonl-instr-'))
+    file = join(dir, 'session.jsonl')
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const instructions = (uuid: string, parent: string, files: Array<[string, string]>) =>
+    JSON.stringify({
+      type: 'attachment',
+      uuid,
+      parentUuid: parent,
+      attachment: {
+        type: 'instructions',
+        changed: true,
+        files: files.map(([path, content]) => ({ path, type: 'User', content }))
+      }
+    })
+  const lines = (f: string) =>
+    readFileSync(f, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
+
+  it('keeps the newest copy of each file and stubs the older ones, leaving the entries and their links', () => {
+    const md = '/home/u/.claude/CLAUDE.md'
+    writeFileSync(
+      file,
+      [
+        entry('u1', 'user'),
+        instructions('i1', 'u1', [[md, 'v1 '.repeat(500)]]),
+        entry('a1', 'assistant', '', 'i1'),
+        instructions('i2', 'a1', [[md, 'v2 '.repeat(500)]]),
+        instructions('i3', 'i2', [[md, 'v3 '.repeat(500)]])
+      ].join('\n') + '\n'
+    )
+    const freed = stubSupersededInstructions(file)
+    const out = lines(file)
+
+    expect(out.map((e) => e.uuid)).toEqual(['u1', 'i1', 'a1', 'i2', 'i3'])
+    expect(out[3].parentUuid).toBe('a1')
+    expect(out[1].attachment.files[0].content).toMatch(/superseded/)
+    expect(out[3].attachment.files[0].content).toMatch(/superseded/)
+    expect(out[4].attachment.files[0].content).toBe('v3 '.repeat(500))
+    expect(out[1].attachment.files[0].path).toBe(md)
+    expect(freed).toBeGreaterThan(2_500)
+  })
+
+  it('tracks each file on its own', () => {
+    writeFileSync(
+      file,
+      [
+        instructions('i1', 'x', [
+          ['/a.md', 'A1'.repeat(100)],
+          ['/b.md', 'B1'.repeat(100)]
+        ]),
+        instructions('i2', 'i1', [['/a.md', 'A2'.repeat(100)]])
+      ].join('\n') + '\n'
+    )
+    stubSupersededInstructions(file)
+    const out = lines(file)
+    expect(out[0].attachment.files[0].content).toMatch(/superseded/)
+    expect(out[0].attachment.files[1].content).toBe('B1'.repeat(100))
+    expect(out[1].attachment.files[0].content).toBe('A2'.repeat(100))
+  })
+
+  it('changes nothing with one copy per file, and is idempotent', () => {
+    const one = [entry('u1', 'user'), instructions('i1', 'u1', [['/a.md', 'only']])].join('\n') + '\n'
+    writeFileSync(file, one)
+    expect(stubSupersededInstructions(file)).toBe(0)
+    expect(readFileSync(file, 'utf-8')).toBe(one)
+
+    writeFileSync(
+      file,
+      [instructions('i1', 'x', [['/a.md', 'old'.repeat(50)]]), instructions('i2', 'i1', [['/a.md', 'new']])].join(
+        '\n'
+      ) + '\n'
+    )
+    stubSupersededInstructions(file)
+    const once = readFileSync(file, 'utf-8')
+    expect(stubSupersededInstructions(file)).toBe(0)
+    expect(readFileSync(file, 'utf-8')).toBe(once)
   })
 })

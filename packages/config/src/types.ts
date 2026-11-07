@@ -239,8 +239,6 @@ export interface SovereignConfig {
       skipDuringSubagents: boolean
       /** After a recycle, wait for the context to grow this % of the window before the next one. */
       regrowPercent: number
-      /** A recycle that frees less than this % of the context stops auto-recycle until a compaction. */
-      minReclaimPercent: number
       /** The threshold after an idle gap past the prompt-cache TTL, when the next call rewrites the whole prompt anyway. */
       coldThresholdPercent: number
     }

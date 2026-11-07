@@ -1483,8 +1483,7 @@ describe('claude-code/auto-recycle stops when pruning cannot shrink the session'
 
   it('measures regrowth from the real fill when it sits below the estimated floor', async () => {
     const compactions: any[] = []
-    // minReclaimPercent 0: only the floor gates the recycle.
-    const backend = backendWith(compactions, { thresholdPercent: 55, regrowPercent: 10, minReclaimPercent: 0 })
+    const backend = backendWith(compactions, { thresholdPercent: 55, regrowPercent: 10 })
     await backend.createSession('t', { threadKey: 'r', model: { provider: 'anthropic', model: 'claude-opus-5-5' } })
     const file = backend.getSessionFilePath!('r')!
     mkdirSync(dirname(file), { recursive: true })
