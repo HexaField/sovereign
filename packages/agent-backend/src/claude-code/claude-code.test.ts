@@ -2530,6 +2530,7 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     expect(opts.mcpServers.code.args).toEqual(['--edit-roots', `/elsewhere${delimiter}${repo}`])
     expect(opts.mcpServers.ad4m).toBeUndefined()
     expect(opts.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
+    expect(opts.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('200000')
   })
 
   it('sends the parent one completion with the final text', async () => {

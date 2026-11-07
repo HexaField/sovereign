@@ -74,6 +74,7 @@ import {
   selectSubagentMcpServers,
   SUBAGENT_BUILTIN_TOOLS,
   MAIN_DISALLOWED_TOOLS,
+  SUBAGENT_AUTO_COMPACT_WINDOW,
   SUBAGENT_TIMEOUT_MS
 } from './subagent-runner.js'
 import { formatSubagentResult } from '@sovereign/core'
@@ -1494,8 +1495,14 @@ export function createClaudeCodeBackend(
     const sessionEnv = {
       ...process.env,
       ...BASH_FIRST_OFF_ENV,
-      // Subagents get exactly SUBAGENT_MCP_SERVERS: no claude.ai connectors.
-      ...(isSubagent ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
+      // Subagents get exactly SUBAGENT_MCP_SERVERS (no claude.ai connectors),
+      // and they compact mid-turn: the auto-recycle only runs between turns.
+      ...(isSubagent
+        ? {
+            ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
+            CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(SUBAGENT_AUTO_COMPACT_WINDOW)
+          }
+        : {}),
       ...(useLiteLlm
         ? {
             ANTHROPIC_BASE_URL: cfgAtStart.litellm!.url,

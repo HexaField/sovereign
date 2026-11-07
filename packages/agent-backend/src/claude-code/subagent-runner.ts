@@ -15,6 +15,12 @@ export const SUBAGENT_BUILTIN_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 
 /** Built-in tools top-level sessions may not call: delegation goes through `agents_spawn`. */
 export const MAIN_DISALLOWED_TOOLS = ['Agent', 'Task']
 
+/** Tokens at which a subagent's SDK compacts mid-turn. A subagent works in
+ *  one long turn, so the between-turn auto-recycle never runs for it; without
+ *  this it grows towards the model's 1M window and re-reads it on every call.
+ *  Each compaction fires PostCompact, which runs the cozempic prune. */
+export const SUBAGENT_AUTO_COMPACT_WINDOW = 200_000
+
 /** MCP servers a child connects to, when configured. `sovereign` is the
  *  narrow subagent endpoint (browser + embeddings). */
 export const SUBAGENT_MCP_SERVERS = ['codegraph', 'semble', 'code', 'sovereign']
