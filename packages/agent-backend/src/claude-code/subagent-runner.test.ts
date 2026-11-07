@@ -57,6 +57,25 @@ describe('claude-code/subagent-runner', () => {
       expect(prompt).not.toContain('Personality source.')
       expect(prompt.startsWith('Rules.\n\n# Environment')).toBe(true)
     })
+
+    it('cuts a repo context over 40k characters to its head plus an index of the sections left out', () => {
+      const repo = join(root, 'repo')
+      mkdirSync(repo)
+      const section = (n: number) => `## Section ${n}\n\n` + `${'y'.repeat(79)}\n`.repeat(100)
+      const text = ['# Big reference', ...Array.from({ length: 10 }, (_, i) => section(i + 1))].join('\n')
+      writeFileSync(join(repo, 'AGENTS.md'), text)
+      const prompt = buildSubagentSystemPrompt({ cwd: repo, home: root })
+
+      expect(text.length).toBeGreaterThan(80_000)
+      expect(prompt.length).toBeLessThan(42_000)
+      expect(prompt).toMatch(/^## Section 1$/m)
+      expect(prompt).not.toMatch(/^## Section 10$/m)
+      // The index points at what was left out, by line, so the agent can Read it.
+      expect(prompt).toMatch(
+        new RegExp(`only its first [\\d,]+ of [\\d,]+ characters.*${join(repo, 'AGENTS.md')}`, 's')
+      )
+      expect(prompt).toMatch(/^- line \d+: ## Section 10$/m)
+    })
   })
 
   describe('selectSubagentMcpServers', () => {
