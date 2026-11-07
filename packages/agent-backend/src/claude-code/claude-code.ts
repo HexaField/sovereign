@@ -238,10 +238,10 @@ async function fetchLiteLlmModels(proxyUrl: string): Promise<ModelCatalogEntry[]
 /**
  * Read the user's global Claude Code personality file
  * (`~/.claude/CLAUDE.md`). Sovereign's personality compiler writes here.
- * Loaded explicitly because `settingSources` drops the `'project'` source
- * that would normally trigger the SDK's CLAUDE.md walk-up. Returns empty
- * string when the file is missing or unreadable — the SDK's preset prompt
- * still works without it.
+ * Threads get it here, once, at the front of the system prompt (it caches
+ * well); `CLAUDE_CODE_DISABLE_CLAUDE_MDS` stops the SDK loading it a second
+ * time as an attachment. Returns empty string when the file is missing or
+ * unreadable — the SDK's preset prompt still works without it.
  */
 function readGlobalPersonality(agentDir: string): string {
   try {
@@ -1469,7 +1469,10 @@ export function createClaudeCodeBackend(
             ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
             CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(SUBAGENT_AUTO_COMPACT_WINDOW)
           }
-        : {}),
+        : // Threads get the personality once, in the system prompt below. The
+          // SDK's user source would also inject ~/.claude/CLAUDE.md as an
+          // attachment, and again each time the file changes.
+          { CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1' }),
       ...(useLiteLlm
         ? {
             ANTHROPIC_BASE_URL: cfgAtStart.litellm!.url,

@@ -1772,6 +1772,13 @@ describe('claude-code/system-config-with-overrides wiring', () => {
     expect(options.settingSources).toEqual(['user', 'local'])
   })
 
+  it('loads the personality once: Sovereign appends it, the SDK loads no CLAUDE.md of its own', async () => {
+    const options = await captureOptions()
+    // The SDK's user source also injects ~/.claude/CLAUDE.md as an attachment,
+    // and re-injects it whenever it changes: two copies, then more.
+    expect(options.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBe('1')
+  })
+
   it('blocks the built-in Agent tool in top-level sessions: delegation goes through agents_spawn', async () => {
     const options = await captureOptions()
     expect(options.disallowedTools).toEqual(['Agent', 'Task'])
