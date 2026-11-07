@@ -49,6 +49,76 @@ describe('agents.list', () => {
   })
 })
 
+describe('executor devin', () => {
+  function devinSetup() {
+    const spawnSubagent = vi.fn(async () => 'child-1')
+    const stopSubagent = vi.fn(async () => {})
+    const listSubagents = vi.fn(async () => [{ sessionKey: 'claude-child', label: 'c', status: 'working' }])
+    const backend = { spawnSubagent, stopSubagent, listSubagents }
+    const devin = {
+      spawn: vi.fn(async () => 'devin-1'),
+      list: vi.fn(() => [
+        { sessionKey: 'devin-1', parentKey: 'parent', label: 'd', status: 'working' as const, task: 't' }
+      ]),
+      has: vi.fn((key: string) => key === 'devin-1'),
+      stop: vi.fn(async () => {})
+    }
+    const deps = buildSovereignMcpDeps({
+      routing: { forSession: () => backend, forKind: () => backend, all: () => [{ backend }] },
+      subagentDefaults: () => ({ model: 'claude-model', timeoutMinutes: 30 }),
+      devin
+    } as any)
+    return { deps, devin, spawnSubagent, stopSubagent }
+  }
+
+  it('spawns on devin with the model asked for and the configured time limit, not the Claude model', async () => {
+    const { deps, devin, spawnSubagent } = devinSetup()
+    const result = await deps.agents!.spawn('parent', {
+      task: 't',
+      cwd: '~/workspaces/coasys/ad4m',
+      label: 'l',
+      executor: 'devin',
+      model: 'swe-2-medium'
+    })
+    expect(result).toEqual({ sessionKey: 'devin-1' })
+    expect(devin.spawn).toHaveBeenCalledWith('parent', {
+      task: 't',
+      cwd: '~/workspaces/coasys/ad4m',
+      label: 'l',
+      model: 'swe-2-medium',
+      timeoutMs: 30 * 60_000
+    })
+    expect(spawnSubagent).not.toHaveBeenCalled()
+  })
+
+  it('keeps executor claude (the default) on the backend', async () => {
+    const { deps, devin, spawnSubagent } = devinSetup()
+    await deps.agents!.spawn('parent', { task: 't', executor: 'claude' })
+    await deps.agents!.spawn('parent', { task: 't' })
+    expect(spawnSubagent).toHaveBeenCalledTimes(2)
+    expect(devin.spawn).not.toHaveBeenCalled()
+  })
+
+  it('refuses executor devin when the devin executor is not wired', async () => {
+    const deps = buildSovereignMcpDeps({ routing: { forSession: () => ({}) } } as any)
+    await expect(deps.agents!.spawn('parent', { task: 't', executor: 'devin' })).rejects.toThrow(/devin/)
+  })
+
+  it('lists devin runs beside the backend subagents, and stops them through the executor', async () => {
+    const { deps, devin, stopSubagent } = devinSetup()
+    expect(await deps.agents!.list('parent')).toEqual([
+      { sessionKey: 'claude-child', label: 'c', status: 'working' },
+      { sessionKey: 'devin-1', label: 'd', status: 'working', task: 't' }
+    ])
+    expect(devin.list).toHaveBeenCalledWith('parent')
+    await deps.agents!.stop('devin-1')
+    expect(devin.stop).toHaveBeenCalledWith('devin-1')
+    expect(stopSubagent).not.toHaveBeenCalled()
+    await deps.agents!.stop('claude-child')
+    expect(stopSubagent).toHaveBeenCalledWith('claude-child')
+  })
+})
+
 describe('sessions.send', () => {
   // A thread's session key is its bare id: the chat module and the UI use that key.
   function sendSetup(registry: Record<string, string> = {}) {

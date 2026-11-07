@@ -44,6 +44,10 @@ export const defaults: SovereignConfig = {
         bashTimeout: 120000
       },
       endpoints: []
+    },
+    devin: {
+      defaultModel: 'swe-2-high',
+      allowedRoots: ['~/workspaces/coasys']
     }
   },
   summary: {

@@ -43,7 +43,7 @@ export interface SovereignToolDeps {
     ): Promise<Array<{ sessionKey: string; label: string; status: string; task?: string }>>
     spawn(
       parentSessionKey: string,
-      opts: { task: string; cwd?: string; label?: string }
+      opts: { task: string; cwd?: string; label?: string; executor?: 'claude' | 'devin'; model?: string }
     ): Promise<{ sessionKey: string }>
     stop(sessionKey: string): Promise<void>
   }
@@ -499,16 +499,36 @@ export function createSovereignMcpServer(
     // ── subagents ─────────────────────────────────────────────────────────
     tool(
       'agents_spawn',
-      'Delegate a task to a subagent. The subagent runs as its own session in `cwd` (a repo or worktree), with SUBAGENT.md and the repo AGENTS.md as its context, and codegraph, semble, code-edit, browser and the built-in file tools. It never commits, spawns subagents or does destructive actions. The call returns at once with the subagent session key. When the subagent ends, its final report arrives in this thread as one message ([Subagent done: …] or [Subagent failed: …]); end your turn and wait for it. Put every fact the subagent needs in `task`: it does not see this conversation. Max 4 running per thread; time limit 4 h unless config `agentBackend.subagentDefaults.timeoutMinutes` sets another.',
+      'Delegate a task to a subagent. The subagent runs as its own session in `cwd` (a repo or worktree), with SUBAGENT.md and the repo AGENTS.md as its context, and codegraph, semble, code-edit, browser and the built-in file tools. It never commits, spawns subagents or does destructive actions. The call returns at once with the subagent session key. When the subagent ends, its final report arrives in this thread as one message ([Subagent done: …] or [Subagent failed: …]); end your turn and wait for it. Put every fact the subagent needs in `task`: it does not see this conversation. Max 4 running per thread; time limit 4 h unless config `agentBackend.subagentDefaults.timeoutMinutes` sets another.\n\n' +
+        "`executor: 'devin'` runs the task through the Devin CLI (Cognition's SWE-2 models) instead of a Claude session. Use it for well-specified coding tasks in public repos (for example ~/workspaces/coasys/*). The `cwd` must be under config `agentBackend.devin.allowedRoots`; private directories (~/.sovereign, ~/workspaces/hexafield) are refused. A devin run cannot reach Sovereign's MCP tools (codegraph, semble, code-edit, browser, sovereign): put every fact in `task`. It never commits or pushes.",
       {
         task: z.string().describe('The complete, self-contained task.'),
-        cwd: z.string().optional().describe('Absolute working directory for the subagent. Default ~/workspaces.'),
-        label: z.string().optional().describe('Short name shown in the UI and in the result message.')
+        cwd: z
+          .string()
+          .optional()
+          .describe('Absolute working directory for the subagent. Default ~/workspaces. Required for devin.'),
+        label: z.string().optional().describe('Short name shown in the UI and in the result message.'),
+        executor: z
+          .enum(['claude', 'devin'])
+          .optional()
+          .describe("Who runs the task: 'claude' (default, a Claude Code session) or 'devin' (the Devin CLI)."),
+        model: z
+          .string()
+          .optional()
+          .describe(
+            'Devin model, for example swe-2-high or swe-2-medium. Default config `agentBackend.devin.defaultModel`. Devin only.'
+          )
       },
       async (args) => {
         const parent = deps.currentSessionKey?.()
         if (!parent) throw new Error('agents_spawn: no calling session')
-        const result = await deps.agents.spawn(parent, { task: args.task, cwd: args.cwd, label: args.label })
+        const result = await deps.agents.spawn(parent, {
+          task: args.task,
+          cwd: args.cwd,
+          label: args.label,
+          ...(args.executor ? { executor: args.executor } : {}),
+          ...(args.model ? { model: args.model } : {})
+        })
         return okJson({ sessionKey: result.sessionKey, note: 'Result arrives as a message in this thread.' })
       }
     ),

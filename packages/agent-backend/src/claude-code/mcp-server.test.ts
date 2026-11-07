@@ -524,6 +524,22 @@ describe('claude-code/mcp-server', () => {
       expect((parseResult(result) as any).sessionKey).toBe('abc')
     })
 
+    it('passes the devin executor and its model through', async () => {
+      const deps = makeDeps()
+      await invoke(getTools(deps), 'agents_spawn', {
+        task: 'fix the bug',
+        cwd: '/repo',
+        executor: 'devin',
+        model: 'swe-2-medium'
+      })
+      expect(deps.agents.spawn).toHaveBeenCalledWith('agent:main:thread:t1', {
+        task: 'fix the bug',
+        cwd: '/repo',
+        executor: 'devin',
+        model: 'swe-2-medium'
+      })
+    })
+
     it('throws without a calling session', async () => {
       const deps = makeDeps({ currentSessionKey: () => undefined })
       await expect(invoke(getTools(deps), 'agents_spawn', { task: 'x' })).rejects.toThrow(/no calling session/)

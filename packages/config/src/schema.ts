@@ -128,6 +128,14 @@ export const schema = {
           },
           additionalProperties: false
         },
+        devin: {
+          type: 'object',
+          properties: {
+            defaultModel: { type: 'string' },
+            allowedRoots: { type: 'array', items: { type: 'string' } }
+          },
+          additionalProperties: false
+        },
         subagentDefaults: {
           type: 'object',
           properties: {

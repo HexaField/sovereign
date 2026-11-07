@@ -24,6 +24,7 @@ import type { AgentBackend, AgentBackendKind, EventBus } from '@sovereign/core'
 import { unwrapThreadId } from '@sovereign/core'
 import type { ThreadManager } from '@sovereign/threads'
 import { sessionKeyToThreadKey } from './wiring.js'
+import type { DevinExecutor } from './devin/executor.js'
 
 /** Global defaults for subagent routing. Thread-level config takes priority
  *  over these; these take priority over the model's explicit request. */
@@ -64,6 +65,8 @@ export interface SovereignMcpDepsInput {
   forge?: ForgeMcpDeps
   /** decision_open / decision_close, in every thread once bound. */
   decisions?: DecisionMcpDeps
+  /** Runs `agents_spawn` with `executor: 'devin'`. Unset: such a call is refused. */
+  devin?: Pick<DevinExecutor, 'spawn' | 'list' | 'has' | 'stop'>
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -147,13 +150,27 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
             /* ignore */
           }
         }
+        for (const r of input.devin?.list(parentKey) ?? [])
+          out.push({ sessionKey: r.sessionKey, label: r.label, status: r.status, task: r.task })
         return out
       },
       async spawn(parentKey, opts) {
+        const defaults = input.subagentDefaults?.()
+        // Devin runs its own models: the thread's and the global Claude routing do not apply.
+        if (opts.executor === 'devin') {
+          if (!input.devin) throw new Error('agents_spawn: the devin executor is not available')
+          const sessionKey = await input.devin.spawn(parentKey, {
+            task: opts.task,
+            cwd: opts.cwd,
+            label: opts.label,
+            ...(opts.model ? { model: opts.model } : {}),
+            ...(defaults?.timeoutMinutes ? { timeoutMs: defaults.timeoutMinutes * 60_000 } : {})
+          })
+          return { sessionKey }
+        }
         // Resolve the parent thread's subagent routing config (if any).
         const threadKey = sessionKeyToThreadKey(parentKey)
         const thread = threadKey ? input.threadManager?.get(threadKey) : undefined
-        const defaults = input.subagentDefaults?.()
 
         // Priority chain (NON-NEGOTIABLE — thread config is authoritative):
         //   1. Thread-level subagentBackend (highest — per-thread override)
@@ -182,6 +199,7 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         return { sessionKey: childKey }
       },
       async stop(sessionKey) {
+        if (input.devin?.has(sessionKey)) return input.devin.stop(sessionKey)
         const backend = routing.forSession(sessionKey)
         if (!backend.stopSubagent) throw new Error('agents_stop: backend does not support stopping subagents')
         await backend.stopSubagent(sessionKey)

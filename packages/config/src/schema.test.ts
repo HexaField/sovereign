@@ -37,6 +37,16 @@ describe('Config Schema', () => {
       )
     })
 
+    it('accepts the devin executor section and rejects bad devin values', () => {
+      expect(defaults.agentBackend.devin).toEqual({ defaultModel: 'swe-2-high', allowedRoots: ['~/workspaces/coasys'] })
+      const devin = { defaultModel: 'swe-2-medium', allowedRoots: ['~/workspaces/coasys', '/srv/public'] }
+      expect(validate({ agentBackend: { ...defaults.agentBackend, devin } }).valid).toBe(true)
+      expect(validate({ agentBackend: { ...defaults.agentBackend, devin: { allowedRoots: '~' } } }).valid).toBe(false)
+      expect(
+        invalidConfigPaths({ agentBackend: { ...defaults.agentBackend, devin: { ...devin, extra: 1 } } })
+      ).toContain('/agentBackend/devin/extra')
+    })
+
     it('accepts the graphcoder flag, off by default, and rejects bad values', () => {
       expect(defaults.graphcoder).toEqual({ enabled: false })
       expect(validate({ graphcoder: { enabled: true } }).valid).toBe(true)

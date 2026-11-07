@@ -22,6 +22,7 @@ import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.j
 import { createMetricsAccumulator, type MetricsAccumulator } from './metrics.js'
 import { buildSovereignMcpDeps, type SubagentDefaults } from './mcp-deps.js'
 import { createEmbeddingsService } from './embeddings-service.js'
+import { createDevinExecutor } from './devin/executor.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -303,6 +304,18 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   // initialises lazily (db opens on first tool call, not at boot).
   const embeddingsService = createEmbeddingsService({ dataDir: input.dataDir })
 
+  // agents_spawn with executor 'devin': Devin CLI runs, results delivered like Claude subagents'.
+  const devinExecutor = createDevinExecutor({
+    dataDir,
+    home: process.env.HOME ?? '',
+    configDir: input.configDir,
+    settings: () => ({
+      defaultModel: configStore.get<string>('agentBackend.devin.defaultModel') ?? undefined,
+      allowedRoots: configStore.get<string[]>('agentBackend.devin.allowedRoots') ?? undefined
+    }),
+    deliver: (parentKey, text) => deliverToParent(parentKey, text)
+  })
+
   const sharedMcpDeps = buildSovereignMcpDeps({
     bus,
     routing: new Proxy({} as any, { get: (_t, p) => (routingBackend as any)[p as any] }),
@@ -316,6 +329,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     browserService,
     embeddings: embeddingsService,
     subagentDefaults,
+    devin: devinExecutor,
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
     ...(input.prWatch ? { prWatch: input.prWatch } : {}),
@@ -522,6 +536,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
       console.warn(`[wiring] subagent result delivery failed for ${parentKey}:`, err)
     )
   }
+  // Devin runs a restart cut off: their parents wait for a result, so tell them.
+  devinExecutor.recoverInterrupted()
 
   return {
     routingBackend,

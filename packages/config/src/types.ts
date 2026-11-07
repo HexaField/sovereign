@@ -98,6 +98,15 @@ export interface SovereignConfig {
         }
       }>
     }
+    /** Devin CLI executor for `agents_spawn` with `executor: 'devin'`. */
+    devin: {
+      /** Model when the call names none (`devin models` lists them). */
+      defaultModel: string
+      /** Directories (and everything below them) a Devin run may use as cwd.
+       *  `~` expands to the home directory. ~/.sovereign and
+       *  ~/workspaces/hexafield are refused whatever this holds. */
+      allowedRoots: string[]
+    }
   }
   /** Running summary service — maintains per-thread rolling summaries via a local model. */
   summary: {
