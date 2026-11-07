@@ -48,9 +48,12 @@ const f = (over: Partial<DecisionFilters> = {}): DecisionFilters => ({ ...DEFAUL
 const ids = (list: Decision[]) => list.map((x) => Number(x.id.split('/').pop()))
 
 describe('decisions model', () => {
-  it('parses saved filters, falling back to open / newest / no grouping', () => {
+  it('parses saved filters, falling back to open / newest / by thread', () => {
     expect(parseDecisionFilters(null)).toEqual(DEFAULT_DECISION_FILTERS)
     expect(parseDecisionFilters('not json')).toEqual(DEFAULT_DECISION_FILTERS)
+    expect(DEFAULT_DECISION_FILTERS.groupBy).toBe('thread')
+    expect(parseDecisionFilters('{}').groupBy).toBe('thread')
+    expect(parseDecisionFilters(JSON.stringify({ groupBy: 'none' })).groupBy).toBe('none')
     expect(
       parseDecisionFilters(
         JSON.stringify({

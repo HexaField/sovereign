@@ -50,7 +50,7 @@ export const DEFAULT_DECISION_FILTERS: DecisionFilters = {
   sourceKinds: [],
   q: '',
   sort: 'newest',
-  groupBy: 'none'
+  groupBy: 'thread'
 }
 
 const pick = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>

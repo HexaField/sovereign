@@ -92,6 +92,15 @@ export const REVIEW_COLORS: Record<ReviewState, string> = {
   dismissed: '#6b7280'
 }
 
+/** One glyph per review state, where a label does not fit (canvas nodes, Kanban stack rows). */
+export const REVIEW_GLYPHS: Record<ReviewState, string> = {
+  approved: '✓',
+  changes_requested: '±',
+  requested: '◌',
+  commented: '…',
+  dismissed: '…'
+}
+
 export const RING_COLORS = {
   agent: '#3b82f6',
   'ci-failed': '#ef4444',
@@ -170,11 +179,11 @@ const PURPLE = '#a855f7'
 export function edgeStyle(e: WorkEdge, to: WorkNode | undefined): EdgeStyle {
   switch (e.kind) {
     case 'base':
-      return { color: '#60a5fa', dash: [], width: 2 }
+      return { color: STACK_FRAME.color, dash: [], width: 2 }
     case 'merged-into':
       return { color: PURPLE, dash: [], width: 1.5 }
     case 'paired':
-      return { color: '#f59e0b', dash: [], width: 2 }
+      return { color: PAIRED_COLOR, dash: [], width: 2 }
     case 'related':
       return { color: PURPLE, dash: [6, 5], width: 1.5 }
     case 'depends-on':
@@ -188,6 +197,12 @@ export function edgeStyle(e: WorkEdge, to: WorkNode | undefined): EdgeStyle {
       return { color: GREY, dash: [5, 4], width: 1 }
   }
 }
+
+/** The frame behind a PR stack: the `base` edge's blue, a faint fill under a thin border. */
+export const STACK_FRAME = { color: '#60a5fa', fillAlpha: 0.07, strokeAlpha: 0.45, pad: 10 }
+
+/** A paired PR's badge: the `paired` edge's amber. */
+export const PAIRED_COLOR = '#f59e0b'
 
 /** A card of an epic it is only related to (not owned by): a dashed purple border, as a `related` edge. */
 export const RELATED_CARD = { color: PURPLE, dash: [4, 3] }

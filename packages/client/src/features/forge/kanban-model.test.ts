@@ -97,7 +97,7 @@ describe('kanbanCards', () => {
     expect(all.sort()).toEqual([1, 2, 5])
   })
 
-  it('shows only the bottom of a stack, with the stack size', () => {
+  it('shows only the bottom of a stack, listing every member bottom → top', () => {
     const bottom = change(REPO, 10)
     const mid = change(REPO, 11)
     const top = change(REPO, 12, { state: 'draft' })
@@ -109,7 +109,31 @@ describe('kanbanCards', () => {
     )
     const cards = [...cols.values()].flat()
     expect(cards.map((c) => c.node.number)).toEqual([10])
-    expect(cards[0].stack).toBe(4)
+    expect(cards[0].stack.map((r) => [r.position, r.ref])).toEqual([
+      [1, '#10'],
+      [2, '#11'],
+      [3, '#13'],
+      [4, '#12']
+    ])
+    expect(cards[0].stack[3].node).toBe(top)
+  })
+
+  it('shows the pairs of a PR and of each stacked PR, repo-qualified, with their state', () => {
+    const bottom = change(REPO, 60)
+    const top = change(REPO, 61)
+    const solo = change(REPO, 62)
+    const mate = change('acme/gears', 7)
+    const done = merged('acme/gears', 8, 1)
+    const cols = board(
+      [bottom, top, solo, mate, done],
+      [edge(top, bottom, 'base'), edge(top, mate, 'paired'), edge(done, solo, 'paired')]
+    )
+    const byNumber = new Map([...cols.values()].flat().map((c) => [c.node.number, c]))
+    expect(byNumber.get(62)!.pairs).toEqual([{ id: done.id, label: 'acme/gears#8', state: 'merged' }])
+    expect(byNumber.get(60)!.pairs).toEqual([])
+    expect(byNumber.get(60)!.stack.map((r) => r.pairs.map((p) => p.label))).toEqual([[], ['acme/gears#7']])
+    // The partner's own card names the PR back.
+    expect(byNumber.get(7)!.pairs.map((p) => p.label)).toEqual([`${REPO}#61`])
   })
 
   it('a PR based on a merged or closed PR is not blocked', () => {
@@ -117,7 +141,7 @@ describe('kanbanCards', () => {
     const pr = change(REPO, 21)
     const cols = board([base, pr], [edge(pr, base, 'base')])
     expect(ids(cols, 'in-review')).toEqual([21])
-    expect(cols.get('in-review')![0].stack).toBe(1)
+    expect(cols.get('in-review')![0].stack).toEqual([])
   })
 
   it('a stacked PR stays blocked when its base is filtered out of view', () => {

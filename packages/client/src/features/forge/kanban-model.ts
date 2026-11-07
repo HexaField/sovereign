@@ -1,9 +1,10 @@
 // Kanban — pure: the panel's shown nodes in, the immediate work in columns out.
 // Only open PRs and open issues get a card. A PR stacked on another open PR
-// waits for it, so only the bottom of a stack shows (with the stack's size);
+// waits for it, so only the bottom of a stack shows (listing the whole stack);
 // an issue an open PR closes rides on that PR's card instead of its own.
 
-import type { AgentOverlay, WorkEdge, WorkNode, WorkStream } from '@sovereign/core'
+import type { AgentOverlay, WorkEdge, WorkNode, WorkNodeState, WorkStream } from '@sovereign/core'
+import { isOpenChange, stackModel } from './stacks.js'
 
 export type KanbanColumn = 'ready' | 'needs-work' | 'in-review' | 'in-progress' | 'todo'
 
@@ -16,19 +17,36 @@ export const KANBAN_COLUMNS: { id: KanbanColumn; title: string }[] = [
   { id: 'ready', title: 'Ready to merge' }
 ]
 
+/** A change paired with a PR, as "owner/name#N". */
+export interface KanbanPair {
+  id: string
+  label: string
+  state: WorkNodeState
+}
+
+/** One PR of a stack, as its bottom card lists it. */
+export interface KanbanStackRow {
+  node: WorkNode
+  /** 1 at the bottom. */
+  position: number
+  /** "#N", or "owner/name#N" from another repo than the bottom's. */
+  ref: string
+  pairs: KanbanPair[]
+}
+
 export interface KanbanCard {
   node: WorkNode
   column: KanbanColumn
-  /** Open PRs in the stack this PR is the bottom of, itself included (1 = not stacked). */
-  stack: number
+  /** The stack this PR is the bottom of, bottom → top, itself first; empty when not stacked. */
+  stack: KanbanStackRow[]
+  /** The changes paired with this PR. */
+  pairs: KanbanPair[]
   /** Open issues the PR (or a PR stacked on it) closes, as "#N" or "owner/name#N" from another repo. */
   closes: string[]
   /** The owning epic's name. */
   epic?: string
 }
 
-const isOpenChange = (n: WorkNode | undefined): n is WorkNode =>
-  !!n && n.kind === 'change' && (n.state === 'open' || n.state === 'draft')
 const isOpenIssue = (n: WorkNode | undefined): n is WorkNode => !!n && n.kind === 'issue' && n.state === 'open'
 
 /** The column of one open PR or issue; the first rule that matches wins. */
@@ -59,51 +77,45 @@ export interface KanbanInput {
 
 export function kanbanCards(input: KanbanInput): Map<KanbanColumn, KanbanCard[]> {
   const { nodesById, edges, shown, overlays } = input
-  const blocked = new Set<string>()
-  const above = new Map<string, string[]>() // base PR → PRs stacked directly on it
+  const stacks = stackModel(nodesById, edges)
   const closesOf = new Map<string, WorkNode[]>()
   const closedByOpenPr = new Set<string>()
   for (const e of edges) {
     const from = nodesById.get(e.from)
     const to = nodesById.get(e.to)
-    if (!isOpenChange(from)) continue
-    if (e.kind === 'base' && isOpenChange(to) && to.id !== from.id) {
-      blocked.add(from.id)
-      above.set(to.id, [...(above.get(to.id) ?? []), from.id])
-    } else if (e.kind === 'closes' && isOpenIssue(to)) {
+    if (e.kind === 'closes' && isOpenChange(from) && isOpenIssue(to)) {
       closedByOpenPr.add(to.id)
       closesOf.set(from.id, [...(closesOf.get(from.id) ?? []), to])
     }
   }
 
-  // The whole stack above a bottom PR (a cycle of bases cannot loop).
-  const stackOf = (bottom: string): string[] => {
-    const seen = new Set([bottom])
-    const queue = [bottom]
-    while (queue.length) {
-      for (const id of above.get(queue.shift()!) ?? []) {
-        if (seen.has(id)) continue
-        seen.add(id)
-        queue.push(id)
-      }
-    }
-    return [...seen]
-  }
   const streamName = new Map(input.streams.map((s) => [s.id, s.name]))
   const refLabel = (pr: WorkNode, i: WorkNode): string =>
     i.repo && i.repo !== pr.repo ? `${i.repo}#${i.number}` : `#${i.number}`
+  const pairsOf = (id: string): KanbanPair[] =>
+    (stacks.pairs.get(id) ?? []).map((p) => {
+      const n = nodesById.get(p)!
+      return { id: p, label: `${n.repo}#${n.number}`, state: n.state }
+    })
 
   const cards: KanbanCard[] = []
   for (const id of shown) {
     const n = nodesById.get(id)
     if (!n) continue
     if (isOpenChange(n)) {
-      if (blocked.has(id)) continue
-      const stack = stackOf(id)
-      const closes = [...new Set(stack.flatMap((s) => (closesOf.get(s) ?? []).map((i) => refLabel(n, i))))]
-      cards.push(card(n, overlays.get(id), stack.length, closes, streamName))
+      const members = stacks.stackOf.get(id)?.members ?? [id]
+      if (members[0] !== id) continue
+      const closes = [...new Set(members.flatMap((s) => (closesOf.get(s) ?? []).map((i) => refLabel(n, i))))]
+      const stack =
+        members.length > 1
+          ? members.map((m, i) => {
+              const node = nodesById.get(m)!
+              return { node, position: i + 1, ref: refLabel(n, node), pairs: pairsOf(m) }
+            })
+          : []
+      cards.push(card(n, overlays.get(id), stack, pairsOf(id), closes, streamName))
     } else if (isOpenIssue(n) && !closedByOpenPr.has(id)) {
-      cards.push(card(n, overlays.get(id), 1, [], streamName))
+      cards.push(card(n, overlays.get(id), [], [], [], streamName))
     }
   }
   const out = new Map<KanbanColumn, KanbanCard[]>(KANBAN_COLUMNS.map((c) => [c.id, []]))
@@ -116,7 +128,8 @@ export function kanbanCards(input: KanbanInput): Map<KanbanColumn, KanbanCard[]>
 function card(
   node: WorkNode,
   overlay: AgentOverlay | undefined,
-  stack: number,
+  stack: KanbanStackRow[],
+  pairs: KanbanPair[],
   closes: string[],
   streamName: Map<string, string>
 ): KanbanCard {
@@ -125,6 +138,7 @@ function card(
     node,
     column: kanbanColumn(node, overlay),
     stack,
+    pairs,
     closes,
     ...(owner ? { epic: streamName.get(owner) ?? owner } : {})
   }

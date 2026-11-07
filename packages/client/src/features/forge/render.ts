@@ -10,8 +10,11 @@ import { anchorOf, type Scene } from './scene.js'
 import {
   CI_COLORS,
   EPIC_STATUS_COLORS,
+  PAIRED_COLOR,
   RELATED_CARD,
   REVIEW_COLORS,
+  REVIEW_GLYPHS,
+  STACK_FRAME,
   STATE_COLORS,
   edgeStyle,
   initials,
@@ -48,6 +51,8 @@ export interface FrameStats {
   bandsDrawn: number
   treeLinksDrawn: number
   memberLinksDrawn: number
+  /** Frames behind PR stacks with two or more members on screen. */
+  stacksDrawn: number
   /** A visible ring pulses: the caller keeps animating. */
   animating: boolean
 }
@@ -163,6 +168,27 @@ function nodeLabel(n: WorkNode, detail: Detail): string {
   return num ? `${num} ${n.title}` : n.title
 }
 
+/** "repo#N" without the owner, from the node or, when it is not loaded, its id. */
+function shortRef(n: WorkNode | undefined, id: string): string {
+  if (n?.repo && n.number !== undefined) return `${n.repo.split('/').pop()}#${n.number}`
+  return id.split('/').pop() ?? id
+}
+
+/** A small outlined badge ending at `right`, centred on `cy`; returns the width it takes with its gap. */
+function pill(ctx: CanvasRenderingContext2D, text: string, right: number, cy: number, color: string): number {
+  ctx.font = `600 9px ${FONT}`
+  const w = ctx.measureText(text).width + 8
+  roundRect(ctx, right - w, cy - 6, w, 12, 3)
+  ctx.fillStyle = `${color}22`
+  ctx.fill()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1
+  ctx.stroke()
+  ctx.fillStyle = color
+  ctx.fillText(text, right - w + 4, cy)
+  return w + 4
+}
+
 function drawNode(
   ctx: CanvasRenderingContext2D,
   n: WorkNode,
@@ -236,9 +262,7 @@ function drawNode(
   if (review) {
     ctx.fillStyle = REVIEW_COLORS[review]
     ctx.font = `700 11px ${FONT}`
-    const glyph =
-      review === 'approved' ? '✓' : review === 'changes_requested' ? '±' : review === 'requested' ? '◌' : '…'
-    ctx.fillText(glyph, badgeX - 8, p.y + 14)
+    ctx.fillText(REVIEW_GLYPHS[review], badgeX - 8, p.y + 14)
     badgeX -= 14
   }
   const category = categoryBadge(n)
@@ -275,6 +299,16 @@ function drawNode(
       ctx.fillText(initials(a), ax - 8, p.y + p.h - 12)
       ctx.textAlign = 'left'
       ax -= 18
+    }
+    // Stack position and pairs, right to left before the initials.
+    const { stacks } = f.scene.layout
+    const stack = stacks.stackOf.get(p.id)
+    if (stack)
+      ax -= pill(ctx, `${stacks.position.get(p.id)}/${stack.members.length}`, ax, p.y + p.h - 12, STACK_FRAME.color)
+    const pairs = stacks.pairs.get(p.id)
+    if (pairs) {
+      const label = pairs.map((id) => shortRef(f.scene.nodesById.get(id), id)).join(' ')
+      ax -= pill(ctx, `⇄ ${label}`, ax, p.y + p.h - 12, PAIRED_COLOR)
     }
     ctx.font = `11px ${FONT}`
     ctx.fillStyle = palette.muted
@@ -366,6 +400,7 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
     bandsDrawn: 0,
     treeLinksDrawn: 0,
     memberLinksDrawn: 0,
+    stacksDrawn: 0,
     animating: false
   }
 
@@ -419,6 +454,45 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
       ctx.textBaseline = 'bottom'
       ctx.fillText('‹ older', b.x0 + 6, b.y - 3)
     }
+  }
+  ctx.globalAlpha = 1
+
+  // Stack frames, behind the edges and nodes: around the stack's members on
+  // the canvas (out of a band), when two or more are. Their labels go on top
+  // of the nodes, after them, so a row above never hides one.
+  const pad = STACK_FRAME.pad
+  // Labels stay legible when zoomed out to compact.
+  const labelPx = Math.min(16, Math.max(9, 7 / vp.scale))
+  const stackLabels: { text: string; x: number; y: number; alpha: number }[] = []
+  for (const stack of layout.stacks.stacks) {
+    let x0 = Infinity
+    let y0 = Infinity
+    let x1 = -Infinity
+    let y1 = -Infinity
+    let shown = 0
+    let faded = true
+    for (const id of stack.members) {
+      const p = layout.nodes.get(id)
+      if (!p || !scene.visible.has(id) || scene.collapsed.bandOf.has(id)) continue
+      shown++
+      if (!scene.dimmed.has(id)) faded = false
+      x0 = Math.min(x0, p.x)
+      y0 = Math.min(y0, p.y)
+      x1 = Math.max(x1, p.x + p.w)
+      y1 = Math.max(y1, p.y + p.h)
+    }
+    if (shown < 2 || x1 + pad < view.x || x0 - pad > vx1 || y1 + pad < view.y || y0 - pad - labelPx > vy1) continue
+    const alpha = faded ? 0.3 : 1
+    roundRect(ctx, x0 - pad, y0 - pad, x1 - x0 + 2 * pad, y1 - y0 + 2 * pad, 12)
+    ctx.fillStyle = STACK_FRAME.color
+    ctx.globalAlpha = STACK_FRAME.fillAlpha * alpha
+    ctx.fill()
+    ctx.strokeStyle = STACK_FRAME.color
+    ctx.globalAlpha = STACK_FRAME.strokeAlpha * alpha
+    ctx.lineWidth = 1.5 / vp.scale
+    ctx.stroke()
+    if (detail !== 'dot') stackLabels.push({ text: `stack · ${stack.members.length}`, x: x0, y: y0 - pad, alpha })
+    stats.stacksDrawn++
   }
   ctx.globalAlpha = 1
 
@@ -559,6 +633,24 @@ export function drawFrame(ctx: CanvasRenderingContext2D, f: FrameInput): FrameSt
     if (!p || !n) continue
     if (drawNode(ctx, n, p, f, detail, scene.dimmed.has(id))) stats.animating = true
     stats.nodesDrawn++
+  }
+
+  // Stack labels, on the frames' top borders.
+  ctx.font = `600 ${labelPx}px ${FONT}`
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  for (const l of stackLabels) {
+    const w = ctx.measureText(l.text).width + 8
+    const h = labelPx + 4
+    ctx.globalAlpha = l.alpha
+    roundRect(ctx, l.x, l.y - h / 2, w, h, 4)
+    ctx.fillStyle = palette.bg
+    ctx.fill()
+    ctx.strokeStyle = STACK_FRAME.color
+    ctx.lineWidth = 1 / vp.scale
+    ctx.stroke()
+    ctx.fillStyle = STACK_FRAME.color
+    ctx.fillText(l.text, l.x + 4, l.y)
   }
   ctx.globalAlpha = 1
 

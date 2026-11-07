@@ -27,6 +27,7 @@ import {
   draftResolution,
   pickOption,
   answeredDecisions,
+  NONE,
   type Draft,
   sortDecisions,
   SOURCE_KIND_LABELS,
@@ -771,6 +772,19 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
                       aria-label={`Select all in ${s.label}`}
                     />
                     <span class="flex-1">{s.label}</span>
+                    <Show when={filters().groupBy === 'thread' && s.key !== NONE}>
+                      <button
+                        class="rounded border px-1.5 font-normal hover:bg-[var(--c-hover-bg)]"
+                        style={{ 'border-color': 'var(--c-border)', color: 'var(--c-text-muted)' }}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          props.onOpenThread(s.key)
+                        }}
+                        data-testid="forge-decisions-open-thread"
+                      >
+                        Open thread
+                      </button>
+                    </Show>
                     <span style={muted}>{s.items.length}</span>
                   </label>
                 </Show>

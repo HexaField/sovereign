@@ -1,12 +1,22 @@
 // The Kanban view of one graph panel: the cards kanbanCards sorts, in columns.
-// A click selects the node, which opens the panel's NodeCard.
+// A click selects the node, which opens the panel's NodeCard; a stack row or a
+// pair chip selects that PR instead.
 
 import { For, Show, type Component } from 'solid-js'
 import type { AgentOverlay } from '@sovereign/core'
 import { ReachBadge } from '../graphcoder/ReachBadge.js'
 import { categoryBadge } from './card-model.js'
-import { KANBAN_COLUMNS, type KanbanCard, type KanbanColumn } from './kanban-model.js'
-import { CHANGES_REQUESTED_RING, CI_COLORS, REVIEW_COLORS, reviewSummary, ringFor, ringLabel } from './style.js'
+import { KANBAN_COLUMNS, type KanbanCard, type KanbanColumn, type KanbanPair } from './kanban-model.js'
+import {
+  CHANGES_REQUESTED_RING,
+  CI_COLORS,
+  REVIEW_COLORS,
+  REVIEW_GLYPHS,
+  STATE_COLORS,
+  reviewSummary,
+  ringFor,
+  ringLabel
+} from './style.js'
 
 export interface KanbanBoardProps {
   columns: Map<KanbanColumn, KanbanCard[]>
@@ -23,26 +33,57 @@ const REVIEW_LABELS = {
   dismissed: 'dismissed'
 } as const
 
-const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: boolean; onSelect: () => void }> = (
-  props
-) => {
+/** Paired PRs as chips in their state's colour; a click selects the partner. */
+const Pairs: Component<{ pairs: KanbanPair[]; onSelect: (id: string) => void }> = (props) => (
+  <For each={props.pairs}>
+    {(p) => (
+      <button
+        class="rounded border px-1 leading-4 hover:bg-[var(--c-hover-bg)]"
+        style={{ color: STATE_COLORS[p.state], 'border-color': 'currentColor' }}
+        title={`Paired with ${p.label} (${p.state})`}
+        onClick={(e) => {
+          e.stopPropagation()
+          props.onSelect(p.id)
+        }}
+        data-testid="forge-kanban-pair"
+      >
+        ⇄ {p.label}
+      </button>
+    )}
+  </For>
+)
+
+const Card: Component<{
+  card: KanbanCard
+  overlay?: AgentOverlay
+  selectedId: string | null
+  onSelect: (id: string) => void
+}> = (props) => {
   const n = () => props.card.node
   const ring = () => ringFor(props.card.node, props.overlay)
   const review = () => reviewSummary(n())
   const ci = () => (n().ci ? CI_COLORS[n().ci!] : null)
   const category = () => categoryBadge(n())
+  // A div, not a button: the stack rows and pair chips inside are buttons of their own.
   return (
-    <button
-      class="w-full rounded border p-2 text-left text-xs hover:bg-[var(--c-hover-bg)]"
+    <div
+      role="button"
+      tabIndex={0}
+      class="w-full cursor-pointer rounded border p-2 text-left text-xs hover:bg-[var(--c-hover-bg)]"
       style={{
-        'border-color': props.selected ? 'var(--c-accent)' : 'var(--c-border)',
+        'border-color': props.selectedId === n().id ? 'var(--c-accent)' : 'var(--c-border)',
         background: 'var(--c-bg-raised, var(--c-bg))',
         color: 'var(--c-text)',
         'box-shadow': ring()?.color ? `inset 3px 0 0 ${ring()!.color}` : undefined,
         outline: ring()?.changesRequested ? `2px dotted ${CHANGES_REQUESTED_RING.color}` : undefined,
         'outline-offset': '1px'
       }}
-      onClick={() => props.onSelect()}
+      onClick={() => props.onSelect(n().id)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+        e.preventDefault()
+        props.onSelect(n().id)
+      }}
       title={ring() ? ringLabel(ring()!) : undefined}
       data-testid="forge-kanban-card"
       data-node={n().id}
@@ -79,8 +120,8 @@ const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: bool
         <Show when={n().branch?.conflict}>
           <span style={{ color: 'var(--c-error, #ef4444)' }}>conflict</span>
         </Show>
-        <Show when={props.card.stack > 1}>
-          <span data-testid="forge-kanban-stack">stack of {props.card.stack}</span>
+        <Show when={!props.card.stack.length}>
+          <Pairs pairs={props.card.pairs} onSelect={props.onSelect} />
         </Show>
         <Show when={props.card.closes.length}>
           <span>closes {props.card.closes.join(', ')}</span>
@@ -90,7 +131,62 @@ const Card: Component<{ card: KanbanCard; overlay?: AgentOverlay; selected: bool
         </Show>
         <ReachBadge structure={n().structure} />
       </div>
-    </button>
+      <Show when={props.card.stack.length}>
+        <div class="mt-1.5 flex flex-col border-t pt-1" style={{ 'border-color': 'var(--c-border)' }}>
+          <For each={props.card.stack}>
+            {(row) => {
+              const ci = () => (row.node.ci ? CI_COLORS[row.node.ci] : null)
+              const review = () => reviewSummary(row.node)
+              return (
+                <div
+                  class="flex flex-wrap items-center gap-x-1.5 rounded px-1 py-0.5 hover:bg-[var(--c-hover-bg)]"
+                  style={{
+                    background: props.selectedId === row.node.id ? 'var(--c-hover-bg)' : undefined
+                  }}
+                  data-testid="forge-kanban-stack-row"
+                  data-node={row.node.id}
+                >
+                  <button
+                    class="flex min-w-36 flex-1 items-center gap-1.5 text-left"
+                    title={`${row.position}/${props.card.stack.length} ${row.ref} ${row.node.title}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      props.onSelect(row.node.id)
+                    }}
+                  >
+                    <span class="w-6 shrink-0 text-right" style={{ color: 'var(--c-text-muted)' }}>
+                      {row.position}/{props.card.stack.length}
+                    </span>
+                    <span class="shrink-0" style={{ color: 'var(--c-text-muted)' }}>
+                      {row.ref}
+                    </span>
+                    <span class="min-w-0 flex-1 truncate">{row.node.title}</span>
+                    <Show when={row.node.state === 'draft'}>
+                      <span style={{ color: 'var(--c-text-muted)' }}>draft</span>
+                    </Show>
+                    <Show when={review()}>
+                      {(r) => (
+                        <span style={{ color: REVIEW_COLORS[r()] }} title={REVIEW_LABELS[r()]}>
+                          {REVIEW_GLYPHS[r()]}
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={ci()}>
+                      <span
+                        class="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: ci()! }}
+                        title={`CI ${row.node.ci}`}
+                      />
+                    </Show>
+                  </button>
+                  <Pairs pairs={row.pairs} onSelect={props.onSelect} />
+                </div>
+              )
+            }}
+          </For>
+        </div>
+      </Show>
+    </div>
   )
 }
 
@@ -125,8 +221,8 @@ const KanbanBoard: Component<KanbanBoardProps> = (props) => (
                   <Card
                     card={c}
                     overlay={props.overlays().get(c.node.id)}
-                    selected={props.selectedId() === c.node.id}
-                    onSelect={() => props.onSelect(c.node.id)}
+                    selectedId={props.selectedId()}
+                    onSelect={props.onSelect}
                   />
                 )}
               </For>

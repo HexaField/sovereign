@@ -152,6 +152,58 @@ describe('depends-on edges', () => {
   })
 })
 
+describe('stacks and pairs', () => {
+  const bottom = change(R, 20)
+  const top = change(R, 21, { state: 'draft' })
+  const mate = change('demo-org/app', 5)
+  const lone = change(R, 22)
+  const nodes = [bottom, top, mate, lone]
+  const layout = computeLayout({
+    nodes,
+    edges: [edge(top, bottom, 'base'), edge(bottom, mate, 'paired')],
+    workstreams: [],
+    now: NOW
+  })
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const draw = (visible: Set<string>, scale = 1) => {
+    const scene = buildScene(layout, byId, visible, new Set(), scale)
+    const p = layout.nodes.get(bottom.id)!
+    const rec = recordingContext()
+    const stats = drawFrame(rec.ctx, {
+      scene,
+      vp: { tx: 600 - p.x * scale, ty: 300 - p.y * scale, scale },
+      width: 1200,
+      height: 600,
+      dpr: 1,
+      palette: DEFAULT_PALETTE,
+      overlays: new Map(),
+      selectedId: null,
+      hoverId: null,
+      time: 0
+    })
+    return { stats, texts: rec.calls.filter((c) => c.name === 'fillText').map((c) => String(c.args[0])) }
+  }
+
+  it('frames a stack with two members on screen, labelled, and badges position and pairs at full detail', () => {
+    const { stats, texts } = draw(new Set(byId.keys()))
+    expect(stats.stacksDrawn).toBe(1)
+    expect(texts).toContain('stack · 2')
+    expect(texts).toContain('1/2')
+    expect(texts).toContain('2/2')
+    expect(texts).toContain('⇄ app#5')
+    expect(texts).toContain('⇄ engine#20')
+  })
+
+  it('labels the frame but drops the badges at compact detail, and frames nothing with one member shown', () => {
+    const compact = draw(new Set(byId.keys()), 0.5)
+    expect(compact.stats.stacksDrawn).toBe(1)
+    expect(compact.texts).toContain('stack · 2')
+    expect(compact.texts).not.toContain('1/2')
+    expect(compact.texts.some((t) => t.startsWith('⇄'))).toBe(false)
+    expect(draw(new Set([bottom.id, mate.id, lone.id])).stats.stacksDrawn).toBe(0)
+  })
+})
+
 describe('goal tree cards', () => {
   const p = plan('plans/auth.md')
   const inA = issue(R, 10, { workstreams: ['a'] })
