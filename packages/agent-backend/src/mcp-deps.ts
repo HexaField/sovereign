@@ -138,7 +138,11 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         for (const inst of routing.all()) {
           try {
             const list = await inst.backend.listSubagents(parentKey)
-            for (const s of list) out.push({ sessionKey: s.sessionKey, label: s.label, status: s.status, task: s.task })
+            // Live only: every subagent ever spawned stays registered as idle,
+            // and listing them all cost an agent ~270k characters per call.
+            for (const s of list)
+              if (s.status !== 'idle')
+                out.push({ sessionKey: s.sessionKey, label: s.label, status: s.status, task: s.task })
           } catch {
             /* ignore */
           }

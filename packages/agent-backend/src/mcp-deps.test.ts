@@ -37,6 +37,18 @@ describe('agents.spawn', () => {
   })
 })
 
+describe('agents.list', () => {
+  it('lists only live subagents, not the finished ones left idle', async () => {
+    const listSubagents = vi.fn(async () => [
+      { sessionKey: 'a', label: 'working one', status: 'working' },
+      { sessionKey: 'b', label: 'finished one', status: 'idle' }
+    ])
+    const deps = buildSovereignMcpDeps({ routing: { all: () => [{ backend: { listSubagents } }] } } as any)
+    expect(await deps.agents!.list('parent')).toEqual([{ sessionKey: 'a', label: 'working one', status: 'working' }])
+    expect(listSubagents).toHaveBeenCalledWith('parent')
+  })
+})
+
 describe('sessions.send', () => {
   // A thread's session key is its bare id: the chat module and the UI use that key.
   function sendSetup(registry: Record<string, string> = {}) {
