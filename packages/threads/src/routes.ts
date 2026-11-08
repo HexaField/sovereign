@@ -418,10 +418,14 @@ export function createThreadRoutes(
       subagentBackend: bodySubagentBackend,
       subagentModel: bodySubagentModel,
       model: bodyModel,
-      pinnedRepoPath: bodyPinnedRepoPath
+      pinnedRepoPath: bodyPinnedRepoPath,
+      pinned
     } = req.body
     if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
       return res.status(400).json({ error: 'label must be a non-empty string' })
+    }
+    if (pinned !== undefined && typeof pinned !== 'boolean') {
+      return res.status(400).json({ error: 'pinned must be a boolean' })
     }
     // Translate legacy `orgId` body field. Empty/`_global` → empty array
     // so a PATCH with `orgId: '_global'` actually moves a thread to global.
@@ -462,7 +466,8 @@ export function createThreadRoutes(
         ...(bodySubagentBackend !== undefined ? { subagentBackend: bodySubagentBackend ?? null } : {}),
         ...(bodySubagentModel !== undefined ? { subagentModel: bodySubagentModel ?? null } : {}),
         ...(bodyModel !== undefined ? { model: bodyModel ?? null } : {}),
-        ...(bodyPinnedRepoPath !== undefined ? { pinnedRepoPath: bodyPinnedRepoPath ?? null } : {})
+        ...(bodyPinnedRepoPath !== undefined ? { pinnedRepoPath: bodyPinnedRepoPath ?? null } : {}),
+        ...(pinned !== undefined ? { pinned } : {})
       })
     } catch (err) {
       return res.status(400).json({ error: (err as Error).message })

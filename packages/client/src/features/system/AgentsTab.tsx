@@ -3,7 +3,8 @@
 import { createSignal, onMount, onCleanup, For, Show, type Component } from 'solid-js'
 import { ClockIcon } from '../../ui/icons.js'
 import { createThreadActions } from '../threads/thread-actions.js'
-import { ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
+import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
+import { comparePins } from '../threads/thread-order.js'
 
 interface ActiveSession {
   key: string
@@ -22,6 +23,8 @@ interface Thread {
   kind?: string
   /** Set on the two presence threads, which cannot be deleted. */
   presence?: string
+  /** Set while pinned to the top. */
+  pinnedAt?: number | null
 }
 
 interface SessionMeta {
@@ -126,7 +129,8 @@ const AgentsTab: Component = () => {
       setThreads((prev) => prev.filter((t) => t.id !== id))
       void loadThreadsAndSessions()
     },
-    onRenamed: (id, label) => setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, label } : t)))
+    onRenamed: (id, label) => setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, label } : t))),
+    onPinned: (id, pinnedAt) => setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, pinnedAt } : t)))
   })
 
   const loadThreadsAndSessions = async () => {
@@ -192,8 +196,10 @@ const AgentsTab: Component = () => {
       active: aMap.get(t.id) ?? null,
       meta: metaMap().get(t.id) ?? null
     }))
-    // Sort: working first, then thinking, then by lastActivity desc
+    // Sort: pinned first (the shared thread-list order), then working, then thinking, then by lastActivity desc
     return all.sort((a, b) => {
+      const pins = comparePins(a.thread, b.thread)
+      if (pins !== 0) return pins
       const order = (row: AgentRow) => {
         if (row.active?.agentStatus === 'working') return 0
         if (row.active?.agentStatus === 'thinking') return 1
@@ -297,9 +303,12 @@ const AgentsTab: Component = () => {
                       <Show
                         when={actions.isRenaming(t.id)}
                         fallback={
-                          <span class="truncate font-medium" style={{ color: 'var(--c-text)' }}>
-                            {label}
-                          </span>
+                          <>
+                            <span class="truncate font-medium" style={{ color: 'var(--c-text)' }}>
+                              {label}
+                            </span>
+                            <PinMark thread={t} />
+                          </>
                         }
                       >
                         <span class="min-w-0 flex-1">

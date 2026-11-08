@@ -87,6 +87,10 @@ export interface ThreadManager {
       subagentModel?: string | null
       /** Set the thread's preferred model; `null` to clear. */
       model?: string | null
+      /** Set the thread's preferred repo for the diff panel; `null` to clear. */
+      pinnedRepoPath?: string | null
+      /** Pin the thread to the top of the thread lists (`pinnedAt` = now), or unpin it. */
+      pinned?: boolean
     }
   ): ThreadInfo | undefined
   /** Returns the single thread carrying the given presence role, or null when

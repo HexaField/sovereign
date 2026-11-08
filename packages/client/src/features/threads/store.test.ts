@@ -44,6 +44,7 @@ import {
   addEntity,
   removeEntity,
   renameThread,
+  pinThread,
   deleteThread,
   initThreadStore,
   _triggerPopstate
@@ -311,6 +312,55 @@ describe('renameThread', () => {
   })
 })
 
+describe('pinThread', () => {
+  it('pins at once, PATCHes { pinned: true } and keeps the server pinnedAt', async () => {
+    setThreads([makeThread({ id: 't1' })])
+    let resolve!: (v: unknown) => void
+    mockFetch.mockReturnValueOnce(new Promise((r) => (resolve = r)))
+    const done = pinThread('t1', true)
+    // Optimistic: pinned before the server answers.
+    expect(threads()[0].pinnedAt).toBeGreaterThan(0)
+    resolve({ ok: true, json: () => Promise.resolve({ thread: makeThread({ id: 't1', pinnedAt: 1234 }) }) })
+    await expect(done).resolves.toBe(1234)
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads/t1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pinned: true }) })
+    )
+    expect(threads()[0].pinnedAt).toBe(1234)
+  })
+
+  it('unpins at once and PATCHes { pinned: false }', async () => {
+    setThreads([makeThread({ id: 't1', pinnedAt: 99 })])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ thread: makeThread({ id: 't1' }) }) })
+    const done = pinThread('t1', false)
+    expect(threads()[0].pinnedAt).toBeUndefined()
+    await expect(done).resolves.toBeUndefined()
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads/t1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pinned: false }) })
+    )
+    expect(threads()[0].pinnedAt).toBeUndefined()
+  })
+
+  it('reverts a pin the server refuses and throws its error', async () => {
+    setThreads([makeThread({ id: 't1' })])
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ error: 'Thread not found' })
+    })
+    await expect(pinThread('t1', true)).rejects.toThrow('Thread not found')
+    expect(threads()[0].pinnedAt).toBeUndefined()
+  })
+
+  it('reverts an unpin when the request fails, keeping the original pinnedAt', async () => {
+    setThreads([makeThread({ id: 't1', pinnedAt: 42 })])
+    mockFetch.mockRejectedValueOnce(new Error('offline'))
+    await expect(pinThread('t1', false)).rejects.toThrow('offline')
+    expect(threads()[0].pinnedAt).toBe(42)
+  })
+})
+
 describe('deleteThread', () => {
   it('removes a background thread without changing the open one', async () => {
     setThreads([makeThread({ id: 'main' }), makeThread({ id: 't2' })])
@@ -427,6 +477,19 @@ describe('initThreadStore', () => {
     setThreads([mockThread('t1')])
     ws._emit('thread.updated', { payload: { thread: { ...mockThread('t1'), unreadCount: 5 } } })
     expect(threads().find((t) => t.id === 't1')?.unreadCount).toBe(5)
+    cleanup()
+  })
+
+  it('applies pin changes from thread.updated WS events (null pinnedAt = unpinned)', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    setThreads([mockThread('t1')])
+    ws._emit('thread.updated', { payload: { threadId: 't1', patch: { pinnedAt: 500 } } })
+    expect(threads()[0].pinnedAt).toBe(500)
+    ws._emit('thread.updated', { payload: { threadId: 't1', patch: { pinnedAt: null } } })
+    expect(threads()[0].pinnedAt).toBeUndefined()
     cleanup()
   })
 

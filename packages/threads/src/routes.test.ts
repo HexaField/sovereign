@@ -503,3 +503,99 @@ describe('Thread Routes — rename and delete', () => {
     expect((await request(app).delete('/api/threads/nope')).status).toBe(404)
   })
 })
+
+describe('Thread Routes — pin to top', () => {
+  let dataDir: string
+  let app: ReturnType<typeof express>
+  let tm: ThreadManager
+  let bus: ReturnType<typeof createEventBus>
+
+  function mount(manager: ThreadManager): ReturnType<typeof express> {
+    const a = express()
+    a.use(express.json())
+    a.use(createThreadRoutes(manager, forwardHandler as any, { backend: createStubBackend() }))
+    return a
+  }
+
+  beforeEach(() => {
+    dataDir = makeTmpDir()
+    bus = createEventBus(dataDir)
+    tm = createThreadManager(bus, dataDir)
+    app = mount(tm)
+  })
+
+  it('PATCH { pinned: true } stamps pinnedAt, and GET /api/threads carries it', async () => {
+    const thread = tm.create({ label: 'a' })
+    const before = Date.now()
+    const res = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    expect(res.status).toBe(200)
+    expect(res.body.thread.pinnedAt).toBeGreaterThanOrEqual(before)
+    const list = await request(app).get('/api/threads')
+    const listed = list.body.threads.find((t: { id: string }) => t.id === thread.id)
+    expect(listed.pinnedAt).toBe(res.body.thread.pinnedAt)
+  })
+
+  it('PATCH { pinned: false } clears pinnedAt', async () => {
+    const thread = tm.create({ label: 'a' })
+    await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    const res = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: false })
+    expect(res.status).toBe(200)
+    expect(res.body.thread.pinnedAt).toBeUndefined()
+    expect(tm.get(thread.id)?.pinnedAt).toBeUndefined()
+  })
+
+  it('pinning an already pinned thread keeps its original pinnedAt', async () => {
+    const thread = tm.create({ label: 'a' })
+    const first = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    await new Promise((r) => setTimeout(r, 5))
+    const again = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    expect(again.body.thread.pinnedAt).toBe(first.body.thread.pinnedAt)
+  })
+
+  it('a pin-only PATCH does not touch lastActivity', async () => {
+    const thread = tm.create({ label: 'a' })
+    thread.lastActivity = 1_000
+    await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    expect(tm.get(thread.id)?.lastActivity).toBe(1_000)
+  })
+
+  it('rejects a non-boolean pinned with 400 and leaves the thread alone', async () => {
+    const thread = tm.create({ label: 'a' })
+    for (const pinned of ['yes', 1, null, {}]) {
+      const res = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned })
+      expect(res.status).toBe(400)
+      expect(res.body.error).toBe('pinned must be a boolean')
+    }
+    expect(tm.get(thread.id)?.pinnedAt).toBeUndefined()
+  })
+
+  it('returns 404 for an unknown thread', async () => {
+    expect((await request(app).patch('/api/threads/nope').send({ pinned: true })).status).toBe(404)
+  })
+
+  it('a pin survives a reload of the thread store', async () => {
+    const pinned = tm.create({ label: 'a' })
+    const plain = tm.create({ label: 'b' })
+    const res = await request(app).patch(`/api/threads/${pinned.id}`).send({ pinned: true })
+    const reloaded = createThreadManager(createEventBus(dataDir), dataDir)
+    expect(reloaded.get(pinned.id)?.pinnedAt).toBe(res.body.thread.pinnedAt)
+    expect(reloaded.get(plain.id)?.pinnedAt).toBeUndefined()
+    const list = await request(mount(reloaded)).get('/api/threads')
+    const listed = list.body.threads.find((t: { id: string }) => t.id === pinned.id)
+    expect(listed.pinnedAt).toBe(res.body.thread.pinnedAt)
+  })
+
+  it('broadcasts the pin as pinnedAt in the thread.updated patch (null once unpinned)', async () => {
+    const patches: Array<Record<string, unknown>> = []
+    bus.on('thread.updated', (e) => {
+      patches.push((e.payload as { patch: Record<string, unknown> }).patch)
+    })
+    const thread = tm.create({ label: 'a' })
+    await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: false })
+    expect(patches).toHaveLength(2)
+    expect(typeof patches[0].pinnedAt).toBe('number')
+    expect(patches[0]).not.toHaveProperty('pinned')
+    expect(patches[1].pinnedAt).toBeNull()
+  })
+})

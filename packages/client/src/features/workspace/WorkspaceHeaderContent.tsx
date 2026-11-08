@@ -4,7 +4,8 @@ import { formatRelativeTime } from '../../lib/format.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from './store.js'
 import { threadKey, switchThread, threads, createThread, moveThread, renameThread } from '../threads/store.js'
 import { createThreadActions } from '../threads/thread-actions.js'
-import { ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
+import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
+import { sortThreads } from '../threads/thread-order.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
@@ -685,11 +686,7 @@ export function WorkspaceHeaderContent() {
             }}
           >
             <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="thread-picker-list">
-              <For
-                each={threads()
-                  .filter((t) => t.id)
-                  .sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}
-              >
+              <For each={sortThreads(threads().filter((t) => t.id))}>
                 {(t) => (
                   <>
                     <div
@@ -725,6 +722,7 @@ export function WorkspaceHeaderContent() {
                               <span class="text-xs">●</span>
                             </Show>
                             <span class="truncate">{t.label ?? t.id}</span>
+                            <PinMark thread={t} />
                             <Show when={t.lastActivity}>
                               <span class="ml-auto shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
                                 {t.lastActivity ? formatRelativeTime(t.lastActivity, nowTick()) : ''}

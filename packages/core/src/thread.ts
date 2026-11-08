@@ -86,6 +86,10 @@ export interface ThreadInfo {
   /** Absolute repo path pinned to this thread. The diff panel shows only
    *  this repo and auto-selects it. Unset = show all repos. */
   pinnedRepoPath?: string
+  /** When the user pinned this thread to the top of the thread lists (ms).
+   *  Pinned threads list first, most recently pinned first. Unset = not pinned.
+   *  Unrelated to `pinnedRepoPath`. Set via PATCH /api/threads/:key `{ pinned }`. */
+  pinnedAt?: number
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus

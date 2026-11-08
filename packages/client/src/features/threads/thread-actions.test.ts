@@ -130,4 +130,41 @@ describe('createThreadActions', () => {
     expect(store.threads().map((t) => t.id)).toEqual(['keep'])
     vi.unstubAllGlobals()
   })
+
+  it('Pin to top closes the menu, pins and reports the new pinnedAt', async () => {
+    const pin = vi.fn().mockResolvedValue(777)
+    const onPinned = vi.fn()
+    const a = createThreadActions({ remove: vi.fn(), rename: vi.fn(), pin, onPinned })
+    a.openMenu('t1')
+    await expect(a.togglePin('t1', true)).resolves.toBe(true)
+    expect(pin).toHaveBeenCalledWith('t1', true)
+    expect(onPinned).toHaveBeenCalledWith('t1', 777)
+    expect(a.menuKey()).toBeNull()
+  })
+
+  it('Unpin reports an unset pinnedAt', async () => {
+    const onPinned = vi.fn()
+    const a = createThreadActions({
+      remove: vi.fn(),
+      rename: vi.fn(),
+      pin: vi.fn().mockResolvedValue(undefined),
+      onPinned
+    })
+    await a.togglePin('t1', false)
+    expect(onPinned).toHaveBeenCalledWith('t1', undefined)
+  })
+
+  it('a failed pin reopens the menu with the error and reports nothing', async () => {
+    const onPinned = vi.fn()
+    const a = createThreadActions({
+      remove: vi.fn(),
+      rename: vi.fn(),
+      pin: vi.fn().mockRejectedValue(new Error('Thread not found')),
+      onPinned
+    })
+    await expect(a.togglePin('t1', true)).resolves.toBe(false)
+    expect(a.isMenuOpen('t1')).toBe(true)
+    expect(a.error()).toBe('Thread not found')
+    expect(onPinned).not.toHaveBeenCalled()
+  })
 })

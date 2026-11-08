@@ -88,6 +88,7 @@ function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
     subagentModel: typeof raw.subagentModel === 'string' ? raw.subagentModel : undefined,
     model: typeof raw.model === 'string' ? raw.model : undefined,
     pinnedRepoPath: typeof raw.pinnedRepoPath === 'string' ? raw.pinnedRepoPath : undefined,
+    pinnedAt: typeof raw.pinnedAt === 'number' && raw.pinnedAt > 0 ? raw.pinnedAt : undefined,
     // Migrate legacy `presence: true` (boolean) → `presence: 'internal'`.
     // String roles pass through untouched; anything else is dropped.
     presence:
@@ -292,10 +293,19 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       subagentModel?: string | null
       model?: string | null
       pinnedRepoPath?: string | null
+      pinned?: boolean
     }
   ): ThreadInfo | undefined {
     const thread = threads.get(id)
     if (!thread) return undefined
+    const { pinned, ...rest } = patch
+    // Pinning is not activity: a pin-only patch leaves `lastActivity` alone, so
+    // unpinning drops the thread back where its activity puts it.
+    const pinOnly = pinned !== undefined && Object.values(rest).every((v) => v === undefined)
+    if (pinned !== undefined) {
+      if (!pinned) delete thread.pinnedAt
+      else if (!thread.pinnedAt) thread.pinnedAt = Date.now()
+    }
     if (patch.label !== undefined) thread.label = patch.label
     if (patch.membraneId !== undefined) thread.membraneId = patch.membraneId
     if (patch.workspaceIds !== undefined) thread.workspaceIds = patch.workspaceIds
@@ -330,13 +340,15 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
         thread.presence = role
       }
     }
-    thread.lastActivity = Date.now()
+    if (!pinOnly) thread.lastActivity = Date.now()
     persistThreadsImmediate()
     bus.emit({
       type: 'thread.updated',
       timestamp: new Date().toISOString(),
       source: 'threads',
-      payload: { threadId: id, patch }
+      // Clients merge the patch into their thread, so a pin change goes out as
+      // the stored field: `pinnedAt` (null once unpinned).
+      payload: { threadId: id, patch: pinned === undefined ? rest : { ...rest, pinnedAt: thread.pinnedAt ?? null } }
     })
     return thread
   }

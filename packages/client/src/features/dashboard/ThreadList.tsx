@@ -3,7 +3,8 @@ import { wsStore } from '../../ws/index.js'
 import { threadKey, setThreadKey } from '../threads/store.js'
 import { closeDashboardModal } from '../nav/store.js'
 import { createThreadActions } from '../threads/thread-actions.js'
-import { ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
+import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
+import { sortThreads } from '../threads/thread-order.js'
 
 interface ThreadEntry {
   id: string
@@ -14,6 +15,8 @@ interface ThreadEntry {
   archived: boolean
   /** Set on the two presence threads, which cannot be deleted. */
   presence?: string
+  /** Set while pinned to the top; `null` after an unpin broadcast. */
+  pinnedAt?: number | null
 }
 
 interface MembraneMeta {
@@ -58,6 +61,11 @@ export function removeThread(list: ThreadEntry[], id: string): ThreadEntry[] {
   return list.filter((t) => t.id !== id)
 }
 
+/** Apply a successful pin or unpin to the list. */
+export function pinInList(list: ThreadEntry[], id: string, pinnedAt: number | undefined): ThreadEntry[] {
+  return list.map((t) => (t.id === id ? { ...t, pinnedAt } : t))
+}
+
 /** Apply a successful rename to the list. */
 export function renameInList(list: ThreadEntry[], id: string, label: string): ThreadEntry[] {
   return list.map((t) => (t.id === id ? { ...t, label } : t))
@@ -77,7 +85,8 @@ export default function ThreadList() {
   // moves the open thread elsewhere when it is the one deleted.
   const actions = createThreadActions({
     onDeleted: (id) => setThreads((prev) => removeThread(prev, id)),
-    onRenamed: (id, label) => setThreads((prev) => renameInList(prev, id, label))
+    onRenamed: (id, label) => setThreads((prev) => renameInList(prev, id, label)),
+    onPinned: (id, pinnedAt) => setThreads((prev) => pinInList(prev, id, pinnedAt))
   })
 
   const membraneMap = createMemo(() => {
@@ -99,7 +108,7 @@ export default function ThreadList() {
         )
       })
     }
-    return list.sort((a, b) => b.lastActivity - a.lastActivity)
+    return sortThreads(list)
   })
 
   async function loadThreads() {
@@ -141,9 +150,7 @@ export default function ThreadList() {
 
   onMount(() => {
     loadThreads().then(() => {
-      const ids = threads()
-        .filter((t) => !t.archived)
-        .sort((a, b) => b.lastActivity - a.lastActivity)
+      const ids = sortThreads(threads().filter((t) => !t.archived))
         .slice(0, 30)
         .map((t) => t.id)
       if (ids.length) loadPreviews(ids)
@@ -269,7 +276,12 @@ export default function ThreadList() {
                           <Show
                             when={actions.isRenaming(thread.id)}
                             fallback={
-                              <span class="truncate text-xs font-medium">{thread.label || thread.id.slice(0, 8)}</span>
+                              <>
+                                <span class="truncate text-xs font-medium">
+                                  {thread.label || thread.id.slice(0, 8)}
+                                </span>
+                                <PinMark thread={thread} />
+                              </>
                             }
                           >
                             <ThreadRenameInput

@@ -1,5 +1,5 @@
 // Thread actions UI shared by every thread list: the "⋯" button, the inline
-// Rename / Delete menu (with delete confirmation), and the inline rename field.
+// Pin / Rename / Archive menu (with delete confirmation), and the inline rename field.
 // State lives in a `createThreadActions()` controller (thread-actions.ts).
 //
 // Usage in a list row:
@@ -13,11 +13,26 @@
 
 import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js'
 import type { ThreadActions } from './thread-actions.js'
+import { isPinned } from './thread-order.js'
+
+/** The thread fields the menu reads. */
+type MenuThread = { id: string; presence?: unknown; pinnedAt?: number | null }
+
+/** The 📌 shown next to a pinned thread's name in every list. */
+export function PinMark(props: { thread: { pinnedAt?: number | null }; class?: string }) {
+  return (
+    <Show when={isPinned(props.thread)}>
+      <span class={props.class ?? "shrink-0 text-[10px] leading-none"} title="Pinned" aria-label="Pinned" role="img">
+        📌
+      </span>
+    </Show>
+  )
+}
 
 /** Marks the ⋯ buttons (`data-thread-actions-button`), so a press on one does not count as a click outside an open menu. */
 const BUTTON_ATTR = 'data-thread-actions-button'
 
-/** The "⋯" button that opens a thread's Rename / Delete menu. */
+/** The "⋯" button that opens a thread's Pin / Rename / Archive menu. */
 export function ThreadActionsButton(props: {
   actions: ThreadActions
   threadId: string
@@ -35,7 +50,7 @@ export function ThreadActionsButton(props: {
         "shrink-0 cursor-pointer rounded border-none bg-transparent px-2 py-1 text-sm font-bold opacity-70 transition-opacity hover:!opacity-100"
       }
       style={{ color: 'var(--c-text-muted)', ...props.style }}
-      title="Rename or delete"
+      title="Pin, rename or archive"
       aria-label="Thread actions"
       aria-haspopup="menu"
       aria-expanded={props.actions.isMenuOpen(props.threadId)}
@@ -51,12 +66,8 @@ export function ThreadActionsButton(props: {
   )
 }
 
-/** The inline Rename / Delete menu for one thread; renders only while that thread's menu is open. */
-export function ThreadActionsMenu(props: {
-  actions: ThreadActions
-  thread: { id: string; presence?: unknown }
-  class?: string
-}) {
+/** The inline Pin / Rename / Archive menu for one thread; renders only while that thread's menu is open. */
+export function ThreadActionsMenu(props: { actions: ThreadActions; thread: MenuThread; class?: string }) {
   return (
     <Show when={props.actions.isMenuOpen(props.thread.id)}>
       <MenuPanel actions={props.actions} thread={props.thread} class={props.class} />
@@ -64,7 +75,7 @@ export function ThreadActionsMenu(props: {
   )
 }
 
-function MenuPanel(props: { actions: ThreadActions; thread: { id: string; presence?: unknown }; class?: string }) {
+function MenuPanel(props: { actions: ThreadActions; thread: MenuThread; class?: string }) {
   let panel: HTMLDivElement | undefined
   const id = () => props.thread.id
 
@@ -110,6 +121,16 @@ function MenuPanel(props: { actions: ThreadActions; thread: { id: string; presen
         when={props.actions.isConfirming(id())}
         fallback={
           <>
+            <button
+              type="button"
+              role="menuitem"
+              class={itemClass}
+              style={{ color: 'var(--c-text)' }}
+              {...hover}
+              onClick={() => void props.actions.togglePin(id(), !isPinned(props.thread))}
+            >
+              {isPinned(props.thread) ? 'Unpin' : 'Pin to top'}
+            </button>
             <button
               type="button"
               role="menuitem"

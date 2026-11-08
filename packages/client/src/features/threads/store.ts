@@ -152,6 +152,34 @@ export async function renameThread(key: string, label: string): Promise<void> {
   setThreads((prev) => prev.map((t) => (t.id === key ? { ...t, label: updated.label } : t)))
 }
 
+/**
+ * Pin a thread to the top of the thread lists, or unpin it. Applies at once
+ * and reverts if the server refuses. The server's `pinnedAt` replaces the
+ * optimistic one, so every list orders the pins alike. Resolves to the new `pinnedAt`.
+ */
+export async function pinThread(key: string, pinned: boolean): Promise<number | undefined> {
+  const previous = threads().find((t) => t.id === key)?.pinnedAt
+  const setPinnedAt = (pinnedAt: number | undefined) =>
+    setThreads((prev) => prev.map((t) => (t.id === key ? { ...t, pinnedAt } : t)))
+  setPinnedAt(pinned ? (previous ?? Date.now()) : undefined)
+  try {
+    const res = await fetch(`/api/threads/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned })
+    })
+    const data: any = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error ?? `${pinned ? 'Pin' : 'Unpin'} failed (${res.status})`)
+    const updated = data.thread as ThreadInfo | undefined
+    const pinnedAt = updated ? (updated.pinnedAt ?? undefined) : pinned ? (previous ?? Date.now()) : undefined
+    setPinnedAt(pinnedAt)
+    return pinnedAt
+  } catch (err) {
+    setPinnedAt(previous)
+    throw err
+  }
+}
+
 /** Archive a thread — a soft delete: the server flags it archived and its
  *  history is kept. If it was open, the most recently active remaining thread opens instead. */
 export async function deleteThread(key: string): Promise<void> {
@@ -240,7 +268,9 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
         const p = msg?.payload ?? msg
         const id = p?.thread?.id ?? p?.threadId ?? p?.id
         if (!id) return
-        const patch = p?.patch ?? p?.thread ?? p
+        const patch = { ...(p?.patch ?? p?.thread ?? p) }
+        // An unpin arrives as `pinnedAt: null`; store it as unset.
+        if (patch.pinnedAt === null) patch.pinnedAt = undefined
         setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
       })
     )
