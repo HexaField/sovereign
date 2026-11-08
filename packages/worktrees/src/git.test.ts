@@ -3,7 +3,15 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { worktreeAdd, worktreeRemove, worktreeList, isBranchMerged, deleteBranch, getLastCommitDate } from './git.js'
+import {
+  worktreeAdd,
+  worktreeAddDetached,
+  worktreeRemove,
+  worktreeList,
+  isBranchMerged,
+  deleteBranch,
+  getLastCommitDate
+} from './git.js'
 
 let tmpDir: string
 let repoPath: string
@@ -37,6 +45,17 @@ describe('Worktree Git Wrapper', () => {
     expect(fs.existsSync(wtPath)).toBe(true)
     const branch = git(wtPath, 'branch', '--show-current')
     expect(branch).toBe('feat-1')
+  })
+
+  it('checks a ref out detached, creating no branch', async () => {
+    const first = git(repoPath, 'rev-parse', 'HEAD')
+    git(repoPath, 'commit', '--allow-empty', '-m', 'second')
+    const wtPath = path.join(tmpDir, 'wt-detached')
+    await worktreeAddDetached(repoPath, wtPath, first)
+    expect(git(wtPath, 'rev-parse', 'HEAD')).toBe(first)
+    expect(git(wtPath, 'branch', '--show-current')).toBe('')
+    expect(git(repoPath, 'branch', '--format=%(refname:short)')).toBe('main')
+    expect((await worktreeList(repoPath)).find((w) => w.worktree === fs.realpathSync(wtPath))?.detached).toBe(true)
   })
 
   it('executes git worktree remove', async () => {

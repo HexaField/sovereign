@@ -182,49 +182,109 @@ describe('claude-code/mcp-server', () => {
     })
   })
 
-  describe('ci_watch', () => {
-    function ciDeps() {
-      const ci = {
+  describe('pr_watch', () => {
+    function prDeps() {
+      const prWatch = {
         watch: vi.fn().mockResolvedValue({ watch: { id: 'w-1' } }),
         list: vi.fn().mockReturnValue([{ id: 'w-1' }]),
         unwatch: vi.fn().mockReturnValue(true)
       }
-      return { ci, tools: getTools(makeDeps({ ci, currentSessionKey: () => 'agent:main:thread:neural-nets' })) }
+      return {
+        prWatch,
+        tools: getTools(makeDeps({ prWatch, currentSessionKey: () => 'agent:main:thread:neural-nets' }))
+      }
+    }
+    /** The tool's input schema, as the MCP transport validates a call against it. */
+    const parse = (tools: Record<string, any>, args: Record<string, unknown>) => {
+      const schema = tools.pr_watch.inputSchema
+      return schema.safeParse(args).success as boolean
     }
 
-    it('watches a PR for the calling thread', async () => {
-      const { ci, tools } = ciDeps()
-      await invoke(tools, 'ci_watch', { repo: 'coasys/ad4m', pr: 1193, checks: ['integration-tests-js'] })
-      expect(ci.watch).toHaveBeenCalledWith(
+    it('watches a PR for the calling thread, CI only by default', async () => {
+      const { prWatch, tools } = prDeps()
+      await invoke(tools, 'pr_watch', { repo: 'coasys/ad4m', pr: 1193, checks: ['integration-tests-js'] })
+      expect(prWatch.watch).toHaveBeenCalledWith(
         expect.objectContaining({
           threadKey: 'neural-nets',
           repo: 'coasys/ad4m',
           target: { kind: 'pr', number: 1193 },
+          events: ['ci'],
           checks: ['integration-tests-js']
         })
       )
     })
 
+    it('passes the events through, without duplicates', async () => {
+      const { prWatch, tools } = prDeps()
+      await invoke(tools, 'pr_watch', { repo: 'o/r', pr: 7, events: ['ci', 'comments', 'reviews', 'comments'] })
+      expect(prWatch.watch.mock.calls[0][0].events).toEqual(['ci', 'comments', 'reviews'])
+    })
+
     it('needs exactly one of pr, branch, sha', async () => {
-      const { ci, tools } = ciDeps()
-      await expect(invoke(tools, 'ci_watch', { repo: 'o/r' })).rejects.toThrow(/exactly one/)
-      await expect(invoke(tools, 'ci_watch', { repo: 'o/r', pr: 1, sha: 'abc' })).rejects.toThrow(/exactly one/)
-      await invoke(tools, 'ci_watch', { repo: 'o/r', branch: 'dev' })
-      expect(ci.watch.mock.calls[0][0].target).toEqual({ kind: 'branch', name: 'dev' })
+      const { prWatch, tools } = prDeps()
+      await expect(invoke(tools, 'pr_watch', { repo: 'o/r' })).rejects.toThrow(/exactly one/)
+      await expect(invoke(tools, 'pr_watch', { repo: 'o/r', pr: 1, sha: 'abc' })).rejects.toThrow(/exactly one/)
+      await invoke(tools, 'pr_watch', { repo: 'o/r', branch: 'dev' })
+      expect(prWatch.watch.mock.calls[0][0].target).toEqual({ kind: 'branch', name: 'dev' })
+    })
+
+    it('refuses comments, reviews or state on a branch or sha, and a long ci-only timeout', async () => {
+      const { prWatch, tools } = prDeps()
+      await expect(invoke(tools, 'pr_watch', { repo: 'o/r', branch: 'dev', events: ['comments'] })).rejects.toThrow(
+        /need a pr/
+      )
+      await expect(invoke(tools, 'pr_watch', { repo: 'o/r', sha: 'abcdef1', events: ['ci', 'state'] })).rejects.toThrow(
+        /need a pr/
+      )
+      await expect(invoke(tools, 'pr_watch', { repo: 'o/r', pr: 1, timeoutMinutes: 3000 })).rejects.toThrow(
+        /at most 2880/
+      )
+      await invoke(tools, 'pr_watch', { repo: 'o/r', pr: 1, events: ['reviews'], timeoutMinutes: 20160 })
+      expect(prWatch.watch).toHaveBeenCalledTimes(1)
+    })
+
+    it('validates the input schema: known events only, at least one, timeout up to 14 days', () => {
+      const { tools } = prDeps()
+      expect(parse(tools, { repo: 'o/r', pr: 1, events: ['ci', 'comments', 'reviews', 'state'] })).toBe(true)
+      expect(parse(tools, { repo: 'o/r', pr: 1, events: ['pushes'] })).toBe(false)
+      expect(parse(tools, { repo: 'o/r', pr: 1, events: [] })).toBe(false)
+      expect(parse(tools, { repo: 'o/r', pr: 1, timeoutMinutes: 20160 })).toBe(true)
+      expect(parse(tools, { repo: 'o/r', pr: 1, timeoutMinutes: 20161 })).toBe(false)
+      expect(parse(tools, { repo: 'o/r', pr: 0 })).toBe(false)
+    })
+
+    it('describes events, trust, own login, batching, lifetimes and the after-push habit', () => {
+      const { tools } = prDeps()
+      const d: string = (tools.pr_watch as unknown as { description: string }).description
+      for (const s of [
+        'ci:',
+        'comments:',
+        'reviews:',
+        'state:',
+        '(untrusted), not read',
+        'own GitHub login',
+        '60 s',
+        '5 minutes',
+        '14 days',
+        'After pushing a PR, call pr_watch with events ["ci","comments","reviews"] and end your turn; do not schedule crons for reviews.'
+      ])
+        expect(d).toContain(s)
     })
 
     it('lists the calling thread by default, every thread with all=true, and unwatches', async () => {
-      const { ci, tools } = ciDeps()
-      await invoke(tools, 'ci_watch_list', {})
-      await invoke(tools, 'ci_watch_list', { all: true })
-      expect(ci.list.mock.calls).toEqual([['neural-nets'], [undefined]])
-      await invoke(tools, 'ci_unwatch', { id: 'w-1' })
-      expect(ci.unwatch).toHaveBeenCalledWith('w-1')
+      const { prWatch, tools } = prDeps()
+      await invoke(tools, 'pr_watch_list', {})
+      await invoke(tools, 'pr_watch_list', { all: true })
+      expect(prWatch.list.mock.calls).toEqual([['neural-nets'], [undefined]])
+      await invoke(tools, 'pr_unwatch', { id: 'w-1' })
+      expect(prWatch.unwatch).toHaveBeenCalledWith('w-1')
     })
 
-    it('registers no ci_* tools until the watcher is bound', () => {
-      const tools = getTools(makeDeps({ ci: {} }))
-      expect(Object.keys(tools).filter((n) => n.startsWith('ci_'))).toEqual([])
+    it('registers no pr_* tools until the watcher is bound, and no ci_* tools at all', () => {
+      expect(Object.keys(getTools(makeDeps({ prWatch: {} }))).filter((n) => n.startsWith('pr_'))).toEqual([])
+      const bound = Object.keys(prDeps().tools)
+      expect(bound.filter((n) => n.startsWith('pr_')).sort()).toEqual(['pr_unwatch', 'pr_watch', 'pr_watch_list'])
+      expect(bound.filter((n) => n.startsWith('ci_'))).toEqual([])
     })
   })
 
@@ -464,6 +524,35 @@ describe('claude-code/mcp-server', () => {
       expect((parseResult(result) as any).sessionKey).toBe('abc')
     })
 
+    it('passes the harness and its model through', async () => {
+      const deps = makeDeps()
+      await invoke(getTools(deps), 'agents_spawn', {
+        task: 'fix the bug',
+        cwd: '/repo',
+        harness: 'devin',
+        model: 'swe-2-medium'
+      })
+      expect(deps.agents.spawn).toHaveBeenCalledWith('agent:main:thread:t1', {
+        task: 'fix the bug',
+        cwd: '/repo',
+        harness: 'devin',
+        model: 'swe-2-medium'
+      })
+    })
+
+    it('lists the configured harness profiles in its description', () => {
+      const deps = makeDeps()
+      deps.agents.harnesses = () => [
+        'claude: Claude Code, cloud, MCP yes',
+        'pi: pi, model q, endpoint s (local), MCP no'
+      ]
+      const d: string = (getTools(deps).agents_spawn as unknown as { description: string }).description
+      expect(d).toContain(
+        'Harness profiles (`harness`):\n- claude: Claude Code, cloud, MCP yes\n- pi: pi, model q, endpoint s (local), MCP no'
+      )
+      expect(d).not.toMatch(/executor/)
+    })
+
     it('throws without a calling session', async () => {
       const deps = makeDeps({ currentSessionKey: () => undefined })
       await expect(invoke(getTools(deps), 'agents_spawn', { task: 'x' })).rejects.toThrow(/no calling session/)
@@ -642,6 +731,87 @@ describe('claude-code/mcp-server', () => {
       const result = await invoke(tools, 'read_meeting', { orgId: 'atlas', meetingId: 'm-gone' })
       expect(result.content[0].text).toContain('not found')
       expect(result.content[0].text).toContain('m-gone')
+    })
+  })
+
+  describe('task tools', () => {
+    function taskDeps() {
+      return {
+        create: vi.fn().mockResolvedValue({ id: 'task://1', name: 'n', state: 'pending', threadId: null }),
+        update: vi.fn().mockResolvedValue({}),
+        get: vi.fn().mockResolvedValue(null),
+        list: vi.fn().mockResolvedValue([]),
+        link: vi.fn().mockResolvedValue(undefined),
+        unlink: vi.fn().mockResolvedValue(undefined),
+        summary: vi.fn().mockResolvedValue({}),
+        importItem: vi.fn().mockResolvedValue({ task: { id: 'task://1' }, created: true })
+      }
+    }
+
+    it('offers task_import instead of task_import_pr', () => {
+      const names = Object.keys(getTools(makeDeps({ tasks: taskDeps() })))
+      expect(names).toContain('task_import')
+      expect(names).not.toContain('task_import_pr')
+    })
+
+    it('task_import forwards a refKey, a URL or a plan with the calling thread', async () => {
+      const tasks = taskDeps()
+      const tools = getTools(makeDeps({ tasks }))
+      await invoke(tools, 'task_import', { ref: 'github:github.com/org/repo#12', threadId: 't9' })
+      await invoke(tools, 'task_import', { url: 'https://github.com/org/repo/issues/3' })
+      const result = await invoke(tools, 'task_import', {
+        plan: { project: 'sovereign', path: 'plans/forge.md' },
+        parentTaskIds: ['task://stream'],
+        membrane: 'coasys'
+      })
+      expect(tasks.importItem.mock.calls.map((c) => c[0])).toEqual([
+        expect.objectContaining({ ref: 'github:github.com/org/repo#12', threadId: 't9', sourceThreadId: 't1' }),
+        expect.objectContaining({ url: 'https://github.com/org/repo/issues/3', sourceThreadId: 't1' }),
+        expect.objectContaining({
+          plan: { project: 'sovereign', path: 'plans/forge.md' },
+          parentTaskIds: ['task://stream'],
+          membrane: 'coasys'
+        })
+      ])
+      expect(parseResult(result)).toEqual({ task: { id: 'task://1' }, created: true })
+    })
+
+    it('task_import needs exactly one of ref, url or plan', async () => {
+      const tasks = taskDeps()
+      const tools = getTools(makeDeps({ tasks }))
+      await expect(invoke(tools, 'task_import', {})).rejects.toThrow(/exactly one/)
+      await expect(
+        invoke(tools, 'task_import', { ref: 'org/repo#1', url: 'https://github.com/org/repo/pull/1' })
+      ).rejects.toThrow(/exactly one/)
+      expect(tasks.importItem).not.toHaveBeenCalled()
+    })
+
+    it('task_list passes the Forge filters through', async () => {
+      const tasks = taskDeps()
+      await invoke(getTools(makeDeps({ tasks })), 'task_list', {
+        membrane: 'coasys',
+        repo: 'coasys/ad4m',
+        workstream: 'task://s',
+        providerKind: 'change',
+        streamsOnly: true
+      })
+      expect(tasks.list).toHaveBeenCalledWith(
+        expect.objectContaining({
+          membrane: 'coasys',
+          repo: 'coasys/ad4m',
+          workstream: 'task://s',
+          providerKind: 'change',
+          isStream: true
+        })
+      )
+    })
+
+    it('task_create with stream: true creates an unassigned stream', async () => {
+      const tasks = taskDeps()
+      await invoke(getTools(makeDeps({ tasks })), 'task_create', { name: 'Plan 20', stream: true, autoAssign: true })
+      expect(tasks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Plan 20', isStream: true, autoAssign: false, sourceThreadId: 't1' })
+      )
     })
   })
 })

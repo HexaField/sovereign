@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseCozempicOutput, parseSizeToChars } from './cozempic-parser.js'
+import { parseCozempicOutput, parseCozempicTokens, parseSizeToChars } from './cozempic-parser.js'
 
 describe('parseSizeToChars', () => {
   it('parses MB values', () => {
@@ -108,5 +108,22 @@ describe('parseCozempicOutput', () => {
     expect(result).not.toBeNull()
     expect(result!.strategies).toEqual([])
     expect(result!.messagesRemoved).toBe(0)
+  })
+})
+
+describe('parseCozempicTokens', () => {
+  it('reads the token counts before and after the prune', () => {
+    const out =
+      '  Before     671.2K tokens    5.12MB  1,706 messages\n  After      433.5K tokens    4.83MB  1,706 messages\n'
+    expect(parseCozempicTokens(out)).toEqual({ before: 671_200, after: 433_500 })
+    expect(parseCozempicTokens('  Before  1.2M tokens  9MB\n  After  950 tokens  1MB')).toEqual({
+      before: 1_200_000,
+      after: 950
+    })
+  })
+
+  it('returns undefined without both lines', () => {
+    expect(parseCozempicTokens('  Before  61.0K tokens  11.63MB')).toBeUndefined()
+    expect(parseCozempicTokens('')).toBeUndefined()
   })
 })

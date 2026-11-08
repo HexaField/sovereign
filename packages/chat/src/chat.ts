@@ -9,7 +9,8 @@ import type {
   AgentBackend,
   AgentBackendEvents,
   QueuedMessage,
-  MessageOrigin
+  MessageOrigin,
+  TurnOrigin
 } from '@sovereign/core'
 import { renderOriginTag } from '@sovereign/core'
 import type { WsHandler } from '@sovereign/primitives'
@@ -71,7 +72,25 @@ export interface SendOptions {
    *  The message still touches the queue (for dedup + snapshot), but gets
    *  force-sent immediately instead of waiting for the dispatch loop. */
   immediate?: boolean
+  /** Who or what sent it: the origin of the turn it starts (timeline).
+   *  Default: `origin` modality cron → cron, ad4m/webhook → system, any
+   *  other origin → user; without an origin, `synthRole: 'system'` → system,
+   *  else user. */
+  via?: TurnOrigin
 }
+
+/** A send's turn origin, from its options. */
+export function viaOf(opts?: SendOptions): TurnOrigin {
+  if (opts?.via) return opts.via
+  const modality = opts?.origin?.modality
+  if (modality === 'cron') return 'cron'
+  if (modality === 'ad4m' || modality === 'webhook') return 'system'
+  if (modality) return 'user'
+  return opts?.synthRole === 'system' ? 'system' : 'user'
+}
+
+const PREVIEW_CHARS = 200
+const previewOf = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, PREVIEW_CHARS)
 
 export interface ChatModule {
   status(): ModuleStatus
@@ -198,6 +217,65 @@ export function createChatModule(
    * adapter+agent are mid-turn. */
   const inFlightByThread = new Map<string, string>() // threadId -> queue id
 
+  // ── Turns, for the timeline: `chat.turn.started` when a thread's turn
+  // begins (its queued message is dispatched, or the backend goes busy on
+  // its own), `chat.turn.ended` at the idle that closes it. Each carries the
+  // turn's origin: the dispatched message's `via`, a `chat.message.injected`
+  // (sessions_send) waiting for the session, else system (a resume). Only
+  // threads count: a subagent's session has its own lifecycle events. ──
+  const viaById = new Map<string, TurnOrigin>() // queue id -> origin
+  const openTurns = new Map<string, { startedAt: number; via: TurnOrigin }>()
+  const injectedVia = new Map<string, { via: TurnOrigin; preview?: string }>()
+  /** A queued message being handed to the backend: its turn, should the backend go busy first. */
+  const dispatching = new Map<string, { via: TurnOrigin; modality?: string; preview?: string; opened?: boolean }>()
+
+  /** The backend went busy: open the turn, with whatever set it going. */
+  function noteBusy(threadId: string): void {
+    if (openTurns.has(threadId)) return
+    const sending = dispatching.get(threadId)
+    dispatching.delete(threadId)
+    if (sending) sending.opened = true
+    const start = sending ?? injectedVia.get(threadId)
+    openTurn(threadId, start?.via ?? 'system', start ?? {})
+  }
+
+  function openTurn(threadId: string, via: TurnOrigin, extra: { modality?: string; preview?: string } = {}): void {
+    if (openTurns.has(threadId) || !threadManager.get(threadId)) return
+    injectedVia.delete(threadId)
+    openTurns.set(threadId, { startedAt: Date.now(), via })
+    bus.emit({
+      type: 'chat.turn.started',
+      timestamp: new Date().toISOString(),
+      source: 'chat',
+      payload: {
+        threadId,
+        via,
+        ...(extra.modality ? { modality: extra.modality } : {}),
+        ...(extra.preview ? { preview: extra.preview } : {})
+      }
+    })
+  }
+
+  function closeTurn(threadId: string, reason?: 'stuck'): void {
+    const turn = openTurns.get(threadId)
+    if (!turn) return
+    openTurns.delete(threadId)
+    bus.emit({
+      type: 'chat.turn.ended',
+      timestamp: new Date().toISOString(),
+      source: 'chat',
+      payload: { threadId, via: turn.via, durationMs: Date.now() - turn.startedAt, ...(reason ? { reason } : {}) }
+    })
+  }
+
+  bus.on('chat.message.injected', (event) => {
+    const p = event.payload as { sessionKey?: string; threadId?: string; via?: TurnOrigin; preview?: string }
+    const key = p.threadId ?? p.sessionKey
+    if (!key) return
+    const threadId = sessionToThread.get(key) ?? key
+    injectedVia.set(threadId, { via: p.via ?? 'agent', ...(p.preview ? { preview: previewOf(p.preview) } : {}) })
+  })
+
   function emitQueueSnapshot(threadId: string): void {
     const items = messageQueue.snapshot(threadId)
     const payload = { threadId, items }
@@ -272,6 +350,16 @@ export function createChatModule(
     const queuedAttachments = attachmentSidecar.get(head.id)
     attachmentSidecar.delete(head.id)
 
+    // The turn this send starts: the backend may report busy before sendMessage resolves.
+    const via = viaById.get(head.id) ?? viaOf(head.origin ? { origin: head.origin } : undefined)
+    viaById.delete(head.id)
+    const turnStart: { via: TurnOrigin; modality?: string; preview?: string; opened?: boolean } = {
+      via,
+      modality: head.origin?.modality,
+      preview: previewOf(head.text)
+    }
+    dispatching.set(threadId, turnStart)
+
     try {
       await backend.sendMessage(
         sessionKey,
@@ -281,6 +369,7 @@ export function createChatModule(
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error(`[chat] queue send failed for ${threadId} (${head.id}): ${errMsg}`)
+      dispatching.delete(threadId)
       inFlightByThread.delete(threadId)
       messageQueue.markFailed(head.id, errMsg)
       // Surface the error to clients via chat.error too — keeps existing UI behaviour.
@@ -322,6 +411,7 @@ export function createChatModule(
       text: head.text,
       timestamp: sentAt,
       queueId: head.id,
+      via,
       ...(head.origin ? { origin: head.origin } : {})
     }
     bus.emit({
@@ -331,6 +421,9 @@ export function createChatModule(
       payload: sentPayload
     })
     chatEvents.emit('chat.message.sent', sentPayload)
+    // Unless the backend's busy status already opened it (and maybe closed it).
+    if (dispatching.get(threadId) === turnStart) dispatching.delete(threadId)
+    if (!turnStart.opened) openTurn(threadId, via, turnStart)
 
     // If the agent already went idle while we awaited sendMessage
     // (completeInFlight cleared the gate), pump the next queued item.
@@ -412,6 +505,7 @@ export function createChatModule(
         statusChangedAt.set(threadId, now)
         persistLiveState(threadId)
         stopJsonlPoll(threadId)
+        closeTurn(threadId, 'stuck')
         // Broadcast the status change to clients
         if (wsHandler) {
           wsHandler.broadcastToChannel('chat', { type: 'chat.status', threadId, status: 'idle' })
@@ -545,12 +639,16 @@ export function createChatModule(
           statusChangedAt.set(threadId, Date.now())
           persistLiveState(threadId)
           if (data.status === 'idle') {
+            closeTurn(threadId)
             stopJsonlPoll(threadId)
             // Agent finished a turn — clear any in-flight queue entry for this
             // thread (we've now seen the result hit our state) and try to send
             // the next queued message.
             completeInFlight(threadId)
-          } else if (data.status === 'working' || data.status === 'thinking') {
+          } else {
+            noteBusy(threadId)
+          }
+          if (data.status === 'working' || data.status === 'thinking') {
             // Start polling JSONL for tool calls since gateway WS doesn't stream them
             const sessionKey2 = threadToSession.get(threadId) ?? deriveSessionKey(threadId)
             startJsonlPoll(threadId, sessionKey2)
@@ -612,6 +710,7 @@ export function createChatModule(
             // the client without telling it anything new.
             const idleData = { sessionKey, threadId, status: 'idle' }
             idleAnnounced.add(threadId)
+            closeTurn(threadId)
             if (wsHandler) {
               wsHandler.broadcastToChannel('chat', { type: 'chat.status', ...idleData })
             }
@@ -663,8 +762,59 @@ export function createChatModule(
           payload: { threadId, turn: data.turn }
         })
       }
+
+      // A compaction finished (the timeline's line).
+      if (eventName === 'chat.compacting' && threadId && data.active === false) {
+        bus.emit({ type: 'chat.compacted', timestamp: new Date().toISOString(), source: 'chat', payload: { threadId } })
+      }
+
+      // Subagent lifecycle on the bus, named by the parent thread. The
+      // result text and parent message stay off it: they reach the parent
+      // through its queue.
+      if (isSubagentEvent) emitSubagent(eventName, data)
     })
   }
+
+  /** The thread a session key belongs to: the mapping, else a thread whose id is the key. */
+  const threadOfKey = (key: string): string | undefined =>
+    sessionToThread.get(key) ?? (threadManager.get(key) ? key : undefined)
+  const subagentLabels = new Map<string, string>() // childKey -> label
+  function emitSubagent(type: string, data: Record<string, unknown>): void {
+    const parentKey = typeof data.parentKey === 'string' ? data.parentKey : undefined
+    const childKey = typeof data.childKey === 'string' ? data.childKey : undefined
+    if (!childKey) return
+    const threadId = parentKey ? threadOfKey(parentKey) : undefined
+    if (type === 'subagent.spawned' && typeof data.label === 'string') subagentLabels.set(childKey, data.label)
+    const label = (typeof data.label === 'string' ? data.label : undefined) ?? subagentLabels.get(childKey)
+    if (type !== 'subagent.spawned') subagentLabels.delete(childKey)
+    const pick = (k: string) => (data[k] !== undefined ? { [k]: data[k] } : {})
+    bus.emit({
+      type,
+      timestamp: new Date().toISOString(),
+      source: 'chat',
+      payload: {
+        ...(threadId ? { threadId } : {}),
+        ...(parentKey ? { parentKey } : {}),
+        childKey,
+        ...(label ? { label } : {}),
+        ...(type === 'subagent.spawned' ? pick('task') : {}),
+        ...(type === 'subagent.completed' ? pick('durationMs') : {}),
+        ...(type === 'subagent.failed' ? { ...pick('error'), ...pick('ended'), ...pick('durationMs') } : {})
+      }
+    })
+  }
+
+  // A session recycle (pruned and resumed): the timeline's line.
+  backend.on('session.recycled', (data) => {
+    const threadId = threadOfKey(data.sessionKey)
+    if (!threadId) return
+    bus.emit({
+      type: 'chat.recycled',
+      timestamp: new Date().toISOString(),
+      source: 'chat',
+      payload: { threadId, preTokens: data.preTokens, postTokens: data.postTokens, method: data.method }
+    })
+  })
 
   // ── Persistent error state — survives SSE reconnect ──────────────────
   // chat.error events arrive from two sources:
@@ -948,6 +1098,7 @@ export function createChatModule(
     if (opts?.synthRole && !queued.deduplicated) {
       synthRoleById.set(queued.id, opts.synthRole)
     }
+    if (!queued.deduplicated) viaById.set(queued.id, viaOf(opts))
     // A new message is activity too: without this, a thread's time only moved
     // when a turn finished, so a long turn showed the previous turn's time.
     if (!queued.deduplicated) {

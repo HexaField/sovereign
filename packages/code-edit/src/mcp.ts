@@ -17,7 +17,7 @@ const DESCRIPTION = `Edit code by naming a symbol instead of quoting its text. R
 - insert {code, after?|before?}: add code beside a symbol, or at the end of the file.
 - remove {symbol}: delete a declaration with its comments, decorators and overloads.
 - create {code}: make a new file (first op only).
-symbol: name, Container::name or Container.name; add @line when names repeat. An edit that adds a syntax error is rejected. Returns a unified diff, plus callers when a signature changes.`
+symbol: name, Container::name or Container.name; add @line when names repeat. An edit that adds a syntax error is rejected. Returns a short report: what changed where, the syntax check, and callers when a signature changes. dryRun returns the unified diff instead of writing.`
 
 // Strict objects: a misspelt key is an error, not dropped (a dropped `after`
 // appends at the end of the file, a dropped `dryRun` writes), and the schema
@@ -56,7 +56,7 @@ const op = z.discriminatedUnion(
   }
 )
 
-const EDIT_FILES_DESCRIPTION = `Apply edit ops to several files in one call, all or nothing: if any op in any file fails, no file changes. Each entry is {file, ops} with the same ops as edit (replace, replace_in, replace_all, insert, remove, create); give each file once. Use it for changes that span files, such as a rename across callers, instead of sed or scripts. Returns one report and diff per file.`
+const EDIT_FILES_DESCRIPTION = `Apply edit ops to several files in one call, all or nothing: if any op in any file fails, no file changes. Each entry is {file, ops} with the same ops as edit (replace, replace_in, replace_all, insert, remove, create); give each file once. Use it for changes that span files, such as a rename across callers, instead of sed or scripts. Returns one report per file; dryRun adds each file's diff.`
 
 /** A tool result: the report, or an error that says nothing was written. */
 async function respond(run: () => Promise<{ report: string }>) {

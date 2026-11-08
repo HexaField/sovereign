@@ -208,7 +208,7 @@ async function runBootstrap(opts: KnowledgeGraphBootstrapOpts, name: string): Pr
     }
     try {
       const shaclJson = typeof definition === 'string' ? definition : JSON.stringify(definition)
-      await proxy.addSubjectClass(className, shaclJson)
+      await proxy.addSdna(className, '', 'subject_class', shaclJson)
       console.log(TAG, `registered model: ${className}`)
       if (!registered.includes(className)) registered.push(className)
     } catch (err) {

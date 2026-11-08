@@ -44,7 +44,20 @@ export const defaults: SovereignConfig = {
         bashTimeout: 120000
       },
       endpoints: []
-    }
+    },
+    // Codex, OpenCode and Pi need a model endpoint, so they get profiles once one is configured.
+    harnesses: {
+      claude: { adapter: 'claude' },
+      devin: {
+        adapter: 'devin',
+        model: 'swe-2-high',
+        sandbox: 'harness',
+        allowedRoots: ['~/workspaces/coasys'],
+        configFile: '~/.config/devin/executor.json',
+        mcp: true
+      }
+    },
+    endpoints: {}
   },
   summary: {
     enabled: false,
@@ -147,7 +160,7 @@ export const defaults: SovereignConfig = {
       prescription: 'standard',
       skipDuringSubagents: true,
       regrowPercent: 10,
-      minReclaimPercent: 5
+      coldThresholdPercent: 20
     },
     cleanup: {
       enabled: true,
@@ -166,5 +179,20 @@ export const defaults: SovereignConfig = {
     pollMs: 90_000,
     forecastPollMs: 1_800_000,
     timeZone: 'Australia/Melbourne'
+  },
+  forge: {
+    enabled: false,
+    identities: {},
+    planDirs: ['plans', 'docs/plans', '.specs'],
+    repos: {},
+    trustedAuthors: {},
+    mentions: [],
+    pollOpenMs: 120_000,
+    pollAllMs: 600_000,
+    windowDays: 21,
+    rethink: { times: ['08:30', '17:30'], maxJobs: 6, tokenBudget: 200_000 }
+  },
+  graphcoder: {
+    enabled: false
   }
 }

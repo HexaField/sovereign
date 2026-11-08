@@ -35,8 +35,8 @@ interface WsHandlerLike {
 
 export interface VoiceStreamChannelDeps {
   ws: WsHandlerLike
-  /** URL of the whisper-stt /transcribe endpoint (e.g. http://127.0.0.1:9876/transcribe). */
-  transcribeUrl: string
+  /** The STT /transcribe endpoint, read when each stream starts so a config change applies. */
+  transcribeUrl: () => string
   /** The presence thread, and how to send a voice message to it (deliver: 'presence'). */
   presence?: {
     threadId(): string | undefined
@@ -92,7 +92,7 @@ export function registerVoiceStreamChannel(deps: VoiceStreamChannelDeps): void {
           delivering.delete(deviceId)
         }
         manager.startSession(deviceId, {
-          transcribeUrl,
+          transcribeUrl: transcribeUrl(),
           format: start.format === 'pcm16' ? 'pcm16' : 'webm',
           sampleRate: start.sampleRate,
           onTranscript(text, isFinal) {

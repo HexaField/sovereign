@@ -112,6 +112,41 @@ describe('isSubagentComplete', () => {
     expect(isSubagentComplete(turns)).toBe(true)
   })
 
+  // --- Harness runs (Devin, Codex, OpenCode, Pi): the turns the harness backend serves ---
+
+  it('keeps polling a running harness run: its last turn streams', () => {
+    const turns: ParsedTurn[] = [
+      turn({ role: 'user', content: 'Fix the bug.' }),
+      turn({ role: 'assistant', content: 'Looking at it.', streaming: true })
+    ]
+    expect(isSubagentComplete(turns)).toBe(false)
+  })
+
+  it('completes a finished harness run on its report', () => {
+    const turns: ParsedTurn[] = [
+      turn({ role: 'user', content: 'Fix the bug.' }),
+      turn({
+        role: 'assistant',
+        content: 'Reading the file.',
+        workItems: [{ type: 'tool_call', name: 'read_file', input: '{}', toolCallId: 'c1', timestamp: 1 }]
+      }),
+      turn({ role: 'assistant', content: 'Fixed the loop bound.' })
+    ]
+    expect(isSubagentComplete(turns)).toBe(true)
+  })
+
+  it('completes a failed harness run on its closing error turn', () => {
+    const turns: ParsedTurn[] = [
+      turn({ role: 'user', content: 'Fix the bug.' }),
+      turn({
+        role: 'system',
+        content: 'Run finished with an error: stopped by the parent',
+        kind: { variant: 'agent-error', label: 'Subagent failed' }
+      })
+    ]
+    expect(isSubagentComplete(turns)).toBe(true)
+  })
+
   it('returns false for a system turn without completion keywords', () => {
     const turns: ParsedTurn[] = [
       turn({ role: 'system', content: 'Context window compacted' }),

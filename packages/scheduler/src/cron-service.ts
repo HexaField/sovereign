@@ -151,7 +151,8 @@ export interface CronServiceOptions {
    * refresh). The default direct-routing path is preserved as a fallback
    * when no injector is wired in (e.g. unit tests).
    */
-  injectChatMessage?: (threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>
+  /** `kind` names who sent it: a cron fire, or a subagent's result delivered the same way. */
+  injectChatMessage?: (threadId: string, text: string, opts?: { kind?: 'cron' | 'subagent' }) => Promise<void>
 }
 
 export function createCronService(opts: CronServiceOptions | RoutingBackend): CronService {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { recycleWanted, recycleExhausted } from './recycle-gate.js'
+import { recycleWanted } from './recycle-gate.js'
 
 const base = { maxTokens: 1_000_000, thresholdPercent: 55, regrowPercent: 10 }
 
@@ -16,20 +16,24 @@ describe('recycleWanted', () => {
     expect(recycleWanted({ ...base, filled: 730_000, floor: 630_000 })).toBe(true)
   })
 
-  it('never recycles a session where pruning stopped helping', () => {
-    expect(recycleWanted({ ...base, filled: 900_000, floor: 630_000, exhausted: true })).toBe(false)
+  it('recycles again once a session that pruning barely shrank has regrown', () => {
+    // 610k → 608k left nothing to prune; 12 h of new tool output later there is.
+    expect(recycleWanted({ ...base, filled: 650_000, floor: 608_000 })).toBe(false)
+    expect(recycleWanted({ ...base, filled: 710_000, floor: 608_000 })).toBe(true)
+  })
+
+  it('uses the cold threshold once the session was idle past the prompt-cache TTL', () => {
+    const cold = { ...base, coldThresholdPercent: 20, cacheTtlMs: 3_600_000 }
+    // 30 % full: under 55 %, over 20 %.
+    expect(recycleWanted({ ...cold, filled: 300_000, idleMs: 59 * 60_000 })).toBe(false)
+    expect(recycleWanted({ ...cold, filled: 300_000, idleMs: 61 * 60_000 })).toBe(true)
+    expect(recycleWanted({ ...cold, filled: 150_000, idleMs: 61 * 60_000 })).toBe(false)
+    // The floor still holds on a cold cache.
+    expect(recycleWanted({ ...cold, filled: 300_000, idleMs: 61 * 60_000, floor: 250_000 })).toBe(false)
   })
 
   it('ignores an unknown fill or window', () => {
     expect(recycleWanted({ ...base, filled: 0 })).toBe(false)
     expect(recycleWanted({ ...base, maxTokens: 0, filled: 10 })).toBe(false)
-  })
-})
-
-describe('recycleExhausted', () => {
-  it('flags a recycle that freed under the minimum share of the context', () => {
-    expect(recycleExhausted(644_000, 630_000, 5)).toBe(true) // 2.2 %
-    expect(recycleExhausted(644_000, 500_000, 5)).toBe(false) // 22 %
-    expect(recycleExhausted(0, 0, 5)).toBe(false)
   })
 })

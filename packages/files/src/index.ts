@@ -4,3 +4,5 @@ export * from './ws.js'
 export * from './watcher.js'
 export * from './tree.js'
 export * from './types.js'
+
+export * from './file-search.js'

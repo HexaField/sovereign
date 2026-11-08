@@ -4,7 +4,7 @@
 
 import fs from 'node:fs'
 import type { EventBus, AgentBackendKind } from '@sovereign/core'
-import type { ConfigStore } from '@sovereign/config'
+import type { ConfigStore, HarnessProfile, ModelEndpoint } from '@sovereign/config'
 import { createBackend } from './factory.js'
 import { routingAsBackend } from './routing-as-backend.js'
 import { createSessionsRegistry } from '@sovereign/primitives'
@@ -20,8 +20,11 @@ import {
 } from './claude-code/index.js'
 import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.js'
 import { createMetricsAccumulator, type MetricsAccumulator } from './metrics.js'
-import { buildSovereignMcpDeps } from './mcp-deps.js'
+import { buildSovereignMcpDeps, type SubagentDefaults } from './mcp-deps.js'
 import { createEmbeddingsService } from './embeddings-service.js'
+import { createHarnessBackend } from './harness/backend.js'
+import { createHarnessRunner } from './harness/runner.js'
+import { harnessMcpServers } from './harness/mcp.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -64,8 +67,12 @@ export interface AgentBackendWiringInput {
   presence?: import('./claude-code/mcp-server.js').PresenceMcpDeps
   /** Task service. When set, the eight task_* MCP tools are registered. */
   tasks?: import('./claude-code/mcp-server.js').TaskMcpDeps
-  /** CI watcher. Its methods are bound later; when set, the ci_* MCP tools are registered. */
-  ci?: import('./claude-code/mcp-server.js').CiWatchMcpDeps
+  /** PR watcher. Its methods are bound later; when set, the pr_watch* MCP tools are registered. */
+  prWatch?: import('./claude-code/mcp-server.js').PrWatchMcpDeps
+  /** Forge rethink runner. Its methods are bound later; the forge_* tools appear in forge-rethink threads. */
+  forge?: import('./claude-code/forge-tools.js').ForgeMcpDeps
+  /** Forge decisions. Bound later; decision_open / decision_close appear in every thread from then on. */
+  decisions?: import('./claude-code/decision-tools.js').DecisionMcpDeps
   /** Path to PRESENCE.md — appended to the session prompt for the presence
    *  thread only. */
   presencePersonalityFile?: string
@@ -287,16 +294,38 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const sessionsRegistry = createSessionsRegistry(dataDir)
   const activeSessions = createActiveSessions({ dataDir })
   const askUserQuestionStore = createAskUserQuestionStore(bus)
-  // Global subagent routing defaults — thread config still takes priority.
-  const subagentDefaults = {
-    backend: configStore.get<string>('agentBackend.subagentDefaults.backend'),
-    model: configStore.get<string>('agentBackend.subagentDefaults.model')
-  }
-  const hasSubagentDefaults = subagentDefaults.backend || subagentDefaults.model
+  // Global subagent defaults — thread config still takes priority. Read from
+  // the config store on every call, so a config change applies to the next spawn.
+  const subagentDefaults = (): SubagentDefaults => ({
+    backend: configStore.get<string>('agentBackend.subagentDefaults.backend') ?? undefined,
+    model: configStore.get<string>('agentBackend.subagentDefaults.model') ?? undefined,
+    timeoutMinutes: configStore.get<number>('agentBackend.subagentDefaults.timeoutMinutes') ?? undefined,
+    harness: configStore.get<string>('agentBackend.subagentDefaults.harness') ?? undefined
+  })
 
   // Embeddings — local vector search over on-machine content. The service
   // initialises lazily (db opens on first tool call, not at boot).
   const embeddingsService = createEmbeddingsService({ dataDir: input.dataDir })
+
+  // agents_spawn with a non-claude harness profile (Devin, Codex, OpenCode, Pi):
+  // CLI runs that routing serves as subagent sessions (harness/backend.ts), so
+  // their cards, views and parent messages are a Claude subagent's.
+  const harnessProfiles = () => configStore.get<Record<string, HarnessProfile>>('agentBackend.harnesses') ?? {}
+  const harnessClaudeConfig = claudeCodeConfigGetter(configStore, dataDir, input.configDir)
+  const harnessRunner = createHarnessRunner({
+    dataDir,
+    home: process.env.HOME ?? '',
+    configDir: input.configDir,
+    profiles: harnessProfiles,
+    endpoints: () => configStore.get<Record<string, ModelEndpoint>>('agentBackend.endpoints') ?? {},
+    secret: (name) => configStore.getSecret(name) || undefined,
+    mcpServers: (cwd) =>
+      harnessMcpServers(harnessClaudeConfig().mcpServers ?? {}, {
+        cwd,
+        claudeJsonPath: `${process.env.HOME ?? ''}/.claude.json`
+      }),
+    activeSessions
+  })
 
   const sharedMcpDeps = buildSovereignMcpDeps({
     bus,
@@ -310,10 +339,13 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     notificationsModule,
     browserService,
     embeddings: embeddingsService,
-    ...(hasSubagentDefaults ? { subagentDefaults } : {}),
+    subagentDefaults,
+    harnesses: { runner: harnessRunner, profiles: harnessProfiles },
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
-    ...(input.ci ? { ci: input.ci } : {})
+    ...(input.prWatch ? { prWatch: input.prWatch } : {}),
+    ...(input.forge ? { forge: input.forge } : {}),
+    ...(input.decisions ? { decisions: input.decisions } : {})
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 
@@ -349,6 +381,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     registry: sessionsRegistry,
     enabledKinds: () =>
       (configStore.get<AgentBackendKind[]>('agentBackend.enabled') as AgentBackendKind[]) ?? enabledBackends,
+    owners: [createHarnessBackend(harnessRunner)],
     factories: {
       'claude-code': () => {
         const orgRoots = () => orgManager.listOrgs().map((o) => o.path)
@@ -387,7 +420,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               memoryFile: input.presenceMemoryFile,
               knowledgeFile: input.presenceKnowledgeFile
             },
-            () => subagentDefaults
+            subagentDefaults
           ),
           metrics
         })
@@ -418,7 +451,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
               memoryFile: input.presenceMemoryFile,
               knowledgeFile: input.presenceKnowledgeFile
             },
-            () => subagentDefaults
+            subagentDefaults
           ),
           subagentPromptFile: input.configDir ? `${input.configDir}/SUBAGENT.md` : undefined,
           globalPersonalityFile: globalPersonalityPath,
@@ -476,7 +509,9 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   // the service falls back to direct routing — preserves test/CI defaults.
   // `opts.kind` (e.g. 'cron') flows through so the chat module can emit a
   // role-correct synthetic chat.turn (system for cron, user otherwise).
-  let chatInjector: ((threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) | undefined
+  let chatInjector:
+    | ((threadId: string, text: string, opts?: { kind?: 'cron' | 'subagent' }) => Promise<void>)
+    | undefined
   const pendingParentMessages: Array<[string, string]> = []
   cronService = createCronService({
     routing: routingBackend,
@@ -490,7 +525,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   // Expose the setter so bootstrap can plug in the chat module after it's
   // constructed without restructuring the existing return shape.
   ;(cronService as any).setInjectChatMessage = (
-    fn: ((threadId: string, text: string, opts?: { kind?: 'cron' }) => Promise<void>) | undefined
+    fn: ((threadId: string, text: string, opts?: { kind?: 'cron' | 'subagent' }) => Promise<void>) | undefined
   ): void => {
     chatInjector = fn
     for (const [parentKey, text] of pendingParentMessages.splice(0)) deliverToParent(parentKey, text)
@@ -509,10 +544,12 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
       pendingParentMessages.push([parentKey, text])
       return
     }
-    chatInjector(parentKey, text, { kind: 'cron' }).catch((err) =>
+    chatInjector(parentKey, text, { kind: 'subagent' }).catch((err) =>
       console.warn(`[wiring] subagent result delivery failed for ${parentKey}:`, err)
     )
   }
+  // Harness runs a restart cut off: their parents wait for a result, so tell them.
+  harnessRunner.recoverInterrupted()
 
   return {
     routingBackend,

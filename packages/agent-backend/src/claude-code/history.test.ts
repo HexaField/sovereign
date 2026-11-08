@@ -7,7 +7,8 @@ import {
   parseClaudeCodeTurns,
   readAllClaudeCodeMessages,
   computeUsageFromFile,
-  latestUsageFromFile
+  latestUsageFromFile,
+  usageSinceFromFile
 } from './history.js'
 
 describe('claude-code/history', () => {
@@ -299,5 +300,130 @@ describe('claude-code/history', () => {
       expect(latest.inputTokens).toBe(5000)
       expect(latest.outputTokens).toBe(100)
     })
+  })
+})
+
+describe('usageSinceFromFile', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cc-usage-'))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('sums API calls since a time, once per message id', () => {
+    const file = join(dir, 's.jsonl')
+    const line = (ts: string, id: string, usage: Record<string, number>) =>
+      JSON.stringify({ type: 'assistant', timestamp: ts, message: { id, role: 'assistant', content: [], usage } })
+    writeFileSync(
+      file,
+      [
+        line('2026-10-16T08:00:00.000Z', 'm0', { input_tokens: 999, output_tokens: 9 }),
+        JSON.stringify({
+          type: 'user',
+          timestamp: '2026-10-16T08:30:00.000Z',
+          message: { role: 'user', content: 'go' }
+        }),
+        line('2026-10-16T08:30:01.000Z', 'm1', {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read_input_tokens: 100,
+          cache_creation_input_tokens: 20
+        }),
+        // The same message's second content block repeats its usage.
+        line('2026-10-16T08:30:01.000Z', 'm1', {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read_input_tokens: 100,
+          cache_creation_input_tokens: 20
+        }),
+        line('2026-10-16T08:30:05.000Z', 'm2', { input_tokens: 3, output_tokens: 40, cache_read_input_tokens: 120 }),
+        'not json'
+      ].join('\n') + '\n'
+    )
+    expect(usageSinceFromFile(file, Date.parse('2026-10-16T08:30:00.000Z'))).toEqual({
+      inputTokens: 13,
+      outputTokens: 45,
+      cacheRead: 220,
+      cacheWrite: 20,
+      calls: 2,
+      // m0 is before the run and never the baseline. m1, the run's first call: its output, 5; m2: 163 − 135.
+      added: 33
+    })
+    expect(usageSinceFromFile(join(dir, 'missing.jsonl'), 0).calls).toBe(0)
+  })
+
+  const call = (ts: string, id: string, usage: Record<string, number>) =>
+    JSON.stringify({ type: 'assistant', timestamp: ts, message: { id, role: 'assistant', content: [], usage } })
+
+  it('counts what the calls add to the context, not a cold cache rewriting what was there', () => {
+    const file = join(dir, 's.jsonl')
+    writeFileSync(
+      file,
+      [
+        // Before the run: a 235,802-token context, served from the cache.
+        call('2026-10-26T09:00:00.000Z', 'm0', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 500,
+          cache_read_input_tokens: 235_000,
+          output_tokens: 300
+        }),
+        // Hours later the cache is cold: the first call writes the whole prompt again.
+        call('2026-10-26T21:30:07.000Z', 'm1', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 236_000,
+          cache_read_input_tokens: 0,
+          output_tokens: 700
+        }),
+        call('2026-10-26T21:30:18.000Z', 'm2', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 1000,
+          cache_read_input_tokens: 236_002,
+          output_tokens: 400
+        })
+      ].join('\n') + '\n'
+    )
+    const u = usageSinceFromFile(file, Date.parse('2026-10-26T21:30:00.000Z'))
+    expect(u.cacheWrite).toBe(237_000)
+    // m1, the run's first call: its output, 700; m2: 237,404 − 236,702 = 702.
+    expect(u.added).toBe(1402)
+  })
+
+  it("counts only the first call's output when the file holds nothing before the run (a recycled or fresh session)", () => {
+    const file = join(dir, 's.jsonl')
+    writeFileSync(
+      file,
+      [
+        // After a recycle the file starts here: the run's first call carries the whole 456k context.
+        call('2026-10-30T06:30:20.000Z', 'm1', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 450_530,
+          cache_read_input_tokens: 0,
+          output_tokens: 5826
+        }),
+        call('2026-10-30T06:30:40.000Z', 'm2', {
+          input_tokens: 2,
+          cache_creation_input_tokens: 1000,
+          cache_read_input_tokens: 456_356,
+          output_tokens: 600
+        })
+      ].join('\n') + '\n'
+    )
+    // m1: its output, 5,826; m2: 457,958 − 456,358 = 1,600.
+    expect(usageSinceFromFile(file, Date.parse('2026-10-30T06:30:00.000Z')).added).toBe(7426)
+  })
+
+  it('adds nothing for a compaction inside the run, then counts growth again', () => {
+    const file = join(dir, 's.jsonl')
+    writeFileSync(
+      file,
+      [
+        call('2026-10-26T21:30:01.000Z', 'm1', { input_tokens: 1000, output_tokens: 100 }),
+        // A compaction shrinks the context: nothing added.
+        call('2026-10-26T21:31:00.000Z', 'm2', { input_tokens: 300, output_tokens: 50 }),
+        call('2026-10-26T21:31:10.000Z', 'm3', { input_tokens: 500, output_tokens: 20 })
+      ].join('\n') + '\n'
+    )
+    // m1: its output, 100; m2: below 1100; m3: 520 − 350.
+    expect(usageSinceFromFile(file, 0).added).toBe(270)
   })
 })

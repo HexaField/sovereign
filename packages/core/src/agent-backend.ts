@@ -45,7 +45,7 @@ export type AgentStatus = 'idle' | 'working' | 'thinking'
  * Identifies which concrete backend implementation owns a session/event.
  * Sovereign supports multiple backends concurrently (one per thread).
  */
-export type AgentBackendKind = 'pi' | 'claude-code' | 'local-llm'
+export type AgentBackendKind = 'pi' | 'claude-code' | 'local-llm' | 'harness'
 
 /**
  * A single unit of agent work: tool call, result, thinking block, or system event.
@@ -146,6 +146,15 @@ export interface AgentBackendEvents {
     errorType?: string
     backendKind?: AgentBackendKind
   }
+  /** A session was recycled: its transcript pruned, to resume on the next message. */
+  'session.recycled': {
+    sessionKey: string
+    preTokens: number
+    postTokens: number
+    reclaimedBytes: number
+    method: 'recycle' | 'auto-recycle'
+    backendKind?: AgentBackendKind
+  }
   /** A subagent was spawned by a parent session */
   'subagent.spawned': {
     parentKey: string
@@ -159,6 +168,9 @@ export interface AgentBackendEvents {
     parentKey: string
     childKey: string
     result: string
+    label?: string
+    /** agents_spawn runs: how long the run took. */
+    durationMs?: number
     tokenUsage?: TokenUsage
     backendKind?: AgentBackendKind
     /** Set for agents_spawn runs: the message to deliver into the parent thread. */
@@ -169,6 +181,10 @@ export interface AgentBackendEvents {
     parentKey: string
     childKey: string
     error: string
+    label?: string
+    durationMs?: number
+    /** The run was cut off rather than failing: `agents_stop`, or its timeout. */
+    ended?: 'stopped' | 'timed-out'
     backendKind?: AgentBackendKind
     /** Set for agents_spawn runs: the message to deliver into the parent thread. */
     parentMessage?: string
@@ -204,6 +220,10 @@ export interface SessionSummary {
   /** For subagent sessions: key of the parent session that spawned this one. */
   parentKey?: string
   task?: string
+  /** Working directory of the session (the Forge overlay maps a subagent's cwd → branch → change). */
+  cwd?: string
+  /** For a running subagent: when its run started (ms). */
+  startedAt?: number
 }
 
 /**
@@ -543,6 +563,12 @@ export interface AgentBackend {
    * know about a session simply omit it.
    */
   getActivityMap?(): Promise<Map<string, number>>
+  /**
+   * Set on a backend that owns only the sessions it starts itself (the
+   * agents_spawn harness runs): routing sends a key here when this answers
+   * true, before the registry and the default backend.
+   */
+  ownsSession?(sessionKey: string): boolean
 }
 
 /**

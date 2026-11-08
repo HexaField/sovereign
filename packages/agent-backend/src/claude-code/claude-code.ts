@@ -71,8 +71,10 @@ import { withEditRoot } from './config.js'
 import {
   buildSubagentSystemPrompt,
   MAX_SUBAGENTS_PER_PARENT,
-  selectSubagentMcpServers,
+  subagentMcpServers,
   SUBAGENT_BUILTIN_TOOLS,
+  MAIN_DISALLOWED_TOOLS,
+  SUBAGENT_AUTO_COMPACT_WINDOW,
   SUBAGENT_TIMEOUT_MS
 } from './subagent-runner.js'
 import { formatSubagentResult } from '@sovereign/core'
@@ -82,9 +84,9 @@ import { createContextFilter } from './context-filter.js'
 import type { ContextFilterConfig } from './context-filter.js'
 import type { DeviceInfo } from '@sovereign/core'
 import type { ActiveSessions } from '../active-sessions.js'
-import { parseCozempicOutput } from './cozempic-parser.js'
-import { recycleWanted, recycleExhausted } from './recycle-gate.js'
-import { trimJsonlToLastCompaction } from './jsonl-trim.js'
+import { parseCozempicOutput, parseCozempicTokens } from './cozempic-parser.js'
+import { recycleWanted } from './recycle-gate.js'
+import { stubSupersededInstructions, trimJsonlToLastCompaction } from './jsonl-trim.js'
 import {
   archiveJsonlBeforeRecycle,
   archiveRawToolOutput,
@@ -93,6 +95,7 @@ import {
 } from '../history-archive.js'
 import { readHistoryLog, historyLogExists, mergeIntoHistoryLog } from '../history-log.js'
 import { attachmentToContentBlock } from './attachment.js'
+import { publishDenial, publishReason } from '../publish-guard.js'
 
 const KIND: AgentBackendKind = 'claude-code'
 
@@ -235,10 +238,10 @@ async function fetchLiteLlmModels(proxyUrl: string): Promise<ModelCatalogEntry[]
 /**
  * Read the user's global Claude Code personality file
  * (`~/.claude/CLAUDE.md`). Sovereign's personality compiler writes here.
- * Loaded explicitly because `settingSources` drops the `'project'` source
- * that would normally trigger the SDK's CLAUDE.md walk-up. Returns empty
- * string when the file is missing or unreadable — the SDK's preset prompt
- * still works without it.
+ * Threads get it here, once, at the front of the system prompt (it caches
+ * well); `CLAUDE_CODE_DISABLE_CLAUDE_MDS` stops the SDK loading it a second
+ * time as an attachment. Returns empty string when the file is missing or
+ * unreadable — the SDK's preset prompt still works without it.
  */
 function readGlobalPersonality(agentDir: string): string {
   try {
@@ -384,7 +387,6 @@ interface PersistedClaudeSessionState {
   run?: { startedAt: number; done?: boolean }
   lastRecycleAt?: number
   recycleFloor?: number
-  recycleExhausted?: boolean
   liveSubagents: string[]
   streamLastLength: number
   thinkingAccum: string
@@ -445,28 +447,26 @@ export function createClaudeCodeBackend(
   ): Record<string, any> {
     const { isSubagent = false, sessionKey, cwd } = opts
     const cfg = getConfig()
+    // Subagents get a fixed set (codegraph, semble, code, narrow sovereign).
+    // Their settingSources skip ~/.claude.json, so its user-scope servers
+    // are merged in there.
+    if (isSubagent) {
+      return subagentMcpServers(cfg.mcpServers ?? {}, { cwd, claudeJsonPath: path.join(home, '.claude.json') })
+    }
     const servers: Record<string, any> = { ...cfg.mcpServers }
     // The symbol editor may also write in the session's own cwd.
     if (cwd && servers.code) servers.code = withEditRoot(servers.code, cwd)
-    // Sovereign tools: connect via the HTTP MCP endpoint on the Sovereign server.
-    // Subagents get the filtered /api/mcp/subagent endpoint (5 tools only:
-    // browser + embeddings). Main sessions get the full /api/mcp endpoint
-    // with ?session= for per-session attribution.
+    // Sovereign tools: the full /api/mcp endpoint, with ?session= for
+    // per-session attribution.
     // alwaysLoad: true keeps sovereign tools in context at turn 1 (no ToolSearch).
-    const mcpUrl = isSubagent
-      ? 'http://localhost:5801/api/mcp/subagent'
-      : sessionKey
-        ? `http://localhost:5801/api/mcp?session=${encodeURIComponent(sessionKey)}`
-        : 'http://localhost:5801/api/mcp'
+    const mcpUrl = sessionKey
+      ? `http://localhost:5801/api/mcp?session=${encodeURIComponent(sessionKey)}`
+      : 'http://localhost:5801/api/mcp'
     servers.sovereign = {
       type: 'http' as const,
       url: mcpUrl,
       alwaysLoad: true
     }
-    // Subagents get a fixed set (codegraph, semble, code, narrow sovereign).
-    // Their settingSources skip ~/.claude.json, so its user-scope servers
-    // are merged in here.
-    if (isSubagent) return selectSubagentMcpServers(servers, path.join(home, '.claude.json'))
     return servers
   }
 
@@ -533,7 +533,6 @@ export function createClaudeCodeBackend(
       run: state.run && { startedAt: state.run.startedAt, done: state.run.done },
       lastRecycleAt: state.lastRecycleAt,
       recycleFloor: state.recycleFloor,
-      recycleExhausted: state.recycleExhausted,
       liveSubagents: [...state.liveSubagents],
       streamLastLength: state.streamLastLength,
       thinkingAccum: state.thinkingAccum,
@@ -560,7 +559,6 @@ export function createClaudeCodeBackend(
         parentSessionKey: value.parentSessionKey,
         lastRecycleAt: value.lastRecycleAt,
         recycleFloor: value.recycleFloor,
-        recycleExhausted: value.recycleExhausted,
         // Recycle count resets on restart — it gates dedup within a process.
         recycleCount: 0,
         compactionCount: value.compactionCount ?? 0,
@@ -695,7 +693,7 @@ export function createClaudeCodeBackend(
   })
 
   /** End an agents_spawn run once: one parent message, result or failure. */
-  function finishRun(state: ClaudeSessionState, failure?: string): void {
+  function finishRun(state: ClaudeSessionState, failure?: string, ended?: 'stopped' | 'timed-out'): void {
     const run = state.run
     const parentKey = state.parentSessionKey
     if (!run || run.done || !parentKey) return
@@ -711,15 +709,17 @@ export function createClaudeCodeBackend(
     const childKey = state.sessionKey
     // An error result fails the run even after some text; the text goes along.
     const error = failure ?? run.error ?? (run.lastText ? undefined : 'ended without a result')
+    const durationMs = Date.now() - run.startedAt
     const parentMessage = formatSubagentResult({
       label: state.label ?? childKey,
       sessionKey: childKey,
-      durationMs: Date.now() - run.startedAt,
+      durationMs,
       result: run.lastText,
       error
     })
-    if (error) emitter.emit('subagent.failed', { parentKey, childKey, error, parentMessage })
-    else emitter.emit('subagent.completed', { parentKey, childKey, result: run.lastText ?? '', parentMessage })
+    const about = { parentKey, childKey, durationMs, ...(state.label ? { label: state.label } : {}) }
+    if (error) emitter.emit('subagent.failed', { ...about, error, parentMessage, ...(ended ? { ended } : {}) })
+    else emitter.emit('subagent.completed', { ...about, result: run.lastText ?? '', parentMessage })
   }
   emitter.on('subagent.spawned', (data) => {
     if (!data.parentKey) return
@@ -881,6 +881,21 @@ export function createClaudeCodeBackend(
               `The target thread is resolved automatically from the calling session.`
           }
         }
+      }
+
+      // No new remotes, no publishing: local repos and private data stay local.
+      if (inp.tool_name === 'Bash') {
+        const command = (inp.tool_input as { command?: unknown } | undefined)?.command
+        const reason = typeof command === 'string' ? publishReason(command) : undefined
+        if (reason)
+          return {
+            continue: true,
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse' as const,
+              permissionDecision: 'deny' as const,
+              permissionDecisionReason: publishDenial(reason)
+            }
+          }
       }
 
       // Record start time for metrics duration tracking. After the redirect
@@ -1179,7 +1194,6 @@ export function createClaudeCodeBackend(
       state.compactionCount = (state.compactionCount ?? 0) + 1
       // A compaction summarised the session: the recycle gate starts afresh.
       state.recycleFloor = undefined
-      state.recycleExhausted = false
       persistState(state)
       emitter.emit('chat.compacting', { sessionKey: state.sessionKey, active: false })
       // MCP rehydration: compact tears down the SDK's deferred-tool catalog
@@ -1211,38 +1225,9 @@ export function createClaudeCodeBackend(
           )
         }
       }
-      // Cozempic post-compaction prune — run standard-tier strategies on the
-      // JSONL to clean up pre-compaction residue (tool-use-result-strip,
-      // metadata-strip, envelope-strip, etc.).  Fire-and-forget: pruning
-      // happens async and does not block the model's next turn.
-      if (state.sessionFile && fs.existsSync(state.sessionFile)) {
-        const { execFile } = await import('node:child_process')
-        const cozempicBin = process.env.COZEMPIC_BIN ?? 'cozempic'
-        execFile(cozempicBin, ['treat', '--rx', 'standard', state.sessionFile], { timeout: 30_000 }, (err, stdout) => {
-          if (err) {
-            // Cozempic not installed or failed — log and continue.
-            // Not a hard failure: the conversation functions without it.
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-              console.warn(`[claude-code] PostCompact cozempic prune failed: ${err.message}`)
-            }
-          } else if (stdout.trim()) {
-            console.log(`[claude-code] PostCompact cozempic: ${stdout.trim().split('\n')[0]}`)
-            // Record context strategy metrics from cozempic output
-            if (deps.metrics) {
-              const parsed = parseCozempicOutput(stdout)
-              if (parsed) {
-                deps.metrics.recordContextStrategy({
-                  ts: Date.now(),
-                  sessionKey: state.sessionKey,
-                  backendKind: 'claude-code',
-                  model: state.model ?? 'unknown',
-                  ...parsed
-                })
-              }
-            }
-          }
-        })
-      }
+      // No cozempic prune here: the compaction already shrank the live
+      // context, and the SDK keeps writing this transcript, so a rewrite now
+      // could drop its lines. Pruning runs in recycleNow, after the query stops.
       return { continue: true }
     }
     const onStop = async (input: HookInput) => {
@@ -1475,8 +1460,17 @@ export function createClaudeCodeBackend(
     const sessionEnv = {
       ...process.env,
       ...BASH_FIRST_OFF_ENV,
-      // Subagents get exactly SUBAGENT_MCP_SERVERS: no claude.ai connectors.
-      ...(isSubagent ? { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' } : {}),
+      // Subagents get exactly SUBAGENT_MCP_SERVERS (no claude.ai connectors),
+      // and they compact mid-turn: the auto-recycle only runs between turns.
+      ...(isSubagent
+        ? {
+            ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
+            CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(SUBAGENT_AUTO_COMPACT_WINDOW)
+          }
+        : // Threads get the personality once, in the system prompt below. The
+          // SDK's user source would also inject ~/.claude/CLAUDE.md as an
+          // attachment, and again each time the file changes.
+          { CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1' }),
       ...(useLiteLlm
         ? {
             ANTHROPIC_BASE_URL: cfgAtStart.litellm!.url,
@@ -1499,8 +1493,9 @@ export function createClaudeCodeBackend(
       // injects ALL built-in schemas regardless of allowedTools (Workflow,
       // Agent, WebFetch, Task*, Cron*, Monitor, … ~30k tokens). `tools`
       // restricts which schemas get injected; `allowedTools` which can run.
-      // No Agent in the list: subagents never spawn subagents.
-      ...(isSubagent ? { tools: SUBAGENT_BUILTIN_TOOLS } : {}),
+      // No Agent in the list: subagents never spawn subagents. Top-level
+      // sessions lose the built-in Agent too: they delegate via agents_spawn.
+      ...(isSubagent ? { tools: SUBAGENT_BUILTIN_TOOLS } : { disallowedTools: MAIN_DISALLOWED_TOOLS }),
       mcpServers: sessionMcpServers,
       hooks: buildHooks(),
       // Settings sources:
@@ -1804,7 +1799,11 @@ export function createClaudeCodeBackend(
     // A due auto-recycle runs here, while the session is known to be idle,
     // rather than after the last turn's result: by then a queued message, a
     // cron or a finished background task may have started the next turn.
-    if (state.recycleDue && state.agentStatus === 'idle' && !recycleDone.has(sessionKey)) {
+    if (
+      (state.recycleDue || coldRecycleWanted(state)) &&
+      state.agentStatus === 'idle' &&
+      !recycleDone.has(sessionKey)
+    ) {
       recycleSession(sessionKey, { metricsMethod: 'auto-recycle' }).catch((err) =>
         console.warn('[context-recycle] auto-recycle error:', err)
       )
@@ -2112,7 +2111,9 @@ export function createClaudeCodeBackend(
         label: state.label,
         lastActivity,
         agentStatus: state.agentStatus,
-        parentKey: state.parentSessionKey
+        parentKey: state.parentSessionKey,
+        ...(state.cwd ? { cwd: state.cwd } : {}),
+        ...(state.run?.startedAt ? { startedAt: state.run.startedAt } : {})
       })
     }
     return out
@@ -2465,6 +2466,34 @@ export function createClaudeCodeBackend(
   // current context fill against the configured threshold and triggers
   // a recycle when the fill exceeds it.
 
+  /** The prompt cache's lifetime: past it, the next call writes the whole prompt again. */
+  const PROMPT_CACHE_TTL_MS = 60 * 60_000
+
+  /** A session idle past the cache TTL rewrites its whole prompt on the next call anyway,
+   *  so a prune before that call costs no extra cache write: the gate's cold threshold applies. */
+  function coldRecycleWanted(state: ClaudeSessionState): boolean {
+    const cfg = getConfig().contextManagement?.recycle
+    if (cfg?.enabled === false || state.parentSessionKey || !state.sessionFile) return false
+    let idleMs: number
+    try {
+      idleMs = Date.now() - fs.statSync(state.sessionFile).mtimeMs
+    } catch {
+      return false
+    }
+    if (idleMs < PROMPT_CACHE_TTL_MS) return false
+    const latest = latestUsageFromFile(state.sessionFile)
+    return recycleWanted({
+      filled: latest.inputTokens + latest.cacheRead + latest.cacheWrite,
+      maxTokens: state.contextWindow ?? contextWindowFor(state.model),
+      thresholdPercent: cfg?.thresholdPercent ?? 45,
+      floor: state.recycleFloor,
+      regrowPercent: cfg?.regrowPercent ?? 10,
+      idleMs,
+      cacheTtlMs: PROMPT_CACHE_TTL_MS,
+      coldThresholdPercent: cfg?.coldThresholdPercent ?? 20
+    })
+  }
+
   async function maybeAutoRecycle(state: ClaudeSessionState): Promise<void> {
     const recycleCfg = getConfig().contextManagement?.recycle
     if (recycleCfg?.enabled === false) return
@@ -2523,8 +2552,7 @@ export function createClaudeCodeBackend(
         maxTokens,
         thresholdPercent: threshold,
         floor: state.recycleFloor,
-        regrowPercent: recycleCfg?.regrowPercent ?? 10,
-        exhausted: state.recycleExhausted
+        regrowPercent: recycleCfg?.regrowPercent ?? 10
       })
     )
       return
@@ -2673,7 +2701,15 @@ export function createClaudeCodeBackend(
     //     working JSONL that the SDK reads for context.
     archiveJsonlBeforeRecycle(dataDir, state.backendSessionId, state.sessionFile)
 
-    // 5. Prune the JSONL — try cozempic subprocess, fall back to native.
+    // 5. Prune the JSONL. First keep only the newest copy of each injected
+    //    instructions file (CLAUDE.md), then cozempic, falling back to native.
+    let stubbedChars = 0
+    try {
+      stubbedChars = stubSupersededInstructions(state.sessionFile)
+    } catch (e) {
+      console.warn('[context-recycle] instructions stub failed:', e)
+    }
+    let cozTokens: { before: number; after: number } | undefined
     let method: 'cozempic' | 'native' = 'native'
     const rx = recycleCfg?.prescription ?? 'standard'
 
@@ -2685,6 +2721,7 @@ export function createClaudeCodeBackend(
         encoding: 'utf-8'
       })
       method = 'cozempic'
+      cozTokens = parseCozempicTokens(cozStdout)
 
       // Record context strategy metrics from cozempic output
       if (deps.metrics && cozStdout) {
@@ -2727,25 +2764,25 @@ export function createClaudeCodeBackend(
       console.warn('[context-recycle] compact-boundary trim failed:', e)
     }
 
-    // 6. Measure post-recycle size.
-    //    Usage entries in the JSONL still record pre-prune API values (pruning
-    //    truncates tool_result content, not usage fields). Estimate post-prune
-    //    tokens proportionally from the byte reduction.
+    // 6. Estimate the post-recycle prompt. The JSONL's usage entries still
+    //    hold pre-prune values. Cozempic reports tokens before and after: much
+    //    of what it strips from the file (envelopes, metadata) is never sent,
+    //    so the byte ratio understates the token cut. Stubbed instructions
+    //    count at ~4 characters a token; without cozempic, fall back to bytes.
     const postBytes = fs.existsSync(state.sessionFile) ? fs.statSync(state.sessionFile).size : 0
-    const postTokens = preBytes > 0 ? Math.round(preTokens * (postBytes / preBytes)) : 0
+    const afterStub = Math.max(0, preTokens - Math.round(stubbedChars / 4))
+    const postTokens =
+      cozTokens && cozTokens.before > 0
+        ? Math.round(afterStub * (cozTokens.after / cozTokens.before))
+        : preBytes > 0
+          ? Math.round(preTokens * (postBytes / preBytes))
+          : 0
 
     // 7. Reset filter dedup state and stamp the recycle time.
     state.contextFilter?.reset()
     state.lastRecycleAt = Date.now()
     state.recycleDue = false
     state.recycleFloor = postTokens
-    state.recycleExhausted = recycleExhausted(preTokens, postTokens, recycleCfg?.minReclaimPercent ?? 5)
-    if (state.recycleExhausted) {
-      console.log(
-        `[context-recycle] ${sessionKey}: recycle freed ${preTokens - postTokens} of ${preTokens} tokens — ` +
-          `pruning cannot shrink it; auto-recycle off until the next compaction`
-      )
-    }
     state.recycleCount = (state.recycleCount ?? 0) + 1
     state.lastUsage = undefined
 
@@ -2777,6 +2814,13 @@ export function createClaudeCodeBackend(
       })
     }
 
+    emitter.emit('session.recycled', {
+      sessionKey,
+      preTokens,
+      postTokens,
+      reclaimedBytes: result.reclaimedBytes,
+      method: opts?.metricsMethod ?? 'recycle'
+    })
     if (announce) emitter.emit('chat.status', { sessionKey, status: 'idle' })
     if (!announce) {
       console.log(
@@ -2882,9 +2926,10 @@ export function createClaudeCodeBackend(
       parentSessionKey
     })
     const run: SubagentRun = { startedAt: Date.now() }
+    const timeoutMs = opts.timeoutMs ?? SUBAGENT_TIMEOUT_MS
     run.timer = setTimeout(
-      () => finishRun(childState, `timed out after ${Math.round(SUBAGENT_TIMEOUT_MS / 60_000)} min`),
-      opts.timeoutMs ?? SUBAGENT_TIMEOUT_MS
+      () => finishRun(childState, `timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} min`, 'timed-out'),
+      timeoutMs
     )
     run.timer.unref?.()
     childState.run = run
@@ -2910,7 +2955,7 @@ export function createClaudeCodeBackend(
   async function stopSubagent(childKey: string): Promise<void> {
     const state = internal.sessions.get(childKey)
     if (!state?.run) throw new Error(`agents_stop: ${childKey} is not an agents_spawn subagent`)
-    finishRun(state, 'stopped by the parent')
+    finishRun(state, 'stopped by the parent', 'stopped')
   }
 
   function getSessionFilePath(sessionKey: string): string | null {

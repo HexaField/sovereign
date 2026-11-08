@@ -128,11 +128,48 @@ export const schema = {
           },
           additionalProperties: false
         },
+        harnesses: {
+          type: 'object',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              adapter: { type: 'string', enum: ['claude', 'devin', 'codex', 'opencode', 'pi'] },
+              bin: { type: 'string' },
+              model: { type: 'string' },
+              endpoint: { type: 'string' },
+              sandbox: { type: 'string', enum: ['harness', 'bwrap', 'none'] },
+              allowedRoots: { type: 'array', items: { type: 'string' } },
+              mcp: { type: 'boolean' },
+              configFile: { type: 'string' },
+              extraArgs: { type: 'array', items: { type: 'string' } },
+              extraEnv: { type: 'object', additionalProperties: { type: 'string' } },
+              timeoutMinutes: { type: 'number', minimum: 1 }
+            },
+            required: ['adapter'],
+            additionalProperties: false
+          }
+        },
+        endpoints: {
+          type: 'object',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              api: { type: 'string', enum: ['openai', 'anthropic'] },
+              baseUrl: { type: 'string', minLength: 1 },
+              apiKeySecret: { type: 'string' },
+              local: { type: 'boolean' }
+            },
+            required: ['api', 'baseUrl', 'local'],
+            additionalProperties: false
+          }
+        },
         subagentDefaults: {
           type: 'object',
           properties: {
+            harness: { type: 'string' },
             backend: { type: 'string' },
-            model: { type: 'string' }
+            model: { type: 'string' },
+            timeoutMinutes: { type: 'number', minimum: 1 }
           },
           additionalProperties: false
         }
@@ -254,7 +291,7 @@ export const schema = {
             prescription: { type: 'string' },
             skipDuringSubagents: { type: 'boolean' },
             regrowPercent: { type: 'number', minimum: 0, maximum: 100 },
-            minReclaimPercent: { type: 'number', minimum: 0, maximum: 100 }
+            coldThresholdPercent: { type: 'number', minimum: 0, maximum: 100 }
           },
           additionalProperties: false
         },
@@ -297,6 +334,60 @@ export const schema = {
       },
       additionalProperties: false
     },
+    forge: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' },
+        identities: {
+          type: 'object',
+          properties: { github: { type: 'string', minLength: 1 } },
+          additionalProperties: false
+        },
+        planDirs: { type: 'array', items: { type: 'string', minLength: 1 } },
+        repos: {
+          type: 'object',
+          additionalProperties: { type: 'array', items: { type: 'string', minLength: 1 } }
+        },
+        trustedAuthors: {
+          type: 'object',
+          additionalProperties: { type: 'array', items: { type: 'string', minLength: 1 } }
+        },
+        mentions: { type: 'array', items: { type: 'string', minLength: 1 } },
+        pollOpenMs: { type: 'number', minimum: 10000 },
+        pollAllMs: { type: 'number', minimum: 30000 },
+        windowDays: { type: 'number', minimum: 1, maximum: 365 },
+        githubApiUrl: { type: 'string', minLength: 1 },
+        githubToken: { type: 'string', minLength: 1 },
+        classifier: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', minLength: 1 },
+            model: { type: 'string', minLength: 1 },
+            timeoutMs: { type: 'number', minimum: 100 }
+          },
+          required: ['url'],
+          additionalProperties: false
+        },
+        rethink: {
+          type: 'object',
+          properties: {
+            times: { type: 'array', items: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' } },
+            maxJobs: { type: 'number', minimum: 0 },
+            tokenBudget: { type: 'number', minimum: 0 },
+            threads: { type: 'object', additionalProperties: { type: 'string', minLength: 1 } }
+          },
+          additionalProperties: false
+        }
+      },
+      additionalProperties: false
+    },
+    graphcoder: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' }
+      },
+      additionalProperties: false
+    },
     deviceOverrides: {
       type: 'object',
       additionalProperties: {
@@ -314,11 +405,11 @@ export const schema = {
   additionalProperties: false
 } as const
 
-/** Secret keys live in {dataDir}/secrets.json, not config.json. */
+/** Secret keys live in {dataDir}/secrets.json, not config.json. Names are
+ *  free-form (an endpoint's `apiKeySecret` picks one); values are strings. */
 export const secretsSchema = {
   type: 'object',
-  properties: {},
-  additionalProperties: false
+  additionalProperties: { type: 'string' }
 } as const
 
 const ajv = new Ajv({ allErrors: true, strict: false })

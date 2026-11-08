@@ -161,7 +161,7 @@ describe('§3.5 Nav Store', () => {
     })
 
     it('setActiveAgentTab switches tabs', () => {
-      const tabs: AgentTab[] = ['overview', 'forest', 'tasks', 'system']
+      const tabs: AgentTab[] = ['overview', 'forest', 'forge', 'system']
       for (const tab of tabs) {
         setActiveAgentTab(tab)
         expect(activeAgentTab()).toBe(tab)
@@ -192,10 +192,16 @@ describe('§3.5 Nav Store', () => {
       expect(lastCall[2]).toContain('tab=overview')
     })
 
-    it('?tab=tasks URL resolves to agent/tasks on init', () => {
+    it('?tab=forge URL resolves to agent/forge on init', () => {
+      cleanup = loadAt('?view=agent&tab=forge', cleanup)
+      expect(activeView()).toBe('agent')
+      expect(activeAgentTab()).toBe('forge')
+    })
+
+    it('legacy ?tab=tasks URL opens the Forge tab (Tasks became Forge)', () => {
       cleanup = loadAt('?view=agent&tab=tasks', cleanup)
       expect(activeView()).toBe('agent')
-      expect(activeAgentTab()).toBe('tasks')
+      expect(activeAgentTab()).toBe('forge')
     })
 
     it('legacy ?view=dashboard URL resolves to agent/overview on init', () => {
@@ -239,7 +245,7 @@ describe('§3.5 Nav Store', () => {
       vi.mocked(threadKey).mockReturnValue('workspace-thread-abc')
       toggleMode()
       toggleMode()
-      setActiveAgentTab('tasks')
+      setActiveAgentTab('forge')
       setActiveView('agent')
       closeDashboardModal()
       await Promise.resolve()

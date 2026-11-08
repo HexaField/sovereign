@@ -1,5 +1,41 @@
 // Config Management — Types
 
+/** A model endpoint a harness profile can talk to. */
+export interface ModelEndpoint {
+  /** Wire protocol the endpoint speaks. */
+  api: 'openai' | 'anthropic'
+  /** For example http://studio.example:8080/v1. */
+  baseUrl: string
+  /** Name of the key in Sovereign's secret store (data/secrets.json); never the key itself. */
+  apiKeySecret?: string
+  /** True when a request never leaves the user's machines. Only a local
+   *  endpoint may run in a private directory (~/.sovereign, ~/workspaces/hexafield). */
+  local: boolean
+}
+
+/** A named, ready-to-run harness for `agents_spawn`. */
+export interface HarnessProfile {
+  adapter: 'claude' | 'devin' | 'codex' | 'opencode' | 'pi'
+  /** The CLI; default the adapter's binary name on PATH, then in ~/.local/bin. */
+  bin?: string
+  /** Model id the harness passes on. Claude: optional, after the thread's and the global subagent model. */
+  model?: string
+  /** A `ModelEndpoint` name. Absent: the harness's own login (Devin). */
+  endpoint?: string
+  /** 'harness': the CLI's own sandbox; 'bwrap': Sovereign wraps the process; 'none'. Default 'bwrap'. */
+  sandbox?: 'harness' | 'bwrap' | 'none'
+  /** Directories (and everything below them) a run may use as cwd; `~` is the home directory. */
+  allowedRoots?: string[]
+  /** Give the run Sovereign's subagent MCP servers (codegraph, semble, code, sovereign). Default true. */
+  mcp?: boolean
+  /** A config file the harness loads instead of the user's (devin: `--config`). */
+  configFile?: string
+  extraArgs?: string[]
+  extraEnv?: Record<string, string>
+  /** Wall-clock limit; default `subagentDefaults.timeoutMinutes`, else 4 h. */
+  timeoutMinutes?: number
+}
+
 export interface SovereignConfig {
   server: {
     port: number
@@ -98,6 +134,10 @@ export interface SovereignConfig {
         }
       }>
     }
+    /** Harness profiles `agents_spawn` can run a task in, by name (its `harness`). */
+    harnesses: Record<string, HarnessProfile>
+    /** Model endpoints harness profiles point at, by name. */
+    endpoints: Record<string, ModelEndpoint>
   }
   /** Running summary service — maintains per-thread rolling summaries via a local model. */
   summary: {
@@ -239,8 +279,8 @@ export interface SovereignConfig {
       skipDuringSubagents: boolean
       /** After a recycle, wait for the context to grow this % of the window before the next one. */
       regrowPercent: number
-      /** A recycle that frees less than this % of the context stops auto-recycle until a compaction. */
-      minReclaimPercent: number
+      /** The threshold after an idle gap past the prompt-cache TTL, when the next call rewrites the whole prompt anyway. */
+      coldThresholdPercent: number
     }
     /** Layer 3: between-session JSONL cleanup via cron. */
     cleanup: {
@@ -274,6 +314,65 @@ export interface SovereignConfig {
     forecastPollMs: number
     /** Time zone for "today" and "tomorrow". */
     timeZone: string
+  }
+  /**
+   * Forge (packages/work-graph): the work graph per membrane. Repos come from
+   * each membrane's projects (plus `repos`), never from code.
+   */
+  forge: {
+    enabled: boolean
+    /** The login Forge acts as per forge (assignee writes). Unset: the adapter's own account. */
+    identities: { github?: string }
+    /** Plan dirs: absolute = every membrane; relative = under each membrane content dir, org and project. */
+    planDirs: string[]
+    /** Extra repos per membrane id ("owner/name" or "host/owner/name"). */
+    repos: Record<string, string[]>
+    /**
+     * Forge logins whose PRs and issues enter the Forge, per membrane id; `"*"`
+     * serves every membrane without its own list. Case-insensitive. No list
+     * for a membrane: every author passes.
+     */
+    trustedAuthors: Record<string, string[]>
+    /** Words besides "@<identity>" that make a comment needs-agent. */
+    mentions: string[]
+    /** Open-items refresh interval. */
+    pollOpenMs: number
+    /** Everything-updated refresh interval (also re-reads branches). */
+    pollAllMs: number
+    /** Default past window in days. */
+    windowDays: number
+    /** GitHub REST base for github.com repos (a mock in the wind tunnel). */
+    githubApiUrl?: string
+    /** GitHub token; unset: GITHUB_TOKEN, GH_TOKEN, then `gh auth token`. */
+    githubToken?: string
+    /**
+     * Loop 1's decision-model tier: llama.cpp's `POST <url>/v1/systemone`.
+     * Unset: events the rules cannot place go to Loop 2 (needs-agent).
+     */
+    classifier?: {
+      /** Server base URL, e.g. http://127.0.0.1:8080 (no /v1/systemone). */
+      url: string
+      /** `model` for a llama-server in router mode. */
+      model?: string
+      /** Per-request timeout; default 5000. */
+      timeoutMs?: number
+    }
+    /** Loop 2 (agent rethink) limits and times. */
+    rethink: {
+      /** Local "HH:MM" times. */
+      times: string[]
+      maxJobs: number
+      tokenBudget: number
+      /** Label of the thread that runs a membrane's rethink, per membrane id. Unset: `forge-rethink`. */
+      threads?: Record<string, string>
+    }
+  }
+  /**
+   * Graphcoder (packages/graphcoder-*): code structure of every indexed
+   * checkout. Read at boot: the router mounts only when enabled.
+   */
+  graphcoder: {
+    enabled: boolean
   }
 }
 

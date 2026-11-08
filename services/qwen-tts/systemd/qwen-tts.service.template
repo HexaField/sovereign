@@ -1,0 +1,22 @@
+[Unit]
+Description=Qwen3-TTS voice service (F5 API adapter for the qwentts.cpp engine)
+After=qwen-tts-engine.service
+Wants=qwen-tts-engine.service
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+Environment=QWEN_TTS_PORT=5813
+Environment=QWEN_TTS_BACKEND_URL=http://127.0.0.1:5814
+Environment=QWEN_TTS_VOICE=default
+Environment=QWEN_TTS_REF_AUDIO=%h/.sovereign/data/voice/references/default.wav
+# Exact transcript of the reference clip.
+Environment="QWEN_TTS_REF_TEXT=@@REF_TEXT@@"
+ExecStart=@@QWEN_TTS_DIR@@/.venv/bin/python @@SERVICE_DIR@@/server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

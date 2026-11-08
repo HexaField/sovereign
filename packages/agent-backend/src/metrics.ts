@@ -165,6 +165,9 @@ export interface MetricsAccumulator {
   }
 }
 
+/** Each log line ends with its time, so a review can read one window from the log. */
+const now = (): string => new Date().toISOString()
+
 export function createMetricsAccumulator(): MetricsAccumulator {
   const toolRing = new RingBuffer<ToolCallMetric>(TOOL_RING_SIZE)
   const compactRing = new RingBuffer<CompactionMetric>(COMPACTION_RING_SIZE)
@@ -243,7 +246,7 @@ export function createMetricsAccumulator(): MetricsAccumulator {
     const tag = m.isSubagent ? 'subagent-tool' : 'tool'
     console.log(
       `[metrics] ${tag} session=${short(m.sessionKey)} model=${m.model} tool=${m.toolName} ` +
-        `in=${m.inputChars} out=${m.outputChars} trimmed=${m.outputTrimmedChars} dur=${m.durationMs}ms`
+        `in=${m.inputChars} out=${m.outputChars} trimmed=${m.outputTrimmedChars} dur=${m.durationMs}ms at=${now()}`
     )
   }
 
@@ -260,7 +263,7 @@ export function createMetricsAccumulator(): MetricsAccumulator {
     console.log(
       `[metrics] ${m.method} session=${short(m.sessionKey)} model=${m.model} ` +
         `pre=${m.preTokens} post=${m.postTokens} reclaimed=${m.tokensReclaimed}` +
-        `${m.isSubagent ? ' (subagent)' : ''}`
+        `${m.isSubagent ? ' (subagent)' : ''} at=${now()}`
     )
   }
 
@@ -298,7 +301,7 @@ export function createMetricsAccumulator(): MetricsAccumulator {
     console.log(
       `[metrics] context-strategy session=${short(m.sessionKey)} model=${m.model} ` +
         `saved=${m.prunedChars}chars (${savingsPct}%) removed=${m.messagesRemoved} ` +
-        `replaced=${m.messagesReplaced} dur=${m.durationMs}ms`
+        `replaced=${m.messagesReplaced} dur=${m.durationMs}ms at=${now()}`
     )
   }
 

@@ -79,3 +79,16 @@ export function parseCozempicOutput(stdout: string): ParsedCozempicMetric | null
     durationMs: 0 // Cozempic doesn't report duration in stdout
   }
 }
+
+/** Cozempic's token estimate before and after a treat (the Before and After lines). */
+export function parseCozempicTokens(stdout: string): { before: number; after: number } | undefined {
+  const read = (label: string) => {
+    const m = new RegExp(`^\\s*${label}\\s+([\\d.,]+)\\s*([KM]?)\\s+tokens`, 'mi').exec(stdout)
+    if (!m) return undefined
+    const n = parseFloat(m[1].replace(/,/g, ''))
+    return Math.round(n * (m[2].toUpperCase() === 'M' ? 1_000_000 : m[2].toUpperCase() === 'K' ? 1_000 : 1))
+  }
+  const before = read('Before')
+  const after = read('After')
+  return before !== undefined && after !== undefined ? { before, after } : undefined
+}

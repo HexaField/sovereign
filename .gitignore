@@ -21,3 +21,7 @@ vendor/coasys/ad4m/core/lib/
 
 # Claude Code project dir — regenerated per session, never committed.
 .claude/
+
+# Python bytecode (services/*)
+__pycache__/
+*.pyc

@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { buildSubagentSystemPrompt, findRepoContext, selectSubagentMcpServers } from './subagent-runner.js'
+import { delimiter, join } from 'node:path'
+import {
+  buildSubagentSystemPrompt,
+  findRepoContext,
+  selectSubagentMcpServers,
+  subagentMcpServers
+} from './subagent-runner.js'
 
 describe('claude-code/subagent-runner', () => {
   let root: string
@@ -57,6 +62,25 @@ describe('claude-code/subagent-runner', () => {
       expect(prompt).not.toContain('Personality source.')
       expect(prompt.startsWith('Rules.\n\n# Environment')).toBe(true)
     })
+
+    it('cuts a repo context over 40k characters to its head plus an index of the sections left out', () => {
+      const repo = join(root, 'repo')
+      mkdirSync(repo)
+      const section = (n: number) => `## Section ${n}\n\n` + `${'y'.repeat(79)}\n`.repeat(100)
+      const text = ['# Big reference', ...Array.from({ length: 10 }, (_, i) => section(i + 1))].join('\n')
+      writeFileSync(join(repo, 'AGENTS.md'), text)
+      const prompt = buildSubagentSystemPrompt({ cwd: repo, home: root })
+
+      expect(text.length).toBeGreaterThan(80_000)
+      expect(prompt.length).toBeLessThan(42_000)
+      expect(prompt).toMatch(/^## Section 1$/m)
+      expect(prompt).not.toMatch(/^## Section 10$/m)
+      // The index points at what was left out, by line, so the agent can Read it.
+      expect(prompt).toMatch(
+        new RegExp(`only its first [\\d,]+ of [\\d,]+ characters.*${join(repo, 'AGENTS.md')}`, 's')
+      )
+      expect(prompt).toMatch(/^- line \d+: ## Section 10$/m)
+    })
   })
 
   describe('selectSubagentMcpServers', () => {
@@ -74,6 +98,19 @@ describe('claude-code/subagent-runner', () => {
       expect(selectSubagentMcpServers({ sovereign: { url: 'u' } }, join(root, 'missing.json'))).toEqual({
         sovereign: { url: 'u' }
       })
+    })
+  })
+
+  describe('subagentMcpServers', () => {
+    it('adds the narrow sovereign endpoint and the cwd as an edit root, then selects the subagent set', () => {
+      const code = { type: 'stdio', command: 'node', args: ['mcp.js', '--edit-roots', '/w'] }
+      const out = subagentMcpServers(
+        { code, ad4m: { type: 'http', url: 'a' }, codegraph: { type: 'stdio', command: 'codegraph', args: [] } },
+        { cwd: '/tmp/repo', claudeJsonPath: join(root, 'missing.json') }
+      )
+      expect(Object.keys(out)).toEqual(['codegraph', 'code', 'sovereign'])
+      expect(out.code.args).toEqual(['mcp.js', '--edit-roots', ['/w', '/tmp/repo'].join(delimiter)])
+      expect(out.sovereign).toEqual({ type: 'http', url: 'http://localhost:5801/api/mcp/subagent', alwaysLoad: true })
     })
   })
 })
