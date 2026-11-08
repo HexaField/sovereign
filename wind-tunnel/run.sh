@@ -41,9 +41,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ad4m lane: overlay the ad4m node + provision step, and point the s10 scenario
-# at the node's host-exposed MCP. Needs an ad4m executor image (AD4M_EXEC_IMAGE,
-# default ad4m-test:latest); s10 self-skips if the node is unreachable.
+# ad4m lane: overlay the ad4m node, its link-server + provision step, and point
+# the s10 scenario at the node's host-exposed MCP. Needs an executor image built
+# from an ad4m checkout by ad4m/build-exec-image.sh (AD4M_EXEC_IMAGE, default
+# swt-ad4m-exec:latest) and the vendored SDK's build (`pnpm run build` at the
+# repo root makes vendor/coasys/ad4m/core/lib), which the provision step loads.
 #
 # The ad4m lane runs s10 by itself by default. s9 restarts the Sovereign
 # container mid-suite; s10's waker then races that reconnect, so the two do not
@@ -52,6 +54,16 @@ done
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 if [[ "$AD4M" == "true" ]]; then
   COMPOSE_ARGS+=(-f "docker/docker-compose.ad4m.yml")
+  export AD4M_EXEC_IMAGE="${AD4M_EXEC_IMAGE:-swt-ad4m-exec:latest}"
+  if ! docker image inspect "$AD4M_EXEC_IMAGE" >/dev/null 2>&1; then
+    echo "✗ ad4m lane: no executor image $AD4M_EXEC_IMAGE — build one with" >&2
+    echo "    AD4M_SRC=<ad4m checkout> ./wind-tunnel/ad4m/build-exec-image.sh $AD4M_EXEC_IMAGE" >&2
+    exit 1
+  fi
+  if [[ ! -f ../vendor/coasys/ad4m/core/lib/index.js ]]; then
+    echo "✗ ad4m lane: the vendored SDK is not built (vendor/coasys/ad4m/core/lib) — run pnpm run build" >&2
+    exit 1
+  fi
   # Default the ad4m lane to s10 unless the caller chose scenarios explicitly.
   if [[ ! " ${EXTRA_ARGS[*]} " == *" --scenario "* ]]; then
     EXTRA_ARGS+=(--scenario s10)

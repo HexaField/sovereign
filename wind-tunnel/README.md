@@ -46,18 +46,18 @@ wind-tunnel/
 
 ## Scenarios
 
-| ID  | Name               | Proves                                                       |
-| --- | ------------------ | ------------------------------------------------------------ |
-| s1  | Cold Start         | Server boots, health responds, WS connects                   |
-| s2  | Thread Lifecycle   | Thread create/read/update/list/delete                        |
-| s3  | Chat Roundtrip     | Full chat send → queue → SDK → mock API → WS response        |
-| s4  | Presence Threads   | Auto-creation of internal + gateway threads, role assignment |
-| s5  | Thread Messaging   | Cross-thread message forwarding                              |
-| s6  | Scheduler CRUD     | Cron job create/list/delete                                  |
-| s7  | WS Events          | Thread lifecycle events propagate to WS clients              |
-| s8  | Config & Membranes | Config endpoint, client config, membrane CRUD                |
-| s9  | Session Resume     | Sessions rehydrate + resume after a restart                  |
-| s10 | AD4M Waker         | Native ad4m waker wakes presence on a mention + reply lands  |
+| ID | Name | Proves |
+| --- | --- | --- |
+| s1 | Cold Start | Server boots, health responds, WS connects |
+| s2 | Thread Lifecycle | Thread create/read/update/list/delete |
+| s3 | Chat Roundtrip | Full chat send → queue → SDK → mock API → WS response |
+| s4 | Presence Threads | Auto-creation of internal + gateway threads, role assignment |
+| s5 | Thread Messaging | Cross-thread message forwarding |
+| s6 | Scheduler CRUD | Cron job create/list/delete |
+| s7 | WS Events | Thread lifecycle events propagate to WS clients |
+| s8 | Config & Membranes | Config endpoint, client config, membrane CRUD |
+| s9 | Session Resume | Sessions rehydrate + resume after a restart |
+| s10 | AD4M Waker | A second agent's WE-shaped mentions wake presence once each; substrings, other DIDs and own writes never do; no re-delivery after a restart; reply lands (ad4m lane) |
 
 ## Mock LLM
 
@@ -110,22 +110,76 @@ Return a `ScenarioResult` with `passed`, `summary`, `metrics`, and `samples`.
 
 ## AD4M Lane
 
-Scenario s10 exercises the full ad4m loop: a neighbourhood @mention wakes Sovereign's native waker, the presence agent runs a turn, and its `presence_reply_ad4m` write-back lands back in the channel. It needs a real ad4m executor, so it runs as an opt-in lane and self-skips otherwise.
+Scenario s10 runs Sovereign's mention waker against a real ad4m executor with two agents: a WE user mentions Sovereign's agent in a shared neighbourhood, the waker wakes the presence agent, and its `presence_reply_ad4m` write-back lands in the channel. It runs as an opt-in lane and self-skips otherwise.
+
+### The executor image
+
+The lane runs the executor of an ad4m checkout (e.g. a PR's head), wrapped in a thin image. Build the binaries and languages in the checkout first, then the image:
 
 ```bash
-# Needs an ad4m executor image (default ad4m-test:latest; override with
-# AD4M_EXEC_IMAGE). s10 self-skips if the node is unreachable.
-./wind-tunnel/run.sh --ad4m
-./wind-tunnel/run.sh --ad4m --scenario s10        # just the ad4m lane
+# In the ad4m checkout: a release build, the local bootstrap seed and the
+# server-link-language bundle (see the ad4m repo's AGENTS.md for the Deno
+# snapshot the executor build needs).
+cargo build --release -p ad4m --bin ad4m-executor --bin ad4m
+(cd bootstrap-languages/local && node generate-seed.mjs)
+(cd bootstrap-languages/server-link-language && pnpm build)
+
+# Here: stage those into wind-tunnel/ad4m/exec-image/.stage (gitignored) and build.
+AD4M_SRC=<ad4m checkout> ./wind-tunnel/ad4m/build-exec-image.sh swt-ad4m-exec:latest
 ```
 
-The lane overlays `docker/docker-compose.ad4m.yml`, which adds:
+`AD4M_TARGET_DIR` points at a cargo target dir outside the checkout. The image (`ad4m/exec-image/Dockerfile`) is `ubuntu:26.04` plus the binaries, the checkout's own `docker-entrypoint.sh`, its local bootstrap languages and the server-link bundle. The base must run the host-built binary: one built on Ubuntu 26.04 needs glibc 2.43.
 
-- **`ad4m`** — a multi-user ad4m node (MCP + WS-RPC, Holochain off), MCP exposed on host `:14561` so s10 can inject the mention + verify the reply.
-- **`ad4m-provision`** — a one-shot step that signs up a user, mints a channel perspective, and writes the user JWT to a shared dir **before** Sovereign boots (`ad4m/provision.mjs`). Sovereign reads that token, so its waker connects as the same user that owns the perspective.
-- a **`sovereign`** override that mounts `ad4m/config.json` (sets `ad4m.host` + agent name `Hex`) and the provisioned token dir as its data dir.
+The provision step also needs the vendored SDK's build (`vendor/coasys/ad4m/core/lib`, made by `pnpm run build` at the repo root).
 
-The provisioned identity is written to `wind-tunnel/ad4m/.provision/` (gitignored) so s10 (on the host) injects + verifies against the exact perspective the waker watches. This mirrors the AD4M wind tunnel's A4 (Sovereign) route, run inside Sovereign's own suite.
+```bash
+AD4M_EXEC_IMAGE=swt-ad4m-exec:latest ./wind-tunnel/run.sh --ad4m   # s10 by default
+```
+
+### Two agents, one neighbourhood
+
+The lane overlays `docker/docker-compose.ad4m.yml`:
+
+- **`link-server`** — ad4m's link-server (built from `vendor/coasys/ad4m/link-server`, `AUTO_ADMIT`), the sync backend of the server-link-language. Holochain is off, as on WE's staging.
+- **`ad4m`** — one multi-user executor (MCP + WS-RPC); MCP on host `:14561`, WS-RPC on `:14560`.
+- **`ad4m-provision`** (`ad4m/provision.mjs`, before Sovereign boots) — signs up **Hex** (Sovereign's agent) and **Alex** (a WE user, its own DID). Hex makes the channel perspective and publishes it as a neighbourhood over the server-link-language templated with the link-server's URL; Alex joins by URL. On one multi-user executor a joined neighbourhood is the same perspective with a second owner, as on WE's staging node, so Alex's links (signed by Alex) land in the perspective Hex's waker watches. A probe link from Alex must reach Hex's view before the step succeeds. It writes Hex's JWT as Sovereign's ad4m token and both agents' identities to `wind-tunnel/ad4m/.provision/provision.json` (gitignored).
+- a **`sovereign`** override that mounts `ad4m/config.json` (`ad4m.host`, agent name `Hex`) and the provisioned dir as its data dir.
+
+Two executors would each need the shared-store languages of ad4m's `tests/js/utils/sharedStores.ts` to find each other's neighbourhood and language, which the image's local bootstrap languages do not set up.
+
+### What s10 checks
+
+Alex registers WE-shaped classes over MCP (`add_model`) and writes records through them (`instance_create`), under the channel:
+
+- `TextBlock` — WE's text block: `text` (`we://text`), `source` (`we://text_source`), `mentions` (`we://mention`), conforming to TextContent by name;
+- `Note` — another app: `content` aliased to `text`, `cc` aliased to `mentions`;
+- `Chat` — text only, no mention relation;
+- `Post` — a post root with `mentions` and no text;
+- `CollectionBlock` — a composed record's root (`kind`, `mentions`), no text; a post comment is one of kind `reply`.
+
+`TextBlock`, `Post` and `CollectionBlock` also carry `responses` (`we://response`, many), as WE's `WeNode` does: a reply is never a child, it hangs off what it answers. A reply is written as WE's transcribe module writes it: the reply `TextBlock` first (no parent), then `instance_add_to_collection` adds it to the answered record's `responses`, then one more adds each `we://mention` to the reply.
+
+A wake case passes when the mock LLM log shows a presence turn whose message says it was mentioned, names the item and `By: <Alex's DID> (signature verified)`, and the presence-internal thread history holds that wake exactly once. A quiet case passes when neither shows up within a window of at least 20 s and three times the slowest wake, and a control mention written after the window still wakes.
+
+| Case | Record | Expect |
+| --- | --- | --- |
+| 1 | TextBlock "@Hexi can you look at this" + mention link to Hex (the reply is scripted here: `presence_reply_ad4m` must land in the channel) | wake |
+| 2 | TextBlock "Hex, can you check the build?", no link | wake |
+| 3 | TextBlock with Hex's DID in the text, no link | wake |
+| 4 | TextBlock source "spoken", "hey Hex what do you think" | wake |
+| 5 | TextBlock "the hexagon tiles are done" | none |
+| 6 | TextBlock, neutral text, mention link to another DID | none |
+| 7 | Hex itself writes a TextBlock naming and mentioning Hex | none |
+| 8 | Note, neutral text, `cc` (aliased to mentions) → Hex | wake |
+| 9 | Chat "Hex are you around?" | wake |
+| 10 | TextBlock naming Hex and linking Hex | wake, once |
+| 11 | Restart the Sovereign container: a new mention wakes, none of the earlier ones is delivered again | wake |
+| 12 | **Known gap:** Post with only a mention link to Hex, its text in a child TextBlock | none (today) |
+| R1 | Feed reply: a TextBlock "@Hexo yes, see the log" in a feed line's `responses`, then a mention link to Hex (the chip label runs into the next word, so only the link can wake). The case line prints the wake's `Parents:` (a reply is not a `has_child` child, so `(unknown)` is expected today; not asserted) | wake, once, by Alex |
+| R2 | Feed reply "thanks Hex, merged" in a feed line's `responses`, no link | wake, once, by Alex |
+| R3 | **Known gap:** post comment: a CollectionBlock of kind `reply` in a post's `responses`, its text in a child TextBlock that does not name Hex, only a mention link on the root | none (today) |
+
+s10 prints one line per case (latency, deliveries, author). It restarts the Sovereign container, so keep it out of a run with s9.
 
 ## Isolation (HARD RULE)
 
