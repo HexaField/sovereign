@@ -424,3 +424,183 @@ describe('Thread Routes — Context Management Health (Layers 1/2/3)', () => {
     expect(res.body.layer2).toMatchObject({ enabled: true, recycleCount: 3, lastRecycleAt })
   })
 })
+
+describe('Thread Routes — rename and delete', () => {
+  let app: ReturnType<typeof express>
+  let tm: ThreadManager
+  let backend: AgentBackend
+  let aborted: string[]
+
+  beforeEach(() => {
+    const dataDir = makeTmpDir()
+    tm = createThreadManager(createEventBus(dataDir), dataDir)
+    aborted = []
+    backend = createStubBackend()
+    backend.abort = async (sessionKey: string) => {
+      aborted.push(sessionKey)
+    }
+    app = express()
+    app.use(express.json())
+    app.use(createThreadRoutes(tm, forwardHandler as any, { backend }))
+  })
+
+  it('PATCH /api/threads/:key renames the thread (trimmed) and persists it', async () => {
+    const thread = tm.create({ label: 'old name' })
+    const res = await request(app).patch(`/api/threads/${thread.id}`).send({ label: '  new name  ' })
+    expect(res.status).toBe(200)
+    expect(res.body.thread.label).toBe('new name')
+    expect(tm.get(thread.id)?.label).toBe('new name')
+  })
+
+  it('PATCH /api/threads/:key rejects an empty or non-string label', async () => {
+    const thread = tm.create({ label: 'keep me' })
+    expect((await request(app).patch(`/api/threads/${thread.id}`).send({ label: '   ' })).status).toBe(400)
+    expect((await request(app).patch(`/api/threads/${thread.id}`).send({ label: 42 })).status).toBe(400)
+    expect(tm.get(thread.id)?.label).toBe('keep me')
+  })
+
+  it('DELETE /api/threads/:key removes the thread from the active list', async () => {
+    const thread = tm.create({ label: 'doomed' })
+    const res = await request(app).delete(`/api/threads/${thread.id}`)
+    expect(res.status).toBe(200)
+    const list = await request(app).get('/api/threads')
+    expect(list.body.threads.map((t: { id: string }) => t.id)).not.toContain(thread.id)
+    expect(aborted).toEqual([])
+  })
+
+  it('DELETE /api/threads/:key stops a turn still running on the thread', async () => {
+    const thread = tm.create({ label: 'busy' })
+    thread.agentStatus = 'working'
+    await request(app).delete(`/api/threads/${thread.id}`)
+    expect(aborted).toEqual([thread.id])
+  })
+
+  it('DELETE /api/threads/:key stops the thread’s live subagents but not its idle ones', async () => {
+    const stopped: string[] = []
+    backend.listSubagents = async () => [
+      { sessionKey: 'child-working', label: 'working child', status: 'working' },
+      { sessionKey: 'child-idle', label: 'idle child', status: 'idle' }
+    ]
+    backend.stopSubagent = async (childKey: string) => {
+      stopped.push(childKey)
+    }
+    const thread = tm.create({ label: 'parent' })
+    await request(app).delete(`/api/threads/${thread.id}`)
+    await new Promise((r) => setImmediate(r))
+    expect(stopped).toEqual(['child-working'])
+  })
+
+  it('DELETE /api/threads/:key archives a presence thread and clears its role', async () => {
+    const thread = tm.create({ label: 'p', presence: 'gateway' })
+    const res = await request(app).delete(`/api/threads/${thread.id}`)
+    expect(res.status).toBe(200)
+    expect(tm.get(thread.id)).toMatchObject({ archived: true })
+    expect(tm.get(thread.id)?.presence).toBeUndefined()
+    const list = await request(app).get('/api/threads')
+    expect(list.body.threads.map((t: { id: string }) => t.id)).not.toContain(thread.id)
+    const presence = await request(app).get('/api/threads/presence')
+    expect(presence.body.gateway).toBeNull()
+    // The role is free for a new thread.
+    expect(tm.create({ label: 'p2', presence: 'gateway' }).presence).toBe('gateway')
+  })
+
+  it('DELETE /api/threads/:key returns 404 for an unknown thread', async () => {
+    expect((await request(app).delete('/api/threads/nope')).status).toBe(404)
+  })
+})
+
+describe('Thread Routes — pin to top', () => {
+  let dataDir: string
+  let app: ReturnType<typeof express>
+  let tm: ThreadManager
+  let bus: ReturnType<typeof createEventBus>
+
+  function mount(manager: ThreadManager): ReturnType<typeof express> {
+    const a = express()
+    a.use(express.json())
+    a.use(createThreadRoutes(manager, forwardHandler as any, { backend: createStubBackend() }))
+    return a
+  }
+
+  beforeEach(() => {
+    dataDir = makeTmpDir()
+    bus = createEventBus(dataDir)
+    tm = createThreadManager(bus, dataDir)
+    app = mount(tm)
+  })
+
+  it('PATCH { pinned: true } stamps pinnedAt, and GET /api/threads carries it', async () => {
+    const thread = tm.create({ label: 'a' })
+    const before = Date.now()
+    const res = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    expect(res.status).toBe(200)
+    expect(res.body.thread.pinnedAt).toBeGreaterThanOrEqual(before)
+    const list = await request(app).get('/api/threads')
+    const listed = list.body.threads.find((t: { id: string }) => t.id === thread.id)
+    expect(listed.pinnedAt).toBe(res.body.thread.pinnedAt)
+  })
+
+  it('PATCH { pinned: false } clears pinnedAt', async () => {
+    const thread = tm.create({ label: 'a' })
+    await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    const res = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: false })
+    expect(res.status).toBe(200)
+    expect(res.body.thread.pinnedAt).toBeUndefined()
+    expect(tm.get(thread.id)?.pinnedAt).toBeUndefined()
+  })
+
+  it('pinning an already pinned thread keeps its original pinnedAt', async () => {
+    const thread = tm.create({ label: 'a' })
+    const first = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    await new Promise((r) => setTimeout(r, 5))
+    const again = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    expect(again.body.thread.pinnedAt).toBe(first.body.thread.pinnedAt)
+  })
+
+  it('a pin-only PATCH does not touch lastActivity', async () => {
+    const thread = tm.create({ label: 'a' })
+    thread.lastActivity = 1_000
+    await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    expect(tm.get(thread.id)?.lastActivity).toBe(1_000)
+  })
+
+  it('rejects a non-boolean pinned with 400 and leaves the thread alone', async () => {
+    const thread = tm.create({ label: 'a' })
+    for (const pinned of ['yes', 1, null, {}]) {
+      const res = await request(app).patch(`/api/threads/${thread.id}`).send({ pinned })
+      expect(res.status).toBe(400)
+      expect(res.body.error).toBe('pinned must be a boolean')
+    }
+    expect(tm.get(thread.id)?.pinnedAt).toBeUndefined()
+  })
+
+  it('returns 404 for an unknown thread', async () => {
+    expect((await request(app).patch('/api/threads/nope').send({ pinned: true })).status).toBe(404)
+  })
+
+  it('a pin survives a reload of the thread store', async () => {
+    const pinned = tm.create({ label: 'a' })
+    const plain = tm.create({ label: 'b' })
+    const res = await request(app).patch(`/api/threads/${pinned.id}`).send({ pinned: true })
+    const reloaded = createThreadManager(createEventBus(dataDir), dataDir)
+    expect(reloaded.get(pinned.id)?.pinnedAt).toBe(res.body.thread.pinnedAt)
+    expect(reloaded.get(plain.id)?.pinnedAt).toBeUndefined()
+    const list = await request(mount(reloaded)).get('/api/threads')
+    const listed = list.body.threads.find((t: { id: string }) => t.id === pinned.id)
+    expect(listed.pinnedAt).toBe(res.body.thread.pinnedAt)
+  })
+
+  it('broadcasts the pin as pinnedAt in the thread.updated patch (null once unpinned)', async () => {
+    const patches: Array<Record<string, unknown>> = []
+    bus.on('thread.updated', (e) => {
+      patches.push((e.payload as { patch: Record<string, unknown> }).patch)
+    })
+    const thread = tm.create({ label: 'a' })
+    await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: true })
+    await request(app).patch(`/api/threads/${thread.id}`).send({ pinned: false })
+    expect(patches).toHaveLength(2)
+    expect(typeof patches[0].pinnedAt).toBe('number')
+    expect(patches[0]).not.toHaveProperty('pinned')
+    expect(patches[1].pinnedAt).toBeNull()
+  })
+})

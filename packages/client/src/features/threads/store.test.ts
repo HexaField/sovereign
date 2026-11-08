@@ -43,10 +43,14 @@ import {
   createThread,
   addEntity,
   removeEntity,
+  renameThread,
+  pinThread,
+  deleteThread,
   initThreadStore,
   _triggerPopstate
 } from './store.js'
 import { makeThread } from './test-factory.js'
+import { getPresenceGatewayThreadId } from './presence-helper.js'
 
 function mockThread(id: string, orgId = '_global'): ReturnType<typeof makeThread> {
   return makeThread({
@@ -177,6 +181,17 @@ describe('fetchThreadsForOrg — reconciliation', () => {
     await vi.waitFor(() => expect(threadKey()).toBe('first'))
   })
 
+  it('auto-selects past the hidden internal presence thread', async () => {
+    setThreadKey('')
+    setLocation()
+    const internal = makeThread({ id: 'internal', presence: 'internal' })
+    const data = { threads: [internal, mockThread('first')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    fetchThreadsForOrg('org1')
+    await vi.waitFor(() => expect(threadKey()).toBe('first'))
+  })
+
   it('keeps threadKey when it matches a fetched thread', async () => {
     setThreadKey('t2')
     const data = { threads: [mockThread('t1'), mockThread('t2')] }
@@ -286,6 +301,180 @@ describe('createThread', () => {
   })
 })
 
+describe('renameThread', () => {
+  it('PATCHes the label and updates the thread list', async () => {
+    setThreads([makeThread({ id: 't1', label: 'old' })])
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ thread: makeThread({ id: 't1', label: 'new' }) })
+    })
+    await renameThread('t1', 'new')
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads/t1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ label: 'new' }) })
+    )
+    expect(threads()[0].label).toBe('new')
+  })
+
+  it('throws the server error and leaves the label alone', async () => {
+    setThreads([makeThread({ id: 't1', label: 'old' })])
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 400, json: () => Promise.resolve({ error: 'bad label' }) })
+    await expect(renameThread('t1', ' ')).rejects.toThrow('bad label')
+    expect(threads()[0].label).toBe('old')
+  })
+})
+
+describe('pinThread', () => {
+  it('pins at once, PATCHes { pinned: true } and keeps the server pinnedAt', async () => {
+    setThreads([makeThread({ id: 't1' })])
+    let resolve!: (v: unknown) => void
+    mockFetch.mockReturnValueOnce(new Promise((r) => (resolve = r)))
+    const done = pinThread('t1', true)
+    // Optimistic: pinned before the server answers.
+    expect(threads()[0].pinnedAt).toBeGreaterThan(0)
+    resolve({ ok: true, json: () => Promise.resolve({ thread: makeThread({ id: 't1', pinnedAt: 1234 }) }) })
+    await expect(done).resolves.toBe(1234)
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads/t1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pinned: true }) })
+    )
+    expect(threads()[0].pinnedAt).toBe(1234)
+  })
+
+  it('unpins at once and PATCHes { pinned: false }', async () => {
+    setThreads([makeThread({ id: 't1', pinnedAt: 99 })])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ thread: makeThread({ id: 't1' }) }) })
+    const done = pinThread('t1', false)
+    expect(threads()[0].pinnedAt).toBeUndefined()
+    await expect(done).resolves.toBeUndefined()
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads/t1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pinned: false }) })
+    )
+    expect(threads()[0].pinnedAt).toBeUndefined()
+  })
+
+  it('reverts a pin the server refuses and throws its error', async () => {
+    setThreads([makeThread({ id: 't1' })])
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ error: 'Thread not found' })
+    })
+    await expect(pinThread('t1', true)).rejects.toThrow('Thread not found')
+    expect(threads()[0].pinnedAt).toBeUndefined()
+  })
+
+  it('reverts an unpin when the request fails, keeping the original pinnedAt', async () => {
+    setThreads([makeThread({ id: 't1', pinnedAt: 42 })])
+    mockFetch.mockRejectedValueOnce(new Error('offline'))
+    await expect(pinThread('t1', false)).rejects.toThrow('offline')
+    expect(threads()[0].pinnedAt).toBe(42)
+  })
+})
+
+describe('deleteThread', () => {
+  it('removes a background thread without changing the open one', async () => {
+    setThreads([makeThread({ id: 'main' }), makeThread({ id: 't2' })])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) })
+    await deleteThread('t2')
+    expect(mockFetch).toHaveBeenCalledWith('/api/threads/t2', { method: 'DELETE' })
+    expect(threads().map((t) => t.id)).toEqual(['main'])
+    expect(threadKey()).toBe('main')
+  })
+
+  it('opens the most recent remaining thread when the open one is deleted', async () => {
+    setThreads([
+      makeThread({ id: 'main', lastActivity: 300 }),
+      makeThread({ id: 'older', lastActivity: 100 }),
+      makeThread({ id: 'newer', lastActivity: 200 })
+    ])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) })
+    await deleteThread('main')
+    expect(threadKey()).toBe('newer')
+  })
+
+  it('clears the selection when the last thread is deleted', async () => {
+    setThreads([makeThread({ id: 'main' })])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) })
+    await deleteThread('main')
+    expect(threads()).toEqual([])
+    expect(threadKey()).toBe('')
+  })
+
+  it('throws and keeps the thread when the server refuses', async () => {
+    setThreads([makeThread({ id: 'main' })])
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ error: 'Thread not found' })
+    })
+    await expect(deleteThread('main')).rejects.toThrow('Thread not found')
+    expect(threads()).toHaveLength(1)
+  })
+  it('never opens the hidden internal presence thread in place of an archived one', async () => {
+    setThreads([
+      makeThread({ id: 'main', lastActivity: 300 }),
+      makeThread({ id: 'internal', lastActivity: 250, presence: 'internal' }),
+      makeThread({ id: 'work', lastActivity: 100 })
+    ])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) })
+    await deleteThread('main')
+    expect(threadKey()).toBe('work')
+  })
+
+  it('archiving the open main presence thread opens its replacement when it arrives', async () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+    setThreads([
+      makeThread({ id: 'gw', lastActivity: 300, presence: 'gateway' }),
+      makeThread({ id: 'work', lastActivity: 100 })
+    ])
+    setThreadKey('gw')
+    // The server archives, then announces the new main thread.
+    ws._emit('thread.deleted', { payload: { threadId: 'gw' } })
+    expect(threadKey()).toBe('work')
+    ws._emit('thread.created', { payload: { thread: makeThread({ id: 'gw2', presence: 'gateway' }) } })
+    expect(threadKey()).toBe('gw2')
+    expect(threads().map((t) => t.id)).toEqual(['work', 'gw2'])
+    // Only once: a later main thread does not pull the user away.
+    ws._emit('thread.created', { payload: { thread: makeThread({ id: 'gw3', presence: 'gateway' }) } })
+    expect(threadKey()).toBe('gw2')
+    cleanup()
+  })
+
+  it('refreshes the cached presence thread ids when a presence thread is archived', async () => {
+    const presence = (id: string) => ({ ok: true, json: () => Promise.resolve({ gateway: { id }, internal: null }) })
+    const ws = createMockWs()
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const cleanup = initThreadStore(ws as any)
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValueOnce(presence('gw'))
+    // Clear whatever an earlier test left cached.
+    ws._emit('thread.updated', { payload: { threadId: 'x', patch: { presence: null } } })
+    expect(await getPresenceGatewayThreadId()).toBe('gw')
+
+    setThreads([makeThread({ id: 'gw', presence: 'gateway' })])
+    ws._emit('thread.deleted', { payload: { threadId: 'gw' } })
+    mockFetch.mockResolvedValueOnce(presence('gw2'))
+    expect(await getPresenceGatewayThreadId()).toBe('gw2')
+    cleanup()
+  })
+
+  it('a new main presence thread does not pull the user away when they archived something else', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+    setThreads([makeThread({ id: 'gw', presence: 'gateway' }), makeThread({ id: 'work' })])
+    setThreadKey('work')
+    ws._emit('thread.deleted', { payload: { threadId: 'gw' } })
+    ws._emit('thread.created', { payload: { thread: makeThread({ id: 'gw2', presence: 'gateway' }) } })
+    expect(threadKey()).toBe('work')
+    cleanup()
+  })
+})
+
 describe('addEntity', () => {
   it('posts entity to thread endpoint', async () => {
     mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({}) })
@@ -361,6 +550,32 @@ describe('initThreadStore', () => {
     setThreads([mockThread('t1')])
     ws._emit('thread.updated', { payload: { thread: { ...mockThread('t1'), unreadCount: 5 } } })
     expect(threads().find((t) => t.id === 't1')?.unreadCount).toBe(5)
+    cleanup()
+  })
+
+  it('applies pin changes from thread.updated WS events (null pinnedAt = unpinned)', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    setThreads([mockThread('t1')])
+    ws._emit('thread.updated', { payload: { threadId: 't1', patch: { pinnedAt: 500 } } })
+    expect(threads()[0].pinnedAt).toBe(500)
+    ws._emit('thread.updated', { payload: { threadId: 't1', patch: { pinnedAt: null } } })
+    expect(threads()[0].pinnedAt).toBeUndefined()
+    cleanup()
+  })
+
+  it('handles thread.deleted WS events', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    setThreads([mockThread('t1'), mockThread('t2')])
+    setThreadKey('t1')
+    ws._emit('thread.deleted', { payload: { threadId: 't1' } })
+    expect(threads().map((t) => t.id)).toEqual(['t2'])
+    expect(threadKey()).toBe('t2')
     cleanup()
   })
 

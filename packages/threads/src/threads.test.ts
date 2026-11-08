@@ -711,6 +711,64 @@ describe('ThreadManager', () => {
       expect(tm.get('legacy-id-1')?.presence).toBe('internal')
       expect(tm.getPresenceThread('internal')?.id).toBe('legacy-id-1')
     })
+
+    it('delete() archives a presence thread, keeps its events, and frees the role', () => {
+      const tm = createThreadManager(bus, dataDir)
+      const gateway = tm.create({ label: 'presence', presence: 'gateway' })
+      tm.addEvent(gateway.id, {
+        threadId: gateway.id,
+        event: { type: 'note' },
+        entityBinding: { orgId: 'o', projectId: 'p', entityType: 'issue', entityRef: '1' },
+        timestamp: 1
+      })
+      expect(tm.delete(gateway.id)).toBe(true)
+      expect(tm.get(gateway.id)).toMatchObject({ archived: true })
+      expect(tm.get(gateway.id)?.presence).toBeUndefined()
+      expect(tm.getEvents(gateway.id)).toHaveLength(1)
+      expect(tm.getPresenceThread('gateway')).toBeNull()
+      const next = tm.create({ label: 'presence', presence: 'gateway' })
+      expect(tm.getPresenceThread('gateway')?.id).toBe(next.id)
+    })
+
+    it('a restart keeps one live thread per role: archived threads load without a role', () => {
+      const base = { membraneId: 'personal', workspaceIds: [], entities: [], unreadCount: 0, agentStatus: 'idle' }
+      fs.writeFileSync(
+        path.join(dataDir, 'threads.json'),
+        JSON.stringify({
+          threads: [
+            // Written by an older build, which archived without clearing the role.
+            {
+              ...base,
+              id: 'old-gw',
+              label: 'presence',
+              presence: 'gateway',
+              archived: true,
+              lastActivity: 2,
+              createdAt: 1
+            },
+            {
+              ...base,
+              id: 'new-gw',
+              label: 'presence',
+              presence: 'gateway',
+              archived: false,
+              lastActivity: 1,
+              createdAt: 2
+            }
+          ]
+        })
+      )
+      const tm = createThreadManager(bus, dataDir)
+      expect(tm.get('old-gw')?.presence).toBeUndefined()
+      expect(tm.getPresenceThread('gateway')?.id).toBe('new-gw')
+      expect(
+        tm
+          .list()
+          .filter((t) => t.presence === 'gateway')
+          .map((t) => t.id)
+      ).toEqual(['new-gw'])
+      expect(() => tm.create({ label: 'presence', presence: 'gateway' })).toThrow(/already exists/)
+    })
   })
 
   describe('subagent routing (subagentBackend / subagentModel)', () => {

@@ -957,7 +957,7 @@ describe('SimpleConversation — per-thread open and storage', () => {
     store.shutdown()
   })
 
-  it('drops a deleted thread’s entries and file', async () => {
+  it('drops a deleted thread’s entries but keeps its file', async () => {
     const dir = makeTmpDir()
     const bus = makeBus()
     const store = createSimpleConversation({ bus, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
@@ -970,7 +970,7 @@ describe('SimpleConversation — per-thread open and storage', () => {
     const bus2 = makeBus()
     const store2 = createSimpleConversation({ bus: bus2, config: () => ({ gatewayThreadId: GATEWAY }), dataDir: dir })
     bus2.emit({ type: 'thread.deleted', timestamp: 'z', source: 'threads', payload: { threadId: 'gone' } })
-    expect(fs.existsSync(file)).toBe(false)
+    expect(fs.existsSync(file)).toBe(true) // delete is a soft delete — history stays on disk
     expect(store2.getEntries('gone')).toEqual([])
     store2.shutdown()
   })

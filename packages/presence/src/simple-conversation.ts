@@ -184,10 +184,12 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
     return path.join(dataDir, THREAD_DIR, `${threadId}.json`)
   }
 
-  /** A thread's entries, loaded from disk on first use. */
+  /** A thread's entries, loaded from disk on first use. A deleted thread's
+   *  file stays on disk but reads empty here — history is kept, the view is not. */
   function entriesOf(threadId: string): SimpleConversationEntry[] {
     let list = threads.get(threadId)
     if (!list) {
+      if (deleted.has(threadId)) return []
       const file = fileFor(threadId)
       list = file ? loadEntries(file) : []
       threads.set(threadId, list)
@@ -240,7 +242,8 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
   let writeTimer: ReturnType<typeof setTimeout> | null = null
 
   function schedulePersist(threadId: string): void {
-    if (!dataDir) return
+    // A deleted thread's file must never be rewritten — its history is kept.
+    if (!dataDir || deleted.has(threadId)) return
     dirty.add(threadId)
     if (writeTimer) return
     writeTimer = setTimeout(() => {
@@ -396,8 +399,8 @@ export function createSimpleConversation(deps: SimpleConversationDeps) {
     cancelDeferred(threadId)
     threads.delete(threadId)
     dirty.delete(threadId)
-    const file = fileFor(threadId)
-    if (file) fs.rmSync(file, { force: true })
+    // The thread's file is deliberately left on disk — delete is a soft
+    // delete, and the file holds paid LLM summaries worth keeping.
     if (watched.delete(threadId)) persistWatched()
   })
 

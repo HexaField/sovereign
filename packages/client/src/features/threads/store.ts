@@ -1,6 +1,8 @@
 import { createSignal } from 'solid-js'
 import type { ThreadInfo } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
+import { resetPresenceThreadCache } from './presence-helper.js'
+import { isListed } from './thread-order.js'
 
 // Single source of truth for the thread shape: the canonical `ThreadInfo`
 // from @sovereign/core (bare UUID `id`, no `key`). Importing it here means a
@@ -45,7 +47,8 @@ export function fetchThreadsForOrg(orgId?: string): void {
       // Only auto-switch if the current key is empty.
       const current = threadKey()
       if (!current) {
-        const first = raw[0]
+        // The most recent thread the lists show (never the hidden internal presence thread).
+        const first = raw.find(isListed)
         if (first) {
           setThreadKey(first.id)
           if (typeof history !== 'undefined') {
@@ -68,8 +71,8 @@ export function switchWorkspaceThreads(orgId: string): void {
     .then((data: any) => {
       const raw: ThreadInfo[] = (data.threads ?? data ?? []).filter((t: ThreadInfo) => t.id)
       setThreads(raw)
-      // Switch to most recent thread (server returns sorted by lastActivity desc)
-      const first = raw[0]
+      // Switch to the most recent listed thread (server returns sorted by lastActivity desc)
+      const first = raw.find(isListed)
       if (first) {
         setThreadKey(first.id)
         if (typeof history !== 'undefined') {
@@ -139,6 +142,85 @@ export function moveThread(key: string, orgId: string): Promise<void> {
     })
 }
 
+/** Rename a thread. The server trims the label and rejects an empty one. */
+export async function renameThread(key: string, label: string): Promise<void> {
+  const res = await fetch(`/api/threads/${encodeURIComponent(key)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label })
+  })
+  const data: any = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error ?? `Rename failed (${res.status})`)
+  const updated = data.thread as ThreadInfo
+  setThreads((prev) => prev.map((t) => (t.id === key ? { ...t, label: updated.label } : t)))
+}
+
+/**
+ * Pin a thread to the top of the thread lists, or unpin it. Applies at once
+ * and reverts if the server refuses. The server's `pinnedAt` replaces the
+ * optimistic one, so every list orders the pins alike. Resolves to the new `pinnedAt`.
+ */
+export async function pinThread(key: string, pinned: boolean): Promise<number | undefined> {
+  const previous = threads().find((t) => t.id === key)?.pinnedAt
+  const setPinnedAt = (pinnedAt: number | undefined) =>
+    setThreads((prev) => prev.map((t) => (t.id === key ? { ...t, pinnedAt } : t)))
+  setPinnedAt(pinned ? (previous ?? Date.now()) : undefined)
+  try {
+    const res = await fetch(`/api/threads/${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned })
+    })
+    const data: any = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error ?? `${pinned ? 'Pin' : 'Unpin'} failed (${res.status})`)
+    const updated = data.thread as ThreadInfo | undefined
+    const pinnedAt = updated ? (updated.pinnedAt ?? undefined) : pinned ? (previous ?? Date.now()) : undefined
+    setPinnedAt(pinnedAt)
+    return pinnedAt
+  } catch (err) {
+    setPinnedAt(previous)
+    throw err
+  }
+}
+
+/** Archive a thread — a soft delete: the server flags it archived and its
+ *  history is kept. If it was open, the most recently active remaining thread opens instead. */
+export async function deleteThread(key: string): Promise<void> {
+  const res = await fetch(`/api/threads/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}))
+    throw new Error(data.error ?? `Archive failed (${res.status})`)
+  }
+  dropThread(key)
+}
+
+/** Until this time, a new main (gateway) presence thread opens when it arrives:
+ *  set when the user archives the main thread they have open. */
+let followGatewayUntil = 0
+const FOLLOW_GATEWAY_MS = 10_000
+
+function dropThread(key: string): void {
+  const dropped = threads().find((t) => t.id === key)
+  // Archiving a presence thread hands its role to a fresh thread.
+  if (dropped?.presence) resetPresenceThreadCache()
+  if (dropped?.presence === 'gateway' && threadKey() === key) followGatewayUntil = Date.now() + FOLLOW_GATEWAY_MS
+  const remaining = threads().filter((t) => t.id !== key)
+  setThreads(remaining)
+  if (threadKey() !== key) return
+  // Open the most recently active thread the lists show (not the internal presence thread).
+  const next = remaining.filter(isListed).sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))[0]
+  if (next) {
+    switchThread(next.id)
+    return
+  }
+  setThreadKey('')
+  if (typeof history !== 'undefined') {
+    const u = new URL(location.href)
+    u.hash = ''
+    history.replaceState(null, '', u.toString())
+  }
+}
+
 export function addEntity(threadKeyVal: string, entity: ThreadInfo['entities'][0]): Promise<void> {
   return fetch(`/api/threads/${threadKeyVal}/entities`, {
     method: 'POST',
@@ -189,6 +271,12 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
           if (prev.some((t) => t.id === thread.id)) return prev
           return [...prev, thread]
         })
+        if (thread.presence) resetPresenceThreadCache()
+        // The replacement for the main thread the user just archived: open it.
+        if (thread.presence === 'gateway' && Date.now() < followGatewayUntil) {
+          followGatewayUntil = 0
+          switchThread(thread.id)
+        }
       })
     )
 
@@ -199,8 +287,20 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
         const p = msg?.payload ?? msg
         const id = p?.thread?.id ?? p?.threadId ?? p?.id
         if (!id) return
-        const patch = p?.patch ?? p?.thread ?? p
+        const patch = { ...(p?.patch ?? p?.thread ?? p) }
+        // An unpin arrives as `pinnedAt: null`; store it as unset.
+        if (patch.pinnedAt === null) patch.pinnedAt = undefined
+        // A presence role moved: the cached presence ids may be stale.
+        if ('presence' in patch) resetPresenceThreadCache()
         setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
+      })
+    )
+
+    unsubs.push(
+      ws.on('thread.deleted', (msg: any) => {
+        const p = msg?.payload ?? msg
+        const id = p?.threadId ?? p?.thread?.id ?? p?.id
+        if (id) dropThread(id)
       })
     )
 

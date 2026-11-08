@@ -363,8 +363,48 @@ export function createThreadRoutes(
   })
 
   router.delete('/api/threads/:key', (req, res) => {
+    // Any thread may be archived, presence threads included: archiving clears
+    // the role and the presence module puts a fresh thread in its place.
+    const thread = threadManager.get(req.params.key)
+    const busy = !!thread && !thread.archived && !!thread.agentStatus && thread.agentStatus !== 'idle'
     const deleted = threadManager.delete(req.params.key)
     if (!deleted) return res.status(404).json({ error: 'Thread not found' })
+    const sessionKey = opts?.chatModule?.getSessionKeyForThread(req.params.key) ?? deriveSessionKey(req.params.key)
+    // A deleted thread must not keep a turn running in the background.
+    if (busy) {
+      backendForSession(sessionKey)
+        ?.abort(sessionKey)
+        .catch(() => {
+          /* best-effort — the thread is already archived */
+        })
+    }
+    // Nor may its subagents keep running — children (Claude subagents and
+    // harness runs) can be live while the parent turn is idle, so this runs
+    // whether or not `busy` was set. Fire and forget, like the abort above.
+    const b = opts?.backend
+    const instances: AgentBackend[] =
+      b && 'all' in b && typeof (b as RoutingBackend).all === 'function'
+        ? (b as RoutingBackend).all().map((i) => i.backend)
+        : b
+          ? [b as AgentBackend]
+          : []
+    for (const inst of instances) {
+      inst
+        .listSubagents(sessionKey)
+        .then((children) => {
+          for (const child of children) {
+            if (child.status === 'idle') continue
+            backendForSession(child.sessionKey)
+              ?.stopSubagent?.(child.sessionKey)
+              ?.catch(() => {
+                /* best-effort — the thread is already archived */
+              })
+          }
+        })
+        .catch(() => {
+          /* best-effort — the thread is already archived */
+        })
+    }
     res.json({ success: true })
   })
 
@@ -379,8 +419,15 @@ export function createThreadRoutes(
       subagentBackend: bodySubagentBackend,
       subagentModel: bodySubagentModel,
       model: bodyModel,
-      pinnedRepoPath: bodyPinnedRepoPath
+      pinnedRepoPath: bodyPinnedRepoPath,
+      pinned
     } = req.body
+    if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
+      return res.status(400).json({ error: 'label must be a non-empty string' })
+    }
+    if (pinned !== undefined && typeof pinned !== 'boolean') {
+      return res.status(400).json({ error: 'pinned must be a boolean' })
+    }
     // Translate legacy `orgId` body field. Empty/`_global` → empty array
     // so a PATCH with `orgId: '_global'` actually moves a thread to global.
     const workspaceIds =
@@ -412,7 +459,7 @@ export function createThreadRoutes(
     let thread
     try {
       thread = threadManager.update(req.params.key, {
-        label,
+        label: label?.trim(),
         membraneId,
         workspaceIds,
         ...(bodyContextWindow !== undefined ? { contextWindow } : {}),
@@ -420,7 +467,8 @@ export function createThreadRoutes(
         ...(bodySubagentBackend !== undefined ? { subagentBackend: bodySubagentBackend ?? null } : {}),
         ...(bodySubagentModel !== undefined ? { subagentModel: bodySubagentModel ?? null } : {}),
         ...(bodyModel !== undefined ? { model: bodyModel ?? null } : {}),
-        ...(bodyPinnedRepoPath !== undefined ? { pinnedRepoPath: bodyPinnedRepoPath ?? null } : {})
+        ...(bodyPinnedRepoPath !== undefined ? { pinnedRepoPath: bodyPinnedRepoPath ?? null } : {}),
+        ...(pinned !== undefined ? { pinned } : {})
       })
     } catch (err) {
       return res.status(400).json({ error: (err as Error).message })
