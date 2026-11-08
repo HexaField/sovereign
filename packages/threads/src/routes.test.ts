@@ -428,13 +428,14 @@ describe('Thread Routes — Context Management Health (Layers 1/2/3)', () => {
 describe('Thread Routes — rename and delete', () => {
   let app: ReturnType<typeof express>
   let tm: ThreadManager
+  let backend: AgentBackend
   let aborted: string[]
 
   beforeEach(() => {
     const dataDir = makeTmpDir()
     tm = createThreadManager(createEventBus(dataDir), dataDir)
     aborted = []
-    const backend = createStubBackend()
+    backend = createStubBackend()
     backend.abort = async (sessionKey: string) => {
       aborted.push(sessionKey)
     }
@@ -472,6 +473,30 @@ describe('Thread Routes — rename and delete', () => {
     thread.agentStatus = 'working'
     await request(app).delete(`/api/threads/${thread.id}`)
     expect(aborted).toEqual([thread.id])
+  })
+
+  it('DELETE /api/threads/:key stops the thread’s live subagents but not its idle ones', async () => {
+    const stopped: string[] = []
+    backend.listSubagents = async () => [
+      { sessionKey: 'child-working', label: 'working child', status: 'working' },
+      { sessionKey: 'child-idle', label: 'idle child', status: 'idle' }
+    ]
+    backend.stopSubagent = async (childKey: string) => {
+      stopped.push(childKey)
+    }
+    const thread = tm.create({ label: 'parent' })
+    await request(app).delete(`/api/threads/${thread.id}`)
+    await new Promise((r) => setImmediate(r))
+    expect(stopped).toEqual(['child-working'])
+  })
+
+  it('DELETE /api/threads/:key refuses a presence thread with 409', async () => {
+    const thread = tm.create({ label: 'p', presence: 'gateway' })
+    const res = await request(app).delete(`/api/threads/${thread.id}`)
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('A presence thread cannot be deleted')
+    const list = await request(app).get('/api/threads')
+    expect(list.body.threads.map((t: { id: string }) => t.id)).toContain(thread.id)
   })
 
   it('DELETE /api/threads/:key returns 404 for an unknown thread', async () => {

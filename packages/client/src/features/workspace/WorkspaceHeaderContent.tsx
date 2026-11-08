@@ -425,8 +425,8 @@ export function WorkspaceHeaderContent() {
   const [newThreadInput, setNewThreadInput] = createSignal(false)
   const [newThreadLabel, setNewThreadLabel] = createSignal('')
   const [moveThreadKey, setMoveThreadKey] = createSignal<string | null>(null)
-  // Per-thread actions (Rename / Delete): which row's menu is open, which row
-  // is awaiting delete confirmation, and which row (or the header) is renaming.
+  // Per-thread actions (Rename / Archive): which row's menu is open, which row
+  // is awaiting archive confirmation, and which row (or the header) is renaming.
   const [menuThreadKey, setMenuThreadKey] = createSignal<string | null>(null)
   const [confirmDeleteKey, setConfirmDeleteKey] = createSignal<string | null>(null)
   const [renamingKey, setRenamingKey] = createSignal<string | null>(null)
@@ -452,7 +452,7 @@ export function WorkspaceHeaderContent() {
       await deleteThread(id)
       closeThreadMenu()
     } catch (err) {
-      setThreadActionError((err as Error).message || 'Delete failed')
+      setThreadActionError((err as Error).message || 'Archive failed')
     } finally {
       setDeleting(false)
     }
@@ -921,14 +921,14 @@ export function WorkspaceHeaderContent() {
                                   onMouseLeave={(e) => (e.currentTarget.style.background = '')}
                                   onClick={() => setConfirmDeleteKey(t.id)}
                                 >
-                                  Delete
+                                  Archive
                                 </button>
                               </Show>
                             </>
                           }
                         >
                           <div class="px-3 pt-2 pb-1.5" style={{ color: 'var(--c-text)' }}>
-                            Delete this thread? This can't be undone.
+                            Archive this thread? Its history is kept.
                           </div>
                           <div class="flex justify-end gap-1 px-2 pb-2">
                             <button
@@ -945,7 +945,7 @@ export function WorkspaceHeaderContent() {
                               onClick={() => void confirmDeleteThread(t.id)}
                               ref={(el) => setTimeout(() => el.focus(), 0)}
                             >
-                              {deleting() ? 'Deleting…' : 'Delete'}
+                              {deleting() ? 'Archiving…' : 'Archive'}
                             </button>
                           </div>
                         </Show>

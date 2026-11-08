@@ -364,14 +364,42 @@ export function createThreadRoutes(
 
   router.delete('/api/threads/:key', (req, res) => {
     const thread = threadManager.get(req.params.key)
+    if (thread?.presence) return res.status(409).json({ error: 'A presence thread cannot be deleted' })
     const busy = !!thread && !thread.archived && !!thread.agentStatus && thread.agentStatus !== 'idle'
     const deleted = threadManager.delete(req.params.key)
     if (!deleted) return res.status(404).json({ error: 'Thread not found' })
+    const sessionKey = opts?.chatModule?.getSessionKeyForThread(req.params.key) ?? deriveSessionKey(req.params.key)
     // A deleted thread must not keep a turn running in the background.
     if (busy) {
-      const sessionKey = opts?.chatModule?.getSessionKeyForThread(req.params.key) ?? deriveSessionKey(req.params.key)
       backendForSession(sessionKey)
         ?.abort(sessionKey)
+        .catch(() => {
+          /* best-effort — the thread is already archived */
+        })
+    }
+    // Nor may its subagents keep running — children (Claude subagents and
+    // harness runs) can be live while the parent turn is idle, so this runs
+    // whether or not `busy` was set. Fire and forget, like the abort above.
+    const b = opts?.backend
+    const instances: AgentBackend[] =
+      b && 'all' in b && typeof (b as RoutingBackend).all === 'function'
+        ? (b as RoutingBackend).all().map((i) => i.backend)
+        : b
+          ? [b as AgentBackend]
+          : []
+    for (const inst of instances) {
+      inst
+        .listSubagents(sessionKey)
+        .then((children) => {
+          for (const child of children) {
+            if (child.status === 'idle') continue
+            backendForSession(child.sessionKey)
+              ?.stopSubagent?.(child.sessionKey)
+              ?.catch(() => {
+                /* best-effort — the thread is already archived */
+              })
+          }
+        })
         .catch(() => {
           /* best-effort — the thread is already archived */
         })

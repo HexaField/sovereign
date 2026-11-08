@@ -152,12 +152,13 @@ export async function renameThread(key: string, label: string): Promise<void> {
   setThreads((prev) => prev.map((t) => (t.id === key ? { ...t, label: updated.label } : t)))
 }
 
-/** Delete a thread. If it was open, the most recently active remaining thread opens instead. */
+/** Archive a thread — a soft delete: the server flags it archived and its
+ *  history is kept. If it was open, the most recently active remaining thread opens instead. */
 export async function deleteThread(key: string): Promise<void> {
   const res = await fetch(`/api/threads/${key}`, { method: 'DELETE' })
   if (!res.ok) {
     const data: any = await res.json().catch(() => ({}))
-    throw new Error(data.error ?? `Delete failed (${res.status})`)
+    throw new Error(data.error ?? `Archive failed (${res.status})`)
   }
   dropThread(key)
 }
