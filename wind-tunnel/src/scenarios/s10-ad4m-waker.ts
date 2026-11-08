@@ -1,4 +1,4 @@
-// S10: AD4M mention waker, end to end, with two agents (ad4m #1557, WE #366).
+// S10: AD4M mention waker, end to end, with two agents (ad4m #1557, #1587, WE #366).
 //
 // Only runs in the ad4m lane (`run.sh --ad4m`: docker-compose.ad4m.yml + the
 // provision step). Otherwise it self-skips as a pass.
@@ -13,10 +13,12 @@
 // Alex registers WE-shaped classes and writes records through them over the
 // executor's MCP (`instance_create`), as WE's Ad4mModel does:
 //   TextBlock — WE's text block: `text` (we://text), `source` (we://text_source),
-//               `mentions` (we://mention), conforming to TextContent by name
-//   Note      — another app: `content` aliased to text, `cc` aliased to mentions
+//               `mentions` (we://mention), conforming to TextContent and
+//               Mentioning by name
+//   Note      — another app: `content` aliased to TextContent's text, `cc` to
+//               Mentioning's mentions
 //   Chat      — text only, no mention relation
-//   Post      — a post root with `mentions` and no text (the known gap)
+//   Post      — a post root with `mentions` and no text (Mentioning only)
 //   CollectionBlock — a composed record's root (`kind`, `mentions`), no text:
 //               a post comment is one of kind "reply"
 // TextBlock, Post and CollectionBlock carry `responses` (we://response), as
@@ -86,7 +88,7 @@ const flagged = (predicate: string, value: string) => ({
 })
 
 /** WE's TextBlock (we_shapes/text_block.json, cut to what a mention needs):
- *  conforms to TextContent by its property names `text` and `mentions`. */
+ *  conforms to TextContent by `text` and to Mentioning by `mentions`. */
 const TEXT_BLOCK = {
   target_class: 'we://TextBlock',
   ...flagged('we://flag', 'we://text_block'),
@@ -136,7 +138,7 @@ const NOTE = {
       setter: setter('app://content'),
       alias: { TextContent: 'text' }
     },
-    { path: 'app://cc', name: 'cc', ...relation('app://cc'), alias: { TextContent: 'mentions' } }
+    { path: 'app://cc', name: 'cc', ...relation('app://cc'), alias: { Mentioning: 'mentions' } }
   ]
 }
 /** A chat line with text and no mention relation (TEXT_ONLY_CHAT_SDNA). */
@@ -553,6 +555,40 @@ export const s10Ad4mWaker: Scenario = {
       return writeReply(alex, user.uuid, { className: 'TextBlock', address: line }, 'thanks Hex, merged')
     })
 
+    // ── Text-less roots (ad4m #1587: Mentioning reads them) ────────────────────
+    // 12. A post root with only a mention link, its text in a child block that
+    //     does not name Hex. The root conforms to Mentioning, not TextContent.
+    await expectWake('12-post-root', 'Post root with only a mention link, its text in a child block', async () => {
+      const post = await create(alex, user.uuid, 'Post', { mentions: [prov.did] }, P)
+      await create(alex, user.uuid, 'TextBlock', { text: 'here is the plan for next week' }, post)
+      return post
+    })
+    // R3. A post comment, composed like a post: a CollectionBlock root of kind
+    //     "reply" hung off the post through we://response, its words in a child
+    //     TextBlock that does not name Hex, the mention link on the root.
+    const r3 = await expectWake(
+      'R3-comment',
+      'Post comment root (we://response) with only a mention link',
+      async () => {
+        const post = await create(alex, user.uuid, 'Post', {}, P)
+        await create(alex, user.uuid, 'TextBlock', { text: 'draft of the launch notes' }, post)
+        const comment = await create(alex, user.uuid, 'CollectionBlock', { kind: 'reply' })
+        await addTo(alex, user.uuid, 'Post', post, 'responses', comment)
+        await create(
+          alex,
+          user.uuid,
+          'TextBlock',
+          { text: 'looks good, one typo in the intro', source: 'typed' },
+          comment
+        )
+        await addTo(alex, user.uuid, 'CollectionBlock', comment, 'mentions', prov.did)
+        return comment
+      }
+    )
+    // Like R1, a comment hangs off the post through we://response, so its
+    // Parents line is reported, not asserted.
+    r3.note = [r3.note, `Parents: ${r3.parents ?? 'n/a'}`].filter(Boolean).join('; ')
+
     // ── No wakes ───────────────────────────────────────────────────────────────
     const quiet: CaseResult[] = []
     const t0 = Date.now()
@@ -572,39 +608,6 @@ export const s10Ad4mWaker: Scenario = {
     await writeQuiet('7-own', 'Sovereign’s own agent mentions itself', () =>
       create(hexMcp, prov.uuid, 'TextBlock', { text: 'Hex, note to self: check the build', mentions: [prov.did] }, P)
     )
-    await writeQuiet(
-      '12-post-root-gap',
-      'KNOWN GAP: post root with only a mention link, its text in a child block',
-      async () => {
-        const post = await create(alex, user.uuid, 'Post', { mentions: [prov.did] }, P)
-        await create(alex, user.uuid, 'TextBlock', { text: 'here is the plan for next week' }, post)
-        return post
-      },
-      'known gap: a mention on a record with no text of its own does not wake (follow-up PR planned)'
-    )
-    // R3. A post comment, composed like a post: a CollectionBlock root of kind
-    //     "reply" hung off the post through we://response, its words in a child
-    //     TextBlock that does not name Hex, the mention link on the root.
-    await writeQuiet(
-      'R3-comment-gap',
-      'KNOWN GAP: post comment root with only a mention link',
-      async () => {
-        const post = await create(alex, user.uuid, 'Post', {}, P)
-        await create(alex, user.uuid, 'TextBlock', { text: 'draft of the launch notes' }, post)
-        const comment = await create(alex, user.uuid, 'CollectionBlock', { kind: 'reply' })
-        await addTo(alex, user.uuid, 'Post', post, 'responses', comment)
-        await create(
-          alex,
-          user.uuid,
-          'TextBlock',
-          { text: 'looks good, one typo in the intro', source: 'typed' },
-          comment
-        )
-        await addTo(alex, user.uuid, 'CollectionBlock', comment, 'mentions', prov.did)
-        return comment
-      },
-      'known gap: a comment root carries the mention but no text, so it does not conform to TextContent'
-    )
     // A fair window: at least MIN_QUIET_MS, and three times the slowest wake above.
     const slowest = Math.max(0, ...cases.map((c) => c.latencyMs ?? 0))
     const window = Math.max(MIN_QUIET_MS, 3 * slowest)
@@ -622,8 +625,7 @@ export const s10Ad4mWaker: Scenario = {
       const wake = await wakeTurn(mockLlmUrl, q.address)
       q.deliveries = await deliveries(client, internalId, q.address)
       q.passed = !wake && q.deliveries === 0 && control.passed
-      if (wake || q.deliveries)
-        q.note = `woke (${q.deliveries} deliveries)${/^(12|R3)-/.test(q.id) ? ' — the gap looks closed: make this a wake case' : ''}`
+      if (wake || q.deliveries) q.note = `woke (${q.deliveries} deliveries)`
       else if (!control.passed) q.note = 'control mention did not wake, so the quiet window proves nothing'
       cases.push(q)
     }
@@ -695,7 +697,7 @@ export const s10Ad4mWaker: Scenario = {
     }
     return {
       passed: true,
-      summary: `${cases.length} cases: ${cases.filter((c) => c.expect === 'wake').length} wakes named the item and Alex once each, ${quiet.length} stayed quiet for ${Math.round(window / 1000)}s (incl. the known post-root and post-comment gaps), R1 Parents: ${metrics.r1Parents ?? 'n/a'}, nothing re-delivered after a restart, reply landed`,
+      summary: `${cases.length} cases: ${cases.filter((c) => c.expect === 'wake').length} wakes named the item and Alex once each, ${quiet.length} stayed quiet for ${Math.round(window / 1000)}s, R1 Parents: ${metrics.r1Parents ?? 'n/a'}, nothing re-delivered after a restart, reply landed`,
       metrics,
       samples: client.samples
     }
