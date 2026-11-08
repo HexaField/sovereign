@@ -363,8 +363,19 @@ export function createThreadRoutes(
   })
 
   router.delete('/api/threads/:key', (req, res) => {
+    const thread = threadManager.get(req.params.key)
+    const busy = !!thread && !thread.archived && !!thread.agentStatus && thread.agentStatus !== 'idle'
     const deleted = threadManager.delete(req.params.key)
     if (!deleted) return res.status(404).json({ error: 'Thread not found' })
+    // A deleted thread must not keep a turn running in the background.
+    if (busy) {
+      const sessionKey = opts?.chatModule?.getSessionKeyForThread(req.params.key) ?? deriveSessionKey(req.params.key)
+      backendForSession(sessionKey)
+        ?.abort(sessionKey)
+        .catch(() => {
+          /* best-effort — the thread is already archived */
+        })
+    }
     res.json({ success: true })
   })
 
@@ -381,6 +392,9 @@ export function createThreadRoutes(
       model: bodyModel,
       pinnedRepoPath: bodyPinnedRepoPath
     } = req.body
+    if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
+      return res.status(400).json({ error: 'label must be a non-empty string' })
+    }
     // Translate legacy `orgId` body field. Empty/`_global` → empty array
     // so a PATCH with `orgId: '_global'` actually moves a thread to global.
     const workspaceIds =
@@ -412,7 +426,7 @@ export function createThreadRoutes(
     let thread
     try {
       thread = threadManager.update(req.params.key, {
-        label,
+        label: label?.trim(),
         membraneId,
         workspaceIds,
         ...(bodyContextWindow !== undefined ? { contextWindow } : {}),

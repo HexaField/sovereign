@@ -43,6 +43,8 @@ import {
   createThread,
   addEntity,
   removeEntity,
+  renameThread,
+  deleteThread,
   initThreadStore,
   _triggerPopstate
 } from './store.js'
@@ -286,6 +288,70 @@ describe('createThread', () => {
   })
 })
 
+describe('renameThread', () => {
+  it('PATCHes the label and updates the thread list', async () => {
+    setThreads([makeThread({ id: 't1', label: 'old' })])
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ thread: makeThread({ id: 't1', label: 'new' }) })
+    })
+    await renameThread('t1', 'new')
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads/t1',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ label: 'new' }) })
+    )
+    expect(threads()[0].label).toBe('new')
+  })
+
+  it('throws the server error and leaves the label alone', async () => {
+    setThreads([makeThread({ id: 't1', label: 'old' })])
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 400, json: () => Promise.resolve({ error: 'bad label' }) })
+    await expect(renameThread('t1', ' ')).rejects.toThrow('bad label')
+    expect(threads()[0].label).toBe('old')
+  })
+})
+
+describe('deleteThread', () => {
+  it('removes a background thread without changing the open one', async () => {
+    setThreads([makeThread({ id: 'main' }), makeThread({ id: 't2' })])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) })
+    await deleteThread('t2')
+    expect(mockFetch).toHaveBeenCalledWith('/api/threads/t2', { method: 'DELETE' })
+    expect(threads().map((t) => t.id)).toEqual(['main'])
+    expect(threadKey()).toBe('main')
+  })
+
+  it('opens the most recent remaining thread when the open one is deleted', async () => {
+    setThreads([
+      makeThread({ id: 'main', lastActivity: 300 }),
+      makeThread({ id: 'older', lastActivity: 100 }),
+      makeThread({ id: 'newer', lastActivity: 200 })
+    ])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) })
+    await deleteThread('main')
+    expect(threadKey()).toBe('newer')
+  })
+
+  it('clears the selection when the last thread is deleted', async () => {
+    setThreads([makeThread({ id: 'main' })])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) })
+    await deleteThread('main')
+    expect(threads()).toEqual([])
+    expect(threadKey()).toBe('')
+  })
+
+  it('throws and keeps the thread when the server refuses', async () => {
+    setThreads([makeThread({ id: 'main' })])
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ error: 'Thread not found' })
+    })
+    await expect(deleteThread('main')).rejects.toThrow('Thread not found')
+    expect(threads()).toHaveLength(1)
+  })
+})
+
 describe('addEntity', () => {
   it('posts entity to thread endpoint', async () => {
     mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve({}) })
@@ -361,6 +427,19 @@ describe('initThreadStore', () => {
     setThreads([mockThread('t1')])
     ws._emit('thread.updated', { payload: { thread: { ...mockThread('t1'), unreadCount: 5 } } })
     expect(threads().find((t) => t.id === 't1')?.unreadCount).toBe(5)
+    cleanup()
+  })
+
+  it('handles thread.deleted WS events', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    setThreads([mockThread('t1'), mockThread('t2')])
+    setThreadKey('t1')
+    ws._emit('thread.deleted', { payload: { threadId: 't1' } })
+    expect(threads().map((t) => t.id)).toEqual(['t2'])
+    expect(threadKey()).toBe('t2')
     cleanup()
   })
 

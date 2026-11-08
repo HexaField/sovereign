@@ -414,3 +414,57 @@ describe('Thread Routes — Context Management Health (Layers 1/2/3)', () => {
     expect(res.body.layer2).toMatchObject({ enabled: true, recycleCount: 3, lastRecycleAt })
   })
 })
+
+describe('Thread Routes — rename and delete', () => {
+  let app: ReturnType<typeof express>
+  let tm: ThreadManager
+  let aborted: string[]
+
+  beforeEach(() => {
+    const dataDir = makeTmpDir()
+    tm = createThreadManager(createEventBus(dataDir), dataDir)
+    aborted = []
+    const backend = createStubBackend()
+    backend.abort = async (sessionKey: string) => {
+      aborted.push(sessionKey)
+    }
+    app = express()
+    app.use(express.json())
+    app.use(createThreadRoutes(tm, forwardHandler as any, { backend }))
+  })
+
+  it('PATCH /api/threads/:key renames the thread (trimmed) and persists it', async () => {
+    const thread = tm.create({ label: 'old name' })
+    const res = await request(app).patch(`/api/threads/${thread.id}`).send({ label: '  new name  ' })
+    expect(res.status).toBe(200)
+    expect(res.body.thread.label).toBe('new name')
+    expect(tm.get(thread.id)?.label).toBe('new name')
+  })
+
+  it('PATCH /api/threads/:key rejects an empty or non-string label', async () => {
+    const thread = tm.create({ label: 'keep me' })
+    expect((await request(app).patch(`/api/threads/${thread.id}`).send({ label: '   ' })).status).toBe(400)
+    expect((await request(app).patch(`/api/threads/${thread.id}`).send({ label: 42 })).status).toBe(400)
+    expect(tm.get(thread.id)?.label).toBe('keep me')
+  })
+
+  it('DELETE /api/threads/:key removes the thread from the active list', async () => {
+    const thread = tm.create({ label: 'doomed' })
+    const res = await request(app).delete(`/api/threads/${thread.id}`)
+    expect(res.status).toBe(200)
+    const list = await request(app).get('/api/threads')
+    expect(list.body.threads.map((t: { id: string }) => t.id)).not.toContain(thread.id)
+    expect(aborted).toEqual([])
+  })
+
+  it('DELETE /api/threads/:key stops a turn still running on the thread', async () => {
+    const thread = tm.create({ label: 'busy' })
+    thread.agentStatus = 'working'
+    await request(app).delete(`/api/threads/${thread.id}`)
+    expect(aborted).toEqual([thread.id])
+  })
+
+  it('DELETE /api/threads/:key returns 404 for an unknown thread', async () => {
+    expect((await request(app).delete('/api/threads/nope')).status).toBe(404)
+  })
+})

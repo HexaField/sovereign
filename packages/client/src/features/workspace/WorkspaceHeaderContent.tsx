@@ -2,7 +2,15 @@ import { createMemo, createSignal, Show, For, onCleanup, onMount } from 'solid-j
 import { wsStore } from '../../ws/index.js'
 import { formatRelativeTime } from '../../lib/format.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from './store.js'
-import { threadKey, switchThread, threads, createThread, moveThread } from '../threads/store.js'
+import {
+  threadKey,
+  switchThread,
+  threads,
+  createThread,
+  moveThread,
+  renameThread,
+  deleteThread
+} from '../threads/store.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
@@ -350,12 +358,105 @@ function SubagentTree(props: {
   )
 }
 
+/** Inline thread-name editor: Enter saves, Escape (or leaving the field) cancels. */
+export function ThreadRenameInput(props: {
+  initial: string
+  onSave: (label: string) => Promise<void>
+  onDone: () => void
+}) {
+  const [value, setValue] = createSignal(props.initial)
+  const [error, setError] = createSignal('')
+  let finished = false
+  const finish = () => {
+    if (finished) return
+    finished = true
+    props.onDone()
+  }
+  const save = async () => {
+    const label = value().trim()
+    if (!label || label === props.initial) return finish()
+    try {
+      await props.onSave(label)
+      finish()
+    } catch (err) {
+      setError((err as Error).message || 'Rename failed')
+    }
+  }
+  return (
+    <input
+      class="w-full min-w-0 rounded border px-2 py-1 text-xs outline-none"
+      style={{
+        background: 'var(--c-bg)',
+        'border-color': error() ? '#ef4444' : 'var(--c-accent)',
+        color: 'var(--c-text)'
+      }}
+      aria-label="Thread name"
+      title={error() || 'Enter to save, Escape to cancel'}
+      value={value()}
+      onInput={(e) => {
+        setValue(e.currentTarget.value)
+        setError('')
+      }}
+      onKeyDown={(e) => {
+        e.stopPropagation()
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          void save()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          finish()
+        }
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onBlur={finish}
+      ref={(el) =>
+        setTimeout(() => {
+          el.focus()
+          el.select()
+        }, 0)
+      }
+    />
+  )
+}
+
 export function WorkspaceHeaderContent() {
   const ws = () => activeWorkspace()
   const [threadPickerOpen, setThreadPickerOpen] = createSignal(false)
   const [newThreadInput, setNewThreadInput] = createSignal(false)
   const [newThreadLabel, setNewThreadLabel] = createSignal('')
   const [moveThreadKey, setMoveThreadKey] = createSignal<string | null>(null)
+  // Per-thread actions (Rename / Delete): which row's menu is open, which row
+  // is awaiting delete confirmation, and which row (or the header) is renaming.
+  const [menuThreadKey, setMenuThreadKey] = createSignal<string | null>(null)
+  const [confirmDeleteKey, setConfirmDeleteKey] = createSignal<string | null>(null)
+  const [renamingKey, setRenamingKey] = createSignal<string | null>(null)
+  const [headerRenaming, setHeaderRenaming] = createSignal(false)
+  const [deleting, setDeleting] = createSignal(false)
+  const [threadActionError, setThreadActionError] = createSignal('')
+
+  const closeThreadMenu = () => {
+    setMenuThreadKey(null)
+    setConfirmDeleteKey(null)
+    setThreadActionError('')
+  }
+  const openThreadMenu = (id: string) => {
+    closeThreadMenu()
+    setMoveThreadKey(null)
+    setRenamingKey(null)
+    setMenuThreadKey(id)
+  }
+  const confirmDeleteThread = async (id: string) => {
+    setDeleting(true)
+    setThreadActionError('')
+    try {
+      await deleteThread(id)
+      closeThreadMenu()
+    } catch (err) {
+      setThreadActionError((err as Error).message || 'Delete failed')
+    } finally {
+      setDeleting(false)
+    }
+  }
   const [wsPickerOpen, setWsPickerOpen] = createSignal(false)
   const [orgList, setOrgList] = createSignal<OrgListItem[]>([])
   const [showAddDialog, setShowAddDialog] = createSignal(false)
@@ -457,6 +558,8 @@ export function WorkspaceHeaderContent() {
   }
 
   startNotificationPolling()
+
+  const activeThread = () => threads().find((th) => th.id === threadKey())
 
   const activeThreadLabel = () => {
     const key = threadKey()
@@ -569,31 +672,57 @@ export function WorkspaceHeaderContent() {
       </Show>
       <span style={{ color: 'var(--c-text-muted)' }}>/</span>
       <div class="relative flex min-w-0 items-center">
-        <button
-          class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-medium transition-colors"
-          style={{
-            color: 'var(--c-accent)',
-            'max-width': '140px',
-            overflow: 'hidden',
-            'text-overflow': 'ellipsis',
-            'white-space': 'nowrap'
-          }}
-          onClick={() => {
-            fetchOrgs()
-            fetchActiveSubagents()
-            setThreadPickerOpen(!threadPickerOpen())
-            setNewThreadInput(false)
-            setMoveThreadKey(null)
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-          title="Switch thread"
+        <Show
+          when={headerRenaming() && activeThread()}
+          fallback={
+            <button
+              class="flex cursor-pointer items-center gap-1 rounded-md border-none bg-transparent px-1.5 py-0.5 text-sm font-medium transition-colors"
+              style={{
+                color: 'var(--c-accent)',
+                'max-width': '140px',
+                overflow: 'hidden',
+                'text-overflow': 'ellipsis',
+                'white-space': 'nowrap',
+                // Above the picker's backdrop, so a second click (and a double-click) reaches it.
+                position: 'relative',
+                'z-index': threadPickerOpen() ? 201 : undefined
+              }}
+              onClick={() => {
+                fetchOrgs()
+                fetchActiveSubagents()
+                setThreadPickerOpen(!threadPickerOpen())
+                setNewThreadInput(false)
+                setMoveThreadKey(null)
+                closeThreadMenu()
+                setRenamingKey(null)
+              }}
+              onDblClick={() => {
+                // Two clicks toggled the picker open and shut; rename the open thread in place.
+                if (!activeThread()) return
+                setThreadPickerOpen(false)
+                setHeaderRenaming(true)
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              title="Switch thread (double-click to rename)"
+            >
+              <span class="overflow-hidden text-ellipsis whitespace-nowrap">{activeThreadLabel()}</span>
+              <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                ▾
+              </span>
+            </button>
+          }
         >
-          <span class="overflow-hidden text-ellipsis whitespace-nowrap">{activeThreadLabel()}</span>
-          <span class="shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-            ▾
-          </span>
-        </button>
+          {(t) => (
+            <div class="w-[160px] shrink-0">
+              <ThreadRenameInput
+                initial={t().label ?? ''}
+                onSave={(label) => renameThread(t().id, label)}
+                onDone={() => setHeaderRenaming(false)}
+              />
+            </div>
+          )}
+        </Show>
         <ChatSettingsButton />
         <button
           class="relative flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-none bg-transparent transition-all"
@@ -639,107 +768,210 @@ export function WorkspaceHeaderContent() {
         <Show when={threadPickerOpen()}>
           <div class="fixed inset-0 z-[199]" onClick={() => setThreadPickerOpen(false)} />
           <div
-            class="absolute top-full left-0 z-[200] mt-1 min-w-[200px] overflow-hidden rounded-lg shadow-lg"
-            style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
+            class="absolute top-full left-0 z-[200] mt-1 flex min-w-[240px] flex-col overflow-hidden rounded-lg shadow-lg"
+            style={{
+              background: 'var(--c-bg-raised)',
+              border: '1px solid var(--c-border)',
+              width: 'max-content',
+              'max-width': 'min(360px, calc(100vw - 1.5rem))',
+              'max-height': 'min(70vh, calc(100dvh - 5rem))'
+            }}
           >
-            <For
-              each={threads()
-                .filter((t) => t.id)
-                .sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}
-            >
-              {(t) => (
-                <>
-                  <div
-                    class="group relative flex w-full items-center text-left text-sm transition-colors"
-                    style={{
-                      color: t.id === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
-                      background: t.id === threadKey() ? 'var(--c-hover-bg)' : undefined
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = t.id === threadKey() ? 'var(--c-hover-bg)' : '')
-                    }
-                  >
-                    <a
-                      class="flex flex-1 items-center gap-2 px-3 py-2 no-underline"
-                      href={`?view=workspace${ws()?.orgId && ws()?.orgId !== '_global' ? `&workspace=${ws()?.orgId}` : ''}#thread=${t.id}`}
-                      style={{ color: 'inherit' }}
-                      onClick={(e) => {
-                        if (e.metaKey || e.ctrlKey) return
+            <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="thread-picker-list">
+              <For
+                each={threads()
+                  .filter((t) => t.id)
+                  .sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))}
+              >
+                {(t) => (
+                  <>
+                    <div
+                      class="group relative flex w-full items-center text-left text-sm transition-colors"
+                      style={{
+                        color: t.id === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
+                        background: t.id === threadKey() ? 'var(--c-hover-bg)' : undefined
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.background = t.id === threadKey() ? 'var(--c-hover-bg)' : '')
+                      }
+                      onContextMenu={(e) => {
+                        if (renamingKey() === t.id) return
                         e.preventDefault()
-                        switchThread(t.id)
-                        setThreadPickerOpen(false)
+                        openThreadMenu(t.id)
                       }}
                     >
-                      <Show when={t.id === threadKey()}>
-                        <span class="text-xs">●</span>
+                      <Show
+                        when={renamingKey() === t.id}
+                        fallback={
+                          <a
+                            class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 no-underline"
+                            href={`?view=workspace${ws()?.orgId && ws()?.orgId !== '_global' ? `&workspace=${ws()?.orgId}` : ''}#thread=${t.id}`}
+                            style={{ color: 'inherit' }}
+                            onClick={(e) => {
+                              if (e.metaKey || e.ctrlKey) return
+                              e.preventDefault()
+                              switchThread(t.id)
+                              setThreadPickerOpen(false)
+                            }}
+                          >
+                            <Show when={t.id === threadKey()}>
+                              <span class="text-xs">●</span>
+                            </Show>
+                            <span class="truncate">{t.label ?? t.id}</span>
+                            <Show when={t.lastActivity}>
+                              <span class="ml-auto shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                                {t.lastActivity ? formatRelativeTime(t.lastActivity, nowTick()) : ''}
+                              </span>
+                            </Show>
+                          </a>
+                        }
+                      >
+                        <div class="flex min-w-0 flex-1 px-2 py-1">
+                          <ThreadRenameInput
+                            initial={t.label ?? ''}
+                            onSave={(label) => renameThread(t.id, label)}
+                            onDone={() => setRenamingKey(null)}
+                          />
+                        </div>
                       </Show>
-                      <span class="truncate">{t.label ?? t.id}</span>
-                      <Show when={t.lastActivity}>
-                        <span class="ml-auto shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                          {t.lastActivity ? formatRelativeTime(t.lastActivity, nowTick()) : ''}
-                        </span>
-                      </Show>
-                    </a>
-                    <div class="relative">
                       <button
-                        class="px-2 py-2 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
+                        class="shrink-0 px-2 py-2 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
                         style={{ color: 'var(--c-accent)' }}
                         title="Move to workspace"
                         onClick={(e) => {
                           e.stopPropagation()
-                          setMoveThreadKey(moveThreadKey() === t.id ? null : t.id)
+                          const open = moveThreadKey() === t.id
+                          closeThreadMenu()
+                          setMoveThreadKey(open ? null : t.id)
                         }}
                       >
                         ⇄
                       </button>
-                      <Show when={moveThreadKey() === t.id}>
+                      <button
+                        class="shrink-0 py-2 pr-2 pl-1 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
+                        style={{ color: 'var(--c-text-muted)' }}
+                        title="Thread actions"
+                        aria-label="Thread actions"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (menuThreadKey() === t.id) closeThreadMenu()
+                          else openThreadMenu(t.id)
+                        }}
+                      >
+                        ⋯
+                      </button>
+                    </div>
+                    <Show when={moveThreadKey() === t.id}>
+                      <div
+                        class="mx-2 mb-1 overflow-hidden rounded-md"
+                        style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
+                      >
                         <div
-                          class="absolute top-0 left-full z-[210] ml-1 min-w-[150px] overflow-hidden rounded-lg shadow-lg"
-                          style={{ background: 'var(--c-bg-raised)', border: '1px solid var(--c-border)' }}
+                          class="px-3 py-1.5 text-[10px] font-semibold tracking-wide uppercase"
+                          style={{ color: 'var(--c-text-muted)' }}
                         >
-                          <div
-                            class="px-3 py-1.5 text-[10px] font-semibold tracking-wide uppercase"
-                            style={{ color: 'var(--c-text-muted)' }}
-                          >
-                            Move to…
-                          </div>
-                          <For each={orgList().filter((o) => o.id !== t.workspaceIds?.[0])}>
-                            {(org) => (
+                          Move to…
+                        </div>
+                        <For each={orgList().filter((o) => o.id !== t.workspaceIds?.[0])}>
+                          {(org) => (
+                            <button
+                              class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+                              style={{ color: 'var(--c-text)' }}
+                              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                              onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                              onClick={() => {
+                                moveThread(t.id, org.id)
+                                setMoveThreadKey(null)
+                                setThreadPickerOpen(false)
+                              }}
+                            >
+                              {org.name}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                    <Show when={menuThreadKey() === t.id}>
+                      <div
+                        class="mx-2 mb-1 overflow-hidden rounded-md text-xs"
+                        style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
+                      >
+                        <Show
+                          when={confirmDeleteKey() === t.id}
+                          fallback={
+                            <>
                               <button
-                                class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+                                class="flex w-full items-center px-3 py-1.5 text-left transition-colors"
                                 style={{ color: 'var(--c-text)' }}
                                 onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
                                 onMouseLeave={(e) => (e.currentTarget.style.background = '')}
                                 onClick={() => {
-                                  moveThread(t.id, org.id)
-                                  setMoveThreadKey(null)
-                                  setThreadPickerOpen(false)
+                                  closeThreadMenu()
+                                  setRenamingKey(t.id)
                                 }}
                               >
-                                {org.name}
+                                Rename
                               </button>
-                            )}
-                          </For>
-                        </div>
-                      </Show>
-                    </div>
-                  </div>
-                  <Show when={(activeSubagents()[t.id] || []).length > 0}>
-                    <SubagentTree
-                      subagents={activeSubagents()[t.id]}
-                      allSubagents={activeSubagents()}
-                      depth={1}
-                      activeKey={threadKey()}
-                      onSelect={(key) => {
-                        switchThread(key)
-                        setThreadPickerOpen(false)
-                      }}
-                    />
-                  </Show>
-                </>
-              )}
-            </For>
+                              <Show when={!t.presence}>
+                                <button
+                                  class="flex w-full items-center px-3 py-1.5 text-left transition-colors"
+                                  style={{ color: '#ef4444' }}
+                                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                                  onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                                  onClick={() => setConfirmDeleteKey(t.id)}
+                                >
+                                  Delete
+                                </button>
+                              </Show>
+                            </>
+                          }
+                        >
+                          <div class="px-3 pt-2 pb-1.5" style={{ color: 'var(--c-text)' }}>
+                            Delete this thread? This can't be undone.
+                          </div>
+                          <div class="flex justify-end gap-1 px-2 pb-2">
+                            <button
+                              class="rounded px-2 py-1"
+                              style={{ color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
+                              onClick={() => closeThreadMenu()}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              class="rounded px-2 py-1 font-medium text-white"
+                              style={{ background: '#ef4444', opacity: deleting() ? '0.5' : '1' }}
+                              disabled={deleting()}
+                              onClick={() => void confirmDeleteThread(t.id)}
+                              ref={(el) => setTimeout(() => el.focus(), 0)}
+                            >
+                              {deleting() ? 'Deleting…' : 'Delete'}
+                            </button>
+                          </div>
+                        </Show>
+                        <Show when={threadActionError()}>
+                          <div class="px-3 pb-2" style={{ color: '#ef4444' }}>
+                            {threadActionError()}
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+                    <Show when={(activeSubagents()[t.id] || []).length > 0}>
+                      <SubagentTree
+                        subagents={activeSubagents()[t.id]}
+                        allSubagents={activeSubagents()}
+                        depth={1}
+                        activeKey={threadKey()}
+                        onSelect={(key) => {
+                          switchThread(key)
+                          setThreadPickerOpen(false)
+                        }}
+                      />
+                    </Show>
+                  </>
+                )}
+              </For>
+            </div>
 
             <div class="mx-2 my-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
             <Show

@@ -139,6 +139,46 @@ export function moveThread(key: string, orgId: string): Promise<void> {
     })
 }
 
+/** Rename a thread. The server trims the label and rejects an empty one. */
+export async function renameThread(key: string, label: string): Promise<void> {
+  const res = await fetch(`/api/threads/${key}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label })
+  })
+  const data: any = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error ?? `Rename failed (${res.status})`)
+  const updated = data.thread as ThreadInfo
+  setThreads((prev) => prev.map((t) => (t.id === key ? { ...t, label: updated.label } : t)))
+}
+
+/** Delete a thread. If it was open, the most recently active remaining thread opens instead. */
+export async function deleteThread(key: string): Promise<void> {
+  const res = await fetch(`/api/threads/${key}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}))
+    throw new Error(data.error ?? `Delete failed (${res.status})`)
+  }
+  dropThread(key)
+}
+
+function dropThread(key: string): void {
+  const remaining = threads().filter((t) => t.id !== key)
+  setThreads(remaining)
+  if (threadKey() !== key) return
+  const next = [...remaining].sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0))[0]
+  if (next) {
+    switchThread(next.id)
+    return
+  }
+  setThreadKey('')
+  if (typeof history !== 'undefined') {
+    const u = new URL(location.href)
+    u.hash = ''
+    history.replaceState(null, '', u.toString())
+  }
+}
+
 export function addEntity(threadKeyVal: string, entity: ThreadInfo['entities'][0]): Promise<void> {
   return fetch(`/api/threads/${threadKeyVal}/entities`, {
     method: 'POST',
@@ -201,6 +241,14 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
         if (!id) return
         const patch = p?.patch ?? p?.thread ?? p
         setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
+      })
+    )
+
+    unsubs.push(
+      ws.on('thread.deleted', (msg: any) => {
+        const p = msg?.payload ?? msg
+        const id = p?.threadId ?? p?.thread?.id ?? p?.id
+        if (id) dropThread(id)
       })
     )
 
