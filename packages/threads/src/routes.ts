@@ -364,14 +364,42 @@ export function createThreadRoutes(
 
   router.delete('/api/threads/:key', (req, res) => {
     const thread = threadManager.get(req.params.key)
+    if (thread?.presence) return res.status(409).json({ error: 'A presence thread cannot be deleted' })
     const busy = !!thread && !thread.archived && !!thread.agentStatus && thread.agentStatus !== 'idle'
     const deleted = threadManager.delete(req.params.key)
     if (!deleted) return res.status(404).json({ error: 'Thread not found' })
+    const sessionKey = opts?.chatModule?.getSessionKeyForThread(req.params.key) ?? deriveSessionKey(req.params.key)
     // A deleted thread must not keep a turn running in the background.
     if (busy) {
-      const sessionKey = opts?.chatModule?.getSessionKeyForThread(req.params.key) ?? deriveSessionKey(req.params.key)
       backendForSession(sessionKey)
         ?.abort(sessionKey)
+        .catch(() => {
+          /* best-effort — the thread is already archived */
+        })
+    }
+    // Nor may its subagents keep running — children (Claude subagents and
+    // harness runs) can be live while the parent turn is idle, so this runs
+    // whether or not `busy` was set. Fire and forget, like the abort above.
+    const b = opts?.backend
+    const instances: AgentBackend[] =
+      b && 'all' in b && typeof (b as RoutingBackend).all === 'function'
+        ? (b as RoutingBackend).all().map((i) => i.backend)
+        : b
+          ? [b as AgentBackend]
+          : []
+    for (const inst of instances) {
+      inst
+        .listSubagents(sessionKey)
+        .then((children) => {
+          for (const child of children) {
+            if (child.status === 'idle') continue
+            backendForSession(child.sessionKey)
+              ?.stopSubagent?.(child.sessionKey)
+              ?.catch(() => {
+                /* best-effort — the thread is already archived */
+              })
+          }
+        })
         .catch(() => {
           /* best-effort — the thread is already archived */
         })
@@ -570,10 +598,19 @@ export function createThreadRoutes(
       const sessionKey = opts?.chatModule?.getSessionKeyForThread(threadKey) ?? deriveSessionKey(threadKey)
       const backend = backendForSession(sessionKey)
       const meta = backend ? await backend.getSessionMeta(sessionKey) : null
+      // No session yet: report the model the first message starts on (the backend default),
+      // not null, which left the settings panel showing the first family in its list.
+      const fallback = meta?.model
+        ? null
+        : await backend?.listAvailableModels().then(
+            (m) => m.defaultModel,
+            () => null
+          )
+      const slash = fallback ? fallback.indexOf('/') : -1
 
       res.json({
-        model: meta?.model ?? null,
-        modelProvider: meta?.modelProvider ?? null,
+        model: meta?.model ?? (fallback ? fallback.slice(slash + 1) : null),
+        modelProvider: meta?.modelProvider ?? (fallback && slash > 0 ? fallback.slice(0, slash) : null),
         contextTokens: meta?.contextTokens ?? null,
         totalTokens: meta?.totalTokens ?? 0,
         inputTokens: meta?.inputTokens ?? 0,
@@ -819,7 +856,8 @@ export function createThreadRoutes(
       return res.json({ backends: [], defaultBackend: null })
     }
     const routing = opts.backend as RoutingBackend
-    const all = routing.all()
+    // A session owner (the harness runs) is not a backend a thread can pick.
+    const all = routing.all().filter((inst) => !inst.backend.ownsSession)
     const def = routing.default()
     res.json({
       backends: all.map((inst) => ({

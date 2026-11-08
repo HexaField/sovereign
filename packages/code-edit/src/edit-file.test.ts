@@ -87,8 +87,13 @@ describe('replace (TypeScript)', () => {
     expect(read(file)).toBe(TS.replace('return x + 1', 'return x + 2'))
     expect(r.report).toContain("kept 'export'")
     expect(r.report).toContain('syntax ok')
-    expect(r.report).toMatch(/^-  return x \+ 1$/m)
-    expect(r.report).toMatch(/^\+  return x \+ 2$/m)
+    // A written edit reports no diff: only a dry run shows one.
+    expect(r.report).not.toContain('@@')
+    const dry = await edit(file, [{ op: 'replace_in', symbol: 'addOne', find: 'x + 2', code: 'x + 3' }], {
+      dryRun: true
+    })
+    expect(dry.report).toMatch(/^-  return x \+ 2$/m)
+    expect(dry.report).toMatch(/^\+  return x \+ 3$/m)
   })
 
   it('replaces the doc comment when the code starts with one', async () => {
@@ -800,7 +805,7 @@ describe.skipIf(!hasCodegraph)('with a codegraph index', () => {
       { roots: [tmp] }
     )
     expect(r.report).toContain('signature changed: greet (name: string): string → (name: string, loud = false): string')
-    expect(r.report).toMatch(/callers to check: src\/app\.ts:4/)
+    expect(r.report).toMatch(/callers to check: [^\n]*src\/app\.ts:4/)
     expect(r.report).toMatch(/affected tests: .*src\/greet\.test\.ts/)
   })
 

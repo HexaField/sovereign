@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
@@ -180,6 +180,23 @@ describe('claude-code/createClaudeCodeBackend', () => {
     })
     expect(out.hookSpecificOutput.permissionDecision).toBe('deny')
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain('mcp__sovereign__cron_create')
+
+    // Commands that add a remote or publish a repo are denied; others run.
+    const remote = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'git remote add origin git@github.com:someone/notes.git' },
+      tool_use_id: 'tu2'
+    })
+    expect(remote.hookSpecificOutput.permissionDecision).toBe('deny')
+    expect(remote.hookSpecificOutput.permissionDecisionReason).toContain('git remote add')
+    const status = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'git status' },
+      tool_use_id: 'tu3'
+    })
+    expect(status.hookSpecificOutput?.permissionDecision).not.toBe('deny')
   })
 
   // ── Regression: tool_result must be emitted EXACTLY ONCE per tool ──
@@ -1201,6 +1218,8 @@ describe('claude-code/auto-recycle waits for the next message', () => {
 
     const statuses: string[] = []
     backend.on('chat.status', (d: any) => statuses.push(d.status))
+    const recycled: any[] = []
+    backend.on('session.recycled', (d: any) => recycled.push(d))
     const started = Date.now()
     await backend.sendMessage('r', 'second')
     // The idle session's input is closed, not interrupted: interrupt() would
@@ -1209,11 +1228,58 @@ describe('claude-code/auto-recycle waits for the next message', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(sdk.queries[0].interrupt).not.toHaveBeenCalled()
     expect(compactions).toEqual([expect.objectContaining({ method: 'auto-recycle' })])
+    // One line for the timeline (the chat layer names the thread).
+    expect(recycled).toEqual([
+      expect.objectContaining({ sessionKey: 'r', method: 'auto-recycle', preTokens: expect.any(Number) })
+    ])
     // No idle while the message is being sent: the chat layer would take it
     // as the end of that message's turn and release its queue gate early.
     expect(statuses).not.toContain('idle')
     // The next message runs in a fresh query on the pruned transcript.
     expect(sdk.queries).toHaveLength(2)
+  })
+
+  it('recycles below the threshold when the session was idle past the prompt-cache TTL', async () => {
+    // 30 % of a 1M window: under the 55 % threshold, over the cold threshold.
+    const run = async (idleMinutes: number) => {
+      const sdk = fullContextSdk()
+      const compactions: any[] = []
+      const metrics = {
+        recordToolCall: vi.fn(),
+        recordContextSnapshot: vi.fn(),
+        recordCompaction: vi.fn((c: any) => compactions.push(c)),
+        recordContextStrategy: vi.fn(),
+        recordRecycle: vi.fn()
+      }
+      const key = `cold-${idleMinutes}`
+      const backend = createClaudeCodeBackend(
+        { dataDir, cwd, agentDir: join(dataDir, 'agent'), contextManagement: { recycle: { enabled: true } } },
+        { sdkQuery: sdk.factory, metrics: metrics as any }
+      )
+      await backend.createSession('t', { threadKey: key, model: { provider: 'anthropic', model: 'claude-opus-5-5' } })
+      const file = backend.getSessionFilePath!(key)!
+      mkdirSync(dirname(file), { recursive: true })
+      const usage = {
+        input_tokens: 300_000,
+        output_tokens: 10,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0
+      }
+      writeFileSync(
+        file,
+        JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [], usage } }) + '\n'
+      )
+      await backend.sendMessage(key, 'first')
+      sdk.endTurn()
+      await new Promise((r) => setTimeout(r, 50))
+      const then = new Date(Date.now() - idleMinutes * 60_000)
+      utimesSync(file, then, then)
+      await backend.sendMessage(key, 'second')
+      await new Promise((r) => setTimeout(r, 20))
+      return compactions
+    }
+    expect(await run(61)).toEqual([expect.objectContaining({ method: 'auto-recycle' })])
+    expect(await run(10)).toHaveLength(0)
   })
 
   it('never recycles a session that a background task has made busy again', async () => {
@@ -1417,8 +1483,7 @@ describe('claude-code/auto-recycle stops when pruning cannot shrink the session'
 
   it('measures regrowth from the real fill when it sits below the estimated floor', async () => {
     const compactions: any[] = []
-    // minReclaimPercent 0: only the floor gates the recycle.
-    const backend = backendWith(compactions, { thresholdPercent: 55, regrowPercent: 10, minReclaimPercent: 0 })
+    const backend = backendWith(compactions, { thresholdPercent: 55, regrowPercent: 10 })
     await backend.createSession('t', { threadKey: 'r', model: { provider: 'anthropic', model: 'claude-opus-5-5' } })
     const file = backend.getSessionFilePath!('r')!
     mkdirSync(dirname(file), { recursive: true })
@@ -1705,6 +1770,18 @@ describe('claude-code/system-config-with-overrides wiring', () => {
   it("passes settingSources: ['user', 'local'] (project source dropped to avoid duplicate cozempic hooks)", async () => {
     const options = await captureOptions()
     expect(options.settingSources).toEqual(['user', 'local'])
+  })
+
+  it('loads the personality once: Sovereign appends it, the SDK loads no CLAUDE.md of its own', async () => {
+    const options = await captureOptions()
+    // The SDK's user source also injects ~/.claude/CLAUDE.md as an attachment,
+    // and re-injects it whenever it changes: two copies, then more.
+    expect(options.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBe('1')
+  })
+
+  it('blocks the built-in Agent tool in top-level sessions: delegation goes through agents_spawn', async () => {
+    const options = await captureOptions()
+    expect(options.disallowedTools).toEqual(['Agent', 'Task'])
   })
 
   it('keeps the specific Sovereign overrides intact alongside system config', async () => {
@@ -2453,12 +2530,13 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     expect(opts.systemPrompt).toContain(`# Repo context (${join(repo, 'AGENTS.md')})`)
     expect(opts.systemPrompt).toContain('Run pnpm test.')
     expect(opts.systemPrompt).not.toContain('claude_code')
-    expect(opts.tools).toEqual(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob'])
+    expect(opts.tools).toEqual(['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'WebFetch', 'WebSearch'])
     expect(opts.settingSources).toEqual(['local'])
     expect(opts.mcpServers.sovereign.url).toBe('http://localhost:5801/api/mcp/subagent')
     expect(opts.mcpServers.code.args).toEqual(['--edit-roots', `/elsewhere${delimiter}${repo}`])
     expect(opts.mcpServers.ad4m).toBeUndefined()
     expect(opts.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
+    expect(opts.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('200000')
   })
 
   it('sends the parent one completion with the final text', async () => {
@@ -2571,6 +2649,8 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     const failed = events.filter((e) => e.type === 'subagent.failed')
     expect(failed).toHaveLength(1)
     expect(failed[0].data.error).toBe('stopped by the parent')
+    // The timeline tells a stop from a failure, and names the run.
+    expect(failed[0].data).toMatchObject({ ended: 'stopped', label: 'slow', durationMs: expect.any(Number) })
     expect(child.abortController.signal.aborted).toBe(true)
   })
 
@@ -2581,7 +2661,9 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
 
     const failed = events.filter((e) => e.type === 'subagent.failed')
     expect(failed).toHaveLength(1)
-    expect(failed[0].data.error).toMatch(/^timed out/)
+    // The message names the limit the run had, not the default
+    expect(failed[0].data.error).toBe('timed out after 1 min')
+    expect(failed[0].data.ended).toBe('timed-out')
     expect(stub.calls.find((o: any) => o.sessionId === childKey).abortController.signal.aborted).toBe(true)
   })
 

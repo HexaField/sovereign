@@ -11,6 +11,7 @@
 //   npx tsx src/main.ts --scenario s1,s3      # run specific scenarios
 //   npx tsx src/main.ts --sovereign-url ...   # custom endpoint (container)
 //   npx tsx src/main.ts --mock-llm-url ...    # custom mock LLM (container)
+//   npx tsx src/main.ts --mock-github-url ... # custom mock GitHub (container)
 
 import { SovereignClient } from './client.js'
 import { ALL_SCENARIOS } from './scenarios/index.js'
@@ -26,6 +27,7 @@ function getArg(name: string, fallback: string): string {
 
 const sovereignUrl = getArg('sovereign-url', 'http://localhost:5811')
 const mockLlmUrl = getArg('mock-llm-url', 'http://localhost:8900')
+const mockGithubUrl = getArg('mock-github-url', 'http://localhost:8910')
 const scenarioFilter = getArg('scenario', '')
 const jsonOutput = args.includes('--json')
 const composeFile = getArg('compose-file', new URL('../docker/docker-compose.yml', import.meta.url).pathname)
@@ -80,6 +82,7 @@ async function run(): Promise<void> {
   console.log()
   console.log(`  Sovereign:  ${sovereignUrl}`)
   console.log(`  Mock LLM:   ${mockLlmUrl}`)
+  console.log(`  Mock GH:    ${mockGithubUrl}`)
   console.log(`  Scenarios:  ${scenarios.map((s) => s.id).join(', ')}`)
   console.log()
 
@@ -98,6 +101,14 @@ async function run(): Promise<void> {
     console.log('  ✓ Mock LLM ready')
   } catch (err: any) {
     console.error(`  ✗ Mock LLM not reachable: ${err.message}`)
+    process.exit(1)
+  }
+
+  try {
+    await waitForService(mockGithubUrl, 'Mock GitHub')
+    console.log('  ✓ Mock GitHub ready')
+  } catch (err: any) {
+    console.error(`  ✗ Mock GitHub not reachable: ${err.message}`)
     process.exit(1)
   }
   console.log()
@@ -120,9 +131,12 @@ async function run(): Promise<void> {
     try {
       const reset = await fetch(`${mockLlmUrl}/mock/reset`, { method: 'POST' })
       if (!reset.ok) throw new Error(`mock reset → ${reset.status}`)
+      const ghReset = await fetch(`${mockGithubUrl}/mock/github/reset`, { method: 'POST' })
+      if (!ghReset.ok) throw new Error(`mock-github reset → ${ghReset.status}`)
       result = await scenario.run({
         client,
         mockLlmUrl,
+        mockGithubUrl,
         sovereignUrl,
         composeFile
       })

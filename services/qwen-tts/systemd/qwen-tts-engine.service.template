@@ -1,0 +1,15 @@
+[Unit]
+Description=Qwen3-TTS 1.7B engine (qwentts.cpp tts-server, Vulkan)
+After=network.target
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=@@QWEN_TTS_DIR@@/bin
+ExecStart=@@QWEN_TTS_DIR@@/bin/tts-server --model @@QWEN_TTS_DIR@@/models/qwen-talker-1.7b-base-Q8_0.gguf --codec @@QWEN_TTS_DIR@@/models/qwen-tokenizer-12hz-Q8_0.gguf --device Vulkan0 --alias qwen3-tts-1.7b-base --host 127.0.0.1 --port 5814 --lang English
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

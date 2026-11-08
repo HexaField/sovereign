@@ -7,9 +7,22 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { withEditRoot } from './config.js'
 
-/** Built-in tools a child may call. No Agent: children never spawn children. */
-export const SUBAGENT_BUILTIN_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob']
+/** Built-in tools a child may call. No Agent: children never spawn children.
+ *  WebFetch and WebSearch serve research children (deep-research researchers). */
+export const SUBAGENT_BUILTIN_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'WebFetch', 'WebSearch']
+
+/** Built-in tools top-level sessions may not call: delegation goes through `agents_spawn`. */
+export const MAIN_DISALLOWED_TOOLS = ['Agent', 'Task']
+
+/** Tokens at which a subagent's SDK compacts mid-turn. A subagent works in
+ *  one long turn, so the between-turn auto-recycle never runs for it; without
+ *  this it grows towards the model's 1M window and re-reads it on every call.
+ *  It must stay well above the subagent's starting prompt, or the SDK
+ *  compacts again at once and aborts ("Autocompact is thrashing"): see
+ *  REPO_CONTEXT_MAX_CHARS. */
+export const SUBAGENT_AUTO_COMPACT_WINDOW = 200_000
 
 /** MCP servers a child connects to, when configured. `sovereign` is the
  *  narrow subagent endpoint (browser + embeddings). */
@@ -19,7 +32,7 @@ export const SUBAGENT_MCP_SERVERS = ['codegraph', 'semble', 'code', 'sovereign']
 export const MAX_SUBAGENTS_PER_PARENT = 4
 
 /** Wall-clock limit for one child. */
-export const SUBAGENT_TIMEOUT_MS = 60 * 60_000
+export const SUBAGENT_TIMEOUT_MS = 240 * 60_000
 
 /**
  * The nearest `AGENTS.md` (else `CLAUDE.md`) at or above `cwd`, stopping at
@@ -44,6 +57,33 @@ export function findRepoContext(cwd: string, stopAt: string): { file: string; te
   }
 }
 
+/** Repo context goes into every call's prompt, so a large file costs on
+ *  every call. Claude Code warns past the same size for a CLAUDE.md. WE's
+ *  generated AGENTS.md runs to ~570k characters (~200k tokens): a subagent
+ *  in WE started above its auto-compact window and thrashed. */
+export const REPO_CONTEXT_MAX_CHARS = 40_000
+
+/** The repo context, or its head plus where each left-out section starts. */
+function fitRepoContext(file: string, text: string): string {
+  if (text.length <= REPO_CONTEXT_MAX_CHARS) return text
+  const cut = text.lastIndexOf('\n', REPO_CONTEXT_MAX_CHARS - 4_000)
+  const head = text.slice(0, cut)
+  const firstLine = head.split('\n').length + 1
+  const index = text
+    .slice(cut + 1)
+    .split('\n')
+    .map((line, i) => (/^#{1,2} /.test(line) ? `- line ${firstLine + i}: ${line}` : ''))
+    .filter(Boolean)
+  const n = (x: number) => x.toLocaleString('en-US')
+  return [
+    head,
+    '',
+    `[This repo context holds only its first ${n(head.length)} of ${n(text.length)} characters. ` +
+      `Read the rest of ${file} by section when the task needs it. Sections left out:]`,
+    ...index
+  ].join('\n')
+}
+
 /** The child's system prompt: SUBAGENT.md, repo context, environment. */
 export function buildSubagentSystemPrompt(opts: { configDir?: string; cwd: string; home: string; now?: Date }): string {
   const parts: string[] = []
@@ -59,7 +99,7 @@ export function buildSubagentSystemPrompt(opts: { configDir?: string; cwd: strin
     opts.configDir && path.resolve(opts.cwd) === path.resolve(opts.configDir)
       ? null
       : findRepoContext(opts.cwd, opts.home)
-  if (repo) parts.push(`# Repo context (${repo.file})\n\n${repo.text}`)
+  if (repo) parts.push(`# Repo context (${repo.file})\n\n${fitRepoContext(repo.file, repo.text)}`)
   const date = (opts.now ?? new Date()).toISOString().slice(0, 10)
   parts.push(`# Environment\n\n- Working directory: ${opts.cwd}\n- Platform: ${process.platform}\n- Date: ${date}`)
   return parts.filter(Boolean).join('\n\n')
@@ -81,4 +121,24 @@ export function selectSubagentMcpServers(configured: Record<string, any>, claude
   const out: Record<string, any> = {}
   for (const name of SUBAGENT_MCP_SERVERS) if (all[name]) out[name] = all[name]
   return out
+}
+
+/** Sovereign's narrow MCP endpoint for subagents (browser + embeddings). */
+export const SUBAGENT_SOVEREIGN_MCP_URL = 'http://localhost:5801/api/mcp/subagent'
+
+/**
+ * A child's MCP servers from the configured ones: the code server may also
+ * edit in `cwd`, `sovereign` is the narrow subagent endpoint, and the set is
+ * {@link selectSubagentMcpServers}'. Claude subagents and every other
+ * harness (`harness/mcp.ts`) start from this.
+ */
+export function subagentMcpServers(
+  configured: Record<string, any>,
+  opts: { cwd?: string; claudeJsonPath: string }
+): Record<string, any> {
+  const servers: Record<string, any> = { ...configured }
+  if (opts.cwd && servers.code) servers.code = withEditRoot(servers.code, opts.cwd)
+  // alwaysLoad: true keeps sovereign tools in context at turn 1 (no ToolSearch).
+  servers.sovereign = { type: 'http' as const, url: SUBAGENT_SOVEREIGN_MCP_URL, alwaysLoad: true }
+  return selectSubagentMcpServers(servers, opts.claudeJsonPath)
 }

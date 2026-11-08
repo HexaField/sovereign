@@ -207,8 +207,9 @@ async function result(plan: Plan, dryRun: boolean): Promise<EditFileResult> {
     ...plan.changes,
     ...(tests.length ? [`affected tests: ${tests.join(', ')}`] : []),
     ...(!dryRun && plan.exists ? ['Read the file again before using the built-in Edit on it.'] : []),
-    '',
-    unifiedDiff(plan.source.text, plan.outcome.text)
+    // Only a dry run shows the diff: after a write it is ~3k characters per
+    // edit that every later call in the session re-reads.
+    ...(dryRun ? ['', unifiedDiff(plan.source.text, plan.outcome.text)] : [])
   ]
   return { path: plan.target, written: !dryRun, report: lines.join('\n') }
 }

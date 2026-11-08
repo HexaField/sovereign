@@ -54,17 +54,33 @@ const ThreadList = lazy(() => import('./ThreadList'))
 const DeviceCard = lazy(() => import('./DeviceCard'))
 const TailscaleCard = lazy(() => import('./TailscaleCard'))
 const WeatherCard = lazy(() => import('./WeatherCard'))
+const TimelinePanel = lazy(() => import('../timeline/TimelinePanel'))
 
 export function DashboardView() {
+  // Landscape: three columns (threads | timeline | cards). Portrait: threads and cards
+  // side by side on top, the timeline across the full width below them.
   return (
-    <div class="flex h-full" style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}>
-      {/* Thread list — main column */}
-      <div class="flex-[3] overflow-hidden border-r" style={{ 'border-color': 'var(--c-border)' }}>
+    <div
+      class="flex h-full portrait:grid portrait:grid-cols-[3fr_2fr] portrait:grid-rows-2"
+      style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}
+    >
+      <div
+        class="min-h-0 min-w-0 flex-[3] overflow-hidden border-r portrait:col-start-1 portrait:row-start-1"
+        style={{ 'border-color': 'var(--c-border)' }}
+      >
         <ThreadList />
       </div>
 
+      {/* Timeline — what happened inside Sovereign, newest first */}
+      <div
+        class="min-h-0 min-w-0 flex-[3] overflow-hidden border-r portrait:col-span-2 portrait:row-start-2 portrait:border-t portrait:border-r-0"
+        style={{ 'border-color': 'var(--c-border)' }}
+      >
+        <TimelinePanel />
+      </div>
+
       {/* System cards — sidebar */}
-      <div class="flex-[2] overflow-y-auto p-3">
+      <div class="min-h-0 min-w-0 flex-[2] overflow-y-auto p-3 portrait:col-start-2 portrait:row-start-1">
         <div class="space-y-3">
           <WeatherCard />
           <DeviceCard />

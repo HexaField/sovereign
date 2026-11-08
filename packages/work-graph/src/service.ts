@@ -1,0 +1,1657 @@
+// Forge service — one per server. Per membrane: scope, sync loops, plans
+// (each a work stream), graph, event log + triage, task sync + notifier,
+// assignee sync, overlay + auto-link. Across membranes: tracked items — PR
+// and issue tasks whose repo their membrane does not sync (or that have no
+// membrane) are read one by one, so their owner threads still hear about CI,
+// reviews and merges. That poll runs with `forge.enabled` off too.
+
+import path from 'node:path'
+import {
+  defaultWorkPrompt,
+  EPIC_STATUSES,
+  epicStatusOf,
+  leafState,
+  parseRefKey,
+  stateOfEpicStatus,
+  trustedAuthorsOf,
+  WORK_CATEGORIES,
+  type EpicStatus,
+  type EventBus,
+  type Forge,
+  type ForgeGraph,
+  type ForgeRef,
+  type ForgeView,
+  type RethinkNote,
+  type WorkCategory,
+  type WorkEdgeKind,
+  type WorkNode,
+  type WorkStream
+} from '@sovereign/core'
+import { repoKey, type ForgeRegistry, type ForgeRepo } from '@sovereign/forges'
+import type { StructureOf } from '@sovereign/graphcoder-core/contract'
+import type { HostForges } from '@sovereign/orgs'
+import { applyView, buildGraph, searchGraph, windowGraph, type BuiltGraph } from './build.js'
+import { createRepoCacheStore, readJson, writeJsonAtomic } from './cache.js'
+import { isWorkCategory } from './category.js'
+import { createDecisionService, type DecisionService } from './decisions.js'
+import { buildDigest, createEventLog, forgeEventLine, safeSegment, triage, type EventLog } from './events.js'
+import { buildOverlay, currentBranch, resolveCheckouts, type OverlayResult } from './overlay.js'
+import { isPlanPath, planMakesStream, scanPlans, type Plan } from './plans.js'
+import { resolveScope, type MembraneScope, type ScopeSource } from './scope.js'
+import { createRepoSync, type RepoSync } from './sync.js'
+import { createStructureHook } from './structure.js'
+import { admitsEvent, trustedCache, trusts, untrustedMessage, type Trusts } from './trust.js'
+import { syncTasks, TERMINAL } from './task-sync.js'
+import { withProgress } from './tree.js'
+import {
+  DEFAULT_FORGE_CONFIG,
+  type ActivePrWatch,
+  type ActiveSubagent,
+  type CachedChange,
+  type CachedIssue,
+  type ForgeClassifier,
+  type ForgeConfig,
+  type ForgeDigest,
+  type ForgeEvent,
+  type PortTask,
+  type RelatedEdgeRecord,
+  type RepoCache,
+  type RethinkTrigger,
+  type TaskInit,
+  type TaskPort,
+  type ThreadPresence,
+  type TriagedEvent
+} from './types.js'
+
+/** sourceThreadId of the task writes the work graph makes (the TaskPort's); its own events are not reacted to. */
+export const FORGE_SOURCE = 'forge'
+
+export class ForgeError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+export interface ForgeServiceDeps {
+  dataDir: string
+  config: () => Partial<ForgeConfig> | undefined
+  scope: ScopeSource
+  forgeRegistry: Pick<ForgeRegistry, 'forgeFor'>
+  tasks: TaskPort
+  bus: EventBus
+  threads: {
+    createThread(membrane: string, label: string): Promise<string>
+    /** A prompt from the user (assign, resolved decisions). */
+    sendToThread(threadId: string, text: string): Promise<void>
+    /** A status notification (CI red, review, merge); default: sendToThread. */
+    notify?(threadId: string, text: string): Promise<void>
+    presence(threadId: string): ThreadPresence | undefined
+  }
+  subagents?: { list(): Promise<ActiveSubagent[]> }
+  prWatch?: { list(): ActivePrWatch[] }
+  classifier?: ForgeClassifier
+  /** Loop 2. Gets the digest; the run is skipped when it is empty. */
+  runRethink?: (
+    membrane: string,
+    digest: ForgeDigest,
+    opts: { trigger: RethinkTrigger }
+  ) => Promise<{ runId?: string } | void>
+  /** Rethink notes per node id, shown on the cards (graph response). */
+  rethinkNotes?: (membrane: string) => Record<string, RethinkNote[]>
+  hosts?: HostForges
+  branchOf?: (cwd: string) => Promise<string | undefined>
+  now?: () => number
+  log?: (msg: string) => void
+  /**
+   * The code structure of a change (Graphcoder's, wired in at bootstrap). Asked for each open change of a synced repo
+   * whose head is new; the result rides on the change's node. Absent: nodes carry no structure.
+   */
+  structureOf?: StructureOf
+  /** Delay between backfill pages (low priority). Default 3 s. */
+  backfillDelayMs?: number
+  /** Overlay recompute interval. Default 10 s. */
+  overlayPollMs?: number
+}
+
+export interface AssignInput {
+  membrane?: string
+  nodeId: string
+  /** null unassigns. */
+  threadId?: string | null
+  newThread?: { label?: string }
+  prompt?: string
+}
+
+export interface RepoStatus {
+  repo: string
+  changes: number
+  issues: number
+  windowSyncedAt?: string
+  lastOpenSyncAt?: string
+  lastAllSyncAt?: string
+  backfill: RepoCache['backfill']
+  error?: string
+}
+
+export interface ForgeStatus {
+  membrane: string
+  enabled: boolean
+  syncing: boolean
+  lastSyncAt?: string
+  lastError?: string
+  identity?: string
+  repos: RepoStatus[]
+  /** forge.trustedAuthors for this membrane: its own list or the "*" one; null = no list, every author's items enter. */
+  allowList: { source: 'membrane' | '*'; logins: string[] } | null
+  plans: number
+  backfill: { done: boolean; pages: number; items: number }
+  triage: ReturnType<EventLog['coverage']>
+  events: number
+}
+
+/** A work stream with its members and related items, as the epics refine prompt lists them. */
+export interface Epic extends WorkStream {
+  /** Items it owns (its member tasks, not its child streams). */
+  members: Array<{ id: string; title: string }>
+  /** Items related to it without being members (a plan of it names them). */
+  related: Array<{ id: string; title: string }>
+}
+
+export interface ForgeService {
+  start(): void
+  stop(): void
+  config(): ForgeConfig
+  membranes(): string[]
+  /** `archived` keeps archived work streams in `workstreams`. */
+  graph(
+    membrane: string,
+    opts?: { view?: string; since?: string; until?: string; archived?: boolean }
+  ): Promise<ForgeGraph>
+  search(membrane: string, q: string): Promise<{ nodes: WorkNode[]; edges: BuiltGraph['edges'] }>
+  overlay(membrane: string): Promise<OverlayResult>
+  sync(membrane: string, mode?: 'open' | 'all'): Promise<{ events: number; changed: boolean }>
+  backfillStep(membrane: string): Promise<boolean>
+  rethink(
+    membrane: string,
+    opts?: { trigger?: RethinkTrigger }
+  ): Promise<{ ran: boolean; count: number; runId?: string }>
+  /** A node of the membrane's full history (not only the window). */
+  node(membrane: string, nodeId: string): Promise<WorkNode | undefined>
+  /** A suggested `related` edge between two nodes of the membrane (shown dashed until accepted). */
+  relate(
+    membrane: string,
+    edge: { from: string; to: string; reason: string; confidence: number; source: 'rethink' }
+  ): Promise<RelatedEdgeRecord>
+  /** `from` cannot finish before `to` (nodes or work streams of the membrane): a `depends-on` edge, accepted at once. An edge already there is returned. */
+  depend(
+    membrane: string,
+    edge: { from: string; to: string; reason?: string; source: 'user' | 'rethink' }
+  ): Promise<RelatedEdgeRecord>
+  digest(membrane: string, since?: string): Promise<ForgeDigest>
+  events(membrane: string, opts?: { since?: string }): TriagedEvent[]
+  assign(input: AssignInput): Promise<{ taskId: string; threadId: string | null; forgeError?: string }>
+  /** Re-read a task's forge item now: its membrane's sync when that covers it, else the item alone. */
+  pollTask(taskId: string): Promise<void>
+  /** Read every tracked item (PR/issue tasks no membrane sync covers) now. */
+  pollTracked(): Promise<{ items: number; events: number }>
+  getViews(membrane: string): Promise<ForgeView[]>
+  putViews(membrane: string, views: ForgeView[]): Promise<ForgeView[]>
+  createStream(membrane: string, name: string, parentId?: string): Promise<WorkStream>
+  addMember(streamId: string, nodeId: string, membrane?: string): Promise<{ taskId: string }>
+  removeMember(streamId: string, nodeId: string, membrane?: string): Promise<boolean>
+  /** Pause a PR, issue or task (its task's state; made when missing), or resume it. Sync leaves a paused item paused until it merges or closes. */
+  setPaused(membrane: string, nodeId: string, paused: boolean): Promise<WorkNode>
+  /** A PR now does a planned task's work: cancel the task ("Opened as <PR>"); the PR joins its stream when it has none. */
+  supersede(
+    membrane: string,
+    nodeId: string,
+    byId: string,
+    reason: string
+  ): Promise<{ taskId: string; streamId?: string }>
+  /**
+   * Set (or, with null, clear) the user's or rethink's category of a node. Precedence user > rule > rethink:
+   * rethink is refused (409) on a node the user or the rules already categorise. Answers the node.
+   */
+  setCategory(
+    membrane: string,
+    nodeId: string,
+    category: WorkCategory | null,
+    source: 'user' | 'rethink',
+    reason?: string
+  ): Promise<WorkNode>
+  /** The membrane's work streams; archived ones only with `archived`. */
+  streams(membrane: string, opts?: { archived?: boolean }): Promise<WorkStream[]>
+  /** Every work stream of the membrane, archived ones included, with its members (not its child streams). */
+  epics(membrane: string): Promise<Epic[]>
+  renameStream(streamId: string, name: string, membrane?: string): Promise<WorkStream>
+  /** Set an epic's status (its task's state: `stateOfEpicStatus`); the user's call, which plan sync never overrides. */
+  setStreamStatus(streamId: string, status: EpicStatus, membrane?: string): Promise<WorkStream>
+  /** Move a stream under another stream, or to the top (null). */
+  setStreamParent(streamId: string, parentId: string | null, membrane?: string): Promise<WorkStream>
+  /** Move every member and child stream of `fromId` into `intoId`, then archive `fromId`. */
+  mergeStreams(fromId: string, intoId: string, membrane?: string): Promise<{ members: number; streams: number }>
+  acceptEdge(from: string, to: string, kind: WorkEdgeKind, membrane?: string): Promise<boolean>
+  deleteEdge(from: string, to: string, kind: WorkEdgeKind, membrane?: string): Promise<boolean>
+  status(membrane: string): Promise<ForgeStatus>
+  /** Open decisions for the user, per membrane; resolving sends one message per receiving thread (`threads.sendToThread`). */
+  readonly decisions: DecisionService
+}
+
+interface MembraneState {
+  scope?: MembraneScope
+  plans: Plan[]
+  plansScanned: boolean
+  log: EventLog
+  syncing: boolean
+  lastSyncAt?: string
+  lastOpenAt: number
+  lastAllAt: number
+  lastError?: string
+  repoErrors: Map<string, string>
+  overlayJson?: string
+}
+
+interface MembraneFile {
+  rethinkCursor?: string
+  /** nodeId → the login Forge added as assignee (only those may be removed). */
+  assignedByForge: Record<string, string>
+  /**
+   * Written by builds before single ownership: plan id → the items the plan
+   * named and those it added to its stream. Read once by migrateOwnership, then dropped.
+   */
+  planLinks?: Record<string, { named?: string[]; linked?: string[] }>
+}
+
+export function resolveConfig(c: Partial<ForgeConfig> | undefined): ForgeConfig {
+  const d = DEFAULT_FORGE_CONFIG
+  return {
+    ...d,
+    ...c,
+    identities: { ...d.identities, ...c?.identities },
+    rethink: { ...d.rethink, ...c?.rethink },
+    repos: { ...d.repos, ...c?.repos },
+    trustedAuthors: c?.trustedAuthors ?? d.trustedAuthors,
+    planDirs: c?.planDirs ?? d.planDirs,
+    mentions: c?.mentions ?? d.mentions
+  }
+}
+
+/** Each stream's relatedCount: the nodes related to it (and not owned by it). */
+export function withRelatedCounts(streams: WorkStream[], nodes: WorkNode[]): WorkStream[] {
+  const counts = new Map<string, number>()
+  for (const n of nodes) for (const id of n.relatedStreams ?? []) counts.set(id, (counts.get(id) ?? 0) + 1)
+  return streams.map((w) => ({ ...w, relatedCount: counts.get(w.id) ?? 0 }))
+}
+
+export function createForgeService(deps: ForgeServiceDeps): ForgeService {
+  const now = deps.now ?? Date.now
+  const iso = () => new Date(now()).toISOString()
+  const log = deps.log ?? ((m: string) => console.log(`[forge] ${m}`))
+  const structures = deps.structureOf ? createStructureHook(deps.structureOf, log) : undefined
+  const store = createRepoCacheStore(deps.dataDir)
+  const syncs = new Map<string, RepoSync>()
+  // Tracked items keep their own caches: a membrane that syncs the same repo
+  // must still see every change as an event of its own.
+  const trackedStore = createRepoCacheStore(deps.dataDir, 'tracked')
+  const trackedSyncs = new Map<string, RepoSync>()
+  let lastTrackedAt = 0
+  const states = new Map<string, MembraneState>()
+  const identities = new Map<string, Promise<string | undefined>>()
+  const timers: Array<ReturnType<typeof setInterval>> = []
+  const disposers: Array<() => void> = []
+  let backfillTimer: ReturnType<typeof setTimeout> | undefined
+  let started = false
+  let watchedIds = new Set<string>()
+
+  const cfg = () => resolveConfig(deps.config())
+  /** A membrane's allow list (forge.trustedAuthors): its own, else "*", else none. Null: an item no membrane holds. */
+  const allowListOf = (membrane: string | null) => trustedAuthorsOf(cfg().trustedAuthors, membrane)
+  const trustsIn = (membrane: string | null): Trusts => trusts(allowListOf(membrane))
+  /** Node id → the membranes (null: none) of the tasks that track it; set by each tracked poll. */
+  const trackedMembranes = new Map<string, Set<string | null>>()
+
+  function state(membrane: string): MembraneState {
+    let s = states.get(membrane)
+    if (!s) {
+      s = {
+        plans: [],
+        plansScanned: false,
+        log: createEventLog(deps.dataDir, membrane),
+        syncing: false,
+        lastOpenAt: 0,
+        lastAllAt: 0,
+        repoErrors: new Map()
+      }
+      states.set(membrane, s)
+    }
+    return s
+  }
+
+  const fileOf = (membrane: string) => path.join(deps.dataDir, 'forge', safeSegment(membrane), 'state.json')
+  const readFile = (membrane: string): MembraneFile => ({
+    assignedByForge: {},
+    ...readJson<MembraneFile>(fileOf(membrane))
+  })
+  /** Read, change and write state.json in one synchronous step, so no await in between writes back a stale copy. */
+  const updateFile = (membrane: string, change: (f: MembraneFile) => void) => {
+    const f = readFile(membrane)
+    change(f)
+    writeJsonAtomic(fileOf(membrane), f)
+  }
+
+  function scopeOf(membrane: string): MembraneScope {
+    if (!deps.scope.getMembrane(membrane)) throw new ForgeError(`unknown membrane: ${membrane}`, 404)
+    const c = cfg()
+    const s = resolveScope(deps.scope, membrane, { planDirs: c.planDirs, repos: c.repos, hosts: deps.hosts })!
+    state(membrane).scope = s
+    return s
+  }
+
+  function forgeOf(r: Pick<ForgeRepo, 'forge' | 'host'>): Forge | undefined {
+    return deps.forgeRegistry.forgeFor({ forge: r.forge, host: r.host })
+  }
+
+  function repoSync(r: Pick<ForgeRef, 'forge' | 'host' | 'repo'>, tracked = false): RepoSync | undefined {
+    const map = tracked ? trackedSyncs : syncs
+    const k = repoKey(r)
+    let s = map.get(k)
+    if (s) return s
+    const forge = forgeOf(r)
+    if (!forge) return undefined
+    s = createRepoSync(
+      { forge: r.forge, host: r.host, repo: r.repo },
+      {
+        forge,
+        store: tracked ? trackedStore : store,
+        windowDays: cfg().windowDays,
+        watched: () => watchedIds,
+        // A shared repo stores what any membrane that reads it trusts; each membrane's graph and log narrow that to its own list
+        trust: () => {
+          if (tracked)
+            return (login, nodeId) => [...(trackedMembranes.get(nodeId) ?? [null])].some((m) => trustsIn(m)(login))
+          const lists = readersOf(r).map(trustsIn)
+          return (login) => lists.some((ok) => ok(login))
+        },
+        now,
+        log
+      }
+    )
+    map.set(k, s)
+    return s
+  }
+  const syncOf = (r: ForgeRepo) => repoSync(r)
+
+  const sameRepo = (a: Pick<ForgeRef, 'forge' | 'host' | 'repo'>, b: Pick<ForgeRef, 'forge' | 'host' | 'repo'>) =>
+    a.forge === b.forge && a.host === b.host && a.repo.toLowerCase() === b.repo.toLowerCase()
+
+  /** The membranes whose sync reads a repo (none found: the "*" list alone). */
+  function readersOf(r: Pick<ForgeRef, 'forge' | 'host' | 'repo'>): Array<string | null> {
+    const out = membranes().filter((m) => (state(m).scope ?? scopeOf(m)).repos.some((x) => sameRepo(x, r)))
+    return out.length ? out : [null]
+  }
+
+  /** A membrane's view of a cache: only the items its allow list trusts. */
+  const trustedFor = (membrane: string) => (c: RepoCache) => trustedCache(c, trustsIn(membrane))
+
+  /** Events the membrane's allow list admits (item author, commenters, reviewer, referencing item). */
+  function trustedEvents(membrane: string, scope: MembraneScope, events: ForgeEvent[]): ForgeEvent[] {
+    const ok = trustsIn(membrane)
+    return events.filter((e) => admitsEvent(e, ok, (id) => itemOf(scope, id)?.item.author))
+  }
+
+  /** The forge ref of a PR or issue task. */
+  function refOfTask(t: PortTask): ForgeRef | undefined {
+    if (!t.key || (t.kind !== 'change' && t.kind !== 'issue')) return undefined
+    return parseRefKey(t.key, t.kind)
+  }
+
+  /** A task whose item its membrane's own sync reads (forge on, membrane synced, repo in scope). */
+  function coveredBySync(t: PortTask, ref: ForgeRef, synced: Set<string>): boolean {
+    if (!t.membrane || !synced.has(t.membrane)) return false
+    return (state(t.membrane).scope ?? scopeOf(t.membrane)).repos.some((r) => sameRepo(r, ref))
+  }
+
+  /** Tracked items of a membrane's tasks, as caches holding just those items. */
+  function trackedCaches(scope: MembraneScope, tasks: PortTask[]): RepoCache[] {
+    const byRepo = new Map<string, RepoCache>()
+    for (const t of tasks) {
+      const ref = refOfTask(t)
+      if (!ref || scope.repos.some((r) => sameRepo(r, ref))) continue
+      const c = trackedSyncs.get(repoKey(ref))?.cache()
+      const item = c && (ref.kind === 'change' ? c.changes[ref.id] : c.issues[ref.id])
+      if (!c || !item) continue
+      const k = repoKey(ref)
+      let out = byRepo.get(k)
+      if (!out) {
+        out = { ...c, changes: {}, issues: {} }
+        byRepo.set(k, out)
+      }
+      if (ref.kind === 'change') out.changes[ref.id] = item as CachedChange
+      else out.issues[ref.id] = item as CachedIssue
+    }
+    return [...byRepo.values()]
+  }
+
+  function caches(scope: MembraneScope) {
+    return scope.repos.map((r) => syncOf(r)?.cache()).filter((c): c is NonNullable<typeof c> => Boolean(c))
+  }
+
+  function itemOf(
+    scope: MembraneScope,
+    nodeId: string
+  ): { sync: RepoSync; item: CachedChange | CachedIssue; ref: ForgeRef } | undefined {
+    const ref = parseRefKey(nodeId, 'change')
+    if (!ref) return undefined
+    const r = scope.repos.find((x) => sameRepo(x, ref))
+    const sync = r ? syncOf(r) : trackedSyncs.get(repoKey(ref))
+    if (!sync) return undefined
+    const c = sync.cache()
+    const change = c.changes[ref.id]
+    if (change) return { sync, item: change, ref: change.ref }
+    const issue = c.issues[ref.id]
+    if (issue) return { sync, item: issue, ref: issue.ref }
+    return undefined
+  }
+
+  async function identityFor(r: Pick<ForgeRepo, 'forge' | 'host'>): Promise<string | undefined> {
+    const configured = cfg().identities.github
+    if (r.forge === 'github' && configured) return configured
+    const k = `${r.forge}:${r.host}`
+    let p = identities.get(k)
+    if (!p) {
+      const forge = forgeOf(r)
+      p = forge ? forge.identity().catch(() => undefined) : Promise.resolve(undefined)
+      identities.set(k, p)
+      void p.then((v) => {
+        if (!v) identities.delete(k)
+      })
+    }
+    return p
+  }
+
+  /** The membrane's forge login (its first repo's forge). */
+  const identityOf = (scope: MembraneScope) =>
+    scope.repos[0] ? identityFor(scope.repos[0]) : Promise.resolve(cfg().identities.github)
+
+  async function full(
+    membrane: string,
+    scope = state(membrane).scope ?? scopeOf(membrane)
+  ): Promise<{ graph: BuiltGraph; tasks: PortTask[] }> {
+    const s = state(membrane)
+    if (!s.plansScanned) rescanPlans(membrane, scope)
+    const [tasks, related, categories] = await Promise.all([
+      deps.tasks.listByMembrane(membrane),
+      deps.tasks.listRelated(membrane),
+      deps.tasks.listCategories(membrane)
+    ])
+    // The one place a membrane's graph reads the caches: only its trusted authors' items
+    const repos = [...caches(scope), ...trackedCaches(scope, tasks)].map(trustedFor(membrane))
+    return { graph: buildGraph({ repos, plans: s.plans, tasks, related, categories }), tasks }
+  }
+
+  /** Rescan plans; plan_changed events for files whose text changed (after the first scan). */
+  function rescanPlans(membrane: string, scope: MembraneScope): ForgeEvent[] {
+    const s = state(membrane)
+    const prev = new Map(s.plans.map((p) => [p.id, p.hash]))
+    const plans = scanPlans(
+      scope.planDirs,
+      scope.repos.map((r) => r.repo)
+    )
+    const events: ForgeEvent[] = []
+    if (s.plansScanned) {
+      for (const p of plans) {
+        const h = prev.get(p.id)
+        if (h === undefined)
+          events.push({ at: iso(), nodeId: p.id, type: 'plan_changed', detail: { added: true, file: p.file } })
+        else if (h !== p.hash)
+          events.push({ at: iso(), nodeId: p.id, type: 'plan_changed', detail: { file: p.file, status: p.status } })
+      }
+    }
+    s.plans = plans
+    s.plansScanned = true
+    return events
+  }
+
+  async function refreshWatched() {
+    const ids = new Set<string>()
+    for (const t of await deps.tasks.listForgeItems()) if (t.key && t.threadId) ids.add(t.key)
+    watchedIds = ids
+  }
+
+  async function triageAll(
+    events: ForgeEvent[],
+    graph: BuiltGraph,
+    tasks: PortTask[],
+    identity: string | undefined
+  ): Promise<TriagedEvent[]> {
+    const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
+    const byKey = new Map(tasks.filter((t) => t.key).map((t) => [t.key!, t]))
+    const out: TriagedEvent[] = []
+    for (const e of events) {
+      const node = nodes.get(e.nodeId)
+      out.push(
+        await triage(
+          e,
+          {
+            ...(node ? { node } : {}),
+            owned: Boolean(byKey.get(e.nodeId)?.threadId),
+            tracked: (id) => byKey.has(id),
+            ...(identity ? { identity } : {}),
+            mentions: cfg().mentions
+          },
+          deps.classifier
+        )
+      )
+    }
+    return out
+  }
+
+  async function digest(membrane: string, since?: string): Promise<ForgeDigest> {
+    const { graph } = await full(membrane)
+    const from = since ?? readFile(membrane).rethinkCursor
+    return buildDigest(
+      membrane,
+      state(membrane).log.read({ verdict: 'needs-agent', ...(from ? { since: from } : {}) }),
+      new Map(graph.nodes.map((n) => [n.id, n])),
+      await deps.tasks.streamsOf(membrane),
+      from
+    )
+  }
+
+  function emit(type: string, payload: unknown) {
+    deps.bus.emit({ type, timestamp: iso(), source: 'forge', payload })
+  }
+
+  /**
+   * Log a membrane's admitted, triaged events and tell the bus
+   * (`forge.events`, read by the timeline): only what passed the trust
+   * filter reaches here, and comment text stays in the log.
+   */
+  function logEvents(
+    membrane: string,
+    via: 'sync' | 'tracked' | 'plans',
+    events: TriagedEvent[],
+    nodes: Map<string, WorkNode>
+  ) {
+    if (!events.length) return
+    state(membrane).log.append(events)
+    emit('forge.events', {
+      membrane,
+      via,
+      count: events.length,
+      events: events.map((e) => forgeEventLine(e, nodes.get(e.nodeId)))
+    })
+  }
+
+  /** One sync per membrane at a time; a request during one runs after it. */
+  const syncChains = new Map<string, Promise<unknown>>()
+  function sync(membrane: string, mode: 'open' | 'all' = 'open'): Promise<{ events: number; changed: boolean }> {
+    scopeOf(membrane)
+    const prev = syncChains.get(membrane) ?? Promise.resolve()
+    const run = prev.then(
+      () => syncOnce(membrane, mode),
+      () => syncOnce(membrane, mode)
+    )
+    syncChains.set(
+      membrane,
+      run.catch(() => undefined)
+    )
+    return run
+  }
+
+  /**
+   * Membranes that sync the same repo share its RepoSync, so only the one
+   * that read a change sees it as an event; the others get it on their next sync.
+   */
+  const sharedEvents = new Map<string, ForgeEvent[]>()
+  function shareEvents(from: string, r: ForgeRepo, events: ForgeEvent[]) {
+    for (const m of membranes()) {
+      if (m === from || !(state(m).scope ?? scopeOf(m)).repos.some((x) => sameRepo(x, r))) continue
+      sharedEvents.set(m, [...(sharedEvents.get(m) ?? []), ...events])
+    }
+  }
+
+  async function syncOnce(membrane: string, mode: 'open' | 'all') {
+    const s = state(membrane)
+    const scope = scopeOf(membrane)
+    s.syncing = true
+    try {
+      await refreshWatched().catch(() => undefined)
+      const events: ForgeEvent[] = sharedEvents.get(membrane) ?? []
+      sharedEvents.delete(membrane)
+      let changed = false
+      for (const r of scope.repos) {
+        const rs = syncOf(r)
+        if (!rs) {
+          s.repoErrors.set(r.repo, `no adapter for ${r.forge}:${r.host}`)
+          continue
+        }
+        try {
+          const res = mode === 'all' ? await rs.syncAll() : await rs.syncOpen()
+          events.push(...res.events)
+          if (res.events.length) shareEvents(membrane, r, res.events)
+          changed ||= res.changed
+          s.repoErrors.delete(r.repo)
+        } catch (err) {
+          s.repoErrors.set(r.repo, (err as Error).message)
+          log(`sync ${membrane} ${r.repo}: ${(err as Error).message}`)
+        }
+      }
+      // Fire and forget: the hook queues the requests and keeps their errors to itself
+      const ok = trustsIn(membrane)
+      const changesOf = (r: ForgeRepo) => Object.values(syncOf(r)?.cache().changes ?? {}).filter((c) => ok(c.author))
+      if (structures)
+        for (const r of scope.repos)
+          structures.request(r.checkouts, changesOf(r), () => emit('forge.updated', { membrane }))
+      const planEvents = rescanPlans(membrane, scope)
+      events.push(...planEvents)
+      changed ||= planEvents.length > 0
+
+      let { graph, tasks } = await full(membrane, scope)
+      // Plans first: a new plan's stream is in the graph this sync builds.
+      if (await syncPlanStreams(membrane, tasks)) {
+        changed = true
+        ;({ graph, tasks } = await full(membrane, scope))
+      }
+      const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
+
+      // Forge-added assignees removed on the forge: forget the marker.
+      const gone = (nodeId: string, login: string) => {
+        const item = itemOf(scope, nodeId)?.item
+        return item && !item.assignees.some((a) => a.toLowerCase() === login.toLowerCase())
+      }
+      if (Object.entries(readFile(membrane).assignedByForge).some(([id, login]) => gone(id, login))) {
+        updateFile(membrane, (f) => {
+          for (const [id, login] of Object.entries(f.assignedByForge)) if (gone(id, login)) delete f.assignedByForge[id]
+        })
+      }
+
+      const triaged = await triageAll(trustedEvents(membrane, scope, events), graph, tasks, await identityOf(scope))
+      logEvents(membrane, 'sync', triaged, nodes)
+
+      const ts = await syncTasks(deps.tasks, {
+        tasks,
+        nodes,
+        edges: graph.edges,
+        events: triaged,
+        item: (id) => itemOf(scope, id)?.item,
+        now: iso()
+      })
+      await notifyAll(ts.notifications, nodes)
+      s.lastSyncAt = iso()
+      s.lastError = s.repoErrors.size ? [...s.repoErrors].map(([r, m]) => `${r}: ${m}`).join('; ') : undefined
+      if (mode === 'all') s.lastAllAt = now()
+      s.lastOpenAt = now()
+      if (changed || events.length || ts.updated) emit('forge.updated', { membrane })
+      scheduleBackfill()
+      return { events: events.length, changed: changed || events.length > 0 }
+    } finally {
+      s.syncing = false
+    }
+  }
+
+  /** CI results a thread hears from its own `pr_watch` (with `ci`) on that change: the forge does not repeat them. */
+  function heardByPrWatch(n: { threadId: string; nodeId: string; type: string }, nodes: Map<string, WorkNode>) {
+    const node = nodes.get(n.nodeId)
+    if (n.type !== 'ci_failed' || !node?.repo) return false
+    return (deps.prWatch?.list() ?? []).some(
+      (w) =>
+        w.threadKey === n.threadId &&
+        w.events.includes('ci') &&
+        w.repo.toLowerCase() === node.repo!.toLowerCase() &&
+        ((w.target.kind === 'pr' && w.target.number === node.number) ||
+          (w.target.kind === 'branch' && w.target.name === node.branch?.head))
+    )
+  }
+
+  async function notifyAll(
+    list: Array<{ threadId: string; text: string; nodeId: string; type: string }>,
+    nodes: Map<string, WorkNode>
+  ) {
+    for (const n of list) {
+      if (heardByPrWatch(n, nodes)) continue
+      try {
+        await (deps.threads.notify ?? deps.threads.sendToThread)(n.threadId, n.text)
+      } catch (err) {
+        log(`notify ${n.threadId}: ${(err as Error).message}`)
+      }
+    }
+  }
+
+  /**
+   * Read tracked items: PR and issue tasks whose membrane's sync does not
+   * read them (forge off, a repo outside the membrane, no membrane). Open
+   * tasks only; `only` reads one task whatever its state.
+   */
+  let trackedChain: Promise<unknown> = Promise.resolve()
+  function pollTracked(only?: string): Promise<{ items: number; events: number }> {
+    const run = trackedChain.then(
+      () => pollTrackedOnce(only),
+      () => pollTrackedOnce(only)
+    )
+    trackedChain = run.catch(() => undefined)
+    return run
+  }
+
+  async function pollTrackedOnce(only?: string): Promise<{ items: number; events: number }> {
+    lastTrackedAt = now()
+    await refreshWatched().catch(() => undefined)
+    const synced = new Set(cfg().enabled ? membranes() : [])
+    const groups = new Map<string, { ref: ForgeRef; refs: ForgeRef[]; tasks: PortTask[] }>()
+    for (const t of await deps.tasks.listForgeItems()) {
+      const ref = refOfTask(t)
+      if (!ref || (only ? t.id !== only : TERMINAL.includes(t.state))) continue
+      if (!only && coveredBySync(t, ref, synced)) continue
+      // Its task's membrane decides whose allow list the item must pass
+      trackedMembranes.set(t.key!, new Set([t.membrane ?? null]))
+      const k = repoKey(ref)
+      const g = groups.get(k) ?? { ref, refs: [], tasks: [] }
+      g.refs.push(ref)
+      g.tasks.push(t)
+      groups.set(k, g)
+    }
+    let items = 0
+    let eventCount = 0
+    for (const g of groups.values()) {
+      try {
+        eventCount += await pollGroup(g)
+        items += g.refs.length
+      } catch (err) {
+        log(`tracked ${g.ref.repo}: ${(err as Error).message}`)
+      }
+    }
+    return { items, events: eventCount }
+  }
+
+  /** Read one repo's tracked items; returns the event count. */
+  async function pollGroup(g: { ref: ForgeRef; refs: ForgeRef[]; tasks: PortTask[] }): Promise<number> {
+    const rs = repoSync(g.ref, true)
+    if (!rs) throw new Error(`no adapter for ${g.ref.forge}:${g.ref.host}`)
+    const res = await rs.refreshItems(g.refs)
+    const c = rs.cache()
+    const graph = buildGraph({ repos: [c], plans: [], tasks: g.tasks, related: [] })
+    const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
+    const triaged = await triageAll(res.events, graph, g.tasks, await identityFor(g.ref))
+    const ts = await syncTasks(deps.tasks, {
+      tasks: g.tasks,
+      nodes,
+      edges: graph.edges,
+      events: triaged,
+      item: (id) => {
+        const ref = parseRefKey(id, 'change')
+        return ref ? (c.changes[ref.id] ?? c.issues[ref.id]) : undefined
+      },
+      now: iso()
+    })
+    await notifyAll(ts.notifications, nodes)
+    // A membrane's event log and canvas hear about its tracked items too.
+    for (const m of new Set(g.tasks.map((t) => t.membrane).filter((m): m is string => Boolean(m)))) {
+      if (!deps.scope.getMembrane(m)) continue
+      const keys = new Set(g.tasks.filter((t) => t.membrane === m).map((t) => t.key))
+      const mine = triaged.filter((e) => keys.has(e.nodeId))
+      logEvents(m, 'tracked', mine, nodes)
+      if (res.changed || mine.length || ts.updated) emit('forge.updated', { membrane: m })
+    }
+    return res.events.length
+  }
+
+  async function pollTask(taskId: string): Promise<void> {
+    const t = await deps.tasks.get(taskId)
+    if (!t) throw new ForgeError(`Task not found: ${taskId}`, 404)
+    const ref = refOfTask(t)
+    if (!ref) throw new ForgeError(`task ${taskId} has no PR or issue`, 400)
+    const synced = new Set(cfg().enabled ? membranes() : [])
+    const covered = coveredBySync(t, ref, synced)
+    if (covered) await sync(t.membrane!, 'open')
+    else await pollTracked(taskId)
+    // An item its allow list refuses never entered the cache: say so rather than poll nothing
+    const rs = covered ? syncs.get(repoKey(ref)) : trackedSyncs.get(repoKey(ref))
+    const cached = rs && (rs.cache().changes[ref.id] ?? rs.cache().issues[ref.id])
+    const author = cached?.author ?? rs?.refused(t.key!)
+    if (author !== undefined && !trustsIn(t.membrane ?? null)(author))
+      throw new ForgeError(untrustedMessage(ref.repo, ref.id, author), 403)
+  }
+
+  /**
+   * A plan that names a forge item and is not done is a work stream (keyed by
+   * the plan id). It owns nothing: the builder relates the items it names to
+   * it (`WorkNode.relatedStreams`). A plan stream whose plan no longer
+   * qualifies (gone, done, names no item) and has no members or child streams
+   * stops being a stream (the plan task stays). Archived ones stay as they are.
+   * The plan's `Status:` line sets the epic's status when it becomes a stream
+   * (in progress → active, else planned); after that the status is the user's.
+   */
+  async function syncPlanStreams(membrane: string, tasks: PortTask[]): Promise<boolean> {
+    let changed = await migrateOwnership(membrane, tasks)
+    if (changed) tasks = await deps.tasks.listByMembrane(membrane)
+    const qualifying = new Set<string>()
+    for (const p of state(membrane).plans) {
+      if (!planMakesStream(p)) continue
+      qualifying.add(p.id)
+      if ((await deps.tasks.findByKey(p.id))?.isStream) continue
+      const t = await deps.tasks.ensureTask(p.id, { name: p.title, membrane, kind: 'plan', stream: true })
+      const initial = stateOfEpicStatus(p.status === 'in_progress' ? 'active' : 'planned')
+      if (t.state !== initial) await deps.tasks.setState(t.id, initial)
+      changed = true
+    }
+    // A plan stream stays a node while it has child streams or sits under a stream in the goal tree
+    const streamIds = new Set(tasks.filter((t) => t.isStream).map((t) => t.id))
+    for (const t of tasks) {
+      if (!t.isStream || t.kind !== 'plan' || !t.key || qualifying.has(t.key)) continue
+      if (epicStatusOf(t.state) === 'archived' || t.childIds.length) continue
+      if (t.parentIds.some((p) => streamIds.has(p))) continue
+      await deps.tasks.setStream(t.id, false)
+      changed = true
+    }
+    return changed
+  }
+
+  /**
+   * Data from before single ownership. Plan sync used to add every item a plan
+   * named to the plan's stream (`planLinks[plan].linked`): those links go, once,
+   * and `planLinks` leaves the membrane file (the plan relates them now). Then
+   * a change or issue still in more than one stream keeps the first by stream
+   * name (links carry no time) and leaves the rest; that pass is a condition,
+   * so it finds nothing once the data is clean.
+   */
+  async function migrateOwnership(membrane: string, tasks: PortTask[]): Promise<boolean> {
+    let changed = false
+    const planLinks = readFile(membrane).planLinks
+    if (planLinks) {
+      for (const [planId, { linked = [] }] of Object.entries(planLinks)) {
+        const stream = await deps.tasks.findByKey(planId)
+        if (!stream?.isStream) continue
+        for (const id of linked) {
+          const t = await deps.tasks.findByKey(id)
+          if (!t || !stream.childIds.includes(t.id)) continue
+          await deps.tasks.removeFromStream(stream.id, t.id)
+          changed = true
+        }
+      }
+      updateFile(membrane, (f) => delete f.planLinks)
+      if (changed) tasks = await deps.tasks.listByMembrane(membrane)
+    }
+    const byId = new Map(tasks.map((t) => [t.id, t]))
+    for (const t of tasks) {
+      if (t.isStream || (t.kind !== 'change' && t.kind !== 'issue') || t.parentIds.length < 2) continue
+      const streams: PortTask[] = []
+      for (const id of t.parentIds) {
+        const p = byId.get(id) ?? (await deps.tasks.get(id))
+        if (p?.isStream) streams.push(p)
+      }
+      if (streams.length < 2) continue
+      streams.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+      for (const s of streams.slice(1)) await deps.tasks.removeFromStream(s.id, t.id)
+      log(`${membrane}: ${t.key ?? t.id} kept in epic "${streams[0].name}", left ${streams.length - 1} other(s)`)
+      changed = true
+    }
+    return changed
+  }
+
+  async function backfillStep(membrane: string): Promise<boolean> {
+    const scope = state(membrane).scope ?? scopeOf(membrane)
+    for (const r of scope.repos) {
+      const rs = syncOf(r)
+      if (!rs || rs.backfillDone()) continue
+      const res = await rs.backfillStep()
+      if (res.items) emit('forge.updated', { membrane })
+      return true
+    }
+    return false
+  }
+
+  function scheduleBackfill() {
+    if (!started || backfillTimer) return
+    backfillTimer = setTimeout(async () => {
+      backfillTimer = undefined
+      let more = false
+      for (const m of membranes()) {
+        if (state(m).syncing) {
+          more = true
+          continue
+        }
+        try {
+          if (await backfillStep(m)) {
+            more = true
+            break
+          }
+        } catch (err) {
+          log(`backfill ${m}: ${(err as Error).message}`)
+          more = false
+          break
+        }
+      }
+      if (more) scheduleBackfill()
+    }, deps.backfillDelayMs ?? 3000)
+    backfillTimer.unref?.()
+  }
+
+  function membranes(): string[] {
+    const c = cfg()
+    return deps.scope
+      .listMembranes()
+      .filter((m) => {
+        const s = resolveScope(deps.scope, m.id, { planDirs: c.planDirs, repos: c.repos, hosts: deps.hosts })
+        return Boolean(s && (s.repos.length || s.planDirs.length))
+      })
+      .map((m) => m.id)
+  }
+
+  async function tick() {
+    const c = cfg()
+    if (now() - lastTrackedAt >= c.pollOpenMs) {
+      await pollTracked().catch((err) => log(`tracked: ${(err as Error).message}`))
+    }
+    if (!c.enabled) return
+    for (const m of membranes()) {
+      const s = state(m)
+      if (s.syncing) continue
+      const t = now()
+      try {
+        if (t - s.lastAllAt >= c.pollAllMs) await sync(m, 'all')
+        else if (t - s.lastOpenAt >= c.pollOpenMs) await sync(m, 'open')
+      } catch (err) {
+        log(`tick ${m}: ${(err as Error).message}`)
+      }
+    }
+  }
+
+  async function overlay(membrane: string): Promise<OverlayResult> {
+    const { graph, tasks } = await full(membrane)
+    const subagents = (await deps.subagents?.list().catch(() => [])) ?? []
+    const checkouts = await resolveCheckouts(subagents, deps.branchOf ?? currentBranch)
+    return buildOverlay({
+      nodes: graph.nodes,
+      tasks,
+      presence: (id) => deps.threads.presence(id),
+      subagents,
+      prWatches: deps.prWatch?.list() ?? [],
+      checkouts
+    })
+  }
+
+  let overlayBusy = false
+  async function pushOverlays() {
+    if (overlayBusy || !started || !cfg().enabled) return
+    overlayBusy = true
+    try {
+      for (const m of membranes()) {
+        let o = await overlay(m)
+        if (await applyClaims(m, o.claims)) o = await overlay(m)
+        const json = JSON.stringify(o.overlays)
+        const s = state(m)
+        if (json !== s.overlayJson) {
+          const first = s.overlayJson === undefined
+          s.overlayJson = json
+          if (!first || o.overlays.length) emit('forge.overlay', { membrane: m, overlays: o.overlays })
+        }
+      }
+    } catch (err) {
+      log(`overlay: ${(err as Error).message}`)
+    } finally {
+      overlayBusy = false
+    }
+  }
+
+  /** Auto-link: a change a subagent or PR watch works on, with no owner, goes to that thread. */
+  async function applyClaims(membrane: string, claims: OverlayResult['claims']): Promise<boolean> {
+    let any = false
+    for (const c of claims) {
+      if (!deps.threads.presence(c.threadId)) continue
+      try {
+        await api.assign({ membrane, nodeId: c.nodeId, threadId: c.threadId })
+        log(`auto-link ${c.nodeId} → ${c.threadId} (${c.by})`)
+        any = true
+      } catch (err) {
+        log(`auto-link ${c.nodeId}: ${(err as Error).message}`)
+      }
+    }
+    return any
+  }
+
+  /** A thread took or dropped a task outside Forge (task_update, the tasks API, an import): follow on the forge. */
+  async function onReassigned(taskId: string, threadId: string | null) {
+    const t = await deps.tasks.get(taskId)
+    if (!t?.key || (t.kind !== 'change' && t.kind !== 'issue')) return
+    if (threadId && t.state === 'pending') await deps.tasks.setState(t.id, 'in_progress')
+    if (threadId) watchedIds.add(t.key)
+    await writeAssignee(t.membrane, t.key, t.kind, Boolean(threadId))
+    if (t.membrane && deps.scope.getMembrane(t.membrane)) emit('forge.updated', { membrane: t.membrane })
+  }
+
+  /** Rescan a membrane's plans after an edit: events, streams, a graph update. */
+  async function plansChanged(m: string, events: ForgeEvent[]) {
+    const s = state(m)
+    const { graph, tasks } = await full(m)
+    if (events.length) {
+      const triaged = await triageAll(events, graph, tasks, await identityOf(s.scope ?? scopeOf(m)))
+      logEvents(m, 'plans', triaged, new Map(graph.nodes.map((n) => [n.id, n])))
+    }
+    const streams = await syncPlanStreams(m, tasks)
+    if (events.length || streams) emit('forge.updated', { membrane: m })
+  }
+
+  async function membraneOfNode(nodeId: string, hint?: string): Promise<string> {
+    if (hint) {
+      scopeOf(hint)
+      return hint
+    }
+    for (const m of membranes()) {
+      const { graph } = await full(m)
+      if (graph.nodes.some((n) => n.id === nodeId)) return m
+    }
+    throw new ForgeError(`node not found: ${nodeId}`, 404)
+  }
+
+  /** A work stream and its membrane; a stream of another membrane than `hint` is not found. */
+  async function streamIn(streamId: string, hint?: string, nodeId?: string) {
+    const stream = await deps.tasks.get(streamId)
+    if (!stream?.isStream || (hint && stream.membrane && stream.membrane !== hint))
+      throw new ForgeError(`not a work stream${hint ? ` of ${hint}` : ''}: ${streamId}`, 404)
+    const membrane = stream.membrane ?? hint ?? (nodeId ? await membraneOfNode(nodeId) : undefined)
+    if (!membrane) throw new ForgeError(`work stream ${streamId} has no membrane`, 400)
+    return { stream, membrane }
+  }
+
+  async function streamOf(membrane: string, streamId: string): Promise<WorkStream> {
+    const w = (await deps.tasks.streamsOf(membrane)).find((x) => x.id === streamId)
+    if (!w) throw new ForgeError(`not a work stream of ${membrane}: ${streamId}`, 404)
+    return w
+  }
+
+  async function nodeIn(membrane: string, nodeId: string): Promise<{ node: WorkNode; tasks: PortTask[] }> {
+    const { graph, tasks } = await full(membrane)
+    const node = graph.nodes.find((n) => n.id === nodeId)
+    if (!node) throw new ForgeError(`node not found: ${nodeId}`, 404)
+    return { node, tasks }
+  }
+
+  /**
+   * Two-way assignee sync: an owner thread adds the membrane's forge
+   * identity as assignee; unassigning removes it only when Forge added it.
+   * Returns the forge's error message, if the write failed.
+   */
+  async function writeAssignee(
+    membrane: string | null,
+    nodeId: string,
+    kind: 'change' | 'issue',
+    on: boolean
+  ): Promise<string | undefined> {
+    const ref = parseRefKey(nodeId, kind)
+    if (!ref) return undefined
+    const forge = forgeOf(ref)
+    if (!forge?.capabilities.assignees) return undefined
+    const m = membrane ?? ''
+    const scope =
+      membrane && deps.scope.getMembrane(membrane) ? (state(membrane).scope ?? scopeOf(membrane)) : undefined
+    const found = scope ? itemOf(scope, nodeId) : itemOfTracked(ref)
+    try {
+      if (on) {
+        const identity = await identityFor(ref)
+        if (!identity || found?.item.assignees.some((a) => a.toLowerCase() === identity.toLowerCase())) return undefined
+        await forge.setAssignees(ref, [identity], [])
+        if (found) {
+          found.item.assignees = [...found.item.assignees, identity]
+          found.sync.save()
+        }
+        updateFile(m, (f) => (f.assignedByForge[nodeId] = identity))
+      } else {
+        const login = readFile(m).assignedByForge[nodeId]
+        if (!login) return undefined
+        await forge.setAssignees(ref, [], [login])
+        if (found) {
+          found.item.assignees = found.item.assignees.filter((a) => a !== login)
+          found.sync.save()
+        }
+        updateFile(m, (f) => delete f.assignedByForge[nodeId])
+      }
+      return undefined
+    } catch (err) {
+      log(`assignee ${nodeId}: ${(err as Error).message}`)
+      return (err as Error).message
+    }
+  }
+
+  function itemOfTracked(ref: ForgeRef): { sync: RepoSync; item: CachedChange | CachedIssue } | undefined {
+    const sync = trackedSyncs.get(repoKey(ref))
+    const c = sync?.cache()
+    const item = c && (c.changes[ref.id] ?? c.issues[ref.id])
+    return sync && item ? { sync, item } : undefined
+  }
+
+  /** The task behind a node, created when missing. */
+  async function taskFor(membrane: string, node: WorkNode): Promise<PortTask> {
+    if (node.taskId) {
+      const t = await deps.tasks.get(node.taskId)
+      if (t) return t
+    }
+    if (node.kind === 'task' || node.kind === 'branch') throw new ForgeError(`no task can be made for ${node.id}`, 400)
+    const init: TaskInit = {
+      name: node.number !== undefined ? `${node.repo}#${node.number} ${node.title}` : node.title,
+      membrane,
+      kind: node.kind,
+      ...(node.url ? { url: node.url } : {})
+    }
+    if (node.kind === 'plan') {
+      // The key names the plan: "plan:<project>/<path in its plan dir>".
+      const rest = node.id.slice('plan:'.length)
+      const project = rest.split('/')[0]
+      init.plan = { project, path: rest.slice(project.length + 1) }
+      init.stream = true
+    } else {
+      const ref = parseRefKey(node.id, node.kind)
+      if (ref) init.ref = ref
+    }
+    return deps.tasks.ensureTask(node.id, init)
+  }
+
+  const decisions = createDecisionService({
+    tasks: deps.tasks,
+    send: (threadId, text) => deps.threads.sendToThread(threadId, text),
+    changed: (membrane) => emit('forge.updated', { membrane }),
+    now
+  })
+
+  const api: ForgeService = {
+    decisions,
+    start() {
+      if (started) return
+      started = true
+      timers.push(setInterval(() => void tick(), 5000))
+      timers.push(setInterval(() => void pushOverlays(), deps.overlayPollMs ?? 10_000))
+      for (const t of timers) t.unref?.()
+      let debounce: ReturnType<typeof setTimeout> | undefined
+      const soon = () => {
+        if (debounce) return
+        debounce = setTimeout(() => {
+          debounce = undefined
+          void pushOverlays()
+        }, 500)
+        debounce.unref?.()
+      }
+      for (const p of ['chat.status', 'subagent.*', 'task.reassigned']) disposers.push(deps.bus.on(p, soon))
+      disposers.push(() => clearTimeout(debounce))
+      // Plans: a markdown edit under a plan dir rescans that membrane's plans.
+      disposers.push(
+        deps.bus.on('file.changed', (e) => {
+          const changedPath = (e.payload as { fullPath?: string })?.fullPath
+          if (!changedPath) return
+          for (const [m, s] of states) {
+            if (!s.scope || !isPlanPath(s.scope.planDirs, changedPath)) continue
+            const events = rescanPlans(m, s.scope)
+            if (!events.length) continue
+            void plansChanged(m, events).catch((err) => log(`plans ${m}: ${(err as Error).message}`))
+          }
+        })
+      )
+      // Assignment outside Forge sets the forge assignee too; a new imported
+      // task gets its first read soon rather than at the next poll.
+      let trackedSoon: ReturnType<typeof setTimeout> | undefined
+      disposers.push(
+        deps.bus.on('task.reassigned', (e) => {
+          const p = e.payload as { taskId?: string; sourceThreadId?: string; newThreadId?: string | null }
+          if (!p?.taskId || p.sourceThreadId === FORGE_SOURCE) return
+          void onReassigned(p.taskId, p.newThreadId ?? null).catch((err) =>
+            log(`reassigned ${p.taskId}: ${(err as Error).message}`)
+          )
+        }),
+        deps.bus.on('task.created', (e) => {
+          const p = e.payload as { taskId?: string; sourceThreadId?: string; threadId?: string | null }
+          if (p?.sourceThreadId === FORGE_SOURCE) return
+          // Created already owned (a task made for a thread): the same as an assignment.
+          if (p?.taskId && p.threadId)
+            void onReassigned(p.taskId, p.threadId).catch((err) =>
+              log(`created ${p.taskId}: ${(err as Error).message}`)
+            )
+          if (trackedSoon) return
+          trackedSoon = setTimeout(() => {
+            trackedSoon = undefined
+            void pollTracked().catch((err) => log(`tracked: ${(err as Error).message}`))
+          }, 1000)
+          trackedSoon.unref?.()
+        }),
+        () => clearTimeout(trackedSoon)
+      )
+      void tick()
+    },
+    stop() {
+      started = false
+      for (const t of timers.splice(0)) clearInterval(t)
+      for (const d of disposers.splice(0)) d()
+      if (backfillTimer) clearTimeout(backfillTimer)
+      backfillTimer = undefined
+    },
+    config: cfg,
+    membranes,
+
+    async graph(membrane, opts = {}) {
+      const c = cfg()
+      const scope = state(membrane).scope ?? scopeOf(membrane)
+      const until = opts.until ?? iso()
+      const since = opts.since ?? new Date(Date.parse(until) - c.windowDays * 86_400_000).toISOString()
+      if (Number.isNaN(Date.parse(since)) || Number.isNaN(Date.parse(until)))
+        throw new ForgeError('since/until must be ISO times', 400)
+      const { graph } = await full(membrane, scope)
+      let view: ForgeView | undefined
+      if (opts.view) {
+        view = (await deps.tasks.getViews(membrane)).find((v) => v.id === opts.view)
+        if (!view && opts.view !== 'all') throw new ForgeError(`unknown view: ${opts.view}`, 404)
+      }
+      const me = await identityOf(scope)
+      const g = windowGraph(applyView(graph, view, { ...(me ? { me } : {}), now: now() }), since, until, now())
+      const s = state(membrane)
+      const syncs_ = scope.repos.map((r) => syncOf(r)).filter((x): x is RepoSync => Boolean(x))
+      const notes = deps.rethinkNotes?.(membrane) ?? {}
+      const streams = withRelatedCounts(
+        withProgress(await deps.tasks.streamsOf(membrane), graph.nodes, graph.edges).filter(
+          (w) => opts.archived || w.status !== 'archived'
+        ),
+        graph.nodes
+      )
+      const shown = new Set(streams.map((w) => w.id))
+      // A shown stream's plan node frames the goal tree, so it is served whatever the view filters
+      const served = new Set(g.nodes.map((n) => n.id))
+      const plans = new Set(streams.map((w) => w.plan).filter((p): p is string => !!p))
+      const frames = graph.nodes.filter((n) => plans.has(n.id) && !served.has(n.id))
+      // A depends-on edge with a stream end joins the served edges while both ends show
+      for (const n of frames) served.add(n.id)
+      const showsEnd = (id: string) => served.has(id) || shown.has(id)
+      const streamEnds = graph.edges.filter(
+        (e) => e.kind === 'depends-on' && (shown.has(e.from) || shown.has(e.to)) && showsEnd(e.from) && showsEnd(e.to)
+      )
+      return {
+        membrane,
+        since,
+        until,
+        nodes: [...g.nodes, ...frames].map((n) => {
+          const workstreams = n.workstreams.filter((w) => shown.has(w))
+          const related = n.relatedStreams?.filter((w) => shown.has(w))
+          let out = workstreams.length === n.workstreams.length ? n : { ...n, workstreams }
+          if (related && related.length !== n.relatedStreams!.length) {
+            const { relatedStreams: _all, ...rest } = out
+            out = related.length ? { ...rest, relatedStreams: related } : rest
+          }
+          if (structures) out = structures.attach(out)
+          return notes[n.id]?.length ? { ...out, rethink: notes[n.id] } : out
+        }),
+        edges: [...g.edges, ...streamEnds],
+        workstreams: streams,
+        ...(cfg().enabled
+          ? { syncing: s.syncing || syncs_.some((x) => !x.cache().windowSyncedAt || !x.backfillDone()) }
+          : { syncing: false, syncOff: true }),
+        ...(s.lastSyncAt ? { lastSyncAt: s.lastSyncAt } : {}),
+        ...(me ? { identity: me } : {})
+      }
+    },
+
+    async search(membrane, q) {
+      const { graph } = await full(membrane)
+      return searchGraph(graph, q)
+    },
+
+    overlay,
+    sync,
+    backfillStep,
+
+    digest,
+
+    events(membrane, opts = {}) {
+      scopeOf(membrane)
+      return state(membrane).log.read(opts)
+    },
+
+    async rethink(membrane, opts = {}) {
+      if (!deps.runRethink) throw new ForgeError('rethink is not available yet', 501)
+      const d = await digest(membrane)
+      if (!d.count) return { ran: false, count: 0 }
+      const started = await deps.runRethink(membrane, d, { trigger: opts.trigger ?? 'manual' })
+      if (d.cursor) updateFile(membrane, (f) => (f.rethinkCursor = d.cursor))
+      return { ran: true, count: d.count, ...(started?.runId ? { runId: started.runId } : {}) }
+    },
+
+    async node(membrane, nodeId) {
+      const { graph } = await full(membrane)
+      const n = graph.nodes.find((x) => x.id === nodeId)
+      return n && structures ? structures.attach(n) : n
+    },
+
+    async relate(membrane, edge) {
+      if (edge.from === edge.to) throw new ForgeError('an edge needs two different nodes', 400)
+      const { graph } = await full(membrane)
+      for (const id of [edge.from, edge.to]) {
+        if (!graph.nodes.some((n) => n.id === id)) throw new ForgeError(`node not found: ${id}`, 404)
+      }
+      if (!(edge.confidence >= 0 && edge.confidence <= 1)) throw new ForgeError('confidence must be 0–1', 400)
+      const rec = await deps.tasks.addRelated(membrane, { ...edge, kind: 'related' })
+      emit('forge.updated', { membrane })
+      return rec
+    },
+
+    async depend(membrane, edge) {
+      if (edge.from === edge.to) throw new ForgeError('an item cannot depend on itself', 400)
+      const [{ graph }, streams, related] = await Promise.all([
+        full(membrane),
+        deps.tasks.streamsOf(membrane),
+        deps.tasks.listRelated(membrane)
+      ])
+      for (const id of [edge.from, edge.to]) {
+        if (!graph.nodes.some((n) => n.id === id) && !streams.some((s) => s.id === id))
+          throw new ForgeError(`neither a node nor a work stream of ${membrane}: ${id}`, 400)
+      }
+      const needs = related.filter((r) => r.kind === 'depends-on')
+      const existing = needs.find((r) => r.from === edge.from && r.to === edge.to)
+      if (existing) return existing
+      // A cycle: what `to` already waits on reaches `from`
+      const seen = new Set([edge.to])
+      const queue = [edge.to]
+      while (queue.length) {
+        const at = queue.shift()!
+        for (const r of needs) {
+          if (r.from !== at || seen.has(r.to)) continue
+          if (r.to === edge.from) throw new ForgeError(`${edge.to} already depends on ${edge.from}`, 400)
+          seen.add(r.to)
+          queue.push(r.to)
+        }
+      }
+      const rec = await deps.tasks.addRelated(membrane, {
+        from: edge.from,
+        to: edge.to,
+        kind: 'depends-on',
+        ...(edge.reason ? { reason: edge.reason } : {}),
+        source: edge.source
+      })
+      await deps.tasks.acceptRelated(membrane, edge.from, edge.to, 'depends-on')
+      emit('forge.updated', { membrane })
+      return { ...rec, accepted: true }
+    },
+
+    async assign(input) {
+      const membrane = await membraneOfNode(input.nodeId, input.membrane)
+      const { node } = await nodeIn(membrane, input.nodeId)
+      const task = await taskFor(membrane, node)
+      const forgeItem = node.kind === 'change' || node.kind === 'issue' ? node.kind : undefined
+
+      if (input.threadId === null) {
+        await deps.tasks.setThread(task.id, null)
+        const forgeError = forgeItem ? await writeAssignee(membrane, node.id, forgeItem, false) : undefined
+        emit('forge.updated', { membrane })
+        return { taskId: task.id, threadId: null, ...(forgeError ? { forgeError } : {}) }
+      }
+
+      let threadId = input.threadId ?? undefined
+      if (!threadId && input.newThread) {
+        threadId = await deps.threads.createThread(membrane, input.newThread.label?.trim() || node.title)
+      }
+      if (!threadId) throw new ForgeError('threadId or newThread is required', 400)
+      await deps.tasks.setThread(task.id, threadId)
+      // An epic's status is the user's: a thread on its plan node does not make it active.
+      if (task.state === 'pending' && !task.isStream) await deps.tasks.setState(task.id, 'in_progress')
+      const forgeError = forgeItem ? await writeAssignee(membrane, node.id, forgeItem, true) : undefined
+      const prompt = input.prompt?.trim() || (input.newThread ? defaultWorkPrompt(node) : undefined)
+      if (prompt) await deps.threads.sendToThread(threadId, prompt)
+      watchedIds.add(node.id)
+      emit('forge.updated', { membrane })
+      return { taskId: task.id, threadId, ...(forgeError ? { forgeError } : {}) }
+    },
+
+    pollTask,
+    pollTracked: () => pollTracked(),
+
+    async getViews(membrane) {
+      scopeOf(membrane)
+      const views = await deps.tasks.getViews(membrane)
+      return views.length ? views : [{ id: 'all', membrane, title: 'All repos', repos: [], filters: {} }]
+    },
+
+    async putViews(membrane, views) {
+      scopeOf(membrane)
+      const seen = new Set<string>()
+      const clean = views.map((v, i) => {
+        const id = typeof v.id === 'string' && v.id ? v.id : `view-${i + 1}`
+        if (seen.has(id)) throw new ForgeError(`duplicate view id: ${id}`, 400)
+        seen.add(id)
+        return {
+          id,
+          membrane,
+          title: String(v.title ?? id),
+          repos: Array.isArray(v.repos) ? v.repos.filter((r) => typeof r === 'string') : [],
+          filters: v.filters && typeof v.filters === 'object' ? v.filters : {},
+          ...(typeof v.height === 'number' ? { height: v.height } : {})
+        }
+      })
+      const out = await deps.tasks.putViews(membrane, clean)
+      emit('forge.updated', { membrane })
+      return out
+    },
+
+    async createStream(membrane, name, parentId) {
+      scopeOf(membrane)
+      if (!name.trim()) throw new ForgeError('name is required', 400)
+      if (parentId) await streamIn(parentId, membrane)
+      const s = await deps.tasks.createStream(membrane, name.trim(), parentId)
+      emit('forge.updated', { membrane })
+      return s
+    },
+
+    async addMember(streamId, nodeId, hint) {
+      const { membrane } = await streamIn(streamId, hint, nodeId)
+      const { node } = await nodeIn(membrane, nodeId)
+      const task = await taskFor(membrane, node)
+      await deps.tasks.addToStream(streamId, task.id)
+      emit('forge.updated', { membrane })
+      return { taskId: task.id }
+    },
+
+    async removeMember(streamId, nodeId, hint) {
+      const { stream, membrane } = await streamIn(streamId, hint, nodeId)
+      const { node } = await nodeIn(membrane, nodeId)
+      if (!node.taskId || !stream.childIds.includes(node.taskId)) return false
+      await deps.tasks.removeFromStream(streamId, node.taskId)
+      emit('forge.updated', { membrane })
+      return true
+    },
+
+    async setPaused(membrane, nodeId, paused) {
+      const { node } = await nodeIn(membrane, nodeId)
+      if (node.kind === 'plan') throw new ForgeError('a plan is an epic: set its status instead', 400)
+      if (paused && leafState(node) !== 'open') throw new ForgeError(`${nodeId} is not open: nothing to pause`, 400)
+      const task = await taskFor(membrane, node)
+      // Resumed: pending, or in progress with an owner; the next sync moves it on from there.
+      const state = paused ? 'paused' : task.threadId ? 'in_progress' : 'pending'
+      if (task.state !== state && (paused || task.state === 'paused')) await deps.tasks.setState(task.id, state)
+      emit('forge.updated', { membrane })
+      return (await nodeIn(membrane, nodeId)).node
+    },
+
+    async supersede(membrane, nodeId, byId, reason) {
+      const { node } = await nodeIn(membrane, nodeId)
+      if (node.kind !== 'task' || node.state !== 'planned' || !node.taskId)
+        throw new ForgeError(`${nodeId} is not a planned task`, 400)
+      const { node: by } = await nodeIn(membrane, byId)
+      if (by.kind !== 'change') throw new ForgeError(`${byId} is not a PR`, 400)
+      if (!reason.trim()) throw new ForgeError('reason is required', 400)
+      await deps.tasks.setState(node.taskId, 'cancelled')
+      await deps.tasks.setTransientState(
+        node.taskId,
+        `Opened as ${by.number !== undefined ? `${by.repo}#${by.number}` : by.id}`
+      )
+      // A PR has one owning stream: take the task's only when the PR has none yet.
+      const streamId = by.workstreams.length ? undefined : node.workstreams[0]
+      if (streamId) await api.addMember(streamId, byId, membrane)
+      emit('forge.updated', { membrane })
+      return { taskId: node.taskId, ...(streamId ? { streamId } : {}) }
+    },
+
+    async setCategory(membrane, nodeId, category, source, reason) {
+      if (category !== null && !isWorkCategory(category))
+        throw new ForgeError(`category must be one of ${WORK_CATEGORIES.join(', ')}, or null`, 400)
+      const { node } = await nodeIn(membrane, nodeId)
+      if (source === 'rethink') {
+        if (category === null) throw new ForgeError('rethink sets a category; only the user clears one', 400)
+        // user > rule > rethink: a rethink category would never show over these.
+        if (node.categorySource === 'user')
+          throw new ForgeError(`${nodeId} is ${node.category} by the user's choice; rethink never overrides it`, 409)
+        if (node.categorySource === 'rule')
+          throw new ForgeError(
+            `${nodeId} is ${node.category} by the rules (its labels or title); nothing to decide`,
+            409
+          )
+      }
+      await deps.tasks.setCategory(membrane, nodeId, source, category, reason?.trim() || undefined)
+      emit('forge.updated', { membrane })
+      return (await nodeIn(membrane, nodeId)).node
+    },
+
+    async streams(membrane, opts = {}) {
+      scopeOf(membrane)
+      const { graph } = await full(membrane)
+      return withRelatedCounts(
+        (await deps.tasks.streamsOf(membrane)).filter((w) => opts.archived || w.status !== 'archived'),
+        graph.nodes
+      )
+    },
+
+    async epics(membrane) {
+      const { graph, tasks } = await full(membrane)
+      const byId = new Map(tasks.map((t) => [t.id, t]))
+      const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
+      return withRelatedCounts(await deps.tasks.streamsOf(membrane), graph.nodes).map((w) => ({
+        ...w,
+        members: (byId.get(w.id)?.childIds ?? [])
+          .map((id) => byId.get(id))
+          .filter((t): t is PortTask => Boolean(t) && !t!.isStream)
+          .map((t) => {
+            const id = t.key ?? `task:${t.id}`
+            return { id, title: nodes.get(id)?.title ?? t.name }
+          }),
+        related: graph.nodes.filter((n) => n.relatedStreams?.includes(w.id)).map((n) => ({ id: n.id, title: n.title }))
+      }))
+    },
+
+    async renameStream(streamId, name, hint) {
+      const { membrane } = await streamIn(streamId, hint)
+      if (!name.trim()) throw new ForgeError('name is required', 400)
+      await deps.tasks.setName(streamId, name.trim())
+      emit('forge.updated', { membrane })
+      return streamOf(membrane, streamId)
+    },
+
+    async setStreamStatus(streamId, status, hint) {
+      const { membrane } = await streamIn(streamId, hint)
+      if (!EPIC_STATUSES.includes(status))
+        throw new ForgeError(`status must be one of ${EPIC_STATUSES.join(', ')}`, 400)
+      await deps.tasks.setState(streamId, stateOfEpicStatus(status))
+      emit('forge.updated', { membrane })
+      return streamOf(membrane, streamId)
+    },
+
+    async setStreamParent(streamId, parentId, hint) {
+      const { stream, membrane } = await streamIn(streamId, hint)
+      if (parentId === streamId) throw new ForgeError('a stream cannot be its own parent', 400)
+      if (parentId) {
+        await streamIn(parentId, membrane)
+        if (!stream.parentIds.includes(parentId)) await deps.tasks.addToStream(parentId, streamId)
+      }
+      for (const p of stream.parentIds) {
+        if (p !== parentId && (await deps.tasks.get(p))?.isStream) await deps.tasks.removeFromStream(p, streamId)
+      }
+      emit('forge.updated', { membrane })
+      return streamOf(membrane, streamId)
+    },
+
+    async mergeStreams(fromId, intoId, hint) {
+      const { stream: from, membrane } = await streamIn(fromId, hint)
+      const { stream: into } = await streamIn(intoId, membrane)
+      if (fromId === intoId) throw new ForgeError('a stream cannot merge into itself', 400)
+      // Walk up from `into`: merging a stream into its own sub-stream would make a cycle.
+      const seen = new Set<string>()
+      for (const up = [...into.parentIds]; up.length; ) {
+        const id = up.pop()!
+        if (id === fromId) throw new ForgeError('a stream cannot merge into its own sub-stream', 400)
+        if (seen.has(id)) continue
+        seen.add(id)
+        up.push(...((await deps.tasks.get(id))?.parentIds ?? []))
+      }
+      let members = 0
+      let streams = 0
+      for (const id of from.childIds) {
+        const child = await deps.tasks.get(id)
+        if (!child) continue
+        if (!into.childIds.includes(id)) await deps.tasks.addToStream(intoId, id)
+        await deps.tasks.removeFromStream(fromId, id)
+        if (child.isStream) streams++
+        else members++
+      }
+      await deps.tasks.setState(fromId, 'cancelled')
+      emit('forge.updated', { membrane })
+      return { members, streams }
+    },
+
+    async acceptEdge(from, to, kind, hint) {
+      for (const m of hint ? [hint] : membranes()) {
+        if (await deps.tasks.acceptRelated(m, from, to, kind)) {
+          emit('forge.updated', { membrane: m })
+          return true
+        }
+      }
+      return false
+    },
+
+    async deleteEdge(from, to, kind, hint) {
+      for (const m of hint ? [hint] : membranes()) {
+        if (await deps.tasks.deleteRelated(m, from, to, kind)) {
+          emit('forge.updated', { membrane: m })
+          return true
+        }
+      }
+      return false
+    },
+
+    async status(membrane) {
+      const scope = scopeOf(membrane)
+      const s = state(membrane)
+      if (!s.plansScanned) rescanPlans(membrane, scope)
+      const list = allowListOf(membrane)
+      const repos: RepoStatus[] = scope.repos.map((r) => {
+        const rs = syncOf(r)
+        const c = rs && trustedFor(membrane)(rs.cache())
+        const err = s.repoErrors.get(r.repo)
+        return {
+          repo: r.repo,
+          changes: c ? Object.keys(c.changes).length : 0,
+          issues: c ? Object.keys(c.issues).length : 0,
+          ...(c?.windowSyncedAt ? { windowSyncedAt: c.windowSyncedAt } : {}),
+          ...(c?.lastOpenSyncAt ? { lastOpenSyncAt: c.lastOpenSyncAt } : {}),
+          ...(c?.lastAllSyncAt ? { lastAllSyncAt: c.lastAllSyncAt } : {}),
+          backfill: c?.backfill ?? {
+            changes: { done: false, pages: 0, items: 0 },
+            issues: { done: false, pages: 0, items: 0 }
+          },
+          ...(err ? { error: err } : {})
+        }
+      })
+      const identity = await identityOf(scope)
+      return {
+        membrane,
+        enabled: cfg().enabled,
+        syncing: s.syncing,
+        ...(s.lastSyncAt ? { lastSyncAt: s.lastSyncAt } : {}),
+        ...(s.lastError ? { lastError: s.lastError } : {}),
+        ...(identity ? { identity } : {}),
+        repos,
+        allowList: list ? { source: list.source, logins: list.logins } : null,
+        plans: s.plans.length,
+        backfill: {
+          done: repos.every((r) => r.backfill.changes.done && r.backfill.issues.done),
+          pages: repos.reduce((a, r) => a + r.backfill.changes.pages + r.backfill.issues.pages, 0),
+          items: repos.reduce((a, r) => a + r.backfill.changes.items + r.backfill.issues.items, 0)
+        },
+        triage: s.log.coverage(),
+        events: s.log.count()
+      }
+    }
+  }
+  return api
+}

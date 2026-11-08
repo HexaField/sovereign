@@ -1,0 +1,64 @@
+{
+  "data": {
+    "rateLimit": { "cost": 4, "remaining": 4976, "resetAt": "2026-03-02T11:00:00Z" },
+    "repository": {
+      "pullRequests": {
+        "pageInfo": { "hasNextPage": true, "endCursor": "Y3Vyc29yOjY=" },
+        "nodes": [
+          {
+            "number": 399,
+            "title": "Drop the legacy cog API",
+            "body": "Superseded by #401.",
+            "url": "https://github.com/acme-labs/widget/pull/399",
+            "state": "CLOSED",
+            "isDraft": false,
+            "merged": false,
+            "createdAt": "2026-02-10T09:00:00Z",
+            "updatedAt": "2026-02-25T15:00:00Z",
+            "closedAt": "2026-02-25T15:00:00Z",
+            "mergedAt": null,
+            "author": { "login": "alex-dev" },
+            "assignees": { "nodes": [] },
+            "reviewRequests": { "nodes": [] },
+            "latestReviews": { "nodes": [{ "author": { "login": "sam-reviewer" }, "state": "DISMISSED" }] },
+            "labels": { "nodes": [] },
+            "headRefName": "chore/drop-cog",
+            "headRefOid": "d4e5f60718293a4b5c6d7e8f9012345678901234",
+            "baseRefName": "dev",
+            "headRepository": { "nameWithOwner": "acme-labs/widget" },
+            "mergeable": "UNKNOWN",
+            "closingIssuesReferences": { "nodes": [] },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "PENDING" } } }] },
+            "timelineItems": { "nodes": [] }
+          },
+          {
+            "number": 350,
+            "title": "Old work",
+            "body": "",
+            "url": "https://github.com/acme-labs/widget/pull/350",
+            "state": "MERGED",
+            "isDraft": false,
+            "merged": true,
+            "createdAt": "2026-01-02T09:00:00Z",
+            "updatedAt": "2026-01-15T09:00:00Z",
+            "closedAt": "2026-01-15T09:00:00Z",
+            "mergedAt": "2026-01-15T09:00:00Z",
+            "author": { "login": "alex-dev" },
+            "assignees": { "nodes": [] },
+            "reviewRequests": { "nodes": [] },
+            "latestReviews": { "nodes": [] },
+            "labels": { "nodes": [] },
+            "headRefName": "old/work",
+            "headRefOid": "e5f60718293a4b5c6d7e8f901234567890123456",
+            "baseRefName": "dev",
+            "headRepository": { "nameWithOwner": "acme-labs/widget" },
+            "mergeable": "UNKNOWN",
+            "closingIssuesReferences": { "nodes": [] },
+            "commits": { "nodes": [] },
+            "timelineItems": { "nodes": [] }
+          }
+        ]
+      }
+    }
+  }
+}

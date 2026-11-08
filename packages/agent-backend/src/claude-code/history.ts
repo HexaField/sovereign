@@ -274,6 +274,63 @@ export function computeUsageFromFile(filePath: string): {
   return out
 }
 
+/** Usage of the API calls a session made at or after `sinceMs`, read from its
+ *  JSONL. Claude Code writes one line per content block of an assistant
+ *  message, each carrying the same usage, so calls count once per message id.
+ *
+ *  `added` counts the tokens these calls added to the context: the first
+ *  call's output, then each later call's growth over the call before it
+ *  (prompt + output, cached or not), never less than zero. The baseline is
+ *  the first call at or after `sinceMs`, never a call before it: a recycle or
+ *  a compaction rewrites the file, so the call before may be missing and the
+ *  whole existing context would read as added. A cold cache that writes the
+ *  context again adds nothing; a compaction that shrinks it adds nothing. */
+export function usageSinceFromFile(
+  filePath: string,
+  sinceMs: number
+): { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; calls: number; added: number } {
+  const out = { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, calls: 0, added: 0 }
+  let content: string
+  try {
+    content = fs.readFileSync(filePath, 'utf-8')
+  } catch {
+    return out
+  }
+  const seen = new Set<string>()
+  let context = 0
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const entry = JSON.parse(line)
+      const usage = entry?.message?.usage
+      if (!usage) continue
+      const id = entry.message.id ?? entry.requestId ?? entry.uuid
+      if (id) {
+        if (seen.has(id)) continue
+        seen.add(id)
+      }
+      const input = usage.input_tokens ?? 0
+      const output = usage.output_tokens ?? 0
+      const cacheRead = usage.cache_read_input_tokens ?? 0
+      const cacheWrite = usage.cache_creation_input_tokens ?? 0
+      const t = Date.parse(entry.timestamp ?? '')
+      if (!Number.isFinite(t) || t < sinceMs) continue
+      // The run's first call: its prompt was there before the run, only its output is new.
+      const previous = out.calls === 0 ? input + cacheRead + cacheWrite : context
+      context = input + cacheRead + cacheWrite + output
+      out.inputTokens += input
+      out.outputTokens += output
+      out.cacheRead += cacheRead
+      out.cacheWrite += cacheWrite
+      out.added += Math.max(0, context - previous)
+      out.calls++
+    } catch {
+      /* malformed line */
+    }
+  }
+  return out
+}
+
 /** Return the LAST turn's usage from a session file — the actual snapshot of
  *  how many tokens currently fill the context window.  Each turn's
  *  `input_tokens` already covers the full conversation, so only the final

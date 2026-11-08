@@ -1,0 +1,67 @@
+{
+  "data": {
+    "rateLimit": { "cost": 1, "remaining": 4975, "resetAt": "2026-03-02T11:00:00Z" },
+    "repository": {
+      "issues": {
+        "pageInfo": { "hasNextPage": false, "endCursor": "aXNzdWU6Mw==" },
+        "nodes": [
+          {
+            "number": 377,
+            "title": "Tooth cache uses too much memory",
+            "body": "Loading 2 GB of teeth at boot.",
+            "url": "https://github.com/acme-labs/widget/issues/377",
+            "state": "OPEN",
+            "stateReason": "REOPENED",
+            "createdAt": "2026-02-01T09:00:00Z",
+            "updatedAt": "2026-03-02T10:31:00Z",
+            "closedAt": null,
+            "author": { "login": "sam-reviewer" },
+            "assignees": { "nodes": [{ "login": "alex-dev" }] },
+            "labels": { "nodes": [{ "name": "perf" }] },
+            "timelineItems": {
+              "nodes": [
+                {
+                  "source": {
+                    "__typename": "PullRequest",
+                    "number": 412,
+                    "repository": { "nameWithOwner": "acme-labs/widget" }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "number": 360,
+            "title": "Gear ratio off by one",
+            "body": "",
+            "url": "https://github.com/acme-labs/widget/issues/360",
+            "state": "CLOSED",
+            "stateReason": "COMPLETED",
+            "createdAt": "2026-01-20T09:00:00Z",
+            "updatedAt": "2026-02-28T12:01:00Z",
+            "closedAt": "2026-02-28T12:01:00Z",
+            "author": { "login": "jo-maintainer" },
+            "assignees": { "nodes": [] },
+            "labels": { "nodes": [{ "name": "bug" }] },
+            "timelineItems": { "nodes": [] }
+          },
+          {
+            "number": 355,
+            "title": "Support left-handed sprockets",
+            "body": "",
+            "url": "https://github.com/acme-labs/widget/issues/355",
+            "state": "CLOSED",
+            "stateReason": "NOT_PLANNED",
+            "createdAt": "2026-01-10T09:00:00Z",
+            "updatedAt": "2026-02-20T12:00:00Z",
+            "closedAt": "2026-02-20T12:00:00Z",
+            "author": null,
+            "assignees": { "nodes": [] },
+            "labels": { "nodes": [] },
+            "timelineItems": { "nodes": [] }
+          }
+        ]
+      }
+    }
+  }
+}

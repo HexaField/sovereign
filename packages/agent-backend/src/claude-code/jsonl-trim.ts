@@ -87,3 +87,56 @@ export function trimJsonlToLastCompaction(filePath: string): number {
   fs.renameSync(tmp, filePath)
   return originalSize - newContent.length
 }
+
+/** What an older copy of an instructions file keeps in place of its text. */
+const SUPERSEDED = '[superseded by a later copy of this file further down]'
+
+/**
+ * Claude Code injects each instructions file (~/.claude/CLAUDE.md, a
+ * project CLAUDE.md) as an `instructions` attachment at every session start
+ * where the file changed, and keeps the old copies: a long thread carried
+ * five copies of a ~24k-token CLAUDE.md. Replace the text of every copy but
+ * the newest of each file with a short marker. Entries and their uuid links
+ * stay, so the SDK resumes the transcript as before.
+ *
+ * Atomic write. Returns the characters removed (0 when nothing changed).
+ */
+export function stubSupersededInstructions(filePath: string): number {
+  const lines = fs.readFileSync(filePath, 'utf-8').split('\n')
+  const parsed = lines.map((line) => {
+    if (!line.includes('"instructions"')) return undefined
+    try {
+      const e = JSON.parse(line) as {
+        type?: string
+        attachment?: { type?: string; files?: Array<{ path?: string; content?: unknown }> }
+      }
+      return e.type === 'attachment' && e.attachment?.type === 'instructions' && Array.isArray(e.attachment.files)
+        ? e
+        : undefined
+    } catch {
+      return undefined
+    }
+  })
+  // The newest line holding each file.
+  const newest = new Map<string, number>()
+  parsed.forEach((e, i) => e?.attachment!.files!.forEach((f) => f.path && newest.set(f.path, i)))
+
+  let freed = 0
+  parsed.forEach((e, i) => {
+    if (!e) return
+    let changed = false
+    for (const f of e.attachment!.files!) {
+      if (!f.path || newest.get(f.path) === i || typeof f.content !== 'string' || f.content === SUPERSEDED) continue
+      freed += f.content.length - SUPERSEDED.length
+      f.content = SUPERSEDED
+      changed = true
+    }
+    if (changed) lines[i] = JSON.stringify(e)
+  })
+  if (freed <= 0) return 0
+
+  const tmp = filePath + '.instr-tmp'
+  fs.writeFileSync(tmp, lines.join('\n'), 'utf-8')
+  fs.renameSync(tmp, filePath)
+  return freed
+}

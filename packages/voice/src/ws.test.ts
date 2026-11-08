@@ -5,7 +5,7 @@ import { registerVoiceStreamChannel } from './ws.js'
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
-function setup() {
+function setup(transcribeUrl = () => 'http://stt/transcribe') {
   let channel: WsChannelOptions | undefined
   const log: string[] = []
   const ws = {
@@ -25,7 +25,7 @@ function setup() {
       return { delivered: true }
     })
   }
-  registerVoiceStreamChannel({ ws, transcribeUrl: 'http://stt/transcribe', presence })
+  registerVoiceStreamChannel({ ws, transcribeUrl, presence })
   const send = (type: string, payload: Record<string, unknown> = {}, from = 'node') =>
     channel!.onMessage!(type, { type, ...payload }, from)
   const disconnect = (from = 'node') => channel!.onDisconnect!(from)
@@ -57,6 +57,22 @@ describe('voice-stream channel — deliver: presence', () => {
       'draft Mac presence-thread "" done'
     ])
     expect(presence.send).toHaveBeenCalledWith('hello there', { deviceId: 'node', deviceName: 'Mac' })
+  })
+
+  it('sends each new stream to the STT endpoint configured when it starts', async () => {
+    let url = 'http://whisper/transcribe'
+    const { send } = setup(() => url)
+    const speak = async () => {
+      send('voice-stream.start', { format: 'pcm16', sampleRate: 16000, deliver: 'presence' })
+      send('voice-stream.chunk', { audio: pcmSeconds(1) })
+      send('voice-stream.stop')
+      await vi.runAllTimersAsync()
+    }
+    await speak()
+    url = 'http://parakeet/transcribe'
+    mockFetch.mockClear()
+    await speak()
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))).toEqual(['http://parakeet/transcribe'])
   })
 
   it('sends nothing for silence, and still clears the draft', async () => {

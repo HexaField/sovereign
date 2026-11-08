@@ -1,0 +1,31 @@
+{
+  "name": "@sovereign/graphcoder-core",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "Josh Field",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./contract": {
+      "types": "./src/contract.ts",
+      "development": "./src/contract.ts",
+      "default": "./dist/contract.js"
+    },
+    "./boundary": {
+      "types": "./src/boundary.ts",
+      "development": "./src/boundary.ts",
+      "default": "./dist/boundary.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc --noEmit",
+    "test": "vitest run --root ../.. packages/graphcoder-core/"
+  }
+}

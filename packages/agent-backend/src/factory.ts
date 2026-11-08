@@ -26,10 +26,14 @@ export interface MultiBackendConfig {
    *  a backend from `agentBackend.enabled`) take effect without a process restart.
    *  Falls back to the static `enabled` list when not supplied. */
   enabledKinds?: () => AgentBackendKind[]
+  /** Backends that own only the sessions they start (`ownsSession`): the
+   *  agents_spawn harness runs. Always on; listed by `all()` and their events
+   *  go through the hub, but never a default or a `forKind` target. */
+  owners?: AgentBackend[]
 }
 
 export interface RoutingBackend {
-  /** All enabled backend instances. */
+  /** All enabled backend instances, then the session owners. */
   all(): BackendInstance[]
   /** Backend chosen for a brand-new session (no registry entry yet). */
   default(): AgentBackend
@@ -68,9 +72,12 @@ export function createBackend(config: MultiBackendConfig): RoutingBackend {
     instances.set(kind, { kind, backend: factory() })
   }
 
+  const owners: BackendInstance[] = (config.owners ?? []).map((backend) => ({ kind: backend.kind, backend }))
+
   /** Resolve a sessionKey to the owning backend.
    *
    * Strategy:
+   *   0) A session owner (`ownsSession`) that claims the key.
    *   1) Registry lookup — explicit bindings always win.
    *      When the key carries an `agent:main:thread:` prefix and the full
    *      key misses, strip the prefix and retry with the bare UUID.
@@ -80,6 +87,8 @@ export function createBackend(config: MultiBackendConfig): RoutingBackend {
    *      authoritative choice for unbound `agent:*` keys.
    */
   function resolveBackend(sessionKey: string): AgentBackend {
+    const owner = owners.find((o) => o.backend.ownsSession?.(sessionKey))
+    if (owner) return owner.backend
     let record = config.registry.getBySession(sessionKey) ?? config.registry.getByThread(sessionKey)
 
     // Fallback: strip the `agent:main:thread:` prefix and retry with the
@@ -122,15 +131,15 @@ export function createBackend(config: MultiBackendConfig): RoutingBackend {
   function ensureSubscribed(event: string) {
     if (subscribedEvents.has(event)) return
     subscribedEvents.add(event)
-    for (const inst of instances.values()) subscribeBackend(inst, event)
+    for (const inst of [...instances.values(), ...owners]) subscribeBackend(inst, event)
   }
 
   const routing: RoutingBackend = {
     registry: config.registry,
     all() {
       const live = config.enabledKinds?.()
-      if (!live) return [...instances.values()]
-      return [...instances.values()].filter((i) => live.includes(i.kind))
+      const enabled = live ? [...instances.values()].filter((i) => live.includes(i.kind)) : [...instances.values()]
+      return [...enabled, ...owners]
     },
     default: defaultBackend,
     forSession: resolveBackend,

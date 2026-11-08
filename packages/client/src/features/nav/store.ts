@@ -19,16 +19,19 @@ export type ViewMode =
 // `workspace` — multi-agent / multi-thread workspace with sidebar, file
 // browser, and per-membrane thread picker.
 //
-// `agent` — agent-wide views: overview dashboard, knowledge forest, tasks
-// and system status. The presence thread opens in the workspace like any
-// other thread; settings live in the header's Service Health popover.
+// `agent` — agent-wide views: overview dashboard, knowledge forest, forge
+// (the work graph) and system status. The presence thread opens in the
+// workspace like any other thread; settings live in the header's Service
+// Health popover.
 export type NavView = 'workspace' | 'agent'
 
 // --- Agent-context tabs (visible when activeView === 'agent') ---
-export type AgentTab = 'overview' | 'forest' | 'tasks' | 'system'
+export type AgentTab = 'overview' | 'forest' | 'forge' | 'system'
 
 const VALID_NAV_VIEWS: NavView[] = ['workspace', 'agent']
-const VALID_AGENT_TABS: AgentTab[] = ['overview', 'forest', 'tasks', 'system']
+const VALID_AGENT_TABS: AgentTab[] = ['overview', 'forest', 'forge', 'system']
+/** Tab ids from older builds, still found in bookmarks and URLs. */
+const LEGACY_AGENT_TABS: Record<string, AgentTab> = { tasks: 'forge' }
 const DEFAULT_AGENT_TAB: AgentTab = 'overview'
 
 /** A URL from before the Hex tab went away: `?view=agent` with no tab, or
@@ -61,6 +64,8 @@ function readAgentTabFromUrl(): AgentTab {
   if (params.get('view') === 'system') return 'system'
   const t = params.get('tab')
   if (t && VALID_AGENT_TABS.includes(t as AgentTab)) return t as AgentTab
+  // The Tasks tab became Forge.
+  if (t && LEGACY_AGENT_TABS[t]) return LEGACY_AGENT_TABS[t]
   // Legacy `?view=dashboard`, `tab=settings`, `tab=hex`, or no tab → overview.
   return DEFAULT_AGENT_TAB
 }

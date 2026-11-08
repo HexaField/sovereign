@@ -7,6 +7,8 @@ export interface ScenarioContext {
   client: SovereignClient
   /** Base URL of the mock LLM (for assertions on request log, script injection). */
   mockLlmUrl: string
+  /** Base URL of the mock GitHub (REST + GraphQL; control API under /mock/github). */
+  mockGithubUrl: string
   /** Base URL of the Sovereign instance. */
   sovereignUrl: string
   /** Absolute path to the docker-compose.yml used for this run. */

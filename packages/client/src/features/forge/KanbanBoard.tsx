@@ -1,0 +1,237 @@
+// The Kanban view of one graph panel: the cards kanbanCards sorts, in columns.
+// A click selects the node, which opens the panel's NodeCard; a stack row or a
+// pair chip selects that PR instead.
+
+import { For, Show, type Component } from 'solid-js'
+import type { AgentOverlay } from '@sovereign/core'
+import { ReachBadge } from '../graphcoder/ReachBadge.js'
+import { categoryBadge } from './card-model.js'
+import { KANBAN_COLUMNS, type KanbanCard, type KanbanColumn, type KanbanPair } from './kanban-model.js'
+import {
+  CHANGES_REQUESTED_RING,
+  CI_COLORS,
+  REVIEW_COLORS,
+  REVIEW_GLYPHS,
+  STATE_COLORS,
+  reviewSummary,
+  ringFor,
+  ringLabel
+} from './style.js'
+
+export interface KanbanBoardProps {
+  columns: Map<KanbanColumn, KanbanCard[]>
+  overlays: () => Map<string, AgentOverlay>
+  selectedId: () => string | null
+  onSelect: (id: string) => void
+}
+
+const REVIEW_LABELS = {
+  approved: 'approved',
+  changes_requested: 'changes requested',
+  requested: 'review requested',
+  commented: 'commented',
+  dismissed: 'dismissed'
+} as const
+
+/** Paired PRs as chips in their state's colour; a click selects the partner. */
+const Pairs: Component<{ pairs: KanbanPair[]; onSelect: (id: string) => void }> = (props) => (
+  <For each={props.pairs}>
+    {(p) => (
+      <button
+        class="rounded border px-1 leading-4 hover:bg-[var(--c-hover-bg)]"
+        style={{ color: STATE_COLORS[p.state], 'border-color': 'currentColor' }}
+        title={`Paired with ${p.label} (${p.state})`}
+        onClick={(e) => {
+          e.stopPropagation()
+          props.onSelect(p.id)
+        }}
+        data-testid="forge-kanban-pair"
+      >
+        ⇄ {p.label}
+      </button>
+    )}
+  </For>
+)
+
+const Card: Component<{
+  card: KanbanCard
+  overlay?: AgentOverlay
+  selectedId: string | null
+  onSelect: (id: string) => void
+}> = (props) => {
+  const n = () => props.card.node
+  const ring = () => ringFor(props.card.node, props.overlay)
+  const review = () => reviewSummary(n())
+  const ci = () => (n().ci ? CI_COLORS[n().ci!] : null)
+  const category = () => categoryBadge(n())
+  // A div, not a button: the stack rows and pair chips inside are buttons of their own.
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      class="w-full cursor-pointer rounded border p-2 text-left text-xs hover:bg-[var(--c-hover-bg)]"
+      style={{
+        'border-color': props.selectedId === n().id ? 'var(--c-accent)' : 'var(--c-border)',
+        background: 'var(--c-bg-raised, var(--c-bg))',
+        color: 'var(--c-text)',
+        'box-shadow': ring()?.color ? `inset 3px 0 0 ${ring()!.color}` : undefined,
+        outline: ring()?.changesRequested ? `2px dotted ${CHANGES_REQUESTED_RING.color}` : undefined,
+        'outline-offset': '1px'
+      }}
+      onClick={() => props.onSelect(n().id)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+        e.preventDefault()
+        props.onSelect(n().id)
+      }}
+      title={ring() ? ringLabel(ring()!) : undefined}
+      data-testid="forge-kanban-card"
+      data-node={n().id}
+    >
+      <div class="flex items-start gap-1.5">
+        <Show when={ci()}>
+          <span class="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ background: ci()! }} title={`CI ${n().ci}`} />
+        </Show>
+        <span class="min-w-0 flex-1">
+          <span style={{ color: 'var(--c-text-muted)' }}>#{n().number}</span> {n().title}
+        </span>
+        <Show when={category()}>
+          {(c) => (
+            <span
+              class="shrink-0 rounded px-1 text-[10px] leading-4"
+              style={{ color: c().fg, background: c().bg }}
+              title={c().title}
+              data-testid="forge-category-badge"
+            >
+              {c().label}
+            </span>
+          )}
+        </Show>
+      </div>
+      <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5" style={{ color: 'var(--c-text-muted)' }}>
+        <span>{n().repo}</span>
+        <Show when={n().author}>
+          <span>@{n().author}</span>
+        </Show>
+        <Show when={n().state === 'draft'}>
+          <span>draft</span>
+        </Show>
+        <Show when={review()}>{(r) => <span style={{ color: REVIEW_COLORS[r()] }}>{REVIEW_LABELS[r()]}</span>}</Show>
+        <Show when={n().branch?.conflict}>
+          <span style={{ color: 'var(--c-error, #ef4444)' }}>conflict</span>
+        </Show>
+        <Show when={!props.card.stack.length}>
+          <Pairs pairs={props.card.pairs} onSelect={props.onSelect} />
+        </Show>
+        <Show when={props.card.closes.length}>
+          <span>closes {props.card.closes.join(', ')}</span>
+        </Show>
+        <Show when={props.card.epic}>
+          <span style={{ color: '#a855f7' }}>{props.card.epic}</span>
+        </Show>
+        <ReachBadge structure={n().structure} />
+      </div>
+      <Show when={props.card.stack.length}>
+        <div class="mt-1.5 flex flex-col border-t pt-1" style={{ 'border-color': 'var(--c-border)' }}>
+          <For each={props.card.stack}>
+            {(row) => {
+              const ci = () => (row.node.ci ? CI_COLORS[row.node.ci] : null)
+              const review = () => reviewSummary(row.node)
+              return (
+                <div
+                  class="flex flex-wrap items-center gap-x-1.5 rounded px-1 py-0.5 hover:bg-[var(--c-hover-bg)]"
+                  style={{
+                    background: props.selectedId === row.node.id ? 'var(--c-hover-bg)' : undefined
+                  }}
+                  data-testid="forge-kanban-stack-row"
+                  data-node={row.node.id}
+                >
+                  <button
+                    class="flex min-w-36 flex-1 items-center gap-1.5 text-left"
+                    title={`${row.position}/${props.card.stack.length} ${row.ref} ${row.node.title}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      props.onSelect(row.node.id)
+                    }}
+                  >
+                    <span class="w-6 shrink-0 text-right" style={{ color: 'var(--c-text-muted)' }}>
+                      {row.position}/{props.card.stack.length}
+                    </span>
+                    <span class="shrink-0" style={{ color: 'var(--c-text-muted)' }}>
+                      {row.ref}
+                    </span>
+                    <span class="min-w-0 flex-1 truncate">{row.node.title}</span>
+                    <Show when={row.node.state === 'draft'}>
+                      <span style={{ color: 'var(--c-text-muted)' }}>draft</span>
+                    </Show>
+                    <Show when={review()}>
+                      {(r) => (
+                        <span style={{ color: REVIEW_COLORS[r()] }} title={REVIEW_LABELS[r()]}>
+                          {REVIEW_GLYPHS[r()]}
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={ci()}>
+                      <span
+                        class="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: ci()! }}
+                        title={`CI ${row.node.ci}`}
+                      />
+                    </Show>
+                  </button>
+                  <Pairs pairs={row.pairs} onSelect={props.onSelect} />
+                </div>
+              )
+            }}
+          </For>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const KanbanBoard: Component<KanbanBoardProps> = (props) => (
+  // Phone (max-sm): each column nearly the screen's width, snapping, the next one peeking in.
+  <div
+    class="flex h-full min-h-0 gap-2 overflow-x-auto p-2 max-sm:snap-x max-sm:snap-mandatory max-sm:gap-1.5 max-sm:p-1.5"
+    data-testid="forge-kanban"
+  >
+    <For each={KANBAN_COLUMNS}>
+      {(col) => {
+        const cards = () => props.columns.get(col.id) ?? []
+        return (
+          <div
+            class="flex min-h-0 w-64 shrink-0 flex-col rounded border max-sm:w-[calc(100vw-2.5rem)] max-sm:snap-center"
+            style={{ 'border-color': 'var(--c-border)' }}
+            data-testid="forge-kanban-column"
+            data-column={col.id}
+          >
+            <div
+              class="flex items-center gap-2 px-2 py-1 text-xs font-semibold max-sm:py-2 max-sm:text-sm"
+              style={{ color: 'var(--c-text)' }}
+            >
+              {col.title}
+              <span class="font-normal" style={{ color: 'var(--c-text-muted)' }}>
+                {cards().length}
+              </span>
+            </div>
+            <div class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2">
+              <For each={cards()}>
+                {(c) => (
+                  <Card
+                    card={c}
+                    overlay={props.overlays().get(c.node.id)}
+                    selectedId={props.selectedId()}
+                    onSelect={props.onSelect}
+                  />
+                )}
+              </For>
+            </div>
+          </div>
+        )
+      }}
+    </For>
+  </div>
+)
+
+export default KanbanBoard

@@ -1,0 +1,188 @@
+// Forge meta store: saved views and related edges, persisted like tasks.
+
+import { afterAll, describe, expect, it } from 'vitest'
+import { createForgeMetaStore } from './meta.js'
+import type { FakeAd4m } from './testing/helpers.js'
+import { cleanupTempDirs, createFakeAd4m, quietLog, tempDir, until } from './testing/helpers.js'
+
+afterAll(cleanupTempDirs)
+
+function open(dir: string, ad4m: FakeAd4m | null) {
+  return createForgeMetaStore({
+    dir,
+    connect: ad4m ? ad4m.connect : null,
+    onReconnect: ad4m ? ad4m.onReconnect : undefined,
+    snapshotDelayMs: 1,
+    retryMs: 60_000,
+    log: quietLog()
+  })
+}
+
+describe('forge meta store', () => {
+  it('saves, lists by membrane, replaces and deletes views', () => {
+    const meta = open(tempDir(), null)
+    const all = meta.saveView({
+      membrane: 'coasys',
+      title: 'ad4m + WE',
+      repos: ['coasys/ad4m', 'coasys/we', 'coasys/we']
+    })
+    const mine = meta.saveView({
+      membrane: 'coasys',
+      title: 'Needs my review',
+      filters: { requestedFromMe: true },
+      height: 320
+    })
+    meta.saveView({ membrane: 'home', title: 'Home' })
+    expect(all.id).toMatch(/^forge-view:\/\//)
+    expect(all.repos).toEqual(['coasys/ad4m', 'coasys/we'])
+    expect(
+      meta
+        .listViews('coasys')
+        .map((v) => v.title)
+        .sort()
+    ).toEqual(['Needs my review', 'ad4m + WE'])
+    const replaced = meta.saveView({ ...mine, title: 'Review queue' })
+    expect(replaced.id).toBe(mine.id)
+    expect(meta.getView(mine.id)).toMatchObject({
+      title: 'Review queue',
+      filters: { requestedFromMe: true },
+      height: 320
+    })
+    expect(meta.deleteView(all.id)).toBe(true)
+    expect(meta.deleteView(all.id)).toBe(false)
+    expect(meta.listViews()).toHaveLength(2)
+    expect(() => meta.saveView({ membrane: 'coasys', title: ' ' })).toThrow(/title/)
+    meta.dispose()
+  })
+
+  it('adds related edges once per node pair, in either direction', () => {
+    const meta = open(tempDir(), null)
+    const a = 'github:github.com/coasys/ad4m#712'
+    const b = 'github:github.com/coasys/we#159'
+    const e1 = meta.addEdge({
+      from: a,
+      to: b,
+      reason: 'Same feature',
+      confidence: 0.6,
+      source: 'rethink',
+      membrane: 'coasys'
+    })
+    const e2 = meta.addEdge({ from: b, to: a, reason: 'Paired by hand', confidence: 2, source: 'user' })
+    expect(e2.id).toBe(e1.id)
+    expect(e2).toMatchObject({
+      from: a,
+      to: b,
+      reason: 'Paired by hand',
+      confidence: 1,
+      source: 'user',
+      membrane: 'coasys'
+    })
+    expect(meta.listEdges({ node: b })).toHaveLength(1)
+    // Another kind between the same pair is another edge.
+    const ref = meta.addEdge({ from: a, to: b, kind: 'references', reason: 'cites it', source: 'rethink' })
+    expect(ref.id).not.toBe(e1.id)
+    expect(() => meta.addEdge({ from: a, to: b, kind: 'nope' as never, reason: '', source: 'sync' })).toThrow(/kind/)
+    expect(e1).toMatchObject({ kind: 'related', accepted: false })
+    expect(meta.acceptEdge(e1.id)).toBe(true)
+    expect(meta.acceptEdge('forge-edge://none')).toBe(false)
+    // Re-adding keeps the acceptance.
+    expect(meta.addEdge({ from: a, to: b, reason: 'again', source: 'rethink' })).toMatchObject({ accepted: true })
+    expect(meta.deleteEdge(ref.id)).toBe(true)
+    expect(meta.listEdges({ membrane: 'home' })).toHaveLength(0)
+    expect(() => meta.addEdge({ from: a, to: a, reason: '', source: 'sync' })).toThrow(/itself/)
+    expect(meta.deleteEdge(e1.id)).toBe(true)
+    expect(meta.listEdges()).toEqual([])
+    meta.dispose()
+  })
+
+  it('keeps views and edges across a restart with AD4M down, then replays them', async () => {
+    const ad4m = createFakeAd4m()
+    ad4m.down()
+    const dir = tempDir()
+    const first = open(dir, ad4m)
+    await first.settled()
+    const view = first.saveView({
+      membrane: 'coasys',
+      title: 'All',
+      repos: ['coasys/ad4m'],
+      filters: { states: ['open'] }
+    })
+    const later = first.saveView({ membrane: 'coasys', title: 'Later', position: 2 })
+    const sooner = first.saveView({ membrane: 'coasys', title: 'Sooner', position: 1 })
+    const added = first.addEdge({
+      from: 'task:1',
+      to: 'plan:we/plans/x.md',
+      reason: 'plan names it',
+      source: 'rethink'
+    })
+    first.acceptEdge(added.id)
+    const edge = { ...added, accepted: true }
+    first.dispose()
+
+    const second = open(dir, ad4m)
+    expect(second.getView(view.id)).toEqual(view)
+    expect(second.listEdges()).toEqual([edge])
+    expect(second.status().pending).toBe(5)
+
+    ad4m.up()
+    await until(() => second.status().pending === 0 && second.status().loadedFromBackend)
+    const fresh = open(tempDir(), ad4m)
+    await fresh.settled()
+    expect(fresh.getView(view.id)).toEqual(view)
+    expect(fresh.listEdges()).toEqual([edge])
+    expect(fresh.listViews('coasys').map((v) => v.id)).toEqual([sooner.id, later.id, view.id])
+
+    // Delete replays too, and leaves nothing of the view in AD4M.
+    fresh.deleteView(view.id)
+    await until(() => fresh.status().pending === 0)
+    expect(ad4m.count({ source: view.id })).toBe(0)
+    second.dispose()
+    fresh.dispose()
+  })
+
+  it('keeps decisions through AD4M: written while down, replayed, read back whole from the links', async () => {
+    const ad4m = createFakeAd4m()
+    ad4m.down()
+    const dir = tempDir()
+    const first = open(dir, ad4m)
+    await first.settled()
+    const full = first.putDecision({
+      id: 'forge-decision://coasys/d1',
+      membrane: 'coasys',
+      question: 'Which "store" for the index?',
+      context: 'Two lines\nof context',
+      options: ['SQLite', 'Postgres, with a pool'],
+      source: { kind: 'thread', ref: 'thread-a', label: 'Indexer thread' },
+      group: 'Index',
+      threadId: 'thread-a',
+      status: 'resolved',
+      resolution: 'SQLite',
+      createdAt: '2026-10-30T01:00:00.000Z',
+      resolvedAt: '2026-10-30T02:00:00.000Z',
+      createdBy: 'thread-a'
+    })
+    const bare = first.putDecision({
+      id: 'forge-decision://home/d2',
+      membrane: 'home',
+      question: 'Paint the shed?',
+      status: 'open',
+      createdAt: '2026-10-30T00:00:00.000Z'
+    })
+    expect(() => first.putDecision({ ...bare, membrane: '' })).toThrow(/membrane/)
+    first.dispose()
+
+    ad4m.up()
+    const second = open(dir, ad4m)
+    await until(() => second.status().pending === 0 && second.status().loadedFromBackend)
+    const fresh = open(tempDir(), ad4m)
+    await fresh.settled()
+    expect(fresh.listDecisions()).toEqual([bare, full])
+    expect(fresh.listDecisions('coasys')).toEqual([full])
+    // A replace leaves one set of links.
+    fresh.putDecision({ ...bare, group: 'Garden' })
+    await until(() => fresh.status().pending === 0)
+    expect(ad4m.count({ source: bare.id, predicate: 'forge://group' })).toBe(1)
+    second.dispose()
+    fresh.dispose()
+  })
+})

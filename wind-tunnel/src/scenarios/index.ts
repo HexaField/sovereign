@@ -35,7 +35,7 @@ import { s31SubagentLifecycle } from './s31-subagent-lifecycle.js'
 import { s32LiteLlmRoundtrip } from './s32-litellm-roundtrip.js'
 import { s33SlashCommands } from './s33-slash-commands.js'
 import { s34FileAttachments } from './s34-file-attachments.js'
-import { s35CiWatch } from './s35-ci-watch.js'
+import { s35PrWatch } from './s35-pr-watch.js'
 import { s36EditToolsOverScripts } from './s36-edit-tools-over-scripts.js'
 import { s37OneSpeaker } from './s37-one-speaker.js'
 import { s38StreamingStt } from './s38-streaming-stt.js'
@@ -43,6 +43,13 @@ import { s39OverlappingReplies } from './s39-overlapping-replies.js'
 import { s40PttStream } from './s40-ptt-stream.js'
 import { s41RecycleGate } from './s41-recycle-gate.js'
 import { s42DeviceFiles } from './s42-device-files.js'
+import { s43ForgeGithub } from './s43-forge-github.js'
+import { s44TaskPersistence } from './s44-task-persistence.js'
+import { s45ForgeWorkGraph } from './s45-forge-work-graph.js'
+import { s46ForgeWired } from './s46-forge-wired.js'
+import { s47ForgeRethink } from './s47-forge-rethink.js'
+import { s48Graphcoder } from './s48-graphcoder.js'
+import { s49GraphcoderStructure } from './s49-graphcoder-structure.js'
 
 export const ALL_SCENARIOS: Scenario[] = [
   s1ColdStart,
@@ -133,12 +140,27 @@ export const ALL_SCENARIOS: Scenario[] = [
   // via POST /api/chat/send travels through the queue sidecar and arrives
   // at the mock LLM as image content blocks.
   s34FileAttachments,
-  s35CiWatch,
+  s35PrWatch,
   s36EditToolsOverScripts,
   s37OneSpeaker,
   s38StreamingStt,
   s39OverlappingReplies,
   s40PttStream,
   s41RecycleGate,
-  s42DeviceFiles
+  s42DeviceFiles,
+  // Forge: the GitHub adapter (packages/forges) driven from the runner
+  // against the mock GitHub container.
+  s43ForgeGithub,
+  // Task graph persistence (Forge P0a): tasks, streams, links, views and edges
+  // survive a container restart; in the ad4m lane, also an AD4M outage.
+  s44TaskPersistence,
+  // Forge: the work graph service (/api/forge) against the mock GitHub.
+  s45ForgeWorkGraph,
+  s46ForgeWired,
+  // Forge Loop 2: rethink thread, digest prompt, run reports, forge_* tools.
+  s47ForgeRethink,
+  // Graphcoder P0: status and stats of an indexed checkout the code index found.
+  s48Graphcoder,
+  // Graphcoder P1: the structure of a change (symbols, module, reach, tests), then cached.
+  s49GraphcoderStructure
 ]

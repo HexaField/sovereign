@@ -1,0 +1,228 @@
+// task_import: parsing refKeys, URLs and plans, and importing them idempotently.
+
+import { trustedAuthorsOf } from '@sovereign/core'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createTaskImporter, parseImportTarget } from './import.js'
+import { createTaskService, type TaskService } from './service.js'
+import { createInMemoryTaskStore } from './store.js'
+import { makeBus } from './testing/helpers.js'
+
+describe('parseImportTarget', () => {
+  it('parses a refKey (kind unknown until GitHub is asked)', () => {
+    expect(parseImportTarget({ ref: 'github:github.com/coasys/ad4m#1390' })).toEqual({
+      type: 'forge',
+      ref: { forge: 'github', host: 'github.com', repo: 'coasys/ad4m', kind: 'change', id: '1390' }
+    })
+  })
+
+  it('parses the owner/name#N shorthand', () => {
+    expect(parseImportTarget({ ref: 'coasys/we#159' })).toMatchObject({
+      type: 'forge',
+      ref: { repo: 'coasys/we', id: '159' }
+    })
+  })
+
+  it('parses PR and issue URLs, with extra path and query', () => {
+    expect(parseImportTarget({ url: 'https://github.com/coasys/ad4m/pull/712/files?w=1' })).toEqual({
+      type: 'forge',
+      kind: 'change',
+      ref: { forge: 'github', host: 'github.com', repo: 'coasys/ad4m', kind: 'change', id: '712' }
+    })
+    expect(parseImportTarget({ url: 'https://github.com/coasys/we/issues/12#issuecomment-1' })).toEqual({
+      type: 'forge',
+      kind: 'issue',
+      ref: { forge: 'github', host: 'github.com', repo: 'coasys/we', kind: 'issue', id: '12' }
+    })
+  })
+
+  it('parses a plan and trims a leading slash', () => {
+    expect(parseImportTarget({ plan: { project: 'sovereign', path: '/plans/forge.md' } })).toEqual({
+      type: 'plan',
+      project: 'sovereign',
+      path: 'plans/forge.md'
+    })
+  })
+
+  it('rejects anything else with a clear message', () => {
+    expect(() => parseImportTarget({})).toThrow(/exactly one/)
+    expect(() => parseImportTarget({ ref: 'coasys/we#1', url: 'https://github.com/coasys/we/pull/1' })).toThrow(
+      /exactly one/
+    )
+    expect(() => parseImportTarget({ ref: 'github:github.com/coasys/we@feat/x' })).toThrow(/refKey/)
+    expect(() => parseImportTarget({ ref: 'radicle:seed.example/rad:z3abc#abc' })).toThrow(/Only GitHub/)
+    expect(() => parseImportTarget({ ref: 'github:github.com/coasys/we#abc' })).toThrow(/numeric/)
+    expect(() => parseImportTarget({ url: 'https://gitlab.com/a/b/-/merge_requests/1' })).toThrow(/github.com/)
+    expect(() => parseImportTarget({ url: 'https://github.com/coasys/we/tree/main' })).toThrow(/pull request or issue/)
+    expect(() => parseImportTarget({ url: 'not a url' })).toThrow(/Not a URL/)
+    expect(() => parseImportTarget({ plan: { project: 'a/b', path: 'x.md' } })).toThrow(/project id/)
+  })
+})
+
+describe('task importer', () => {
+  let svc: TaskService
+  let sent: Array<{ threadId: string; text: string }>
+  let exec: ReturnType<typeof vi.fn>
+
+  function prJson(state = 'OPEN') {
+    return JSON.stringify({
+      state,
+      isDraft: false,
+      reviewDecision: null,
+      statusCheckRollup: [],
+      title: 'Add the widget',
+      headRefName: 'feat/widget',
+      comments: []
+    })
+  }
+
+  beforeEach(() => {
+    svc = createTaskService({ store: createInMemoryTaskStore(), bus: makeBus().bus })
+    sent = []
+    exec = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === 'api') return { stdout: args[1].endsWith('/7') ? 'false\n' : 'true\n' }
+      if (args[0] === 'pr') return { stdout: prJson() }
+      if (args[0] === 'issue')
+        return {
+          stdout: JSON.stringify({
+            title: 'Crash on start',
+            state: 'OPEN',
+            url: 'https://github.com/org/repo/issues/7'
+          })
+        }
+      throw new Error(`unexpected gh ${args.join(' ')}`)
+    })
+  })
+
+  function importer() {
+    const sendToThread = async (threadId: string, text: string) => void sent.push({ threadId, text })
+    return { importer: createTaskImporter({ taskService: svc, sendToThread, exec: exec as never }) }
+  }
+
+  it('imports a refKey that GitHub says is a PR, once', async () => {
+    const { importer: imp } = importer()
+    const first = await imp.import({ ref: 'github:github.com/org/repo#42', membrane: 'coasys', sourceThreadId: 't' })
+    const again = await imp.import({ url: 'https://github.com/org/repo/pull/42', sourceThreadId: 't' })
+    expect(first.created).toBe(true)
+    expect(again.created).toBe(false)
+    expect(again.task.id).toBe(first.task.id)
+    expect(first.task).toMatchObject({ membrane: 'coasys', provider: { kind: 'change', status: 'open' } })
+    // The second import knew the item: no second "PR or issue?" call.
+    expect(exec.mock.calls.filter((c) => c[1][0] === 'api')).toHaveLength(1)
+    expect(first.task).toMatchObject({ name: 'PR #42: Add the widget', state: 'pending', threadId: null })
+    expect(first.task.description).toContain('Branch: feat/widget')
+    expect(sent).toEqual([])
+  })
+
+  it('imports a PR URL for a thread: assigned, in progress, prompted; a later import adds a missing membrane', async () => {
+    const { importer: imp } = importer()
+    exec.mockImplementationOnce(async () => ({ stdout: JSON.stringify({ ...JSON.parse(prJson()), isDraft: true }) }))
+    const { task } = await imp.import({
+      url: 'https://github.com/org/repo/pull/9',
+      threadId: 'th',
+      sourceThreadId: 't'
+    })
+    expect(task).toMatchObject({ threadId: 'th', state: 'in_progress', membrane: null, provider: { status: 'draft' } })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ threadId: 'th' })
+    expect(sent[0].text).toContain('gh pr checks 9 -R org/repo')
+    const again = await imp.import({ url: 'https://github.com/org/repo/pull/9', membrane: 'acme', sourceThreadId: 't' })
+    expect(again).toMatchObject({ created: false, task: { id: task.id, membrane: 'acme' } })
+    expect(exec.mock.calls.filter((c) => c[1][0] === 'pr')).toHaveLength(1)
+  })
+
+  it('imports a refKey that GitHub says is an issue, assigns it and sends the prompt', async () => {
+    const { importer: imp } = importer()
+    const { task, created } = await imp.import({
+      ref: 'github:github.com/org/repo#7',
+      threadId: 'thread-1',
+      sourceThreadId: 't'
+    })
+    expect(created).toBe(true)
+    expect(task).toMatchObject({
+      name: 'Issue #7: Crash on start',
+      threadId: 'thread-1',
+      state: 'in_progress',
+      provider: { kind: 'issue', issueState: 'open', refs: [{ kind: 'issue', repo: 'org/repo', id: '7' }] }
+    })
+    expect(sent).toHaveLength(1)
+    expect(sent[0].text).toContain('gh issue view 7 -R org/repo')
+    const again = await imp.import({ url: 'https://github.com/org/repo/issues/7', sourceThreadId: 't' })
+    expect(again).toMatchObject({ created: false, task: { id: task.id } })
+  })
+
+  describe('forge.trustedAuthors', () => {
+    const lists: Record<string, string[]> = { acme: ['alex-dev'], '*': ['sam-reporter'] }
+    function trusting() {
+      exec.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args[0] === 'api' && args[3] === '.user.login')
+          return { stdout: args[1].endsWith('/66') || args[1].endsWith('/8') ? 'drive-by\n' : 'Alex-Dev\n' }
+        if (args[0] === 'api') return { stdout: args[1].endsWith('/8') ? 'false\n' : 'true\n' }
+        if (args[0] === 'pr') return { stdout: prJson() }
+        if (args[0] === 'issue') return { stdout: JSON.stringify({ title: 'Run this', state: 'OPEN' }) }
+        throw new Error(`unexpected gh ${args.join(' ')}`)
+      })
+      const sendToThread = async (threadId: string, text: string) => void sent.push({ threadId, text })
+      return createTaskImporter({
+        taskService: svc,
+        sendToThread,
+        exec: exec as never,
+        trustedAuthors: (m) => trustedAuthorsOf(lists, m)
+      })
+    }
+
+    it("refuses an untrusted author's PR or issue before it reads or stores anything else", async () => {
+      const imp = trusting()
+      await expect(
+        imp.import({
+          url: 'https://github.com/org/repo/pull/66',
+          membrane: 'acme',
+          threadId: 'th',
+          sourceThreadId: 't'
+        })
+      ).rejects.toThrow('org/repo#66 by drive-by: author not in forge.trustedAuthors')
+      await expect(imp.import({ ref: 'org/repo#8', sourceThreadId: 't' })).rejects.toThrow(
+        'org/repo#8 by drive-by: author not in forge.trustedAuthors'
+      )
+      expect(await svc.findByProviderKey('github:github.com/org/repo#66')).toBeFalsy()
+      expect(exec.mock.calls.filter((c) => c[1][0] === 'pr' || c[1][0] === 'issue')).toHaveLength(0)
+      expect(sent).toEqual([])
+    })
+
+    it("imports a trusted author's item (case-insensitive), by the membrane's list", async () => {
+      const imp = trusting()
+      const { created } = await imp.import({
+        url: 'https://github.com/org/repo/pull/42',
+        membrane: 'acme',
+        sourceThreadId: 't'
+      })
+      expect(created).toBe(true)
+      // No membrane: the "*" list, which does not hold alex-dev.
+      await expect(imp.import({ url: 'https://github.com/org/repo/pull/43', sourceThreadId: 't' })).rejects.toThrow(
+        'org/repo#43 by Alex-Dev: author not in forge.trustedAuthors'
+      )
+    })
+
+    it('no list: no author check', async () => {
+      const { importer: imp } = importer()
+      await imp.import({ url: 'https://github.com/org/repo/pull/66', membrane: 'acme', sourceThreadId: 't' })
+      expect(exec.mock.calls.some((c) => c[1][3] === '.user.login')).toBe(false)
+    })
+  })
+
+  it('imports a plan with no GitHub call, under a stream', async () => {
+    const { importer: imp } = importer()
+    const stream = await svc.createStream({ name: 'Forge', sourceThreadId: 't' })
+    const { task } = await imp.import({
+      plan: { project: 'sovereign', path: 'plans/forge.md', name: 'Forge plan' },
+      parentTaskIds: [stream.id],
+      sourceThreadId: 't'
+    })
+    expect(task).toMatchObject({
+      name: 'Forge plan',
+      provider: { kind: 'plan', project: 'sovereign', path: 'plans/forge.md', status: 'planned' },
+      parentTasks: [{ id: stream.id }]
+    })
+    expect(exec).not.toHaveBeenCalled()
+    expect((await svc.findByProviderKey('plan:sovereign/plans/forge.md'))!.id).toBe(task.id)
+  })
+})

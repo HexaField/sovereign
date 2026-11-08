@@ -81,7 +81,7 @@ export function createThreadActions(opts: ThreadActionsOptions = {}) {
         opts.onDeleted?.(id)
         return true
       } catch (err) {
-        setError((err as Error).message || 'Delete failed')
+        setError((err as Error).message || 'Archive failed')
         return false
       } finally {
         setDeletingKey(null)

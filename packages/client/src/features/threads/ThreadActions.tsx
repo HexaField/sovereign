@@ -129,14 +129,14 @@ function MenuPanel(props: { actions: ThreadActions; thread: { id: string; presen
                 {...hover}
                 onClick={() => props.actions.askDelete(id())}
               >
-                Delete
+                Archive
               </button>
             </Show>
           </>
         }
       >
         <div class="px-3 pt-2 pb-1.5" style={{ color: 'var(--c-text)' }}>
-          Delete this thread? This can't be undone.
+          Archive this thread? Its history is kept.
         </div>
         <div class="flex justify-end gap-1 px-2 pb-2">
           <button
@@ -155,7 +155,7 @@ function MenuPanel(props: { actions: ThreadActions; thread: { id: string; presen
             onClick={() => void props.actions.confirmDelete(id())}
             ref={(el) => setTimeout(() => el.focus(), 0)}
           >
-            {props.actions.isDeleting(id()) ? 'Deleting…' : 'Delete'}
+            {props.actions.isDeleting(id()) ? 'Archiving…' : 'Archive'}
           </button>
         </div>
       </Show>
