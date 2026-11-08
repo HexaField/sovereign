@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { HarnessProfile, ModelEndpoint } from '@sovereign/config'
 import { ENDPOINT_KEY_ENV, type HarnessAdapter } from './adapter.js'
+import { devinAdapter } from './adapters/devin.js'
 import {
   buildHarnessBrief,
   bwrapArgs,
@@ -231,14 +232,26 @@ const fakeAdapter: HarnessAdapter = {
   },
   report(stdout) {
     return stdout.trim()
-  }
+  },
+  textStdout: true
 }
+
+const EVENT_NAMES = [
+  'session.info',
+  'subagent.spawned',
+  'chat.status',
+  'chat.stream',
+  'chat.turn',
+  'subagent.completed',
+  'subagent.failed'
+] as const
 
 describe('createHarnessRunner', () => {
   let bin: string
   let work: string
   let dataDir: string
   let delivered: Array<[string, string]>
+  let events: Array<{ name: string; data: any }>
   let runner: HarnessRunner | undefined
   let profiles: Record<string, HarnessProfile>
   let endpoints: Record<string, ModelEndpoint>
@@ -251,6 +264,7 @@ describe('createHarnessRunner', () => {
     work = path.join(home, 'workspaces', 'coasys', 'ad4m')
     dataDir = path.join(tmp, 'data')
     delivered = []
+    events = []
     lastRunDirs = []
     profiles = {
       claude: { adapter: 'claude' },
@@ -278,7 +292,6 @@ describe('createHarnessRunner', () => {
       endpoints: () => endpoints,
       secret: (name) => (name === 'cloudKey' ? 'sk-cloud' : undefined),
       mcpServers: (cwd) => ({ code: { type: 'stdio', command: 'node', args: ['--edit-roots', cwd], env: {} } }),
-      deliver: (parentKey, text) => delivered.push([parentKey, text]),
       pathEnv: bin,
       env: { PATH: '/usr/bin:/bin', HOME: home, SSH_AUTH_SOCK: '/run/ssh.sock', GH_TOKEN: 'gh' },
       adapters: {
@@ -292,6 +305,13 @@ describe('createHarnessRunner', () => {
       },
       ...overrides
     })
+    // The parent's message rides on the run's last event: wiring delivers it, once.
+    for (const name of EVENT_NAMES) {
+      runner.on(name, (data: any) => {
+        events.push({ name, data })
+        if (data.parentMessage) delivered.push([data.parentKey, data.parentMessage])
+      })
+    }
     return runner
   }
 
@@ -331,7 +351,7 @@ describe('createHarnessRunner', () => {
     expect(text).toContain(`Transcript: ${keep}`)
     expect(text).toMatch(new RegExp(`Session: ${key}$`))
     expect(fs.readFileSync(path.join(keep, 'output.log'), 'utf8')).toContain('Fixed it.')
-    expect(fs.readdirSync(keep).sort()).toEqual(['export', 'output.log'])
+    expect(fs.readdirSync(keep).sort()).toEqual(['export', 'output.log', 'run.json'])
     expect(fs.existsSync(lastRunDirs[0])).toBe(false)
     // It ran in the real cwd with the filtered env: no SSH agent, no forge token.
     expect(fs.readFileSync(path.join(work, '.fake-cwd'), 'utf8').trim()).toBe(work)
@@ -485,6 +505,152 @@ describe('createHarnessRunner', () => {
     expect(delivered[0][1]).toContain(`Session: ${key}`)
     make().recoverInterrupted()
     expect(delivered).toHaveLength(1)
+  })
+
+  it("emits a Claude subagent's events in order, with the parent's message on the last one only", async () => {
+    const r = make()
+    const key = await r.spawn('parent-1', { harness: 'fake', task: 'Fix the bug.', cwd: work, label: 'fix bug' })
+    await until(() => events.some((e) => e.name === 'subagent.completed'))
+    const names = events.map((e) => e.name).filter((n) => n !== 'chat.stream')
+    expect(names).toEqual([
+      'session.info',
+      'subagent.spawned',
+      'chat.status',
+      'chat.turn',
+      'chat.status',
+      'subagent.completed'
+    ])
+    const of = (name: string) => events.filter((e) => e.name === name).map((e) => e.data)
+    expect(of('session.info')[0]).toEqual({ sessionKey: key, label: 'fix bug', history: [], backendKind: 'harness' })
+    expect(of('subagent.spawned')[0]).toEqual({
+      parentKey: 'parent-1',
+      childKey: key,
+      task: 'Fix the bug.',
+      label: 'fix bug',
+      backendKind: 'harness'
+    })
+    expect(of('chat.status').map((d) => d.status)).toEqual(['working', 'idle'])
+    // stdout streams into the view as the model writes it (a text-stdout adapter).
+    expect(
+      of('chat.stream')
+        .map((d) => d.text)
+        .join('')
+    ).toContain('Fixed it.')
+    expect(of('chat.turn')[0].turn).toMatchObject({ role: 'assistant', content: expect.stringMatching(/^Fixed it\./) })
+    const done = of('subagent.completed')[0]
+    expect(done).toMatchObject({ parentKey: 'parent-1', childKey: key, label: 'fix bug', result: expect.any(String) })
+    expect(done.durationMs).toBeGreaterThanOrEqual(0)
+    expect(done.parentMessage).toMatch(/^\[Subagent done: fix bug\] after 1 min\n\nFixed it\./)
+    expect(delivered).toHaveLength(1)
+  })
+
+  it('emits subagent.failed with the error, how it ended, and the parent message', async () => {
+    const r = make()
+    const key = await r.spawn('parent-1', { harness: 'fake', task: 'HANG', cwd: work, label: 'long' })
+    await r.stop(key)
+    await until(() => events.some((e) => e.name === 'subagent.failed'))
+    const failed = events.find((e) => e.name === 'subagent.failed')!.data
+    expect(failed).toMatchObject({
+      parentKey: 'parent-1',
+      childKey: key,
+      label: 'long',
+      error: 'stopped by the parent',
+      ended: 'stopped',
+      parentMessage: expect.stringMatching(/^\[Subagent failed: long\]/)
+    })
+    expect(events.filter((e) => e.name === 'subagent.completed')).toEqual([])
+    expect(delivered).toHaveLength(1)
+  })
+
+  it('tracks each run under its parent in activeSessions while it runs', async () => {
+    const calls: string[] = []
+    const r = make({
+      activeSessions: {
+        addSubagent: (parent, sub) => calls.push(`add ${parent} ${sub.agentId} ${sub.label}`),
+        removeSubagent: (parent, id) => calls.push(`remove ${parent} ${id}`)
+      }
+    })
+    const key = await r.spawn('parent-1', { harness: 'fake', task: 't', cwd: work, label: 'l' })
+    expect(calls).toEqual([`add parent-1 ${key} l`])
+    await until(() => delivered.length === 1)
+    expect(calls).toEqual([`add parent-1 ${key} l`, `remove parent-1 ${key}`])
+  })
+
+  it('serves a finished run as turns: the task, then stdout as the report', async () => {
+    const r = make()
+    const key = await r.spawn('parent-1', { harness: 'fake', task: 'Fix the bug.', cwd: work, label: 'fix bug' })
+    await until(() => delivered.length === 1)
+    const turns = r.history(key)!
+    expect(turns.map((t) => t.role)).toEqual(['user', 'assistant'])
+    expect(turns[0].content).toBe('Fix the bug.')
+    expect(turns[1]).toMatchObject({ content: expect.stringMatching(/^Fixed it\./), workItems: [] })
+    expect(turns[1].streaming).toBeFalsy()
+    expect(r.record(key)).toMatchObject({ status: 'completed', parentKey: 'parent-1', adapter: 'pi', label: 'fix bug' })
+    expect(r.records('parent-1').map((x) => x.sessionKey)).toEqual([key])
+    expect(r.records('other')).toEqual([])
+    expect(r.history('harness-00000000-0000-0000-0000-000000000000')).toBeNull()
+    expect(r.history('../../etc')).toBeNull()
+  })
+
+  it('serves a running run with its stdout so far as a streaming turn', async () => {
+    fs.writeFileSync(path.join(bin, 'fake-harness'), '#!/bin/sh\necho "Looking at it."\nsleep 30\n', { mode: 0o755 })
+    const r = make()
+    const key = await r.spawn('parent-1', { harness: 'fake', task: 'Slow task', cwd: work })
+    await until(() => (r.history(key)?.[1]?.content ?? '') !== '')
+    const turns = r.history(key)!
+    expect(turns[1]).toMatchObject({ role: 'assistant', content: 'Looking at it.', streaming: true })
+    expect(r.record(key)?.status).toBe('working')
+  })
+
+  it("serves a finished Devin run from its ATIF export, ending on the transcript's report", async () => {
+    const r = make({
+      adapters: { pi: { ...fakeAdapter, transcript: devinAdapter.transcript, textStdout: true } }
+    })
+    const key = await r.spawn('parent-1', { harness: 'fake', task: 'Fix the off-by-one.', cwd: work })
+    await until(() => delivered.length === 1)
+    fs.copyFileSync(
+      path.join(import.meta.dirname, 'atif.fixture.json'),
+      path.join(dataDir, 'agent-backend', 'harness', key, 'export')
+    )
+    const turns = r.history(key)!
+    expect(turns.map((t) => t.role)).toEqual(['user', 'assistant', 'assistant'])
+    expect(turns[0].content).toBe('Fix the off-by-one.')
+    expect(turns[1].workItems.filter((w) => w.type === 'tool_call').map((w) => w.name)).toEqual([
+      'read_file',
+      'mcp__code__edit'
+    ])
+    // The report is the transcript's last message: not repeated after it.
+    expect(turns[2].content).toMatch(/^Fixed the loop bound/)
+  })
+
+  it('serves a failed run with the error as a closing system turn', async () => {
+    const r = make()
+    const key = await r.spawn('parent-1', { harness: 'fake', task: 'FAIL', cwd: work })
+    await until(() => delivered.length === 1)
+    const turns = r.history(key)!
+    const last = turns[turns.length - 1]
+    expect(last).toMatchObject({ role: 'system', kind: { variant: 'agent-error', label: 'Subagent failed' } })
+    expect(last.content).toMatch(/^Run finished with an error: pi exited with code 1/)
+    expect(last.content).toContain('boom: model refused')
+    expect(r.record(key)?.status).toBe('failed')
+  })
+
+  it('marks a run a restart cut off as failed in its record and emits subagent.failed', async () => {
+    const first = make()
+    const key = await first.spawn('parent-1', { harness: 'fake', task: 'HANG', cwd: work, label: 'long job' })
+    first.dispose()
+    events = []
+    const second = make()
+    second.recoverInterrupted()
+    expect(events.map((e) => e.name)).toEqual(['subagent.failed'])
+    expect(events[0].data).toMatchObject({
+      parentKey: 'parent-1',
+      childKey: key,
+      error: 'cut off by a Sovereign restart'
+    })
+    expect(second.record(key)).toMatchObject({ status: 'failed', error: 'cut off by a Sovereign restart' })
+    const turns = second.history(key)!
+    expect(turns[turns.length - 1].content).toMatch(/cut off by a Sovereign restart/)
   })
 
   it.runIf(fs.existsSync('/usr/bin/bwrap'))('runs under bwrap: credentials hidden, cwd writable', async () => {

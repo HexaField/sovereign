@@ -116,6 +116,23 @@ describe('devin adapter', () => {
   it('reports stdout without the login banner', () => {
     expect(devinAdapter.report('Logged in as a@example.com\nOrg: x\n\nFixed.\n', '')).toBe('Fixed.')
   })
+
+  it("reports the export's last agent message, not stdout's run-together progress remarks", () => {
+    const exportFile = path.join(tmp, 'export.json')
+    fs.writeFileSync(
+      exportFile,
+      JSON.stringify({
+        steps: [
+          { source: 'user', message: 'Fix it.' },
+          { source: 'agent', message: 'Fixing it.' },
+          { source: 'agent', message: '## Report\n\nFixed the range.' }
+        ]
+      })
+    )
+    expect(devinAdapter.report('Fixing it.## Report\n\nFixed the range.', exportFile)).toBe(
+      '## Report\n\nFixed the range.'
+    )
+  })
 })
 
 describe('trustWorkspace', () => {

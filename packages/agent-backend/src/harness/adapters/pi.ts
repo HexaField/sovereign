@@ -55,5 +55,7 @@ export const piAdapter: HarnessAdapter = {
 
   report(stdout) {
     return plainText(stdout).trim()
-  }
+  },
+
+  textStdout: true
 }

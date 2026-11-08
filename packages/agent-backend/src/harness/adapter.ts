@@ -1,6 +1,7 @@
 // One CLI agent harness, adapted to Sovereign's runner (runner.ts).
 
 import type { HarnessProfile, ModelEndpoint } from '@sovereign/config'
+import type { ParsedTurn } from '@sovereign/core'
 import type { McpServerSpec } from './mcp.js'
 
 /** The env var a run's endpoint key travels in; per-run configs reference it, never the key. */
@@ -52,6 +53,11 @@ export interface HarnessAdapter {
   prepare(run: HarnessRun): HarnessCommand
   /** The final report from stdout and/or the export file. */
   report(stdout: string, exportFile: string): string
+  /** The run's assistant turns (text, reasoning, tool calls), from stdout and/or the export file;
+   *  `at` stands in for times the transcript lacks. Without it, the subagent view shows stdout. */
+  transcript?(stdout: string, exportFile: string, at: number): ParsedTurn[]
+  /** stdout is the model's text as it writes it (not JSON events): streamed live into the subagent view. */
+  textStdout?: boolean
 }
 
 const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g')

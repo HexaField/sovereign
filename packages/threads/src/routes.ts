@@ -814,7 +814,8 @@ export function createThreadRoutes(
       return res.json({ backends: [], defaultBackend: null })
     }
     const routing = opts.backend as RoutingBackend
-    const all = routing.all()
+    // A session owner (the harness runs) is not a backend a thread can pick.
+    const all = routing.all().filter((inst) => !inst.backend.ownsSession)
     const def = routing.default()
     res.json({
       backends: all.map((inst) => ({

@@ -22,6 +22,7 @@ import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.j
 import { createMetricsAccumulator, type MetricsAccumulator } from './metrics.js'
 import { buildSovereignMcpDeps, type SubagentDefaults } from './mcp-deps.js'
 import { createEmbeddingsService } from './embeddings-service.js'
+import { createHarnessBackend } from './harness/backend.js'
 import { createHarnessRunner } from './harness/runner.js'
 import { harnessMcpServers } from './harness/mcp.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
@@ -307,7 +308,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const embeddingsService = createEmbeddingsService({ dataDir: input.dataDir })
 
   // agents_spawn with a non-claude harness profile (Devin, Codex, OpenCode, Pi):
-  // CLI runs, results delivered like Claude subagents'.
+  // CLI runs that routing serves as subagent sessions (harness/backend.ts), so
+  // their cards, views and parent messages are a Claude subagent's.
   const harnessProfiles = () => configStore.get<Record<string, HarnessProfile>>('agentBackend.harnesses') ?? {}
   const harnessClaudeConfig = claudeCodeConfigGetter(configStore, dataDir, input.configDir)
   const harnessRunner = createHarnessRunner({
@@ -322,7 +324,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
         cwd,
         claudeJsonPath: `${process.env.HOME ?? ''}/.claude.json`
       }),
-    deliver: (parentKey, text) => deliverToParent(parentKey, text)
+    activeSessions
   })
 
   const sharedMcpDeps = buildSovereignMcpDeps({
@@ -379,6 +381,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     registry: sessionsRegistry,
     enabledKinds: () =>
       (configStore.get<AgentBackendKind[]>('agentBackend.enabled') as AgentBackendKind[]) ?? enabledBackends,
+    owners: [createHarnessBackend(harnessRunner)],
     factories: {
       'claude-code': () => {
         const orgRoots = () => orgManager.listOrgs().map((o) => o.path)

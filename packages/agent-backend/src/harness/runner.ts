@@ -1,8 +1,10 @@
 // The runner for `agents_spawn` harnesses other than Claude Code (Devin,
 // Codex, OpenCode, Pi): one non-interactive CLI process per run, configured
-// per run by its adapter (adapters/*.ts), with one [Subagent done: …] /
-// [Subagent failed: …] message to the parent when it ends, as for a Claude
-// Code subagent.
+// per run by its adapter (adapters/*.ts). It emits a Claude Code subagent's
+// events (session.info, subagent.spawned, chat.stream/turn/status, then
+// subagent.completed or subagent.failed with the parent's [Subagent done: …]
+// / [Subagent failed: …] message), and keeps each run's record (run.json)
+// and transcript, so the subagent view can show it (backend.ts).
 //
 // The rules it enforces for every harness:
 // 1. The cwd's real path lies under the profile's allowedRoots, and never in a
@@ -28,13 +30,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { HarnessProfile, ModelEndpoint } from '@sovereign/config'
-import { formatSubagentResult } from '@sovereign/core'
+import { formatSubagentResult, type AgentBackendEvents, type ParsedTurn } from '@sovereign/core'
+import { createBackendEmitter } from '@sovereign/primitives'
+import type { ActiveSessions } from '../active-sessions.js'
 import {
   buildSubagentSystemPrompt,
   MAX_SUBAGENTS_PER_PARENT,
   SUBAGENT_TIMEOUT_MS
 } from '../claude-code/subagent-runner.js'
-import { ENDPOINT_KEY_ENV, type HarnessAdapter } from './adapter.js'
+import { ENDPOINT_KEY_ENV, plainText, type HarnessAdapter } from './adapter.js'
 import { codexAdapter } from './adapters/codex.js'
 import { devinAdapter } from './adapters/devin.js'
 import { opencodeAdapter } from './adapters/opencode.js'
@@ -271,8 +275,20 @@ export interface HarnessRunSummary {
   startedAt: number
 }
 
+/** A run's record, kept in `<runId>/run.json` after it ends. */
+export interface HarnessRunRecord extends Omit<HarnessRunSummary, 'status'> {
+  status: 'working' | 'completed' | 'failed'
+  adapter: HarnessAdapter['id']
+  endedAt?: number
+  /** The report (the adapter's final answer). */
+  answer?: string
+  error?: string
+  ended?: 'stopped' | 'timed-out'
+  stderrTail?: string
+}
+
 export interface HarnessRunner {
-  /** Start a run; returns its key at once. The parent gets one message when it ends. */
+  /** Start a run; returns its key at once. Its subagent.completed / subagent.failed carries the parent's message. */
   spawn(parentKey: string, opts: HarnessSpawnOptions): Promise<string>
   /** Running runs (finished ones drop out). */
   list(parentKey?: string): HarnessRunSummary[]
@@ -285,6 +301,13 @@ export interface HarnessRunner {
   recoverInterrupted(): void
   /** Kill every run without telling parents: shutdown. The next boot's recoverInterrupted tells them. */
   dispose(): void
+  /** Every run with a record, running or ended, newest first. */
+  records(parentKey?: string): HarnessRunRecord[]
+  record(key: string): HarnessRunRecord | null
+  /** The run as turns: the task, the transcript (else stdout), the report, the failure. Null for an unknown key. */
+  history(key: string): ParsedTurn[] | null
+  on<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void): void
+  off<K extends keyof AgentBackendEvents>(event: K, handler: (data: AgentBackendEvents[K]) => void): void
 }
 
 export interface HarnessRunnerOptions {
@@ -299,8 +322,8 @@ export interface HarnessRunnerOptions {
   secret: (name: string) => string | undefined
   /** The subagent MCP set for a run in `cwd`. */
   mcpServers: (cwd: string) => Record<string, McpServerSpec>
-  /** Deliver the result message into the parent thread. */
-  deliver: (parentKey: string, text: string) => void
+  /** Tracks each run under its parent, as for a Claude Code subagent. */
+  activeSessions?: Pick<ActiveSessions, 'addSubagent' | 'removeSubagent'>
   /** Where to look for the CLIs and bwrap; default the process PATH. */
   pathEnv?: string
   /** The child's environment before filtering; default the process env. */
@@ -319,6 +342,7 @@ interface Run extends HarnessRunSummary {
   stderr: string
   /** Set when the run was cut off rather than ending on its own. */
   ended?: string
+  endedKind?: 'stopped' | 'timed-out'
   disposed?: boolean
   timer?: ReturnType<typeof setTimeout>
   killTimer?: ReturnType<typeof setTimeout>
@@ -370,6 +394,61 @@ export function createHarnessRunner(opts: HarnessRunnerOptions): HarnessRunner {
     fs.renameSync(tmp, runsFile)
   }
 
+  const emitter = createBackendEmitter('harness')
+  const turn = (role: ParsedTurn['role'], content: string, timestamp: number): ParsedTurn => ({
+    role,
+    content,
+    timestamp,
+    workItems: [],
+    thinkingBlocks: []
+  })
+
+  const recordFile = (key: string) => path.join(baseDir, key, 'run.json')
+  function readRecord(key: string): HarnessRunRecord | null {
+    // Keys come from routes: only a run id names a run dir.
+    if (!/^harness-[0-9a-f-]+$/.test(key)) return null
+    try {
+      return JSON.parse(fs.readFileSync(recordFile(key), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+  function writeRecord(record: HarnessRunRecord): void {
+    const file = recordFile(record.sessionKey)
+    if (!fs.existsSync(path.dirname(file))) return
+    const tmp = `${file}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(record, null, 2))
+    fs.renameSync(tmp, file)
+  }
+  function liveRecord(run: Run): HarnessRunRecord {
+    const { sessionKey, parentKey, label, harness, task, cwd, model, startedAt } = run
+    return {
+      sessionKey,
+      parentKey,
+      label,
+      harness,
+      task,
+      cwd,
+      model,
+      startedAt,
+      adapter: run.adapter.id,
+      status: 'working'
+    }
+  }
+
+  function recordOf(key: string): HarnessRunRecord | null {
+    const run = runs.get(key)
+    return run ? liveRecord(run) : readRecord(key)
+  }
+
+  function failureTurn(record: HarnessRunRecord): ParsedTurn {
+    const tail = record.stderrTail && !record.ended ? `\n\nstderr (tail):\n\n\`\`\`\n${record.stderrTail}\n\`\`\`` : ''
+    return {
+      ...turn('system', `Run finished with an error: ${record.error}${tail}`, record.endedAt ?? Date.now()),
+      kind: { variant: 'agent-error', label: 'Subagent failed' }
+    }
+  }
+
   function finish(run: Run, code: number | null, signal: NodeJS.Signals | null): void {
     if (!runs.has(run.sessionKey)) return
     runs.delete(run.sessionKey)
@@ -400,22 +479,43 @@ export function createHarnessRunner(opts: HarnessRunnerOptions): HarnessRunner {
       body = [answer, `stderr (tail):\n\n\`\`\`\n${stderrTail}\n\`\`\``].filter(Boolean).join('\n\n')
     }
     body = [body, `Transcript: ${run.keepDir}`].filter(Boolean).join('\n\n')
-    opts.deliver(
-      run.parentKey,
-      formatSubagentResult({
-        label: run.label,
-        sessionKey: run.sessionKey,
-        durationMs: Date.now() - run.startedAt,
-        result: body,
-        error
+    const endedAt = Date.now()
+    const durationMs = endedAt - run.startedAt
+    const record: HarnessRunRecord = {
+      ...liveRecord(run),
+      status: error ? 'failed' : 'completed',
+      endedAt,
+      ...(answer ? { answer } : {}),
+      ...(error ? { error } : {}),
+      ...(run.endedKind ? { ended: run.endedKind } : {}),
+      ...(error && stderrTail ? { stderrTail } : {})
+    }
+    writeRecord(record)
+
+    const sessionKey = run.sessionKey
+    if (answer) emitter.emit('chat.turn', { sessionKey, turn: turn('assistant', answer, endedAt) })
+    if (error) emitter.emit('chat.turn', { sessionKey, turn: failureTurn(record) })
+    emitter.emit('chat.status', { sessionKey, status: 'idle' })
+    const parentMessage = formatSubagentResult({ label: run.label, sessionKey, durationMs, result: body, error })
+    const about = { parentKey: run.parentKey, childKey: sessionKey, label: run.label, durationMs }
+    if (error) {
+      emitter.emit('subagent.failed', {
+        ...about,
+        error,
+        parentMessage,
+        ...(run.endedKind ? { ended: run.endedKind } : {})
       })
-    )
+    } else {
+      emitter.emit('subagent.completed', { ...about, result: answer, parentMessage })
+    }
+    opts.activeSessions?.removeSubagent(run.parentKey, sessionKey)
   }
 
   /** Cut a run off: SIGTERM to its process group, SIGKILL after a grace period. */
-  function cutOff(run: Run, reason: string): void {
+  function cutOff(run: Run, reason: string, kind: 'stopped' | 'timed-out'): void {
     if (run.ended) return
     run.ended = reason
+    run.endedKind = kind
     const pid = run.child.pid
     if (!pid) return
     killGroup(pid, 'SIGTERM')
@@ -586,8 +686,17 @@ export function createHarnessRunner(opts: HarnessRunnerOptions): HarnessRunner {
       if (child.pid) liveGroups.add(child.pid)
       installExitHook()
       persist()
+      writeRecord(liveRecord(run))
+      // A Claude Code subagent's start: the chat module maps the key on subagent.spawned.
+      emitter.emit('session.info', { sessionKey: key, label, history: [] })
+      emitter.emit('subagent.spawned', { parentKey, childKey: key, task: o.task, label })
+      emitter.emit('chat.status', { sessionKey: key, status: 'working' })
+      opts.activeSessions?.addSubagent(parentKey, { agentId: key, label, startedAt: run.startedAt })
       child.stdout!.setEncoding('utf8').on('data', (d: string) => {
-        if (run.stdout.length < MAX_STDOUT) run.stdout += d
+        if (run.stdout.length >= MAX_STDOUT) return
+        run.stdout += d
+        const text = adapter.textStdout ? plainText(d) : ''
+        if (text) emitter.emit('chat.stream', { sessionKey: key, text })
       })
       child.stderr!.setEncoding('utf8').on('data', (d: string) => {
         run.stderr = (run.stderr + d).slice(-STDERR_TAIL * 2)
@@ -599,7 +708,7 @@ export function createHarnessRunner(opts: HarnessRunnerOptions): HarnessRunner {
       child.on('close', (code, signal) => finish(run, code, signal))
       const timeoutMs = profile.timeoutMinutes ? profile.timeoutMinutes * 60_000 : (o.timeoutMs ?? SUBAGENT_TIMEOUT_MS)
       run.timer = setTimeout(
-        () => cutOff(run, `timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} min`),
+        () => cutOff(run, `timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} min`, 'timed-out'),
         timeoutMs
       )
       return key
@@ -628,7 +737,7 @@ export function createHarnessRunner(opts: HarnessRunnerOptions): HarnessRunner {
     async stop(key) {
       const run = runs.get(key)
       if (!run) throw new Error(`agents_stop: ${key} is not a running harness run`)
-      cutOff(run, 'stopped by the parent')
+      cutOff(run, 'stopped by the parent', 'stopped')
     },
 
     describe() {
@@ -639,16 +748,21 @@ export function createHarnessRunner(opts: HarnessRunnerOptions): HarnessRunner {
       const left = readPersisted().filter((p) => !runs.has(p.sessionKey))
       if (!left.length) return
       persist()
+      const error = 'cut off by a Sovereign restart'
       for (const p of left) {
-        opts.deliver(
-          p.parentKey,
-          formatSubagentResult({
-            label: p.label,
-            sessionKey: p.sessionKey,
-            durationMs: Date.now() - p.startedAt,
-            error: 'cut off by a Sovereign restart'
-          })
-        )
+        const endedAt = Date.now()
+        const durationMs = endedAt - p.startedAt
+        const record = readRecord(p.sessionKey)
+        if (record) writeRecord({ ...record, status: 'failed', endedAt, error })
+        emitter.emit('subagent.failed', {
+          parentKey: p.parentKey,
+          childKey: p.sessionKey,
+          label: p.label,
+          durationMs,
+          error,
+          parentMessage: formatSubagentResult({ label: p.label, sessionKey: p.sessionKey, durationMs, error })
+        })
+        opts.activeSessions?.removeSubagent(p.parentKey, p.sessionKey)
       }
     },
 
@@ -658,6 +772,66 @@ export function createHarnessRunner(opts: HarnessRunnerOptions): HarnessRunner {
         if (run.timer) clearTimeout(run.timer)
         if (run.child.pid) killGroup(run.child.pid, 'SIGKILL')
       }
-    }
+    },
+
+    records(parentKey) {
+      let keys: string[] = []
+      try {
+        keys = fs.readdirSync(baseDir).filter((f) => f.startsWith('harness-'))
+      } catch {
+        /* no runs yet */
+      }
+      const out: HarnessRunRecord[] = []
+      for (const key of new Set([...runs.keys(), ...keys])) {
+        const record = recordOf(key)
+        if (record && (!parentKey || record.parentKey === parentKey)) out.push(record)
+      }
+      return out.sort((a, b) => b.startedAt - a.startedAt)
+    },
+
+    record: recordOf,
+
+    history(key) {
+      const run = runs.get(key)
+      const record = recordOf(key)
+      if (!record) return null
+      const keepDir = path.join(baseDir, key)
+      let stdout = run?.stdout ?? ''
+      if (!run) {
+        try {
+          stdout = fs.readFileSync(path.join(keepDir, 'output.log'), 'utf8')
+        } catch {
+          /* cut off by a restart: no output kept */
+        }
+      }
+      const adapter = run?.adapter ?? adapters[record.adapter]
+      const endedAt = record.endedAt ?? Date.now()
+      let transcript: ParsedTurn[] = []
+      try {
+        transcript = adapter?.transcript?.(stdout, path.join(keepDir, 'export'), endedAt) ?? []
+      } catch {
+        /* an unreadable transcript: stdout stands in */
+      }
+      const turns = [turn('user', record.task, record.startedAt), ...transcript]
+      if (record.status === 'working') {
+        const last = transcript[transcript.length - 1]
+        if (last) last.streaming = true
+        else
+          turns.push({
+            ...turn('assistant', adapter?.textStdout ? plainText(stdout).trim() : '', endedAt),
+            streaming: true
+          })
+        return turns
+      }
+      // The report closes the view, unless the transcript already ends on it.
+      const last = transcript[transcript.length - 1]
+      const endsOnText = !!last?.content.trim() && !last.workItems.length
+      if (record.answer && !endsOnText) turns.push(turn('assistant', record.answer, endedAt))
+      if (record.error) turns.push(failureTurn(record))
+      return turns
+    },
+
+    on: emitter.on,
+    off: emitter.off
   }
 }

@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ENDPOINT_KEY_ENV, plainText, requireEndpoint, requireModel, type HarnessAdapter } from '../adapter.js'
+import { opencodeTurns } from '../transcript.js'
 
 /**
  * The final answer in `--format json` output: the text parts of the last
@@ -118,5 +119,9 @@ export const opencodeAdapter: HarnessAdapter = {
 
   report(stdout) {
     return opencodeReport(stdout)
+  },
+
+  transcript(stdout) {
+    return opencodeTurns(stdout)
   }
 }

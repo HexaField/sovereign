@@ -6,6 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ENDPOINT_KEY_ENV, requireEndpoint, requireModel, type HarnessAdapter } from '../adapter.js'
+import { codexTurns } from '../transcript.js'
 
 type TomlValue = string | boolean | number | string[] | Record<string, string>
 
@@ -102,5 +103,9 @@ export const codexAdapter: HarnessAdapter = {
     } catch {
       return ''
     }
+  },
+
+  transcript(stdout, _exportFile, at) {
+    return codexTurns(stdout, at)
   }
 }

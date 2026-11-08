@@ -122,8 +122,10 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         /* ignore */
       }
     }
+    // Routing lists the harness runs too (harness/backend.ts): each run once.
     for (const r of input.harnesses?.runner.list(parentKey) ?? [])
-      out.push({ sessionKey: r.sessionKey, label: r.label, status: r.status, task: r.task })
+      if (!out.some((s) => s.sessionKey === r.sessionKey))
+        out.push({ sessionKey: r.sessionKey, label: r.label, status: r.status, task: r.task })
     return out
   }
 

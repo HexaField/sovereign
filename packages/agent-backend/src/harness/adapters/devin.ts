@@ -7,6 +7,22 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { plainText, type HarnessAdapter } from '../adapter.js'
+import { atifTurns } from '../transcript.js'
+
+/** The last non-empty agent message in Devin's ATIF export, if it has one. */
+function lastAgentMessage(exportFile: string): string | undefined {
+  try {
+    const steps = JSON.parse(fs.readFileSync(exportFile, 'utf8'))?.steps
+    if (!Array.isArray(steps)) return undefined
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const m = steps[i]?.source === 'agent' ? steps[i].message : undefined
+      if (typeof m === 'string' && m.trim()) return m.trim()
+    }
+  } catch {
+    /* no export: fall back to stdout */
+  }
+  return undefined
+}
 
 /** Add `dir` to Devin's workspace trust file (`{ trusted_paths: [...] }`), atomically, keeping every other entry. */
 export function trustWorkspace(trustFile: string, dir: string): void {
@@ -98,7 +114,16 @@ export const devinAdapter: HarnessAdapter = {
     }
   },
 
-  report(stdout) {
-    return stripDevinBanner(stdout)
-  }
+  // stdout runs every progress remark into the report with no line break;
+  // the export holds the final agent message on its own.
+  report(stdout, exportFile) {
+    return lastAgentMessage(exportFile) ?? stripDevinBanner(stdout)
+  },
+
+  // The export is written when the run ends; until then the view streams stdout.
+  transcript(_stdout, exportFile) {
+    return atifTurns(exportFile)
+  },
+
+  textStdout: true
 }

@@ -74,6 +74,30 @@ describe('createBackend / RoutingBackend', () => {
     rmSync(dataDir, { recursive: true, force: true })
   })
 
+  it('routes keys a session owner claims to it, lists it, and forwards its events', () => {
+    const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
+    const cc = makeStub('claude-code')
+    const harness = Object.assign(makeStub('harness'), { ownsSession: (k: string) => k.startsWith('harness-') })
+    const routing = createBackend({
+      enabled: ['claude-code'],
+      default: 'claude-code',
+      registry,
+      factories: { 'claude-code': () => cc },
+      owners: [harness],
+      enabledKinds: () => ['claude-code']
+    })
+
+    expect(routing.forSession('harness-1234').kind).toBe('harness')
+    expect(routing.forSession('agent:main:thread:other').kind).toBe('claude-code')
+    expect(routing.all().map((b) => b.kind)).toEqual(['claude-code', 'harness'])
+    expect(routing.forKind('harness')).toBeUndefined()
+    const seen: string[] = []
+    routing.on('subagent.spawned', (e) => seen.push(e.childKey))
+    ;(harness as any).__emit('subagent.spawned', { parentKey: 'p', childKey: 'harness-1234', task: 't' })
+    expect(seen).toEqual(['harness-1234'])
+    rmSync(dataDir, { recursive: true, force: true })
+  })
+
   it('throws if the default backend is not enabled', () => {
     const registry = createSessionsRegistry(dataDir, { debounceMs: 0 })
     expect(() =>

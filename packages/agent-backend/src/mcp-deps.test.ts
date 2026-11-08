@@ -150,6 +150,19 @@ describe('harnesses', () => {
     expect(runner.spawn).not.toHaveBeenCalled()
   })
 
+  it('counts a harness run once when routing lists it too (the harness backend)', async () => {
+    const { deps, runner, listSubagents } = harnessSetup()
+    listSubagents.mockResolvedValue([
+      { sessionKey: 'c1', label: 'c', status: 'working' },
+      { sessionKey: 'c2', label: 'c', status: 'working' },
+      { sessionKey: 'harness-1', label: 'd', status: 'working', task: 't' }
+    ] as any)
+    expect((await deps.agents!.list('parent')).map((s) => s.sessionKey)).toEqual(['c1', 'c2', 'harness-1'])
+    // 3 running: a fourth may start.
+    await deps.agents!.spawn('parent', { task: 't', harness: 'devin', cwd: '/w' })
+    expect(runner.spawn).toHaveBeenCalledTimes(1)
+  })
+
   it('lists harness runs beside the backend subagents, stops them on the runner, and describes the profiles', async () => {
     const { deps, runner, stopSubagent } = harnessSetup()
     expect(await deps.agents!.list('parent')).toEqual([
