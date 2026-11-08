@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }))
 
-import { applyThreadUpdate, shortRelativeTime } from './ThreadList.jsx'
+import { applyThreadUpdate, renameInList, removeThread, shortRelativeTime } from './ThreadList.jsx'
 
 const T0 = 1_800_000_000_000
 const thread = (id: string, lastActivity: number) => ({
@@ -42,5 +42,18 @@ describe('applyThreadUpdate', () => {
 
   it('ignores a payload without an id', () => {
     expect(applyThreadUpdate(list, { patch: { lastActivity: T0 + 1 } })).toBe(list)
+  })
+})
+
+describe('removeThread / renameInList', () => {
+  const list = [thread('a', T0), thread('b', T0)]
+
+  it('drops a deleted thread', () => {
+    expect(removeThread(list, 'a').map((t) => t.id)).toEqual(['b'])
+    expect(removeThread(list, 'missing')).toHaveLength(2)
+  })
+
+  it('applies a rename to that thread only', () => {
+    expect(renameInList(list, 'b', 'Renamed').map((t) => t.label)).toEqual(['a', 'Renamed'])
   })
 })

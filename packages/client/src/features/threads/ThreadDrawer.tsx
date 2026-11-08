@@ -1,6 +1,6 @@
 import { createSignal, createMemo, createResource, For, Show, onCleanup } from 'solid-js'
 import type { ThreadInfo } from './store.js'
-import { threadKey, switchThread, createThread } from './store.js'
+import { threadKey, switchThread, createThread, deleteThread } from './store.js'
 import { getThreadDisplayName, getEntityIcon, groupThreadsByWorkspace, formatRelativeTime } from './helpers.js'
 
 // ── Hidden threads (localStorage-backed) ─────────────────────────────
@@ -74,13 +74,6 @@ interface ThreadStatusItem {
 // ── Data fetching (stubs until server routes exist) ──────────────────
 
 const BASE = typeof import.meta !== 'undefined' ? import.meta.env?.BASE_URL || '/' : '/'
-
-// ── Archive thread (server-side soft delete) ──────────────────────────
-
-export async function archiveThread(key: string): Promise<boolean> {
-  const res = await fetch(`${BASE}api/threads/${encodeURIComponent(key)}`, { method: 'DELETE' })
-  return res.ok
-}
 
 async function fetchSessionTree(): Promise<SessionNode[]> {
   try {
@@ -549,14 +542,13 @@ export function ThreadDrawer(props: ThreadDrawerProps) {
     refetch()
   }
 
+  // Server-side soft delete through the store, which drops the thread from
+  // `threads()` and leaves it if it was open.
   const handleArchive = async (key: string) => {
-    const ok = await archiveThread(key)
-    if (!ok) return
-    // Navigate away from the archived thread
-    if ((props.activeKey() || threadKey()) === key) {
-      const url = new URL(globalThis.location.href)
-      url.searchParams.delete('thread')
-      globalThis.history.pushState({}, '', url)
+    try {
+      await deleteThread(key)
+    } catch {
+      return
     }
     refetch()
   }

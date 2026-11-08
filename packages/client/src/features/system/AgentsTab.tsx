@@ -2,6 +2,8 @@
 
 import { createSignal, onMount, onCleanup, For, Show, type Component } from 'solid-js'
 import { ClockIcon } from '../../ui/icons.js'
+import { createThreadActions } from '../threads/thread-actions.js'
+import { ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
 
 interface ActiveSession {
   key: string
@@ -18,6 +20,8 @@ interface Thread {
   membraneId?: string
   lastActivity?: number
   kind?: string
+  /** Set on the two presence threads, which cannot be deleted. */
+  presence?: string
 }
 
 interface SessionMeta {
@@ -115,14 +119,15 @@ const AgentsTab: Component = () => {
     }
   }
 
-  const archiveThread = async (id: string) => {
-    try {
-      const res = await fetch(`/api/threads/${encodeURIComponent(id)}`, { method: 'DELETE' })
-      if (res.ok) loadThreadsAndSessions()
-    } catch {
-      /* best-effort */
-    }
-  }
+  // Rename / Delete per thread (⋯ or right-click). The store's deleteThread also
+  // updates the header's thread list and leaves a deleted open thread.
+  const actions = createThreadActions({
+    onDeleted: (id) => {
+      setThreads((prev) => prev.filter((t) => t.id !== id))
+      void loadThreadsAndSessions()
+    },
+    onRenamed: (id, label) => setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, label } : t)))
+  })
 
   const loadThreadsAndSessions = async () => {
     try {
@@ -165,7 +170,10 @@ const AgentsTab: Component = () => {
   onMount(() => {
     loadMembranes()
     loadThreadsAndSessions()
-    pollTimer = setInterval(loadThreadsAndSessions, 5_000)
+    // The poll rebuilds every row, so it holds while a menu or rename field is open.
+    pollTimer = setInterval(() => {
+      if (!actions.busy()) void loadThreadsAndSessions()
+    }, 5_000)
     onCleanup(() => {
       if (pollTimer) clearInterval(pollTimer)
     })
@@ -267,6 +275,7 @@ const AgentsTab: Component = () => {
                       : '#a855f755'
                     : 'var(--c-border)'
                 }}
+                onContextMenu={(e) => actions.onContextMenu(t.id, e)}
               >
                 <div class="flex items-start gap-3">
                   {/* Status dot */}
@@ -285,9 +294,22 @@ const AgentsTab: Component = () => {
                   <div class="min-w-0 flex-1">
                     {/* Label + badges */}
                     <div class="flex flex-wrap items-center gap-1.5">
-                      <span class="truncate font-medium" style={{ color: 'var(--c-text)' }}>
-                        {label}
-                      </span>
+                      <Show
+                        when={actions.isRenaming(t.id)}
+                        fallback={
+                          <span class="truncate font-medium" style={{ color: 'var(--c-text)' }}>
+                            {label}
+                          </span>
+                        }
+                      >
+                        <span class="min-w-0 flex-1">
+                          <ThreadRenameInput
+                            initial={t.label ?? ''}
+                            onSave={(next) => actions.saveRename(t.id, next)}
+                            onDone={actions.stopRename}
+                          />
+                        </span>
+                      </Show>
                       <Show when={t.kind}>
                         <span
                           class="rounded px-1.5 py-0.5 text-[10px] font-medium"
@@ -419,29 +441,12 @@ const AgentsTab: Component = () => {
                             {formatRelativeTime(t.lastActivity!)}
                           </span>
                         </Show>
-                        <button
-                          class="opacity-0 transition-opacity group-hover:opacity-50 hover:!opacity-100"
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: 'var(--c-text-muted)',
-                            'font-size': '11px',
-                            padding: '0 2px',
-                            'line-height': '1'
-                          }}
-                          title="Archive thread"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            archiveThread(t.id)
-                          }}
-                        >
-                          🗃
-                        </button>
+                        <ThreadActionsButton actions={actions} threadId={t.id} />
                       </div>
                     </div>
                   </div>
                 </div>
+                <ThreadActionsMenu actions={actions} thread={t} class="mt-2 overflow-hidden rounded-md text-xs" />
               </div>
             )
           }}

@@ -141,7 +141,7 @@ export function moveThread(key: string, orgId: string): Promise<void> {
 
 /** Rename a thread. The server trims the label and rejects an empty one. */
 export async function renameThread(key: string, label: string): Promise<void> {
-  const res = await fetch(`/api/threads/${key}`, {
+  const res = await fetch(`/api/threads/${encodeURIComponent(key)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ label })
@@ -154,7 +154,7 @@ export async function renameThread(key: string, label: string): Promise<void> {
 
 /** Delete a thread. If it was open, the most recently active remaining thread opens instead. */
 export async function deleteThread(key: string): Promise<void> {
-  const res = await fetch(`/api/threads/${key}`, { method: 'DELETE' })
+  const res = await fetch(`/api/threads/${encodeURIComponent(key)}`, { method: 'DELETE' })
   if (!res.ok) {
     const data: any = await res.json().catch(() => ({}))
     throw new Error(data.error ?? `Delete failed (${res.status})`)

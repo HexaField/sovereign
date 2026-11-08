@@ -2,15 +2,9 @@ import { createMemo, createSignal, Show, For, onCleanup, onMount } from 'solid-j
 import { wsStore } from '../../ws/index.js'
 import { formatRelativeTime } from '../../lib/format.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from './store.js'
-import {
-  threadKey,
-  switchThread,
-  threads,
-  createThread,
-  moveThread,
-  renameThread,
-  deleteThread
-} from '../threads/store.js'
+import { threadKey, switchThread, threads, createThread, moveThread, renameThread } from '../threads/store.js'
+import { createThreadActions } from '../threads/thread-actions.js'
+import { ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
@@ -358,104 +352,18 @@ function SubagentTree(props: {
   )
 }
 
-/** Inline thread-name editor: Enter saves, Escape (or leaving the field) cancels. */
-export function ThreadRenameInput(props: {
-  initial: string
-  onSave: (label: string) => Promise<void>
-  onDone: () => void
-}) {
-  const [value, setValue] = createSignal(props.initial)
-  const [error, setError] = createSignal('')
-  let finished = false
-  const finish = () => {
-    if (finished) return
-    finished = true
-    props.onDone()
-  }
-  const save = async () => {
-    const label = value().trim()
-    if (!label || label === props.initial) return finish()
-    try {
-      await props.onSave(label)
-      finish()
-    } catch (err) {
-      setError((err as Error).message || 'Rename failed')
-    }
-  }
-  return (
-    <input
-      class="w-full min-w-0 rounded border px-2 py-1 text-xs outline-none"
-      style={{
-        background: 'var(--c-bg)',
-        'border-color': error() ? '#ef4444' : 'var(--c-accent)',
-        color: 'var(--c-text)'
-      }}
-      aria-label="Thread name"
-      title={error() || 'Enter to save, Escape to cancel'}
-      value={value()}
-      onInput={(e) => {
-        setValue(e.currentTarget.value)
-        setError('')
-      }}
-      onKeyDown={(e) => {
-        e.stopPropagation()
-        if (e.key === 'Enter') {
-          e.preventDefault()
-          void save()
-        } else if (e.key === 'Escape') {
-          e.preventDefault()
-          finish()
-        }
-      }}
-      onClick={(e) => e.stopPropagation()}
-      onBlur={finish}
-      ref={(el) =>
-        setTimeout(() => {
-          el.focus()
-          el.select()
-        }, 0)
-      }
-    />
-  )
-}
-
 export function WorkspaceHeaderContent() {
   const ws = () => activeWorkspace()
   const [threadPickerOpen, setThreadPickerOpen] = createSignal(false)
   const [newThreadInput, setNewThreadInput] = createSignal(false)
   const [newThreadLabel, setNewThreadLabel] = createSignal('')
   const [moveThreadKey, setMoveThreadKey] = createSignal<string | null>(null)
-  // Per-thread actions (Rename / Delete): which row's menu is open, which row
-  // is awaiting delete confirmation, and which row (or the header) is renaming.
-  const [menuThreadKey, setMenuThreadKey] = createSignal<string | null>(null)
-  const [confirmDeleteKey, setConfirmDeleteKey] = createSignal<string | null>(null)
-  const [renamingKey, setRenamingKey] = createSignal<string | null>(null)
+  // Per-thread actions (Rename / Delete), shared with the other thread lists.
+  const actions = createThreadActions()
   const [headerRenaming, setHeaderRenaming] = createSignal(false)
-  const [deleting, setDeleting] = createSignal(false)
-  const [threadActionError, setThreadActionError] = createSignal('')
-
   const closeThreadMenu = () => {
-    setMenuThreadKey(null)
-    setConfirmDeleteKey(null)
-    setThreadActionError('')
-  }
-  const openThreadMenu = (id: string) => {
-    closeThreadMenu()
-    setMoveThreadKey(null)
-    setRenamingKey(null)
-    setMenuThreadKey(id)
-  }
-  const confirmDeleteThread = async (id: string) => {
-    setDeleting(true)
-    setThreadActionError('')
-    try {
-      await deleteThread(id)
-      closeThreadMenu()
-    } catch (err) {
-      setThreadActionError((err as Error).message || 'Delete failed')
-    } finally {
-      setDeleting(false)
-    }
+    actions.closeMenu()
+    actions.stopRename()
   }
   const [wsPickerOpen, setWsPickerOpen] = createSignal(false)
   const [orgList, setOrgList] = createSignal<OrgListItem[]>([])
@@ -694,7 +602,6 @@ export function WorkspaceHeaderContent() {
                 setNewThreadInput(false)
                 setMoveThreadKey(null)
                 closeThreadMenu()
-                setRenamingKey(null)
               }}
               onDblClick={() => {
                 // Two clicks toggled the picker open and shut; rename the open thread in place.
@@ -796,13 +703,12 @@ export function WorkspaceHeaderContent() {
                         (e.currentTarget.style.background = t.id === threadKey() ? 'var(--c-hover-bg)' : '')
                       }
                       onContextMenu={(e) => {
-                        if (renamingKey() === t.id) return
-                        e.preventDefault()
-                        openThreadMenu(t.id)
+                        setMoveThreadKey(null)
+                        actions.onContextMenu(t.id, e)
                       }}
                     >
                       <Show
-                        when={renamingKey() === t.id}
+                        when={actions.isRenaming(t.id)}
                         fallback={
                           <a
                             class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 no-underline"
@@ -830,8 +736,8 @@ export function WorkspaceHeaderContent() {
                         <div class="flex min-w-0 flex-1 px-2 py-1">
                           <ThreadRenameInput
                             initial={t.label ?? ''}
-                            onSave={(label) => renameThread(t.id, label)}
-                            onDone={() => setRenamingKey(null)}
+                            onSave={(label) => actions.saveRename(t.id, label)}
+                            onDone={actions.stopRename}
                           />
                         </div>
                       </Show>
@@ -848,19 +754,12 @@ export function WorkspaceHeaderContent() {
                       >
                         ⇄
                       </button>
-                      <button
-                        class="shrink-0 py-2 pr-2 pl-1 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
-                        style={{ color: 'var(--c-text-muted)' }}
-                        title="Thread actions"
-                        aria-label="Thread actions"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (menuThreadKey() === t.id) closeThreadMenu()
-                          else openThreadMenu(t.id)
-                        }}
-                      >
-                        ⋯
-                      </button>
+                      <ThreadActionsButton
+                        actions={actions}
+                        threadId={t.id}
+                        onToggle={() => setMoveThreadKey(null)}
+                        class="shrink-0 cursor-pointer border-none bg-transparent py-2 pr-2 pl-1 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
+                      />
                     </div>
                     <Show when={moveThreadKey() === t.id}>
                       <div
@@ -892,70 +791,7 @@ export function WorkspaceHeaderContent() {
                         </For>
                       </div>
                     </Show>
-                    <Show when={menuThreadKey() === t.id}>
-                      <div
-                        class="mx-2 mb-1 overflow-hidden rounded-md text-xs"
-                        style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
-                      >
-                        <Show
-                          when={confirmDeleteKey() === t.id}
-                          fallback={
-                            <>
-                              <button
-                                class="flex w-full items-center px-3 py-1.5 text-left transition-colors"
-                                style={{ color: 'var(--c-text)' }}
-                                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                                onMouseLeave={(e) => (e.currentTarget.style.background = '')}
-                                onClick={() => {
-                                  closeThreadMenu()
-                                  setRenamingKey(t.id)
-                                }}
-                              >
-                                Rename
-                              </button>
-                              <Show when={!t.presence}>
-                                <button
-                                  class="flex w-full items-center px-3 py-1.5 text-left transition-colors"
-                                  style={{ color: '#ef4444' }}
-                                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                                  onMouseLeave={(e) => (e.currentTarget.style.background = '')}
-                                  onClick={() => setConfirmDeleteKey(t.id)}
-                                >
-                                  Delete
-                                </button>
-                              </Show>
-                            </>
-                          }
-                        >
-                          <div class="px-3 pt-2 pb-1.5" style={{ color: 'var(--c-text)' }}>
-                            Delete this thread? This can't be undone.
-                          </div>
-                          <div class="flex justify-end gap-1 px-2 pb-2">
-                            <button
-                              class="rounded px-2 py-1"
-                              style={{ color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
-                              onClick={() => closeThreadMenu()}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              class="rounded px-2 py-1 font-medium text-white"
-                              style={{ background: '#ef4444', opacity: deleting() ? '0.5' : '1' }}
-                              disabled={deleting()}
-                              onClick={() => void confirmDeleteThread(t.id)}
-                              ref={(el) => setTimeout(() => el.focus(), 0)}
-                            >
-                              {deleting() ? 'Deleting…' : 'Delete'}
-                            </button>
-                          </div>
-                        </Show>
-                        <Show when={threadActionError()}>
-                          <div class="px-3 pb-2" style={{ color: '#ef4444' }}>
-                            {threadActionError()}
-                          </div>
-                        </Show>
-                      </div>
-                    </Show>
+                    <ThreadActionsMenu actions={actions} thread={t} />
                     <Show when={(activeSubagents()[t.id] || []).length > 0}>
                       <SubagentTree
                         subagents={activeSubagents()[t.id]}

@@ -2,6 +2,8 @@
 
 import { createSignal, For, Show, onMount } from 'solid-js'
 import { threads, switchThread, type ThreadInfo } from '../threads/store.js'
+import { createThreadActions } from './thread-actions.js'
+import { ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from './ThreadActions.js'
 
 export const [quickSwitchOpen, setQuickSwitchOpen] = createSignal(false)
 
@@ -18,6 +20,8 @@ function fuzzyMatch(query: string, text: string): boolean {
 export function QuickSwitchModal() {
   const [query, setQuery] = createSignal('')
   const [selectedIdx, setSelectedIdx] = createSignal(0)
+  // Rename / Delete per thread (⋯ or right-click); the store updates `threads()`.
+  const actions = createThreadActions()
   let inputRef: HTMLInputElement | undefined
 
   const filtered = () => {
@@ -50,7 +54,8 @@ export function QuickSwitchModal() {
       const item = items[selectedIdx()]
       if (item) handleSelect(item)
     } else if (e.key === 'Escape') {
-      setQuickSwitchOpen(false)
+      if (actions.menuKey()) actions.closeMenu()
+      else setQuickSwitchOpen(false)
     }
   }
 
@@ -66,7 +71,11 @@ export function QuickSwitchModal() {
         class="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]"
         style={{ background: 'rgba(0,0,0,0.5)', 'backdrop-filter': 'blur(2px)' }}
         onClick={(e) => {
-          if (e.target === e.currentTarget) setQuickSwitchOpen(false)
+          if (e.target === e.currentTarget) {
+            actions.closeMenu()
+            actions.stopRename()
+            setQuickSwitchOpen(false)
+          }
         }}
       >
         <div
@@ -98,23 +107,45 @@ export function QuickSwitchModal() {
               }
             >
               {(thread, idx) => (
-                <button
-                  class="flex w-full cursor-pointer flex-col px-3 py-2 text-left transition-colors"
-                  style={{
-                    background: idx() === selectedIdx() ? 'var(--c-bg-hover)' : 'transparent',
-                    border: 'none',
-                    color: 'var(--c-text)'
-                  }}
-                  onClick={() => handleSelect(thread)}
-                  onMouseEnter={() => setSelectedIdx(idx())}
-                >
-                  <span class="text-sm font-medium">{thread.label || thread.id}</span>
-                  <Show when={thread.membraneId || thread.workspaceIds?.[0]}>
-                    <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                      {thread.membraneId ?? thread.workspaceIds?.[0]}
-                    </span>
-                  </Show>
-                </button>
+                <>
+                  <div
+                    role="option"
+                    aria-selected={idx() === selectedIdx()}
+                    class="flex w-full cursor-pointer items-center gap-1 py-2 pr-1 pl-3 text-left transition-colors"
+                    style={{
+                      background: idx() === selectedIdx() ? 'var(--c-bg-hover)' : 'transparent',
+                      color: 'var(--c-text)'
+                    }}
+                    onClick={() => {
+                      if (!actions.isRenaming(thread.id)) handleSelect(thread)
+                    }}
+                    onMouseEnter={() => setSelectedIdx(idx())}
+                    onContextMenu={(e) => actions.onContextMenu(thread.id, e)}
+                  >
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <Show
+                        when={actions.isRenaming(thread.id)}
+                        fallback={<span class="truncate text-sm font-medium">{thread.label || thread.id}</span>}
+                      >
+                        <ThreadRenameInput
+                          initial={thread.label ?? ''}
+                          onSave={(label) => actions.saveRename(thread.id, label)}
+                          onDone={() => {
+                            actions.stopRename()
+                            inputRef?.focus()
+                          }}
+                        />
+                      </Show>
+                      <Show when={thread.membraneId || thread.workspaceIds?.[0]}>
+                        <span class="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                          {thread.membraneId ?? thread.workspaceIds?.[0]}
+                        </span>
+                      </Show>
+                    </div>
+                    <ThreadActionsButton actions={actions} threadId={thread.id} />
+                  </div>
+                  <ThreadActionsMenu actions={actions} thread={thread} />
+                </>
               )}
             </For>
           </div>
