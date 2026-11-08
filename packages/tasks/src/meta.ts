@@ -1,12 +1,17 @@
 // Forge meta store — saved Forge views, the `related` edges agents add
-// between work-graph nodes, and node categories set by rethink or the user.
+// between work-graph nodes, node categories set by rethink or the user, and
+// the decisions agents open for the user (decision_open).
 // Same resilience as the task store (durable.ts): memory for reads, AD4M for
 // writes, outbox while AD4M is down, snapshot for restarts. Files:
 // <dir>/meta-outbox.jsonl, <dir>/meta-snapshot.json.
 
 import { randomUUID } from 'node:crypto'
 import {
+  DECISION_SOURCE_KINDS,
+  DECISION_STATUSES,
   WORK_CATEGORIES,
+  type Decision,
+  type DecisionSource,
   type ForgeFilters,
   type ForgeView,
   type WorkCategory,
@@ -57,6 +62,7 @@ export interface ForgeMeta {
   views: Map<string, StoredView>
   edges: Map<string, RelatedEdge>
   categories: Map<string, StoredCategory>
+  decisions: Map<string, Decision>
 }
 
 export type ForgeMetaOp =
@@ -66,6 +72,7 @@ export type ForgeMetaOp =
   | { type: 'edge.delete'; id: string }
   | { type: 'category.put'; category: StoredCategory }
   | { type: 'category.delete'; id: string }
+  | { type: 'decision.put'; decision: Decision }
 
 const EDGE_SOURCES: readonly RelatedEdgeSource[] = ['sync', 'rethink', 'user']
 const CATEGORY_SOURCES: readonly CategorySource[] = ['rethink', 'user']
@@ -88,7 +95,7 @@ const EDGE_KINDS: readonly WorkEdgeKind[] = [
 ]
 
 export function emptyForgeMeta(): ForgeMeta {
-  return { views: new Map(), edges: new Map(), categories: new Map() }
+  return { views: new Map(), edges: new Map(), categories: new Map(), decisions: new Map() }
 }
 
 function cloneView<V extends ForgeView>(v: V): V {
@@ -114,6 +121,9 @@ export function applyMetaOp(m: ForgeMeta, op: ForgeMetaOp): void {
       return
     case 'category.delete':
       m.categories.delete(op.id)
+      return
+    case 'decision.put':
+      m.decisions.set(op.decision.id, structuredClone(op.decision))
       return
   }
 }
@@ -163,6 +173,34 @@ function reviveCategory(raw: any): StoredCategory | undefined {
   }
 }
 
+const text = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v : undefined)
+
+function reviveDecisionSource(raw: any): DecisionSource | undefined {
+  if (!raw || typeof raw !== 'object' || !DECISION_SOURCE_KINDS.includes(raw.kind) || !text(raw.ref)) return undefined
+  return { kind: raw.kind, ref: raw.ref, ...(text(raw.label) ? { label: raw.label } : {}) }
+}
+
+export function reviveDecision(raw: any): Decision | undefined {
+  if (!raw || typeof raw.id !== 'string' || !text(raw.membrane) || !text(raw.question)) return undefined
+  const options = Array.isArray(raw.options) ? raw.options.filter((o: unknown) => text(o)).map(String) : []
+  const source = reviveDecisionSource(raw.source)
+  return {
+    id: raw.id,
+    membrane: raw.membrane,
+    question: raw.question,
+    ...(text(raw.context) ? { context: raw.context } : {}),
+    ...(options.length ? { options } : {}),
+    ...(source ? { source } : {}),
+    ...(text(raw.group) ? { group: raw.group } : {}),
+    ...(text(raw.threadId) ? { threadId: raw.threadId } : {}),
+    status: DECISION_STATUSES.includes(raw.status) ? raw.status : 'open',
+    ...(text(raw.resolution) ? { resolution: raw.resolution } : {}),
+    createdAt: String(raw.createdAt ?? new Date(0).toISOString()),
+    ...(text(raw.resolvedAt) ? { resolvedAt: raw.resolvedAt } : {}),
+    ...(text(raw.createdBy) ? { createdBy: raw.createdBy } : {})
+  }
+}
+
 function clampConfidence(n: number): number {
   if (!Number.isFinite(n)) return 0
   return Math.min(1, Math.max(0, n))
@@ -183,6 +221,10 @@ export function reviveMetaOp(raw: unknown): ForgeMetaOp | undefined {
     case 'category.put': {
       const category = reviveCategory(op.category)
       return category ? { type: 'category.put', category } : undefined
+    }
+    case 'decision.put': {
+      const decision = reviveDecision(op.decision)
+      return decision ? { type: 'decision.put', decision } : undefined
     }
     case 'view.delete':
     case 'edge.delete':
@@ -240,6 +282,28 @@ export function metaOpMutations(op: ForgeMetaOp): { add: LinkTriple[]; removeMat
       ]
       return { add, removeMatching: [{ source: c.id }] }
     }
+    case 'decision.put': {
+      const d = op.decision
+      const add: LinkTriple[] = [
+        { source: d.id, predicate: RDF_TYPE, target: T.Decision },
+        { source: d.id, predicate: P.membrane, target: toLiteral(d.membrane) },
+        { source: d.id, predicate: P.question, target: toLiteral(d.question) },
+        { source: d.id, predicate: P.decisionStatus, target: toLiteral(d.status) },
+        { source: d.id, predicate: P.createdAt, target: toLiteral(d.createdAt) }
+      ]
+      const opt = (predicate: string, value: string | undefined) => {
+        if (value) add.push({ source: d.id, predicate, target: toLiteral(value) })
+      }
+      opt(P.context, d.context)
+      opt(P.options, d.options?.length ? JSON.stringify(d.options) : undefined)
+      opt(P.origin, d.source ? JSON.stringify(d.source) : undefined)
+      opt(P.group, d.group)
+      opt(P.threadId, d.threadId)
+      opt(P.resolution, d.resolution)
+      opt(P.resolvedAt, d.resolvedAt)
+      opt(P.createdBy, d.createdBy)
+      return { add, removeMatching: [{ source: d.id }] }
+    }
     case 'view.delete':
     case 'edge.delete':
     case 'category.delete':
@@ -252,11 +316,13 @@ export function forgeMetaFromLinks(links: LinkTriple[]): ForgeMeta {
   const views = new Map<string, Record<string, any>>()
   const edges = new Map<string, Record<string, any>>()
   const categories = new Map<string, Record<string, any>>()
+  const decisions = new Map<string, Record<string, any>>()
   for (const l of links) {
     if (l.predicate !== RDF_TYPE) continue
     if (l.target === T.ForgeView) views.set(l.source, { id: l.source, repos: [] })
     else if (l.target === T.RelatedEdge) edges.set(l.source, { id: l.source })
     else if (l.target === T.NodeCategory) categories.set(l.source, { id: l.source })
+    else if (l.target === T.Decision) decisions.set(l.source, { id: l.source })
   }
   for (const l of links) {
     const v = views.get(l.source)
@@ -299,6 +365,30 @@ export function forgeMetaFromLinks(links: LinkTriple[]): ForgeMeta {
       else if (l.predicate === P.source) c.source = value
       else if (l.predicate === P.reason) c.reason = value
       else if (l.predicate === P.createdAt) c.createdAt = value
+      continue
+    }
+    const d = decisions.get(l.source)
+    if (d) {
+      const value = fromLiteral(l.target)
+      const parsed = () => {
+        try {
+          return JSON.parse(value)
+        } catch {
+          return undefined
+        }
+      }
+      if (l.predicate === P.membrane) d.membrane = value
+      else if (l.predicate === P.question) d.question = value
+      else if (l.predicate === P.context) d.context = value
+      else if (l.predicate === P.options) d.options = parsed()
+      else if (l.predicate === P.origin) d.source = parsed()
+      else if (l.predicate === P.group) d.group = value
+      else if (l.predicate === P.threadId) d.threadId = value
+      else if (l.predicate === P.decisionStatus) d.status = value
+      else if (l.predicate === P.resolution) d.resolution = value
+      else if (l.predicate === P.resolvedAt) d.resolvedAt = value
+      else if (l.predicate === P.createdBy) d.createdBy = value
+      else if (l.predicate === P.createdAt) d.createdAt = value
     }
   }
   for (const raw of views.values()) {
@@ -312,6 +402,10 @@ export function forgeMetaFromLinks(links: LinkTriple[]): ForgeMeta {
   for (const raw of categories.values()) {
     const c = reviveCategory(raw)
     if (c) m.categories.set(c.id, c)
+  }
+  for (const raw of decisions.values()) {
+    const d = reviveDecision(raw)
+    if (d) m.decisions.set(d.id, d)
   }
   return m
 }
@@ -371,6 +465,11 @@ export interface ForgeMetaStore {
     category: WorkCategory | null
     reason?: string
   }): StoredCategory | null
+  /** A membrane's decisions (every membrane's without one), oldest first. */
+  listDecisions(membrane?: string): Decision[]
+  getDecision(id: string): Decision | null
+  /** Store a decision whole: create, or replace the one with its id. */
+  putDecision(decision: Decision): Decision
   status(): DurableStatus
   settled(): Promise<void>
   sync(): Promise<void>
@@ -404,7 +503,8 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
     serialize: (m) => ({
       views: [...m.views.values()],
       edges: [...m.edges.values()],
-      categories: [...m.categories.values()]
+      categories: [...m.categories.values()],
+      decisions: [...m.decisions.values()]
     }),
     deserialize: (raw: any) => {
       const m = emptyForgeMeta()
@@ -420,15 +520,20 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
         const category = reviveCategory(c)
         if (category) m.categories.set(category.id, category)
       }
+      for (const d of raw?.decisions ?? []) {
+        const decision = reviveDecision(d)
+        if (decision) m.decisions.set(decision.id, decision)
+      }
       return m
     },
     reviveOp: reviveMetaOp,
     seedOps: (m) => [
       ...[...m.views.values()].map((view): ForgeMetaOp => ({ type: 'view.put', view })),
       ...[...m.edges.values()].map((edge): ForgeMetaOp => ({ type: 'edge.put', edge })),
-      ...[...m.categories.values()].map((category): ForgeMetaOp => ({ type: 'category.put', category }))
+      ...[...m.categories.values()].map((category): ForgeMetaOp => ({ type: 'category.put', category })),
+      ...[...m.decisions.values()].map((decision): ForgeMetaOp => ({ type: 'decision.put', decision }))
     ],
-    isEmpty: (m) => m.views.size === 0 && m.edges.size === 0 && m.categories.size === 0,
+    isEmpty: (m) => m.views.size === 0 && m.edges.size === 0 && m.categories.size === 0 && m.decisions.size === 0,
     retryMs: opts.retryMs,
     callTimeoutMs: opts.callTimeoutMs,
     snapshotDelayMs: opts.snapshotDelayMs,
@@ -537,6 +642,22 @@ export function createForgeMetaStore(opts: ForgeMetaStoreOptions): ForgeMetaStor
       }
       durable.write({ type: 'category.put', category })
       return { ...category }
+    },
+    listDecisions(membrane) {
+      return [...state().decisions.values()]
+        .filter((d) => membrane === undefined || d.membrane === membrane)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .map((d) => structuredClone(d))
+    },
+    getDecision(id) {
+      const d = state().decisions.get(id)
+      return d ? structuredClone(d) : null
+    },
+    putDecision(input) {
+      const decision = reviveDecision(input)
+      if (!decision) throw new Error('A decision needs an id, a membrane and a question')
+      durable.write({ type: 'decision.put', decision })
+      return structuredClone(decision)
     },
     status: durable.status,
     settled: durable.settled,

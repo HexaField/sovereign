@@ -2,9 +2,25 @@
 // saved graphs stack as panels (or one shows solo). Each panel loads its own
 // window; overlays and live updates are shared per membrane.
 
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, type Component } from 'solid-js'
-import type { AgentOverlay, ForgeView as ForgeViewDef } from '@sovereign/core'
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  onMount,
+  Show,
+  type Component,
+  type JSX
+} from 'solid-js'
+import type { AgentOverlay, Decision, ForgeView as ForgeViewDef } from '@sovereign/core'
 import ForgePanel from './ForgePanel.js'
+import MobileBar, { MenuItem } from './MobileBar.js'
+import MobileSheet from './MobileSheet.js'
+import { createNarrow, panelsToShow, type DecisionControls, type PanelControls } from './mobile.js'
+import DecisionsView from './DecisionsView.js'
+import { openCount } from './decisions-model.js'
 import RethinkReport from './RethinkReport.js'
 import {
   phaseAfterRuns,
@@ -78,10 +94,20 @@ const ForgeView: Component = () => {
   const [rethinkRuns, setRethinkRuns] = createSignal<RethinkRuns | null>(null)
   const [reportId, setReportId] = createSignal<string | null>(null)
   const [mode, setMode] = createSignal<ForgeMode>(parseForgeMode(readLs(LS_MODE)))
-  const toggleMode = (): void => {
-    const next: ForgeMode = mode() === 'graph' ? 'kanban' : 'graph'
+  const pickMode = (next: ForgeMode): void => {
     setMode(next)
     writeLs(LS_MODE, next)
+  }
+  // Decisions: loaded for the membrane whatever the mode, so the button shows the open count.
+  const [decisions, setDecisions] = createSignal<Decision[]>([])
+  const [decisionsLoading, setDecisionsLoading] = createSignal(false)
+  const [decisionsError, setDecisionsError] = createSignal<string | null>(null)
+  const openDecisions = createMemo(() => openCount(decisions()))
+  // A decision's source link to a node: back to the graph, the node selected in the first panel.
+  const [focusRequest, setFocusRequest] = createSignal<{ id: string; seq: number } | null>(null)
+  const selectNode = (id: string): void => {
+    pickMode('graph')
+    setFocusRequest({ id, seq: (focusRequest()?.seq ?? 0) + 1 })
   }
 
   const threadMembrane = createMemo(() => storeThreads().find((t) => t.id === threadKey())?.membraneId ?? null)
@@ -135,6 +161,29 @@ const ForgeView: Component = () => {
       } catch {
         if (membrane() === m) setViews([seedView(m)])
       }
+    })
+  )
+
+  const loadDecisions = async (): Promise<void> => {
+    const m = membrane()
+    if (!m) return
+    setDecisionsLoading(true)
+    try {
+      const list = await api.decisions(m)
+      if (membrane() !== m) return
+      setDecisions(list)
+      setDecisionsError(null)
+    } catch (e) {
+      if (membrane() === m) setDecisionsError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDecisionsLoading(false)
+    }
+  }
+  // On a membrane change and on every forge.updated (decisions emit it too).
+  createEffect(
+    on([membrane, refresh], ([m]) => {
+      if (!m) return setDecisions([])
+      void loadDecisions()
     })
   )
 
@@ -243,165 +292,342 @@ const ForgeView: Component = () => {
     switchThread(id)
   }
 
+  // ── Phone layout: one slim bar, the rest behind Filters and ⋯ ─────────
+  const narrow = createNarrow()
+  const [panelControls, setPanelControls] = createSignal<PanelControls | null>(null)
+  const [decisionControls, setDecisionControls] = createSignal<DecisionControls | null>(null)
+  const [graphsSheet, setGraphsSheet] = createSignal(false)
+  const mobileFilterCount = (): number | null => {
+    const c = mode() === 'decisions' ? decisionControls() : panelControls()
+    return c ? c.filterCount() : null
+  }
+  const openMobileFilters = (): void => {
+    const c = mode() === 'decisions' ? decisionControls() : panelControls()
+    c?.openFilters()
+  }
+  const rethinkBusy = (): boolean => rethinkPhase().phase === 'starting' || rethinkPhase().phase === 'running'
+
+  /** The saved graphs: show all or one, reorder, remove, add (desktop dropdown and phone sheet). */
+  const graphsBody = (): JSX.Element => (
+    <>
+      <button
+        class="mb-1 w-full rounded px-2 py-1 text-left hover:bg-[var(--c-hover-bg)] max-sm:min-h-10"
+        style={{ color: arrangement().mode === 'all' ? 'var(--c-accent)' : 'var(--c-text)' }}
+        onClick={() => setArr({ mode: 'all' })}
+      >
+        {narrow() ? 'Show all (a phone shows the first)' : 'Show all, stacked'}
+      </button>
+      <For each={views()}>
+        {(v, i) => (
+          <div class="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-[var(--c-hover-bg)]">
+            <button
+              class="min-w-0 flex-1 truncate px-1 text-left max-sm:min-h-10"
+              style={{
+                color:
+                  arrangement().mode === 'solo' && (arrangement() as { id: string }).id === v.id
+                    ? 'var(--c-accent)'
+                    : 'var(--c-text)'
+              }}
+              title="Show this graph alone"
+              onClick={() => setArr({ mode: 'solo', id: v.id })}
+              data-testid="forge-graph-solo"
+            >
+              {v.title}
+            </button>
+            <button
+              class="max-sm:h-10 max-sm:w-10"
+              title="Move up"
+              disabled={i() === 0}
+              onClick={() => commitViews(moveView(views(), v.id, -1))}
+            >
+              ↑
+            </button>
+            <button
+              class="max-sm:h-10 max-sm:w-10"
+              title="Move down"
+              disabled={i() === views().length - 1}
+              onClick={() => commitViews(moveView(views(), v.id, 1))}
+            >
+              ↓
+            </button>
+            <button
+              class="max-sm:h-10 max-sm:w-10"
+              title="Remove graph"
+              disabled={views().length <= 1}
+              onClick={() => commitViews(removeView(views(), v.id))}
+              data-testid="forge-graph-remove"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+      </For>
+      <div class="mt-2 flex gap-1">
+        <input
+          class="min-w-0 flex-1 rounded border px-1.5 py-0.5 max-sm:h-10 max-sm:text-sm"
+          style={btnStyle}
+          placeholder="New graph title"
+          value={newTitle()}
+          onInput={(e) => setNewTitle(e.currentTarget.value)}
+          data-testid="forge-graph-title"
+        />
+        <button
+          class={`${btn} max-sm:min-h-10 max-sm:px-4`}
+          style={btnStyle}
+          disabled={!membrane()}
+          onClick={() => {
+            const m = membrane()
+            if (!m) return
+            commitViews(addView(views(), m, newTitle() || `Graph ${views().length + 1}`, newViewId(views())))
+            setNewTitle('')
+          }}
+          data-testid="forge-graph-add"
+        >
+          Add
+        </button>
+      </div>
+    </>
+  )
+
+  /** The phone ⋯ menu: the status line, then every header action the bar leaves out. */
+  const mobileMenu = (close: () => void): JSX.Element => {
+    const run = (fn: () => void) => () => {
+      close()
+      fn()
+    }
+    return (
+      <>
+        <Show when={mode() !== 'decisions' ? panelControls() : null}>
+          {(c) => (
+            <div
+              class="px-4 pt-2 pb-1 text-xs"
+              style={{ color: 'var(--c-text-muted)' }}
+              data-testid="forge-mobile-status"
+            >
+              {c().status().join(' · ')}
+              <Show when={c().error()}>
+                <div style={{ color: 'var(--c-error, #ef4444)' }} data-testid="forge-error">
+                  {c().error()}
+                </div>
+              </Show>
+            </div>
+          )}
+        </Show>
+        <MenuItem
+          label={`Graphs (${views().length})`}
+          hint={shown()[0]?.title}
+          onClick={run(() => setGraphsSheet(true))}
+          testid="forge-graphs"
+        />
+        <Show when={mode() !== 'decisions' ? panelControls() : null}>
+          {(c) => (
+            <>
+              <MenuItem label={`◆ ${c().treeLabel()}`} onClick={run(c().openTree)} testid="forge-tree-toggle" />
+              <MenuItem
+                label="← History"
+                hint="three more weeks"
+                disabled={c().historyDisabled()}
+                onClick={run(c().history)}
+                testid="forge-history"
+              />
+              <Show when={c().canFit()}>
+                <MenuItem label="Fit" onClick={run(c().fit)} testid="forge-fit" />
+              </Show>
+            </>
+          )}
+        </Show>
+        <div class="my-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+        <MenuItem
+          label="Sync now"
+          disabled={!membrane()}
+          onClick={run(() => void act('Sync', () => api.sync(membrane()!)))}
+          testid="forge-sync"
+        />
+        <MenuItem
+          label="Rethink now"
+          hint={phaseLabel(rethinkPhase()) || undefined}
+          disabled={!membrane() || rethinkBusy()}
+          onClick={run(() => void rethinkNow())}
+          testid="forge-rethink"
+        />
+        <Show when={rethinkRuns()?.runs[0]}>
+          {(r) => (
+            <MenuItem
+              label="Last rethink"
+              hint={runLinkLabel(r()).replace(/^Last rethink:\s*/, '')}
+              onClick={run(() => setReportId(r().id))}
+              testid="forge-rethink-last"
+            />
+          )}
+        </Show>
+      </>
+    )
+  }
+
   return (
     <div
       class="flex h-full min-h-0 flex-col"
       style={{ background: 'var(--c-bg)', color: 'var(--c-text)' }}
       data-testid="forge-view"
     >
-      <div class="flex flex-wrap items-center gap-2 border-b px-3 py-1.5" style={{ 'border-color': 'var(--c-border)' }}>
-        <select
-          class="rounded border px-2 py-0.5 text-xs"
-          style={btnStyle}
-          value={membrane() ?? ''}
-          onChange={(e) => {
-            setChosen(e.currentTarget.value)
-            writeLs(LS_MEMBRANE, e.currentTarget.value)
+      <Show when={narrow()}>
+        <MobileBar
+          mode={mode()}
+          onMode={pickMode}
+          openDecisions={openDecisions()}
+          membranes={membranes()}
+          membrane={membrane()}
+          onMembrane={(id) => {
+            setChosen(id)
+            writeLs(LS_MEMBRANE, id)
           }}
-          data-testid="forge-membrane"
-        >
-          <For each={membranes()}>{(m) => <option value={m.id}>{m.name}</option>}</For>
-        </select>
-
-        <div class="relative" ref={graphsEl}>
-          <button class={btn} style={btnStyle} onClick={() => setGraphsOpen(!graphsOpen())} data-testid="forge-graphs">
-            Graphs ({views().length}) ▾
-          </button>
-          <Show when={graphsOpen()}>
-            <div
-              class="absolute top-full left-0 z-[61] mt-1 w-72 rounded border p-2 text-xs shadow-lg"
-              style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
-              data-testid="forge-graphs-menu"
-            >
-              <button
-                class="mb-1 w-full rounded px-2 py-1 text-left hover:bg-[var(--c-hover-bg)]"
-                style={{ color: arrangement().mode === 'all' ? 'var(--c-accent)' : 'var(--c-text)' }}
-                onClick={() => setArr({ mode: 'all' })}
-              >
-                Show all, stacked
-              </button>
-              <For each={views()}>
-                {(v, i) => (
-                  <div class="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-[var(--c-hover-bg)]">
-                    <button
-                      class="min-w-0 flex-1 truncate px-1 text-left"
-                      style={{
-                        color:
-                          arrangement().mode === 'solo' && (arrangement() as { id: string }).id === v.id
-                            ? 'var(--c-accent)'
-                            : 'var(--c-text)'
-                      }}
-                      title="Show this graph alone"
-                      onClick={() => setArr({ mode: 'solo', id: v.id })}
-                      data-testid="forge-graph-solo"
-                    >
-                      {v.title}
-                    </button>
-                    <button
-                      title="Move up"
-                      disabled={i() === 0}
-                      onClick={() => commitViews(moveView(views(), v.id, -1))}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      title="Move down"
-                      disabled={i() === views().length - 1}
-                      onClick={() => commitViews(moveView(views(), v.id, 1))}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      title="Remove graph"
-                      disabled={views().length <= 1}
-                      onClick={() => commitViews(removeView(views(), v.id))}
-                      data-testid="forge-graph-remove"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
-              </For>
-              <div class="mt-2 flex gap-1">
-                <input
-                  class="min-w-0 flex-1 rounded border px-1.5 py-0.5"
-                  style={btnStyle}
-                  placeholder="New graph title"
-                  value={newTitle()}
-                  onInput={(e) => setNewTitle(e.currentTarget.value)}
-                  data-testid="forge-graph-title"
-                />
-                <button
-                  class={btn}
-                  style={btnStyle}
-                  disabled={!membrane()}
-                  onClick={() => {
-                    const m = membrane()
-                    if (!m) return
-                    commitViews(addView(views(), m, newTitle() || `Graph ${views().length + 1}`, newViewId(views())))
-                    setNewTitle('')
-                  }}
-                  data-testid="forge-graph-add"
-                >
-                  Add
-                </button>
-              </div>
+          filterCount={mobileFilterCount()}
+          onFilters={openMobileFilters}
+          menu={mobileMenu}
+        />
+        <Show when={graphsSheet()}>
+          <MobileSheet
+            title={`Graphs (${views().length})`}
+            onClose={() => setGraphsSheet(false)}
+            testid="forge-graphs-sheet"
+          >
+            <div class="p-3 text-sm" data-testid="forge-graphs-menu">
+              {graphsBody()}
             </div>
-          </Show>
-        </div>
-        <button
-          class={btn}
-          style={btnStyle}
-          onClick={toggleMode}
-          title={mode() === 'graph' ? 'Show the immediate items as a Kanban' : 'Show the work graph'}
-          data-testid="forge-mode"
-        >
-          {mode() === 'graph' ? 'Kanban' : 'Graph'}
-        </button>
-
-        <span class="flex-1" />
+          </MobileSheet>
+        </Show>
         <Show when={notice()}>
-          <span class="text-xs" style={{ color: 'var(--c-text-muted)' }} data-testid="forge-notice">
-            {notice()}
-          </span>
-        </Show>
-        <button
-          class={btn}
-          style={btnStyle}
-          disabled={!membrane()}
-          onClick={() => act('Sync', () => api.sync(membrane()!))}
-          data-testid="forge-sync"
-        >
-          Sync now
-        </button>
-        <Show when={phaseLabel(rethinkPhase())}>
-          <span class="text-xs" style={{ color: 'var(--c-text-muted)' }} data-testid="forge-rethink-status">
-            {phaseLabel(rethinkPhase())}
-          </span>
-        </Show>
-        <Show when={rethinkRuns()?.runs[0]}>
-          {(r) => (
-            <button
-              class="text-xs hover:underline"
-              style={{ color: 'var(--c-accent)' }}
-              onClick={() => setReportId(r().id)}
-              title="Open the run report"
-              data-testid="forge-rethink-last"
+          <div
+            class="pointer-events-none fixed inset-x-0 bottom-20 z-[63] flex justify-center px-4"
+            data-testid="forge-notice"
+          >
+            <span
+              class="rounded-full border px-3 py-1.5 text-xs shadow-lg"
+              style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
             >
-              {runLinkLabel(r())}
-            </button>
-          )}
+              {notice()}
+            </span>
+          </div>
         </Show>
-        <button
-          class={btn}
-          style={btnStyle}
-          disabled={!membrane() || rethinkPhase().phase === 'starting' || rethinkPhase().phase === 'running'}
-          onClick={() => void rethinkNow()}
-          data-testid="forge-rethink"
+      </Show>
+      <Show when={!narrow()}>
+        <div
+          class="flex flex-wrap items-center gap-2 border-b px-3 py-1.5"
+          style={{ 'border-color': 'var(--c-border)' }}
         >
-          Rethink now
-        </button>
-      </div>
+          <select
+            class="rounded border px-2 py-0.5 text-xs"
+            style={btnStyle}
+            value={membrane() ?? ''}
+            onChange={(e) => {
+              setChosen(e.currentTarget.value)
+              writeLs(LS_MEMBRANE, e.currentTarget.value)
+            }}
+            data-testid="forge-membrane"
+          >
+            <For each={membranes()}>{(m) => <option value={m.id}>{m.name}</option>}</For>
+          </select>
+
+          <div class="relative" ref={graphsEl}>
+            <button
+              class={btn}
+              style={btnStyle}
+              onClick={() => setGraphsOpen(!graphsOpen())}
+              data-testid="forge-graphs"
+            >
+              Graphs ({views().length}) ▾
+            </button>
+            <Show when={graphsOpen()}>
+              <div
+                class="absolute top-full left-0 z-[61] mt-1 w-72 rounded border p-2 text-xs shadow-lg"
+                style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)' }}
+                data-testid="forge-graphs-menu"
+              >
+                {graphsBody()}
+              </div>
+            </Show>
+          </div>
+          <div class="flex" role="tablist" data-testid="forge-mode">
+            <For
+              each={[
+                { mode: 'graph' as const, label: (): string => 'Graph', title: 'Show the work graph' },
+                {
+                  mode: 'kanban' as const,
+                  label: (): string => 'Kanban',
+                  title: 'Show the immediate items as a Kanban'
+                },
+                {
+                  mode: 'decisions' as const,
+                  label: (): string => `Decisions (${openDecisions()} open)`,
+                  title: 'Questions agents left for you; resolve several at once'
+                }
+              ]}
+            >
+              {(m, i) => (
+                <button
+                  class={`border px-2 py-0.5 text-xs transition-colors hover:bg-[var(--c-hover-bg)] ${i() === 0 ? 'rounded-l' : ''} ${i() === 2 ? 'rounded-r' : ''} ${i() > 0 ? '-ml-px' : ''}`}
+                  style={{
+                    ...btnStyle,
+                    ...(mode() === m.mode
+                      ? { color: 'var(--c-accent)', 'border-color': 'var(--c-accent)', 'z-index': 1 }
+                      : {})
+                  }}
+                  role="tab"
+                  aria-selected={mode() === m.mode}
+                  onClick={() => pickMode(m.mode)}
+                  title={m.title}
+                  data-testid={`forge-mode-${m.mode}`}
+                >
+                  {m.label()}
+                </button>
+              )}
+            </For>
+          </div>
+
+          <span class="flex-1" />
+          <Show when={notice()}>
+            <span class="text-xs" style={{ color: 'var(--c-text-muted)' }} data-testid="forge-notice">
+              {notice()}
+            </span>
+          </Show>
+          <button
+            class={btn}
+            style={btnStyle}
+            disabled={!membrane()}
+            onClick={() => act('Sync', () => api.sync(membrane()!))}
+            data-testid="forge-sync"
+          >
+            Sync now
+          </button>
+          <Show when={phaseLabel(rethinkPhase())}>
+            <span class="text-xs" style={{ color: 'var(--c-text-muted)' }} data-testid="forge-rethink-status">
+              {phaseLabel(rethinkPhase())}
+            </span>
+          </Show>
+          <Show when={rethinkRuns()?.runs[0]}>
+            {(r) => (
+              <button
+                class="text-xs hover:underline"
+                style={{ color: 'var(--c-accent)' }}
+                onClick={() => setReportId(r().id)}
+                title="Open the run report"
+                data-testid="forge-rethink-last"
+              >
+                {runLinkLabel(r())}
+              </button>
+            )}
+          </Show>
+          <button
+            class={btn}
+            style={btnStyle}
+            disabled={!membrane() || rethinkPhase().phase === 'starting' || rethinkPhase().phase === 'running'}
+            onClick={() => void rethinkNow()}
+            data-testid="forge-rethink"
+          >
+            Rethink now
+          </button>
+        </div>
+      </Show>
 
       <Show when={reportId() && membrane() ? { id: reportId()!, m: membrane()! } : null}>
         {(r) => (
@@ -429,28 +655,52 @@ const ForgeView: Component = () => {
         }
       >
         {(m) => (
-          <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <For each={shownIds()}>
-              {(id) => (
-                <Show when={viewById(id)}>
-                  {(v) => (
-                    <ForgePanel
-                      membrane={m()}
-                      view={v()}
-                      api={api}
-                      overlays={overlays}
-                      refresh={refresh}
-                      threads={threadsForPicker}
-                      onViewChange={(patch) => commitViews(updateView(views(), id, patch))}
-                      onOpenThread={openThread}
-                      fill={shownIds().length === 1}
-                      mode={mode()}
-                    />
-                  )}
-                </Show>
-              )}
-            </For>
-          </div>
+          <Show
+            when={mode() !== 'decisions'}
+            fallback={
+              <DecisionsView
+                membrane={m()}
+                api={api}
+                decisions={decisions()}
+                loading={decisionsLoading()}
+                error={decisionsError()}
+                reload={loadDecisions}
+                threads={threadsForPicker}
+                onOpenThread={openThread}
+                onSelectNode={selectNode}
+                narrow={narrow()}
+                onMobileControls={(c) => setDecisionControls(() => c)}
+              />
+            }
+          >
+            <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <For each={panelsToShow(shownIds(), narrow())}>
+                {(id, i) => (
+                  <Show when={viewById(id)}>
+                    {(v) => (
+                      <ForgePanel
+                        membrane={m()}
+                        view={v()}
+                        api={api}
+                        overlays={overlays}
+                        refresh={refresh}
+                        threads={threadsForPicker}
+                        onViewChange={(patch) => commitViews(updateView(views(), id, patch))}
+                        onOpenThread={openThread}
+                        fill={narrow() || shownIds().length === 1}
+                        narrow={narrow()}
+                        onMobileControls={(c) => {
+                          if (i() === 0) setPanelControls(() => c)
+                        }}
+                        mode={mode() === 'kanban' ? 'kanban' : 'graph'}
+                        focusRequest={() => (i() === 0 ? focusRequest() : null)}
+                      />
+                    )}
+                  </Show>
+                )}
+              </For>
+            </div>
+          </Show>
         )}
       </Show>
     </div>

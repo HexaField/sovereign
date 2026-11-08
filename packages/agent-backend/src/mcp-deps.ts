@@ -7,9 +7,10 @@ import type {
   PresenceMcpDeps,
   EmbeddingsToolDeps,
   TaskMcpDeps,
-  CiWatchMcpDeps,
+  PrWatchMcpDeps,
   SovereignToolDeps
 } from './claude-code/mcp-server.js'
+import type { DecisionMcpDeps } from './claude-code/decision-tools.js'
 import type { ForgeMcpDeps } from './claude-code/forge-tools.js'
 import type { RoutingBackend } from './factory.js'
 import type { CronService } from '@sovereign/scheduler'
@@ -23,6 +24,9 @@ import type { AgentBackend, AgentBackendKind, EventBus } from '@sovereign/core'
 import { unwrapThreadId } from '@sovereign/core'
 import type { ThreadManager } from '@sovereign/threads'
 import { sessionKeyToThreadKey } from './wiring.js'
+import type { HarnessProfile } from '@sovereign/config'
+import { MAX_SUBAGENTS_PER_PARENT } from './claude-code/subagent-runner.js'
+import type { HarnessRunner } from './harness/runner.js'
 
 /** Global defaults for subagent routing. Thread-level config takes priority
  *  over these; these take priority over the model's explicit request. */
@@ -31,6 +35,8 @@ export interface SubagentDefaults {
   model?: string
   /** Wall-clock limit per subagent; unset: the backend's default. */
   timeoutMinutes?: number
+  /** The harness profile agents_spawn uses when the call names none; unset: claude. */
+  harness?: string
 }
 
 export interface SovereignMcpDepsInput {
@@ -57,9 +63,18 @@ export interface SovereignMcpDepsInput {
   embeddings?: EmbeddingsToolDeps
   /** Task service. When set, registers the eight task_* MCP tools. */
   tasks?: TaskMcpDeps
-  ci?: CiWatchMcpDeps
+  /** PR watcher (pr_watch / pr_watch_list / pr_unwatch), bound later. */
+  prWatch?: PrWatchMcpDeps
   /** Forge rethink tools (forge_*), registered in forge-rethink threads only. */
   forge?: ForgeMcpDeps
+  /** decision_open / decision_close, in every thread once bound. */
+  decisions?: DecisionMcpDeps
+  /** Harness profiles (config `agentBackend.harnesses`) and the runner for the
+   *  non-claude ones. Unset: only claude runs. */
+  harnesses?: {
+    runner: Pick<HarnessRunner, 'spawn' | 'list' | 'has' | 'stop' | 'describe'>
+    profiles: () => Record<string, HarnessProfile>
+  }
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -88,6 +103,30 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     const record = routing.registry.getByThread(id) ?? routing.registry.getBySession(id)
     // A record can still name the legacy form: it resolves to the same bare key
     return record ? unwrapThreadId(record.sessionKey) : id
+  }
+
+  /** Running subagents: every backend's live children, then the harness runs. */
+  async function listAgents(
+    parentKey?: string
+  ): Promise<Array<{ sessionKey: string; label: string; status: string; task?: string }>> {
+    const out: Array<{ sessionKey: string; label: string; status: string; task?: string }> = []
+    for (const inst of routing.all()) {
+      try {
+        const list = await inst.backend.listSubagents(parentKey)
+        // Live only: every subagent ever spawned stays registered as idle,
+        // and listing them all cost an agent ~270k characters per call.
+        for (const s of list)
+          if (s.status !== 'idle')
+            out.push({ sessionKey: s.sessionKey, label: s.label, status: s.status, task: s.task })
+      } catch {
+        /* ignore */
+      }
+    }
+    // Routing lists the harness runs too (harness/backend.ts): each run once.
+    for (const r of input.harnesses?.runner.list(parentKey) ?? [])
+      if (!out.some((s) => s.sessionKey === r.sessionKey))
+        out.push({ sessionKey: r.sessionKey, label: r.label, status: r.status, task: r.task })
+    return out
   }
 
   return {
@@ -129,23 +168,38 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
       }
     },
     agents: {
-      async list(parentKey) {
-        const out: Array<{ sessionKey: string; label: string; status: string; task?: string }> = []
-        for (const inst of routing.all()) {
-          try {
-            const list = await inst.backend.listSubagents(parentKey)
-            for (const s of list) out.push({ sessionKey: s.sessionKey, label: s.label, status: s.status, task: s.task })
-          } catch {
-            /* ignore */
-          }
-        }
-        return out
-      },
+      list: listAgents,
       async spawn(parentKey, opts) {
+        const defaults = input.subagentDefaults?.()
+        const harness = opts.harness ?? defaults?.harness ?? 'claude'
+        const profile = input.harnesses?.profiles()[harness]
+        if (!profile && harness !== 'claude') {
+          const names = Object.keys(input.harnesses?.profiles() ?? {})
+          throw new Error(`agents_spawn: unknown harness ${harness} (configured: ${names.join(', ') || 'claude'})`)
+        }
+        // One limit across every harness: Claude children and harness runs alike.
+        const running = (await listAgents(parentKey)).length
+        if (running >= MAX_SUBAGENTS_PER_PARENT) {
+          throw new Error(
+            `agents_spawn: ${running} subagents already run for this thread (max ${MAX_SUBAGENTS_PER_PARENT}); wait for one to finish`
+          )
+        }
+        // Other harnesses run their own models: the thread's and the global Claude routing do not apply.
+        if (profile && profile.adapter !== 'claude') {
+          if (!input.harnesses) throw new Error(`agents_spawn: harness ${harness} needs the harness runner`)
+          const sessionKey = await input.harnesses.runner.spawn(parentKey, {
+            harness,
+            task: opts.task,
+            cwd: opts.cwd,
+            label: opts.label,
+            ...(opts.model ? { model: opts.model } : {}),
+            ...(defaults?.timeoutMinutes ? { timeoutMs: defaults.timeoutMinutes * 60_000 } : {})
+          })
+          return { sessionKey }
+        }
         // Resolve the parent thread's subagent routing config (if any).
         const threadKey = sessionKeyToThreadKey(parentKey)
         const thread = threadKey ? input.threadManager?.get(threadKey) : undefined
-        const defaults = input.subagentDefaults?.()
 
         // Priority chain (NON-NEGOTIABLE — thread config is authoritative):
         //   1. Thread-level subagentBackend (highest — per-thread override)
@@ -162,8 +216,8 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         }
         if (!backend.spawnSubagent) throw new Error('agents_spawn: backend does not support subagent spawn')
 
-        // Same priority for model: thread > global > the parent's model.
-        const effectiveModel = thread?.subagentModel ?? defaults?.model
+        // Same priority for model: thread > global > the call's > the profile's > the parent's model.
+        const effectiveModel = thread?.subagentModel ?? defaults?.model ?? (opts.model || profile?.model)
         const childKey = await backend.spawnSubagent(parentKey, {
           task: opts.task,
           cwd: opts.cwd,
@@ -174,9 +228,13 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         return { sessionKey: childKey }
       },
       async stop(sessionKey) {
+        if (input.harnesses?.runner.has(sessionKey)) return input.harnesses.runner.stop(sessionKey)
         const backend = routing.forSession(sessionKey)
         if (!backend.stopSubagent) throw new Error('agents_stop: backend does not support stopping subagents')
         await backend.stopSubagent(sessionKey)
+      },
+      harnesses() {
+        return input.harnesses?.runner.describe() ?? []
       }
     },
     notifications: {
@@ -277,7 +335,8 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.embeddings ? { embeddings: input.embeddings } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
-    ...(input.ci ? { ci: input.ci } : {}),
-    ...(input.forge ? { forge: input.forge } : {})
+    ...(input.prWatch ? { prWatch: input.prWatch } : {}),
+    ...(input.forge ? { forge: input.forge } : {}),
+    ...(input.decisions ? { decisions: input.decisions } : {})
   }
 }

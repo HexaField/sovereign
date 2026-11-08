@@ -1,6 +1,6 @@
 // Forge ontology — the `sovereign-forge` AD4M perspective.
 //
-// One namespace (`forge://`), five SHACL subject classes, registered when the
+// One namespace (`forge://`), six SHACL subject classes, registered when the
 // perspective is first opened (ad4m-perspective.ts):
 //
 //   Task         task://<uuid>        rdf://type forge://Task
@@ -8,6 +8,7 @@
 //   RelatedEdge  forge-edge://<uuid>  rdf://type forge://RelatedEdge
 //   ForgeView    forge-view://<uuid>  rdf://type forge://ForgeView
 //   NodeCategory forge-category://<membrane>/<source>/<node id>  rdf://type forge://NodeCategory
+//   Decision     forge-decision://<membrane>/<uuid>  rdf://type forge://Decision
 //
 // Subtasks are one link per pair, parent → child: `forge://subtask`.
 // Scalar values are AD4M string literals; provider and filters are JSON text
@@ -24,7 +25,8 @@ export const T = {
   WorkStream: 'forge://WorkStream',
   RelatedEdge: 'forge://RelatedEdge',
   ForgeView: 'forge://ForgeView',
-  NodeCategory: 'forge://NodeCategory'
+  NodeCategory: 'forge://NodeCategory',
+  Decision: 'forge://Decision'
 } as const
 
 export const P = {
@@ -57,7 +59,17 @@ export const P = {
   position: 'forge://position',
   // NodeCategory (also membrane, source, reason, createdAt)
   node: 'forge://node',
-  category: 'forge://category'
+  category: 'forge://category',
+  // Decision (also membrane, threadId, createdAt); options and origin are JSON
+  question: 'forge://question',
+  context: 'forge://context',
+  options: 'forge://options',
+  origin: 'forge://origin',
+  group: 'forge://group',
+  decisionStatus: 'forge://decisionStatus',
+  resolution: 'forge://resolution',
+  resolvedAt: 'forge://resolvedAt',
+  createdBy: 'forge://createdBy'
 } as const
 
 /** Single-valued string literal property. */
@@ -145,6 +157,23 @@ export const FORGE_SHACL_CLASSES: Record<string, object> = {
       scalar('category', P.category, true),
       scalar('source', P.source, true),
       scalar('reason', P.reason),
+      scalar('created', P.createdAt, true)
+    ]
+  },
+  Decision: {
+    ...typed(T.Decision),
+    properties: [
+      scalar('membrane', P.membrane, true),
+      scalar('question', P.question, true),
+      scalar('context', P.context),
+      scalar('options', P.options),
+      scalar('origin', P.origin),
+      scalar('group', P.group),
+      scalar('threadId', P.threadId),
+      scalar('decisionStatus', P.decisionStatus, true),
+      scalar('resolution', P.resolution),
+      scalar('resolved', P.resolvedAt),
+      scalar('createdBy', P.createdBy),
       scalar('created', P.createdAt, true)
     ]
   }

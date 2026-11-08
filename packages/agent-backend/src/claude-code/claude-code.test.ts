@@ -1483,8 +1483,7 @@ describe('claude-code/auto-recycle stops when pruning cannot shrink the session'
 
   it('measures regrowth from the real fill when it sits below the estimated floor', async () => {
     const compactions: any[] = []
-    // minReclaimPercent 0: only the floor gates the recycle.
-    const backend = backendWith(compactions, { thresholdPercent: 55, regrowPercent: 10, minReclaimPercent: 0 })
+    const backend = backendWith(compactions, { thresholdPercent: 55, regrowPercent: 10 })
     await backend.createSession('t', { threadKey: 'r', model: { provider: 'anthropic', model: 'claude-opus-5-5' } })
     const file = backend.getSessionFilePath!('r')!
     mkdirSync(dirname(file), { recursive: true })
@@ -1771,6 +1770,13 @@ describe('claude-code/system-config-with-overrides wiring', () => {
   it("passes settingSources: ['user', 'local'] (project source dropped to avoid duplicate cozempic hooks)", async () => {
     const options = await captureOptions()
     expect(options.settingSources).toEqual(['user', 'local'])
+  })
+
+  it('loads the personality once: Sovereign appends it, the SDK loads no CLAUDE.md of its own', async () => {
+    const options = await captureOptions()
+    // The SDK's user source also injects ~/.claude/CLAUDE.md as an attachment,
+    // and re-injects it whenever it changes: two copies, then more.
+    expect(options.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBe('1')
   })
 
   it('blocks the built-in Agent tool in top-level sessions: delegation goes through agents_spawn', async () => {
@@ -2530,6 +2536,7 @@ describe('claude-code/spawnSubagent — agents_spawn runner', () => {
     expect(opts.mcpServers.code.args).toEqual(['--edit-roots', `/elsewhere${delimiter}${repo}`])
     expect(opts.mcpServers.ad4m).toBeUndefined()
     expect(opts.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false')
+    expect(opts.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('200000')
   })
 
   it('sends the parent one completion with the final text', async () => {

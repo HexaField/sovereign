@@ -153,15 +153,37 @@ describe('scheduler', () => {
   })
 })
 
-describe('CI watch', () => {
-  it('red, green and stopped', () => {
-    const base = {
-      threadId: 't1',
-      repo: 'acme-labs/widget',
-      target: 'acme-labs/widget#12',
-      url: 'https://github.com/acme-labs/widget/pull/12'
-    }
-    expect(one('ci.watch.ended', { ...base, result: 'failed', failed: ['lint', 'unit'] })).toEqual({
+describe('PR watch', () => {
+  const base = {
+    threadId: 't1',
+    repo: 'acme-labs/widget',
+    target: 'acme-labs/widget#12',
+    url: 'https://github.com/acme-labs/widget/pull/12'
+  }
+  it('a long watch: CI results while it lives, then how it stopped', () => {
+    const long = { ...base, events: ['ci', 'comments', 'reviews'] }
+    expect(one('pr.watch.ci', { ...long, result: 'failed', failed: ['lint'] })).toMatchObject({
+      action: 'ci.failed',
+      title: 'CI failed on acme-labs/widget#12',
+      detail: 'lint'
+    })
+    expect(one('pr.watch.ci', { ...long, result: 'no-checks', message: 'no checks within 20 min' })).toMatchObject({
+      action: 'ci.stopped',
+      title: 'Stopped watching CI on acme-labs/widget#12'
+    })
+    expect(one('pr.watch.ended', { ...long, result: 'merged' })).toMatchObject({
+      action: 'watch.stopped',
+      title: 'Stopped watching acme-labs/widget#12: merged'
+    })
+    expect(one('pr.watch.ended', { ...long, result: 'timed-out', message: 'timed out after 7 days' })).toMatchObject({
+      action: 'watch.stopped',
+      title: 'Stopped watching acme-labs/widget#12',
+      detail: 'timed out after 7 days'
+    })
+  })
+
+  it('a CI-only watch: red, green and stopped', () => {
+    expect(one('pr.watch.ended', { ...base, result: 'failed', failed: ['lint', 'unit'] })).toEqual({
       at: AT,
       kind: 'github',
       action: 'ci.failed',
@@ -172,11 +194,11 @@ describe('CI watch', () => {
       origin: 'system',
       url: 'https://github.com/acme-labs/widget/pull/12'
     })
-    expect(one('ci.watch.ended', { ...base, result: 'passed' })).toMatchObject({
+    expect(one('pr.watch.ended', { ...base, result: 'passed' })).toMatchObject({
       action: 'ci.passed',
       title: 'CI passed on acme-labs/widget#12'
     })
-    expect(one('ci.watch.ended', { ...base, result: 'timed-out', message: 'timed out' })).toMatchObject({
+    expect(one('pr.watch.ended', { ...base, result: 'timed-out', message: 'timed out' })).toMatchObject({
       action: 'ci.stopped',
       title: 'Stopped watching CI on acme-labs/widget#12',
       detail: 'timed out'
@@ -395,7 +417,8 @@ describe('everything else', () => {
         'chat.recycled',
         'chat.turn.ended',
         'chat.turn.started',
-        'ci.watch.ended',
+        'pr.watch.ci',
+        'pr.watch.ended',
         'forge.events',
         'forge.rethink',
         'forge.rethink.action',

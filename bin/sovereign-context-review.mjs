@@ -44,8 +44,50 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
 }
 
+// ── Session kinds ─────────────────────────────────────────────────────
+// The state file says whether a session is a subagent (it has a parent)
+// and gives its label; the transcript itself carries neither.
+const sessionInfo = new Map()
+const stateDir = path.join(dataDir, 'agent-backend', 'claude-code-state')
+for (const f of fs.existsSync(stateDir) ? fs.readdirSync(stateDir) : []) {
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(stateDir, f), 'utf8')).data ?? {}
+    if (d.backendSessionId)
+      sessionInfo.set(d.backendSessionId, { kind: d.parentSessionKey ? 'subagent' : 'thread', label: d.label })
+  } catch {
+    /* unreadable state file: the session counts as unknown */
+  }
+}
+const kindOf = (id) => sessionInfo.get(id)?.kind ?? 'unknown'
+
 // ── Transcripts ───────────────────────────────────────────────────────
 const usage = { calls: 0, read: 0, write: 0, output: 0 }
+/** Per kind: sessions, calls, cache reads, prompt tokens by size band. */
+const BANDS = [100_000, 200_000, 400_000, Infinity]
+const byKind = new Map()
+const kindStats = (k) => {
+  if (!byKind.has(k))
+    byKind.set(k, { sessions: 0, calls: 0, read: 0, write: 0, output: 0, bands: BANDS.map(() => 0), compactions: [] })
+  return byKind.get(k)
+}
+/** Per session: for the top list. */
+const sessionStats = []
+/** Tool results as the model received them (after the filter), by kind and tool, and Bash by command head. */
+const seen = { tools: new Map(), bash: new Map() }
+const addSeen = (map, key, chars) => {
+  const a = map.get(key) ?? { n: 0, chars: 0 }
+  a.n++
+  a.chars += chars
+  map.set(key, a)
+}
+const bashHead = (cmd) =>
+  String(cmd)
+    .replace(/^\s*cd\s+\S+\s*(&&|;)\s*/, '')
+    .replace(/^(\w+=\S+\s+)+/, '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .join(' ')
 const cold = { idle: { n: 0, tok: 0 }, other: { n: 0, tok: 0 } }
 const coldBySession = new Map()
 const tools = new Map()
@@ -60,7 +102,12 @@ for (const dir of fs.existsSync(projectsDir) ? fs.readdirSync(projectsDir) : [])
     const file = path.join(full, f)
     if (fs.statSync(file).mtimeMs < since) continue
     files++
-    const seen = new Set()
+    const id = f.slice(0, -'.jsonl'.length)
+    const kind = kindOf(id)
+    const ks = kindStats(kind)
+    const ss = { id, kind, label: sessionInfo.get(id)?.label, calls: 0, read: 0, maxPrompt: 0 }
+    const seenIds = new Set()
+    const toolUses = new Map()
     let prev
     for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
       if (!line) continue
@@ -70,8 +117,10 @@ for (const dir of fs.existsSync(projectsDir) ? fs.readdirSync(projectsDir) : [])
       } catch {
         continue
       }
-      const msg = e.message
       const t = Date.parse(e.timestamp ?? '')
+      // The SDK's own compaction leaves a boundary entry: Sovereign logs no metric for it.
+      if (e.subtype === 'compact_boundary' && t >= since) ks.compactions.push(e.compactMetadata?.preTokens ?? 0)
+      const msg = e.message
       if (!msg || typeof msg !== 'object' || !Number.isFinite(t)) continue
       if (t < since) {
         if (msg.usage) prev = t
@@ -79,15 +128,27 @@ for (const dir of fs.existsSync(projectsDir) ? fs.readdirSync(projectsDir) : [])
       }
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
         for (const b of msg.content) {
-          if (b?.type !== 'tool_use' || !b.id || seen.has(b.id)) continue
-          seen.add(b.id)
+          if (b?.type !== 'tool_use' || !b.id || seenIds.has(b.id)) continue
+          seenIds.add(b.id)
+          toolUses.set(b.id, b)
           toolCalls++
           tools.set(b.name, (tools.get(b.name) ?? 0) + 1)
         }
       }
+      if (msg.role === 'user' && Array.isArray(msg.content)) {
+        for (const b of msg.content) {
+          if (b?.type !== 'tool_result') continue
+          const use = toolUses.get(b.tool_use_id)
+          const text =
+            typeof b.content === 'string' ? b.content : (b.content ?? []).map((x) => x?.text ?? '').join('')
+          const name = use?.name ?? '?'
+          addSeen(seen.tools, `${kind}\t${name}`, text.length)
+          if (name === 'Bash') addSeen(seen.bash, bashHead(use.input?.command ?? ''), text.length)
+        }
+      }
       const u = msg.usage
-      if (!u || (msg.id && seen.has(msg.id))) continue
-      if (msg.id) seen.add(msg.id)
+      if (!u || (msg.id && seenIds.has(msg.id))) continue
+      if (msg.id) seenIds.add(msg.id)
       const write = u.cache_creation_input_tokens ?? 0
       const read = u.cache_read_input_tokens ?? 0
       const prompt = write + read + (u.input_tokens ?? 0)
@@ -95,14 +156,26 @@ for (const dir of fs.existsSync(projectsDir) ? fs.readdirSync(projectsDir) : [])
       usage.read += read
       usage.write += write
       usage.output += u.output_tokens ?? 0
+      ks.calls++
+      ks.read += read
+      ks.write += write
+      ks.output += u.output_tokens ?? 0
+      ks.bands[BANDS.findIndex((b) => prompt < b)] += prompt
+      ss.calls++
+      ss.read += read
+      if (prompt > ss.maxPrompt) ss.maxPrompt = prompt
       if (write > 50_000 && read < 0.2 * prompt) {
-        const kind = prev === undefined || t - prev > 3_600_000 ? 'idle' : 'other'
-        cold[kind].n++
-        cold[kind].tok += write
+        const why = prev === undefined || t - prev > 3_600_000 ? 'idle' : 'other'
+        cold[why].n++
+        cold[why].tok += write
         const key = f.slice(0, 8)
         coldBySession.set(key, (coldBySession.get(key) ?? 0) + write)
       }
       prev = t
+    }
+    if (ss.calls) {
+      ks.sessions++
+      sessionStats.push(ss)
     }
   }
 }
@@ -128,7 +201,7 @@ if (fs.existsSync(logFile)) {
       recycles.push({ session: m[1], pre: +m[2], reclaimed: +m[4] })
     } else if ((m = /\] context-strategy .*?\(([\d.]+)%\)/.exec(line))) {
       strategies.push(+m[1])
-    } else if ((m = /\] tool .*? out=(\d+) trimmed=(\d+)/.exec(line))) {
+    } else if ((m = /\] (?:subagent-)?tool .*? out=(\d+) trimmed=(\d+)/.exec(line))) {
       filter.results++
       filter.out += +m[1]
       filter.trimmed += +m[2]
@@ -156,6 +229,35 @@ out.push(`| Cold rewrites without idle (restart, recycle) | ${fmt(cold.other.n)}
 const topCold = [...coldBySession].sort((a, b) => b[1] - a[1]).slice(0, 5)
 if (topCold.length) out.push('', `Most cold-rewrite tokens: ${topCold.map(([s, n]) => `${s} ${fmt(n)}`).join(', ')}.`)
 
+out.push('', '## Threads and subagents', '')
+out.push(
+  '| Kind | Sessions | Calls | Cache reads | Share | Avg prompt | Prompt tokens in calls < 100k / 100–200k / 200–400k / > 400k |',
+  '|---|---|---|---|---|---|---|'
+)
+for (const [k, s] of [...byKind].sort((a, b) => b[1].read - a[1].read)) {
+  const total = s.bands.reduce((a, b) => a + b, 0)
+  out.push(
+    `| ${k} | ${fmt(s.sessions)} | ${fmt(s.calls)} | ${fmt(s.read)} | ${pct(s.read, usage.read)} | ${fmt(total / (s.calls || 1))} | ${s.bands.map((b) => pct(b, total)).join(' / ')} |`
+  )
+}
+for (const [k, s] of byKind)
+  if (s.compactions.length)
+    out.push('', `SDK compactions (${k}): ${fmt(s.compactions.length)}, median ${fmt(median(s.compactions))} tokens before.`)
+out.push('', '### Most cache reads', '')
+out.push('| Session | Kind | Label | Calls | Cache reads | Max prompt |', '|---|---|---|---|---|---|')
+for (const s of sessionStats.sort((a, b) => b.read - a.read).slice(0, 10))
+  out.push(`| ${s.id.slice(0, 8)} | ${s.kind} | ${s.label ?? ''} | ${fmt(s.calls)} | ${fmt(s.read)} | ${fmt(s.maxPrompt)} |`)
+
+out.push('', '## Tool results the model saw (after the filter)', '')
+out.push('| Kind | Tool | Results | Characters |', '|---|---|---|---|')
+for (const [key, a] of [...seen.tools].sort((x, y) => y[1].chars - x[1].chars).slice(0, 15)) {
+  const [k, name] = key.split('\t')
+  out.push(`| ${k} | ${name} | ${fmt(a.n)} | ${fmt(a.chars)} |`)
+}
+out.push('', '| Bash command | Runs | Characters |', '|---|---|---|')
+for (const [head, a] of [...seen.bash].sort((x, y) => y[1].chars - x[1].chars).slice(0, 10))
+  out.push(`| \`${head.replace(/[|`]/g, '')}\` | ${fmt(a.n)} | ${fmt(a.chars)} |`)
+
 out.push('', '## Tool calls', '')
 out.push('| Tool | Calls | Share |', '|---|---|---|')
 for (const [name, n] of [...tools].sort((a, b) => b[1] - a[1]).slice(0, 20))
@@ -178,7 +280,7 @@ if (!recycles.length && !strategies.length && !filter.results) {
   out.push(`| Tokens reclaimed | ${fmt(recycles.reduce((a, r) => a + r.reclaimed, 0))} |`)
   out.push(`| Cozempic passes, median saved (of the transcript file) | ${fmt(strategies.length)}, ${median(strategies).toFixed(1)}% |`)
   out.push(
-    `| Tool-output filter | ${fmt(filter.hit)} of ${fmt(filter.results)} results trimmed, ${pct(filter.trimmed, filter.out)} of output |`
+    `| Tool-output filter (threads and subagents) | ${fmt(filter.hit)} of ${fmt(filter.results)} results trimmed, ${pct(filter.trimmed, filter.out)} of the raw tool responses |`
   )
   const top = [...bySession].sort((a, b) => b[1] - a[1]).slice(0, 5)
   if (top.length) out.push('', `Most recycled: ${top.map(([s, n]) => `${s} (${n})`).join(', ')}.`)

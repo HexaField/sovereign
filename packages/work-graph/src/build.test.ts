@@ -201,6 +201,27 @@ describe('buildGraph', () => {
     expect(g.nodes.find((n) => n.id === 'task:t3')).toMatchObject({ state: 'paused', zone: 'future' })
   })
 
+  it('shows a plan whose task the user cancelled as cancelled, whatever its file says', () => {
+    const plan: Plan = {
+      id: 'plan:acme/old.md',
+      project: 'acme',
+      file: '/x/old.md',
+      title: 'Old',
+      status: 'in_progress',
+      refs: [],
+      hash: 'h',
+      createdAt: '2026-10-01T00:00:00Z',
+      updatedAt: '2026-10-01T00:00:00Z'
+    }
+    const tasks = [task({ id: 'p', key: plan.id, state: 'cancelled', updatedAt: '2026-10-29T00:00:00.000Z' })]
+    const g = buildGraph(input({ plans: [plan], tasks }))
+    expect(g.nodes.find((n) => n.id === plan.id)).toMatchObject({
+      state: 'cancelled',
+      zone: 'past',
+      closedAt: '2026-10-29T00:00:00.000Z'
+    })
+  })
+
   it('links closes (dashed while the issue is open), references (from the mentioning item) and plans', () => {
     const c = change(WIDGET, 1, {
       closes: [{ forge: 'github', host: 'github.com', repo: WIDGET, kind: 'issue', id: '10' }]

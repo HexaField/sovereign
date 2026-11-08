@@ -1,7 +1,7 @@
 // Work graph — the types the service, its ports and its routes share.
 
 import { defaults, type SovereignConfig } from '@sovereign/config'
-import type { Change, ForgeIssue, ForgeRef, WorkNode } from '@sovereign/core'
+import type { Change, ForgeIssue, ForgeRef, PrWatchEvent, WorkNode } from '@sovereign/core'
 
 /** `forge` in config.json. */
 export type ForgeConfig = SovereignConfig['forge']
@@ -162,9 +162,12 @@ export interface ActiveSubagent {
   startedAt: number
 }
 
-export interface ActiveCiWatch {
+export interface ActivePrWatch {
   threadKey: string
   repo: string
   target: { kind: 'pr'; number: number } | { kind: 'branch'; name: string } | { kind: 'sha'; sha: string }
   createdAt: number
+  events: PrWatchEvent[]
+  /** Still waits on CI for the current head. */
+  ciWaiting: boolean
 }

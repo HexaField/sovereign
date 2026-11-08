@@ -45,7 +45,7 @@ export type AgentStatus = 'idle' | 'working' | 'thinking'
  * Identifies which concrete backend implementation owns a session/event.
  * Sovereign supports multiple backends concurrently (one per thread).
  */
-export type AgentBackendKind = 'pi' | 'claude-code' | 'local-llm'
+export type AgentBackendKind = 'pi' | 'claude-code' | 'local-llm' | 'harness'
 
 /**
  * A single unit of agent work: tool call, result, thinking block, or system event.
@@ -563,6 +563,12 @@ export interface AgentBackend {
    * know about a session simply omit it.
    */
   getActivityMap?(): Promise<Map<string, number>>
+  /**
+   * Set on a backend that owns only the sessions it starts itself (the
+   * agents_spawn harness runs): routing sends a key here when this answers
+   * true, before the registry and the default backend.
+   */
+  ownsSession?(sessionKey: string): boolean
 }
 
 /**

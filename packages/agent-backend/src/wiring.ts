@@ -4,7 +4,7 @@
 
 import fs from 'node:fs'
 import type { EventBus, AgentBackendKind } from '@sovereign/core'
-import type { ConfigStore } from '@sovereign/config'
+import type { ConfigStore, HarnessProfile, ModelEndpoint } from '@sovereign/config'
 import { createBackend } from './factory.js'
 import { routingAsBackend } from './routing-as-backend.js'
 import { createSessionsRegistry } from '@sovereign/primitives'
@@ -22,6 +22,9 @@ import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.j
 import { createMetricsAccumulator, type MetricsAccumulator } from './metrics.js'
 import { buildSovereignMcpDeps, type SubagentDefaults } from './mcp-deps.js'
 import { createEmbeddingsService } from './embeddings-service.js'
+import { createHarnessBackend } from './harness/backend.js'
+import { createHarnessRunner } from './harness/runner.js'
+import { harnessMcpServers } from './harness/mcp.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -64,10 +67,12 @@ export interface AgentBackendWiringInput {
   presence?: import('./claude-code/mcp-server.js').PresenceMcpDeps
   /** Task service. When set, the eight task_* MCP tools are registered. */
   tasks?: import('./claude-code/mcp-server.js').TaskMcpDeps
-  /** CI watcher. Its methods are bound later; when set, the ci_* MCP tools are registered. */
-  ci?: import('./claude-code/mcp-server.js').CiWatchMcpDeps
+  /** PR watcher. Its methods are bound later; when set, the pr_watch* MCP tools are registered. */
+  prWatch?: import('./claude-code/mcp-server.js').PrWatchMcpDeps
   /** Forge rethink runner. Its methods are bound later; the forge_* tools appear in forge-rethink threads. */
   forge?: import('./claude-code/forge-tools.js').ForgeMcpDeps
+  /** Forge decisions. Bound later; decision_open / decision_close appear in every thread from then on. */
+  decisions?: import('./claude-code/decision-tools.js').DecisionMcpDeps
   /** Path to PRESENCE.md — appended to the session prompt for the presence
    *  thread only. */
   presencePersonalityFile?: string
@@ -294,12 +299,33 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const subagentDefaults = (): SubagentDefaults => ({
     backend: configStore.get<string>('agentBackend.subagentDefaults.backend') ?? undefined,
     model: configStore.get<string>('agentBackend.subagentDefaults.model') ?? undefined,
-    timeoutMinutes: configStore.get<number>('agentBackend.subagentDefaults.timeoutMinutes') ?? undefined
+    timeoutMinutes: configStore.get<number>('agentBackend.subagentDefaults.timeoutMinutes') ?? undefined,
+    harness: configStore.get<string>('agentBackend.subagentDefaults.harness') ?? undefined
   })
 
   // Embeddings — local vector search over on-machine content. The service
   // initialises lazily (db opens on first tool call, not at boot).
   const embeddingsService = createEmbeddingsService({ dataDir: input.dataDir })
+
+  // agents_spawn with a non-claude harness profile (Devin, Codex, OpenCode, Pi):
+  // CLI runs that routing serves as subagent sessions (harness/backend.ts), so
+  // their cards, views and parent messages are a Claude subagent's.
+  const harnessProfiles = () => configStore.get<Record<string, HarnessProfile>>('agentBackend.harnesses') ?? {}
+  const harnessClaudeConfig = claudeCodeConfigGetter(configStore, dataDir, input.configDir)
+  const harnessRunner = createHarnessRunner({
+    dataDir,
+    home: process.env.HOME ?? '',
+    configDir: input.configDir,
+    profiles: harnessProfiles,
+    endpoints: () => configStore.get<Record<string, ModelEndpoint>>('agentBackend.endpoints') ?? {},
+    secret: (name) => configStore.getSecret(name) || undefined,
+    mcpServers: (cwd) =>
+      harnessMcpServers(harnessClaudeConfig().mcpServers ?? {}, {
+        cwd,
+        claudeJsonPath: `${process.env.HOME ?? ''}/.claude.json`
+      }),
+    activeSessions
+  })
 
   const sharedMcpDeps = buildSovereignMcpDeps({
     bus,
@@ -314,10 +340,12 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     browserService,
     embeddings: embeddingsService,
     subagentDefaults,
+    harnesses: { runner: harnessRunner, profiles: harnessProfiles },
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
-    ...(input.ci ? { ci: input.ci } : {}),
-    ...(input.forge ? { forge: input.forge } : {})
+    ...(input.prWatch ? { prWatch: input.prWatch } : {}),
+    ...(input.forge ? { forge: input.forge } : {}),
+    ...(input.decisions ? { decisions: input.decisions } : {})
   })
   const sovereignMcpServer = createSovereignMcpServer(sharedMcpDeps)
 
@@ -353,6 +381,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     registry: sessionsRegistry,
     enabledKinds: () =>
       (configStore.get<AgentBackendKind[]>('agentBackend.enabled') as AgentBackendKind[]) ?? enabledBackends,
+    owners: [createHarnessBackend(harnessRunner)],
     factories: {
       'claude-code': () => {
         const orgRoots = () => orgManager.listOrgs().map((o) => o.path)
@@ -519,6 +548,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
       console.warn(`[wiring] subagent result delivery failed for ${parentKey}:`, err)
     )
   }
+  // Harness runs a restart cut off: their parents wait for a result, so tell them.
+  harnessRunner.recoverInterrupted()
 
   return {
     routingBackend,

@@ -26,6 +26,8 @@ export interface StreamCardProps {
   /** A plan's stream whose plan node is loaded: open the plan's node card (links, assign, notes). */
   onPlanDetails?: () => void
   onClose: () => void
+  /** Phone bottom sheet: full width, fills its container, a 44 px close button. */
+  sheet?: boolean
   onChanged: () => void
 }
 
@@ -64,7 +66,7 @@ const StreamCard: Component<StreamCardProps> = (props) => {
         return (
           <div
             data-testid="forge-stream-card"
-            class="flex max-h-full w-[360px] flex-col overflow-hidden rounded-lg border shadow-xl"
+            class={`flex max-h-full flex-col overflow-hidden ${props.sheet ? "min-h-0 w-full flex-1" : "w-[360px] rounded-lg border shadow-xl"}`}
             style={{ background: 'var(--c-bg-raised)', 'border-color': 'var(--c-border)', color: 'var(--c-text)' }}
             onPointerDown={(e) => e.stopPropagation()}
             onWheel={(e) => e.stopPropagation()}
@@ -84,10 +86,16 @@ const StreamCard: Component<StreamCardProps> = (props) => {
                 </div>
               </div>
               <button
-                class="shrink-0 px-1 text-lg leading-none"
+                class={
+                  props.sheet
+                    ? "-my-2 -mr-2 flex h-11 w-11 shrink-0 items-center justify-center text-2xl"
+                    : "shrink-0 px-1 text-lg leading-none"
+                }
                 style={muted}
                 onClick={props.onClose}
                 title="Close (Esc)"
+                aria-label="Close"
+                data-testid="forge-stream-card-close"
               >
                 ×
               </button>

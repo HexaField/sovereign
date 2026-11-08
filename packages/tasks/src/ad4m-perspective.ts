@@ -23,6 +23,12 @@ export interface ForgePerspectiveOptions {
   /** Perspective name. Default "sovereign-forge". */
   name?: string
   log?: Pick<Console, 'log' | 'warn'>
+  /**
+   * How long a cached perspective may stay missing before a new one is created.
+   * Right after a restart the executor lists perspectives it has not loaded yet
+   * as missing; creating then would orphan the real one. Default 2 minutes.
+   */
+  missGraceMs?: number
 }
 
 export interface ForgePerspective {
@@ -113,6 +119,8 @@ export function createForgePerspective(opts: ForgePerspectiveOptions): ForgePers
   const log = opts.log ?? console
   const name = opts.name ?? FORGE_PERSPECTIVE_NAME
   const registered = new Set<string>()
+  const missGraceMs = opts.missGraceMs ?? 120_000
+  let missingSince: number | null = null
   let inflight: Promise<LinkGraph> | null = null
 
   async function open(): Promise<LinkGraph> {
@@ -123,17 +131,24 @@ export function createForgePerspective(opts: ForgePerspectiveOptions): ForgePers
     const cached = readCache(opts.dataDir)
     if (cached?.perspectiveUuid && cached.perspectiveName === name) {
       proxy = (await client.perspective.byUUID(cached.perspectiveUuid)) as unknown as ProxyLike | null
-      if (!proxy) log.warn(TAG, `cached perspective ${cached.perspectiveUuid} is gone — looking up "${name}"`)
+      if (!proxy) log.warn(TAG, `cached perspective ${cached.perspectiveUuid} not found — looking up "${name}"`)
     }
     if (!proxy) {
       const all = (await client.perspective.all()) as unknown as ProxyLike[]
       proxy = all.find((p) => p.name === name) ?? null
+      if (!proxy && cached?.perspectiveUuid) {
+        // Not loaded yet, or really gone: wait out the grace period before creating.
+        missingSince ??= Date.now()
+        if (Date.now() - missingSince < missGraceMs)
+          throw new Error(`perspective ${cached.perspectiveUuid} not loaded yet`)
+      }
       if (!proxy) {
         proxy = (await client.perspective.add(name)) as unknown as ProxyLike
         log.log(TAG, `created perspective ${name} (${proxy.uuid})`)
       }
       writeCache(opts.dataDir, { perspectiveName: name, perspectiveUuid: proxy.uuid })
     }
+    missingSince = null
 
     if (!registered.has(proxy.uuid)) {
       const existing = await proxy.subjectClasses()

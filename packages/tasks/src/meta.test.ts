@@ -139,4 +139,50 @@ describe('forge meta store', () => {
     second.dispose()
     fresh.dispose()
   })
+
+  it('keeps decisions through AD4M: written while down, replayed, read back whole from the links', async () => {
+    const ad4m = createFakeAd4m()
+    ad4m.down()
+    const dir = tempDir()
+    const first = open(dir, ad4m)
+    await first.settled()
+    const full = first.putDecision({
+      id: 'forge-decision://coasys/d1',
+      membrane: 'coasys',
+      question: 'Which "store" for the index?',
+      context: 'Two lines\nof context',
+      options: ['SQLite', 'Postgres, with a pool'],
+      source: { kind: 'thread', ref: 'thread-a', label: 'Indexer thread' },
+      group: 'Index',
+      threadId: 'thread-a',
+      status: 'resolved',
+      resolution: 'SQLite',
+      createdAt: '2026-10-30T01:00:00.000Z',
+      resolvedAt: '2026-10-30T02:00:00.000Z',
+      createdBy: 'thread-a'
+    })
+    const bare = first.putDecision({
+      id: 'forge-decision://home/d2',
+      membrane: 'home',
+      question: 'Paint the shed?',
+      status: 'open',
+      createdAt: '2026-10-30T00:00:00.000Z'
+    })
+    expect(() => first.putDecision({ ...bare, membrane: '' })).toThrow(/membrane/)
+    first.dispose()
+
+    ad4m.up()
+    const second = open(dir, ad4m)
+    await until(() => second.status().pending === 0 && second.status().loadedFromBackend)
+    const fresh = open(tempDir(), ad4m)
+    await fresh.settled()
+    expect(fresh.listDecisions()).toEqual([bare, full])
+    expect(fresh.listDecisions('coasys')).toEqual([full])
+    // A replace leaves one set of links.
+    fresh.putDecision({ ...bare, group: 'Garden' })
+    await until(() => fresh.status().pending === 0)
+    expect(ad4m.count({ source: bare.id, predicate: 'forge://group' })).toBe(1)
+    second.dispose()
+    fresh.dispose()
+  })
 })

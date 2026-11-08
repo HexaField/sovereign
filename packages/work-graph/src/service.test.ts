@@ -313,10 +313,19 @@ describe('forge service', () => {
     expect((await service.status('acme')).triage.rule.needsAgent).toBeGreaterThanOrEqual(1)
   })
 
-  it("CI red is left to the owner thread's own CI watch on that change", async () => {
+  it("CI red is left to the owner thread's own PR watch (with ci) on that change", async () => {
     service = make({
-      ciWatch: {
-        list: () => [{ threadKey: 'owner', repo: WIDGET, target: { kind: 'pr', number: 50 }, createdAt: 1 }]
+      prWatch: {
+        list: () => [
+          {
+            threadKey: 'owner',
+            repo: WIDGET,
+            target: { kind: 'pr', number: 50 },
+            createdAt: 1,
+            events: ['ci', 'comments'],
+            ciWaiting: true
+          }
+        ]
       }
     })
     await service.sync('acme')
@@ -328,6 +337,31 @@ describe('forge service', () => {
     await service.sync('acme', 'open')
     expect((await port.findByKey(nid(WIDGET, 50)))!.transientState).toMatch(/^CI red: build/)
     expect(sent).toEqual([])
+  })
+
+  it('a PR watch without ci leaves CI red to the forge', async () => {
+    service = make({
+      prWatch: {
+        list: () => [
+          {
+            threadKey: 'owner',
+            repo: WIDGET,
+            target: { kind: 'pr', number: 50 },
+            createdAt: 1,
+            events: ['comments', 'reviews'],
+            ciWaiting: false
+          }
+        ]
+      }
+    })
+    await service.sync('acme')
+    await service.assign({ nodeId: nid(WIDGET, 50), threadId: 'owner' })
+    sent = []
+    forge.changes.get(WIDGET)!.find((c) => c.ref.id === '50')!.checks = { state: 'failing' }
+    forge.checkResults.set(`${WIDGET}#50`, { state: 'failing', failed: ['build'] })
+    now += 120_000
+    await service.sync('acme', 'open')
+    expect(sent.filter((s) => s.threadId === 'owner' && /CI/.test(s.text))).toHaveLength(1)
   })
 
   it('rethink runs Loop 2 on a non-empty digest only, and moves the cursor', async () => {
@@ -793,7 +827,7 @@ describe('forge service', () => {
     expect(writes()).toHaveLength(2)
   })
 
-  it('auto-links a change a subagent or a CI watch works on to that thread when nobody owns it', async () => {
+  it('auto-links a change a subagent or a PR watch works on to that thread when nobody owns it', async () => {
     const widgetDir = path.join(tmp, 'acme', 'widget')
     service = make({
       overlayPollMs: 20,
@@ -801,8 +835,17 @@ describe('forge service', () => {
         list: async () => [{ key: 'sub-1', label: 'fix', parentThreadId: 'parent-1', cwd: widgetDir, startedAt: 1 }]
       },
       branchOf: async () => 'feat/50',
-      ciWatch: {
-        list: () => [{ threadKey: 'th-ci', repo: WIDGET, target: { kind: 'pr', number: 51 }, createdAt: 1 }]
+      prWatch: {
+        list: () => [
+          {
+            threadKey: 'th-ci',
+            repo: WIDGET,
+            target: { kind: 'pr', number: 51 },
+            createdAt: 1,
+            events: ['ci'],
+            ciWaiting: true
+          }
+        ]
       }
     })
     await service.sync('acme')

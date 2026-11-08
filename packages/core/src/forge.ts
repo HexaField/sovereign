@@ -268,11 +268,16 @@ export interface WorkEdge {
   confidence?: number
 }
 
+/** What a `pr_watch` follows: CI results, comments, reviews, PR state. */
+export type PrWatchEvent = 'ci' | 'comments' | 'reviews' | 'state'
+
 export interface AgentOverlay {
   nodeId: string
   thread?: { id: string; label: string; status: 'working' | 'thinking' | 'idle' }
   subagents: { key: string; label: string; startedAt: number }[]
-  ciWatch?: { state: 'waiting' | 'passed' | 'failed'; since: number }
+  /** PR watches (`pr_watch`) threads hold on this node, merged: since the oldest,
+   *  every event they follow, and whether one still waits on CI. */
+  prWatch?: { since: number; events: PrWatchEvent[]; ciWaiting: boolean }
   /** user = the owner thread is idle on a question to the user. */
   waitingOn?: 'ci' | 'review' | 'user' | null
 }
@@ -512,6 +517,58 @@ export interface TaskPort {
     category: WorkCategory | null,
     reason?: string
   ): Promise<NodeCategoryRecord | null>
+  /** The membrane's decisions, open and resolved. */
+  listDecisions(membrane: string): Promise<Decision[]>
+  getDecision(id: string): Promise<Decision | undefined>
+  /** Store a decision whole (create or replace by id). */
+  putDecision(decision: Decision): Promise<Decision>
+}
+
+// ── Decisions ─────────────────────────────────────────────────────────
+
+export type DecisionStatus = 'open' | 'resolved'
+export const DECISION_STATUSES: readonly DecisionStatus[] = ['open', 'resolved']
+export type DecisionSourceKind = 'plan' | 'thread' | 'node' | 'other'
+export const DECISION_SOURCE_KINDS: readonly DecisionSourceKind[] = ['plan', 'thread', 'node', 'other']
+
+/** Where a decision came up: a plan path, a thread id, a work-graph node id, or free text. */
+export interface DecisionSource {
+  kind: DecisionSourceKind
+  ref: string
+  label?: string
+}
+
+/** A question the user has to answer; its resolution goes to `threadId`. */
+export interface Decision {
+  /** `forge-decision://<membrane>/<uuid>` */
+  id: string
+  membrane: string
+  /** The decision to make, one line. */
+  question: string
+  /** Why it matters: short markdown. */
+  context?: string
+  /** Suggested answers. */
+  options?: string[]
+  source?: DecisionSource
+  /** Free-text group name: decisions with the same group form a group. */
+  group?: string
+  /** The thread that receives the resolution. */
+  threadId?: string
+  status: DecisionStatus
+  resolution?: string
+  createdAt: string
+  resolvedAt?: string
+  /** A thread id, or 'user'. */
+  createdBy?: string
+}
+
+/** What one resolve call sent to one thread. */
+export interface DecisionDelivery {
+  threadId: string
+  /** The decision ids its message holds. */
+  ids: string[]
+  sent: boolean
+  error?: string
 }
 
 /** What a thread assigned to a node is asked to do, unless the user writes the prompt. */

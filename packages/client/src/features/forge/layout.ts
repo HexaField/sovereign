@@ -23,6 +23,7 @@
 // Every sort ends on the id, so the same graph always gives the same layout.
 
 import type { WorkEdge, WorkNode, WorkStream, Zone } from '@sovereign/core'
+import { stackModel, type StackModel } from './stacks.js'
 
 export const DAY_MS = 86_400_000
 export const PX_PER_DAY = 160
@@ -103,6 +104,8 @@ export interface Layout {
   now: number
   /** The goal tree: card id → the stream it stands for, child → parent connectors, item → card connectors. */
   tree: { cards: Map<string, WorkStream>; links: TreeLink[]; members: MemberLink[] }
+  /** PR stacks and pairs, for the frames and badges the renderer draws. */
+  stacks: StackModel
 }
 
 export interface LayoutInput {
@@ -774,7 +777,8 @@ export function computeLayout(input: LayoutInput): Layout {
     futureStart,
     bounds: { minX, maxX, minY: 0, maxY },
     now,
-    tree: { cards, links, members }
+    tree: { cards, links, members },
+    stacks: stackModel(new Map(nodes.map((n) => [n.id, n])), input.edges)
   }
 }
 

@@ -2,6 +2,8 @@
 
 import type {
   AgentOverlay,
+  Decision,
+  DecisionDelivery,
   EpicStatus,
   ForgeGraph,
   ForgeView,
@@ -116,7 +118,40 @@ export function createForgeApi(f: Fetch = (...a) => fetch(...a)) {
     },
     deleteEdge: async (e: Pick<WorkEdge, 'from' | 'to' | 'kind'>): Promise<void> => {
       await json(await send(`/api/forge/edges/${enc(e.from)}/${enc(e.to)}/${enc(e.kind)}`, 'DELETE'))
-    }
+    },
+    /** The membrane's decisions; `status` 'all' gives open and resolved. */
+    decisions: async (membrane: string, status: 'open' | 'resolved' | 'all' = 'all'): Promise<Decision[]> =>
+      (
+        await json<{ decisions: Decision[] }>(
+          await f(`/api/forge/decisions?membrane=${enc(membrane)}&status=${enc(status)}`)
+        )
+      ).decisions ?? [],
+    /** Change a decision's group or thread (null clears), question, context or options. */
+    updateDecision: async (
+      membrane: string,
+      id: string,
+      patch: Partial<Record<'group' | 'threadId' | 'context', string | null>> & {
+        question?: string
+        options?: string[]
+      }
+    ): Promise<Decision> => json(await send(`/api/forge/decisions/${enc(id)}`, 'PATCH', { membrane, ...patch })),
+    /** Set a group and/or a thread on many decisions at once. */
+    groupDecisions: async (
+      membrane: string,
+      ids: string[],
+      patch: { group?: string | null; threadId?: string | null }
+    ): Promise<Decision[]> =>
+      (
+        await json<{ decisions: Decision[] }>(
+          await send('/api/forge/decisions/group', 'POST', { membrane, ids, ...patch })
+        )
+      ).decisions ?? [],
+    /** Resolve many at once; each receiving thread gets one message. */
+    resolveDecisions: async (body: {
+      membrane: string
+      items: Array<{ id: string; resolution: string }>
+    }): Promise<{ resolved: Decision[]; deliveries: DecisionDelivery[] }> =>
+      json(await send('/api/forge/decisions/resolve', 'POST', body))
   }
 }
 

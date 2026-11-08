@@ -278,10 +278,13 @@ export function computeUsageFromFile(filePath: string): {
  *  JSONL. Claude Code writes one line per content block of an assistant
  *  message, each carrying the same usage, so calls count once per message id.
  *
- *  `added` counts the tokens these calls added to the context: each call's
- *  growth over the call before it (prompt + output, cached or not), never
- *  less than zero. A cold cache that writes the existing context again adds
- *  nothing; a compaction that shrinks it adds nothing either. */
+ *  `added` counts the tokens these calls added to the context: the first
+ *  call's output, then each later call's growth over the call before it
+ *  (prompt + output, cached or not), never less than zero. The baseline is
+ *  the first call at or after `sinceMs`, never a call before it: a recycle or
+ *  a compaction rewrites the file, so the call before may be missing and the
+ *  whole existing context would read as added. A cold cache that writes the
+ *  context again adds nothing; a compaction that shrinks it adds nothing. */
 export function usageSinceFromFile(
   filePath: string,
   sinceMs: number
@@ -310,10 +313,11 @@ export function usageSinceFromFile(
       const output = usage.output_tokens ?? 0
       const cacheRead = usage.cache_read_input_tokens ?? 0
       const cacheWrite = usage.cache_creation_input_tokens ?? 0
-      const previous = context
-      context = input + cacheRead + cacheWrite + output
       const t = Date.parse(entry.timestamp ?? '')
       if (!Number.isFinite(t) || t < sinceMs) continue
+      // The run's first call: its prompt was there before the run, only its output is new.
+      const previous = out.calls === 0 ? input + cacheRead + cacheWrite : context
+      context = input + cacheRead + cacheWrite + output
       out.inputTokens += input
       out.outputTokens += output
       out.cacheRead += cacheRead

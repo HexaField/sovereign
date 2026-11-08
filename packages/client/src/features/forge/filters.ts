@@ -47,7 +47,7 @@ export function agentMatches(f: ForgeFilters['agent'], o: AgentOverlay | undefin
   if (!f) return true
   if (!o) return false
   if (f === 'any') return !!o.thread || o.subagents.length > 0
-  if (f === 'waiting-ci') return o.waitingOn === 'ci' || o.ciWatch?.state === 'waiting'
+  if (f === 'waiting-ci') return o.waitingOn === 'ci' || Boolean(o.prWatch?.ciWaiting)
   return o.waitingOn === 'review'
 }
 
@@ -294,6 +294,43 @@ export const MORE_MENUS: FilterMenu[] = [
 /** How many values are selected in the chips behind "More" (shown on the chip). */
 export function moreActiveCount(f: ForgeFilters): number {
   return MORE_MENUS.reduce((n, m) => n + ((f[m.key] as string[] | undefined)?.length ?? 0), 0)
+}
+
+/** The list filters a FilterBar sets (Repo … Label, and the category chips). */
+const BAR_LIST_KEYS: OptionKey[] = [
+  'repos',
+  'kinds',
+  'categories',
+  'states',
+  'assignees',
+  'zones',
+  'authors',
+  'reviewers',
+  'labels'
+]
+
+/**
+ * The phone Filters button's badge: everything the FilterBar sets away from
+ * its default. Each picked list value counts one, and so does each toggle
+ * (Requested from me, Not in a tree, Agent, Updated, the text filter,
+ * Paused, Empty plans, Dim instead). Tree picks and status chips belong to
+ * the Tree panel, not the sheet, and do not count.
+ */
+export function activeFilterCount(f: ForgeFilters): number {
+  let n = 0
+  for (const k of BAR_LIST_KEYS) n += (f[k] as string[] | undefined)?.length ?? 0
+  for (const on of [
+    f.requestedFromMe,
+    f.orphans,
+    f.agent,
+    f.updatedWithinDays,
+    f.text?.trim(),
+    f.showPaused,
+    f.showEmpty,
+    f.dim
+  ])
+    if (on) n++
+  return n
 }
 
 /**

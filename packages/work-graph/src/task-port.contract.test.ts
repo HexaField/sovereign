@@ -220,6 +220,46 @@ describe.each(IMPLS)('TaskPort contract: $name', ({ make }) => {
     dispose()
   })
 
+  it('stores decisions whole per membrane, replaced by id, across a restart', async () => {
+    const { port, reopen, dispose } = await make()
+    const id = 'forge-decision://acme/d1'
+    const open = {
+      id,
+      membrane: 'acme',
+      question: 'Which database for the index?',
+      context: 'The **index** grows fast.',
+      options: ['SQLite', 'Postgres'],
+      source: { kind: 'plan' as const, ref: 'plan:engine/plans/index.md', label: 'Index plan' },
+      group: 'Index',
+      threadId: 'thread-a',
+      status: 'open' as const,
+      createdAt: '2026-10-30T01:00:00.000Z',
+      createdBy: 'thread-a'
+    }
+    expect(await port.putDecision(open)).toEqual(open)
+    await port.putDecision({
+      id: 'forge-decision://beta/d2',
+      membrane: 'beta',
+      question: 'Ship on Friday?',
+      status: 'open',
+      createdAt: '2026-10-30T02:00:00.000Z'
+    })
+    const resolved = {
+      ...open,
+      status: 'resolved' as const,
+      resolution: 'SQLite',
+      resolvedAt: '2026-10-30T03:00:00.000Z'
+    }
+    await port.putDecision(resolved)
+    const after = reopen ? await reopen() : port
+    expect(await after.listDecisions('acme')).toEqual([resolved])
+    expect((await after.listDecisions('beta')).map((d) => d.question)).toEqual(['Ship on Friday?'])
+    expect(await after.getDecision(id)).toEqual(resolved)
+    expect(await after.getDecision('forge-decision://acme/none')).toBeUndefined()
+    await expect(after.putDecision({ ...open, question: ' ' })).rejects.toThrow(/question/)
+    dispose()
+  })
+
   it('keeps tasks across a restart (persistent implementations)', async () => {
     const { port, reopen, dispose } = await make()
     if (!reopen) return dispose()

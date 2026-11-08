@@ -3,6 +3,7 @@
 import express, { Router, type Request, type Response } from 'express'
 import { EPIC_STATUSES, WORK_CATEGORIES, type EpicStatus, type ForgeView, type WorkEdgeKind } from '@sovereign/core'
 import { isWorkCategory } from './category.js'
+import { DecisionError } from './decisions.js'
 import { ForgeError, type ForgeService } from './service.js'
 
 export type Auth = (req: Request, res: Response, next: () => void) => void
@@ -24,7 +25,8 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim
 const param = (req: Request, k: string) => str(req.body?.[k]) ?? str(req.query[k])
 
 export function fail(res: Response, err: unknown) {
-  if (err instanceof ForgeError) return res.status(err.status).json({ error: err.message })
+  if (err instanceof ForgeError || err instanceof DecisionError)
+    return res.status(err.status).json({ error: err.message })
   const msg = (err as Error)?.message ?? String(err)
   // TaskPort errors name a missing task or a bad link.
   if (/not found/i.test(msg)) return res.status(404).json({ error: msg })
@@ -303,6 +305,76 @@ export function createForgeRouter(service: ForgeService, requireAuth: Auth): Rou
       if (!(await service.deleteEdge(e.from, e.to, e.kind, param(req, 'membrane'))))
         throw new ForgeError('no such suggested edge', 404)
       return { deleted: true }
+    })
+  )
+
+  // ── Decisions: questions agents leave for the user (decision_open). ──
+  router.get(
+    '/api/forge/decisions',
+    requireAuth,
+    handle(async (req) => {
+      const status = str(req.query.status) ?? 'open'
+      if (!['open', 'resolved', 'all'].includes(status)) throw bad('status must be open, resolved or all')
+      return {
+        decisions: await service.decisions.list(requireMembrane(req), status as 'open' | 'resolved' | 'all')
+      }
+    })
+  )
+
+  router.post(
+    '/api/forge/decisions',
+    requireAuth,
+    json,
+    handle((req) => {
+      const b = req.body ?? {}
+      if (!str(b.question)) throw bad('question is required')
+      return service.decisions.open(requireMembrane(req), {
+        question: b.question,
+        context: b.context,
+        options: b.options,
+        source: b.source,
+        group: b.group,
+        threadId: b.threadId,
+        createdBy: str(b.createdBy) ?? 'user'
+      })
+    }, 201)
+  )
+
+  // Set a group and/or a thread on many decisions at once (null or '' clears).
+  router.post(
+    '/api/forge/decisions/group',
+    requireAuth,
+    json,
+    handle(async (req) => {
+      const b = req.body ?? {}
+      return {
+        decisions: await service.decisions.group(requireMembrane(req), b.ids, {
+          ...(b.group !== undefined ? { group: b.group } : {}),
+          ...(b.threadId !== undefined ? { threadId: b.threadId } : {})
+        })
+      }
+    })
+  )
+
+  // Resolve many; each receiving thread gets ONE message with all of its resolutions.
+  router.post(
+    '/api/forge/decisions/resolve',
+    requireAuth,
+    json,
+    handle((req) => service.decisions.resolve(requireMembrane(req), req.body?.items))
+  )
+
+  // A decision id is URL-encoded (forge-decision://…).
+  router.patch(
+    '/api/forge/decisions/:id',
+    requireAuth,
+    json,
+    handle((req) => {
+      const b = req.body ?? {}
+      const patch: Record<string, unknown> = {}
+      for (const k of ['question', 'context', 'options', 'group', 'threadId']) if (k in b) patch[k] = b[k]
+      if (!Object.keys(patch).length) throw bad('nothing to change: question, context, options, group or threadId')
+      return service.decisions.update(requireMembrane(req), String(req.params.id), patch)
     })
   )
 

@@ -1,5 +1,41 @@
 // Config Management — Types
 
+/** A model endpoint a harness profile can talk to. */
+export interface ModelEndpoint {
+  /** Wire protocol the endpoint speaks. */
+  api: 'openai' | 'anthropic'
+  /** For example http://studio.example:8080/v1. */
+  baseUrl: string
+  /** Name of the key in Sovereign's secret store (data/secrets.json); never the key itself. */
+  apiKeySecret?: string
+  /** True when a request never leaves the user's machines. Only a local
+   *  endpoint may run in a private directory (~/.sovereign, ~/workspaces/hexafield). */
+  local: boolean
+}
+
+/** A named, ready-to-run harness for `agents_spawn`. */
+export interface HarnessProfile {
+  adapter: 'claude' | 'devin' | 'codex' | 'opencode' | 'pi'
+  /** The CLI; default the adapter's binary name on PATH, then in ~/.local/bin. */
+  bin?: string
+  /** Model id the harness passes on. Claude: optional, after the thread's and the global subagent model. */
+  model?: string
+  /** A `ModelEndpoint` name. Absent: the harness's own login (Devin). */
+  endpoint?: string
+  /** 'harness': the CLI's own sandbox; 'bwrap': Sovereign wraps the process; 'none'. Default 'bwrap'. */
+  sandbox?: 'harness' | 'bwrap' | 'none'
+  /** Directories (and everything below them) a run may use as cwd; `~` is the home directory. */
+  allowedRoots?: string[]
+  /** Give the run Sovereign's subagent MCP servers (codegraph, semble, code, sovereign). Default true. */
+  mcp?: boolean
+  /** A config file the harness loads instead of the user's (devin: `--config`). */
+  configFile?: string
+  extraArgs?: string[]
+  extraEnv?: Record<string, string>
+  /** Wall-clock limit; default `subagentDefaults.timeoutMinutes`, else 4 h. */
+  timeoutMinutes?: number
+}
+
 export interface SovereignConfig {
   server: {
     port: number
@@ -98,6 +134,10 @@ export interface SovereignConfig {
         }
       }>
     }
+    /** Harness profiles `agents_spawn` can run a task in, by name (its `harness`). */
+    harnesses: Record<string, HarnessProfile>
+    /** Model endpoints harness profiles point at, by name. */
+    endpoints: Record<string, ModelEndpoint>
   }
   /** Running summary service — maintains per-thread rolling summaries via a local model. */
   summary: {
@@ -239,8 +279,6 @@ export interface SovereignConfig {
       skipDuringSubagents: boolean
       /** After a recycle, wait for the context to grow this % of the window before the next one. */
       regrowPercent: number
-      /** A recycle that frees less than this % of the context stops auto-recycle until a compaction. */
-      minReclaimPercent: number
       /** The threshold after an idle gap past the prompt-cache TTL, when the next call rewrites the whole prompt anyway. */
       coldThresholdPercent: number
     }

@@ -8,9 +8,10 @@ export {
   type SovereignToolDeps,
   type EmbeddingsToolDeps,
   type TaskMcpDeps,
-  type CiWatchMcpDeps
+  type PrWatchMcpDeps
 } from './mcp-server.js'
 export { forgeTools, type ForgeMcpDeps } from './forge-tools.js'
+export { decisionTools, DECISION_TOOLS, type DecisionMcpDeps, type DecisionOpenInput } from './decision-tools.js'
 export { ensureLayeredContextFile, ensureAd4mSkill } from './personality.js'
 export { createPersonalityCompiler } from './personality-compiler.js'
 export type { PersonalityCompiler, PersonalityCompilerOptions, PersonalityManifest } from './personality-compiler.js'
