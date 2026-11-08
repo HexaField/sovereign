@@ -8,7 +8,8 @@
 //                  happen here. Normal Claude Code thread.
 //   - 'internal' — peripheral awareness. External integrations (AD4M, webhooks)
 //                  and watched-thread digests land here. Carries PRESENCE.md + memory.
-// Both are auto-created on first boot when missing.
+// Both are auto-created on first boot when missing, and again when the thread
+// holding a role is archived (archiving clears the role).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -75,8 +76,20 @@ export function createPresenceModule(deps: PresenceModuleDeps): PresenceModule {
 
   const cachedIds = { internal: null as string | null, gateway: null as string | null }
 
+  /** The cached id while its thread still exists, is live, and holds the role. */
+  function cachedLive(role: 'internal' | 'gateway'): string | null {
+    const id = cachedIds[role]
+    if (!id) return null
+    const thread = deps.threadManager.get(id)
+    if (thread && !thread.archived && thread.presence === role) return id
+    cachedIds[role] = null
+    return null
+  }
+
   function resolveThread(role: 'internal' | 'gateway'): string | null {
-    if (cachedIds[role]) return cachedIds[role]
+    const cached = cachedLive(role)
+    if (cached) return cached
+    // The thread manager allows one live thread per role, so this never duplicates.
     const existing = deps.threadManager.getPresenceThread(role)
     if (existing) {
       cachedIds[role] = existing.id
@@ -107,6 +120,24 @@ export function createPresenceModule(deps: PresenceModuleDeps): PresenceModule {
   // Trigger lookups/creates eagerly so the rest of the wiring sees both ids.
   internalThreadId()
   gatewayThreadId()
+
+  // Archiving a presence thread clears its role. Put a fresh thread in its
+  // place right away, so voice, replies and mentions keep a live target and the
+  // user gets a new main chat without a restart. A role cleared by an update is
+  // only dropped from the cache: whoever cleared it may be handing it to another
+  // thread, so the next lookup resolves it.
+  const offDeleted = deps.bus.on('thread.deleted', (event) => {
+    const id = (event.payload as { threadId?: string } | undefined)?.threadId
+    for (const role of ['internal', 'gateway'] as const) {
+      if (id && cachedIds[role] === id) resolveThread(role)
+    }
+  })
+  const offUpdated = deps.bus.on('thread.updated', (event) => {
+    const id = (event.payload as { threadId?: string } | undefined)?.threadId
+    for (const role of ['internal', 'gateway'] as const) {
+      if (id && cachedIds[role] === id) cachedLive(role)
+    }
+  })
 
   const lastOrigin = createLastOriginTracker(deps.bus, internalThreadId)
   const digest = createPresenceDigest({
@@ -151,6 +182,8 @@ export function createPresenceModule(deps: PresenceModuleDeps): PresenceModule {
     tools,
     forwardToInternal,
     dispose() {
+      offDeleted()
+      offUpdated()
       digest.dispose()
       lastOrigin.dispose()
     }

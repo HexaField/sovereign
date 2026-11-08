@@ -363,8 +363,9 @@ export function createThreadRoutes(
   })
 
   router.delete('/api/threads/:key', (req, res) => {
+    // Any thread may be archived, presence threads included: archiving clears
+    // the role and the presence module puts a fresh thread in its place.
     const thread = threadManager.get(req.params.key)
-    if (thread?.presence) return res.status(409).json({ error: 'A presence thread cannot be deleted' })
     const busy = !!thread && !thread.archived && !!thread.agentStatus && thread.agentStatus !== 'idle'
     const deleted = threadManager.delete(req.params.key)
     if (!deleted) return res.status(404).json({ error: 'Thread not found' })

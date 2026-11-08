@@ -4,7 +4,7 @@ import { threadKey, setThreadKey } from '../threads/store.js'
 import { closeDashboardModal } from '../nav/store.js'
 import { createThreadActions } from '../threads/thread-actions.js'
 import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
-import { sortThreads } from '../threads/thread-order.js'
+import { isListed, sortThreads } from '../threads/thread-order.js'
 
 interface ThreadEntry {
   id: string
@@ -13,7 +13,7 @@ interface ThreadEntry {
   agentStatus: string
   lastActivity: number
   archived: boolean
-  /** Set on the two presence threads, which cannot be deleted. */
+  /** The presence role (`gateway` or `internal`), when the thread holds one. */
   presence?: string
   /** Set while pinned to the top; `null` after an unpin broadcast. */
   pinnedAt?: number | null
@@ -97,7 +97,7 @@ export default function ThreadList() {
 
   const filtered = createMemo(() => {
     const q = search().toLowerCase().trim()
-    let list = threads().filter((t) => !t.archived)
+    let list = threads().filter(isListed)
     if (q) {
       list = list.filter((t) => {
         const mb = t.membraneId ? membraneMap().get(t.membraneId) : null
@@ -150,7 +150,7 @@ export default function ThreadList() {
 
   onMount(() => {
     loadThreads().then(() => {
-      const ids = sortThreads(threads().filter((t) => !t.archived))
+      const ids = sortThreads(threads().filter(isListed))
         .slice(0, 30)
         .map((t) => t.id)
       if (ids.length) loadPreviews(ids)

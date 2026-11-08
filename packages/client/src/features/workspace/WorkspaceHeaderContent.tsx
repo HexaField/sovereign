@@ -5,7 +5,7 @@ import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace }
 import { threadKey, switchThread, threads, createThread, moveThread, renameThread } from '../threads/store.js'
 import { createThreadActions } from '../threads/thread-actions.js'
 import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
-import { sortThreads } from '../threads/thread-order.js'
+import { listedThreads } from '../threads/thread-order.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
@@ -686,7 +686,7 @@ export function WorkspaceHeaderContent() {
             }}
           >
             <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="thread-picker-list">
-              <For each={sortThreads(threads().filter((t) => t.id))}>
+              <For each={listedThreads(threads().filter((t) => t.id))}>
                 {(t) => (
                   <>
                     <div

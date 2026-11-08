@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { compareThreads, comparePins, isPinned, sortThreads } from './thread-order.js'
+import { compareThreads, comparePins, isListed, isPinned, listedThreads, sortThreads } from './thread-order.js'
 
 const t = (id: string, lastActivity: number, pinnedAt?: number | null) => ({ id, lastActivity, pinnedAt })
 
@@ -28,7 +28,8 @@ describe('thread order', () => {
   })
 
   it('handles a missing lastActivity', () => {
-    const list = [{ id: 'none' }, t('some', 1)]
+    const none: { id: string; lastActivity?: number } = { id: 'none' }
+    const list = [none, t('some', 1)]
     expect(sortThreads(list).map((x) => x.id)).toEqual(['some', 'none'])
   })
 
@@ -43,5 +44,28 @@ describe('thread order', () => {
     expect(comparePins(t('a', 1), t('b', 2))).toBe(0)
     expect(comparePins(t('a', 1, 5), t('b', 2))).toBeLessThan(0)
     expect(compareThreads(t('a', 1), t('b', 2))).toBeGreaterThan(0)
+  })
+})
+
+describe('listed threads', () => {
+  it('hides the internal presence thread and archived threads, keeps the main presence thread', () => {
+    const list = [
+      { id: 'main', lastActivity: 1, presence: 'gateway' as const },
+      { id: 'internal', lastActivity: 9, presence: 'internal' as const },
+      { id: 'gone', lastActivity: 8, archived: true },
+      { id: 'work', lastActivity: 5 }
+    ]
+    expect(listedThreads(list).map((x) => x.id)).toEqual(['work', 'main'])
+    expect(isListed(list[0])).toBe(true)
+    expect(isListed(list[1])).toBe(false)
+    expect(isListed(list[2])).toBe(false)
+  })
+
+  it('keeps thread-list order (pins first)', () => {
+    const list = [
+      { id: 'a', lastActivity: 9 },
+      { id: 'b', lastActivity: 1, pinnedAt: 5 }
+    ]
+    expect(listedThreads(list).map((x) => x.id)).toEqual(['b', 'a'])
   })
 })

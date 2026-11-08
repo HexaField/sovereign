@@ -27,6 +27,28 @@ export function compareThreads(a: Orderable, b: Orderable): number {
   return comparePins(a, b) || (b.lastActivity ?? 0) - (a.lastActivity ?? 0)
 }
 
+/** The fields `isListed` reads. */
+export interface Listable {
+  presence?: string | null
+  archived?: boolean
+}
+
+/**
+ * True when a user-facing thread list (header picker, Overview, Cmd+K) shows
+ * the thread. Archived threads are left out, and so is the internal presence
+ * thread: the agent's background thread, which the user never chats in and
+ * which otherwise reads as a second copy of the main presence chat.
+ * System → Agents lists every thread and does not use this.
+ */
+export function isListed(t: Listable): boolean {
+  return !t.archived && t.presence !== 'internal'
+}
+
+/** The threads of `list` a user-facing thread list shows, in thread-list order. */
+export function listedThreads<T extends Orderable & Listable>(list: readonly T[]): T[] {
+  return sortThreads(list.filter(isListed))
+}
+
 /** A sorted copy of `list` in thread-list order. */
 export function sortThreads<T extends Orderable>(list: readonly T[]): T[] {
   return [...list].sort(compareThreads)

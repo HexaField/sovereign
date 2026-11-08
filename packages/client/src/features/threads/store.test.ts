@@ -50,6 +50,7 @@ import {
   _triggerPopstate
 } from './store.js'
 import { makeThread } from './test-factory.js'
+import { getPresenceGatewayThreadId } from './presence-helper.js'
 
 function mockThread(id: string, orgId = '_global'): ReturnType<typeof makeThread> {
   return makeThread({
@@ -174,6 +175,17 @@ describe('fetchThreadsForOrg — reconciliation', () => {
     setThreadKey('')
     setLocation()
     const data = { threads: [mockThread('first'), mockThread('second')] }
+    mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
+
+    fetchThreadsForOrg('org1')
+    await vi.waitFor(() => expect(threadKey()).toBe('first'))
+  })
+
+  it('auto-selects past the hidden internal presence thread', async () => {
+    setThreadKey('')
+    setLocation()
+    const internal = makeThread({ id: 'internal', presence: 'internal' })
+    const data = { threads: [internal, mockThread('first')] }
     mockFetch.mockResolvedValueOnce({ json: () => Promise.resolve(data) })
 
     fetchThreadsForOrg('org1')
@@ -399,6 +411,67 @@ describe('deleteThread', () => {
     })
     await expect(deleteThread('main')).rejects.toThrow('Thread not found')
     expect(threads()).toHaveLength(1)
+  })
+  it('never opens the hidden internal presence thread in place of an archived one', async () => {
+    setThreads([
+      makeThread({ id: 'main', lastActivity: 300 }),
+      makeThread({ id: 'internal', lastActivity: 250, presence: 'internal' }),
+      makeThread({ id: 'work', lastActivity: 100 })
+    ])
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ success: true }) })
+    await deleteThread('main')
+    expect(threadKey()).toBe('work')
+  })
+
+  it('archiving the open main presence thread opens its replacement when it arrives', async () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+    setThreads([
+      makeThread({ id: 'gw', lastActivity: 300, presence: 'gateway' }),
+      makeThread({ id: 'work', lastActivity: 100 })
+    ])
+    setThreadKey('gw')
+    // The server archives, then announces the new main thread.
+    ws._emit('thread.deleted', { payload: { threadId: 'gw' } })
+    expect(threadKey()).toBe('work')
+    ws._emit('thread.created', { payload: { thread: makeThread({ id: 'gw2', presence: 'gateway' }) } })
+    expect(threadKey()).toBe('gw2')
+    expect(threads().map((t) => t.id)).toEqual(['work', 'gw2'])
+    // Only once: a later main thread does not pull the user away.
+    ws._emit('thread.created', { payload: { thread: makeThread({ id: 'gw3', presence: 'gateway' }) } })
+    expect(threadKey()).toBe('gw2')
+    cleanup()
+  })
+
+  it('refreshes the cached presence thread ids when a presence thread is archived', async () => {
+    const presence = (id: string) => ({ ok: true, json: () => Promise.resolve({ gateway: { id }, internal: null }) })
+    const ws = createMockWs()
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const cleanup = initThreadStore(ws as any)
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValueOnce(presence('gw'))
+    // Clear whatever an earlier test left cached.
+    ws._emit('thread.updated', { payload: { threadId: 'x', patch: { presence: null } } })
+    expect(await getPresenceGatewayThreadId()).toBe('gw')
+
+    setThreads([makeThread({ id: 'gw', presence: 'gateway' })])
+    ws._emit('thread.deleted', { payload: { threadId: 'gw' } })
+    mockFetch.mockResolvedValueOnce(presence('gw2'))
+    expect(await getPresenceGatewayThreadId()).toBe('gw2')
+    cleanup()
+  })
+
+  it('a new main presence thread does not pull the user away when they archived something else', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+    setThreads([makeThread({ id: 'gw', presence: 'gateway' }), makeThread({ id: 'work' })])
+    setThreadKey('work')
+    ws._emit('thread.deleted', { payload: { threadId: 'gw' } })
+    ws._emit('thread.created', { payload: { thread: makeThread({ id: 'gw2', presence: 'gateway' }) } })
+    expect(threadKey()).toBe('work')
+    cleanup()
   })
 })
 

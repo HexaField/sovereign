@@ -4,7 +4,7 @@ import { createSignal, For, Show, onMount } from 'solid-js'
 import { threads, switchThread, type ThreadInfo } from '../threads/store.js'
 import { createThreadActions } from './thread-actions.js'
 import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from './ThreadActions.js'
-import { sortThreads } from './thread-order.js'
+import { listedThreads } from './thread-order.js'
 
 export const [quickSwitchOpen, setQuickSwitchOpen] = createSignal(false)
 
@@ -27,7 +27,7 @@ export function QuickSwitchModal() {
 
   const filtered = () => {
     const q = query()
-    const all = sortThreads(threads())
+    const all = listedThreads(threads())
     if (!q) return all
     return all.filter((t) => {
       const label = t.label || t.id

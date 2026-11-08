@@ -16,7 +16,7 @@ import type { ThreadActions } from './thread-actions.js'
 import { isPinned } from './thread-order.js'
 
 /** The thread fields the menu reads. */
-type MenuThread = { id: string; presence?: unknown; pinnedAt?: number | null }
+type MenuThread = { id: string; pinnedAt?: number | null }
 
 /** The 📌 shown next to a pinned thread's name in every list. */
 export function PinMark(props: { thread: { pinnedAt?: number | null }; class?: string }) {
@@ -141,18 +141,16 @@ function MenuPanel(props: { actions: ThreadActions; thread: MenuThread; class?: 
             >
               Rename
             </button>
-            <Show when={!props.thread.presence}>
-              <button
-                type="button"
-                role="menuitem"
-                class={itemClass}
-                style={{ color: '#ef4444' }}
-                {...hover}
-                onClick={() => props.actions.askDelete(id())}
-              >
-                Archive
-              </button>
-            </Show>
+            <button
+              type="button"
+              role="menuitem"
+              class={itemClass}
+              style={{ color: '#ef4444' }}
+              {...hover}
+              onClick={() => props.actions.askDelete(id())}
+            >
+              Archive
+            </button>
           </>
         }
       >

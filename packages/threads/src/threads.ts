@@ -90,9 +90,11 @@ function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
     pinnedRepoPath: typeof raw.pinnedRepoPath === 'string' ? raw.pinnedRepoPath : undefined,
     pinnedAt: typeof raw.pinnedAt === 'number' && raw.pinnedAt > 0 ? raw.pinnedAt : undefined,
     // Migrate legacy `presence: true` (boolean) → `presence: 'internal'`.
-    // String roles pass through untouched; anything else is dropped.
-    presence:
-      raw.presence === true
+    // String roles pass through untouched; anything else is dropped. An
+    // archived thread holds no role (older builds archived without clearing it).
+    presence: raw.archived
+      ? undefined
+      : raw.presence === true
         ? 'internal'
         : raw.presence === 'internal' || raw.presence === 'gateway'
           ? raw.presence
@@ -357,6 +359,9 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     const thread = threads.get(id)
     if (!thread) return false
     thread.archived = true
+    // An archived thread plays no presence role: the presence module resolves
+    // (or creates) a live thread for the role instead. History is kept.
+    delete thread.presence
     persistThreadsImmediate()
     bus.emit({
       type: 'thread.deleted',

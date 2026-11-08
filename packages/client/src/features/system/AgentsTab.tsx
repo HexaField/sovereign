@@ -21,7 +21,7 @@ interface Thread {
   membraneId?: string
   lastActivity?: number
   kind?: string
-  /** Set on the two presence threads, which cannot be deleted. */
+  /** The presence role (`gateway` or `internal`), when the thread holds one. */
   presence?: string
   /** Set while pinned to the top. */
   pinnedAt?: number | null

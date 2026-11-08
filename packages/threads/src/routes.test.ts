@@ -490,13 +490,18 @@ describe('Thread Routes — rename and delete', () => {
     expect(stopped).toEqual(['child-working'])
   })
 
-  it('DELETE /api/threads/:key refuses a presence thread with 409', async () => {
+  it('DELETE /api/threads/:key archives a presence thread and clears its role', async () => {
     const thread = tm.create({ label: 'p', presence: 'gateway' })
     const res = await request(app).delete(`/api/threads/${thread.id}`)
-    expect(res.status).toBe(409)
-    expect(res.body.error).toBe('A presence thread cannot be deleted')
+    expect(res.status).toBe(200)
+    expect(tm.get(thread.id)).toMatchObject({ archived: true })
+    expect(tm.get(thread.id)?.presence).toBeUndefined()
     const list = await request(app).get('/api/threads')
-    expect(list.body.threads.map((t: { id: string }) => t.id)).toContain(thread.id)
+    expect(list.body.threads.map((t: { id: string }) => t.id)).not.toContain(thread.id)
+    const presence = await request(app).get('/api/threads/presence')
+    expect(presence.body.gateway).toBeNull()
+    // The role is free for a new thread.
+    expect(tm.create({ label: 'p2', presence: 'gateway' }).presence).toBe('gateway')
   })
 
   it('DELETE /api/threads/:key returns 404 for an unknown thread', async () => {
