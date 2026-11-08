@@ -524,20 +524,33 @@ describe('claude-code/mcp-server', () => {
       expect((parseResult(result) as any).sessionKey).toBe('abc')
     })
 
-    it('passes the devin executor and its model through', async () => {
+    it('passes the harness and its model through', async () => {
       const deps = makeDeps()
       await invoke(getTools(deps), 'agents_spawn', {
         task: 'fix the bug',
         cwd: '/repo',
-        executor: 'devin',
+        harness: 'devin',
         model: 'swe-2-medium'
       })
       expect(deps.agents.spawn).toHaveBeenCalledWith('agent:main:thread:t1', {
         task: 'fix the bug',
         cwd: '/repo',
-        executor: 'devin',
+        harness: 'devin',
         model: 'swe-2-medium'
       })
+    })
+
+    it('lists the configured harness profiles in its description', () => {
+      const deps = makeDeps()
+      deps.agents.harnesses = () => [
+        'claude: Claude Code, cloud, MCP yes',
+        'pi: pi, model q, endpoint s (local), MCP no'
+      ]
+      const d: string = (getTools(deps).agents_spawn as unknown as { description: string }).description
+      expect(d).toContain(
+        'Harness profiles (`harness`):\n- claude: Claude Code, cloud, MCP yes\n- pi: pi, model q, endpoint s (local), MCP no'
+      )
+      expect(d).not.toMatch(/executor/)
     })
 
     it('throws without a calling session', async () => {

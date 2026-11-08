@@ -43,9 +43,11 @@ export interface SovereignToolDeps {
     ): Promise<Array<{ sessionKey: string; label: string; status: string; task?: string }>>
     spawn(
       parentSessionKey: string,
-      opts: { task: string; cwd?: string; label?: string; executor?: 'claude' | 'devin'; model?: string }
+      opts: { task: string; cwd?: string; label?: string; harness?: string; model?: string }
     ): Promise<{ sessionKey: string }>
     stop(sessionKey: string): Promise<void>
+    /** One line per configured harness profile, for agents_spawn's description. */
+    harnesses?(): string[]
   }
   notifications: {
     send(opts: { title: string; body?: string; severity?: string; entityId?: string }): { id: string }
@@ -500,23 +502,27 @@ export function createSovereignMcpServer(
     tool(
       'agents_spawn',
       'Delegate a task to a subagent. The subagent runs as its own session in `cwd` (a repo or worktree), with SUBAGENT.md and the repo AGENTS.md as its context, and codegraph, semble, code-edit, browser and the built-in file tools. It never commits, spawns subagents or does destructive actions. The call returns at once with the subagent session key. When the subagent ends, its final report arrives in this thread as one message ([Subagent done: …] or [Subagent failed: …]); end your turn and wait for it. Put every fact the subagent needs in `task`: it does not see this conversation. Max 4 running per thread; time limit 4 h unless config `agentBackend.subagentDefaults.timeoutMinutes` sets another.\n\n' +
-        "`executor: 'devin'` runs the task through the Devin CLI (Cognition's SWE-2 models) instead of a Claude session. Use it for well-specified coding tasks in public repos (for example ~/workspaces/coasys/*). The `cwd` must be under config `agentBackend.devin.allowedRoots`; private directories (~/.sovereign, ~/workspaces/hexafield) are refused. A devin run cannot reach Sovereign's MCP tools (codegraph, semble, code-edit, browser, sovereign): put every fact in `task`. It never commits or pushes.",
+        "`harness` picks a profile from config `agentBackend.harnesses` (default `agentBackend.subagentDefaults.harness`, else claude): a Claude Code session, or another CLI agent (Devin, Codex, OpenCode, Pi) run by Sovereign. A non-claude run needs a `cwd` under its profile's allowedRoots; private directories (~/.sovereign, ~/workspaces/hexafield) are refused unless the profile's endpoint is local. It gets the MCP tools only where its line says MCP yes: otherwise put every fact in `task`." +
+        ((deps.agents.harnesses?.() ?? []).length
+          ? `\n\nHarness profiles (\`harness\`):\n${deps.agents.harnesses!()
+              .map((l) => `- ${l}`)
+              .join('\n')}`
+          : ''),
       {
         task: z.string().describe('The complete, self-contained task.'),
         cwd: z
           .string()
           .optional()
-          .describe('Absolute working directory for the subagent. Default ~/workspaces. Required for devin.'),
+          .describe(
+            'Absolute working directory for the subagent. Default ~/workspaces. Required for a non-claude harness.'
+          ),
         label: z.string().optional().describe('Short name shown in the UI and in the result message.'),
-        executor: z
-          .enum(['claude', 'devin'])
-          .optional()
-          .describe("Who runs the task: 'claude' (default, a Claude Code session) or 'devin' (the Devin CLI)."),
+        harness: z.string().optional().describe('A harness profile name (listed above). Default claude.'),
         model: z
           .string()
           .optional()
           .describe(
-            'Devin model, for example swe-2-high or swe-2-medium. Default config `agentBackend.devin.defaultModel`. Devin only.'
+            "Model id for the harness (for example swe-2-high for devin). Default the profile's model; thread and global subagent model settings take priority for claude."
           )
       },
       async (args) => {
@@ -526,7 +532,7 @@ export function createSovereignMcpServer(
           task: args.task,
           cwd: args.cwd,
           label: args.label,
-          ...(args.executor ? { executor: args.executor } : {}),
+          ...(args.harness ? { harness: args.harness } : {}),
           ...(args.model ? { model: args.model } : {})
         })
         return okJson({ sessionKey: result.sessionKey, note: 'Result arrives as a message in this thread.' })

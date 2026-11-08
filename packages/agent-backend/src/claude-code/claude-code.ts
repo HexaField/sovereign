@@ -71,7 +71,7 @@ import { withEditRoot } from './config.js'
 import {
   buildSubagentSystemPrompt,
   MAX_SUBAGENTS_PER_PARENT,
-  selectSubagentMcpServers,
+  subagentMcpServers,
   SUBAGENT_BUILTIN_TOOLS,
   MAIN_DISALLOWED_TOOLS,
   SUBAGENT_AUTO_COMPACT_WINDOW,
@@ -447,28 +447,26 @@ export function createClaudeCodeBackend(
   ): Record<string, any> {
     const { isSubagent = false, sessionKey, cwd } = opts
     const cfg = getConfig()
+    // Subagents get a fixed set (codegraph, semble, code, narrow sovereign).
+    // Their settingSources skip ~/.claude.json, so its user-scope servers
+    // are merged in there.
+    if (isSubagent) {
+      return subagentMcpServers(cfg.mcpServers ?? {}, { cwd, claudeJsonPath: path.join(home, '.claude.json') })
+    }
     const servers: Record<string, any> = { ...cfg.mcpServers }
     // The symbol editor may also write in the session's own cwd.
     if (cwd && servers.code) servers.code = withEditRoot(servers.code, cwd)
-    // Sovereign tools: connect via the HTTP MCP endpoint on the Sovereign server.
-    // Subagents get the filtered /api/mcp/subagent endpoint (5 tools only:
-    // browser + embeddings). Main sessions get the full /api/mcp endpoint
-    // with ?session= for per-session attribution.
+    // Sovereign tools: the full /api/mcp endpoint, with ?session= for
+    // per-session attribution.
     // alwaysLoad: true keeps sovereign tools in context at turn 1 (no ToolSearch).
-    const mcpUrl = isSubagent
-      ? 'http://localhost:5801/api/mcp/subagent'
-      : sessionKey
-        ? `http://localhost:5801/api/mcp?session=${encodeURIComponent(sessionKey)}`
-        : 'http://localhost:5801/api/mcp'
+    const mcpUrl = sessionKey
+      ? `http://localhost:5801/api/mcp?session=${encodeURIComponent(sessionKey)}`
+      : 'http://localhost:5801/api/mcp'
     servers.sovereign = {
       type: 'http' as const,
       url: mcpUrl,
       alwaysLoad: true
     }
-    // Subagents get a fixed set (codegraph, semble, code, narrow sovereign).
-    // Their settingSources skip ~/.claude.json, so its user-scope servers
-    // are merged in here.
-    if (isSubagent) return selectSubagentMcpServers(servers, path.join(home, '.claude.json'))
     return servers
   }
 

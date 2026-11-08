@@ -24,7 +24,9 @@ import type { AgentBackend, AgentBackendKind, EventBus } from '@sovereign/core'
 import { unwrapThreadId } from '@sovereign/core'
 import type { ThreadManager } from '@sovereign/threads'
 import { sessionKeyToThreadKey } from './wiring.js'
-import type { DevinExecutor } from './devin/executor.js'
+import type { HarnessProfile } from '@sovereign/config'
+import { MAX_SUBAGENTS_PER_PARENT } from './claude-code/subagent-runner.js'
+import type { HarnessRunner } from './harness/runner.js'
 
 /** Global defaults for subagent routing. Thread-level config takes priority
  *  over these; these take priority over the model's explicit request. */
@@ -33,6 +35,8 @@ export interface SubagentDefaults {
   model?: string
   /** Wall-clock limit per subagent; unset: the backend's default. */
   timeoutMinutes?: number
+  /** The harness profile agents_spawn uses when the call names none; unset: claude. */
+  harness?: string
 }
 
 export interface SovereignMcpDepsInput {
@@ -65,8 +69,12 @@ export interface SovereignMcpDepsInput {
   forge?: ForgeMcpDeps
   /** decision_open / decision_close, in every thread once bound. */
   decisions?: DecisionMcpDeps
-  /** Runs `agents_spawn` with `executor: 'devin'`. Unset: such a call is refused. */
-  devin?: Pick<DevinExecutor, 'spawn' | 'list' | 'has' | 'stop'>
+  /** Harness profiles (config `agentBackend.harnesses`) and the runner for the
+   *  non-claude ones. Unset: only claude runs. */
+  harnesses?: {
+    runner: Pick<HarnessRunner, 'spawn' | 'list' | 'has' | 'stop' | 'describe'>
+    profiles: () => Record<string, HarnessProfile>
+  }
 }
 
 export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignToolDeps {
@@ -95,6 +103,28 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
     const record = routing.registry.getByThread(id) ?? routing.registry.getBySession(id)
     // A record can still name the legacy form: it resolves to the same bare key
     return record ? unwrapThreadId(record.sessionKey) : id
+  }
+
+  /** Running subagents: every backend's live children, then the harness runs. */
+  async function listAgents(
+    parentKey?: string
+  ): Promise<Array<{ sessionKey: string; label: string; status: string; task?: string }>> {
+    const out: Array<{ sessionKey: string; label: string; status: string; task?: string }> = []
+    for (const inst of routing.all()) {
+      try {
+        const list = await inst.backend.listSubagents(parentKey)
+        // Live only: every subagent ever spawned stays registered as idle,
+        // and listing them all cost an agent ~270k characters per call.
+        for (const s of list)
+          if (s.status !== 'idle')
+            out.push({ sessionKey: s.sessionKey, label: s.label, status: s.status, task: s.task })
+      } catch {
+        /* ignore */
+      }
+    }
+    for (const r of input.harnesses?.runner.list(parentKey) ?? [])
+      out.push({ sessionKey: r.sessionKey, label: r.label, status: r.status, task: r.task })
+    return out
   }
 
   return {
@@ -136,30 +166,27 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
       }
     },
     agents: {
-      async list(parentKey) {
-        const out: Array<{ sessionKey: string; label: string; status: string; task?: string }> = []
-        for (const inst of routing.all()) {
-          try {
-            const list = await inst.backend.listSubagents(parentKey)
-            // Live only: every subagent ever spawned stays registered as idle,
-            // and listing them all cost an agent ~270k characters per call.
-            for (const s of list)
-              if (s.status !== 'idle')
-                out.push({ sessionKey: s.sessionKey, label: s.label, status: s.status, task: s.task })
-          } catch {
-            /* ignore */
-          }
-        }
-        for (const r of input.devin?.list(parentKey) ?? [])
-          out.push({ sessionKey: r.sessionKey, label: r.label, status: r.status, task: r.task })
-        return out
-      },
+      list: listAgents,
       async spawn(parentKey, opts) {
         const defaults = input.subagentDefaults?.()
-        // Devin runs its own models: the thread's and the global Claude routing do not apply.
-        if (opts.executor === 'devin') {
-          if (!input.devin) throw new Error('agents_spawn: the devin executor is not available')
-          const sessionKey = await input.devin.spawn(parentKey, {
+        const harness = opts.harness ?? defaults?.harness ?? 'claude'
+        const profile = input.harnesses?.profiles()[harness]
+        if (!profile && harness !== 'claude') {
+          const names = Object.keys(input.harnesses?.profiles() ?? {})
+          throw new Error(`agents_spawn: unknown harness ${harness} (configured: ${names.join(', ') || 'claude'})`)
+        }
+        // One limit across every harness: Claude children and harness runs alike.
+        const running = (await listAgents(parentKey)).length
+        if (running >= MAX_SUBAGENTS_PER_PARENT) {
+          throw new Error(
+            `agents_spawn: ${running} subagents already run for this thread (max ${MAX_SUBAGENTS_PER_PARENT}); wait for one to finish`
+          )
+        }
+        // Other harnesses run their own models: the thread's and the global Claude routing do not apply.
+        if (profile && profile.adapter !== 'claude') {
+          if (!input.harnesses) throw new Error(`agents_spawn: harness ${harness} needs the harness runner`)
+          const sessionKey = await input.harnesses.runner.spawn(parentKey, {
+            harness,
             task: opts.task,
             cwd: opts.cwd,
             label: opts.label,
@@ -187,8 +214,8 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         }
         if (!backend.spawnSubagent) throw new Error('agents_spawn: backend does not support subagent spawn')
 
-        // Same priority for model: thread > global > the parent's model.
-        const effectiveModel = thread?.subagentModel ?? defaults?.model
+        // Same priority for model: thread > global > the call's > the profile's > the parent's model.
+        const effectiveModel = thread?.subagentModel ?? defaults?.model ?? (opts.model || profile?.model)
         const childKey = await backend.spawnSubagent(parentKey, {
           task: opts.task,
           cwd: opts.cwd,
@@ -199,10 +226,13 @@ export function buildSovereignMcpDeps(input: SovereignMcpDepsInput): SovereignTo
         return { sessionKey: childKey }
       },
       async stop(sessionKey) {
-        if (input.devin?.has(sessionKey)) return input.devin.stop(sessionKey)
+        if (input.harnesses?.runner.has(sessionKey)) return input.harnesses.runner.stop(sessionKey)
         const backend = routing.forSession(sessionKey)
         if (!backend.stopSubagent) throw new Error('agents_stop: backend does not support stopping subagents')
         await backend.stopSubagent(sessionKey)
+      },
+      harnesses() {
+        return input.harnesses?.runner.describe() ?? []
       }
     },
     notifications: {

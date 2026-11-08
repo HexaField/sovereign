@@ -4,7 +4,7 @@
 
 import fs from 'node:fs'
 import type { EventBus, AgentBackendKind } from '@sovereign/core'
-import type { ConfigStore } from '@sovereign/config'
+import type { ConfigStore, HarnessProfile, ModelEndpoint } from '@sovereign/config'
 import { createBackend } from './factory.js'
 import { routingAsBackend } from './routing-as-backend.js'
 import { createSessionsRegistry } from '@sovereign/primitives'
@@ -22,7 +22,8 @@ import { createLocalLlmBackend, localLlmConfigGetter } from './local-llm/index.j
 import { createMetricsAccumulator, type MetricsAccumulator } from './metrics.js'
 import { buildSovereignMcpDeps, type SubagentDefaults } from './mcp-deps.js'
 import { createEmbeddingsService } from './embeddings-service.js'
-import { createDevinExecutor } from './devin/executor.js'
+import { createHarnessRunner } from './harness/runner.js'
+import { harnessMcpServers } from './harness/mcp.js'
 import { createCronService, type CronService } from '@sovereign/scheduler'
 import type { Scheduler } from '@sovereign/scheduler'
 import type { OrgManager } from '@sovereign/orgs'
@@ -297,22 +298,30 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const subagentDefaults = (): SubagentDefaults => ({
     backend: configStore.get<string>('agentBackend.subagentDefaults.backend') ?? undefined,
     model: configStore.get<string>('agentBackend.subagentDefaults.model') ?? undefined,
-    timeoutMinutes: configStore.get<number>('agentBackend.subagentDefaults.timeoutMinutes') ?? undefined
+    timeoutMinutes: configStore.get<number>('agentBackend.subagentDefaults.timeoutMinutes') ?? undefined,
+    harness: configStore.get<string>('agentBackend.subagentDefaults.harness') ?? undefined
   })
 
   // Embeddings — local vector search over on-machine content. The service
   // initialises lazily (db opens on first tool call, not at boot).
   const embeddingsService = createEmbeddingsService({ dataDir: input.dataDir })
 
-  // agents_spawn with executor 'devin': Devin CLI runs, results delivered like Claude subagents'.
-  const devinExecutor = createDevinExecutor({
+  // agents_spawn with a non-claude harness profile (Devin, Codex, OpenCode, Pi):
+  // CLI runs, results delivered like Claude subagents'.
+  const harnessProfiles = () => configStore.get<Record<string, HarnessProfile>>('agentBackend.harnesses') ?? {}
+  const harnessClaudeConfig = claudeCodeConfigGetter(configStore, dataDir, input.configDir)
+  const harnessRunner = createHarnessRunner({
     dataDir,
     home: process.env.HOME ?? '',
     configDir: input.configDir,
-    settings: () => ({
-      defaultModel: configStore.get<string>('agentBackend.devin.defaultModel') ?? undefined,
-      allowedRoots: configStore.get<string[]>('agentBackend.devin.allowedRoots') ?? undefined
-    }),
+    profiles: harnessProfiles,
+    endpoints: () => configStore.get<Record<string, ModelEndpoint>>('agentBackend.endpoints') ?? {},
+    secret: (name) => configStore.getSecret(name) || undefined,
+    mcpServers: (cwd) =>
+      harnessMcpServers(harnessClaudeConfig().mcpServers ?? {}, {
+        cwd,
+        claudeJsonPath: `${process.env.HOME ?? ''}/.claude.json`
+      }),
     deliver: (parentKey, text) => deliverToParent(parentKey, text)
   })
 
@@ -329,7 +338,7 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
     browserService,
     embeddings: embeddingsService,
     subagentDefaults,
-    devin: devinExecutor,
+    harnesses: { runner: harnessRunner, profiles: harnessProfiles },
     ...(input.presence ? { presence: input.presence } : {}),
     ...(input.tasks ? { tasks: input.tasks } : {}),
     ...(input.prWatch ? { prWatch: input.prWatch } : {}),
@@ -536,8 +545,8 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
       console.warn(`[wiring] subagent result delivery failed for ${parentKey}:`, err)
     )
   }
-  // Devin runs a restart cut off: their parents wait for a result, so tell them.
-  devinExecutor.recoverInterrupted()
+  // Harness runs a restart cut off: their parents wait for a result, so tell them.
+  harnessRunner.recoverInterrupted()
 
   return {
     routingBackend,

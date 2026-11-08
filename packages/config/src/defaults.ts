@@ -45,10 +45,19 @@ export const defaults: SovereignConfig = {
       },
       endpoints: []
     },
-    devin: {
-      defaultModel: 'swe-2-high',
-      allowedRoots: ['~/workspaces/coasys']
-    }
+    // Codex, OpenCode and Pi need a model endpoint, so they get profiles once one is configured.
+    harnesses: {
+      claude: { adapter: 'claude' },
+      devin: {
+        adapter: 'devin',
+        model: 'swe-2-high',
+        sandbox: 'harness',
+        allowedRoots: ['~/workspaces/coasys'],
+        configFile: '~/.config/devin/executor.json',
+        mcp: true
+      }
+    },
+    endpoints: {}
   },
   summary: {
     enabled: false,

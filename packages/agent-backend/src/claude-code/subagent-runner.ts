@@ -7,6 +7,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { withEditRoot } from './config.js'
 
 /** Built-in tools a child may call. No Agent: children never spawn children.
  *  WebFetch and WebSearch serve research children (deep-research researchers). */
@@ -120,4 +121,24 @@ export function selectSubagentMcpServers(configured: Record<string, any>, claude
   const out: Record<string, any> = {}
   for (const name of SUBAGENT_MCP_SERVERS) if (all[name]) out[name] = all[name]
   return out
+}
+
+/** Sovereign's narrow MCP endpoint for subagents (browser + embeddings). */
+export const SUBAGENT_SOVEREIGN_MCP_URL = 'http://localhost:5801/api/mcp/subagent'
+
+/**
+ * A child's MCP servers from the configured ones: the code server may also
+ * edit in `cwd`, `sovereign` is the narrow subagent endpoint, and the set is
+ * {@link selectSubagentMcpServers}'. Claude subagents and every other
+ * harness (`harness/mcp.ts`) start from this.
+ */
+export function subagentMcpServers(
+  configured: Record<string, any>,
+  opts: { cwd?: string; claudeJsonPath: string }
+): Record<string, any> {
+  const servers: Record<string, any> = { ...configured }
+  if (opts.cwd && servers.code) servers.code = withEditRoot(servers.code, opts.cwd)
+  // alwaysLoad: true keeps sovereign tools in context at turn 1 (no ToolSearch).
+  servers.sovereign = { type: 'http' as const, url: SUBAGENT_SOVEREIGN_MCP_URL, alwaysLoad: true }
+  return selectSubagentMcpServers(servers, opts.claudeJsonPath)
 }

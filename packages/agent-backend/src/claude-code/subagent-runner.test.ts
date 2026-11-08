@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { buildSubagentSystemPrompt, findRepoContext, selectSubagentMcpServers } from './subagent-runner.js'
+import { delimiter, join } from 'node:path'
+import {
+  buildSubagentSystemPrompt,
+  findRepoContext,
+  selectSubagentMcpServers,
+  subagentMcpServers
+} from './subagent-runner.js'
 
 describe('claude-code/subagent-runner', () => {
   let root: string
@@ -93,6 +98,19 @@ describe('claude-code/subagent-runner', () => {
       expect(selectSubagentMcpServers({ sovereign: { url: 'u' } }, join(root, 'missing.json'))).toEqual({
         sovereign: { url: 'u' }
       })
+    })
+  })
+
+  describe('subagentMcpServers', () => {
+    it('adds the narrow sovereign endpoint and the cwd as an edit root, then selects the subagent set', () => {
+      const code = { type: 'stdio', command: 'node', args: ['mcp.js', '--edit-roots', '/w'] }
+      const out = subagentMcpServers(
+        { code, ad4m: { type: 'http', url: 'a' }, codegraph: { type: 'stdio', command: 'codegraph', args: [] } },
+        { cwd: '/tmp/repo', claudeJsonPath: join(root, 'missing.json') }
+      )
+      expect(Object.keys(out)).toEqual(['codegraph', 'code', 'sovereign'])
+      expect(out.code.args).toEqual(['mcp.js', '--edit-roots', ['/w', '/tmp/repo'].join(delimiter)])
+      expect(out.sovereign).toEqual({ type: 'http', url: 'http://localhost:5801/api/mcp/subagent', alwaysLoad: true })
     })
   })
 })
