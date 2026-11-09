@@ -95,9 +95,26 @@ export interface ThreadInfo {
    *  the thread lists show it above the hand-placed ones. Set via
    *  POST /api/threads/reorder; cleared when the thread is pinned or unpinned. */
   sortOrder?: number
+  /** The user-made folder (`ThreadFolder.id`) holding this thread. Unset = the
+   *  main list. One level: a folder holds threads, never other folders.
+   *  Set via PUT /api/threads/:key/folder; cleared when its folder is deleted. */
+  folderId?: string
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus
   createdAt: number
   archived: boolean
+}
+
+/**
+ * A folder the user made and named in the thread lists, holding related threads
+ * (`ThreadInfo.folderId`). Folders do not nest. Stored in
+ * `<dataDir>/thread-folders.json`; served by `/api/thread-folders`.
+ */
+export interface ThreadFolder {
+  /** Opaque UUID. */
+  id: string
+  /** Display name, trimmed, 1–80 characters, unique ignoring case. */
+  name: string
+  createdAt: number
 }

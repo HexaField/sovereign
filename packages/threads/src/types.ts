@@ -5,9 +5,9 @@
 // definition — a stale `thread.key` access then fails to compile everywhere.
 // Re-exported here for back-compat with the many `@sovereign/threads` importers.
 
-import type { EntityType, EntityBinding, ThreadInfo } from '@sovereign/core'
+import type { EntityType, EntityBinding, ThreadInfo, ThreadFolder } from '@sovereign/core'
 
-export type { EntityType, EntityBinding, ThreadInfo } from '@sovereign/core'
+export type { EntityType, EntityBinding, ThreadInfo, ThreadFolder } from '@sovereign/core'
 
 export interface ThreadEvent {
   threadId: string
@@ -103,6 +103,26 @@ export interface ThreadManager {
    * Optional so test doubles need not implement it.
    */
   reorder?(ids: string[], opts?: { pinned?: boolean }): ThreadInfo[]
+  /**
+   * User-made folders (one level: threads inside folders, never folders inside
+   * folders). Folder changes emit `thread.folders` with the whole list; a thread
+   * moving in or out emits `thread.updated` `{ folderId, sortOrder: null }`.
+   * Optional so test doubles need not implement them.
+   */
+  listFolders?(): ThreadFolder[]
+  /** Throws `FolderError` on an empty, too long or already used name. */
+  createFolder?(name: string): ThreadFolder
+  /** Returns undefined for an unknown folder; throws `FolderError` on a bad name. */
+  renameFolder?(id: string, name: string): ThreadFolder | undefined
+  /** Deletes the folder, never its threads: they go back to the main list. False for an unknown folder. */
+  deleteFolder?(id: string): boolean
+  /**
+   * Move a thread into a folder (`folderId`) or back to the main list (`null`).
+   * It lands at the top of its new list, as a thread never placed by hand; a pin
+   * stays. Not activity. Returns undefined for an unknown thread; throws
+   * `FolderError` for an unknown folder.
+   */
+  moveToFolder?(threadId: string, folderId: string | null): ThreadInfo | undefined
   /** Returns the single thread carrying the given presence role, or null when
    *  none exists. At most one thread per role; see `plans/presence-thread-spec.md`. */
   getPresenceThread(role: 'internal' | 'gateway'): ThreadInfo | null

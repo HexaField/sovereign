@@ -9,25 +9,42 @@
 // - Buttons, links' own controls and text fields in a row never start a drag.
 // - Near the list's top or bottom edge the list scrolls; Escape cancels.
 //
-// Rows are the elements carrying `data-thread-row="<id>"` inside `container`,
-// in the same order as `items()`.
+// - With folders (`onMoveToFolder`): dropping on a folder's row
+//   (`data-drop-folder="<id>"`) files the thread there, and a thread dragged
+//   out of its folder's block (`section`) goes back to the main list.
+//
+// Rows are the elements carrying `data-thread-row="<id>"` inside `container`
+// (and, with `list`, `data-drag-list="<list>"`), in the same order as `items()`.
 
 import { createSignal } from 'solid-js'
 import { autoScrollStep, dropIndexAt, planDrop, type DragThread, type ReorderPlan } from './thread-drag.js'
 
-/** Where a drag would drop now. `pinned` is set when the drop pins (true) or unpins (false). */
+/**
+ * Where a drag would drop now. `pinned` is set when the drop pins (true) or
+ * unpins (false). `folderId` is set for a move instead of a reorder: into that
+ * folder, or (`null`) out of the folder into the main list; `index` is then -1.
+ */
 export interface DropTarget {
   index: number
   pinned?: boolean
+  folderId?: string | null
 }
 
 export interface ThreadDragOptions<T extends DragThread> {
   /** The threads in the order the list shows them. */
   items: () => readonly T[]
-  /** The list element holding the rows; also the element that scrolls. */
+  /** The element that scrolls and holds the rows. */
   container: () => HTMLElement | undefined
+  /** Only rows marked `data-drag-list="<list>"` belong to this list (several lists share one container). */
+  list?: string
   /** Apply a drop. */
   onReorder: (plan: ReorderPlan) => void
+  /** File the dragged thread in a folder, or (`null`) take it out of its folder. Enables folder drops. */
+  onMoveToFolder?: (id: string, folderId: string | null) => void
+  /** The folder this list is (undefined: the main list). Its own row is not a drop target. */
+  ownFolder?: string
+  /** The folder's block (its row and threads): a drop outside it takes the thread out. */
+  section?: () => HTMLElement | undefined
 }
 
 /** Movement (px) before a pressed row or grip turns into a drag. */
@@ -42,18 +59,45 @@ export function createThreadDrag<T extends DragThread>(opts: ThreadDragOptions<T
   const [target, setTarget] = createSignal<DropTarget | null>(null)
 
   let press: { id: string; pointerId: number; x: number; y: number; threshold: number } | null = null
+  let lastX = 0
   let lastY = 0
   let frame = 0
   let bodyUserSelect = ''
 
+  const rowSelector = opts.list ? `[data-thread-row][data-drag-list="${CSS.escape(opts.list)}"]` : '[data-thread-row]'
+
   function rows(): HTMLElement[] {
     const el = opts.container()
-    return el ? Array.from(el.querySelectorAll<HTMLElement>('[data-thread-row]')) : []
+    return el ? Array.from(el.querySelectorAll<HTMLElement>(rowSelector)) : []
+  }
+
+  /** The folder move the pointer is over, if any: a folder row, or (null) outside this folder. */
+  function folderMove(): string | null | undefined {
+    if (!opts.onMoveToFolder) return undefined
+    const el = opts.container()
+    if (!el) return undefined
+    for (const row of el.querySelectorAll<HTMLElement>('[data-drop-folder]')) {
+      const id = row.dataset.dropFolder
+      if (!id || id === opts.ownFolder) continue
+      const r = row.getBoundingClientRect()
+      if (lastY >= r.top && lastY < r.bottom && lastX >= r.left && lastX <= r.right) return id
+    }
+    const block = opts.ownFolder ? opts.section?.() : undefined
+    if (block) {
+      const r = block.getBoundingClientRect()
+      if (lastY < r.top || lastY > r.bottom) return null
+    }
+    return undefined
   }
 
   function retarget(): void {
     const id = draggingId()
     if (!id) return
+    const move = folderMove()
+    if (move !== undefined) {
+      setTarget({ index: -1, folderId: move })
+      return
+    }
     const index = dropIndexAt(
       rows().map((r) => r.getBoundingClientRect()),
       lastY
@@ -98,12 +142,17 @@ export function createThreadDrag<T extends DragThread>(opts: ThreadDragOptions<T
     // The click that ends a mouse drag must not also open the row.
     swallowNextClick()
     if (!drop || !t) return
+    if (t.folderId !== undefined) {
+      opts.onMoveToFolder?.(id, t.folderId)
+      return
+    }
     const plan = planDrop(opts.items(), id, t.index)
     if (plan) opts.onReorder(plan)
   }
 
   function onMove(e: PointerEvent): void {
     if (!press || e.pointerId !== press.pointerId) return
+    lastX = e.clientX
     lastY = e.clientY
     if (!draggingId()) {
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < press.threshold) return
@@ -160,6 +209,7 @@ export function createThreadDrag<T extends DragThread>(opts: ThreadDragOptions<T
   function startPress(e: PointerEvent, id: string, threshold: number): void {
     if (press || draggingId()) return
     press = { id, pointerId: e.pointerId, x: e.clientX, y: e.clientY, threshold }
+    lastX = e.clientX
     lastY = e.clientY
     listen()
   }
@@ -171,6 +221,8 @@ export function createThreadDrag<T extends DragThread>(opts: ThreadDragOptions<T
     target,
     /** True when the drop line belongs above row `index` (0..n; n: below the last). */
     lineAt: (index: number) => target()?.index === index,
+    /** The folder move a drop would make now: a folder id, `null` (out of the folder), or undefined (none). */
+    folderTarget: () => target()?.folderId,
     /** pointerdown on a row's ⠿ grip: any pointer drags. */
     onGripPointerDown(e: PointerEvent, id: string): void {
       if (e.button !== 0) return

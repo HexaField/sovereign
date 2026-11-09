@@ -1,15 +1,16 @@
 import { createSignal } from 'solid-js'
-import type { ThreadInfo } from '@sovereign/core'
+import type { ThreadInfo, ThreadFolder } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
 import { resetPresenceThreadCache } from './presence-helper.js'
 import { isListed } from './thread-order.js'
 import { applyReorder, restoreOrder, snapshotOrder, type ReorderPlan } from './thread-drag.js'
+import { loadOpenFolders, saveOpenFolders } from './thread-folders.js'
 
 // Single source of truth for the thread shape: the canonical `ThreadInfo`
 // from @sovereign/core (bare UUID `id`, no `key`). Importing it here means a
 // stale `thread.key` access is a compile error rather than a silent runtime
 // "empty dropdown".
-export type { ThreadInfo }
+export type { ThreadInfo, ThreadFolder }
 
 /** Convenience accessor — first workspace, or undefined. */
 export function threadPrimaryWorkspace(t: ThreadInfo): string | undefined {
@@ -217,6 +218,108 @@ export async function reorderThreads(plan: ReorderPlan): Promise<void> {
   }
 }
 
+// ── Folders (user-made; one level). Layout rule: thread-folders.ts ──────────
+
+export const [folders, setFolders] = createSignal<ThreadFolder[]>([])
+/** The folders open in the thread lists (shared by every list, kept per browser). */
+export const [openFolders, setOpenFolders] = createSignal<ReadonlySet<string>>(loadOpenFolders())
+
+export function isFolderOpen(id: string): boolean {
+  return openFolders().has(id)
+}
+
+export function setFolderOpen(id: string, open: boolean): void {
+  const next = new Set(openFolders())
+  if (open) next.add(id)
+  else next.delete(id)
+  setOpenFolders(next)
+  saveOpenFolders(next)
+}
+
+export function toggleFolder(id: string): void {
+  setFolderOpen(id, !isFolderOpen(id))
+}
+
+async function folderRequest(url: string, method: string, body?: unknown): Promise<any> {
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  })
+  const data: any = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`)
+  return data
+}
+
+export async function fetchFolders(): Promise<void> {
+  try {
+    const data = await folderRequest('/api/thread-folders', 'GET')
+    if (Array.isArray(data.folders)) setFolders(data.folders)
+  } catch {
+    /* a server without folders: the lists show none */
+  }
+}
+
+/** Make a folder (open, so its first threads show). Throws the server's reason (empty or taken name). */
+export async function createFolder(name: string): Promise<ThreadFolder> {
+  const { folder } = await folderRequest('/api/thread-folders', 'POST', { name })
+  setFolders((prev) => (prev.some((f) => f.id === folder.id) ? prev : [...prev, folder]))
+  setFolderOpen(folder.id, true)
+  return folder
+}
+
+export async function renameFolder(id: string, name: string): Promise<void> {
+  const { folder } = await folderRequest(`/api/thread-folders/${encodeURIComponent(id)}`, 'PATCH', { name })
+  setFolders((prev) => prev.map((f) => (f.id === id ? folder : f)))
+}
+
+/** Delete a folder; its threads go back to the main list (never deleted). Applies at once, reverts on error. */
+export async function deleteFolder(id: string): Promise<void> {
+  const before = {
+    folders: folders(),
+    members: threads()
+      .filter((t) => t.folderId === id)
+      .map((t) => t.id)
+  }
+  setFolders((prev) => prev.filter((f) => f.id !== id))
+  setThreads((prev) => prev.map((t) => (t.folderId === id ? unfiled(t) : t)))
+  try {
+    await folderRequest(`/api/thread-folders/${encodeURIComponent(id)}`, 'DELETE')
+    setFolderOpen(id, false)
+  } catch (err) {
+    setFolders(before.folders)
+    const members = new Set(before.members)
+    setThreads((prev) => prev.map((t) => (members.has(t.id) ? { ...t, folderId: id } : t)))
+    throw err
+  }
+}
+
+function unfiled(t: ThreadInfo): ThreadInfo {
+  const { folderId: _f, sortOrder: _s, ...rest } = t
+  return rest as ThreadInfo
+}
+
+/**
+ * File a thread in a folder, or take it out (`null`): it lands at the top of
+ * its new list. Applies at once and reverts (then throws) if the server refuses.
+ */
+export async function moveThreadToFolder(id: string, folderId: string | null): Promise<void> {
+  // A thread of another workspace is not in this list; the server still moves it.
+  const previous = threads().find((t) => t.id === id)
+  if (previous && (previous.folderId ?? null) === folderId) return
+  const filed = (t: ThreadInfo): ThreadInfo => (folderId ? { ...unfiled(t), folderId } : unfiled(t))
+  setThreads((prev) => prev.map((t) => (t.id === id ? filed(t) : t)))
+  try {
+    await folderRequest(`/api/threads/${encodeURIComponent(id)}/folder`, 'PUT', { folderId })
+  } catch (err) {
+    if (previous)
+      setThreads((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, folderId: previous.folderId, sortOrder: previous.sortOrder } : t))
+      )
+    throw err
+  }
+}
+
 /** Archive a thread — a soft delete: the server flags it archived and its
  *  history is kept. If it was open, the most recently active remaining thread opens instead. */
 export async function deleteThread(key: string): Promise<void> {
@@ -326,6 +429,7 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
         // `sortOrder: null`; store them as unset.
         if (patch.pinnedAt === null) patch.pinnedAt = undefined
         if (patch.sortOrder === null) patch.sortOrder = undefined
+        if (patch.folderId === null) patch.folderId = undefined
         // A presence role moved: the cached presence ids may be stale.
         if ('presence' in patch) resetPresenceThreadCache()
         setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
@@ -337,6 +441,13 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
         const p = msg?.payload ?? msg
         const id = p?.threadId ?? p?.thread?.id ?? p?.id
         if (id) dropThread(id)
+      })
+    )
+
+    unsubs.push(
+      ws.on('thread.folders', (msg: any) => {
+        const list = (msg?.payload ?? msg)?.folders
+        if (Array.isArray(list)) setFolders(list.filter((f: ThreadFolder) => f?.id && typeof f.name === 'string'))
       })
     )
 
@@ -361,8 +472,9 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
     )
   }
 
-  // Fetch initial threads for active org
+  // Fetch initial threads for active org, and the folders
   fetchThreadsForOrg()
+  void fetchFolders()
 
   return () => {
     unsubs.forEach((u) => u())

@@ -22,6 +22,7 @@ export function registerThreadsWs(
       'thread.switched',
       'thread.updated',
       'thread.deleted',
+      'thread.folders',
       'thread.entity.added',
       'thread.entity.removed',
       'thread.event.routed'
@@ -74,6 +75,8 @@ export function registerThreadsWs(
     'thread.created',
     'thread.updated',
     'thread.deleted',
+    // The whole folder list, after any folder is created, renamed or deleted.
+    'thread.folders',
     'thread.entity.added',
     'thread.entity.removed',
     'thread.event.routed'

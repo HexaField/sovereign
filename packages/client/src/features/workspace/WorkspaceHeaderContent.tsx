@@ -9,12 +9,17 @@ import {
   createThread,
   moveThread,
   renameThread,
-  reorderThreads
+  reorderThreads,
+  folders,
+  moveThreadToFolder,
+  type ThreadInfo
 } from '../threads/store.js'
 import { createThreadActions } from '../threads/thread-actions.js'
 import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
 import { listedThreads } from '../threads/thread-order.js'
-import { createThreadDrag } from '../threads/thread-drag-controller.js'
+import { layoutThreads } from '../threads/thread-folders.js'
+import { createFolderDragHub, FolderBlock, NewFolderButton } from '../threads/ThreadFolders.js'
+import { createThreadDrag, type ThreadDrag } from '../threads/thread-drag-controller.js'
 import { DragGrip, DropLine } from '../threads/ThreadDrag.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { startNotificationPolling } from '../notifications/store.js'
@@ -373,17 +378,31 @@ export function WorkspaceHeaderContent() {
   const actions = createThreadActions()
   // Drag to reorder the picker's threads (⠿ grip, or drag a row with the mouse).
   let pickerListEl: HTMLDivElement | undefined
-  const pickerThreads = createMemo(() => listedThreads(threads().filter((t) => t.id)))
+  // Folders: pinned threads, then the folders (A–Z), then the rest (thread-folders.ts).
+  const pickerLayout = createMemo(() => layoutThreads(listedThreads(threads().filter((t) => t.id)), folders()))
+  const pickerMain = () => pickerLayout().main
   const [reorderError, setReorderError] = createSignal('')
+  const onPickerReorder = (plan: Parameters<typeof reorderThreads>[0]) => {
+    setReorderError('')
+    reorderThreads(plan).catch((err: Error) => setReorderError(err.message || 'Reorder failed'))
+  }
+  const onPickerMove = (id: string, folderId: string | null) => {
+    setReorderError('')
+    moveThreadToFolder(id, folderId).catch((err: Error) => setReorderError(err.message || 'Move failed'))
+  }
+  const folderHub = createFolderDragHub()
   const drag = createThreadDrag({
-    items: pickerThreads,
+    items: pickerMain,
     container: () => pickerListEl,
-    onReorder: (plan) => {
-      setReorderError('')
-      reorderThreads(plan).catch((err: Error) => setReorderError(err.message || 'Reorder failed'))
-    }
+    list: 'main',
+    onReorder: onPickerReorder,
+    onMoveToFolder: onPickerMove
   })
-  onCleanup(() => drag.dispose())
+  const offHub = folderHub.add('main', drag)
+  onCleanup(() => {
+    offHub()
+    drag.dispose()
+  })
   const [headerRenaming, setHeaderRenaming] = createSignal(false)
   const closeThreadMenu = () => {
     actions.closeMenu()
@@ -509,6 +528,133 @@ export function WorkspaceHeaderContent() {
     }
     return key
   }
+
+  /** One thread of the picker: of the main list (`list` "main") or of a folder (`list` its id). */
+  const pickerRow = (t: ThreadInfo, i: () => number, isLast: () => boolean, drag: ThreadDrag, list: string) => (
+    <>
+      <div
+        data-thread-row={t.id}
+        data-drag-list={list}
+        class="group relative flex w-full items-center text-left text-sm transition-colors"
+        style={{
+          color: t.id === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
+          background: t.id === threadKey() ? 'var(--c-hover-bg)' : undefined,
+          opacity: drag.draggingId() === t.id ? 0.45 : undefined
+        }}
+        onPointerDown={(e) => drag.onRowPointerDown(e, t.id)}
+        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = t.id === threadKey() ? 'var(--c-hover-bg)' : '')}
+        onContextMenu={(e) => {
+          setMoveThreadKey(null)
+          actions.onContextMenu(t.id, e)
+        }}
+      >
+        <DropLine show={drag.lineAt(i())} pinned={drag.target()?.pinned} />
+        <Show when={isLast()}>
+          <DropLine show={drag.lineAt(i() + 1)} pinned={drag.target()?.pinned} at="bottom" />
+        </Show>
+        <DragGrip drag={drag} threadId={t.id} class="w-4 pl-1" />
+        <Show
+          when={actions.isRenaming(t.id)}
+          fallback={
+            <a
+              draggable={false}
+              class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-3 pl-1 no-underline"
+              href={`?view=workspace${ws()?.orgId && ws()?.orgId !== '_global' ? `&workspace=${ws()?.orgId}` : ''}#thread=${t.id}`}
+              style={{ color: 'inherit' }}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey) return
+                e.preventDefault()
+                switchThread(t.id)
+                setThreadPickerOpen(false)
+              }}
+            >
+              <Show when={t.id === threadKey()}>
+                <span class="text-xs">●</span>
+              </Show>
+              <span class="truncate">{t.label ?? t.id}</span>
+              <PinMark thread={t} />
+              <Show when={t.lastActivity}>
+                <span class="ml-auto shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                  {t.lastActivity ? formatRelativeTime(t.lastActivity, nowTick()) : ''}
+                </span>
+              </Show>
+            </a>
+          }
+        >
+          <div class="flex min-w-0 flex-1 px-2 py-1">
+            <ThreadRenameInput
+              initial={t.label ?? ''}
+              onSave={(label) => actions.saveRename(t.id, label)}
+              onDone={actions.stopRename}
+            />
+          </div>
+        </Show>
+        <button
+          class="shrink-0 px-2 py-2 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
+          style={{ color: 'var(--c-accent)' }}
+          title="Move to workspace"
+          onClick={(e) => {
+            e.stopPropagation()
+            const open = moveThreadKey() === t.id
+            closeThreadMenu()
+            setMoveThreadKey(open ? null : t.id)
+          }}
+        >
+          ⇄
+        </button>
+        <ThreadActionsButton
+          actions={actions}
+          threadId={t.id}
+          onToggle={() => setMoveThreadKey(null)}
+          class="shrink-0 cursor-pointer border-none bg-transparent py-2 pr-2 pl-1 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
+        />
+      </div>
+      <Show when={moveThreadKey() === t.id}>
+        <div
+          class="mx-2 mb-1 overflow-hidden rounded-md"
+          style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
+        >
+          <div
+            class="px-3 py-1.5 text-[10px] font-semibold tracking-wide uppercase"
+            style={{ color: 'var(--c-text-muted)' }}
+          >
+            Move to…
+          </div>
+          <For each={orgList().filter((o) => o.id !== t.workspaceIds?.[0])}>
+            {(org) => (
+              <button
+                class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
+                style={{ color: 'var(--c-text)' }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+                onClick={() => {
+                  moveThread(t.id, org.id)
+                  setMoveThreadKey(null)
+                  setThreadPickerOpen(false)
+                }}
+              >
+                {org.name}
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+      <ThreadActionsMenu actions={actions} thread={t} />
+      <Show when={(activeSubagents()[t.id] || []).length > 0}>
+        <SubagentTree
+          subagents={activeSubagents()[t.id]}
+          allSubagents={activeSubagents()}
+          depth={1}
+          activeKey={threadKey()}
+          onSelect={(key) => {
+            switchThread(key)
+            setThreadPickerOpen(false)
+          }}
+        />
+      </Show>
+    </>
+  )
 
   return (
     <div class="flex min-w-0 items-center gap-1.5 text-sm">
@@ -718,137 +864,32 @@ export function WorkspaceHeaderContent() {
               class="min-h-0 flex-1 overflow-y-auto overscroll-contain"
               data-testid="thread-picker-list"
             >
-              <For each={pickerThreads()}>
-                {(t, i) => (
-                  <>
-                    <div
-                      data-thread-row={t.id}
-                      class="group relative flex w-full items-center text-left text-sm transition-colors"
-                      style={{
-                        color: t.id === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
-                        background: t.id === threadKey() ? 'var(--c-hover-bg)' : undefined,
-                        opacity: drag.draggingId() === t.id ? 0.45 : undefined
-                      }}
-                      onPointerDown={(e) => drag.onRowPointerDown(e, t.id)}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                      onMouseLeave={(e) =>
-                        (e.currentTarget.style.background = t.id === threadKey() ? 'var(--c-hover-bg)' : '')
-                      }
-                      onContextMenu={(e) => {
-                        setMoveThreadKey(null)
-                        actions.onContextMenu(t.id, e)
-                      }}
-                    >
-                      <DropLine show={drag.lineAt(i())} pinned={drag.target()?.pinned} />
-                      <Show when={i() === pickerThreads().length - 1}>
-                        <DropLine show={drag.lineAt(i() + 1)} pinned={drag.target()?.pinned} at="bottom" />
-                      </Show>
-                      <DragGrip drag={drag} threadId={t.id} class="w-4 pl-1" />
-                      <Show
-                        when={actions.isRenaming(t.id)}
-                        fallback={
-                          <a
-                            draggable={false}
-                            class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-3 pl-1 no-underline"
-                            href={`?view=workspace${ws()?.orgId && ws()?.orgId !== '_global' ? `&workspace=${ws()?.orgId}` : ''}#thread=${t.id}`}
-                            style={{ color: 'inherit' }}
-                            onClick={(e) => {
-                              if (e.metaKey || e.ctrlKey) return
-                              e.preventDefault()
-                              switchThread(t.id)
-                              setThreadPickerOpen(false)
-                            }}
-                          >
-                            <Show when={t.id === threadKey()}>
-                              <span class="text-xs">●</span>
-                            </Show>
-                            <span class="truncate">{t.label ?? t.id}</span>
-                            <PinMark thread={t} />
-                            <Show when={t.lastActivity}>
-                              <span class="ml-auto shrink-0 text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                                {t.lastActivity ? formatRelativeTime(t.lastActivity, nowTick()) : ''}
-                              </span>
-                            </Show>
-                          </a>
-                        }
-                      >
-                        <div class="flex min-w-0 flex-1 px-2 py-1">
-                          <ThreadRenameInput
-                            initial={t.label ?? ''}
-                            onSave={(label) => actions.saveRename(t.id, label)}
-                            onDone={actions.stopRename}
-                          />
-                        </div>
-                      </Show>
-                      <button
-                        class="shrink-0 px-2 py-2 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
-                        style={{ color: 'var(--c-accent)' }}
-                        title="Move to workspace"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          const open = moveThreadKey() === t.id
-                          closeThreadMenu()
-                          setMoveThreadKey(open ? null : t.id)
-                        }}
-                      >
-                        ⇄
-                      </button>
-                      <ThreadActionsButton
-                        actions={actions}
-                        threadId={t.id}
-                        onToggle={() => setMoveThreadKey(null)}
-                        class="shrink-0 cursor-pointer border-none bg-transparent py-2 pr-2 pl-1 text-sm font-bold opacity-80 transition-opacity hover:!opacity-100"
-                      />
-                    </div>
-                    <Show when={moveThreadKey() === t.id}>
-                      <div
-                        class="mx-2 mb-1 overflow-hidden rounded-md"
-                        style={{ background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}
-                      >
-                        <div
-                          class="px-3 py-1.5 text-[10px] font-semibold tracking-wide uppercase"
-                          style={{ color: 'var(--c-text-muted)' }}
-                        >
-                          Move to…
-                        </div>
-                        <For each={orgList().filter((o) => o.id !== t.workspaceIds?.[0])}>
-                          {(org) => (
-                            <button
-                              class="flex w-full items-center px-3 py-1.5 text-left text-xs transition-colors"
-                              style={{ color: 'var(--c-text)' }}
-                              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
-                              onMouseLeave={(e) => (e.currentTarget.style.background = '')}
-                              onClick={() => {
-                                moveThread(t.id, org.id)
-                                setMoveThreadKey(null)
-                                setThreadPickerOpen(false)
-                              }}
-                            >
-                              {org.name}
-                            </button>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
-                    <ThreadActionsMenu actions={actions} thread={t} />
-                    <Show when={(activeSubagents()[t.id] || []).length > 0}>
-                      <SubagentTree
-                        subagents={activeSubagents()[t.id]}
-                        allSubagents={activeSubagents()}
-                        depth={1}
-                        activeKey={threadKey()}
-                        onSelect={(key) => {
-                          switchThread(key)
-                          setThreadPickerOpen(false)
-                        }}
-                      />
-                    </Show>
-                  </>
+              <For each={pickerMain().slice(0, pickerLayout().pinnedCount)}>
+                {(t, i) => pickerRow(t, i, () => i() === pickerMain().length - 1, drag, 'main')}
+              </For>
+              <For each={pickerLayout().folders}>
+                {(f) => (
+                  <FolderBlock
+                    folder={f}
+                    threads={() => pickerLayout().inFolder.get(f.id) ?? []}
+                    container={() => pickerListEl}
+                    hub={folderHub}
+                    onReorder={onPickerReorder}
+                    onMove={onPickerMove}
+                    row={(t, i, isLast, d, list) => pickerRow(t, i, isLast, d, list)}
+                  />
                 )}
+              </For>
+              <For each={pickerMain().slice(pickerLayout().pinnedCount)}>
+                {(t, i) => {
+                  const index = () => pickerLayout().pinnedCount + i()
+                  return pickerRow(t, index, () => index() === pickerMain().length - 1, drag, 'main')
+                }}
               </For>
             </div>
 
             <div class="mx-2 my-1 border-t" style={{ 'border-color': 'var(--c-border)' }} />
+            <NewFolderButton />
             <Show
               when={newThreadInput()}
               fallback={
