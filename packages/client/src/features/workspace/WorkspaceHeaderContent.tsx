@@ -2,10 +2,20 @@ import { createMemo, createSignal, Show, For, onCleanup, onMount } from 'solid-j
 import { wsStore } from '../../ws/index.js'
 import { formatRelativeTime } from '../../lib/format.js'
 import { activeWorkspace, chatExpanded, toggleChatExpanded, setActiveWorkspace } from './store.js'
-import { threadKey, switchThread, threads, createThread, moveThread, renameThread } from '../threads/store.js'
+import {
+  threadKey,
+  switchThread,
+  threads,
+  createThread,
+  moveThread,
+  renameThread,
+  reorderThreads
+} from '../threads/store.js'
 import { createThreadActions } from '../threads/thread-actions.js'
 import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
 import { listedThreads } from '../threads/thread-order.js'
+import { createThreadDrag } from '../threads/thread-drag-controller.js'
+import { DragGrip, DropLine } from '../threads/ThreadDrag.js'
 import { ChatSettingsButton } from '../chat/ChatSettings.js'
 import { startNotificationPolling } from '../notifications/store.js'
 import { ExpandIcon, CollapseIcon } from '../../ui/icons.js'
@@ -361,6 +371,19 @@ export function WorkspaceHeaderContent() {
   const [moveThreadKey, setMoveThreadKey] = createSignal<string | null>(null)
   // Per-thread actions (Rename / Delete), shared with the other thread lists.
   const actions = createThreadActions()
+  // Drag to reorder the picker's threads (⠿ grip, or drag a row with the mouse).
+  let pickerListEl: HTMLDivElement | undefined
+  const pickerThreads = createMemo(() => listedThreads(threads().filter((t) => t.id)))
+  const [reorderError, setReorderError] = createSignal('')
+  const drag = createThreadDrag({
+    items: pickerThreads,
+    container: () => pickerListEl,
+    onReorder: (plan) => {
+      setReorderError('')
+      reorderThreads(plan).catch((err: Error) => setReorderError(err.message || 'Reorder failed'))
+    }
+  })
+  onCleanup(() => drag.dispose())
   const [headerRenaming, setHeaderRenaming] = createSignal(false)
   const closeThreadMenu = () => {
     actions.closeMenu()
@@ -685,16 +708,28 @@ export function WorkspaceHeaderContent() {
               'max-height': 'min(70vh, calc(100dvh - 5rem))'
             }}
           >
-            <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="thread-picker-list">
-              <For each={listedThreads(threads().filter((t) => t.id))}>
-                {(t) => (
+            <Show when={reorderError()}>
+              <div class="shrink-0 px-3 py-1.5 text-xs" style={{ color: 'var(--c-danger, #e5484d)' }} role="alert">
+                {reorderError()}
+              </div>
+            </Show>
+            <div
+              ref={(el) => (pickerListEl = el)}
+              class="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+              data-testid="thread-picker-list"
+            >
+              <For each={pickerThreads()}>
+                {(t, i) => (
                   <>
                     <div
+                      data-thread-row={t.id}
                       class="group relative flex w-full items-center text-left text-sm transition-colors"
                       style={{
                         color: t.id === threadKey() ? 'var(--c-accent)' : 'var(--c-text)',
-                        background: t.id === threadKey() ? 'var(--c-hover-bg)' : undefined
+                        background: t.id === threadKey() ? 'var(--c-hover-bg)' : undefined,
+                        opacity: drag.draggingId() === t.id ? 0.45 : undefined
                       }}
+                      onPointerDown={(e) => drag.onRowPointerDown(e, t.id)}
                       onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--c-hover-bg)')}
                       onMouseLeave={(e) =>
                         (e.currentTarget.style.background = t.id === threadKey() ? 'var(--c-hover-bg)' : '')
@@ -704,11 +739,17 @@ export function WorkspaceHeaderContent() {
                         actions.onContextMenu(t.id, e)
                       }}
                     >
+                      <DropLine show={drag.lineAt(i())} pinned={drag.target()?.pinned} />
+                      <Show when={i() === pickerThreads().length - 1}>
+                        <DropLine show={drag.lineAt(i() + 1)} pinned={drag.target()?.pinned} at="bottom" />
+                      </Show>
+                      <DragGrip drag={drag} threadId={t.id} class="w-4 pl-1" />
                       <Show
                         when={actions.isRenaming(t.id)}
                         fallback={
                           <a
-                            class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 no-underline"
+                            draggable={false}
+                            class="flex min-w-0 flex-1 items-center gap-2 py-2 pr-3 pl-1 no-underline"
                             href={`?view=workspace${ws()?.orgId && ws()?.orgId !== '_global' ? `&workspace=${ws()?.orgId}` : ''}#thread=${t.id}`}
                             style={{ color: 'inherit' }}
                             onClick={(e) => {

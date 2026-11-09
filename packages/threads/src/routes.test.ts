@@ -604,3 +604,170 @@ describe('Thread Routes — pin to top', () => {
     expect(patches[1].pinnedAt).toBeNull()
   })
 })
+
+describe('Thread Routes — manual order (POST /api/threads/reorder)', () => {
+  let dataDir: string
+  let app: ReturnType<typeof express>
+  let tm: ThreadManager
+  let bus: ReturnType<typeof createEventBus>
+
+  function mount(manager: ThreadManager): ReturnType<typeof express> {
+    const a = express()
+    a.use(express.json())
+    a.use(createThreadRoutes(manager, forwardHandler as any, { backend: createStubBackend() }))
+    return a
+  }
+
+  /** The ids of `ids`, sorted by their stored sortOrder. */
+  function byOrder(manager: ThreadManager, ids: string[]): string[] {
+    return [...ids].sort((x, y) => (manager.get(x)?.sortOrder ?? 0) - (manager.get(y)?.sortOrder ?? 0))
+  }
+
+  beforeEach(() => {
+    dataDir = makeTmpDir()
+    bus = createEventBus(dataDir)
+    tm = createThreadManager(bus, dataDir)
+    app = mount(tm)
+  })
+
+  it('stores the order given, without touching lastActivity, and returns the threads', async () => {
+    const [a, b, c] = ['a', 'b', 'c'].map((label) => tm.create({ label }))
+    for (const t of [a, b, c]) t.lastActivity = 1_000
+    const res = await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [c.id, a.id, b.id] })
+    expect(res.status).toBe(200)
+    expect(res.body.threads.map((t: { id: string }) => t.id)).toEqual([c.id, a.id, b.id])
+    expect(byOrder(tm, [a.id, b.id, c.id])).toEqual([c.id, a.id, b.id])
+    for (const t of [a, b, c]) expect(tm.get(t.id)?.lastActivity).toBe(1_000)
+    const list = await request(app).get('/api/threads')
+    const listed = list.body.threads.find((t: { id: string }) => t.id === c.id)
+    expect(typeof listed.sortOrder).toBe('number')
+  })
+
+  it('a later reorder of some threads keeps the others in their places', async () => {
+    const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((label) => tm.create({ label }))
+    await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [a.id, b.id, c.id, d.id] })
+    // Another list shows only b and d: swap them.
+    await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [d.id, b.id] })
+    expect(byOrder(tm, [a.id, b.id, c.id, d.id])).toEqual([a.id, d.id, c.id, b.id])
+  })
+
+  it('pinned: true pins a thread dragged into the pinned group', async () => {
+    const [p, q, x] = ['p', 'q', 'x'].map((label) => tm.create({ label }))
+    tm.update(p.id, { pinned: true })
+    tm.update(q.id, { pinned: true })
+    const res = await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [p.id, x.id, q.id], pinned: true })
+    expect(res.status).toBe(200)
+    expect(tm.get(x.id)?.pinnedAt).toBeGreaterThan(0)
+    expect(byOrder(tm, [p.id, x.id, q.id])).toEqual([p.id, x.id, q.id])
+  })
+
+  it('pinned: false unpins a thread dragged out of the pinned group', async () => {
+    const [p, x] = ['p', 'x'].map((label) => tm.create({ label }))
+    tm.update(p.id, { pinned: true })
+    await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [x.id, p.id], pinned: false })
+    expect(tm.get(p.id)?.pinnedAt).toBeUndefined()
+    expect(byOrder(tm, [p.id, x.id])).toEqual([x.id, p.id])
+  })
+
+  it('pinning or unpinning from the menu drops the manual place', async () => {
+    const [a, b] = ['a', 'b'].map((label) => tm.create({ label }))
+    await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [a.id, b.id] })
+    await request(app).patch(`/api/threads/${a.id}`).send({ pinned: true })
+    expect(tm.get(a.id)?.sortOrder).toBeUndefined()
+    expect(tm.get(b.id)?.sortOrder).toBeTypeOf('number')
+  })
+
+  it('rejects bad input with 400 and changes nothing', async () => {
+    const a = tm.create({ label: 'a' })
+    const bodies: unknown[] = [
+      {},
+      { ids: 'x' },
+      { ids: [] },
+      { ids: [1] },
+      { ids: [''] },
+      { ids: [a.id, a.id] },
+      { ids: [a.id], pinned: 'yes' },
+      { ids: Array.from({ length: 1001 }, (_, i) => `t${i}`) }
+    ]
+    for (const body of bodies) {
+      const res = await request(app)
+        .post('/api/threads/reorder')
+        .send(body as object)
+      expect(res.status, JSON.stringify(body).slice(0, 60)).toBe(400)
+      expect(typeof res.body.error).toBe('string')
+    }
+    expect(tm.get(a.id)?.sortOrder).toBeUndefined()
+  })
+
+  it('returns 404 for an unknown thread and changes nothing', async () => {
+    const a = tm.create({ label: 'a' })
+    const res = await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [a.id, 'nope'] })
+    expect(res.status).toBe(404)
+    expect(tm.get(a.id)?.sortOrder).toBeUndefined()
+  })
+
+  it('the order and pins survive a reload of the thread store', async () => {
+    const [a, b, c] = ['a', 'b', 'c'].map((label) => tm.create({ label }))
+    await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [b.id, c.id, a.id], pinned: true })
+    const reloaded = createThreadManager(createEventBus(dataDir), dataDir)
+    expect(byOrder(reloaded, [a.id, b.id, c.id])).toEqual([b.id, c.id, a.id])
+    for (const t of [a, b, c]) {
+      expect(reloaded.get(t.id)?.sortOrder).toBe(tm.get(t.id)?.sortOrder)
+      expect(reloaded.get(t.id)?.pinnedAt).toBeGreaterThan(0)
+    }
+  })
+
+  it('broadcasts thread.updated for each changed thread only', async () => {
+    const [a, b, c] = ['a', 'b', 'c'].map((label) => tm.create({ label }))
+    await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [a.id, b.id, c.id] })
+    const events: Array<{ threadId: string; patch: Record<string, unknown> }> = []
+    bus.on('thread.updated', (e) => {
+      events.push(e.payload as { threadId: string; patch: Record<string, unknown> })
+    })
+    // Swap a and b: c keeps its place, so it is not broadcast.
+    await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [b.id, a.id, c.id] })
+    expect(events.map((e) => e.threadId).sort()).toEqual([a.id, b.id].sort())
+    for (const e of events) expect(e.patch).toEqual({ sortOrder: tm.get(e.threadId)?.sortOrder })
+    // The same order again changes nothing.
+    events.length = 0
+    const again = await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [b.id, a.id, c.id] })
+    expect(again.body.changed).toBe(0)
+    expect(events).toHaveLength(0)
+  })
+
+  it('a cross-group drag broadcasts the new pinnedAt with the sortOrder', async () => {
+    const x = tm.create({ label: 'x' })
+    const events: Array<Record<string, unknown>> = []
+    bus.on('thread.updated', (e) => {
+      events.push((e.payload as { patch: Record<string, unknown> }).patch)
+    })
+    await request(app)
+      .post('/api/threads/reorder')
+      .send({ ids: [x.id], pinned: true })
+    expect(events).toHaveLength(1)
+    expect(events[0].pinnedAt).toBe(tm.get(x.id)?.pinnedAt)
+    expect(events[0].sortOrder).toBe(tm.get(x.id)?.sortOrder)
+  })
+})

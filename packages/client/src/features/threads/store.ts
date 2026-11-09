@@ -3,6 +3,7 @@ import type { ThreadInfo } from '@sovereign/core'
 import type { WsStore } from '../../ws/ws-store.js'
 import { resetPresenceThreadCache } from './presence-helper.js'
 import { isListed } from './thread-order.js'
+import { applyReorder, restoreOrder, snapshotOrder, type ReorderPlan } from './thread-drag.js'
 
 // Single source of truth for the thread shape: the canonical `ThreadInfo`
 // from @sovereign/core (bare UUID `id`, no `key`). Importing it here means a
@@ -183,6 +184,39 @@ export async function pinThread(key: string, pinned: boolean): Promise<number | 
   }
 }
 
+/**
+ * Put threads in a manual order (a drag in a thread list). `plan.ids` is one
+ * group (pinned or not) in its new order; `plan.pinned` pins or unpins them
+ * (a drag across the pinned line). Applies at once, takes the server's values
+ * when it answers, and reverts (then throws) if the server refuses.
+ * Other tabs and devices follow through the `thread.updated` broadcasts.
+ */
+export async function reorderThreads(plan: ReorderPlan): Promise<void> {
+  const snapshot = snapshotOrder(threads(), plan.ids)
+  setThreads((prev) => applyReorder(prev, plan))
+  try {
+    const res = await fetch('/api/threads/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(plan)
+    })
+    const data: any = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error ?? `Reorder failed (${res.status})`)
+    const stored = new Map<string, ThreadInfo>(
+      (Array.isArray(data.threads) ? (data.threads as ThreadInfo[]) : []).filter((t) => t?.id).map((t) => [t.id, t])
+    )
+    setThreads((prev) =>
+      prev.map((t) => {
+        const s = stored.get(t.id)
+        return s ? { ...t, pinnedAt: s.pinnedAt ?? undefined, sortOrder: s.sortOrder ?? undefined } : t
+      })
+    )
+  } catch (err) {
+    setThreads((prev) => restoreOrder(prev, snapshot))
+    throw err
+  }
+}
+
 /** Archive a thread — a soft delete: the server flags it archived and its
  *  history is kept. If it was open, the most recently active remaining thread opens instead. */
 export async function deleteThread(key: string): Promise<void> {
@@ -288,8 +322,10 @@ export function initThreadStore(wsStore?: WsStore, initialOrgId?: string): () =>
         const id = p?.thread?.id ?? p?.threadId ?? p?.id
         if (!id) return
         const patch = { ...(p?.patch ?? p?.thread ?? p) }
-        // An unpin arrives as `pinnedAt: null`; store it as unset.
+        // An unpin arrives as `pinnedAt: null`, a dropped manual place as
+        // `sortOrder: null`; store them as unset.
         if (patch.pinnedAt === null) patch.pinnedAt = undefined
+        if (patch.sortOrder === null) patch.sortOrder = undefined
         // A presence role moved: the cached presence ids may be stale.
         if ('presence' in patch) resetPresenceThreadCache()
         setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))

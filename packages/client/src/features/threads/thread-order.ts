@@ -1,15 +1,32 @@
-// Thread list order, shared by every thread list: pinned threads first (most
-// recently pinned first), then the rest by last activity, newest first.
+// Thread list order, shared by every thread list (header picker, Overview,
+// Cmd+K, System → Agents). The exact rule:
+//
+//   1. Pinned threads form the top group, the rest the group below.
+//   2. Within each group, threads never placed by hand (no `sortOrder`: new
+//      chats, and a thread just pinned or unpinned from the ⋯ menu) come first:
+//      pinned ones most recently pinned first, unpinned ones by last activity,
+//      newest first.
+//   3. Then the threads the user placed by dragging, by `sortOrder`, lowest
+//      first. Their activity does not move them; ties fall back to activity.
+//
+// Without any dragging this is the old order: pins newest-pinned first, then
+// the rest by activity.
 
-/** The fields the order reads. `pinnedAt` may arrive as `null` from a `thread.updated` unpin. */
+/** The fields the order reads. `pinnedAt` and `sortOrder` may arrive as `null` from a `thread.updated`. */
 export interface Orderable {
   pinnedAt?: number | null
+  sortOrder?: number | null
   lastActivity?: number
 }
 
 /** True when the thread is pinned to the top. */
 export function isPinned(t: Orderable): boolean {
   return typeof t.pinnedAt === 'number' && t.pinnedAt > 0
+}
+
+/** True when the user placed the thread by dragging (it has a manual place). */
+export function isPlaced(t: Orderable): boolean {
+  return typeof t.sortOrder === 'number' && Number.isFinite(t.sortOrder)
 }
 
 /**
@@ -22,9 +39,16 @@ export function comparePins(a: Orderable, b: Orderable): number {
   return pb - pa
 }
 
-/** Pins first, then by last activity, newest first. */
+const byActivity = (a: Orderable, b: Orderable) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0)
+
+/** The thread-list order (see the rule at the top of this file). */
 export function compareThreads(a: Orderable, b: Orderable): number {
-  return comparePins(a, b) || (b.lastActivity ?? 0) - (a.lastActivity ?? 0)
+  const pinned = isPinned(a)
+  if (pinned !== isPinned(b)) return pinned ? -1 : 1
+  const placed = isPlaced(a)
+  if (placed !== isPlaced(b)) return placed ? 1 : -1
+  if (placed) return (a.sortOrder as number) - (b.sortOrder as number) || byActivity(a, b)
+  return (pinned ? comparePins(a, b) : 0) || byActivity(a, b)
 }
 
 /** The fields `isListed` reads. */

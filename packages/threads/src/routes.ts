@@ -75,6 +75,9 @@ export interface AskUserQuestionRouteStore {
   }>
 }
 
+/** The most threads one reorder may name. */
+const MAX_REORDER = 1000
+
 export function createThreadRoutes(
   threadManager: ThreadManager,
   forwardHandler: ForwardHandler,
@@ -360,6 +363,31 @@ export function createThreadRoutes(
       await applyContextWindow(thread.id, contextWindow)
     }
     res.status(201).json({ thread })
+  })
+
+  // Manual order (drag to reorder). Body: { ids: string[], pinned?: boolean }:
+  // one list group (pinned or not) in its new order; `pinned` moves every
+  // listed thread into that group (a drag across the pinned line). Every
+  // changed thread goes out on `thread.updated` as { sortOrder, pinnedAt? }.
+  router.post('/api/threads/reorder', (req, res) => {
+    const { ids, pinned } = req.body ?? {}
+    if (
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > MAX_REORDER ||
+      !ids.every((id) => typeof id === 'string' && id.length > 0)
+    ) {
+      return res.status(400).json({ error: `ids must be 1–${MAX_REORDER} thread ids` })
+    }
+    if (new Set(ids).size !== ids.length) return res.status(400).json({ error: 'ids must not repeat' })
+    if (pinned !== undefined && typeof pinned !== 'boolean') {
+      return res.status(400).json({ error: 'pinned must be a boolean' })
+    }
+    if (!threadManager.reorder) return res.status(501).json({ error: 'Reordering is not supported' })
+    const unknown = (ids as string[]).find((id) => !threadManager.get(id))
+    if (unknown) return res.status(404).json({ error: `Thread not found: ${unknown}` })
+    const changed = threadManager.reorder(ids, pinned === undefined ? {} : { pinned })
+    res.json({ threads: (ids as string[]).map((id) => threadManager.get(id)), changed: changed.length })
   })
 
   router.delete('/api/threads/:key', (req, res) => {

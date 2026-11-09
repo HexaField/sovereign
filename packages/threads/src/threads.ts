@@ -17,6 +17,7 @@ import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { EventBus } from '@sovereign/core'
 import type { ThreadInfo, EntityBinding, ThreadEvent, ThreadFilter, ThreadManager, EntityType } from './types.js'
+import { assignSortOrders } from './sort-order.js'
 
 const SCHEMA_VERSION = 2
 
@@ -89,6 +90,7 @@ function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
     model: typeof raw.model === 'string' ? raw.model : undefined,
     pinnedRepoPath: typeof raw.pinnedRepoPath === 'string' ? raw.pinnedRepoPath : undefined,
     pinnedAt: typeof raw.pinnedAt === 'number' && raw.pinnedAt > 0 ? raw.pinnedAt : undefined,
+    sortOrder: typeof raw.sortOrder === 'number' && Number.isFinite(raw.sortOrder) ? raw.sortOrder : undefined,
     // Migrate legacy `presence: true` (boolean) → `presence: 'internal'`.
     // String roles pass through untouched; anything else is dropped. An
     // archived thread holds no role (older builds archived without clearing it).
@@ -304,9 +306,17 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     // Pinning is not activity: a pin-only patch leaves `lastActivity` alone, so
     // unpinning drops the thread back where its activity puts it.
     const pinOnly = pinned !== undefined && Object.values(rest).every((v) => v === undefined)
+    // A thread that changes group (pinned ↔ not) drops its manual place: it
+    // lands at the top of its new group, as a thread never placed by hand.
+    let droppedOrder = false
     if (pinned !== undefined) {
+      const wasPinned = !!thread.pinnedAt
       if (!pinned) delete thread.pinnedAt
       else if (!thread.pinnedAt) thread.pinnedAt = Date.now()
+      if (wasPinned !== pinned && thread.sortOrder !== undefined) {
+        delete thread.sortOrder
+        droppedOrder = true
+      }
     }
     if (patch.label !== undefined) thread.label = patch.label
     if (patch.membraneId !== undefined) thread.membraneId = patch.membraneId
@@ -350,9 +360,54 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       source: 'threads',
       // Clients merge the patch into their thread, so a pin change goes out as
       // the stored field: `pinnedAt` (null once unpinned).
-      payload: { threadId: id, patch: pinned === undefined ? rest : { ...rest, pinnedAt: thread.pinnedAt ?? null } }
+      payload: {
+        threadId: id,
+        patch:
+          pinned === undefined
+            ? rest
+            : { ...rest, pinnedAt: thread.pinnedAt ?? null, ...(droppedOrder ? { sortOrder: null } : {}) }
+      }
     })
     return thread
+  }
+
+  function reorder(ids: string[], opts: { pinned?: boolean } = {}): ThreadInfo[] {
+    const placed = ids.map((id) => threads.get(id))
+    const missing = ids.find((_, i) => !placed[i])
+    if (missing !== undefined) throw new Error(`Unknown thread: ${missing}`)
+    if (new Set(ids).size !== ids.length) throw new Error('Duplicate thread id')
+    const list = placed as ThreadInfo[]
+    const pinned = opts.pinned
+    // A thread joining the other group brings no place with it.
+    const changesGroup = (t: ThreadInfo) => pinned !== undefined && !!t.pinnedAt !== pinned
+    const slots = assignSortOrders(list.map((t) => (changesGroup(t) ? undefined : t.sortOrder)))
+    const now = Date.now()
+    const changes: Array<{ thread: ThreadInfo; patch: { sortOrder?: number; pinnedAt?: number | null } }> = []
+    list.forEach((t, i) => {
+      const patch: { sortOrder?: number; pinnedAt?: number | null } = {}
+      if (changesGroup(t)) {
+        if (pinned) t.pinnedAt = now
+        else delete t.pinnedAt
+        patch.pinnedAt = t.pinnedAt ?? null
+      }
+      if (t.sortOrder !== slots[i]) {
+        t.sortOrder = slots[i]
+        patch.sortOrder = slots[i]
+      }
+      if (Object.keys(patch).length) changes.push({ thread: t, patch })
+    })
+    if (changes.length === 0) return []
+    // Placing threads is not activity: `lastActivity` stays as it was.
+    persistThreadsImmediate()
+    for (const { thread, patch } of changes) {
+      bus.emit({
+        type: 'thread.updated',
+        timestamp: new Date().toISOString(),
+        source: 'threads',
+        payload: { threadId: thread.id, patch }
+      })
+    }
+    return changes.map((c) => c.thread)
   }
 
   function del(id: string): boolean {
@@ -536,6 +591,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     getByLabel,
     resolve,
     update,
+    reorder,
     list,
     delete: del,
     addEntity,

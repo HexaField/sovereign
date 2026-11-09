@@ -45,11 +45,13 @@ import {
   removeEntity,
   renameThread,
   pinThread,
+  reorderThreads,
   deleteThread,
   initThreadStore,
   _triggerPopstate
 } from './store.js'
 import { makeThread } from './test-factory.js'
+import { sortThreads } from './thread-order.js'
 import { getPresenceGatewayThreadId } from './presence-helper.js'
 
 function mockThread(id: string, orgId = '_global'): ReturnType<typeof makeThread> {
@@ -324,6 +326,78 @@ describe('renameThread', () => {
   })
 })
 
+describe('reorderThreads', () => {
+  const ids = () => sortThreads(threads()).map((t) => t.id)
+
+  it('reorders at once, POSTs the plan, then keeps the server values', async () => {
+    setThreads([
+      makeThread({ id: 'a', lastActivity: 3 }),
+      makeThread({ id: 'b', lastActivity: 2 }),
+      makeThread({ id: 'c', lastActivity: 1 })
+    ])
+    expect(ids()).toEqual(['a', 'b', 'c'])
+    let resolve!: (v: unknown) => void
+    mockFetch.mockReturnValueOnce(new Promise((r) => (resolve = r)))
+    const done = reorderThreads({ ids: ['c', 'a', 'b'] })
+    // Optimistic: the new order shows before the server answers.
+    expect(ids()).toEqual(['c', 'a', 'b'])
+    resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          threads: [
+            makeThread({ id: 'c', sortOrder: 10 }),
+            makeThread({ id: 'a', sortOrder: 11 }),
+            makeThread({ id: 'b', sortOrder: 12 })
+          ]
+        })
+    })
+    await done
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/threads/reorder',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ ids: ['c', 'a', 'b'] }) })
+    )
+    expect(threads().map((t) => t.sortOrder)).toEqual([11, 12, 10])
+    expect(ids()).toEqual(['c', 'a', 'b'])
+  })
+
+  it('pins a thread dragged into the pinned group at once', async () => {
+    setThreads([makeThread({ id: 'p', pinnedAt: 5 }), makeThread({ id: 'x' })])
+    mockFetch.mockReturnValueOnce(new Promise(() => {}))
+    void reorderThreads({ ids: ['x', 'p'], pinned: true })
+    expect(threads().find((t) => t.id === 'x')?.pinnedAt).toBeGreaterThan(0)
+    expect(ids()).toEqual(['x', 'p'])
+  })
+
+  it('reverts the order and pins the server refuses, and throws its error', async () => {
+    setThreads([
+      makeThread({ id: 'p', pinnedAt: 5, sortOrder: 0 }),
+      makeThread({ id: 'a', lastActivity: 2, sortOrder: 0 }),
+      makeThread({ id: 'b', lastActivity: 1, sortOrder: 1 })
+    ])
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ error: 'Thread not found: b' })
+    })
+    await expect(reorderThreads({ ids: ['b', 'p', 'a'], pinned: false })).rejects.toThrow('Thread not found: b')
+    expect(threads().map((t) => [t.id, t.pinnedAt, t.sortOrder])).toEqual([
+      ['p', 5, 0],
+      ['a', undefined, 0],
+      ['b', undefined, 1]
+    ])
+    expect(ids()).toEqual(['p', 'a', 'b'])
+  })
+
+  it('reverts on a network error too', async () => {
+    setThreads([makeThread({ id: 'a', lastActivity: 2 }), makeThread({ id: 'b', lastActivity: 1 })])
+    mockFetch.mockRejectedValueOnce(new Error('offline'))
+    await expect(reorderThreads({ ids: ['b', 'a'] })).rejects.toThrow('offline')
+    expect(threads().every((t) => t.sortOrder === undefined)).toBe(true)
+    expect(ids()).toEqual(['a', 'b'])
+  })
+})
+
 describe('pinThread', () => {
   it('pins at once, PATCHes { pinned: true } and keeps the server pinnedAt', async () => {
     setThreads([makeThread({ id: 't1' })])
@@ -563,6 +637,20 @@ describe('initThreadStore', () => {
     expect(threads()[0].pinnedAt).toBe(500)
     ws._emit('thread.updated', { payload: { threadId: 't1', patch: { pinnedAt: null } } })
     expect(threads()[0].pinnedAt).toBeUndefined()
+    cleanup()
+  })
+
+  it('applies manual order from thread.updated WS events (null sortOrder = dropped)', () => {
+    mockFetch.mockResolvedValue({ json: () => Promise.resolve({ threads: [] }) })
+    const ws = createMockWs()
+    const cleanup = initThreadStore(ws as any)
+
+    setThreads([mockThread('t1')])
+    ws._emit('thread.updated', { payload: { threadId: 't1', patch: { sortOrder: 3 } } })
+    expect(threads()[0].sortOrder).toBe(3)
+    ws._emit('thread.updated', { payload: { threadId: 't1', patch: { pinnedAt: 9, sortOrder: null } } })
+    expect(threads()[0].sortOrder).toBeUndefined()
+    expect(threads()[0].pinnedAt).toBe(9)
     cleanup()
   })
 

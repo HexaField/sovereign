@@ -93,6 +93,16 @@ export interface ThreadManager {
       pinned?: boolean
     }
   ): ThreadInfo | undefined
+  /**
+   * Put threads in the user's manual order: `ids` is one list group (pinned or
+   * not) in its new order; they take `sortOrder`s in that order, reusing the
+   * places they held (see `sort-order.ts`). `pinned` moves every listed thread
+   * into that group (a drag across the pinned line). Not activity: leaves
+   * `lastActivity` alone. Persists, emits `thread.updated` per changed thread,
+   * and returns the changed threads. Throws on an unknown or repeated id.
+   * Optional so test doubles need not implement it.
+   */
+  reorder?(ids: string[], opts?: { pinned?: boolean }): ThreadInfo[]
   /** Returns the single thread carrying the given presence role, or null when
    *  none exists. At most one thread per role; see `plans/presence-thread-spec.md`. */
   getPresenceThread(role: 'internal' | 'gateway'): ThreadInfo | null
