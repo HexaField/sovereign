@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { compareThreads, comparePins, isListed, isPinned, listedThreads, sortThreads } from './thread-order.js'
+import {
+  compareThreads,
+  comparePins,
+  isListed,
+  isPinned,
+  isPlaced,
+  listedThreads,
+  sortThreads
+} from './thread-order.js'
 
 const t = (id: string, lastActivity: number, pinnedAt?: number | null) => ({ id, lastActivity, pinnedAt })
 
@@ -44,6 +52,58 @@ describe('thread order', () => {
     expect(comparePins(t('a', 1), t('b', 2))).toBe(0)
     expect(comparePins(t('a', 1, 5), t('b', 2))).toBeLessThan(0)
     expect(compareThreads(t('a', 1), t('b', 2))).toBeGreaterThan(0)
+  })
+})
+
+describe('manual order (drag to reorder)', () => {
+  const o = (id: string, lastActivity: number, sortOrder?: number | null, pinnedAt?: number) => ({
+    id,
+    lastActivity,
+    sortOrder,
+    pinnedAt
+  })
+  const ids = (list: Array<ReturnType<typeof o>>) => sortThreads(list).map((x) => x.id)
+
+  it('placed threads follow their sortOrder, whatever their activity', () => {
+    expect(ids([o('a', 99, 2), o('b', 1, 0), o('c', 50, 1)])).toEqual(['b', 'c', 'a'])
+  })
+
+  it('threads never placed come first in their group, newest activity first', () => {
+    const list = [o('placed-1', 100, 0), o('placed-2', 100, 1), o('new-old', 5), o('new-fresh', 10)]
+    expect(ids(list)).toEqual(['new-fresh', 'new-old', 'placed-1', 'placed-2'])
+  })
+
+  it('pins stay a top group: unplaced pins (newest pin first), placed pins, then the rest', () => {
+    const list = [
+      o('rest-placed', 1, 0),
+      o('rest-new', 9),
+      o('pin-placed-b', 1, 5, 100),
+      o('pin-placed-a', 1, 3, 100),
+      o('pin-new-old', 1, undefined, 200),
+      o('pin-new-late', 1, undefined, 300)
+    ]
+    expect(ids(list)).toEqual([
+      'pin-new-late',
+      'pin-new-old',
+      'pin-placed-a',
+      'pin-placed-b',
+      'rest-new',
+      'rest-placed'
+    ])
+  })
+
+  it('a pinned thread with a low sortOrder still sorts below no unpinned thread', () => {
+    expect(ids([o('rest', 1, -100), o('pin', 1, 50, 1)])).toEqual(['pin', 'rest'])
+  })
+
+  it('treats a null sortOrder (a dropped place) as never placed', () => {
+    expect(isPlaced(o('a', 1, null))).toBe(false)
+    expect(isPlaced(o('a', 1, 0))).toBe(true)
+    expect(ids([o('placed', 9, 0), o('dropped', 1, null)])).toEqual(['dropped', 'placed'])
+  })
+
+  it('equal places fall back to activity', () => {
+    expect(ids([o('a', 1, 4), o('b', 2, 4)])).toEqual(['b', 'a'])
   })
 })
 

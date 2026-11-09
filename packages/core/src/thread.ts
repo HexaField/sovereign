@@ -90,6 +90,11 @@ export interface ThreadInfo {
    *  Pinned threads list first, most recently pinned first. Unset = not pinned.
    *  Unrelated to `pinnedRepoPath`. Set via PATCH /api/threads/:key `{ pinned }`. */
   pinnedAt?: number
+  /** The thread's place in the user's manual order (drag to reorder), lower
+   *  first, within its group (pinned or not). Unset = never placed by hand:
+   *  the thread lists show it above the hand-placed ones. Set via
+   *  POST /api/threads/reorder; cleared when the thread is pinned or unpinned. */
+  sortOrder?: number
   lastActivity: number
   unreadCount: number
   agentStatus: AgentStatus

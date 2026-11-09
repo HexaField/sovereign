@@ -4,7 +4,7 @@ import { createSignal, onMount, onCleanup, For, Show, type Component } from 'sol
 import { ClockIcon } from '../../ui/icons.js'
 import { createThreadActions } from '../threads/thread-actions.js'
 import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
-import { comparePins } from '../threads/thread-order.js'
+import { compareThreads } from '../threads/thread-order.js'
 
 interface ActiveSession {
   key: string
@@ -196,20 +196,8 @@ const AgentsTab: Component = () => {
       active: aMap.get(t.id) ?? null,
       meta: metaMap().get(t.id) ?? null
     }))
-    // Sort: pinned first (the shared thread-list order), then working, then thinking, then by lastActivity desc
-    return all.sort((a, b) => {
-      const pins = comparePins(a.thread, b.thread)
-      if (pins !== 0) return pins
-      const order = (row: AgentRow) => {
-        if (row.active?.agentStatus === 'working') return 0
-        if (row.active?.agentStatus === 'thinking') return 1
-        return 2
-      }
-      const oa = order(a),
-        ob = order(b)
-      if (oa !== ob) return oa - ob
-      return (b.thread.lastActivity ?? 0) - (a.thread.lastActivity ?? 0)
-    })
+    // The shared thread-list order: pins, then the user's manual (dragged) order, then activity.
+    return all.sort((a, b) => compareThreads(a.thread, b.thread))
   }
 
   const workingCount = () => activeSessions().filter((s) => s.agentStatus === 'working').length

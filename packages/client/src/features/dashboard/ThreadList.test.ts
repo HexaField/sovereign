@@ -2,7 +2,16 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }))
 
-import { applyThreadUpdate, pinInList, renameInList, removeThread, shortRelativeTime } from './ThreadList.jsx'
+import {
+  applyThreadUpdate,
+  pinInList,
+  renameInList,
+  removeThread,
+  reorderInList,
+  shortRelativeTime,
+  type ThreadEntry
+} from './ThreadList.jsx'
+import { sortThreads } from '../threads/thread-order.js'
 
 const T0 = 1_800_000_000_000
 const thread = (id: string, lastActivity: number) => ({
@@ -70,5 +79,64 @@ describe('pinInList', () => {
   it('takes an unpin broadcast ({ pinnedAt: null }) through applyThreadUpdate', () => {
     const next = applyThreadUpdate(pinInList(list, 'a', 5), { threadId: 'a', patch: { pinnedAt: null } })
     expect(next[0].pinnedAt).toBeNull()
+  })
+})
+
+describe('reorderInList (Overview drag to reorder)', () => {
+  const entry = (
+    id: string,
+    lastActivity: number,
+    extra: { pinnedAt?: number; sortOrder?: number } = {}
+  ): ThreadEntry => ({
+    id,
+    label: id,
+    agentStatus: 'idle',
+    lastActivity,
+    archived: false,
+    ...extra
+  })
+  const order = (list: Array<{ id: string }>) => sortThreads(list as any[]).map((t: { id: string }) => t.id)
+
+  it('shows the new order at once and saves the plan', async () => {
+    let list = [entry('a', 3), entry('b', 2), entry('c', 1)]
+    const save = vi.fn(() => Promise.resolve())
+    const done = reorderInList(
+      () => list,
+      (next) => (list = next),
+      { ids: ['c', 'b', 'a'] },
+      save
+    )
+    expect(order(list)).toEqual(['c', 'b', 'a'])
+    await done
+    expect(save).toHaveBeenCalledWith({ ids: ['c', 'b', 'a'] })
+    expect(order(list)).toEqual(['c', 'b', 'a'])
+  })
+
+  it('puts the old order back when the save fails, keeping changes made meanwhile', async () => {
+    let list = [entry('a', 3), entry('b', 2, { pinnedAt: 7 })]
+    const save = vi.fn(async () => {
+      list = list.map((t) => (t.id === 'a' ? { ...t, label: 'renamed' } : t))
+      throw new Error('Reorder failed (500)')
+    })
+    await expect(
+      reorderInList(
+        () => list,
+        (next) => (list = next),
+        { ids: ['b', 'a'], pinned: false },
+        save
+      )
+    ).rejects.toThrow('Reorder failed (500)')
+    expect(order(list)).toEqual(['b', 'a'])
+    expect(list.find((t) => t.id === 'b')?.pinnedAt).toBe(7)
+    expect(list.find((t) => t.id === 'a')?.label).toBe('renamed')
+  })
+
+  it('applies a sortOrder broadcast, and a null one as never placed', () => {
+    let list = [entry('a', 3), entry('b', 1)]
+    list = applyThreadUpdate(list, { threadId: 'b', patch: { sortOrder: 0 } })
+    list = applyThreadUpdate(list, { threadId: 'a', patch: { sortOrder: 1 } })
+    expect(order(list)).toEqual(['b', 'a'])
+    list = applyThreadUpdate(list, { threadId: 'a', patch: { sortOrder: null } })
+    expect(order(list)).toEqual(['a', 'b'])
   })
 })

@@ -1,12 +1,15 @@
 import { createSignal, createMemo, onMount, onCleanup, Show, For } from 'solid-js'
 import { wsStore } from '../../ws/index.js'
-import { threadKey, setThreadKey } from '../threads/store.js'
+import { threadKey, setThreadKey, reorderThreads } from '../threads/store.js'
 import { closeDashboardModal } from '../nav/store.js'
 import { createThreadActions } from '../threads/thread-actions.js'
 import { PinMark, ThreadActionsButton, ThreadActionsMenu, ThreadRenameInput } from '../threads/ThreadActions.js'
 import { isListed, sortThreads } from '../threads/thread-order.js'
+import { applyReorder, restoreOrder, snapshotOrder, type ReorderPlan } from '../threads/thread-drag.js'
+import { createThreadDrag } from '../threads/thread-drag-controller.js'
+import { DragGrip, DropLine } from '../threads/ThreadDrag.js'
 
-interface ThreadEntry {
+export interface ThreadEntry {
   id: string
   label: string
   membraneId?: string
@@ -17,6 +20,8 @@ interface ThreadEntry {
   presence?: string
   /** Set while pinned to the top; `null` after an unpin broadcast. */
   pinnedAt?: number | null
+  /** The thread's manual place (drag to reorder); `null` after a broadcast that drops it. */
+  sortOrder?: number | null
 }
 
 interface MembraneMeta {
@@ -66,6 +71,26 @@ export function pinInList(list: ThreadEntry[], id: string, pinnedAt: number | un
   return list.map((t) => (t.id === id ? { ...t, pinnedAt } : t))
 }
 
+/**
+ * Reorder the list at once (a drop), then save it; puts the old order back if
+ * the save fails. The shared store (header picker) is updated by `reorderThreads`.
+ */
+export async function reorderInList(
+  get: () => ThreadEntry[],
+  set: (list: ThreadEntry[]) => void,
+  plan: ReorderPlan,
+  save: (plan: ReorderPlan) => Promise<void> = reorderThreads
+): Promise<void> {
+  const snapshot = snapshotOrder(get(), plan.ids)
+  set(applyReorder(get(), plan))
+  try {
+    await save(plan)
+  } catch (err) {
+    set(restoreOrder(get(), snapshot))
+    throw err
+  }
+}
+
 /** Apply a successful rename to the list. */
 export function renameInList(list: ThreadEntry[], id: string, label: string): ThreadEntry[] {
   return list.map((t) => (t.id === id ? { ...t, label } : t))
@@ -88,6 +113,19 @@ export default function ThreadList() {
     onRenamed: (id, label) => setThreads((prev) => renameInList(prev, id, label)),
     onPinned: (id, pinnedAt) => setThreads((prev) => pinInList(prev, id, pinnedAt))
   })
+
+  // Drag to reorder (⠿ grip, or drag a row with the mouse).
+  let listEl: HTMLDivElement | undefined
+  const [reorderError, setReorderError] = createSignal('')
+  const drag = createThreadDrag({
+    items: () => filtered(),
+    container: () => listEl,
+    onReorder: (plan) => {
+      setReorderError('')
+      reorderInList(threads, setThreads, plan).catch((err: Error) => setReorderError(err.message || 'Reorder failed'))
+    }
+  })
+  onCleanup(() => drag.dispose())
 
   const membraneMap = createMemo(() => {
     const m = new Map<string, MembraneMeta>()
@@ -211,11 +249,17 @@ export default function ThreadList() {
         />
       </div>
 
-      <div class="flex-1 overflow-y-auto px-1">
+      <Show when={reorderError()}>
+        <div class="shrink-0 px-3 pb-1 text-xs" style={{ color: 'var(--c-danger, #e5484d)' }} role="alert">
+          {reorderError()}
+        </div>
+      </Show>
+
+      <div ref={(el) => (listEl = el)} class="flex-1 overflow-y-auto px-1">
         <Show when={!loading()} fallback={<div class="px-3 py-4 text-xs opacity-40">Loading...</div>}>
           <Show when={filtered().length > 0} fallback={<div class="px-3 py-4 text-xs opacity-40">No threads</div>}>
             <For each={filtered()}>
-              {(thread) => {
+              {(thread, i) => {
                 const mb = () => (thread.membraneId ? membraneMap().get(thread.membraneId) : null)
                 const preview = () => previews()[thread.id]
                 const isActive = () => thread.agentStatus === 'working' || thread.agentStatus === 'thinking'
@@ -227,11 +271,13 @@ export default function ThreadList() {
                       role="button"
                       tabIndex={0}
                       data-thread-row={thread.id}
-                      class="flex w-full cursor-pointer items-start gap-2 rounded-md py-2 pr-1 pl-2.5 text-left transition-colors"
+                      class="group relative flex w-full cursor-pointer items-start gap-1.5 rounded-md py-2 pr-1 pl-0.5 text-left transition-colors"
                       style={{
                         background: isCurrent() ? 'var(--c-hover-bg-strong)' : 'transparent',
-                        color: 'var(--c-text)'
+                        color: 'var(--c-text)',
+                        opacity: drag.draggingId() === thread.id ? 0.45 : undefined
                       }}
+                      onPointerDown={(e) => drag.onRowPointerDown(e, thread.id)}
                       onMouseEnter={(e) => {
                         if (!isCurrent()) e.currentTarget.style.background = 'var(--c-hover-bg)'
                       }}
@@ -250,6 +296,11 @@ export default function ThreadList() {
                       }}
                       onContextMenu={(e) => actions.onContextMenu(thread.id, e)}
                     >
+                      <DropLine show={drag.lineAt(i())} pinned={drag.target()?.pinned} />
+                      <Show when={i() === filtered().length - 1}>
+                        <DropLine show={drag.lineAt(i() + 1)} pinned={drag.target()?.pinned} at="bottom" />
+                      </Show>
+                      <DragGrip drag={drag} threadId={thread.id} class="-my-2 w-4" />
                       {/* Activity indicator */}
                       <span
                         class="mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full"
