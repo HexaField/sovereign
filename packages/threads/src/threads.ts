@@ -11,15 +11,39 @@
 //   <dataDir>/threads/events.json   per-thread event log keyed by thread.id
 //   <dataDir>/threads/registry.json LEGACY pre-membrane file; read once on
 //                                   cold boot if threads.json is missing.
+//   <dataDir>/thread-folders.json   { version: 1, folders: ThreadFolder[] } —
+//                                   user-made folders; threads point at one
+//                                   through `folderId`.
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { EventBus } from '@sovereign/core'
-import type { ThreadInfo, EntityBinding, ThreadEvent, ThreadFilter, ThreadManager, EntityType } from './types.js'
+import type {
+  ThreadInfo,
+  ThreadFolder,
+  EntityBinding,
+  ThreadEvent,
+  ThreadFilter,
+  ThreadManager,
+  EntityType
+} from './types.js'
 import { assignSortOrders } from './sort-order.js'
 
 const SCHEMA_VERSION = 2
+const FOLDERS_VERSION = 1
+export const MAX_FOLDER_NAME = 80
+export const MAX_FOLDERS = 500
+
+/** A folder request the manager refuses: `status` 400 (bad input) or 409 (name in use). */
+export class FolderError extends Error {
+  readonly status: 400 | 404 | 409
+  constructor(message: string, status: 400 | 404 | 409 = 400) {
+    super(message)
+    this.name = 'FolderError'
+    this.status = status
+  }
+}
 
 function entityRefKey(entity: EntityBinding): string {
   return `${entity.orgId}/${entity.projectId}/${entity.entityType}:${entity.entityRef}`
@@ -91,6 +115,7 @@ function projectToV2(raw: any, orgToMembrane: Map<string, string>): ThreadInfo {
     pinnedRepoPath: typeof raw.pinnedRepoPath === 'string' ? raw.pinnedRepoPath : undefined,
     pinnedAt: typeof raw.pinnedAt === 'number' && raw.pinnedAt > 0 ? raw.pinnedAt : undefined,
     sortOrder: typeof raw.sortOrder === 'number' && Number.isFinite(raw.sortOrder) ? raw.sortOrder : undefined,
+    folderId: typeof raw.folderId === 'string' && raw.folderId ? raw.folderId : undefined,
     // Migrate legacy `presence: true` (boolean) → `presence: 'internal'`.
     // String roles pass through untouched; anything else is dropped. An
     // archived thread holds no role (older builds archived without clearing it).
@@ -113,6 +138,7 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
   const threadsPath = path.join(dataDir, 'threads.json')
   const eventsPath = path.join(dataDir, 'threads', 'events.json')
   const legacyRegistryPath = path.join(dataDir, 'threads', 'registry.json')
+  const foldersPath = path.join(dataDir, 'thread-folders.json')
 
   /** Primary store, keyed by Thread.id (UUID). */
   const threads = new Map<string, ThreadInfo>()
@@ -186,6 +212,30 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     } catch {
       /* ignore */
     }
+  }
+
+  // ── Load folders ────────────────────────────────────────────────────
+  const folders = new Map<string, ThreadFolder>()
+  if (fs.existsSync(foldersPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(foldersPath, 'utf-8'))
+      for (const raw of data.folders ?? []) {
+        if (typeof raw?.id !== 'string' || !raw.id || typeof raw.name !== 'string' || !raw.name.trim()) continue
+        folders.set(raw.id, {
+          id: raw.id,
+          name: raw.name.trim(),
+          createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now()
+        })
+      }
+    } catch {
+      /* corrupt file: start without folders; threads fall back to the main list */
+    }
+  }
+  // A thread whose folder is gone lists in the main list.
+  for (const t of threads.values()) if (t.folderId && !folders.has(t.folderId)) delete t.folderId
+
+  function persistFoldersImmediate(): void {
+    atomicWrite(foldersPath, JSON.stringify({ version: FOLDERS_VERSION, folders: [...folders.values()] }, null, 2))
   }
 
   function persistThreadsImmediate(): void {
@@ -377,6 +427,10 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     if (missing !== undefined) throw new Error(`Unknown thread: ${missing}`)
     if (new Set(ids).size !== ids.length) throw new Error('Duplicate thread id')
     const list = placed as ThreadInfo[]
+    // One list at a time: the main list or one folder.
+    if (list.some((t) => t.folderId !== list[0].folderId)) {
+      throw new FolderError('Threads to reorder must all be in the same folder (or all in the main list)')
+    }
     const pinned = opts.pinned
     // A thread joining the other group brings no place with it.
     const changesGroup = (t: ThreadInfo) => pinned !== undefined && !!t.pinnedAt !== pinned
@@ -408,6 +462,109 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
       })
     }
     return changes.map((c) => c.thread)
+  }
+
+  // ── Folders ─────────────────────────────────────────────────────────
+
+  /** Copies: a broadcast list must not change under a later rename. */
+  function listFolders(): ThreadFolder[] {
+    return [...folders.values()].map((f) => ({ ...f }))
+  }
+
+  function emitFolders(): void {
+    bus.emit({
+      type: 'thread.folders',
+      timestamp: new Date().toISOString(),
+      source: 'threads',
+      payload: { folders: listFolders() }
+    })
+  }
+
+  /** A valid, unused folder name (trimmed), or a FolderError. */
+  function checkName(name: unknown, exceptId?: string): string {
+    if (typeof name !== 'string' || !name.trim()) throw new FolderError('A folder needs a name')
+    const trimmed = name.trim()
+    if (trimmed.length > MAX_FOLDER_NAME) {
+      throw new FolderError(`A folder name is at most ${MAX_FOLDER_NAME} characters`)
+    }
+    const lower = trimmed.toLowerCase()
+    const taken = [...folders.values()].find((f) => f.id !== exceptId && f.name.toLowerCase() === lower)
+    if (taken) throw new FolderError(`A folder named "${taken.name}" already exists`, 409)
+    return trimmed
+  }
+
+  function createFolder(name: string): ThreadFolder {
+    const checked = checkName(name)
+    if (folders.size >= MAX_FOLDERS) throw new FolderError(`At most ${MAX_FOLDERS} folders`)
+    const folder: ThreadFolder = { id: randomUUID(), name: checked, createdAt: Date.now() }
+    folders.set(folder.id, folder)
+    persistFoldersImmediate()
+    emitFolders()
+    return { ...folder }
+  }
+
+  function renameFolder(id: string, name: string): ThreadFolder | undefined {
+    const folder = folders.get(id)
+    if (!folder) return undefined
+    const checked = checkName(name, id)
+    if (checked !== folder.name) {
+      folder.name = checked
+      persistFoldersImmediate()
+      emitFolders()
+    }
+    return { ...folder }
+  }
+
+  /** Put `thread` in `folderId` (undefined = main list); returns its broadcast patch, or null if unchanged. */
+  function placeInFolder(
+    thread: ThreadInfo,
+    folderId: string | undefined
+  ): { folderId: string | null; sortOrder: null } | null {
+    if (thread.folderId === folderId) return null
+    if (folderId) thread.folderId = folderId
+    else delete thread.folderId
+    // It lands at the top of its new list, as a thread never placed by hand.
+    delete thread.sortOrder
+    return { folderId: folderId ?? null, sortOrder: null }
+  }
+
+  function emitThreadPatch(threadId: string, patch: Record<string, unknown>): void {
+    bus.emit({
+      type: 'thread.updated',
+      timestamp: new Date().toISOString(),
+      source: 'threads',
+      payload: { threadId, patch }
+    })
+  }
+
+  function deleteFolder(id: string): boolean {
+    if (!folders.has(id)) return false
+    folders.delete(id)
+    // Its threads (archived ones too) go back to the main list.
+    const moved: Array<[string, Record<string, unknown>]> = []
+    for (const t of threads.values()) {
+      if (t.folderId !== id) continue
+      const patch = placeInFolder(t, undefined)
+      if (patch) moved.push([t.id, patch])
+    }
+    if (moved.length) persistThreadsImmediate()
+    persistFoldersImmediate()
+    for (const [threadId, patch] of moved) emitThreadPatch(threadId, patch)
+    emitFolders()
+    return true
+  }
+
+  function moveToFolder(threadId: string, folderId: string | null): ThreadInfo | undefined {
+    const thread = threads.get(threadId)
+    if (!thread) return undefined
+    if (folderId !== null && !folders.has(folderId)) throw new FolderError(`Folder not found: ${folderId}`, 404)
+    const patch = placeInFolder(thread, folderId ?? undefined)
+    if (patch) {
+      // Filing a thread is not activity: `lastActivity` stays as it was.
+      persistThreadsImmediate()
+      emitThreadPatch(threadId, patch)
+    }
+    return thread
   }
 
   function del(id: string): boolean {
@@ -592,6 +749,11 @@ export function createThreadManager(bus: EventBus, dataDir: string): ThreadManag
     resolve,
     update,
     reorder,
+    listFolders,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveToFolder,
     list,
     delete: del,
     addEntity,

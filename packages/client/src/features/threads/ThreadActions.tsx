@@ -1,5 +1,6 @@
 // Thread actions UI shared by every thread list: the "⋯" button, the inline
-// Pin / Rename / Archive menu (with delete confirmation), and the inline rename field.
+// Pin / Rename / Move to folder / Archive menu (with delete confirmation), and
+// the inline rename field.
 // State lives in a `createThreadActions()` controller (thread-actions.ts).
 //
 // Usage in a list row:
@@ -11,12 +12,12 @@
 //   </div>
 //   <ThreadActionsMenu actions={actions} thread={t} />
 
-import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js'
+import { createSignal, For, onCleanup, onMount, Show, type JSX } from 'solid-js'
 import type { ThreadActions } from './thread-actions.js'
 import { isPinned } from './thread-order.js'
 
 /** The thread fields the menu reads. */
-type MenuThread = { id: string; pinnedAt?: number | null }
+type MenuThread = { id: string; pinnedAt?: number | null; folderId?: string | null }
 
 /** The 📌 shown next to a pinned thread's name in every list. */
 export function PinMark(props: { thread: { pinnedAt?: number | null }; class?: string }) {
@@ -120,7 +121,12 @@ function MenuPanel(props: { actions: ThreadActions; thread: MenuThread; class?: 
       <Show
         when={props.actions.isConfirming(id())}
         fallback={
-          <>
+          <Show
+            when={!props.actions.isPicking(id())}
+            fallback={
+              <FolderPicker actions={props.actions} thread={props.thread} itemClass={itemClass} hover={hover} />
+            }
+          >
             <button
               type="button"
               role="menuitem"
@@ -145,13 +151,35 @@ function MenuPanel(props: { actions: ThreadActions; thread: MenuThread; class?: 
               type="button"
               role="menuitem"
               class={itemClass}
+              style={{ color: 'var(--c-text)' }}
+              {...hover}
+              onClick={() => props.actions.startPick(id())}
+            >
+              Move to folder…
+            </button>
+            <Show when={props.thread.folderId}>
+              <button
+                type="button"
+                role="menuitem"
+                class={itemClass}
+                style={{ color: 'var(--c-text)' }}
+                {...hover}
+                onClick={() => void props.actions.moveTo(id(), null)}
+              >
+                Remove from folder
+              </button>
+            </Show>
+            <button
+              type="button"
+              role="menuitem"
+              class={itemClass}
               style={{ color: '#ef4444' }}
               {...hover}
               onClick={() => props.actions.askDelete(id())}
             >
               Archive
             </button>
-          </>
+          </Show>
         }
       >
         <div class="px-3 pt-2 pb-1.5" style={{ color: 'var(--c-text)' }}>
@@ -187,12 +215,87 @@ function MenuPanel(props: { actions: ThreadActions; thread: MenuThread; class?: 
   )
 }
 
-/** Inline thread-name editor: Enter saves, Escape (or leaving the field) cancels. */
+/** "Move to folder…": the folders (A–Z, without the thread's own) and a field for a new one. */
+function FolderPicker(props: {
+  actions: ThreadActions
+  thread: MenuThread
+  itemClass: string
+  hover: { onMouseEnter: (e: MouseEvent) => void; onMouseLeave: (e: MouseEvent) => void }
+}) {
+  const [naming, setNaming] = createSignal(false)
+  const id = () => props.thread.id
+  return (
+    <>
+      <div class="px-3 pt-2 pb-1 text-[10px] tracking-wide uppercase" style={{ color: 'var(--c-text-muted)' }}>
+        Move to folder
+      </div>
+      <For each={props.actions.folderChoices(props.thread.folderId)}>
+        {(f) => (
+          <button
+            type="button"
+            role="menuitem"
+            class={props.itemClass}
+            style={{ color: 'var(--c-text)' }}
+            {...props.hover}
+            onClick={() => void props.actions.moveTo(id(), f.id)}
+          >
+            <span class="mr-1.5">📁</span>
+            <span class="truncate">{f.name}</span>
+          </button>
+        )}
+      </For>
+      <Show
+        when={naming()}
+        fallback={
+          <button
+            type="button"
+            role="menuitem"
+            class={props.itemClass}
+            style={{ color: 'var(--c-accent)' }}
+            {...props.hover}
+            onClick={() => setNaming(true)}
+          >
+            + New folder…
+          </button>
+        }
+      >
+        <div class="px-2 py-1.5">
+          <ThreadRenameInput
+            initial=""
+            label="New folder name"
+            placeholder="Folder name"
+            onSave={async (name) => {
+              if (!(await props.actions.moveToNew(id(), name))) throw new Error(props.actions.error() || 'Failed')
+            }}
+            onDone={() => setNaming(false)}
+          />
+        </div>
+      </Show>
+      <button
+        type="button"
+        role="menuitem"
+        class={props.itemClass}
+        style={{ color: 'var(--c-text-muted)' }}
+        {...props.hover}
+        onClick={() => props.actions.openMenu(id())}
+      >
+        ← Back
+      </button>
+    </>
+  )
+}
+
+/** Inline name editor (threads, folders): Enter saves, Escape (or leaving the field) cancels. */
 export function ThreadRenameInput(props: {
   initial: string
   onSave: (label: string) => Promise<void>
   onDone: () => void
   class?: string
+  /** The field's accessible name (default "Thread name"). */
+  label?: string
+  placeholder?: string
+  /** Show a refused save's reason under the field (not only on hover). */
+  showError?: boolean
 }) {
   const [value, setValue] = createSignal(props.initial)
   const [error, setError] = createSignal('')
@@ -212,7 +315,7 @@ export function ThreadRenameInput(props: {
       setError((err as Error).message || 'Rename failed')
     }
   }
-  return (
+  const field = (
     <input
       class={props.class ?? "w-full min-w-0 rounded border px-2 py-1 text-xs outline-none"}
       style={{
@@ -220,7 +323,8 @@ export function ThreadRenameInput(props: {
         'border-color': error() ? '#ef4444' : 'var(--c-accent)',
         color: 'var(--c-text)'
       }}
-      aria-label="Thread name"
+      aria-label={props.label ?? 'Thread name'}
+      placeholder={props.placeholder}
       title={error() || 'Enter to save, Escape to cancel'}
       value={value()}
       onInput={(e) => {
@@ -246,5 +350,16 @@ export function ThreadRenameInput(props: {
         }, 0)
       }
     />
+  )
+  if (!props.showError) return field
+  return (
+    <div class="flex min-w-0 flex-1 flex-col">
+      {field}
+      <Show when={error()}>
+        <div class="pt-1 text-[11px]" role="alert" style={{ color: '#ef4444' }}>
+          {error()}
+        </div>
+      </Show>
+    </div>
   )
 }

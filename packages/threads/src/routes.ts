@@ -1,9 +1,10 @@
 // Threads — REST API endpoints
 
 import fs from 'node:fs'
-import { Router } from 'express'
+import { Router, type Response } from 'express'
 import type { ThreadManager } from './types.js'
 import type { ForwardHandler } from './forward.js'
+import { FolderError } from './threads.js'
 import {
   deriveSessionKey,
   type AgentBackend,
@@ -386,8 +387,70 @@ export function createThreadRoutes(
     if (!threadManager.reorder) return res.status(501).json({ error: 'Reordering is not supported' })
     const unknown = (ids as string[]).find((id) => !threadManager.get(id))
     if (unknown) return res.status(404).json({ error: `Thread not found: ${unknown}` })
-    const changed = threadManager.reorder(ids, pinned === undefined ? {} : { pinned })
-    res.json({ threads: (ids as string[]).map((id) => threadManager.get(id)), changed: changed.length })
+    try {
+      const changed = threadManager.reorder(ids, pinned === undefined ? {} : { pinned })
+      res.json({ threads: (ids as string[]).map((id) => threadManager.get(id)), changed: changed.length })
+    } catch (err) {
+      if (err instanceof FolderError) return res.status(err.status).json({ error: err.message })
+      throw err
+    }
+  })
+
+  // User-made folders (one level: threads inside folders). Folder changes go
+  // out on `thread.folders` { folders }; a thread filed or unfiled goes out on
+  // `thread.updated` { folderId, sortOrder: null }.
+  const folderFail = (res: Response, err: unknown) => {
+    if (err instanceof FolderError) return res.status(err.status).json({ error: err.message })
+    throw err
+  }
+  const noFolders = (res: Response) => res.status(501).json({ error: 'Folders are not supported' })
+
+  router.get('/api/thread-folders', (_req, res) => {
+    if (!threadManager.listFolders) return noFolders(res)
+    res.json({ folders: threadManager.listFolders() })
+  })
+
+  router.post('/api/thread-folders', (req, res) => {
+    if (!threadManager.createFolder) return noFolders(res)
+    try {
+      res.status(201).json({ folder: threadManager.createFolder(req.body?.name) })
+    } catch (err) {
+      folderFail(res, err)
+    }
+  })
+
+  router.patch('/api/thread-folders/:id', (req, res) => {
+    if (!threadManager.renameFolder) return noFolders(res)
+    try {
+      const folder = threadManager.renameFolder(req.params.id, req.body?.name)
+      if (!folder) return res.status(404).json({ error: 'Folder not found' })
+      res.json({ folder })
+    } catch (err) {
+      folderFail(res, err)
+    }
+  })
+
+  // Deletes the folder only: its threads go back to the main list.
+  router.delete('/api/thread-folders/:id', (req, res) => {
+    if (!threadManager.deleteFolder) return noFolders(res)
+    if (!threadManager.deleteFolder(req.params.id)) return res.status(404).json({ error: 'Folder not found' })
+    res.json({ success: true })
+  })
+
+  // Body: { folderId: string | null } — into that folder, or back to the main list.
+  router.put('/api/threads/:key/folder', (req, res) => {
+    if (!threadManager.moveToFolder) return noFolders(res)
+    const folderId = req.body?.folderId
+    if (folderId !== null && (typeof folderId !== 'string' || !folderId)) {
+      return res.status(400).json({ error: 'folderId must be a folder id or null' })
+    }
+    try {
+      const thread = threadManager.moveToFolder(req.params.key, folderId)
+      if (!thread) return res.status(404).json({ error: 'Thread not found' })
+      res.json({ thread })
+    } catch (err) {
+      folderFail(res, err)
+    }
   })
 
   router.delete('/api/threads/:key', (req, res) => {

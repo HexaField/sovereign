@@ -4,6 +4,7 @@ vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise
 
 import {
   applyThreadUpdate,
+  moveInList,
   pinInList,
   renameInList,
   removeThread,
@@ -138,5 +139,55 @@ describe('reorderInList (Overview drag to reorder)', () => {
     expect(order(list)).toEqual(['b', 'a'])
     list = applyThreadUpdate(list, { threadId: 'a', patch: { sortOrder: null } })
     expect(order(list)).toEqual(['a', 'b'])
+  })
+})
+
+describe('moveInList (Overview folders)', () => {
+  const entry = (id: string, extra: Partial<ThreadEntry> = {}): ThreadEntry => ({
+    id,
+    label: id,
+    agentStatus: 'idle',
+    lastActivity: 1,
+    archived: false,
+    ...extra
+  })
+
+  it('files the thread at once, at the top of the folder, and saves it', async () => {
+    let list = [entry('a', { sortOrder: 3 }), entry('b')]
+    const save = vi.fn(() => Promise.resolve())
+    const done = moveInList(
+      () => list,
+      (next) => (list = next),
+      'a',
+      'dogs',
+      save
+    )
+    expect(list[0]).toMatchObject({ folderId: 'dogs', sortOrder: null })
+    await done
+    expect(save).toHaveBeenCalledWith('a', 'dogs')
+  })
+
+  it('puts it back when the save fails, and skips a move that changes nothing', async () => {
+    let list = [entry('a', { folderId: 'dogs', sortOrder: 2 })]
+    const failing = vi.fn(() => Promise.reject(new Error('Folder not found')))
+    await expect(
+      moveInList(
+        () => list,
+        (next) => (list = next),
+        'a',
+        null,
+        failing
+      )
+    ).rejects.toThrow('Folder not found')
+    expect(list[0]).toMatchObject({ folderId: 'dogs', sortOrder: 2 })
+    const save = vi.fn(() => Promise.resolve())
+    await moveInList(
+      () => list,
+      (next) => (list = next),
+      'a',
+      'dogs',
+      save
+    )
+    expect(save).not.toHaveBeenCalled()
   })
 })
