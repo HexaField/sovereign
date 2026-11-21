@@ -514,7 +514,7 @@ const presenceReplyAd4mSchema: ToolSchema = {
   function: {
     name: 'sovereign_presence_reply_ad4m',
     description:
-      'Post a reply into the AD4M channel of the last ad4m-origin message (or explicit perspective/channel). Only callable from the presence-internal thread.',
+      'Post a reply into the AD4M channel of the last ad4m-origin message (or explicit perspective/channel). Only callable from the presence-internal thread. The reply is plain text and mentions no one: to address a person or a bot, post a TextBlock with a real mention instead (the "Replying:" line of the wake).',
     parameters: {
       type: 'object',
       required: ['text'],
