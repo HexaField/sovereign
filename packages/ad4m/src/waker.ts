@@ -191,12 +191,21 @@ function textOf(result: any, address: string): string | undefined {
   return typeof text === 'string' && text ? text : undefined
 }
 
-/** How a post addresses someone so that it wakes them (the wording of ad4m's waker prompts, coasys/ad4m#1889). */
-const MENTION_RULE =
-  "Every post that is for a person or a bot carries their DID in the item's mentions relation, plus a mention mark over @Name where the class keeps marks; tag everyone you answer or ask, and nobody a post isn't for. " +
-  'Plain @Name text without the mentions link does not wake anyone reliably. ' +
-  'To post: instance_create with parent = the channel and properties {"text": "@Name …", "mentions": ["<DID>"], "marks": "[{\\"start\\":0,\\"end\\":5,\\"type\\":\\"mention\\",\\"did\\":\\"<DID>\\"}]"} (marks is a JSON array encoded as a string; offsets count code points, end exclusive). ' +
-  "The executor does not derive mention links from marks. The sender's DID is on the By: line."
+/**
+ * The texts of `addresses` through TextContent, for mentions whose query result
+ * holds none: a Mentioning row carries only `mentions`. A failed read leaves
+ * the wake without text.
+ */
+async function textsOf(client: Ad4mTypedClient, perspective: string, addresses: string[]): Promise<any> {
+  if (!addresses.length) return undefined
+  try {
+    const query = { where: { id: addresses }, properties: ['text'] }
+    return await client.perspective.modelQuery(perspective, TEXT_CONTENT, JSON.stringify(query))
+  } catch (e) {
+    logger.warn(`waker: could not read the text of ${addresses.join(', ')}: ${(e as Error)?.message ?? e}`)
+    return undefined
+  }
+}
 
 function mentionText(m: MentionMessage, body: string | undefined): string {
   const lines = [`[AD4M] You were mentioned${body ? `: "${body}"` : ''}`, `Item: ${m.address}`]
@@ -208,7 +217,6 @@ function mentionText(m: MentionMessage, body: string | undefined): string {
     )
   lines.push(`Parents: ${m.parents.length ? m.parents.join(', ') : '(unknown)'}`)
   if (m.ancestors?.length) lines.push(`Ancestors: ${m.ancestors.join(', ')}`)
-  lines.push(`Replying: ${MENTION_RULE}`)
   return lines.join('\n')
 }
 
@@ -264,11 +272,13 @@ export function startWaker(
         seen = { ...seen, ...delivered }
         persistState()
       },
-      onWake: (sub, result, mentions) => {
+      onWake: async (sub, result, mentions) => {
         const entry = entryOf(sub.perspective)
         if (!entry || !mentions?.length) return true
+        const missing = mentions.filter((m) => !textOf(result, m.address)).map((m) => m.address)
+        const fetched = await textsOf(client, sub.perspective, missing)
         for (const m of mentions) {
-          const body = textOf(result, m.address)
+          const body = textOf(result, m.address) ?? textOf(fetched, m.address)
           emitBusEvent(bus, 'ad4m.perspective.mention', { uuid: sub.perspective, ...m, body })
           emitBusEvent(bus, 'ad4m.thread.message', {
             threadKey: entry.threadKey,

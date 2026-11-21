@@ -79,6 +79,8 @@ describe('mentionSubscription', () => {
 const proxies: FakeProxy[] = []
 /** What the text query holds when it opens: the mentions already in the perspective. */
 let opening: unknown = { instances: [] }
+/** The texts a TextContent read by id finds (record address → text); `fail` makes the read reject. */
+let stored: Record<string, string> & { fail?: string } = {}
 class FakeProxy {
   callbacks: Array<(r: unknown) => void> = []
   result: unknown
@@ -112,10 +114,15 @@ function fixture(
   existing: unknown[] = []
 ) {
   opening = { instances: existing }
+  stored = {}
   const emitted: Array<{ type: string; payload: any }> = []
   const bus = { emit: (e: any) => emitted.push(e), on: vi.fn(() => () => {}) } as unknown as EventBus
   const modelQuery = vi.fn(async (_uuid: string, cls: string, q: string) => {
-    const scope = JSON.parse(q).parent
+    const { parent: scope, where } = JSON.parse(q)
+    if (cls === 'ad4m://TextContent') {
+      if (stored.fail) throw new Error(stored.fail)
+      return { instances: (where.id as string[]).filter((id) => stored[id]).map((id) => ({ id, text: stored[id] })) }
+    }
     if (cls !== 'ad4m://Container') return { instances: [] }
     return scope.transitive ? { instances: [{ id: 'space://1' }] } : { instances: [{ id: 'channel://1' }] }
   })
@@ -191,18 +198,15 @@ describe('startWaker on the SDK waker', () => {
     expect(woken[0].text).toContain(`By: ${ALEX} (signature verified)`)
     expect(woken[0].text).toContain(`At: ${AT}`)
     expect(woken[0].text).toContain('Matched by: your name or DID in the text; a mention link may also exist')
-    // The wake tells the agent how to address people in its reply.
-    const replying = woken[0].text.split('\n').at(-1)
-    expect(replying).toMatch(
-      /^Replying: Every post that is for a person or a bot carries their DID in the item's mentions relation/
-    )
-    expect(replying).toContain('"mentions": ["<DID>"]')
-    expect(replying).toContain('does not derive mention links from marks')
+    // Provenance and text only: how to reply lives in the agent's stable prompt.
+    expect(woken[0].text.split('\n').at(-1)).toBe('Ancestors: space://1')
+    expect(woken[0].text).not.toContain('Replying:')
   })
 
   it('wakes on a verified mention link to its DID from the mention query, a text-less root included', async () => {
-    const { emitted } = fixture([{ uuid: 'n-1', sharedUrl: 'neighbourhood://a' }])
+    const { emitted, modelQuery } = fixture([{ uuid: 'n-1', sharedUrl: 'neighbourhood://a' }])
     await settle()
+    stored['block://chip'] = '@Hex can you review this?'
     mentionProxy().push({
       instances: [
         mentionRow('block://chip', [DID]),
@@ -216,7 +220,26 @@ describe('startWaker on the SDK waker', () => {
     expect(woken.map((m) => m.context.messageAddress)).toEqual(['block://chip', 'post://root'])
     expect(woken[0].text).toContain(`By: ${ALEX} (signature verified)`)
     expect(woken[0].text).toContain('Matched by: a mention link')
-    // Mentioning rows hold no text, so a wake through the mention query has no body.
+    // Mentioning rows hold no text: the waker reads it through TextContent, in one query.
+    const reads = modelQuery.mock.calls.filter(([, cls]) => cls === 'ad4m://TextContent')
+    expect(reads.map(([uuid, , q]) => [uuid, JSON.parse(q)])).toEqual([
+      ['n-1', { where: { id: ['block://chip', 'post://root'] }, properties: ['text'] }]
+    ])
+    expect(woken[0].context.body).toBe('@Hex can you review this?')
+    expect(woken[0].text.split('\n')[0]).toBe('[AD4M] You were mentioned: "@Hex can you review this?"')
+    // A root whose text sits in child blocks has none of its own.
+    expect(woken[1].context.body).toBeUndefined()
+    expect(woken[1].text.split('\n')[0]).toBe('[AD4M] You were mentioned')
+  })
+
+  it('still wakes, without text, when reading the text fails', async () => {
+    const { emitted } = fixture([{ uuid: 'n-1', sharedUrl: 'neighbourhood://a' }])
+    await settle()
+    stored.fail = 'executor busy'
+    mentionProxy().push({ instances: [mentionRow('block://chip', [DID])] })
+    await settle()
+    const woken = mentionsOf(emitted)
+    expect(woken.map((m) => m.context.messageAddress)).toEqual(['block://chip'])
     expect(woken[0].context.body).toBeUndefined()
   })
 
