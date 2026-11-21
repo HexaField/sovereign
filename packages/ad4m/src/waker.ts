@@ -191,6 +191,13 @@ function textOf(result: any, address: string): string | undefined {
   return typeof text === 'string' && text ? text : undefined
 }
 
+/** How a post addresses someone so that it wakes them (the wording of ad4m's waker prompts, coasys/ad4m#1889). */
+const MENTION_RULE =
+  "Every post that is for a person or a bot carries their DID in the item's mentions relation, plus a mention mark over @Name where the class keeps marks; tag everyone you answer or ask, and nobody a post isn't for. " +
+  'Plain @Name text without the mentions link does not wake anyone reliably. ' +
+  'To post: instance_create with parent = the channel and properties {"text": "@Name …", "mentions": ["<DID>"], "marks": "[{\\"start\\":0,\\"end\\":5,\\"type\\":\\"mention\\",\\"did\\":\\"<DID>\\"}]"} (marks is a JSON array encoded as a string; offsets count code points, end exclusive). ' +
+  "The executor does not derive mention links from marks. The sender's DID is on the By: line."
+
 function mentionText(m: MentionMessage, body: string | undefined): string {
   const lines = [`[AD4M] You were mentioned${body ? `: "${body}"` : ''}`, `Item: ${m.address}`]
   if (m.author) lines.push(`By: ${m.author}${m.verified ? ' (signature verified)' : ' (signature NOT verified)'}`)
@@ -201,6 +208,7 @@ function mentionText(m: MentionMessage, body: string | undefined): string {
     )
   lines.push(`Parents: ${m.parents.length ? m.parents.join(', ') : '(unknown)'}`)
   if (m.ancestors?.length) lines.push(`Ancestors: ${m.ancestors.join(', ')}`)
+  lines.push(`Replying: ${MENTION_RULE}`)
   return lines.join('\n')
 }
 

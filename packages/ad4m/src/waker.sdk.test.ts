@@ -191,6 +191,13 @@ describe('startWaker on the SDK waker', () => {
     expect(woken[0].text).toContain(`By: ${ALEX} (signature verified)`)
     expect(woken[0].text).toContain(`At: ${AT}`)
     expect(woken[0].text).toContain('Matched by: your name or DID in the text; a mention link may also exist')
+    // The wake tells the agent how to address people in its reply.
+    const replying = woken[0].text.split('\n').at(-1)
+    expect(replying).toMatch(
+      /^Replying: Every post that is for a person or a bot carries their DID in the item's mentions relation/
+    )
+    expect(replying).toContain('"mentions": ["<DID>"]')
+    expect(replying).toContain('does not derive mention links from marks')
   })
 
   it('wakes on a verified mention link to its DID from the mention query, a text-less root included', async () => {

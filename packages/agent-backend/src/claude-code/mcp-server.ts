@@ -973,7 +973,7 @@ export function createSovereignMcpServer(
         ),
         tool(
           'presence_reply_ad4m',
-          'Post a reply into the AD4M channel of the last ad4m-origin message (or explicit perspective/channel). Only callable from the presence-internal thread.',
+          'Post a reply into the AD4M channel of the last ad4m-origin message (or explicit perspective/channel). Only callable from the presence-internal thread. The reply is plain text and mentions no one: to address a person or a bot, post a TextBlock with a real mention instead (the "Replying:" line of the wake).',
           {
             text: z.string(),
             perspectiveUuid: z.string().optional(),
