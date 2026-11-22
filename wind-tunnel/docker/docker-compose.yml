@@ -46,6 +46,9 @@ services:
     build:
       context: ../../
       dockerfile: wind-tunnel/docker/sovereign.Dockerfile
+      args:
+        # 1 for the UI lane (run.sh --ui): the image then serves the client.
+        WITH_CLIENT: "${SWT_WITH_CLIENT:-0}"
     ports:
       - "5811:5801"
     environment:
