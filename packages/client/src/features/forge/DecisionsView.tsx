@@ -58,6 +58,12 @@ export interface DecisionsViewProps {
   narrow?: boolean
   /** Phone layout: hands the top bar the filter count and the sheet. */
   onMobileControls?: (c: DecisionControls | null) => void
+  /**
+   * A thread's panel: `decisions` is already one thread's list, so the filters start from
+   * the defaults without grouping by thread, stay in this view (never the saved Forge
+   * filters), and the Thread chip and each row's thread label are left out.
+   */
+  local?: boolean
 }
 
 const btn = 'rounded border px-2 py-0.5 text-xs transition-colors disabled:opacity-40 hover:bg-[var(--c-hover-bg)]'
@@ -184,7 +190,9 @@ const SheetPicks: Component<{
 )
 
 const DecisionsView: Component<DecisionsViewProps> = (props) => {
-  const [filters, setFiltersSignal] = createSignal<DecisionFilters>(readFilters())
+  const [filters, setFiltersSignal] = createSignal<DecisionFilters>(
+    props.local ? { ...parseDecisionFilters(null), groupBy: 'none' } : readFilters()
+  )
   const [filtersOpen, setFiltersOpen] = createSignal(false)
   if (props.onMobileControls) {
     props.onMobileControls({
@@ -196,6 +204,7 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
   const setFilters = (patch: Partial<DecisionFilters>): void => {
     const next = { ...filters(), ...patch }
     setFiltersSignal(next)
+    if (props.local) return
     try {
       localStorage.setItem(LS_FILTERS, JSON.stringify(next))
     } catch {
@@ -394,12 +403,14 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
               )}
             </Show>
             <span>{groupLabel(d().group)}</span>
-            <Show when={d().threadId} fallback={<span>No thread</span>}>
-              {(t) => (
-                <button class="hover:underline" onClick={() => props.onOpenThread(t())}>
-                  → {threadLabel(t(), name)}
-                </button>
-              )}
+            <Show when={!props.local}>
+              <Show when={d().threadId} fallback={<span>No thread</span>}>
+                {(t) => (
+                  <button class="hover:underline" onClick={() => props.onOpenThread(t())}>
+                    → {threadLabel(t(), name)}
+                  </button>
+                )}
+              </Show>
             </Show>
             <span title={d().createdAt}>{ageLabel(d().createdAt, Date.now())}</span>
           </div>
@@ -576,13 +587,15 @@ const DecisionsView: Component<DecisionsViewProps> = (props) => {
             onToggle={(v) => setFilters({ groups: toggleIn(filters().groups, v) })}
             testid="decisions-filter-group"
           />
-          <ChipMenu
-            label="Thread"
-            options={options().threads}
-            picked={filters().threads}
-            onToggle={(v) => setFilters({ threads: toggleIn(filters().threads, v) })}
-            testid="decisions-filter-thread"
-          />
+          <Show when={!props.local}>
+            <ChipMenu
+              label="Thread"
+              options={options().threads}
+              picked={filters().threads}
+              onToggle={(v) => setFilters({ threads: toggleIn(filters().threads, v) })}
+              testid="decisions-filter-thread"
+            />
+          </Show>
           <ChipMenu
             label="Source"
             options={options().sourceKinds}

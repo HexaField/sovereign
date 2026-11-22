@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "test": "tsx src/main.ts",
-    "mock-llm": "tsx mock-llm/server.ts"
+    "mock-llm": "tsx mock-llm/server.ts",
+    "ui": "tsx src/ui/thread-decisions-shots.ts"
   },
   "dependencies": {
+    "playwright-core": "1.60.0",
     "tsx": "^4.19.0",
     "ws": "^8.18.0"
   },

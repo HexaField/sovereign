@@ -181,6 +181,18 @@ A wake case passes when the mock LLM log shows a presence turn whose message say
 
 s10 prints one line per case (latency, deliveries, author). It restarts the Sovereign container, so keep it out of a run with s9.
 
+## UI Lane
+
+```bash
+./wind-tunnel/run.sh --ui                          # screenshots as after-*.png
+./wind-tunnel/run.sh --ui --baseline                # from a checkout without the feature: before-*.png, header only
+SWT_CHROMIUM=/path/to/chrome ./wind-tunnel/run.sh --ui   # a Chromium other than playwright-core's pinned one
+```
+
+`--ui` builds the Sovereign image with the client (`WITH_CLIENT=1`; the build makes throwaway dev TLS certs, which the vite config reads and `.dockerignore` leaves out), starts the stack, runs `src/ui/thread-decisions-shots.ts` instead of the scenarios, and tears down. The script seeds a membrane pair, a thread "Release planning" with three open decisions (two in one membrane, one in the other), one answered decision and one for a second thread, all through the server's decision routes. It then opens the client at 1440x900 and 390x844 and writes `wind-tunnel/.screenshots/<prefix>-{desktop,mobile}-{header-badge,panel}.png`.
+
+It checks that the header badge (a compact count pill) reads 3, that the panel lists exactly the thread's three open decisions (not the other thread's, not the answered one), and that nothing is written to `/api/forge/views`. The screenshots are deterministic: frozen browser clock (set from the seeded decisions' timestamps), no animations, fixed locale, timezone, scheme, scale and font stack, pre-set device name, and the header's status dot (it follows the agent backend's connection, which flaps in the container) hidden in every shot, so before and after differ only by the change. Hidden, not masked: a Playwright mask paints over whatever covers the dot, such as the panel's close button. Two runs against fresh containers give byte-identical files.
+
 ## Isolation (HARD RULE)
 
 The wind tunnel runs **only inside Docker containers**. No `--native` mode exists. The runner refuses any `--sovereign-url` pointing at port 5801 (production). Scenarios must never interact with the live production Sovereign instance.

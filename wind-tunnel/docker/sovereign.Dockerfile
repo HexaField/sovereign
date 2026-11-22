@@ -23,8 +23,18 @@ RUN NODE_ENV=development pnpm install --no-frozen-lockfile && \
     npx node-gyp rebuild 2>/dev/null || true
 
 # Build all server-side packages.
-# Client build skipped — headless tests don't serve the UI.
+# The client build is skipped unless WITH_CLIENT=1 (the UI lane, run.sh --ui):
+# headless scenarios don't serve the UI. The vite config reads dev TLS certs
+# that the build context leaves out (.dockerignore), so the UI build makes
+# throwaway ones; they only matter to the dev server.
+ARG WITH_CLIENT=0
 RUN pnpm -r --filter '!@sovereign/client' build
+RUN if [ "$WITH_CLIENT" = "1" ]; then \
+      mkdir -p .certs && \
+      openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+        -keyout .certs/localhost.key -out .certs/localhost.cert && \
+      pnpm --filter @sovereign/client build && rm -rf .certs; \
+    fi
 
 # The codegraph CLI ships inside the @colbymchenry/codegraph dependency (with its
 # own Node). No telemetry from the image.

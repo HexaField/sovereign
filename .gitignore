@@ -25,3 +25,6 @@ vendor/coasys/ad4m/core/lib/
 # Python bytecode (services/*)
 __pycache__/
 *.pyc
+
+# Wind-tunnel UI lane screenshots
+wind-tunnel/.screenshots/

@@ -8,6 +8,7 @@
 #   ./wind-tunnel/run.sh --no-build               # skip docker build
 #   ./wind-tunnel/run.sh --keep                   # keep containers after run
 #   ./wind-tunnel/run.sh --benchmark --scenario s18  # real LLM via host llama-server
+#   ./wind-tunnel/run.sh --ui [--baseline]  # UI lane: client build + screenshots
 #
 # SAFETY: All scenarios run inside Docker containers only.
 # No --native flag exists — removed by design. The wind tunnel
@@ -26,6 +27,9 @@ NO_BUILD=false
 KEEP=false
 AD4M=false
 BENCHMARK=false
+UI=false
+SHOTS_PREFIX=after
+BASELINE=
 LITELLM=false
 EXTRA_ARGS=()
 
@@ -36,6 +40,9 @@ while [[ $# -gt 0 ]]; do
     --native)    echo "✗ REFUSED — --native removed. The wind tunnel runs in Docker only." >&2; exit 1 ;;
     --benchmark) BENCHMARK=true; shift ;;
     --ad4m)      AD4M=true; shift ;;
+    --ui)        UI=true; shift ;;
+    --shots-prefix) SHOTS_PREFIX="$2"; shift 2 ;;
+    --baseline)  BASELINE=--baseline; SHOTS_PREFIX=before; shift ;;
     --litellm)   LITELLM=true; shift ;;
     *)           EXTRA_ARGS+=("$1"); shift ;;
   esac
@@ -102,6 +109,13 @@ if [[ "$LITELLM" == "true" ]]; then
   fi
 fi
 
+# UI lane: the image includes the client build (the server then serves it on
+# :5811) and, instead of the scenarios, src/ui/thread-decisions-shots.ts seeds
+# data through the API and takes the screenshots. See README "UI lane".
+if [[ "$UI" == "true" ]]; then
+  export SWT_WITH_CLIENT=1
+fi
+
 # Install deps if needed
 if [[ ! -d "node_modules" ]]; then
   echo "📦 Installing wind-tunnel dependencies..."
@@ -148,6 +162,15 @@ while ! docker compose "${COMPOSE_ARGS[@]}" ps --format json 2>/dev/null \
 done
 echo "✓ Services healthy"
 echo ""
+
+# UI lane: screenshots, not scenarios.
+if [[ "$UI" == "true" ]]; then
+  npx tsx src/ui/thread-decisions-shots.ts \
+    --sovereign-url "http://localhost:5811" \
+    --prefix "$SHOTS_PREFIX" $BASELINE \
+    --out "$(pwd)/.screenshots"
+  exit $?
+fi
 
 # Run scenarios
 npx tsx src/main.ts \

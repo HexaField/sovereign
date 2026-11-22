@@ -14,6 +14,7 @@ const WorkspaceHeaderContent = lazy(() =>
 )
 import { SummaryBubble } from '../chat/SummaryBubble.js'
 import { TtsToggle } from '../chat/TtsToggle.js'
+const ThreadDecisions = lazy(() => import('../forge/ThreadDecisions.js'))
 
 // ── Exported helpers (used by tests) ─────────────────────────────────
 export const VIEW_MODES = ['chat', 'voice', 'dashboard', 'recording'] as const
@@ -125,6 +126,9 @@ export function Header() {
 
         {/* TTS + simple-conversation toggles for the open thread. */}
         <Show when={threadOpen()}>
+          <Suspense>
+            <ThreadDecisions />
+          </Suspense>
           <TtsToggle />
           <SummaryBubble />
         </Show>
