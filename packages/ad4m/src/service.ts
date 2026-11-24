@@ -21,6 +21,8 @@ export interface Ad4mConfig {
    * Falls back to the AD4M profile name if omitted.
    */
   agentName?: string
+  /** The wake text config (`ad4m.wake`); called at each wake so a config change needs no restart. */
+  wake?: () => import('@sovereign/core').Ad4mWakeConfig
 }
 
 export interface Ad4mService {
@@ -46,7 +48,9 @@ export function createAd4mService(
 
   // Watched-perspectives store lives next to the token file
   const watchedFile = path.join(path.dirname(config.tokenFile), 'ad4m-watched.json')
-  const watcher: WatcherController = startWaker(clientManager, bus, watchedFile, config.agentName)
+  const watcher: WatcherController = startWaker(clientManager, bus, watchedFile, config.agentName, {
+    wake: config.wake
+  })
 
   const stopNotificationBridge = notifications ? startNotificationBridge(bus, notifications) : () => {}
 

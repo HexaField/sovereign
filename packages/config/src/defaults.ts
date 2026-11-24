@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { DEFAULT_AD4M_WAKE } from '@sovereign/core'
 import type { SovereignConfig } from './types.js'
 
 const home = process.env.HOME ?? ''
@@ -68,7 +69,8 @@ export const defaults: SovereignConfig = {
   },
   ad4m: {
     host: '',
-    mcpUrl: ''
+    mcpUrl: '',
+    wake: structuredClone(DEFAULT_AD4M_WAKE)
   },
   voice: {
     transcribeUrl: '',

@@ -14,6 +14,16 @@ describe('Config Schema', () => {
       expect(result.errors).toHaveLength(0)
     })
 
+    it("accepts ad4m.wake: defaults are today's text, a custom template and count validate, junk does not", () => {
+      expect(defaults.ad4m.wake.contextMessages).toBe(5)
+      expect(defaults.ad4m.wake.template).toContain('[AD4M] You were mentioned')
+      const ad4m = (wake: unknown) => ({ ...defaults, ad4m: { ...defaults.ad4m, wake } })
+      expect(validate(ad4m({ ...defaults.ad4m.wake, template: '{body}', contextMessages: 0 })).valid).toBe(true)
+      expect(validate(ad4m({ ...defaults.ad4m.wake, contextMessages: -1 })).valid).toBe(false)
+      expect(validate(ad4m({ ...defaults.ad4m.wake, extra: 1 })).valid).toBe(false)
+      expect(validate(ad4m({ ...defaults.ad4m.wake, labels: { verified: 3 } })).valid).toBe(false)
+    })
+
     it('accepts a full forge section and rejects bad forge values', () => {
       const forge = {
         ...defaults.forge,

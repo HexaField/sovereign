@@ -1,5 +1,7 @@
 // Config Management — Types
 
+import type { Ad4mWakeConfig } from '@sovereign/core'
+
 /** A model endpoint a harness profile can talk to. */
 export interface ModelEndpoint {
   /** Wire protocol the endpoint speaks. */
@@ -155,6 +157,8 @@ export interface SovereignConfig {
     /** Empty string means AD4M integration is disabled. */
     host: string
     mcpUrl: string
+    /** The text of a mention wake and its preceding messages; read at every wake. */
+    wake: Ad4mWakeConfig
   }
   voice: {
     transcribeUrl: string
