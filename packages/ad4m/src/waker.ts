@@ -1,9 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { QuerySubscriptionProxy, WakerSubscriptionManager } from '@coasys/ad4m'
-import type { MentionMessage, WakerSubscription } from '@coasys/ad4m'
+import type { WakerSubscription } from '@coasys/ad4m'
 import type { EventBus } from '@sovereign/core'
 import type { Ad4mClientManager, Ad4mTypedClient } from './client.js'
+import { resolveWake, wakeText, type PreviousMessage } from './wake-text.js'
 
 // The mention waker: one SDK WakerSubscriptionManager per executor connection
 // (whole-word matching, own writes skipped, parents and ancestors through the
@@ -87,6 +88,8 @@ async function resolveAgentIdentity(client: Ad4mTypedClient, configuredName?: st
 // ── The subscription ───────────────────────────────────────────────────────────
 
 const TEXT_CONTENT = 'ad4m://TextContent'
+/** Records read beyond the wanted messages: newer ones that arrived between the mention and the read. */
+const CONTEXT_MARGIN = 8
 const MENTIONING = 'ad4m://Mentioning'
 /** Newest mentions the query returns (the executor's MENTION_WINDOW). */
 const MENTION_WINDOW = 50
@@ -207,17 +210,41 @@ async function textsOf(client: Ad4mTypedClient, perspective: string, addresses: 
   }
 }
 
-function mentionText(m: MentionMessage, body: string | undefined): string {
-  const lines = [`[AD4M] You were mentioned${body ? `: "${body}"` : ''}`, `Item: ${m.address}`]
-  if (m.author) lines.push(`By: ${m.author}${m.verified ? ' (signature verified)' : ' (signature NOT verified)'}`)
-  if (m.timestamp) lines.push(`At: ${m.timestamp}`)
-  if (m.via)
-    lines.push(
-      `Matched by: ${m.via === 'mentions' ? 'a mention link' : 'your name or DID in the text; a mention link may also exist'}`
-    )
-  lines.push(`Parents: ${m.parents.length ? m.parents.join(', ') : '(unknown)'}`)
-  if (m.ancestors?.length) lines.push(`Ancestors: ${m.ancestors.join(', ')}`)
-  return lines.join('\n')
+/**
+ * The messages before `address` under `parent`, oldest first. One query for the
+ * newest records of the parent (the executor's `instance_transcript` query, as
+ * the `where` filter has no string comparison: a mention is among the newest);
+ * the window is `count` plus a margin for records that came after the mention.
+ * A mention outside the window, or a failed read, leaves the wake without them.
+ */
+async function previousOf(
+  client: Ad4mTypedClient,
+  perspective: string,
+  parent: string | undefined,
+  address: string,
+  count: number
+): Promise<PreviousMessage[]> {
+  if (!parent || count < 1) return []
+  try {
+    const query = {
+      parent: { id: parent },
+      order: [['timestamp', 'desc']],
+      limit: count + CONTEXT_MARGIN,
+      properties: ['text', 'author', 'timestamp']
+    }
+    const res = await client.perspective.modelQuery(perspective, TEXT_CONTENT, JSON.stringify(query))
+    const rows: any[] = res?.instances ?? []
+    const at = rows.findIndex((r) => r?.id === address)
+    if (at < 0) return []
+    return rows
+      .slice(at + 1, at + 1 + count)
+      .filter((r) => typeof r.text === 'string' && r.text.trim())
+      .reverse()
+      .map((r) => ({ author: r.author, timestamp: r.timestamp, text: r.text }))
+  } catch (e) {
+    logger.warn(`waker: could not read the messages before ${address}: ${(e as Error)?.message ?? e}`)
+    return []
+  }
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -237,7 +264,12 @@ export function startWaker(
   /** The AI agent's name (e.g. "Hex"): people address it by this, not by the human's profile names. */
   configuredAgentName?: string,
   /** Tests: a stand-in for the SDK's live query, and the debounce. */
-  opts: { QuerySubscriptionProxy?: unknown; debounceMs?: number } = {}
+  opts: {
+    QuerySubscriptionProxy?: unknown
+    debounceMs?: number
+    /** The wake text config (`ad4m.wake`), read at each wake so a config change applies to the next one. */
+    wake?: () => Parameters<typeof resolveWake>[0]
+  } = {}
 ): WatcherController {
   const userWatches = new Map<string, WatchEntry>()
   const autoWatches = new Map<string, WatchEntry>()
@@ -273,17 +305,19 @@ export function startWaker(
         persistState()
       },
       onWake: async (sub, result, mentions) => {
+        const wake = resolveWake(opts.wake?.())
         const entry = entryOf(sub.perspective)
         if (!entry || !mentions?.length) return true
         const missing = mentions.filter((m) => !textOf(result, m.address)).map((m) => m.address)
         const fetched = await textsOf(client, sub.perspective, missing)
         for (const m of mentions) {
           const body = textOf(result, m.address) ?? textOf(fetched, m.address)
+          const previous = await previousOf(client, sub.perspective, m.parents[0], m.address, wake.contextMessages)
           emitBusEvent(bus, 'ad4m.perspective.mention', { uuid: sub.perspective, ...m, body })
           emitBusEvent(bus, 'ad4m.thread.message', {
             threadKey: entry.threadKey,
             threadLabel: entry.label,
-            text: mentionText(m, body),
+            text: wakeText(wake, m, body, previous),
             context: {
               perspectiveUuid: sub.perspective,
               channelAddress: m.parents[0],

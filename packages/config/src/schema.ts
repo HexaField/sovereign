@@ -180,7 +180,27 @@ export const schema = {
       type: 'object',
       properties: {
         host: { type: 'string' },
-        mcpUrl: { type: 'string' }
+        mcpUrl: { type: 'string' },
+        wake: {
+          type: 'object',
+          properties: {
+            template: { type: 'string' },
+            contextMessages: { type: 'integer', minimum: 0, maximum: 30 },
+            contextLine: { type: 'string' },
+            labels: {
+              type: 'object',
+              properties: {
+                verified: { type: 'string' },
+                unverified: { type: 'string' },
+                viaLink: { type: 'string' },
+                viaText: { type: 'string' },
+                unknownParents: { type: 'string' }
+              },
+              additionalProperties: false
+            }
+          },
+          additionalProperties: false
+        }
       },
       additionalProperties: false
     },

@@ -81,6 +81,9 @@ const proxies: FakeProxy[] = []
 let opening: unknown = { instances: [] }
 /** The texts a TextContent read by id finds (record address → text); `fail` makes the read reject. */
 let stored: Record<string, string> & { fail?: string } = {}
+/** The records under the parent as the transcript query returns them, newest first; `fail` rejects it. */
+let siblings: { rows: any[]; fail?: string } = { rows: [] }
+let wakeConfig: any
 class FakeProxy {
   callbacks: Array<(r: unknown) => void> = []
   result: unknown
@@ -113,12 +116,19 @@ function fixture(
   watchedFile?: string,
   existing: unknown[] = []
 ) {
+  siblings = { rows: [] }
+  wakeConfig = undefined
   opening = { instances: existing }
   stored = {}
   const emitted: Array<{ type: string; payload: any }> = []
   const bus = { emit: (e: any) => emitted.push(e), on: vi.fn(() => () => {}) } as unknown as EventBus
   const modelQuery = vi.fn(async (_uuid: string, cls: string, q: string) => {
     const { parent: scope, where } = JSON.parse(q)
+    if (cls === 'ad4m://TextContent' && !where) {
+      // The previous-messages read: the newest records under a parent.
+      if (siblings.fail) throw new Error(siblings.fail)
+      return { instances: siblings.rows.slice(0, JSON.parse(q).limit) }
+    }
     if (cls === 'ad4m://TextContent') {
       if (stored.fail) throw new Error(stored.fail)
       return { instances: (where.id as string[]).filter((id) => stored[id]).map((id) => ({ id, text: stored[id] })) }
@@ -143,7 +153,8 @@ function fixture(
   proxies.length = 0
   const watcher = startWaker(manager as any, bus, watchedFile, 'Hex', {
     QuerySubscriptionProxy: FakeProxy,
-    debounceMs: 0
+    debounceMs: 0,
+    wake: () => wakeConfig
   })
   return { emitted, watcher, modelQuery }
 }
@@ -221,7 +232,9 @@ describe('startWaker on the SDK waker', () => {
     expect(woken[0].text).toContain(`By: ${ALEX} (signature verified)`)
     expect(woken[0].text).toContain('Matched by: a mention link')
     // Mentioning rows hold no text: the waker reads it through TextContent, in one query.
-    const reads = modelQuery.mock.calls.filter(([, cls]) => cls === 'ad4m://TextContent')
+    const reads = modelQuery.mock.calls.filter(
+      ([, cls, q]) => cls === 'ad4m://TextContent' && JSON.parse(q as string).where
+    )
     expect(reads.map(([uuid, , q]) => [uuid, JSON.parse(q)])).toEqual([
       ['n-1', { where: { id: ['block://chip', 'post://root'] }, properties: ['text'] }]
     ])
@@ -292,5 +305,80 @@ describe('startWaker on the SDK waker', () => {
     ])
     watcher.unwatchPerspective('local-1')
     expect(watcher.getWatched()).toEqual([])
+  })
+})
+
+describe('the messages before a mention', () => {
+  const at = (s: number) => `2026-11-23T12:00:${String(s).padStart(2, '0')}.000Z`
+  /** Newest first, as the transcript query returns them: msg://new, then three earlier ones. */
+  const transcript = () => [
+    { id: 'msg://later', text: 'came after', author: ALEX, timestamp: at(9) },
+    { id: 'msg://new', text: 'Hex, join?', author: ALEX, timestamp: at(8) },
+    { id: 'msg://c', text: 'third '.repeat(60), author: 'did:key:z6MkBobbbb', timestamp: at(7) },
+    { id: 'msg://b', text: 'second', author: ALEX, timestamp: at(6) },
+    { id: 'msg://a', text: 'first', author: 'did:key:z6MkBobbbb', timestamp: at(5) }
+  ]
+  async function wakeOnce(wake?: unknown, setup?: () => void) {
+    const f = fixture([{ uuid: 'n-1', sharedUrl: 'neighbourhood://a' }])
+    wakeConfig = wake
+    siblings = { rows: transcript() }
+    setup?.()
+    await settle()
+    textProxy().push({ instances: [row('msg://new', 'Hex, join?')] })
+    await settle()
+    return { ...f, woken: mentionsOf(f.emitted) }
+  }
+
+  it('attaches the five previous messages, oldest first, clipped, with a compact author and time', async () => {
+    const { woken, modelQuery } = await wakeOnce()
+    expect(woken).toHaveLength(1)
+    const lines = woken[0].text.split('\n')
+    const at0 = lines.indexOf('Before it:')
+    expect(lines.slice(at0 + 1)).toEqual([
+      '…Bobbbb 12:00:05: first',
+      '…MkAlex 12:00:06: second',
+      expect.stringMatching(/^…Bobbbb 12:00:07: third .*…$/)
+    ])
+    // One read of the newest records under the item's parent; messages after the item are not attached.
+    const read = modelQuery.mock.calls.map((c) => JSON.parse(c[2])).find((q) => q.order)
+    expect(read).toMatchObject({
+      parent: { id: 'channel://1' },
+      order: [['timestamp', 'desc']],
+      properties: ['text', 'author', 'timestamp']
+    })
+    expect(woken[0].text).not.toContain('came after')
+  })
+
+  it('contextMessages 0 attaches nothing and reads nothing', async () => {
+    const { woken, modelQuery } = await wakeOnce({ contextMessages: 0 })
+    expect(woken[0].text).not.toContain('Before it:')
+    expect(modelQuery.mock.calls.some((c) => !JSON.parse(c[2]).where && JSON.parse(c[2]).order)).toBe(false)
+  })
+
+  it('contextMessages 1 attaches only the nearest one', async () => {
+    const { woken } = await wakeOnce({ contextMessages: 1 })
+    expect(woken[0].text).toMatch(/Before it:\n…Bobbbb 12:00:07: third/)
+    expect(woken[0].text).not.toContain('second')
+  })
+
+  it('a failed read leaves the wake without them', async () => {
+    const { woken } = await wakeOnce(undefined, () => {
+      siblings.fail = 'boom'
+    })
+    expect(woken).toHaveLength(1)
+    expect(woken[0].text).toContain('Item: msg://new')
+    expect(woken[0].text).not.toContain('Before it:')
+  })
+
+  it('a mention outside the newest records attaches nothing', async () => {
+    const { woken } = await wakeOnce(undefined, () => {
+      siblings.rows = [{ id: 'msg://other', text: 'x', author: ALEX, timestamp: at(9) }]
+    })
+    expect(woken[0].text).not.toContain('Before it:')
+  })
+
+  it('a template from config applies to the next wake, no restart', async () => {
+    const { woken } = await wakeOnce({ template: 'PING {address} by {author}: {body}', contextMessages: 0 })
+    expect(woken[0].text).toBe(`PING msg://new by ${ALEX}: Hex, join?`)
   })
 })

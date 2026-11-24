@@ -509,7 +509,8 @@ export function bootstrapServer(input: BootstrapInput): BootstrapResult {
         {
           host: cfg.ad4m.host,
           tokenFile: path.join(dataDir, 'ad4m-token.json'),
-          agentName: cfg.identity.agentName
+          agentName: cfg.identity.agentName,
+          wake: () => (configStore.get() as SovereignConfig).ad4m.wake
         },
         bus,
         notificationsModule

@@ -52,3 +52,4 @@ export interface ChatQueueSnapshot {
   threadId: string
   items: QueuedMessage[]
 }
+export * from './ad4m-wake.js'
