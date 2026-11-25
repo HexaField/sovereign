@@ -193,6 +193,8 @@ SWT_CHROMIUM=/path/to/chrome ./wind-tunnel/run.sh --ui   # a Chromium other than
 
 It checks that the header badge (a compact count pill) reads 3, that the panel lists exactly the thread's three open decisions (not the other thread's, not the answered one), and that nothing is written to `/api/forge/views`. The screenshots are deterministic: frozen browser clock (set from the seeded decisions' timestamps), no animations, fixed locale, timezone, scheme, scale and font stack, pre-set device name, and the header's status dot (it follows the agent backend's connection, which flaps in the container) hidden in every shot, so before and after differ only by the change. Hidden, not masked: a Playwright mask paints over whatever covers the dot, such as the panel's close button. Two runs against fresh containers give byte-identical files.
 
+`--ui-script <name>` runs another script from `src/ui/` (default `thread-decisions-shots`). `./wind-tunnel/run.sh --ui --ui-script theme-tabs-shots` opens two tabs in one browser context, picks a theme in tab A through the real picker, and checks that tab B takes it without a reload (the `storage` event) and that a second context (another device) does not. With `--baseline` it expects B to stay unchanged. Shots: `<prefix>-{tab-A,tab-B,other-device}.png`.
+
 ## Isolation (HARD RULE)
 
 The wind tunnel runs **only inside Docker containers**. No `--native` mode exists. The runner refuses any `--sovereign-url` pointing at port 5801 (production). Scenarios must never interact with the live production Sovereign instance.
