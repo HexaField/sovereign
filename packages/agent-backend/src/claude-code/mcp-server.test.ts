@@ -298,10 +298,10 @@ describe('claude-code/mcp-server', () => {
       expect(deps.cron.list).toHaveBeenCalledWith(true)
     })
 
-    it('filters by threadKey — exact match', async () => {
+    it('filters by threadKey', async () => {
       const listSpy = vi.fn().mockResolvedValue([
-        { id: 'c1', sessionTarget: 'neural-nets' },
-        { id: 'c2', sessionTarget: 'experiments' }
+        { id: 'c1', threadKey: 'neural-nets' },
+        { id: 'c2', threadKey: 'experiments' }
       ])
       const deps = makeDeps({ cron: { createUserMessageCron: vi.fn(), list: listSpy, remove: vi.fn() } as any })
       const tools = getTools(deps)
@@ -311,17 +311,12 @@ describe('claude-code/mcp-server', () => {
       expect(parsed.crons[0].id).toBe('c1')
     })
 
-    it('filters by threadKey — canonical suffix match', async () => {
-      const listSpy = vi.fn().mockResolvedValue([
-        { id: 'c1', sessionTarget: 'agent:main:thread:neural-nets' },
-        { id: 'c2', sessionTarget: 'agent:main:thread:experiments' }
-      ])
+    it('does not match a legacy compound key to a bare thread key', async () => {
+      const listSpy = vi.fn().mockResolvedValue([{ id: 'c1', threadKey: 'agent:main:thread:neural-nets' }])
       const deps = makeDeps({ cron: { createUserMessageCron: vi.fn(), list: listSpy, remove: vi.fn() } as any })
       const tools = getTools(deps)
       const result = await invoke(tools, 'cron_list', { threadKey: 'neural-nets' })
-      const parsed = parseResult(result) as any
-      expect(parsed.crons).toHaveLength(1)
-      expect(parsed.crons[0].id).toBe('c1')
+      expect((parseResult(result) as any).crons).toHaveLength(0)
     })
   })
 

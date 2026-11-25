@@ -369,13 +369,7 @@ export function createSovereignMcpServer(
       },
       async (args) => {
         const all = await deps.cron.list(true)
-        const filtered = args.threadKey
-          ? all.filter((j: any) => {
-              const target = j.sessionTarget ?? j.sessionKey ?? j.payload?.threadKey
-              if (!target) return false
-              return target === args.threadKey || target.endsWith(`:thread:${args.threadKey}`)
-            })
-          : all
+        const filtered = args.threadKey ? all.filter((j: any) => j.threadKey === args.threadKey) : all
         return okJson({ crons: filtered })
       }
     ),

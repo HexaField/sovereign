@@ -193,6 +193,8 @@ SWT_CHROMIUM=/path/to/chrome ./wind-tunnel/run.sh --ui   # a Chromium other than
 
 It checks that the header badge (a compact count pill) reads 3, that the panel lists exactly the thread's three open decisions (not the other thread's, not the answered one), and that nothing is written to `/api/forge/views`. The screenshots are deterministic: frozen browser clock (set from the seeded decisions' timestamps), no animations, fixed locale, timezone, scheme, scale and font stack, pre-set device name, and the header's status dot (it follows the agent backend's connection, which flaps in the container) hidden in every shot, so before and after differ only by the change. Hidden, not masked: a Playwright mask paints over whatever covers the dot, such as the panel's close button. Two runs against fresh containers give byte-identical files.
 
+`src/ui/thread-crons-shots.ts` is a second UI script, for the cron list in the thread settings dropdown. It is not wired into `run.sh`. Start the stack with `SWT_WITH_CLIENT=1 docker compose -f docker/docker-compose.yml up -d --build` (from `wind-tunnel/`), run `npx tsx src/ui/thread-crons-shots.ts --prefix after` (add `--baseline` on a checkout from before the change), then `docker compose -f docker/docker-compose.yml down -v`.
+
 ## Isolation (HARD RULE)
 
 The wind tunnel runs **only inside Docker containers**. No `--native` mode exists. The runner refuses any `--sovereign-url` pointing at port 5801 (production). Scenarios must never interact with the live production Sovereign instance.

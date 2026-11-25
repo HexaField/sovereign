@@ -136,6 +136,22 @@ describe('Thread Routes — Model Switching', () => {
     expect(res.status).toBe(404)
   })
 
+  it('GET /api/threads/:key/crons lists only the crons whose threadKey is that thread', async () => {
+    const cronService = {
+      list: async () => [
+        { id: 'a', threadKey: 'alpha' },
+        { id: 'b', threadKey: 'beta' },
+        { id: 'c', threadKey: 'beta', payload: { message: 'mentions alpha in text' } }
+      ]
+    }
+    const cronApp = express()
+    cronApp.use(express.json())
+    cronApp.use(createThreadRoutes(tm, forwardHandler as any, { backend, cronService: cronService as any }))
+    const res = await request(cronApp).get('/api/threads/alpha/crons')
+    expect(res.status).toBe(200)
+    expect(res.body.crons.map((c: { id: string }) => c.id)).toEqual(['a'])
+  })
+
   describe('session-info reports backend metadata verbatim', () => {
     it('returns the stored model and provider without rewriting', async () => {
       const thread = tm.create({ label: 'drift-test' })

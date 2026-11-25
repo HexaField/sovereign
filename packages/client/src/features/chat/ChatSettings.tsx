@@ -1,9 +1,9 @@
-// Chat Settings — floating popover for thread info (model, context, cron jobs)
+// Chat Settings — floating popover for thread info (model, context, crons)
 import { createSignal, createEffect, onMount, onCleanup, Show, For } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import { threadKey } from '../threads/store.js'
 import { agentStatus, abortChat } from './store.js'
-import { CronManagerModal } from '../crons/CronManagerModal.js'
+import { ThreadCrons } from '../crons/ThreadCrons.js'
 import { isThreadMuted, setThreadMute } from '../threads/mute-store.js'
 
 interface ModelCatalogEntry {
@@ -31,15 +31,6 @@ interface ThreadInfo {
   lastRecycleAt: number | null
 }
 
-interface CronJob {
-  id: string
-  name: string
-  enabled: boolean
-  schedule: { kind: string; expr?: string; everyMs?: number }
-  payload: { kind: string; message?: string; text?: string }
-  state?: { lastStatus?: string; nextRunAtMs?: number }
-}
-
 interface WatchEntry {
   uuid: string
   threadKey: string
@@ -59,30 +50,9 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function formatSchedule(s: CronJob['schedule']): string {
-  if (s.expr) return s.expr
-  if (s.everyMs) {
-    const mins = Math.round(s.everyMs / 60000)
-    if (mins < 60) return `every ${mins}m`
-    const hrs = Math.round(mins / 60)
-    return `every ${hrs}h`
-  }
-  return s.kind
-}
-
-function formatNextRun(ms?: number): string {
-  if (!ms) return ''
-  const diff = ms - Date.now()
-  if (diff < 0) return 'overdue'
-  if (diff < 60000) return 'in <1m'
-  if (diff < 3600000) return `in ${Math.round(diff / 60000)}m`
-  return `in ${Math.round(diff / 3600000)}h`
-}
-
 export function ChatSettingsButton() {
   const [open, setOpen] = createSignal(false)
   const [info, setInfo] = createSignal<ThreadInfo | null>(null)
-  const [crons, setCrons] = createSignal<CronJob[]>([])
   const [loading, setLoading] = createSignal(false)
   const [availableModels, setAvailableModels] = createSignal<string[]>([])
   const [modelCatalog, setModelCatalog] = createSignal<ModelCatalogEntry[]>([])
@@ -96,7 +66,6 @@ export function ChatSettingsButton() {
   const [contextWindowSize, setContextWindowSize] = createSignal<number | undefined>(undefined)
   const [contextWindowSaving, setContextWindowSaving] = createSignal(false)
   const [actionFeedback, setActionFeedback] = createSignal('')
-  const [cronManagerOpen, setCronManagerOpen] = createSignal(false)
   const [watchedNeighbourhoods, setWatchedNeighbourhoods] = createSignal<WatchEntry[]>([])
   const [allPerspectives, setAllPerspectives] = createSignal<PerspectiveItem[]>([])
   const [ad4mLoaded, setAd4mLoaded] = createSignal(false)
@@ -184,21 +153,7 @@ export function ChatSettingsButton() {
     }
     setLoading(false)
 
-    // Fetch crons independently with a short timeout so a slow/down gateway doesn't block UI
-    const key2 = threadKey()
-    if (!key2) return
-    try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 5000)
-      const cronsRes = await fetch(`/api/threads/${encodeURIComponent(key2)}/crons`, { signal: controller.signal })
-      clearTimeout(timeout)
-      if (cronsRes.ok) {
-        const data = await cronsRes.json()
-        setCrons(data.crons ?? [])
-      }
-    } catch {
-      /* crons unavailable — UI still works */
-    }
+    if (!threadKey()) return
 
     // AD4M neighbourhood watches — best-effort, won't block if AD4M is down
     try {
@@ -1021,119 +976,9 @@ export function ChatSettingsButton() {
                 )}
               </Show>
 
-              {/* Cron Jobs */}
-              <Show when={crons().length > 0}>
-                <div
-                  style={{
-                    'margin-top': '10px',
-                    'padding-top': '10px',
-                    'border-top': '1px solid var(--c-border)'
-                  }}
-                >
-                  <div class="text-xs font-medium" style={{ color: 'var(--c-text-heading)', 'margin-bottom': '6px' }}>
-                    Cron Jobs ({crons().length})
-                  </div>
-                  <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>
-                    <For each={crons()}>
-                      {(job) => (
-                        <div
-                          class="text-xs"
-                          style={{
-                            display: 'flex',
-                            'align-items': 'center',
-                            gap: '6px',
-                            padding: '4px 6px',
-                            'border-radius': '6px',
-                            background: 'var(--c-bg)',
-                            color: 'var(--c-text)'
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: '6px',
-                              height: '6px',
-                              'border-radius': '50%',
-                              background: job.enabled ? 'var(--c-success, #22c55e)' : 'var(--c-text-muted)',
-                              'flex-shrink': '0'
-                            }}
-                          />
-                          <span
-                            style={{
-                              flex: '1',
-                              'min-width': '0',
-                              overflow: 'hidden',
-                              'text-overflow': 'ellipsis',
-                              'white-space': 'nowrap'
-                            }}
-                          >
-                            {job.name || job.id}
-                          </span>
-                          <span style={{ color: 'var(--c-text-muted)', 'flex-shrink': '0', 'font-size': '10px' }}>
-                            {formatSchedule(job.schedule)}
-                          </span>
-                          <Show when={job.state?.nextRunAtMs}>
-                            <span style={{ color: 'var(--c-text-muted)', 'flex-shrink': '0', 'font-size': '10px' }}>
-                              {formatNextRun(job.state?.nextRunAtMs)}
-                            </span>
-                          </Show>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                  <button
-                    class="cursor-pointer text-xs"
-                    style={{
-                      'margin-top': '6px',
-                      padding: '4px 10px',
-                      'border-radius': '6px',
-                      border: '1px solid var(--c-border)',
-                      background: 'transparent',
-                      color: 'var(--c-accent)',
-                      cursor: 'pointer',
-                      'font-weight': '500',
-                      width: '100%',
-                      'text-align': 'center'
-                    }}
-                    onClick={() => {
-                      setCronManagerOpen(true)
-                      setOpen(false)
-                    }}
-                  >
-                    Manage Crons
-                  </button>
-                </div>
-              </Show>
-
-              {/* Manage Crons — always visible even when no per-thread crons */}
-              <Show when={crons().length === 0 && !loading()}>
-                <div
-                  style={{
-                    'margin-top': '10px',
-                    'padding-top': '10px',
-                    'border-top': '1px solid var(--c-border)'
-                  }}
-                >
-                  <button
-                    class="cursor-pointer text-xs"
-                    style={{
-                      padding: '4px 10px',
-                      'border-radius': '6px',
-                      border: '1px solid var(--c-border)',
-                      background: 'transparent',
-                      color: 'var(--c-accent)',
-                      cursor: 'pointer',
-                      'font-weight': '500',
-                      width: '100%',
-                      'text-align': 'center'
-                    }}
-                    onClick={() => {
-                      setCronManagerOpen(true)
-                      setOpen(false)
-                    }}
-                  >
-                    Manage Crons
-                  </button>
-                </div>
+              {/* Crons: managed in place, always for this thread */}
+              <Show when={threadKey()} keyed>
+                {(key) => <ThreadCrons threadKey={key} />}
               </Show>
 
               {/* AD4M Neighbourhoods — only shown when AD4M is reachable */}
@@ -1297,11 +1142,6 @@ export function ChatSettingsButton() {
             </div>
           </div>
         </Portal>
-      </Show>
-
-      {/* Cron Manager Modal */}
-      <Show when={cronManagerOpen()}>
-        <CronManagerModal threadKey={threadKey() || 'main'} onClose={() => setCronManagerOpen(false)} />
       </Show>
     </div>
   )

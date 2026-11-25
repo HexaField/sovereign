@@ -1,5 +1,5 @@
 // Cron Results Banner — shows recent cron run outcomes for the current thread
-import { createSignal, createEffect, onMount, Show, For } from 'solid-js'
+import { createSignal, createEffect, Show, For } from 'solid-js'
 import type { WsStore } from '../../ws/ws-store.js'
 import { threadKey } from '../threads/store.js'
 
@@ -15,10 +15,6 @@ export interface CronRunResult {
 }
 
 const [cronRuns, setCronRuns] = createSignal<CronRunResult[]>([])
-const [channelStatus, setChannelStatus] = createSignal<{
-  hasRealChannels: boolean
-  warning: string | null
-} | null>(null)
 
 // Max number of runs to show
 const MAX_RUNS = 5
@@ -87,21 +83,6 @@ async function fetchRunsForThread(tk: string): Promise<void> {
   }
 }
 
-/** Fetch channel status (are real channels configured?) */
-async function fetchChannelStatus(): Promise<void> {
-  try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 5000)
-    const res = await fetch('/api/crons/channel-status', { signal: controller.signal })
-    clearTimeout(timeout)
-    if (!res.ok) return
-    const data = await res.json()
-    setChannelStatus(data)
-  } catch {
-    // Non-fatal
-  }
-}
-
 function formatTime(ts: number): string {
   if (!ts) return ''
   const d = new Date(ts)
@@ -123,47 +104,6 @@ function formatDuration(ms?: number): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + '…' : s
-}
-
-/** Banner showing delivery channel warning */
-export function ChannelWarningBanner() {
-  onMount(() => {
-    fetchChannelStatus()
-  })
-
-  return (
-    <Show when={channelStatus() && !channelStatus()!.hasRealChannels && channelStatus()!.warning}>
-      <div
-        style={{
-          padding: '8px 12px',
-          margin: '0 0 8px 0',
-          'border-radius': '8px',
-          background: 'rgba(249, 115, 22, 0.1)',
-          border: '1px solid rgba(249, 115, 22, 0.3)',
-          display: 'flex',
-          'align-items': 'flex-start',
-          gap: '8px'
-        }}
-      >
-        <span style={{ 'font-size': '14px', 'flex-shrink': '0', 'margin-top': '1px' }}>⚠️</span>
-        <div>
-          <div
-            style={{
-              'font-size': '12px',
-              'font-weight': '600',
-              color: 'var(--c-warning, #f97316)',
-              'margin-bottom': '2px'
-            }}
-          >
-            No Delivery Channels
-          </div>
-          <div style={{ 'font-size': '11px', color: 'var(--c-text-muted)', 'line-height': '1.4' }}>
-            {channelStatus()!.warning}
-          </div>
-        </div>
-      </div>
-    </Show>
-  )
 }
 
 /** Inline banner showing recent cron run results for the current thread */
