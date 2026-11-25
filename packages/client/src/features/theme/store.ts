@@ -36,11 +36,24 @@ applyThemeClass(_currentTheme())
 
 export const currentTheme: Accessor<Theme> = _currentTheme
 
-export function setTheme(theme: Theme): void {
-  if (!isValidTheme(theme)) return
+function applyTheme(theme: Theme): void {
   _setTheme(theme)
   applyThemeClass(theme)
+}
+
+export function setTheme(theme: Theme): void {
+  if (!isValidTheme(theme)) return
+  applyTheme(theme)
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(STORAGE_KEY, theme)
   }
+}
+
+// A `storage` event fires only in the other tabs of this origin, on this device,
+// so a theme chosen here reaches them and no other device. Apply without
+// writing back: that write would not loop, but there is nothing to store.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === STORAGE_KEY && isValidTheme(e.newValue)) applyTheme(e.newValue)
+  })
 }

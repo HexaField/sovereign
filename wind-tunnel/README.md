@@ -193,7 +193,9 @@ SWT_CHROMIUM=/path/to/chrome ./wind-tunnel/run.sh --ui   # a Chromium other than
 
 It checks that the header badge (a compact count pill) reads 3, that the panel lists exactly the thread's three open decisions (not the other thread's, not the answered one), and that nothing is written to `/api/forge/views`. The screenshots are deterministic: frozen browser clock (set from the seeded decisions' timestamps), no animations, fixed locale, timezone, scheme, scale and font stack, pre-set device name, and the header's status dot (it follows the agent backend's connection, which flaps in the container) hidden in every shot, so before and after differ only by the change. Hidden, not masked: a Playwright mask paints over whatever covers the dot, such as the panel's close button. Two runs against fresh containers give byte-identical files.
 
-`src/ui/thread-crons-shots.ts` is a second UI script, for the cron list in the thread settings dropdown. It is not wired into `run.sh`. Start the stack with `SWT_WITH_CLIENT=1 docker compose -f docker/docker-compose.yml up -d --build` (from `wind-tunnel/`), run `npx tsx src/ui/thread-crons-shots.ts --prefix after` (add `--baseline` on a checkout from before the change), then `docker compose -f docker/docker-compose.yml down -v`.
+`--ui-script <name>` runs another script from `src/ui/` (default `thread-decisions-shots`). `./wind-tunnel/run.sh --ui --ui-script theme-tabs-shots` opens two tabs in one browser context, picks a theme in tab A through the real picker, and checks that tab B takes it without a reload (the `storage` event) and that a second context (another device) does not. With `--baseline` it expects B to stay unchanged. Shots: `<prefix>-{tab-A,tab-B,other-device}.png`.
+
+`./wind-tunnel/run.sh --ui --ui-script thread-crons-shots` shoots the cron list in the thread settings dropdown, the add-cron form and a refused create. With `--baseline` (on a checkout from before the change) it shoots the old list and the Manage Crons modal.
 
 ## Isolation (HARD RULE)
 

@@ -9,6 +9,7 @@
 #   ./wind-tunnel/run.sh --keep                   # keep containers after run
 #   ./wind-tunnel/run.sh --benchmark --scenario s18  # real LLM via host llama-server
 #   ./wind-tunnel/run.sh --ui [--baseline]  # UI lane: client build + screenshots
+#   ./wind-tunnel/run.sh --ui --ui-script theme-tabs-shots  # another UI script from src/ui
 #
 # SAFETY: All scenarios run inside Docker containers only.
 # No --native flag exists — removed by design. The wind tunnel
@@ -29,6 +30,7 @@ AD4M=false
 BENCHMARK=false
 UI=false
 SHOTS_PREFIX=after
+UI_SCRIPT=thread-decisions-shots
 BASELINE=
 LITELLM=false
 EXTRA_ARGS=()
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --benchmark) BENCHMARK=true; shift ;;
     --ad4m)      AD4M=true; shift ;;
     --ui)        UI=true; shift ;;
+    --ui-script) UI_SCRIPT="$2"; shift 2 ;;
     --shots-prefix) SHOTS_PREFIX="$2"; shift 2 ;;
     --baseline)  BASELINE=--baseline; SHOTS_PREFIX=before; shift ;;
     --litellm)   LITELLM=true; shift ;;
@@ -165,7 +168,7 @@ echo ""
 
 # UI lane: screenshots, not scenarios.
 if [[ "$UI" == "true" ]]; then
-  npx tsx src/ui/thread-decisions-shots.ts \
+  npx tsx "src/ui/${UI_SCRIPT}.ts" \
     --sovereign-url "http://localhost:5811" \
     --prefix "$SHOTS_PREFIX" $BASELINE \
     --out "$(pwd)/.screenshots"
