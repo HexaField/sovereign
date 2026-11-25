@@ -606,13 +606,7 @@ export function createSovereignToolExecutor(
         case 'sovereign_cron_list': {
           const all = await deps.cron.list(true)
           const threadKey = input.threadKey as string | undefined
-          const filtered = threadKey
-            ? all.filter((j: any) => {
-                const target = j.sessionTarget ?? j.sessionKey ?? j.payload?.threadKey
-                if (!target) return false
-                return target === threadKey || target.endsWith(`:thread:${threadKey}`)
-              })
-            : all
+          const filtered = threadKey ? all.filter((j: any) => j.threadKey === threadKey) : all
           return ok({ crons: filtered })
         }
         case 'sovereign_cron_delete': {

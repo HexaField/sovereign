@@ -195,6 +195,8 @@ It checks that the header badge (a compact count pill) reads 3, that the panel l
 
 `--ui-script <name>` runs another script from `src/ui/` (default `thread-decisions-shots`). `./wind-tunnel/run.sh --ui --ui-script theme-tabs-shots` opens two tabs in one browser context, picks a theme in tab A through the real picker, and checks that tab B takes it without a reload (the `storage` event) and that a second context (another device) does not. With `--baseline` it expects B to stay unchanged. Shots: `<prefix>-{tab-A,tab-B,other-device}.png`.
 
+`./wind-tunnel/run.sh --ui --ui-script thread-crons-shots` shoots the cron list in the thread settings dropdown, the add-cron form and a refused create. With `--baseline` (on a checkout from before the change) it shoots the old list and the Manage Crons modal.
+
 ## Isolation (HARD RULE)
 
 The wind tunnel runs **only inside Docker containers**. No `--native` mode exists. The runner refuses any `--sovereign-url` pointing at port 5801 (production). Scenarios must never interact with the live production Sovereign instance.

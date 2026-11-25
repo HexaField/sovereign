@@ -1024,27 +1024,11 @@ export function createThreadRoutes(
     if (!cronService) return res.json({ crons: [] })
     try {
       const threadKey = req.params.key
-      const sessionKey =
-        opts?.chatModule?.getSessionKeyForThread(threadKey) ??
-        (threadKey === 'main'
-          ? 'agent:main:main'
-          : threadKey.startsWith('agent:')
-            ? threadKey
-            : `agent:main:thread:${threadKey}`)
       const jobs = await Promise.race([
         cronService.list(true),
         new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
       ]).catch(() => [] as any[])
-      const filtered = jobs.filter((j: any) => {
-        if (j.sessionTarget === sessionKey) return true
-        if (j.sessionKey === sessionKey) return true
-        if (j.payload?.sessionTarget === sessionKey) return true
-        if (j.sessionTarget === `session:${sessionKey}`) return true
-        const text = j.payload?.message || j.payload?.text || ''
-        if (text.includes(threadKey)) return true
-        return false
-      })
-      res.json({ crons: filtered })
+      res.json({ crons: jobs.filter((j) => j.threadKey === threadKey) })
     } catch (err: any) {
       res.status(500).json({ error: err.message })
     }

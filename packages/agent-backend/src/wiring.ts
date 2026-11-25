@@ -515,6 +515,10 @@ export function wireAgentBackend(input: AgentBackendWiringInput): AgentBackendWi
   const pendingParentMessages: Array<[string, string]> = []
   cronService = createCronService({
     routing: routingBackend,
+    threadExists: (key) => {
+      const thread = input.threadManager?.get(key)
+      return !!thread && !thread.archived
+    },
     scheduler,
     bus,
     injectChatMessage: (threadId, text, opts) => {

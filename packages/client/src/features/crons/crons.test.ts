@@ -1,208 +1,135 @@
 import { describe, it, expect } from 'vitest'
-import { deriveThreadKey, detectCronIssues, buildFixToThreadPatch } from './types.js'
+import {
+  formatSchedule,
+  formatNextRun,
+  formatLastRun,
+  splitInterval,
+  formFromJob,
+  validateCronForm,
+  toLocalInput,
+  EMPTY_FORM,
+  type CronJob,
+  type CronFormValues
+} from './cron-model.js'
 
-describe('deriveThreadKey', () => {
-  it('extracts key from session:agent:main:thread:<key>', () => {
-    expect(deriveThreadKey('session:agent:main:thread:v2-app')).toBe('v2-app')
+const NOW = Date.parse('2026-11-25T12:00:00Z')
+const job = (over: Partial<CronJob> = {}): CronJob => ({
+  id: 'j1',
+  name: 'Digest',
+  enabled: true,
+  threadKey: 't1',
+  schedule: { kind: 'cron', expr: '0 9 * * *' },
+  payload: { message: 'Summarise' },
+  ...over
+})
+const form = (over: Partial<CronFormValues>): CronFormValues => ({ ...EMPTY_FORM, prompt: 'Do it', ...over })
+
+describe('formatSchedule', () => {
+  it('shows a cron expression as it is', () => {
+    expect(formatSchedule({ kind: 'cron', expr: '*/5 * * * *' })).toBe('*/5 * * * *')
   })
-
-  it('extracts key from agent:main:thread:<key>', () => {
-    expect(deriveThreadKey(undefined, 'agent:main:thread:upgrades')).toBe('upgrades')
+  it('shows an interval in its largest even unit', () => {
+    expect(formatSchedule({ kind: 'interval', everyMs: 5 * 60_000 })).toBe('every 5m')
+    expect(formatSchedule({ kind: 'interval', everyMs: 2 * 3_600_000 })).toBe('every 2h')
+    expect(formatSchedule({ kind: 'interval', everyMs: 86_400_000 })).toBe('every 1d')
+    expect(formatSchedule({ kind: 'interval', everyMs: 90 * 60_000 })).toBe('every 90m')
   })
-
-  it('prefers sessionTarget over sessionKey', () => {
-    expect(deriveThreadKey('session:agent:main:thread:from-target', 'agent:main:thread:from-key')).toBe('from-target')
-  })
-
-  it('returns null for isolated sessions', () => {
-    expect(deriveThreadKey('isolated')).toBeNull()
-  })
-
-  it('returns null for main sessions', () => {
-    expect(deriveThreadKey('main')).toBeNull()
-  })
-
-  it('returns null when both are undefined', () => {
-    expect(deriveThreadKey(undefined, undefined)).toBeNull()
-  })
-
-  it('returns null for agent:main:main', () => {
-    expect(deriveThreadKey('agent:main:main')).toBeNull()
-  })
-
-  it('handles hyphenated thread keys', () => {
-    expect(deriveThreadKey('session:agent:main:thread:my-cool-thread')).toBe('my-cool-thread')
+  it('shows a one-shot as once plus the time', () => {
+    expect(formatSchedule({ kind: 'oneshot', at: '2026-11-25T09:00:00Z' })).toMatch(/^once /)
+    expect(formatSchedule({ kind: 'oneshot', at: 'nonsense' })).toBe('once')
   })
 })
 
-describe('detectCronIssues', () => {
-  const baseJob = {
-    id: 'test-1',
-    name: 'Test Job',
-    enabled: true,
-    schedule: { kind: 'cron', expr: '*/5 * * * *' },
-    payload: { kind: 'agentTurn', message: 'hello' },
-    delivery: { mode: 'announce', channel: 'webchat' },
-    sessionTarget: 'session:agent:main:thread:v2-app',
-    state: { lastStatus: 'ok' }
-  }
-
-  it('returns empty array for healthy cron', () => {
-    expect(detectCronIssues(baseJob)).toEqual([])
-  })
-
-  it('detects missing-channel when no delivery', () => {
-    const job = { ...baseJob, delivery: undefined }
-    expect(detectCronIssues(job)).toContain('missing-channel')
-  })
-
-  it('detects missing-channel when channel is empty', () => {
-    const job = { ...baseJob, delivery: { mode: 'announce' } }
-    expect(detectCronIssues(job)).toContain('missing-channel')
-  })
-
-  it('detects wrong-session-target for isolated', () => {
-    const job = { ...baseJob, sessionTarget: 'isolated' }
-    expect(detectCronIssues(job)).toContain('wrong-session-target')
-  })
-
-  it('detects wrong-session-target for main', () => {
-    const job = { ...baseJob, sessionTarget: 'main' }
-    expect(detectCronIssues(job)).toContain('wrong-session-target')
-  })
-
-  it('detects system-event-on-thread', () => {
-    const job = {
-      ...baseJob,
-      payload: { kind: 'systemEvent', text: 'check status' },
-      sessionTarget: 'session:agent:main:thread:v2-app'
-    }
-    expect(detectCronIssues(job)).toContain('system-event-on-thread')
-  })
-
-  it('does NOT flag system-event when not on thread', () => {
-    const job = {
-      ...baseJob,
-      payload: { kind: 'systemEvent', text: 'check status' },
-      sessionTarget: 'isolated'
-    }
-    // Should have wrong-session-target but NOT system-event-on-thread (no thread key)
-    const issues = detectCronIssues(job)
-    expect(issues).not.toContain('system-event-on-thread')
-  })
-
-  it('detects disabled-after-error', () => {
-    const job = { ...baseJob, enabled: false, state: { lastStatus: 'error' } }
-    expect(detectCronIssues(job)).toContain('disabled-after-error')
-  })
-
-  it('does NOT flag disabled-after-error when status is ok', () => {
-    const job = { ...baseJob, enabled: false, state: { lastStatus: 'ok' } }
-    expect(detectCronIssues(job)).not.toContain('disabled-after-error')
-  })
-
-  it('can detect multiple issues at once', () => {
-    const job = {
-      ...baseJob,
-      delivery: undefined,
-      sessionTarget: 'isolated',
-      enabled: false,
-      state: { lastStatus: 'error' }
-    }
-    const issues = detectCronIssues(job)
-    expect(issues).toContain('missing-channel')
-    expect(issues).toContain('wrong-session-target')
-    expect(issues).toContain('disabled-after-error')
-  })
-
-  it('detects no-delivery-channels when webchat announce with no real channels', () => {
-    const job = {
-      ...baseJob,
-      delivery: { mode: 'announce', channel: 'webchat' }
-    }
-    const issues = detectCronIssues(job, { hasRealChannels: false })
-    expect(issues).toContain('no-delivery-channels')
-  })
-
-  it('does NOT flag no-delivery-channels when real channels exist', () => {
-    const job = {
-      ...baseJob,
-      delivery: { mode: 'announce', channel: 'webchat' }
-    }
-    const issues = detectCronIssues(job, { hasRealChannels: true })
-    expect(issues).not.toContain('no-delivery-channels')
-  })
-
-  it('does NOT flag no-delivery-channels when no channelInfo provided', () => {
-    const job = {
-      ...baseJob,
-      delivery: { mode: 'announce', channel: 'webchat' }
-    }
-    // Without channelInfo, we can't know — so don't flag
-    const issues = detectCronIssues(job)
-    expect(issues).not.toContain('no-delivery-channels')
-  })
-
-  it('does NOT flag no-delivery-channels when delivery mode is not announce', () => {
-    const job = {
-      ...baseJob,
-      delivery: { mode: 'none', channel: 'webchat' }
-    }
-    const issues = detectCronIssues(job, { hasRealChannels: false })
-    expect(issues).not.toContain('no-delivery-channels')
+describe('splitInterval', () => {
+  it('picks the largest unit that divides evenly', () => {
+    expect(splitInterval(3_600_000)).toEqual({ every: 1, unit: 'hours' })
+    expect(splitInterval(7 * 86_400_000)).toEqual({ every: 7, unit: 'days' })
+    expect(splitInterval(61 * 60_000)).toEqual({ every: 61, unit: 'minutes' })
   })
 })
 
-describe('buildFixToThreadPatch', () => {
-  const baseJob = {
-    id: 'test-1',
-    name: 'Test Job',
-    enabled: true,
-    schedule: { kind: 'cron', expr: '*/5 * * * *' },
-    payload: { kind: 'agentTurn', message: 'check status' },
-    delivery: { mode: 'announce', channel: 'webchat' },
-    sessionTarget: 'isolated',
-    threadKey: null as string | null,
-    issues: ['wrong-session-target' as const, 'missing-channel' as const]
-  }
-
-  it('sets correct sessionTarget', () => {
-    const patch = buildFixToThreadPatch(baseJob, 'v2-app')
-    expect(patch.sessionTarget).toBe('session:agent:main:thread:v2-app')
+describe('formatNextRun / formatLastRun', () => {
+  it('reads the next run as a short span, or due now', () => {
+    expect(formatNextRun(NOW + 30_000, NOW)).toBe('in <1m')
+    expect(formatNextRun(NOW + 10 * 60_000, NOW)).toBe('in 10m')
+    expect(formatNextRun(NOW + 3 * 3_600_000, NOW)).toBe('in 3h')
+    expect(formatNextRun(NOW + 2 * 86_400_000, NOW)).toBe('in 2d')
+    expect(formatNextRun(NOW - 1, NOW)).toBe('due now')
+    expect(formatNextRun(undefined, NOW)).toBe('')
   })
-
-  it('sets delivery to announce/webchat', () => {
-    const patch = buildFixToThreadPatch(baseJob, 'v2-app')
-    expect(patch.delivery).toEqual({ mode: 'announce', channel: 'webchat' })
+  it('reads the last result', () => {
+    expect(formatLastRun(undefined, NOW)).toBe('Not run yet')
+    expect(formatLastRun({}, NOW)).toBe('Not run yet')
+    expect(formatLastRun({ lastRunAtMs: NOW - 5 * 60_000, lastStatus: 'ok' }, NOW)).toBe('Ran 5m ago')
+    expect(formatLastRun({ lastRunAtMs: NOW - 2 * 3_600_000, lastStatus: 'error' }, NOW)).toBe('Failed 2h ago')
   })
+})
 
-  it('preserves agentTurn payload', () => {
-    const patch = buildFixToThreadPatch(baseJob, 'v2-app')
-    const payload = patch.payload as Record<string, unknown>
-    expect(payload.kind).toBe('agentTurn')
-    expect(payload.message).toBe('check status')
+describe('validateCronForm', () => {
+  it('builds a cron body and trims the name and message', () => {
+    const r = validateCronForm(form({ name: '  Digest ', expr: ' 0  9 * * * ', prompt: ' Do it ' }), NOW)
+    expect(r).toEqual({
+      ok: true,
+      body: { name: 'Digest', schedule: { kind: 'cron', expr: '0 9 * * *' }, prompt: 'Do it' }
+    })
   })
-
-  it('converts systemEvent to agentTurn', () => {
-    const job = {
-      ...baseJob,
-      payload: { kind: 'systemEvent', text: 'check status' }
+  it('leaves the name out when it is blank', () => {
+    const r = validateCronForm(form({ expr: '0 9 * * *' }), NOW)
+    expect(r.ok && 'name' in r.body).toBe(false)
+  })
+  it('refuses an expression without 5 or 6 fields', () => {
+    const r = validateCronForm(form({ expr: 'every day' }), NOW)
+    expect(r).toEqual({ ok: false, errors: { expr: 'Enter 5 fields, like 0 9 * * *' } })
+  })
+  it('builds an interval in milliseconds', () => {
+    const r = validateCronForm(form({ mode: 'interval', every: '2', unit: 'hours' }), NOW)
+    expect(r.ok && r.body.schedule).toEqual({ kind: 'interval', everyMs: 7_200_000 })
+  })
+  it('refuses a zero, negative or fractional interval', () => {
+    for (const every of ['0', '-3', '1.5', '', 'abc']) {
+      const r = validateCronForm(form({ mode: 'interval', every }), NOW)
+      expect(r.ok).toBe(false)
+      expect(!r.ok && r.errors.every).toBeTruthy()
     }
-    const patch = buildFixToThreadPatch(job, 'v2-app')
-    const payload = patch.payload as Record<string, unknown>
-    expect(payload.kind).toBe('agentTurn')
-    expect(payload.message).toBe('check status')
-    expect(payload.text).toBeUndefined()
   })
+  it('builds a one-shot as an ISO time and refuses a missing or past time', () => {
+    const future = toLocalInput(new Date(NOW + 3_600_000).toISOString())
+    const ok = validateCronForm(form({ mode: 'oneshot', at: future }), NOW)
+    expect(ok.ok && ok.body.schedule.kind).toBe('oneshot')
+    expect(validateCronForm(form({ mode: 'oneshot', at: '' }), NOW)).toEqual({
+      ok: false,
+      errors: { at: 'Pick a date and time' }
+    })
+    const past = toLocalInput(new Date(NOW - 3_600_000).toISOString())
+    expect(validateCronForm(form({ mode: 'oneshot', at: past }), NOW)).toEqual({
+      ok: false,
+      errors: { at: 'Pick a time in the future' }
+    })
+  })
+  it('refuses a blank message and reports every error at once', () => {
+    const r = validateCronForm(form({ expr: '', prompt: '  ' }), NOW)
+    expect(r).toEqual({
+      ok: false,
+      errors: { expr: 'Enter 5 fields, like 0 9 * * *', prompt: 'Enter a message' }
+    })
+  })
+})
 
-  it('does not overwrite existing message with text on systemEvent conversion', () => {
-    const job = {
-      ...baseJob,
-      payload: { kind: 'systemEvent', text: 'old text', message: 'existing message' }
-    }
-    const patch = buildFixToThreadPatch(job, 'v2-app')
-    const payload = patch.payload as Record<string, unknown>
-    expect(payload.kind).toBe('agentTurn')
-    expect(payload.message).toBe('existing message')
+describe('formFromJob', () => {
+  it('starts blank for a new cron', () => {
+    expect(formFromJob()).toEqual(EMPTY_FORM)
+  })
+  it('fills the form from a cron, interval or one-shot job', () => {
+    expect(formFromJob(job())).toMatchObject({ mode: 'cron', expr: '0 9 * * *', name: 'Digest', prompt: 'Summarise' })
+    expect(formFromJob(job({ schedule: { kind: 'interval', everyMs: 7_200_000 } }))).toMatchObject({
+      mode: 'interval',
+      every: '2',
+      unit: 'hours'
+    })
+    const at = new Date(NOW + 86_400_000).toISOString()
+    const oneshot = formFromJob(job({ schedule: { kind: 'oneshot', at } }))
+    expect(oneshot.mode).toBe('oneshot')
+    const back = validateCronForm(oneshot, NOW)
+    expect(back.ok && new Date(back.body.schedule.at!).getTime()).toBe(new Date(at).getTime())
   })
 })

@@ -1,7 +1,25 @@
 import { Router, type Request, type Response } from 'express'
 import type { Scheduler } from './scheduler.js'
 import type { Job } from './types.js'
-import { toStoredPatch, type CronService } from './cron-service.js'
+import {
+  toStoredPatch,
+  CronNotFoundError,
+  CronValidationError,
+  SOVEREIGN_CRON_JOB_KIND,
+  type CronService
+} from './cron-service.js'
+
+const CRON_ONLY = 'cron jobs are created and edited through /api/crons'
+
+/** A cron's target and prompt change only through the cron service, which checks the thread. */
+const CRON_OWNED_FIELDS = ['payload', 'sessionKey', 'sessionTarget', 'threadKey', 'prompt']
+
+/** 400 for a caller's mistake, 404 for an unknown cron, else 500. */
+function failure(res: Response, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err)
+  const status = err instanceof CronNotFoundError ? 404 : err instanceof CronValidationError ? 400 : 500
+  res.status(status).json({ error: message })
+}
 
 export function createSchedulerRoutes(scheduler: Scheduler, cronService?: CronService): Router {
   const router = Router()
@@ -27,6 +45,7 @@ export function createSchedulerRoutes(scheduler: Scheduler, cronService?: CronSe
     try {
       const { name, schedule, payload, enabled, tags, concurrency, deleteAfterRun } = req.body
       if (!name || !schedule) return res.status(400).json({ error: 'name and schedule are required' })
+      if (payload?.kind === SOVEREIGN_CRON_JOB_KIND) return res.status(400).json({ error: CRON_ONLY })
       const job = scheduler.add({
         name,
         schedule,
@@ -47,7 +66,9 @@ export function createSchedulerRoutes(scheduler: Scheduler, cronService?: CronSe
     const existing = scheduler.get(req.params.id)
     if (!existing) return res.status(404).json({ error: `Job '${req.params.id}' not found` })
     try {
-      // Same guard as PATCH /api/crons/:id: a Sovereign cron must keep a runnable payload.
+      if (existing.payload?.kind === SOVEREIGN_CRON_JOB_KIND && CRON_OWNED_FIELDS.some((f) => f in req.body)) {
+        return res.status(400).json({ error: CRON_ONLY })
+      }
       res.json(scheduler.update(req.params.id, toStoredPatch(existing, req.body) as Partial<Job>))
     } catch (err: any) {
       res.status(400).json({ error: err.message })
@@ -79,170 +100,71 @@ export function createSchedulerRoutes(scheduler: Scheduler, cronService?: CronSe
   return router
 }
 
-/** Derive threadKey from a cron job's sessionTarget or sessionKey. */
-function deriveThreadKey(sessionTarget?: string, sessionKey?: string): string | null {
-  for (const val of [sessionTarget, sessionKey]) {
-    if (!val) continue
-    const sessionMatch = val.match(/^session:agent:main:thread:(.+)$/)
-    if (sessionMatch) return sessionMatch[1]
-    const agentMatch = val.match(/^agent:main:thread:(.+)$/)
-    if (agentMatch) return agentMatch[1]
-  }
-  return null
-}
-
-/** Detect well-known issues with a cron job's configuration. */
-function detectCronIssues(job: any): string[] {
-  const issues: string[] = []
-  if (!job.delivery?.channel) {
-    issues.push('missing-channel')
-  }
-  const target = job.sessionTarget || ''
-  const threadKey = deriveThreadKey(job.sessionTarget, job.sessionKey)
-  if ((target === 'isolated' || target === 'main') && !threadKey) {
-    issues.push('wrong-session-target')
-  }
-  if (threadKey && job.payload?.kind === 'systemEvent') {
-    issues.push('system-event-on-thread')
-  }
-  if (job.enabled === false && job.state?.lastStatus === 'error') {
-    issues.push('disabled-after-error')
-  }
-  if (job.delivery?.channel === 'webchat' && job.delivery?.mode === 'announce') {
-    issues.push('no-delivery-channels')
-  }
-  return issues
-}
-
 export function registerCronManagementRoutes(router: Router, cronService: CronService): void {
-  // GET /api/crons — list ALL cron jobs with issue detection + threadKey derivation
+  // GET /api/crons — list every cron, each with its threadKey, next run and last result
   router.get('/api/crons', async (_req, res) => {
     try {
-      const jobs = await Promise.race([
+      const crons = await Promise.race([
         cronService.list(true),
-        new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
-      ]).catch(() => [] as any[])
-      const annotated = jobs.map((j: any) => ({
-        ...j,
-        threadKey: deriveThreadKey(j.sessionTarget, j.sessionKey),
-        issues: detectCronIssues(j)
-      }))
-      res.json({ crons: annotated })
-    } catch (err: any) {
-      res.status(500).json({ error: err.message })
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('cron list timeout')), 5000))
+      ]).catch(() => [])
+      res.json({ crons })
+    } catch (err) {
+      failure(res, err)
     }
   })
 
-  // PATCH /api/crons/:id — update a cron job
+  // POST /api/crons — create a cron on one thread. 400 without a threadKey or for a thread that does not exist.
+  router.post('/api/crons', async (req, res) => {
+    try {
+      const { threadKey, name, schedule, prompt } = req.body ?? {}
+      if (typeof threadKey !== 'string' || !threadKey.trim()) {
+        return res.status(400).json({ error: 'threadKey is required' })
+      }
+      const { id } = cronService.createUserMessageCron({
+        threadKey,
+        schedule,
+        prompt,
+        label: typeof name === 'string' && name.trim() ? name.trim() : undefined
+      })
+      const cron = (await cronService.list(true)).find((j) => j.id === id)
+      res.status(201).json({ ok: true, cron })
+    } catch (err) {
+      failure(res, err)
+    }
+  })
+
+  // PATCH /api/crons/:id — edit name, schedule, prompt, enabled or threadKey
   router.patch('/api/crons/:id', async (req, res) => {
     try {
-      const result = await cronService.update(req.params.id, req.body)
+      const result = await cronService.update(req.params.id, req.body ?? {})
       res.json({ ok: true, cron: result })
-    } catch (err: any) {
-      res.status(500).json({ error: err.message })
+    } catch (err) {
+      failure(res, err)
     }
   })
 
-  // DELETE /api/crons/cleanup — bulk remove disabled+errored+past crons
-  router.delete('/api/crons/cleanup', async (_req, res) => {
+  // POST /api/crons/:id/run — fire a cron now
+  router.post('/api/crons/:id/run', async (req, res) => {
     try {
-      const jobs = await cronService.list(true)
-      const toRemove = jobs.filter((j: any) => {
-        if (j.enabled === false && j.state?.lastStatus === 'error') return true
-        if (j.enabled === false && j.deleteAfterRun === true) return true
-        if (j.schedule?.kind === 'oneshot' && j.schedule?.at) {
-          const atMs = new Date(j.schedule.at).getTime()
-          if (!isNaN(atMs) && atMs < Date.now()) return true
-        }
-        return false
-      })
-      let removed = 0
-      for (const job of toRemove) {
-        try {
-          await cronService.remove(job.id)
-          removed++
-        } catch {
-          /* keep going */
-        }
-      }
-      res.json({ ok: true, removed, total: toRemove.length })
-    } catch (err: any) {
-      res.status(500).json({ error: err.message })
+      await cronService.run(req.params.id)
+      res.json({ ok: true })
+    } catch (err) {
+      failure(res, err)
     }
   })
 
-  // DELETE /api/crons/:id — remove a cron job
+  // DELETE /api/crons/:id — remove a cron
   router.delete('/api/crons/:id', async (req, res) => {
     try {
       await cronService.remove(req.params.id)
       res.json({ ok: true })
-    } catch (err: any) {
-      res.status(500).json({ error: err.message })
+    } catch (err) {
+      failure(res, err)
     }
   })
 
-  // POST /api/crons/:id/fix-thread — one-click fix to pin cron to a thread
-  router.post('/api/crons/:id/fix-thread', async (req, res) => {
-    try {
-      const { threadKey } = req.body
-      if (!threadKey) {
-        return res.status(400).json({ error: 'threadKey is required' })
-      }
-      const jobs = await cronService.list(true)
-      const job = jobs.find((j: any) => j.id === req.params.id)
-      if (!job) {
-        return res.status(404).json({ error: 'Cron job not found' })
-      }
-      // update() maps a changed sessionKey onto the stored payload's threadKey.
-      const result = await cronService.update(req.params.id, { sessionKey: threadKey, enabled: true })
-      res.json({ ok: true, cron: result })
-    } catch (err: any) {
-      res.status(500).json({ error: err.message })
-    }
-  })
-
-  // POST /api/crons/:id/toggle — enable/disable toggle
-  router.post('/api/crons/:id/toggle', async (req, res) => {
-    try {
-      const jobs = await cronService.list(true)
-      const job = jobs.find((j: any) => j.id === req.params.id)
-      if (!job) {
-        return res.status(404).json({ error: 'Cron job not found' })
-      }
-      const result = await cronService.update(req.params.id, { enabled: !job.enabled })
-      res.json({ ok: true, cron: result })
-    } catch (err: any) {
-      res.status(500).json({ error: err.message })
-    }
-  })
-
-  // GET /api/crons/channel-status — check if any delivery channels are configured
-  router.get('/api/crons/channel-status', async (_req, res) => {
-    try {
-      const jobs = await Promise.race([
-        cronService.list(true),
-        new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-      ]).catch(() => [] as any[])
-      const channels = new Set<string>()
-      for (const j of jobs) {
-        if (j.delivery?.channel) channels.add(j.delivery.channel)
-      }
-      const realChannels = [...channels].filter((c) => c !== 'webchat')
-      const hasRealChannels = realChannels.length > 0
-      res.json({
-        hasRealChannels,
-        channels: [...channels],
-        realChannels,
-        warning: hasRealChannels
-          ? null
-          : 'No messaging channels configured. Cron delivery via "webchat" only works during active browser sessions. Configure Telegram, Discord, or another channel for reliable delivery.'
-      })
-    } catch (err: any) {
-      res.status(500).json({ error: err.message })
-    }
-  })
-
-  // GET /api/crons/runs — get cron run history, optionally filtered by thread
+  // GET /api/crons/runs — run history, optionally for one thread
   router.get('/api/crons/runs', async (req, res) => {
     try {
       const threadKeyFilter = req.query.threadKey as string | undefined
@@ -254,16 +176,11 @@ export function registerCronManagementRoutes(router: Router, cronService: CronSe
       }
 
       const jobs = await cronService.list(true)
-      const jobThreadMap = new Map<string, string | null>()
-      for (const job of jobs) {
-        jobThreadMap.set(job.id, deriveThreadKey(job.sessionTarget, job.sessionKey))
-      }
-      const filtered = entries.filter((e: any) => jobThreadMap.get(e.jobId) === threadKeyFilter)
+      const jobThreadMap = new Map(jobs.map((job) => [job.id, job.threadKey]))
+      const filtered = entries.filter((e) => jobThreadMap.get(e.jobId) === threadKeyFilter)
       res.json({ entries: filtered.slice(0, limit) })
-    } catch (err: any) {
-      res.status(500).json({ error: err.message })
+    } catch (err) {
+      failure(res, err)
     }
   })
 }
-
-export { deriveThreadKey, detectCronIssues }

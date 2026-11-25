@@ -10,14 +10,29 @@
 import type { EventBus, CronJob, CronRunEntry, BackendRouter } from '@sovereign/core'
 import type { Job, Schedule } from './types.js'
 import type { Scheduler } from './scheduler.js'
+import { nextRunTime } from './cron.js'
 
-// Local alias retained for backwards compatibility with callers that pass a
-// full RoutingBackend (agent-backend's superset interface).
 type RoutingBackend = BackendRouter
 
 export type { CronJob, CronRunEntry } from '@sovereign/core'
 
-const SOVEREIGN_CRON_JOB_KIND = 'sovereign.userMessage'
+/** A caller's input is wrong (HTTP 400): no thread, an unknown thread, a schedule that cannot run. */
+export class CronValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CronValidationError'
+  }
+}
+
+/** The named cron does not exist (HTTP 404). */
+export class CronNotFoundError extends Error {
+  constructor(id: string) {
+    super(`cron: unknown job '${id}'`)
+    this.name = 'CronNotFoundError'
+  }
+}
+
+export const SOVEREIGN_CRON_JOB_KIND = 'sovereign.userMessage'
 
 export interface CreateUserMessageCronOpts {
   threadKey: string
@@ -31,13 +46,17 @@ export interface CronService {
   runs(jobId?: string): Promise<CronRunEntry[]>
   update(id: string, patch: Record<string, unknown>): Promise<unknown>
   remove(id: string): Promise<void>
+  /** Fire a job now, outside its schedule. */
+  run(id: string): Promise<void>
   /** Send a message into a backend session (used by cron-monitor for delivery relay). */
   sendMessage(sessionKey: string, text: string): Promise<void>
 
   /**
    * Schedule a future user-message into a Sovereign thread. At fire time the
    * cron service resolves `threadKey → backend = routing.forSession(threadKey)`
-   * and calls `backend.sendMessage(threadKey, renderedPrompt)`.
+   * and calls `backend.sendMessage(threadKey, renderedPrompt)`. Throws
+   * `CronValidationError` when the thread key is blank or names no thread, the
+   * prompt is empty, or the schedule cannot run.
    */
   createUserMessageCron(opts: CreateUserMessageCronOpts): { id: string; schedule: string }
 }
@@ -63,17 +82,40 @@ export function formatCronPrompt(label: string | undefined, prompt: string): str
   return `${tag} ${prompt}`
 }
 
-// Bare-UUID scheme: the routing layer keys sessions by bare Thread.id. Coerce
-// any legacy compound thread key to its bare id before routing a cron fire.
-function canonicalSessionKey(threadKey: string): string {
-  if (threadKey === 'agent:main:main') return 'main'
-  if (threadKey.startsWith('agent:main:thread:')) return threadKey.slice('agent:main:thread:'.length)
-  if (threadKey.startsWith('agent:main:subagent:')) return threadKey.slice('agent:main:subagent:'.length)
-  return threadKey
+/** The thread key of a stored cron payload; every cron has one. */
+function threadOf(payload: Record<string, unknown>): string {
+  return payload.threadKey as string
+}
+
+/** Refuse a schedule the scheduler cannot run: a bad expression would throw on every tick. */
+function assertRunnable(s: Schedule): void {
+  try {
+    if (s.kind === 'interval') {
+      if (!(typeof s.everyMs === 'number' && s.everyMs > 0)) throw new Error('everyMs must be a positive number')
+    } else if (s.kind === 'oneshot') {
+      if (typeof s.at !== 'string' || Number.isNaN(Date.parse(s.at))) throw new Error('at must be an ISO 8601 time')
+    } else if (s.kind === 'cron') {
+      if (typeof s.expr !== 'string' || !s.expr.trim()) throw new Error('expr is required')
+      nextRunTime(s)
+    } else {
+      throw new Error('kind must be cron, interval or oneshot')
+    }
+  } catch (err) {
+    throw new CronValidationError(`cron: invalid schedule (${err instanceof Error ? err.message : String(err)})`)
+  }
 }
 
 /** CronJob fields list() derives from the stored job; never stored themselves. */
-const DERIVED_FIELDS = new Set(['payload', 'sessionKey', 'sessionTarget', 'delivery'])
+const DERIVED_FIELDS = new Set([
+  'payload',
+  'sessionKey',
+  'sessionTarget',
+  'delivery',
+  'threadKey',
+  'prompt',
+  'state',
+  'deleteAfterRun'
+])
 
 /**
  * The prompt an agentTurn payload carries. list() fills `message` and `text`
@@ -119,23 +161,27 @@ export function toStoredPatch(existing: Job, patch: Record<string, unknown>): Re
     }
     payload = incoming
   }
+  if (typeof patch.prompt === 'string') payload = { ...(payload ?? stored), prompt: patch.prompt }
 
   const target =
-    typeof patch.sessionKey === 'string'
-      ? patch.sessionKey
-      : typeof patch.sessionTarget === 'string'
-        ? patch.sessionTarget.replace(/^session:/, '')
-        : undefined
+    patch.threadKey !== undefined
+      ? String(patch.threadKey)
+      : typeof patch.sessionKey === 'string'
+        ? patch.sessionKey
+        : typeof patch.sessionTarget === 'string'
+          ? patch.sessionTarget.replace(/^session:/, '')
+          : undefined
   const base = payload ?? stored
-  if (target && canonicalSessionKey(target) !== canonicalSessionKey(String(base.threadKey))) {
-    payload = { ...base, threadKey: canonicalSessionKey(target) }
-  }
+  if (target !== undefined && target !== base.threadKey) payload = { ...base, threadKey: target }
   if (payload) next.payload = payload
+  if (patch.schedule) next.deleteAfterRun = (patch.schedule as Schedule).kind === 'oneshot'
   return next
 }
 
 export interface CronServiceOptions {
   routing: RoutingBackend
+  /** Whether a thread with this id exists and is not archived. Every cron must name one. */
+  threadExists: (threadKey: string) => boolean
   scheduler?: Scheduler
   bus?: EventBus
   /**
@@ -155,14 +201,16 @@ export interface CronServiceOptions {
   injectChatMessage?: (threadId: string, text: string, opts?: { kind?: 'cron' | 'subagent' }) => Promise<void>
 }
 
-export function createCronService(opts: CronServiceOptions | RoutingBackend): CronService {
-  const config: CronServiceOptions = (opts as any).all
-    ? { routing: opts as RoutingBackend }
-    : (opts as CronServiceOptions)
-  const routing = config.routing
-  const scheduler = config.scheduler
-  const bus = config.bus
-  const injectChatMessage = config.injectChatMessage
+export function createCronService(config: CronServiceOptions): CronService {
+  const { routing, scheduler, bus, injectChatMessage, threadExists } = config
+
+  /** Refuse a blank thread key, or one that names no live thread. */
+  function assertThread(threadKey: unknown): asserts threadKey is string {
+    if (typeof threadKey !== 'string' || !threadKey.trim()) {
+      throw new CronValidationError('cron: threadKey is required')
+    }
+    if (!threadExists(threadKey)) throw new CronValidationError(`cron: thread '${threadKey}' does not exist`)
+  }
 
   function listSovereignJobs(): CronJob[] {
     if (!scheduler) return []
@@ -174,15 +222,25 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
 
   function sovereignJobToCronJob(j: Job): CronJob {
     const payload = j.payload as Record<string, unknown>
-    const threadKey = payload.threadKey as string
-    const sessionKey = canonicalSessionKey(threadKey)
+    const threadKey = threadOf(payload)
+    const lastRun = scheduler?.runs(j.id, 1)[0]
+    const nextRun = j.enabled ? scheduler?.nextRun(j.id) : null
     return {
       id: j.id,
       name: j.name,
       enabled: j.enabled,
-      sessionTarget: `session:${sessionKey}`,
-      sessionKey,
-      delivery: { mode: 'none' },
+      threadKey,
+      sessionTarget: `session:${threadKey}`,
+      sessionKey: threadKey,
+      state: {
+        ...(nextRun ? { nextRunAtMs: Date.parse(nextRun) } : {}),
+        ...(lastRun
+          ? {
+              lastRunAtMs: Date.parse(lastRun.startedAt),
+              lastStatus: lastRun.status === 'completed' ? 'ok' : lastRun.status === 'failed' ? 'error' : lastRun.status
+            }
+          : {})
+      },
       payload: {
         kind: 'agentTurn',
         message: payload.prompt as string,
@@ -204,10 +262,9 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
       const job = payload.job
       const runId = payload.runId
       if (!job || (job.payload?.kind as string | undefined) !== SOVEREIGN_CRON_JOB_KIND) return
-      const threadKey = job.payload.threadKey as string
+      const sessionKey = threadOf(job.payload)
       const prompt = job.payload.prompt as string
       const label = (job.payload.label as string | undefined) ?? job.name
-      const sessionKey = canonicalSessionKey(threadKey)
       const text = formatCronPrompt(label, prompt)
       try {
         if (injectChatMessage) {
@@ -263,14 +320,22 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
     },
     async update(id, patch) {
       const existing = scheduler?.get(id)
-      if (!scheduler || !existing) throw new Error(`cron: unknown job '${id}'`)
-      const updated = scheduler.update(id, toStoredPatch(existing, patch) as Partial<Job>)
+      if (!scheduler || !existing) throw new CronNotFoundError(id)
+      const stored = toStoredPatch(existing, patch)
+      const target = (stored.payload as Record<string, unknown> | undefined)?.threadKey
+      if (target !== undefined && target !== existing.payload.threadKey) assertThread(target)
+      if (patch.schedule) assertRunnable(patch.schedule as Schedule)
+      const updated = scheduler.update(id, stored as Partial<Job>)
       // Answer in the shape list() uses, so a caller can edit and resend it.
       return updated.payload?.kind === SOVEREIGN_CRON_JOB_KIND ? sovereignJobToCronJob(updated) : updated
     },
     async remove(id) {
-      if (!scheduler || !scheduler.get(id)) throw new Error(`cron: unknown job '${id}'`)
+      if (!scheduler || !scheduler.get(id)) throw new CronNotFoundError(id)
       scheduler.remove(id)
+    },
+    async run(id) {
+      if (!scheduler || !scheduler.get(id)) throw new CronNotFoundError(id)
+      scheduler.trigger(id)
     },
     async sendMessage(sessionKey, text) {
       const target = routing.forSession(sessionKey)
@@ -278,6 +343,11 @@ export function createCronService(opts: CronServiceOptions | RoutingBackend): Cr
     },
     createUserMessageCron(input) {
       if (!scheduler) throw new Error('cron: Sovereign-native scheduler not available')
+      assertThread(input.threadKey)
+      if (typeof input.prompt !== 'string' || !input.prompt.trim()) {
+        throw new CronValidationError('cron: prompt is required')
+      }
+      assertRunnable(input.schedule)
       const job = scheduler.add({
         name: input.label ?? `cron:${input.threadKey}`,
         schedule: input.schedule,

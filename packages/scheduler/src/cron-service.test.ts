@@ -5,11 +5,13 @@ import { join } from 'node:path'
 import { createEventBus } from '@sovereign/core'
 import type { AgentBackend, BackendCapabilities, BackendRouter } from '@sovereign/core'
 import { createScheduler } from './scheduler.js'
-import { createCronService, toStoredPatch } from './cron-service.js'
+import { createCronService, toStoredPatch, CronValidationError, CronNotFoundError } from './cron-service.js'
 import type { Job } from './types.js'
 import { createBackendEmitter } from '@sovereign/primitives'
 
 type RoutingBackend = BackendRouter
+
+const threadExists = () => true
 
 function stubRouter(backend: AgentBackend): BackendRouter {
   return { forSession: () => backend }
@@ -68,7 +70,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
   it('creates a Sovereign-managed cron job', () => {
     const bus = createEventBus(dataDir)
     const scheduler = createScheduler(bus, dataDir, 60000)
-    const service = createCronService({ routing, scheduler, bus })
+    const service = createCronService({ routing, scheduler, bus, threadExists })
     const result = service.createUserMessageCron({
       threadKey: 't1',
       schedule: { kind: 'oneshot', at: new Date(Date.now() + 60000).toISOString() },
@@ -86,7 +88,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     const sends: Array<{ sessionKey: string; text: string }> = []
     const stub = makeStubBackend(sends)
     routing = stubRouter(stub)
-    const service = createCronService({ routing, scheduler, bus })
+    const service = createCronService({ routing, scheduler, bus, threadExists })
     service.createUserMessageCron({
       threadKey: 't1',
       schedule: { kind: 'oneshot', at: new Date(Date.now() - 1000).toISOString() },
@@ -107,7 +109,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
   it('list() surfaces Sovereign-managed jobs alongside backend-managed ones', async () => {
     const bus = createEventBus(dataDir)
     const scheduler = createScheduler(bus, dataDir, 60000)
-    const service = createCronService({ routing, scheduler, bus })
+    const service = createCronService({ routing, scheduler, bus, threadExists })
     service.createUserMessageCron({
       threadKey: 't2',
       schedule: { kind: 'cron', expr: '0 * * * *' },
@@ -123,7 +125,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
   it('sets deleteAfterRun on oneshot jobs so the scheduler cleans them up', () => {
     const bus = createEventBus(dataDir)
     const scheduler = createScheduler(bus, dataDir, 60000)
-    const service = createCronService({ routing, scheduler, bus })
+    const service = createCronService({ routing, scheduler, bus, threadExists })
 
     // Oneshot — should get deleteAfterRun: true
     const oneshot = service.createUserMessageCron({
@@ -182,7 +184,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     it('preserves expr + tz for a kind=cron job', async () => {
       const bus = createEventBus(dataDir)
       const scheduler = createScheduler(bus, dataDir, 60000)
-      const service = createCronService({ routing, scheduler, bus })
+      const service = createCronService({ routing, scheduler, bus, threadExists })
       service.createUserMessageCron({
         threadKey: 't-cron',
         schedule: { kind: 'cron', expr: '*/5 * * * *', tz: 'UTC' },
@@ -199,7 +201,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     it('preserves everyMs for a kind=interval job', async () => {
       const bus = createEventBus(dataDir)
       const scheduler = createScheduler(bus, dataDir, 60000)
-      const service = createCronService({ routing, scheduler, bus })
+      const service = createCronService({ routing, scheduler, bus, threadExists })
       service.createUserMessageCron({
         threadKey: 't-interval',
         schedule: { kind: 'interval', everyMs: 60000 },
@@ -218,7 +220,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     it('preserves at + uses kind="oneshot" (not "at") for a kind=oneshot job', async () => {
       const bus = createEventBus(dataDir)
       const scheduler = createScheduler(bus, dataDir, 60000)
-      const service = createCronService({ routing, scheduler, bus })
+      const service = createCronService({ routing, scheduler, bus, threadExists })
       const fireAt = new Date(Date.now() + 60000).toISOString()
       service.createUserMessageCron({
         threadKey: 't-oneshot',
@@ -239,7 +241,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     it('round-trip: schedule shape from list() matches what was passed to createUserMessageCron', async () => {
       const bus = createEventBus(dataDir)
       const scheduler = createScheduler(bus, dataDir, 60000)
-      const service = createCronService({ routing, scheduler, bus })
+      const service = createCronService({ routing, scheduler, bus, threadExists })
       const inputs = [
         { threadKey: 'r-cron', schedule: { kind: 'cron' as const, expr: '0 9 * * *', tz: 'Australia/Melbourne' } },
         { threadKey: 'r-interval', schedule: { kind: 'interval' as const, everyMs: 30000 } },
@@ -280,6 +282,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
       const injected: Array<{ threadId: string; text: string; kind?: string }> = []
       const backend = makeStubBackend(sends)
       const service = createCronService({
+        threadExists,
         routing: stubRouter(backend),
         scheduler,
         bus,
@@ -312,7 +315,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
       const scheduler = createScheduler(bus, dataDir, 50)
       const sends: Array<{ sessionKey: string; text: string }> = []
       const backend = makeStubBackend(sends)
-      const service = createCronService({ routing: stubRouter(backend), scheduler, bus })
+      const service = createCronService({ routing: stubRouter(backend), scheduler, bus, threadExists })
       service.createUserMessageCron({
         threadKey: 'direct-thread',
         schedule: { kind: 'oneshot', at: new Date(Date.now() - 1000).toISOString() },
@@ -330,7 +333,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     it('round-trips a listed job: edits the prompt, keeps the thread, stays listed', async () => {
       const bus = createEventBus(dataDir)
       const scheduler = createScheduler(bus, dataDir, 60000)
-      const service = createCronService({ routing, scheduler, bus })
+      const service = createCronService({ routing, scheduler, bus, threadExists })
       const { id } = service.createUserMessageCron({
         threadKey: 't-rt',
         schedule: { kind: 'cron', expr: '0 5 * * *', tz: 'UTC' },
@@ -348,7 +351,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     it('rejects a payload it cannot run', async () => {
       const bus = createEventBus(dataDir)
       const scheduler = createScheduler(bus, dataDir, 60000)
-      const service = createCronService({ routing, scheduler, bus })
+      const service = createCronService({ routing, scheduler, bus, threadExists })
       const { id } = service.createUserMessageCron({
         threadKey: 't-bad',
         schedule: { kind: 'cron', expr: '0 5 * * *', tz: 'UTC' },
@@ -363,7 +366,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     it('takes whichever of message/text changed, refuses a conflict, and answers in the listed shape', async () => {
       const bus = createEventBus(dataDir)
       const scheduler = createScheduler(bus, dataDir, 60000)
-      const service = createCronService({ routing, scheduler, bus })
+      const service = createCronService({ routing, scheduler, bus, threadExists })
       const { id } = service.createUserMessageCron({
         threadKey: 't-mt',
         schedule: { kind: 'cron', expr: '0 5 * * *', tz: 'UTC' },
@@ -384,7 +387,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
     it('stores a whole listed job unchanged, and a new sessionKey retargets it', async () => {
       const bus = createEventBus(dataDir)
       const scheduler = createScheduler(bus, dataDir, 60000)
-      const service = createCronService({ routing, scheduler, bus })
+      const service = createCronService({ routing, scheduler, bus, threadExists })
       const { id } = service.createUserMessageCron({
         threadKey: 't-old',
         schedule: { kind: 'cron', expr: '0 5 * * *', tz: 'UTC' },
@@ -399,8 +402,7 @@ describe('createCronService — Sovereign-native user-message cron', () => {
         expect(scheduler.get(id)).not.toHaveProperty(field)
       }
 
-      // The fix-thread route's patch, legacy key form included.
-      await service.update(id, { sessionKey: 'agent:main:thread:t-new', enabled: true })
+      await service.update(id, { sessionKey: 't-new', enabled: true })
       expect(scheduler.get(id)!.payload.threadKey).toBe('t-new')
       expect((await service.list(true)).find((j) => j.id === id)?.sessionKey).toBe('t-new')
       scheduler.destroy()
@@ -408,7 +410,127 @@ describe('createCronService — Sovereign-native user-message cron', () => {
   })
 })
 
-describe('toStoredPatch — shared by PATCH /api/crons/:id and PATCH /api/jobs/:id', () => {
+describe('a cron always has a target thread', () => {
+  let dataDir: string
+  const known = (key: string) => key === 'alpha' || key === 'beta'
+  const schedule = { kind: 'cron' as const, expr: '0 5 * * *', tz: 'UTC' }
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sov-cron-thread-'))
+  })
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  function setup() {
+    const bus = createEventBus(dataDir)
+    const scheduler = createScheduler(bus, dataDir, 60000)
+    const service = createCronService({
+      routing: stubRouter(makeStubBackend([])),
+      scheduler,
+      bus,
+      threadExists: known
+    })
+    return { scheduler, service }
+  }
+
+  it('creates a cron on an existing thread', () => {
+    const { scheduler, service } = setup()
+    const { id } = service.createUserMessageCron({ threadKey: 'alpha', schedule, prompt: 'p' })
+    expect(scheduler.get(id)?.payload.threadKey).toBe('alpha')
+    scheduler.destroy()
+  })
+
+  it.each(['', '   '])('refuses a blank thread key (%j)', (threadKey) => {
+    const { scheduler, service } = setup()
+    expect(() => service.createUserMessageCron({ threadKey, schedule, prompt: 'p' })).toThrow(CronValidationError)
+    expect(() => service.createUserMessageCron({ threadKey, schedule, prompt: 'p' })).toThrow(/thread/)
+    expect(scheduler.list()).toHaveLength(0)
+    scheduler.destroy()
+  })
+
+  it('refuses a thread key that names no thread, legacy compound keys included', () => {
+    const { scheduler, service } = setup()
+    for (const threadKey of ['ghost', 'agent:main:main', 'agent:main:thread:alpha']) {
+      expect(() => service.createUserMessageCron({ threadKey, schedule, prompt: 'p' })).toThrow(
+        new RegExp(`thread '${threadKey}' does not exist`)
+      )
+    }
+    expect(scheduler.list()).toHaveLength(0)
+    scheduler.destroy()
+  })
+
+  it('refuses an empty prompt and a schedule the scheduler cannot run', () => {
+    const { scheduler, service } = setup()
+    expect(() => service.createUserMessageCron({ threadKey: 'alpha', schedule, prompt: ' ' })).toThrow(/prompt/)
+    expect(() =>
+      service.createUserMessageCron({ threadKey: 'alpha', schedule: { kind: 'cron', expr: 'not a cron' }, prompt: 'p' })
+    ).toThrow(CronValidationError)
+    expect(() =>
+      service.createUserMessageCron({ threadKey: 'alpha', schedule: { kind: 'interval', everyMs: 0 }, prompt: 'p' })
+    ).toThrow(/everyMs/)
+    expect(() =>
+      service.createUserMessageCron({
+        threadKey: 'alpha',
+        schedule: { kind: 'oneshot', at: 'tomorrow-ish' },
+        prompt: 'p'
+      })
+    ).toThrow(/at/)
+    expect(scheduler.list()).toHaveLength(0)
+    scheduler.destroy()
+  })
+
+  it('update() refuses a retarget to no thread or an unknown thread, and keeps the job as it was', async () => {
+    const { scheduler, service } = setup()
+    const { id } = service.createUserMessageCron({ threadKey: 'alpha', schedule, prompt: 'p' })
+    await expect(service.update(id, { threadKey: '' })).rejects.toThrow(CronValidationError)
+    await expect(service.update(id, { threadKey: 'ghost' })).rejects.toThrow(/does not exist/)
+    await expect(
+      service.update(id, { payload: { kind: 'sovereign.userMessage', threadKey: '', prompt: 'p' } })
+    ).rejects.toThrow(/thread/)
+    expect(scheduler.get(id)?.payload.threadKey).toBe('alpha')
+    await service.update(id, { threadKey: 'beta' })
+    expect(scheduler.get(id)?.payload.threadKey).toBe('beta')
+    scheduler.destroy()
+  })
+
+  it("update() lets an edit through when the job's own thread has since gone", async () => {
+    const { scheduler, service } = setup()
+    const { id } = service.createUserMessageCron({ threadKey: 'alpha', schedule, prompt: 'p' })
+    const gone = createCronService({
+      routing: stubRouter(makeStubBackend([])),
+      scheduler,
+      threadExists: () => false
+    })
+    await gone.update(id, { enabled: false })
+    expect(scheduler.get(id)?.enabled).toBe(false)
+    scheduler.destroy()
+  })
+
+  it('list() carries the thread key, the next run and the last result', async () => {
+    const { scheduler, service } = setup()
+    const { id } = service.createUserMessageCron({ threadKey: 'alpha', schedule, prompt: 'p' })
+    const [job] = await service.list(true)
+    expect(job.threadKey).toBe('alpha')
+    expect(typeof (job.state as any).nextRunAtMs).toBe('number')
+    expect((job.state as any).lastStatus).toBeUndefined()
+    expect(job).not.toHaveProperty('delivery')
+    scheduler.destroy()
+    void id
+  })
+
+  it('run() fires a job now; an unknown id is a not-found error', async () => {
+    const { scheduler, service } = setup()
+    const { id } = service.createUserMessageCron({ threadKey: 'alpha', schedule, prompt: 'p' })
+    await service.run(id)
+    expect(scheduler.runs(id).length).toBeGreaterThan(0)
+    await expect(service.run('nope')).rejects.toThrow(CronNotFoundError)
+    await expect(service.remove('nope')).rejects.toThrow(CronNotFoundError)
+    scheduler.destroy()
+  })
+})
+
+describe('toStoredPatch — used by PATCH /api/crons/:id', () => {
   const job = (payload: Record<string, unknown>): Job => ({
     id: 'j',
     name: 'n',

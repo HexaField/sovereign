@@ -12,26 +12,6 @@ export interface CronMonitorOptions {
   pollIntervalMs?: number
 }
 
-/** Derive threadKey from sessionTarget or sessionKey.
- *  Handles both legacy compound keys (`session:agent:main:thread:<key>`) and
- *  post-migration bare-UUID / `session:<bare>` formats. */
-function deriveThreadKey(sessionTarget?: string, sessionKey?: string): string | null {
-  for (const val of [sessionTarget, sessionKey]) {
-    if (!val) continue
-    // Legacy: session:agent:main:thread:<key>
-    const sessionMatch = val.match(/^session:agent:main:thread:(.+)$/)
-    if (sessionMatch) return sessionMatch[1]
-    // Legacy: agent:main:thread:<key>
-    const agentMatch = val.match(/^agent:main:thread:(.+)$/)
-    if (agentMatch) return agentMatch[1]
-    // Post-migration: session:<bare-key> (e.g. session:1949df6d-...)
-    if (val.startsWith('session:')) return val.slice('session:'.length)
-    // Bare key (UUID or thread name) — use directly
-    if (!val.includes(':')) return val
-  }
-  return null
-}
-
 export function createCronMonitor(options: CronMonitorOptions) {
   const { cronService, wsHandler, pollIntervalMs = 30_000 } = options
 
@@ -39,19 +19,14 @@ export function createCronMonitor(options: CronMonitorOptions) {
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let destroyed = false
 
-  const jobCache = new Map<string, { name: string; threadKey: string | null; sessionTarget?: string }>()
+  const jobCache = new Map<string, { name: string; threadKey: string | null }>()
 
   async function refreshJobCache(): Promise<void> {
     try {
       const jobs = await cronService.list(true)
       jobCache.clear()
       for (const job of jobs) {
-        const threadKey = deriveThreadKey(job.sessionTarget, job.sessionKey)
-        jobCache.set(job.id, {
-          name: job.name || job.id,
-          threadKey,
-          sessionTarget: job.sessionTarget
-        })
+        jobCache.set(job.id, { name: job.name || job.id, threadKey: job.threadKey ?? null })
       }
     } catch {
       /* non-fatal */
@@ -76,7 +51,7 @@ export function createCronMonitor(options: CronMonitorOptions) {
 
       for (const run of newRuns) {
         const jobMeta = jobCache.get(run.jobId)
-        const threadKey = jobMeta?.threadKey ?? deriveThreadKey(undefined, (run as any).sessionKey) ?? null
+        const threadKey = jobMeta?.threadKey ?? null
 
         const event = {
           type: 'cron.run.completed',
@@ -93,11 +68,10 @@ export function createCronMonitor(options: CronMonitorOptions) {
         wsHandler.broadcastToChannel('chat', event as any)
 
         if (threadKey && run.status === 'ok' && run.summary) {
-          const sessionKey = `agent:main:thread:${threadKey}`
           const jobName = run.jobName || jobMeta?.name || 'Cron job'
           const relayText = `[Cron: ${jobName}] ${run.summary}`
           console.log(`[cron-monitor] Relaying result to thread ${threadKey}: ${relayText.substring(0, 80)}`)
-          cronService.sendMessage(sessionKey, relayText).catch((err: any) => {
+          cronService.sendMessage(threadKey, relayText).catch((err: any) => {
             console.error(`[cron-monitor] Failed to relay result to thread ${threadKey}:`, err.message)
           })
         }

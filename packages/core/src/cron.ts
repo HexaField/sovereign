@@ -18,11 +18,12 @@ export interface CronJob {
   enabled?: boolean
   sessionTarget?: string
   sessionKey?: string
-  delivery?: { mode?: string; channel?: string }
+  /** The thread the cron fires into. Every cron has one. */
+  threadKey?: string
   payload?: { kind?: string; message?: string; text?: string }
   schedule?: CronScheduleShape
   deleteAfterRun?: boolean
-  state?: { lastStatus?: string }
+  state?: { lastStatus?: string; nextRunAtMs?: number; lastRunAtMs?: number }
   [key: string]: unknown
 }
 
