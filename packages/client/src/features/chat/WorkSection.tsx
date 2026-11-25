@@ -1,6 +1,7 @@
 import { createSignal, For, Show, createMemo, type JSX } from 'solid-js'
 import type { WorkItem } from '@sovereign/core'
 import { renderMarkdown } from '../../lib/markdown.js'
+import { sanitizeHtml } from './MarkdownContent.js'
 import {
   ReadIcon,
   WriteIcon,
@@ -514,11 +515,18 @@ function SystemEventRow(props: { item: WorkItem }) {
 
 // ── Expandable thought row ──────────────────────────────────────────
 const THOUGHT_TRUNCATE = 120
+export function thoughtHtml(text: string, expanded: boolean): string {
+  const shown = text.length > THOUGHT_TRUNCATE && !expanded ? text.slice(0, THOUGHT_TRUNCATE) + '…' : text
+  return sanitizeHtml(renderMarkdown(shown))
+}
+
+// Compact, italic markdown for an xs row. The last paragraph is inline so the ▲/▼ marker follows the text.
+const THOUGHT_MARKDOWN_CLASS =
+  'inline break-words [&_a]:text-[var(--c-accent)] [&_a]:underline [&_code]:not-italic [&_code]:font-mono [&_li]:mb-0 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:my-0 [&_p+p]:mt-1 [&_pre]:my-1 [&_pre]:not-italic [&_pre]:overflow-x-auto [&_strong]:font-semibold [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4 [&>p:last-child]:inline [&>:first-child]:mt-0'
+
 function ThoughtRow(props: { text: string }) {
   const needsTruncation = () => props.text.length > THOUGHT_TRUNCATE
   const [expanded, setExpanded] = createSignal(false)
-  const displayText = () =>
-    !needsTruncation() || expanded() ? props.text : props.text.slice(0, THOUGHT_TRUNCATE) + '…'
 
   return (
     <div
@@ -531,7 +539,7 @@ function ThoughtRow(props: { text: string }) {
       }}
       onClick={() => needsTruncation() && setExpanded((v) => !v)}
     >
-      <span>{displayText()}</span>
+      <div class={THOUGHT_MARKDOWN_CLASS} innerHTML={thoughtHtml(props.text, expanded())} />
       <Show when={needsTruncation()}>
         <span class="ml-1" style={{ opacity: 0.5, 'font-style': 'normal', 'font-size': '10px' }}>
           {expanded() ? '▲' : '▼'}

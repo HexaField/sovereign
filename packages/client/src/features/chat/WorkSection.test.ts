@@ -10,7 +10,8 @@ import {
   splitEditFilesReport,
   symbolEditSummary,
   symbolEditsSummary,
-  WorkSection
+  WorkSection,
+  thoughtHtml
 } from './WorkSection.js'
 import type { WorkItem } from '@sovereign/core'
 
@@ -379,6 +380,40 @@ describe('§4.4 WorkSection', () => {
         prefix: '',
         text: '… 54 more diff lines'
       })
+    })
+  })
+
+  describe('thought rows', () => {
+    const render = (text: string, expanded = false) => thoughtHtml(text, expanded)
+
+    it('renders markdown in a thought', () => {
+      const html = render('**bold** and `code`\n\n- item')
+      expect(html).toContain('<strong>bold</strong>')
+      expect(html).toContain('<code')
+      expect(html).toContain('<ul>')
+      expect(html).toContain('<li>item</li>')
+    })
+
+    it('renders a plain thought as one paragraph with the same words', () => {
+      const html = render('Checking the config file')
+      expect(html.trim()).toBe('<p>Checking the config file</p>')
+      expect(html).not.toContain('<strong>')
+      expect(html).not.toContain('<ul')
+    })
+
+    it('does not run script from a thought', () => {
+      const html = render('hi <script>alert(1)</script> <img src=x onerror="alert(2)">')
+      expect(html).not.toContain('<script')
+      expect(html).not.toContain('onerror')
+    })
+
+    it('cuts a long thought at 120 characters, and shows all of it when expanded', () => {
+      const long = '**' + 'x'.repeat(200)
+      const cut = render(long)
+      expect(cut).toContain('…')
+      expect(cut).not.toContain('x'.repeat(121))
+      expect(cut).not.toContain('<strong>')
+      expect(render(long, true)).toContain('x'.repeat(200))
     })
   })
 })
