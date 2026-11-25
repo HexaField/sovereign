@@ -84,6 +84,35 @@ describe('§1.4 Theme Store', () => {
     window.matchMedia = originalMatchMedia
   })
 
+  describe('other tabs on this device (storage event)', () => {
+    const fromOtherTab = (key: string | null, newValue: string | null) =>
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue }))
+
+    it('applies a theme another tab stored', () => {
+      fromOtherTab('sovereign:theme', 'ironman')
+      expect(currentTheme()).toBe('ironman')
+      expect(document.documentElement.classList.contains('ironman')).toBe(true)
+    })
+
+    it('does not write localStorage again', () => {
+      const setItem = vi.spyOn(localStorageMock, 'setItem')
+      fromOtherTab('sovereign:theme', 'jarvis')
+      expect(currentTheme()).toBe('jarvis')
+      expect(setItem).not.toHaveBeenCalled()
+      setItem.mockRestore()
+    })
+
+    it('ignores other keys, a cleared key and invalid values', () => {
+      setTheme('light')
+      fromOtherTab('other:key', 'ironman')
+      fromOtherTab('sovereign:theme', null)
+      fromOtherTab(null, null)
+      fromOtherTab('sovereign:theme', 'nonsense')
+      expect(currentTheme()).toBe('light')
+      expect(document.documentElement.classList.contains('light')).toBe(true)
+    })
+  })
+
   it('Theme type MUST be: default | light | ironman | jarvis', () => {
     const validThemes: Theme[] = ['default', 'light', 'ironman', 'jarvis']
     for (const t of validThemes) {
