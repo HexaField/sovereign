@@ -119,8 +119,8 @@ if [[ "$UI" == "true" ]]; then
   export SWT_WITH_CLIENT=1
 fi
 
-# Install deps if needed
-if [[ ! -d "node_modules" ]]; then
+# Install deps if missing or older than package.json (a new dependency, e.g. playwright-core for --ui)
+if [[ ! -f "node_modules/.package-lock.json" || "package.json" -nt "node_modules/.package-lock.json" ]]; then
   echo "📦 Installing wind-tunnel dependencies..."
   npm install --no-audit --no-fund 2>/dev/null
 fi
