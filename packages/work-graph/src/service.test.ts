@@ -266,6 +266,37 @@ describe('forge service', () => {
     expect(d.groups[0].nodes[0].node.id).toBe(nid(WIDGET, 50))
   })
 
+  describe('triage config, read per event', () => {
+    // An assignment to the identity, synced as one event, on the same service every time.
+    async function assignedVerdict(): Promise<string | undefined> {
+      now += 120_000
+      forge.put(
+        change(WIDGET, 50, { updatedAt: new Date(now).toISOString(), assignees: ['hex-agent'], title: 'Stream teeth' })
+      )
+      now += 60_000
+      await service.sync('acme')
+      const found = service.events('acme').filter((e) => e.type === 'assigned')
+      return found[found.length - 1]?.triage
+    }
+
+    it('a config change turns the next verdict with no restart', async () => {
+      await service.sync('acme')
+      expect(await assignedVerdict()).toBe('needs-agent')
+      forge.put(change(WIDGET, 50, { updatedAt: new Date(now).toISOString(), assignees: [], title: 'Stream teeth' }))
+      config.triage = { assigned: 'info' }
+      now += 60_000
+      await service.sync('acme')
+      expect(await assignedVerdict()).toBe('info')
+    })
+
+    it('a membrane override beats the global one', async () => {
+      await service.sync('acme')
+      config.triage = { assigned: 'needs-agent' }
+      config.membraneTriage = { acme: { assigned: 'info' } }
+      expect(await assignedVerdict()).toBe('info')
+    })
+  })
+
   it('a merged change turns its task completed within one sync, without a message to the owner thread', async () => {
     await service.sync('acme')
     await service.assign({ nodeId: nid(WIDGET, 50), threadId: 'owner' })

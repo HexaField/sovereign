@@ -45,7 +45,7 @@ export function forgeTools(deps: ForgeMcpDeps | undefined, threadId: string | un
     ),
     tool(
       'forge_dispatch',
-      "Send specific work about a node to its owner thread (or `threadId`): fix the named failing checks, answer the named review comments. Never a base merge or a merge-up: the user chooses which changes take the base. Counted against the run's job limit and token budget; refused past either. Without an owner thread it starts a new thread only for a node in a work stream.",
+      "Send specific work about a node to its owner thread (or `threadId`): fix the named failing checks, answer the named review comments. Counted against the run's job limit and token budget; refused past either. Without an owner thread it starts a new thread only for a node in a work stream.",
       {
         membrane,
         nodeId,
