@@ -78,7 +78,7 @@ import {
   SUBAGENT_TIMEOUT_MS
 } from './subagent-runner.js'
 import { formatSubagentResult } from '@sovereign/core'
-import { ensureAd4mSkill, ensureLayeredContextFile, findUnreachableAgentModels } from './personality.js'
+import { ensureAd4mSkill, findUnreachableAgentModels } from './personality.js'
 import type { ClaudeAdapterInternal, ClaudeCodeConfig, ClaudeSessionState, SubagentRun, ToolPolicy } from './types.js'
 import { createContextFilter } from './context-filter.js'
 import type { ContextFilterConfig } from './context-filter.js'
@@ -490,13 +490,11 @@ export function createClaudeCodeBackend(
     )
   }
 
-  // Workspace-local seed file — best-effort, never fatal. The global
-  // personality (~/.claude/CLAUDE.md) is owned by the personality compiler
-  // in bootstrap; only the layered-context file gets seeded here.
+  // Best-effort, never fatal. No `.claude/CLAUDE.md` is seeded in a cwd: one
+  // there makes Claude Code skip every AGENTS.md below it.
   try {
     const initCwd = initConfig.cwd ?? process.cwd()
     fs.mkdirSync(initCwd, { recursive: true })
-    ensureLayeredContextFile(initCwd)
     const initMcp = resolveMcpServers()
     if (initMcp['ad4m'] && initConfig.configDir) ensureAd4mSkill(initConfig.configDir, initAgentDir)
   } catch {
@@ -1719,17 +1717,6 @@ export function createClaudeCodeBackend(
       parentSessionKey: opts?.parentSessionKey
     })
     persistRegistry(state, opts?.threadKey ?? sessionKey, opts?.orgId)
-    // Seed the per-cwd workspace files if this session uses a different cwd
-    // than the adapter default — gives per-org workspaces their own
-    // layered-context file without touching the global personality (which
-    // the compiler owns).
-    if (opts?.cwd && opts.cwd !== (getConfig().cwd ?? process.cwd())) {
-      try {
-        ensureLayeredContextFile(opts.cwd)
-      } catch {
-        /* read-only cwd in tests */
-      }
-    }
     // CC doesn't inject seedHistory into its own context (the SDK manages
     // conversation state), but persist to the shared history log so that
     // getHistory can surface the prior conversation after a backend switch.

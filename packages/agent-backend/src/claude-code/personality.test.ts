@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ensureLayeredContextFile, findUnreachableAgentModels } from './personality.js'
+import { findUnreachableAgentModels } from './personality.js'
 
 describe('claude-code/personality', () => {
   let cwd: string
@@ -12,17 +12,6 @@ describe('claude-code/personality', () => {
   })
   afterEach(() => {
     rmSync(cwd, { recursive: true, force: true })
-  })
-
-  it('seeds .claude/CLAUDE.md when missing, leaves existing files untouched', () => {
-    ensureLayeredContextFile(cwd)
-    const path = join(cwd, '.claude', 'CLAUDE.md')
-    expect(existsSync(path)).toBe(true)
-    expect(readFileSync(path, 'utf-8')).toMatch(/Sovereign workspace context/)
-
-    writeFileSync(path, '# my own layered context\nentirely user-owned.\n')
-    ensureLayeredContextFile(cwd)
-    expect(readFileSync(path, 'utf-8')).toBe('# my own layered context\nentirely user-owned.\n')
   })
 
   it('flags agent definitions whose model a Claude session cannot reach', () => {
