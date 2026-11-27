@@ -2248,6 +2248,18 @@ describe('claude-code/litellm env injection', () => {
     expect(opts.env.ANTHROPIC_API_KEY).toBe('test-litellm-key')
   })
 
+  it('keeps tool search off and the 200K window for a local model behind the proxy', async () => {
+    const opts = await captureOptionsForModel('qwen3.8-27b', { url: 'http://localhost:4000' })
+    expect(opts.env.ENABLE_TOOL_SEARCH).toBe('false')
+    expect(opts.env.CLAUDE_CODE_DISABLE_1M_CONTEXT).toBe('1')
+  })
+
+  it('does not set the proxy-only variables for a Claude model', async () => {
+    const opts = await captureOptionsForModel('claude-opus-4-6', { url: 'http://localhost:4000' })
+    expect(opts.env?.ENABLE_TOOL_SEARCH).toBeUndefined()
+    expect(opts.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT).toBeUndefined()
+  })
+
   it('defaults apiKey to "litellm" when not specified', async () => {
     const opts = await captureOptionsForModel('qwen', { url: 'http://proxy:4000' })
     expect(opts.env?.ANTHROPIC_API_KEY).toBe('litellm')

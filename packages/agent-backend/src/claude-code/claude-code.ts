@@ -137,6 +137,7 @@ const MODEL_CATALOG: CatalogFamily[] = [
     family: 'fable',
     familyLabel: 'Fable',
     versions: [
+      { id: 'claude-fable-5-2', version: '5.2', versionLabel: '5.2' },
       { id: 'claude-fable-5-1', version: '5.1', versionLabel: '5.1' },
       { id: 'claude-fable-5', version: '5', versionLabel: '5' }
     ]
@@ -159,6 +160,7 @@ const MODEL_CATALOG: CatalogFamily[] = [
     familyLabel: 'Sonnet',
     versions: [
       { id: 'sonnet', version: null, versionLabel: 'Latest' },
+      { id: 'claude-sonnet-5-5', version: '5.5', versionLabel: '5.5' },
       { id: 'claude-sonnet-5', version: '5', versionLabel: '5' },
       { id: 'claude-sonnet-4-6', version: '4.6', versionLabel: '4.6' },
       { id: 'claude-sonnet-4-5', version: '4.5', versionLabel: '4.5' }
@@ -169,6 +171,7 @@ const MODEL_CATALOG: CatalogFamily[] = [
     familyLabel: 'Haiku',
     versions: [
       { id: 'haiku', version: null, versionLabel: 'Latest' },
+      { id: 'claude-haiku-5-5', version: '5.5', versionLabel: '5.5' },
       { id: 'claude-haiku-4-5', version: '4.5', versionLabel: '4.5' }
     ]
   },
@@ -291,7 +294,7 @@ const WAKEUP_REDIRECT: Record<string, string> = {
 // that tells the model to edit files with sed, heredocs or short scripts
 // instead of Edit/Write. Those edits fail silently and skip the diff review,
 // so turn the steer off. The variable is an internal CLI flag (read from the
-// bundled CLI of @anthropic-ai/claude-agent-sdk 0.3.281);
+// bundled CLI of @anthropic-ai/claude-agent-sdk 0.3.332);
 // bash-first-steer.test.ts runs the real CLI and fails if an upgrade renames it.
 export const BASH_FIRST_OFF_ENV = { CLAUDE_CODE_THRIFTY_SONIC: '0' }
 
@@ -1472,7 +1475,12 @@ export function createClaudeCodeBackend(
       ...(useLiteLlm
         ? {
             ANTHROPIC_BASE_URL: cfgAtStart.litellm!.url,
-            ANTHROPIC_API_KEY: cfgAtStart.litellm!.apiKey ?? 'litellm'
+            ANTHROPIC_API_KEY: cfgAtStart.litellm!.apiKey ?? 'litellm',
+            // Since CLI 2.1.304 a custom base URL turns tool search on, and since
+            // 2.1.323 an unknown model id gets a 1M window (was 200K). A local
+            // model through LiteLLM understands neither: keep the old behaviour.
+            ENABLE_TOOL_SEARCH: 'false',
+            CLAUDE_CODE_DISABLE_1M_CONTEXT: '1'
           }
         : {})
     } as Record<string, string>
