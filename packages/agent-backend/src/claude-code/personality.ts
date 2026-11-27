@@ -4,31 +4,12 @@
 //
 // The personality itself (the global `~/.claude/CLAUDE.md`) is owned by the
 // personality compiler — see `personality-compiler.ts`. The functions here
-// only seed the workspace-local layered-context file and check the user's
-// agent definitions. Subagents run through agents_spawn (subagent-runner.ts).
+// only seed the ad4m skill and check the user's agent definitions. No
+// workspace `.claude/CLAUDE.md` is seeded: one in a folder makes Claude Code
+// skip every AGENTS.md below it. Subagents run through agents_spawn (subagent-runner.ts).
 
 import fs from 'node:fs'
 import path from 'node:path'
-
-const WORKSPACE_LAYERED_BODY = `# Sovereign workspace context
-
-Workspace-local Claude Code context. Read via cwd walk-up alongside the
-global \`~/.claude/CLAUDE.md\` (assembled by Sovereign's personality
-compiler). Edit freely — this file is seeded once and never rewritten.
-`
-
-/**
- * Write `${cwd}/.claude/CLAUDE.md` as a one-time seed. Existing user files
- * are left strictly alone — Sovereign does not own or rewrite the workspace's
- * layered-context file.
- */
-export function ensureLayeredContextFile(cwd: string): void {
-  const dir = path.join(cwd, '.claude')
-  const filePath = path.join(dir, 'CLAUDE.md')
-  if (fs.existsSync(filePath)) return
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(filePath, WORKSPACE_LAYERED_BODY)
-}
 
 /** An agent definition whose `model:` a Claude session cannot reach. */
 export interface UnreachableAgentModel {

@@ -550,13 +550,12 @@ describe('claude-code/createClaudeCodeBackend', () => {
     expect(meta?.model).toBe('claude-sonnet-5')
   })
 
-  it('writes personality files into cwd on construction', () => {
+  it('writes no instruction files into cwd on construction', () => {
     createClaudeCodeBackend({ dataDir, cwd, agentDir: join(dataDir, 'agent') }, { sdkQuery: stubSdkQuery() })
-    // Sovereign no longer writes a workspace-root CLAUDE.md (the global one
-    // at ~/.claude/CLAUDE.md is owned by the personality compiler). Only the
-    // layered-context file is seeded into cwd; no subagent definition.
+    // A `.claude/CLAUDE.md` in cwd would make Claude Code skip every
+    // AGENTS.md below it; the global personality is the compiler's.
     const fs = require('node:fs')
-    expect(fs.existsSync(join(cwd, '.claude', 'CLAUDE.md'))).toBe(true)
+    expect(fs.existsSync(join(cwd, '.claude', 'CLAUDE.md'))).toBe(false)
     expect(fs.existsSync(join(cwd, '.claude', 'agents'))).toBe(false)
   })
 
