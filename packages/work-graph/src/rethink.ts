@@ -142,6 +142,37 @@ function eventLine(e: TriagedEvent): string {
   return `${e.at} ${e.type}${d ? ` — ${d}` : ''} [${tier}]`
 }
 
+/** The Jobs table shipped with the package (`prompts/` sits beside `src/` and `dist/`). */
+const DEFAULT_JOBS_FILE = new URL('../prompts/rethink-jobs.md', import.meta.url)
+const readDefaultJobs = () => fs.readFileSync(DEFAULT_JOBS_FILE, 'utf8')
+
+/**
+ * The Jobs section for a run: the file `forge.rethink.jobsFile` names for the
+ * membrane (else `"*"`), read now; the default when none is set or the file
+ * cannot be read (logged once per file and reason).
+ */
+export function loadJobsTemplate(
+  files: Record<string, string> | undefined,
+  membrane: string,
+  log: (msg: string) => void,
+  warned: Set<string>
+): string {
+  const file = files?.[membrane] ?? files?.['*']
+  if (!file) return readDefaultJobs()
+  try {
+    const text = fs.readFileSync(path.resolve(file), 'utf8')
+    if (text.trim()) return text
+    throw new Error('empty')
+  } catch (err) {
+    const why = `${file}: ${(err as Error).message}`
+    if (!warned.has(why)) {
+      warned.add(why)
+      log(`jobs file unusable (${why}); using the default`)
+    }
+    return readDefaultJobs()
+  }
+}
+
 /** The message a rethink run sends to the membrane's forge-rethink thread. */
 export function buildRethinkPrompt(input: {
   membrane: string
@@ -156,6 +187,8 @@ export function buildRethinkPrompt(input: {
   uncategorised?: WorkNode[]
   /** The membrane's trusted authors; undefined when it has no allow list. */
   trusted?: string[]
+  /** The Jobs section (Markdown, `{issueSearch}` placeholder). Unset: the default template. */
+  jobs?: string
 }): string {
   const { membrane, runId, digest, limits, owners, streams, planned, trusted, uncategorised = [] } = input
   // A search by text alone can surface an untrusted author's issue: search per trusted author.
@@ -171,22 +204,7 @@ export function buildRethinkPrompt(input: {
     ''
   )
 
-  out.push('## Jobs', '')
-  out.push('| Job | When | How |', '|---|---|---|')
-  out.push(
-    '| Semantic relationships | Two items are about the same thing and no edge says so; an item belongs in a stream | `forge_relate` with a reason and a confidence (0–1); `forge_stream_add` (sets the item’s one owning stream). Shown dashed until the user keeps or deletes it |',
-    '| Behind or in conflict | A change is behind its base, conflicts with it, or sits on a merged base | Never `forge_dispatch` a base merge or a merge-up: the user chooses which changes take the base. An approved change that conflicts goes into the `forge_attention` call as a merge decision |',
-    '| Iterate | Review comments or red CI on an owned change | `forge_dispatch` to the owner thread with the specific comments or failing checks |',
-    '| Bug reports | One failure pattern across changes, or a bug found in review | `forge_bug_draft` with the evidence nodes: a draft the user approves. Never open an issue yourself |',
-    '| Flag for the user | Review requested from them, merge decisions, approved and waiting, stale items they own, blocked agents, drafts to approve | ONE `forge_attention` call holding every item (recorded on the cards and in the run report; no message is sent) |',
-    '| Planned → begun | A PR started work that a planned task or an open issue describes | Planned task: `forge_supersede`. Issue the PR does not close: `forge_relate` (reason: the PR does the issue’s work); once that PR merged, an attention item to close the issue. Check each new or changed PR in the digest against the planned tasks below and against open issues (' +
-      issueSearch +
-      ') |',
-    '| Dependencies | An item must wait for another (a stacked PR outside its base chain, a plan’s “Needs”, one stream before the next) and no depends-on edge says so, or one no longer holds | `forge_depend` (`remove: true` for one that no longer holds) |',
-    '| Categorise | An item shown as “Category: uncategorised” (in the digest or under Uncategorised items) | `forge_categorize` with one of: feature = new or improved user-facing capability; bug = a fix for a defect; design = plans, specs, architecture, docs, RFCs, proposals; future = tech debt and enabling work (refactors, infrastructure, internal libraries, plumbing, migrations, dependency upgrades, CI and test infrastructure, perf groundwork, cleanups) — “future” never means “later” |',
-    '| Tidy | Tasks whose items ended, empty streams | `forge_note` on the card, or an attention item when the user must act |',
-    ''
-  )
+  out.push((input.jobs ?? readDefaultJobs()).split('{issueSearch}').join(issueSearch).trimEnd(), '')
 
   out.push('## Limits', '')
   out.push(
@@ -557,6 +575,7 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
   const log = deps.log ?? ((m: string) => console.log(`[forge-rethink] ${m}`))
   const states = new Map<string, RethinkStateFile>()
   const active = new Map<string, ActiveRun>()
+  const warnedJobs = new Set<string>()
 
   const dirOf = (m: string) => path.join(deps.dataDir, 'forge', safeSegment(m), 'rethink')
   const stateFile = (m: string) => path.join(dirOf(m), 'state.json')
@@ -1054,7 +1073,8 @@ export function createRethinkRunner(deps: RethinkRunnerDeps): RethinkRunner {
             streams: graph.workstreams,
             planned: graph.nodes.filter((n) => n.kind === 'task' && n.state === 'planned'),
             uncategorised: graph.nodes.filter((n) => !n.category && (n.kind === 'branch' || leafState(n) === 'open')),
-            trusted: trustedAuthorsOf(svc.config().trustedAuthors, m)?.logins
+            trusted: trustedAuthorsOf(svc.config().trustedAuthors, m)?.logins,
+            jobs: loadJobsTemplate(svc.config().rethink.jobsFile, m, log, warnedJobs)
           })
         )
       } catch (err) {

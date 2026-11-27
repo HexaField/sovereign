@@ -40,6 +40,22 @@ const ctx = (over: Partial<TriageContext> = {}): TriageContext => ({
   ...over
 })
 
+describe('ruleTriage overrides', () => {
+  it('an override replaces the default verdict of its event type, and only that one', () => {
+    const triage = { conflict: 'needs-agent', ci_failed: 'info', commented: 'model' } as const
+    expect(ruleTriage(ev('conflict', { base: 'dev' }), ctx({ triage }))).toBe('needs-agent')
+    expect(ruleTriage(ev('ci_failed'), ctx({ owned: true, triage }))).toBe('info')
+    expect(ruleTriage(ev('commented', { text: ['@hex-agent hi'] }), ctx({ triage }))).toBeUndefined()
+    expect(ruleTriage(ev('behind_base', { behind: 1 }), ctx({ triage }))).toBe('info')
+  })
+
+  it("'owned' is needs-agent only for an item with an owner thread", () => {
+    const triage = { conflict: 'owned' } as const
+    expect(ruleTriage(ev('conflict'), ctx({ owned: true, triage }))).toBe('needs-agent')
+    expect(ruleTriage(ev('conflict'), ctx({ owned: false, triage }))).toBe('info')
+  })
+})
+
 describe('ruleTriage', () => {
   it('places the fixed needs-agent cases', () => {
     expect(ruleTriage(ev('ci_failed'), ctx({ owned: true }))).toBe('needs-agent')

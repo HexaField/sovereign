@@ -373,6 +373,17 @@ export const schema = {
           additionalProperties: { type: 'array', items: { type: 'string', minLength: 1 } }
         },
         mentions: { type: 'array', items: { type: 'string', minLength: 1 } },
+        triage: {
+          type: 'object',
+          additionalProperties: { type: 'string', enum: ['info', 'needs-agent', 'owned', 'model'] }
+        },
+        membraneTriage: {
+          type: 'object',
+          additionalProperties: {
+            type: 'object',
+            additionalProperties: { type: 'string', enum: ['info', 'needs-agent', 'owned', 'model'] }
+          }
+        },
         pollOpenMs: { type: 'number', minimum: 10000 },
         pollAllMs: { type: 'number', minimum: 30000 },
         windowDays: { type: 'number', minimum: 1, maximum: 365 },
@@ -394,7 +405,8 @@ export const schema = {
             times: { type: 'array', items: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' } },
             maxJobs: { type: 'number', minimum: 0 },
             tokenBudget: { type: 'number', minimum: 0 },
-            threads: { type: 'object', additionalProperties: { type: 'string', minLength: 1 } }
+            threads: { type: 'object', additionalProperties: { type: 'string', minLength: 1 } },
+            jobsFile: { type: 'object', additionalProperties: { type: 'string', minLength: 1 } }
           },
           additionalProperties: false
         }

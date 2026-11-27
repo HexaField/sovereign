@@ -339,6 +339,14 @@ export interface SovereignConfig {
     trustedAuthors: Record<string, string[]>
     /** Words besides "@<identity>" that make a comment needs-agent. */
     mentions: string[]
+    /**
+     * Loop 1 triage verdict per event type, over the built-in table: `info`,
+     * `needs-agent`, `owned` (needs-agent only when the item has an owner
+     * thread, else info) or `model` (leave it to the classifier). Read per event.
+     */
+    triage: Record<string, 'info' | 'needs-agent' | 'owned' | 'model'>
+    /** The same per membrane id; beats `triage` for that membrane. */
+    membraneTriage: Record<string, Record<string, 'info' | 'needs-agent' | 'owned' | 'model'>>
     /** Open-items refresh interval. */
     pollOpenMs: number
     /** Everything-updated refresh interval (also re-reads branches). */
@@ -369,6 +377,13 @@ export interface SovereignConfig {
       tokenBudget: number
       /** Label of the thread that runs a membrane's rethink, per membrane id. Unset: `forge-rethink`. */
       threads?: Record<string, string>
+      /**
+       * Markdown file replacing the rethink prompt's Jobs section, per membrane
+       * id; `"*"` serves every membrane without its own. Read on every run;
+       * `{issueSearch}` stands for the issue search command. Unset or
+       * unreadable: the default shipped in packages/work-graph/prompts.
+       */
+      jobsFile?: Record<string, string>
     }
   }
   /**

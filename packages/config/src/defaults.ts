@@ -189,6 +189,8 @@ export const defaults: SovereignConfig = {
     repos: {},
     trustedAuthors: {},
     mentions: [],
+    triage: {},
+    membraneTriage: {},
     pollOpenMs: 120_000,
     pollAllMs: 600_000,
     windowDays: 21,

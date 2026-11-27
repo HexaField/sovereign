@@ -13,12 +13,16 @@ import type {
   ForgeClassifier,
   ForgeDigest,
   ForgeEvent,
+  ForgeEventType,
   TriageCoverage,
   TriagedEvent,
   TriageVerdict
 } from './types.js'
 
 export const TRIAGE_THRESHOLD = 0.7
+
+/** `owned`: needs-agent when the item has an owner thread, else info. `model`: leave it to the classifier. */
+export type TriageSetting = TriageVerdict | 'owned' | 'model'
 
 /**
  * One admitted event as the `forge.events` bus event carries it (the timeline
@@ -61,6 +65,8 @@ export interface TriageContext {
   identity?: string
   /** Extra words that count as a mention. */
   mentions: string[]
+  /** Overrides of the default verdict per event type (config `forge.triage`, the membrane's on top). */
+  triage?: Partial<Record<string, TriageSetting>>
 }
 
 function mentioned(text: string, ctx: TriageContext): boolean {
@@ -74,56 +80,74 @@ function mentioned(text: string, ctx: TriageContext): boolean {
 /** A bot account: GitHub App bots end in `[bot]`; machine users carry `bot` as a name segment (`lal-bot`). */
 const isBot = (login: unknown) => typeof login === 'string' && /\[bot\]$|(^|[-_])bot([-_]|$)/i.test(login)
 
-/** The fixed rules: a verdict, or undefined when they cannot place the event. */
+/** A default rule: a fixed setting, or a predicate giving a verdict (undefined: the rules cannot place it). */
+type Rule = TriageSetting | ((e: ForgeEvent, ctx: TriageContext) => TriageVerdict | undefined)
+
+const ownedOrModel: Rule = (_e, ctx) => (ctx.owned ? undefined : 'info')
+
+/**
+ * The default verdict per event type: a fixed setting, or the predicate that
+ * places it (mention matching, bot detection and the like stay code). The
+ * user chooses which changes take the base: behind, in conflict or on a
+ * merged base wakes nobody.
+ */
+const DEFAULT_RULES: Record<ForgeEventType, Rule> = {
+  ci_failed: 'owned',
+  reviewed: (e, ctx) => {
+    const d = e.detail as Record<string, any>
+    if (d.state === 'changes_requested') return 'needs-agent'
+    if (d.state === 'commented' && ctx.owned) return isBot(d.login) ? 'info' : undefined
+    return 'info'
+  },
+  conflict: 'info',
+  behind_base: 'info',
+  base_merged: 'info',
+  commented: (e, ctx) => {
+    const d = e.detail as Record<string, any>
+    const me = ctx.identity?.toLowerCase()
+    const text = Array.isArray(d.text) ? d.text.join('\n') : String(d.text ?? '')
+    if (mentioned(text, ctx)) return 'needs-agent'
+    // Bots and our own replies (the identity) wake nobody
+    const authors: unknown[] = Array.isArray(d.authors) ? d.authors : []
+    const quiet = (a: unknown) => isBot(a) || (!!me && typeof a === 'string' && a.toLowerCase() === me)
+    if (authors.length && authors.every(quiet)) return 'info'
+    return ctx.owned ? undefined : 'info'
+  },
+  referenced: (e, ctx) => {
+    const d = e.detail as Record<string, any>
+    return d.byKind === 'issue' && ctx.node?.kind === 'change' && ctx.tracked(e.nodeId) ? 'needs-agent' : 'info'
+  },
+  assigned: (e, ctx) => {
+    const d = e.detail as Record<string, any>
+    const me = ctx.identity?.toLowerCase()
+    const added: string[] = Array.isArray(d.added) ? d.added : []
+    return me && added.some((a) => a.toLowerCase() === me) && !ctx.owned ? 'needs-agent' : 'info'
+  },
+  review_requested: (e, ctx) => {
+    const d = e.detail as Record<string, any>
+    const me = ctx.identity?.toLowerCase()
+    const who = String(d.login ?? '').toLowerCase()
+    if (me && who === me) return 'needs-agent'
+    if (ctx.mentions.some((m) => m.toLowerCase() === who)) return 'needs-agent'
+    return 'info'
+  },
+  reopened: ownedOrModel,
+  stale: ownedOrModel,
+  plan_changed: 'model',
+  opened: 'info',
+  merged: 'info',
+  closed: 'info',
+  pushed: 'info',
+  ci_passed: 'info',
+  labelled: 'info'
+}
+
+/** The rules: a verdict, or undefined when they cannot place the event (config's `triage` overrides the defaults). */
 export function ruleTriage(e: ForgeEvent, ctx: TriageContext): TriageVerdict | undefined {
-  const d = e.detail as Record<string, any>
-  const me = ctx.identity?.toLowerCase()
-  switch (e.type) {
-    case 'ci_failed':
-      return ctx.owned ? 'needs-agent' : 'info'
-    case 'reviewed':
-      if (d.state === 'changes_requested') return 'needs-agent'
-      if (d.state === 'commented' && ctx.owned) return isBot(d.login) ? 'info' : undefined
-      return 'info'
-    // The user chooses which changes take the base: behind, in conflict or on a merged base wakes nobody
-    case 'conflict':
-    case 'behind_base':
-    case 'base_merged':
-      return 'info'
-    case 'commented': {
-      const text = Array.isArray(d.text) ? d.text.join('\n') : String(d.text ?? '')
-      if (mentioned(text, ctx)) return 'needs-agent'
-      // Bots and our own replies (the identity) wake nobody
-      const authors: unknown[] = Array.isArray(d.authors) ? d.authors : []
-      const quiet = (a: unknown) => isBot(a) || (!!me && typeof a === 'string' && a.toLowerCase() === me)
-      if (authors.length && authors.every(quiet)) return 'info'
-      return ctx.owned ? undefined : 'info'
-    }
-    case 'referenced':
-      return d.byKind === 'issue' && ctx.node?.kind === 'change' && ctx.tracked(e.nodeId) ? 'needs-agent' : 'info'
-    case 'assigned': {
-      const added: string[] = Array.isArray(d.added) ? d.added : []
-      return me && added.some((a) => a.toLowerCase() === me) && !ctx.owned ? 'needs-agent' : 'info'
-    }
-    case 'review_requested': {
-      const who = String(d.login ?? '').toLowerCase()
-      if (me && who === me) return 'needs-agent'
-      if (ctx.mentions.some((m) => m.toLowerCase() === who)) return 'needs-agent'
-      return 'info'
-    }
-    case 'reopened':
-    case 'stale':
-      return ctx.owned ? undefined : 'info'
-    case 'plan_changed':
-      return undefined
-    case 'opened':
-    case 'merged':
-    case 'closed':
-    case 'pushed':
-    case 'ci_passed':
-    case 'labelled':
-      return 'info'
-  }
+  const rule = ctx.triage?.[e.type] ?? DEFAULT_RULES[e.type]
+  if (typeof rule === 'function') return rule(e, ctx)
+  if (rule === 'owned') return ctx.owned ? 'needs-agent' : 'info'
+  return rule === 'model' ? undefined : rule
 }
 
 export function emptyCoverage(): TriageCoverage {

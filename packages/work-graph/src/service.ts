@@ -274,7 +274,9 @@ export function resolveConfig(c: Partial<ForgeConfig> | undefined): ForgeConfig 
     repos: { ...d.repos, ...c?.repos },
     trustedAuthors: c?.trustedAuthors ?? d.trustedAuthors,
     planDirs: c?.planDirs ?? d.planDirs,
-    mentions: c?.mentions ?? d.mentions
+    mentions: c?.mentions ?? d.mentions,
+    triage: c?.triage ?? d.triage,
+    membraneTriage: c?.membraneTriage ?? d.membraneTriage
   }
 }
 
@@ -524,8 +526,11 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     events: ForgeEvent[],
     graph: BuiltGraph,
     tasks: PortTask[],
-    identity: string | undefined
+    identity: string | undefined,
+    membrane?: string
   ): Promise<TriagedEvent[]> {
+    const c = cfg()
+    const overrides = { ...c.triage, ...(membrane ? c.membraneTriage[membrane] : undefined) }
     const nodes = new Map(graph.nodes.map((n) => [n.id, n]))
     const byKey = new Map(tasks.filter((t) => t.key).map((t) => [t.key!, t]))
     const out: TriagedEvent[] = []
@@ -539,7 +544,8 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
             owned: Boolean(byKey.get(e.nodeId)?.threadId),
             tracked: (id) => byKey.has(id),
             ...(identity ? { identity } : {}),
-            mentions: cfg().mentions
+            mentions: c.mentions,
+            triage: overrides
           },
           deps.classifier
         )
@@ -668,7 +674,13 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
         })
       }
 
-      const triaged = await triageAll(trustedEvents(membrane, scope, events), graph, tasks, await identityOf(scope))
+      const triaged = await triageAll(
+        trustedEvents(membrane, scope, events),
+        graph,
+        tasks,
+        await identityOf(scope),
+        membrane
+      )
       logEvents(membrane, 'sync', triaged, nodes)
 
       const ts = await syncTasks(deps.tasks, {
@@ -1026,7 +1038,7 @@ export function createForgeService(deps: ForgeServiceDeps): ForgeService {
     const s = state(m)
     const { graph, tasks } = await full(m)
     if (events.length) {
-      const triaged = await triageAll(events, graph, tasks, await identityOf(s.scope ?? scopeOf(m)))
+      const triaged = await triageAll(events, graph, tasks, await identityOf(s.scope ?? scopeOf(m)), m)
       logEvents(m, 'plans', triaged, new Map(graph.nodes.map((n) => [n.id, n])))
     }
     const streams = await syncPlanStreams(m, tasks)
