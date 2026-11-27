@@ -369,7 +369,12 @@ describe('forge service', () => {
     service = make({ runRethink: async (_m, d) => void runs.push(d.count) })
     await service.sync('acme')
     expect(await service.rethink('acme')).toEqual({ ran: false, count: 0 })
-    forge.put(change(WIDGET, 50, { updatedAt: new Date(now + 60_000).toISOString(), mergeable: false }))
+    forge.put(
+      change(WIDGET, 50, {
+        updatedAt: new Date(now + 60_000).toISOString(),
+        reviewers: [{ login: 'jo', state: 'changes_requested' }]
+      })
+    )
     now += 120_000
     await service.sync('acme')
     expect(await service.rethink('acme')).toEqual({ ran: true, count: 1 })
