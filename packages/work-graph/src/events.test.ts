@@ -44,9 +44,6 @@ describe('ruleTriage', () => {
   it('places the fixed needs-agent cases', () => {
     expect(ruleTriage(ev('ci_failed'), ctx({ owned: true }))).toBe('needs-agent')
     expect(ruleTriage(ev('reviewed', { state: 'changes_requested', login: 'x' }), ctx())).toBe('needs-agent')
-    expect(ruleTriage(ev('conflict'), ctx())).toBe('needs-agent')
-    const approved = node({ reviewers: [{ login: 'jo', state: 'approved' }] })
-    expect(ruleTriage(ev('behind_base', { behind: 2 }), ctx({ node: approved }))).toBe('needs-agent')
     expect(ruleTriage(ev('commented', { text: ['ping @hex-agent please'] }), ctx())).toBe('needs-agent')
     expect(ruleTriage(ev('commented', { text: ['Alex, can you look?'] }), ctx())).toBe('needs-agent')
     expect(ruleTriage(ev('referenced', { byKind: 'issue' }), ctx({ tracked: () => true }))).toBe('needs-agent')
@@ -56,7 +53,12 @@ describe('ruleTriage', () => {
 
   it('places the plain info cases', () => {
     expect(ruleTriage(ev('ci_failed'), ctx())).toBe('info')
+    // Behind, in conflict or on a merged base wakes nobody, owned or approved: the user chooses which changes take the base
     expect(ruleTriage(ev('behind_base', { behind: 2 }), ctx())).toBe('info')
+    const approved = node({ reviewers: [{ login: 'jo', state: 'approved' }] })
+    expect(ruleTriage(ev('behind_base', { behind: 2 }), ctx({ node: approved, owned: true }))).toBe('info')
+    expect(ruleTriage(ev('conflict', { base: 'dev' }), ctx({ node: approved, owned: true }))).toBe('info')
+    expect(ruleTriage(ev('base_merged', { base: 'feat' }), ctx({ owned: true }))).toBe('info')
     expect(ruleTriage(ev('commented', { text: ['nice, @hex-agentx'] }), ctx())).toBe('info')
     expect(ruleTriage(ev('assigned', { added: ['hex-agent'] }), ctx({ owned: true }))).toBe('info')
     expect(ruleTriage(ev('referenced', { byKind: 'change' }), ctx({ tracked: () => true }))).toBe('info')
@@ -101,7 +103,7 @@ describe('triage tiers', () => {
 
   it('rule first, without asking the model', async () => {
     let asked = 0
-    const r = await triage(ev('conflict'), ctx(), {
+    const r = await triage(ev('ci_failed'), ctx({ owned: true }), {
       classify: async () => (asked++, { choice: 'info', confidence: 1 })
     })
     expect(r).toMatchObject({ triage: 'needs-agent', tier: 'rule' })

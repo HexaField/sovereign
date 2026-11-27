@@ -74,11 +74,6 @@ function mentioned(text: string, ctx: TriageContext): boolean {
 /** A bot account: GitHub App bots end in `[bot]`; machine users carry `bot` as a name segment (`lal-bot`). */
 const isBot = (login: unknown) => typeof login === 'string' && /\[bot\]$|(^|[-_])bot([-_]|$)/i.test(login)
 
-const approved = (n?: WorkNode) =>
-  Boolean(
-    n?.reviewers.some((r) => r.state === 'approved') && !n?.reviewers.some((r) => r.state === 'changes_requested')
-  )
-
 /** The fixed rules: a verdict, or undefined when they cannot place the event. */
 export function ruleTriage(e: ForgeEvent, ctx: TriageContext): TriageVerdict | undefined {
   const d = e.detail as Record<string, any>
@@ -90,12 +85,11 @@ export function ruleTriage(e: ForgeEvent, ctx: TriageContext): TriageVerdict | u
       if (d.state === 'changes_requested') return 'needs-agent'
       if (d.state === 'commented' && ctx.owned) return isBot(d.login) ? 'info' : undefined
       return 'info'
+    // The user chooses which changes take the base: behind, in conflict or on a merged base wakes nobody
     case 'conflict':
-      return 'needs-agent'
     case 'behind_base':
-      return approved(ctx.node) ? 'needs-agent' : 'info'
     case 'base_merged':
-      return ctx.owned ? 'needs-agent' : 'info'
+      return 'info'
     case 'commented': {
       const text = Array.isArray(d.text) ? d.text.join('\n') : String(d.text ?? '')
       if (mentioned(text, ctx)) return 'needs-agent'
