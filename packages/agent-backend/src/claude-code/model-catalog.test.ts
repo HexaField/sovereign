@@ -32,6 +32,13 @@ describe('model catalog ids', () => {
     expect(list).toContain('claude-fable-5')
   })
 
+  it('lists the models CLI 2.1.332 names: Fable 5.2, Sonnet 5.5, Haiku 5.5', async () => {
+    const list = await ids()
+    expect(list).toContain('claude-fable-5-2')
+    expect(list).toContain('claude-sonnet-5-5')
+    expect(list).toContain('claude-haiku-5-5')
+  })
+
   it('still pins the 4-series with a minor', async () => {
     const list = await ids()
     expect(list).toContain('claude-opus-4-6')
